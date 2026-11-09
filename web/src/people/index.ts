@@ -9,4 +9,5 @@ export { TalkPeopleControls } from './TalkPeopleControls';
 export { ShareAllControls } from './ShareAllControls';
 export { onInterestedChanged } from './sync';
 export { importProfile } from './import';
+export { useProfileName } from './storage';
 export type { ConferenceLike, InterestedProp, TalkLike } from './types';

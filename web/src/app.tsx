@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { ArrowLeft, CalendarX, CircleExclamationPoint, CircleUserRound, ExternalLink, FileUp, X } from 'lucide-preact';
+import { ArrowLeft, CalendarX, ChevronLeft, CircleExclamationPoint, ExternalLink, Settings, X } from 'lucide-preact';
 import type { Conference, InterestedTalk, SearchFilters, SearchResponse, SearchResult, Talk } from './types';
 import { EMPTY_FILTERS } from './types';
 import { ApiError, getConferences, isAbort, search } from './api';
@@ -97,6 +97,12 @@ export function App() {
   const online = useOnline();
 
   const { slug, tab } = route;
+  // The screen before this one, so Back from Settings or Profile can pop history instead of pushing.
+  const routeRef = useRef(route);
+  const prevRoute = useRef<Route | null>(null);
+  const lastTabScreen = useRef<Route | null>(null);
+  routeRef.current = route;
+  if (route.tab !== 'profile' && route.tab !== 'settings') lastTabScreen.current = route;
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
   const searchable = conference?.status === 'searchable' ? conference : null;
   const talks = interested.slug === slug ? interested.talks : [];
@@ -131,6 +137,7 @@ export function App() {
       setSwitcherOpen(false);
       setOpenTalk(null);
       setImportOpen(false);
+      prevRoute.current = routeRef.current;
       setRoute(readRoute());
     };
     window.addEventListener('popstate', onRoute);
@@ -325,6 +332,8 @@ export function App() {
     setInterested(s, [...current, ...added]);
     followShare(s, ids, true);
     offerInstallOnce();
+    // The imported talks live on Interested, so show them there.
+    location.hash = '#/interested';
     showToast(`Marked ${added.length} ${added.length === 1 ? 'talk' : 'talks'} as Interested`, {
       label: 'Undo',
       onClick: () => {
@@ -362,16 +371,39 @@ export function App() {
 
   const pickConference = (next: string) => {
     setSwitcherOpen(false);
-    if (next !== slug) goToConference(next, tab === 'settings' ? 'people' : tab);
+    if (next !== slug) goToConference(next, tab);
   };
 
   const interestedIds = new Set(talks.map((t) => t.talk_id));
   const base = slug ? `/e/${encodeURIComponent(slug)}` : '';
   const isTabScreen = tab !== 'profile' && tab !== 'settings';
 
+  // Back pops history when the previous screen is the one Back leads to, so the browser's Back
+  // button and this one agree. Otherwise it links there, for a deep link or a reload.
+  const prev = prevRoute.current;
+  const backTo =
+    tab === 'profile'
+      ? { href: '#/settings', pops: prev?.slug === slug && prev?.tab === 'settings' }
+      : { href: `#/${lastTabScreen.current?.slug === slug ? lastTabScreen.current.tab : 'people'}`, pops: prev?.slug === slug && prev?.tab !== 'profile' && prev?.tab !== 'settings' };
   const leading = !isTabScreen ? (
-    <a class="icon-btn appbar-back" href={tab === 'settings' ? '#/profile' : '#/people'} aria-label="Back">
-      <ArrowLeft size={22} aria-hidden="true" />
+    <a
+      class={tab === 'profile' ? 'appbar-back-labeled' : 'icon-btn appbar-back'}
+      href={backTo.href}
+      aria-label={tab === 'profile' ? 'Back to Settings' : 'Back'}
+      onClick={(e) => {
+        if (!backTo.pops || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        history.back();
+      }}
+    >
+      {tab === 'profile' ? (
+        <>
+          <ChevronLeft size={24} aria-hidden="true" />
+          <span>Settings</span>
+        </>
+      ) : (
+        <ArrowLeft size={22} aria-hidden="true" />
+      )}
     </a>
   ) : null;
 
@@ -392,20 +424,6 @@ export function App() {
   const actions = (
     <>
       {!online && <OfflineBadge />}
-      {tab === 'interested' && searchable && online && (
-        <button
-          type="button"
-          class="icon-btn"
-          aria-label="Import my schedule"
-          title="Import my schedule"
-          onClick={() => {
-            setToast(null);
-            setImportOpen(true);
-          }}
-        >
-          <FileUp size={22} aria-hidden="true" />
-        </button>
-      )}
       {tab === 'interested' && searchable && (
         <OverflowMenu
           label="Interested options"
@@ -413,8 +431,8 @@ export function App() {
         />
       )}
       {isTabScreen && (
-        <a class="icon-btn" href="#/profile" aria-label="Your profile">
-          <CircleUserRound size={24} aria-hidden="true" />
+        <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">
+          <Settings size={24} aria-hidden="true" />
         </a>
       )}
     </>
@@ -473,7 +491,16 @@ export function App() {
         <AppBar leading={leading} title={title} actions={actions} />
         <main class="main" id="main">
           {tab === 'settings' ? (
-            <SettingsScreen theme={theme} onTheme={setTheme} />
+            <SettingsScreen
+              theme={theme}
+              onTheme={setTheme}
+              canImport={!!searchable && online}
+              importNote={!searchable ? 'Open a conference first' : !online ? 'Needs a connection' : null}
+              onImport={() => {
+                setToast(null);
+                setImportOpen(true);
+              }}
+            />
           ) : !searchable ? (
             blocker()
           ) : (
@@ -540,10 +567,6 @@ export function App() {
                   interested={talks}
                   onToggle={toggleInterested}
                   onBrowse={() => (location.hash = '#/search')}
-                  onImport={() => {
-                    setToast(null);
-                    setImportOpen(true);
-                  }}
                 />
               )}
             </>

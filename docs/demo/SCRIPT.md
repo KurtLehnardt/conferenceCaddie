@@ -6,7 +6,7 @@ The QR code is `docs/demo/qr-kubecon.png` (1280 px, high error correction; a vec
 
 ## Before you start
 
-1. Open the app on the demo phone and clear its state. If a stray profile exists, open the profile icon at the top right, scroll to Delete, tap "Delete my profile" twice (the second tap confirms), and check for "Your profile was deleted from this phone and from our server."
+1. Open the app on the demo phone and clear its state. If a stray profile exists, open Settings with the gear at the top right, tap Profile, scroll to Delete, tap "Delete my profile" twice (the second tap confirms), and check for "Your profile was deleted from this phone and from our server."
 2. Remove every test profile that is not a sample from the live people index for KubeCon. On 9 November it held five, four of them open to meet and one sharing for the demo talk, and they show up in People to meet and in the talk circle next to the samples. Delete them from the phones that made them, or ask the operator to remove them.
 3. Re-seed the two demo profiles so that they are present and fresh (see "The two demo profiles" below).
 4. Open the QR link once while online and wait for People to load. The app saves the conference's schedule for offline use about two seconds after it opens, and the airplane-mode step relies on that.
@@ -58,7 +58,7 @@ Say: "Everyone at a conference wants to meet the right people. Scan this and you
 - Swipe down and switch on airplane mode (and make sure Wi-Fi is off). The audience sees the phone's airplane icon, and an "Offline" pill appears in the app's top bar.
 - Tap Search and type "ebpf" in the empty box. The audience sees "Offline: keyword search only" above "8 talks", in schedule order, each card with "eBPF" highlighted in its abstract. Say: "Offline there is no semantic search, only keywords over the schedule saved on the phone, and the app says so."
 - Tap Interested. Both talks are still there: the shared talk and the one marked in step 4. Each card shows "Talk circles need a connection.", and the sharing card at the top is hidden.
-- Tap the profile icon at the top right. The name and the ten chosen topics are still there.
+- Tap the gear at the top right, then Profile. The name and the ten chosen topics are still there.
 - Tap People. The audience sees "People to meet needs a connection" and "They will load when you're back online. Search, your Interested list and your profile still work on this phone." People matching is live data, so it does not pretend to work offline. For you shows "Suggestions need a connection" in the same way.
 - Switch airplane mode off. The "Offline" pill goes away and People loads again.
 

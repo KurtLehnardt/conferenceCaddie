@@ -1081,6 +1081,20 @@ mark {
   font-size: 15px;
 }
 
+.state-hint {
+  max-width: 320px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.state-hint a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
 .banner {
   display: flex;
   align-items: center;
@@ -1607,6 +1621,62 @@ mark {
 
 @media (hover: hover) {
   .settings-link:hover {
+    background: var(--fill);
+  }
+}
+
+.settings-nav {
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+}
+
+.settings-nav:disabled {
+  opacity: 0.55;
+}
+
+@media (hover: hover) {
+  .settings-nav:not(:disabled):hover {
+    background: var(--fill);
+  }
+}
+
+.settings-icon,
+.settings-chevron {
+  flex: none;
+  color: var(--text-2);
+}
+
+.settings-nav-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-hint {
+  color: var(--text-2);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.appbar-back-labeled {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 12px 0 10px;
+  border-radius: 999px;
+  color: var(--accent-ink);
+  font-size: 17px;
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .appbar-back-labeled:hover {
     background: var(--fill);
   }
 }

@@ -244,3 +244,9 @@ export function usePeopleStore(): number {
   }, []);
   return version;
 }
+
+/** The display name on this device's profile, empty when there is none. Re-renders on change. */
+export function useProfileName(): string {
+  usePeopleStore();
+  return (getProfile()?.display_name ?? '').trim();
+}

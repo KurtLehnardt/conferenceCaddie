@@ -582,20 +582,6 @@
   color: var(--danger);
 }
 
-.pp-settings-row {
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  min-height: 56px;
-  padding: 0 16px;
-  color: var(--text);
-  font-weight: 500;
-  text-decoration: none;
-}
-
-.pp-settings-row svg {
-  color: var(--text-2);
-}
-
 /* ---------- Topic picker ---------- */
 
 .pp-picker {
