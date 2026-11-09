@@ -1,0 +1,19 @@
+{
+  "rename": {},
+  "merge": {
+    "agent": "agents",
+    "ai-agent": "ai-agents",
+    "clusters": "cluster",
+    "gpus": "gpu",
+    "k8s": "kubernetes",
+    "sandboxing": "sandbox",
+    "workload": "workloads"
+  },
+  "remove": [
+    "demo", "demo-theater", "theater",
+    "from", "one", "what", "you", "we", "when", "without", "do", "have", "can", "has", "all", "let",
+    "here", "don't", "about", "across", "after", "already", "up", "two", "everyone", "lessons-from",
+    "beyond", "build", "built", "running", "first", "real", "high", "end", "world", "stop", "ship",
+    "breaking", "missing", "live", "lessons", "future", "era"
+  ]
+}
