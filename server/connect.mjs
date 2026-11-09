@@ -30,6 +30,7 @@ import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
 import { refFor } from './device.mjs';
 import { isFiltered, FILTERED } from './moderation.mjs';
+import { mintBleToken, bleView, BLE_OFF } from './ble.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
@@ -279,7 +280,7 @@ async function blocks(req, res, url) {
 // ---------------------------------------------------------------------------------------------
 // Presence.
 
-const PRESENCE_KEYS = new Set(['event', 'zone', 'spot']);
+const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'ble']);
 
 async function putPresence(req, res) {
   const device = writer(req);
@@ -287,6 +288,7 @@ async function putPresence(req, res) {
   if (typeof body.zone !== 'string') throw bad('zone must be a string');
   const zone = body.zone.trim();
   const spot = line(body.spot, 'spot', SPOT_MAX);
+  if (body.ble !== undefined && typeof body.ble !== 'boolean') throw bad('ble must be a boolean');
   const conf = await conferenceFor(body.event);
   const me = await authenticated(device, conf.slug);
   if (!me || me.open_to_meet !== true) throw profileRequired();
@@ -299,9 +301,12 @@ async function putPresence(req, res) {
   // A spot line hidden after reports stays off until the operator unhides it.
   const storedSpot = me.spot_hidden === true ? null : spot;
   const presence = { presence_zone: zone, presence_spot: storedSpot, presence_since: since, presence_until: iso(untilMs) };
-  const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: presence });
+  // Android companion (ble.mjs): ble: true mints a ten-minute Bluetooth token with this write,
+  // ble: false clears it, and a write that says nothing leaves it as it was.
+  const ble = body.ble === true ? mintBleToken(now, untilMs) : body.ble === false ? BLE_OFF : {};
+  const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: { ...presence, ...ble } });
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, presence_since: since, presence_until: presence.presence_until });
+  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, presence_since: since, presence_until: presence.presence_until, ...(body.ble === true ? { ble: bleView(ble) } : {}) });
 }
 
 async function deletePresence(req, res, url) {

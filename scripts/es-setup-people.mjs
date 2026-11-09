@@ -82,6 +82,9 @@ const connectProperties = {
   presence_spot: { type: 'text' },
   presence_since: { type: 'date' },
   presence_until: { type: 'date' },
+  // The Android companion's Bluetooth token (server/ble.mjs): resolved by exact value, ten minutes.
+  ble_token: { type: 'keyword' },
+  ble_token_until: { type: 'date' },
 };
 
 const properties = {

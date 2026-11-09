@@ -2,7 +2,7 @@
 // The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence
 // and /api/meet/*. This is the only place that reads the device secret.
 import { getDevice } from './storage';
-import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Recommendation, ReportKind, ReportReason, TopicHit } from './types';
+import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
 export class PeopleApiError extends Error {
   constructor(
@@ -152,6 +152,47 @@ export function putPresence(slug: string, zone: string, spot: string) {
 
 export function deletePresence(slug: string) {
   return call<{ ok: boolean }>(`/api/presence?event=${encodeURIComponent(slug)}`, { method: 'DELETE', device: true });
+}
+
+/* ---------- Android companion: find people near me by Bluetooth (server/ble.mjs) ---------- */
+
+export interface BleToken {
+  /** 16 random bytes, base64url: what the phone advertises. */
+  token: string;
+  /** ISO time the token stops resolving; the phone asks for a new one before then. */
+  rotate_at: string;
+}
+
+/** A presence write that also mints (ble: true) or clears (ble: false) the Bluetooth token. */
+export function putPresenceBle(slug: string, zone: string, spot: string, ble: boolean) {
+  return call<{ ok: boolean; presence_until: string; ble?: BleToken }>('/api/presence', {
+    method: 'PUT',
+    body: JSON.stringify({ event: slug, zone, spot: spot.trim().slice(0, 60), ble }),
+    device: true,
+  });
+}
+
+export function rotateBleToken(slug: string) {
+  return call<{ ok: boolean; ble: BleToken }>('/api/presence/ble/rotate', post({ event: slug }, undefined, true));
+}
+
+export interface Sighting {
+  token: string;
+  rssi: number;
+}
+
+/** A person a sightings report resolved to: a strong match within a few metres. */
+export interface NearbyPerson {
+  ref: string;
+  display_name: string;
+  evidence: string | null;
+  speak_topics: TopicRef[];
+  zone: string | null;
+}
+
+/** The tokens heard in the last window. The server keeps none of it and answers with strong matches only. */
+export function postSightings(slug: string, sightings: Sighting[], signal?: AbortSignal) {
+  return call<{ nearby: NearbyPerson[] }>('/api/presence/sightings', post({ event: slug, sightings: sightings.slice(0, 50) }, signal, true));
 }
 
 export function requestMeet(slug: string, ref: string, topicId: string | null, note: string) {

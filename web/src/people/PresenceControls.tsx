@@ -2,6 +2,7 @@
 // notice, the remaining time (tap extends), and the #/here/{zone} deep link.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { MapPin } from 'lucide-preact';
+import { BleControls } from './BleControls';
 import {
   extend,
   lastChosenZone,
@@ -233,6 +234,7 @@ export function PresenceControls({
           </div>
         </div>
       )}
+      <BleControls conference={conference} />
     </section>
   );
 }

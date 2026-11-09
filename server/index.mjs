@@ -5,7 +5,8 @@
 //      STATIC_DIR (default web/dist), ES_PEOPLE_API_KEY (people, circles and circle counts only),
 //      ES_PEOPLE_INDEX (default caddie-people), ES_PEOPLE_BLOCKS_INDEX (default
 //      caddie-people-blocks), ES_PEOPLE_MEETS_INDEX (default caddie-people-meets),
-//      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), REF_SALT (optional).
+//      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), REF_SALT (optional),
+//      BLE_NEAR_RSSI (default -75, the Bluetooth "a few metres" threshold of ble.mjs).
 //
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
@@ -17,6 +18,7 @@ import { validate, search, BadRequest, UpstreamError } from './search.mjs';
 import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleConnectApi } from './connect.mjs';
+import { handleBleApi } from './ble.mjs';
 import { handleReportApi } from './report.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
@@ -287,6 +289,7 @@ async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
   if (await handleConnectApi(req, res, url)) return;
+  if (await handleBleApi(req, res, url)) return;
   if (await handleReportApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;

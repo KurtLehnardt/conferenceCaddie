@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, MessagesSquare, Search, UserRound, Users, X } from 'lucide-preact';
 import { fetchMatches, isAbort, MATCH_PAGE, PeopleApiError } from './api';
+import { revealBleCard, useBleReveal } from './ble';
 import { takePendingSearch, withoutBlocked } from './connect';
 import { ForYouRow } from './ForYou';
 import { PersonCard, SampleNote } from './PersonCard';
@@ -221,6 +222,10 @@ function PeopleList({
   const [more, setMore] = useState(false);
   const sentinel = useRef<HTMLDivElement>(null);
   const searching = !!query.trim() || around;
+  // Android app: a tapped "right near you" notification lands on that card once Around now loaded.
+  const listEl = useRef<HTMLDivElement>(null);
+  const loadedKey = useRef('');
+  const bleReveal = useBleReveal(slug);
   // Zones come back only while I am around, so the list is fetched again when that changes.
   const meAround = getPresence(slug).on;
   const key = `${slug}|${query.trim()}|${around}|${meAround}`;
@@ -244,6 +249,7 @@ function PeopleList({
       .then((r) => {
         if (ctl.signal.aborted) return;
         const results = r.results ?? [];
+        loadedKey.current = key;
         setPage({ results, done: results.length < MATCH_PAGE });
       })
       .catch((err) => {
@@ -288,6 +294,10 @@ function PeopleList({
     };
   }, [page]);
 
+  useEffect(() => {
+    if (around && page && bleReveal && loadedKey.current === key) revealBleCard(slug, listEl.current, withoutBlocked(slug, page.results));
+  }, [around, page, bleReveal]);
+
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;
   if (error) return <p class="pp-error pp-pad">{error}</p>;
@@ -301,7 +311,7 @@ function PeopleList({
     );
   }
   return (
-    <div class="pp-list">
+    <div class="pp-list" ref={listEl}>
       <SampleNote people={results} />
       {results.map((p) => (
         <PersonCard key={p.ref} person={p} slug={slug} />
@@ -341,6 +351,14 @@ export function PeopleScreen({
     else timer.current = window.setTimeout(() => setQuery(v), DEBOUNCE_MS);
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  // Android app: a tapped "right near you" notification opens the Around now view.
+  const bleReveal = useBleReveal(conference.slug);
+  useEffect(() => {
+    if (!bleReveal) return;
+    onInput('');
+    setAround(true);
+  }, [bleReveal]);
 
   const searching = !!query.trim() || around;
   return (
