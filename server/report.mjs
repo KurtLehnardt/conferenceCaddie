@@ -11,8 +11,9 @@
 // - A target is a person's profile (kind profile, named by their ref), their presence spot line
 //   (kind spot, the same ref) or a meet (kind meet, named by its meet_id; the reporter must be a
 //   participant and ref must name the other one). Reporting oneself is a 404, like blocking.
-// - Two distinct reporters hide the target. A profile gets hidden: true, a meet gets hidden: true,
-//   a spot gets its presence_spot cleared and spot_hidden: true. The hide is a Bulk partial update
+// - Two distinct reporters hide the target. A profile gets hidden: true, a meet gets hidden: true
+//   and hidden_owner_id (the reported participant, who alone keeps seeing it), a spot gets its
+//   presence_spot cleared and spot_hidden: true. The hide is a Bulk partial update
 //   (or an _update on the meet), so it never re-runs the embedding model. Who reads which flag is
 //   in docs/REPORT_INTEGRATION_NOTES.md; the operator CLI is scripts/moderation.mjs.
 // - 20 reports per device per hour, on top of the shared per-address write limit.
@@ -89,10 +90,11 @@ async function reporterCount(slug, kind, id) {
   return json.count ?? 0;
 }
 
-// Marks a target hidden. A target that is already gone (404) needs nothing.
+// Marks a target hidden. A target that is already gone (404) needs nothing. A meet also records
+// whose content was reported (hidden_owner_id), the one participant who keeps seeing it.
 async function hide(slug, kind, id, profileId) {
   if (kind === 'meet') {
-    await people('POST', `${idx(MEETS_INDEX)}/_update/${encodeURIComponent(id)}?refresh=wait_for`, { doc: { hidden: true } }, { okStatuses: [404] });
+    await people('POST', `${idx(MEETS_INDEX)}/_update/${encodeURIComponent(id)}?refresh=wait_for`, { doc: { hidden: true, hidden_owner_id: profileId } }, { okStatuses: [404] });
     return;
   }
   const doc = kind === 'profile' ? { hidden: true } : { presence_spot: null, spot_hidden: true };

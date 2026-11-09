@@ -43,12 +43,18 @@ for (const name of [index, alias, peopleIndex, meetsIndex]) {
 }
 
 async function es(method, path, body) {
-  const res = await fetch(ES_URL + path, {
-    method,
-    headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(60_000),
-  });
+  let res;
+  try {
+    res = await fetch(ES_URL + path, {
+      method,
+      headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    console.error(`Could not reach Elasticsearch: ${err?.cause?.code ?? err?.name ?? 'error'}`);
+    process.exit(1);
+  }
   const text = await res.text();
   let json;
   try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text.slice(0, 500) }; }
