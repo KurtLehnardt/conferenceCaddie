@@ -27,7 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { visibleUntil, textHash } from '../server/people.mjs';
-import { newDevice, hashSecret } from '../server/device.mjs';
+import { newDevice, hashSecret, refFor } from '../server/device.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const WRITE_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -178,6 +178,7 @@ for (const p of samples.profiles.slice(0, limit)) {
     doc: {
       event_id: slug,
       profile_id: device.profileId,
+      ref: refFor(slug, device.profileId),
       display_name: name,
       ...text,
       learn_topics: resolveTopics(p.learn).slice(0, 30),

@@ -401,7 +401,7 @@ function readBody(req) {
   });
 }
 
-export const isPlainObject = (v) = v !== null && typeof v === 'object' && !Array.isArray(v);
+export const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 export async function jsonBody(req, allowedKeys) {
   const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -544,16 +544,22 @@ export async function peopleByIds(eventId, profileIds) {
   return map;
 }
 
-// The live document a result's ref points at, or null. Only a document the requester could have
-// seen qualifies: visible conference-wide, or sharing a talk the requester also shares for.
-export async function personByRef(me, ref) {
+// The live document a result's ref points at, limited to OTHER_FIELDS, or null.
+export async function docByRef(eventId, ref) {
   const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_search`, {
     size: 1,
     _source: OTHER_FIELDS,
-    query: { bool: { filter: [{ term: { event_id: me.event_id } }, { term: { ref } }, { range: { visible_until: { gt: 'now' } } }] } },
+    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { ref } }, { range: { visible_until: { gt: 'now' } } }] } },
   });
   const s = json.hits?.hits?.[0]?._source;
-  if (!s?.profile_id || s.profile_id === me.profile_id) return null;
+  return s?.profile_id ? s : null;
+}
+
+// The person a result's ref points at, or null. Only someone the requester could have seen
+// qualifies: visible conference-wide, or sharing a talk the requester also shares for.
+export async function personByRef(me, ref) {
+  const s = await docByRef(me.event_id, ref);
+  if (!s || s.profile_id === me.profile_id) return null;
   const mine = new Set(me.shared_talk_ids ?? []);
   if (s.open_to_meet !== true && !(s.shared_talk_ids ?? []).some((id) => mine.has(id))) return null;
   return s;

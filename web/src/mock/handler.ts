@@ -5,7 +5,15 @@
 // the real server does all matching and ranking in Elasticsearch.
 import type { Facets, SearchFilters, SearchRequest, SearchResponse, TagFacet } from '../types';
 import { EMPTY_FILTERS } from '../types';
-import { MOCK_CONFERENCES, MOCK_PEOPLE, MOCK_TALKS, MOCK_TOPICS, type MockPerson, type MockTalk } from './fixtures';
+import {
+  MOCK_CONFERENCES,
+  MOCK_PEOPLE,
+  MOCK_REQUESTER_REF,
+  MOCK_TALKS,
+  MOCK_TOPICS,
+  type MockPerson,
+  type MockTalk,
+} from './fixtures';
 
 type Json = Record<string, unknown>;
 
@@ -161,17 +169,30 @@ function topicRefs(conference: string, ids: string[]) {
   }));
 }
 
-function personResult(p: MockPerson, me: Stored | undefined, interestedIds: string[]) {
+function personResult(
+  p: MockPerson,
+  me: Stored | undefined,
+  interestedIds: string[],
+  extra: { terms?: string[]; meAround?: boolean } = {},
+) {
   const myLearn = (me?.profile.learn_topics as string[] | undefined) ?? [];
   const mySpeak = (me?.profile.speak_topics as string[] | undefined) ?? [];
   const reasons: string[] = [];
   const canTeach = p.speak_topics.filter((t) => myLearn.includes(t));
   const wantsMine = p.learn_topics.filter((t) => mySpeak.includes(t));
   const label = (ids: string[]) => topicRefs(p.event_id, ids).map((t) => t.label).join(', ');
+  // Find & connect: the passage that matched the text search, with <mark> tags.
+  const terms = extra.terms ?? [];
+  const hit = terms.length ? (highlight(p.expertise, terms) ?? highlight(p.about, terms)) : null;
+  const evidence = hit ?? p.expertise.split(/(?<=\.)\s/)[0];
+  const around = !!p.presence_zone;
+  const zone = around && extra.meAround ? p.presence_zone : undefined;
+  if (hit) reasons.push(`They've worked on ${hit}`);
   if (canTeach.length) reasons.push(`They can speak to ${label(canTeach)}, which you want to learn about.`);
   if (wantsMine.length) reasons.push(`They want to learn about ${label(wantsMine)}, which you can speak to.`);
   const both = p.shared_talk_ids.find((id) => interestedIds.includes(id));
   if (both) reasons.push(`You are both interested in ${MOCK_TALKS.find((t) => t.talk_id === both)?.title}.`);
+  if (zone) reasons.push(`They're in ${zone} right now.`);
   if (!reasons.length) reasons.push(`Ask them about ${label(p.speak_topics)}.`);
   return {
     ref: p.ref,
@@ -183,7 +204,128 @@ function personResult(p: MockPerson, me: Stored | undefined, interestedIds: stri
     reasons,
     opener: reasons[0],
     contact: { linkedin_url: null, contact_note: 'Sample profile, not a real person' },
+    evidence,
+    around,
+    ...(zone ? { zone } : {}),
   };
+}
+
+/* ---------- Find & connect: blocks, presence, meets ---------- */
+
+type MeetState = 'requested' | 'accepted' | 'declined' | 'active' | 'found' | 'cancelled' | 'expired';
+
+interface MockMeet {
+  meet_id: string;
+  event_id: string;
+  /** Participants are `dev:{profile_id}` for this browser and `ref:{ref}` for a sample person. */
+  requester: string;
+  recipient: string;
+  topic_id: string | null;
+  note: string;
+  rendezvous: string | null;
+  spot_me: Record<string, string>;
+  state: MeetState;
+  created_at: string;
+  /** For the seeded incoming request: it appears in the inbox only after this time. */
+  visible_at: string;
+  active_since: string | null;
+  expires_at: string | null;
+}
+
+interface Connect {
+  blocks: Record<string, string[]>;
+  presence: Record<string, { zone: string; spot: string; since: string; until: string }>;
+  meets: MockMeet[];
+  seeded: string[];
+}
+
+const CONNECT_KEY = 'caddie.mock.connect';
+const PRESENCE_MS = 60 * 60_000;
+const ACTIVE_MS = 20 * 60_000;
+const SEED_DELAY_MS = 5_000;
+const AUTO_ACCEPT_MS = 10_000;
+const FILTERED = { error: 'filtered', message: 'That was held back by the filter. Edit it and try again.' };
+
+function readConnect(): Connect {
+  try {
+    const c = JSON.parse(sessionStorage.getItem(CONNECT_KEY) ?? '{}');
+    return { blocks: c.blocks ?? {}, presence: c.presence ?? {}, meets: c.meets ?? [], seeded: c.seeded ?? [] };
+  } catch {
+    return { blocks: {}, presence: {}, meets: [], seeded: [] };
+  }
+}
+
+function writeConnect(c: Connect) {
+  try {
+    sessionStorage.setItem(CONNECT_KEY, JSON.stringify(c));
+  } catch {
+    // Mock data is disposable.
+  }
+}
+
+/** The mock filter: the word "rejectme" stands in for the server's wordlist. */
+function filtered(text: unknown): boolean {
+  return /rejectme/i.test(String(text ?? ''));
+}
+
+function myPresence(c: Connect, slug: string, id: string) {
+  const p = c.presence[`${slug}:${id}`];
+  if (!p) return null;
+  if (Date.parse(p.until) <= Date.now()) {
+    delete c.presence[`${slug}:${id}`];
+    return null;
+  }
+  return p;
+}
+
+function blockedEitherWay(c: Connect, slug: string, id: string, ref: string): boolean {
+  return (c.blocks[`${slug}:${id}`] ?? []).includes(ref);
+}
+
+function personByRef(slug: string, ref: string): MockPerson | undefined {
+  return MOCK_PEOPLE.find((p) => p.event_id === slug && p.ref === ref);
+}
+
+function otherOf(m: MockMeet, me: string): MockPerson | undefined {
+  const other = m.requester === me ? m.recipient : m.requester;
+  return other.startsWith('ref:') ? personByRef(m.event_id, other.slice(4)) : undefined;
+}
+
+const OVER: MeetState[] = ['declined', 'found', 'cancelled', 'expired'];
+
+/** What the sample people "do" between polls: accept after a while, go active when both are around. */
+function advanceMeets(c: Connect, slug: string, id: string) {
+  const me = `dev:${id}`;
+  const now = Date.now();
+  const mine = myPresence(c, slug, id);
+  for (const m of c.meets) {
+    if (m.event_id !== slug || (m.requester !== me && m.recipient !== me)) continue;
+    const other = otherOf(m, me);
+    if (m.state === 'requested' && m.requester === me && other?.presence_zone && now - Date.parse(m.created_at) > AUTO_ACCEPT_MS) {
+      m.state = 'accepted';
+    }
+    if (m.state === 'accepted' && mine && other?.presence_zone) {
+      m.state = 'active';
+      m.active_since = new Date(now).toISOString();
+      m.expires_at = new Date(now + ACTIVE_MS).toISOString();
+      if (!m.rendezvous) m.rendezvous = other.presence_zone;
+    }
+    if (m.state === 'active' && (!mine || (m.expires_at && Date.parse(m.expires_at) <= now))) m.state = 'expired';
+  }
+}
+
+function meetFor(c: Connect, meetId: string, id: string): MockMeet {
+  const m = c.meets.find((x) => x.meet_id === meetId);
+  if (!m) throw new HttpError(404, { error: 'not found' });
+  const me = `dev:${id}`;
+  if (m.requester !== me && m.recipient !== me) throw new HttpError(403, { error: 'forbidden' });
+  return m;
+}
+
+function randomId(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function route(method: string, path: string, query: URLSearchParams, headers: Headers, body: Json): Json {
@@ -279,10 +421,234 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const me = readStore()[`${conf.slug}:${id}`];
     if (!me?.open_to_meet) throw new HttpError(403, { error: 'visibility_required' });
     const interestedIds = (body.interested_talk_ids as string[]) ?? [];
-    const results = MOCK_PEOPLE.filter((p) => p.event_id === conf.slug && p.open_to_meet).map((p) =>
-      personResult(p, me, interestedIds),
+    const c = readConnect();
+    const query = String(body.query ?? '').slice(0, 300);
+    if (body.when !== undefined && body.when !== 'anyone' && body.when !== 'around_now') throw new HttpError(400, { error: 'when' });
+    const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+    const from = Math.max(0, Number(body.from) || 0);
+    const size = Math.min(Math.max(1, Number(body.size) || 20), 20);
+    const meAround = !!myPresence(c, conf.slug, id);
+    const pool = MOCK_PEOPLE.filter(
+      (p) =>
+        p.event_id === conf.slug &&
+        p.open_to_meet &&
+        !blockedEitherWay(c, conf.slug, id, p.ref) &&
+        (body.when !== 'around_now' || !!p.presence_zone) &&
+        (!terms.length || terms.some((w) => `${p.expertise} ${p.about}`.toLowerCase().includes(w))),
     );
+    // Text hits first, then people who are around, as the real ranking would.
+    const score = (p: MockPerson) =>
+      (terms.filter((w) => p.expertise.toLowerCase().includes(w)).length || 0) * 10 + (p.presence_zone ? 1 : 0);
+    const ranked = pool.sort((a, b) => score(b) - score(a));
+    const results = ranked.slice(from, from + size).map((p) => personResult(p, me, interestedIds, { terms, meAround }));
+    writeConnect(c);
     return { results };
+  }
+
+  if (path === '/api/schedule' && method === 'GET') {
+    const conf = conferenceOf(query.get('event'));
+    const talks = MOCK_TALKS.filter((t) => t.conference === conf.slug && t.kind === 'talk').map((t) => ({
+      ...strip(t),
+      abstract: t.abstract.slice(0, 400),
+    }));
+    return { conference: conf.slug, talks };
+  }
+
+  if (path === '/api/people/block' && (method === 'POST' || method === 'DELETE')) {
+    const id = device(headers);
+    const conf = conferenceOf(body.event);
+    const ref = String(body.ref ?? '');
+    if (!ref) throw new HttpError(400, { error: 'ref' });
+    const c = readConnect();
+    const key = `${conf.slug}:${id}`;
+    const list = new Set(c.blocks[key] ?? []);
+    if (method === 'POST') list.add(ref);
+    else list.delete(ref);
+    c.blocks[key] = [...list];
+    writeConnect(c);
+    return { ok: true };
+  }
+  if (path === '/api/people/blocks' && method === 'GET') {
+    const id = device(headers);
+    const conf = conferenceOf(query.get('event'));
+    return { refs: readConnect().blocks[`${conf.slug}:${id}`] ?? [] };
+  }
+
+  if (path === '/api/presence' && method === 'PUT') {
+    const id = device(headers);
+    const conf = conferenceOf(body.event);
+    const me = readStore()[`${conf.slug}:${id}`];
+    if (!me?.open_to_meet) throw new HttpError(403, { error: 'profile_required' });
+    const zone = String(body.zone ?? '').trim();
+    if (!zone) throw new HttpError(400, { error: 'zone' });
+    const spot = String(body.spot ?? '').slice(0, 60);
+    if (filtered(spot)) throw new HttpError(400, FILTERED);
+    const c = readConnect();
+    const now = Date.now();
+    const until = new Date(now + PRESENCE_MS).toISOString();
+    const key = `${conf.slug}:${id}`;
+    c.presence[key] = { zone, spot, since: new Date(now).toISOString(), until };
+    // Once per session: a sample person asks to talk shop a few seconds after presence goes on.
+    const requester = personByRef(conf.slug, MOCK_REQUESTER_REF);
+    if (requester && !c.seeded.includes(key) && !blockedEitherWay(c, conf.slug, id, requester.ref)) {
+      c.seeded.push(key);
+      c.meets.push({
+        meet_id: randomId(),
+        event_id: conf.slug,
+        requester: `ref:${requester.ref}`,
+        recipient: `dev:${id}`,
+        topic_id: requester.speak_topics[0] ?? null,
+        note: "I'd like to compare notes on eBPF probes in production",
+        rendezvous: null,
+        spot_me: { [`ref:${requester.ref}`]: 'Orange lanyard, standing by the demo screen' },
+        state: 'requested',
+        created_at: new Date(now).toISOString(),
+        visible_at: new Date(now + SEED_DELAY_MS).toISOString(),
+        active_since: null,
+        expires_at: null,
+      });
+    }
+    writeConnect(c);
+    return { ok: true, presence_until: until };
+  }
+  if (path === '/api/presence' && method === 'DELETE') {
+    const id = device(headers);
+    const c = readConnect();
+    delete c.presence[`${query.get('event')}:${id}`];
+    writeConnect(c);
+    return { ok: true };
+  }
+
+  if (path === '/api/meet' && method === 'POST') {
+    const id = device(headers);
+    const conf = conferenceOf(body.event);
+    const me = readStore()[`${conf.slug}:${id}`];
+    if (!me?.open_to_meet) throw new HttpError(403, { error: 'visibility_required' });
+    const ref = String(body.ref ?? '');
+    const target = personByRef(conf.slug, ref);
+    if (!target) throw new HttpError(404, { error: 'not found' });
+    const c = readConnect();
+    if (blockedEitherWay(c, conf.slug, id, ref)) throw new HttpError(403, { error: 'blocked' });
+    const note = String(body.note ?? '').slice(0, 140);
+    if (filtered(note)) throw new HttpError(400, FILTERED);
+    const meKey = `dev:${id}`;
+    const them = `ref:${ref}`;
+    const hour = Date.now() - 3_600_000;
+    const recent = c.meets.filter((m) => m.requester === meKey && Date.parse(m.created_at) > hour).length;
+    if (recent >= 10) throw new HttpError(429, { error: 'rate_limited', message: 'Slow down a little.' });
+    const open = c.meets.find(
+      (m) =>
+        m.event_id === conf.slug &&
+        !OVER.includes(m.state) &&
+        ((m.requester === meKey && m.recipient === them) || (m.requester === them && m.recipient === meKey)),
+    );
+    if (open) throw new HttpError(409, { error: 'already_open' });
+    const now = new Date().toISOString();
+    const meet: MockMeet = {
+      meet_id: randomId(),
+      event_id: conf.slug,
+      requester: meKey,
+      recipient: them,
+      topic_id: typeof body.topic_id === 'string' ? body.topic_id : null,
+      note,
+      rendezvous: null,
+      spot_me: { [them]: 'Blue jacket, laptop with a sticker wall' },
+      state: 'requested',
+      created_at: now,
+      visible_at: now,
+      active_since: null,
+      expires_at: null,
+    };
+    c.meets.push(meet);
+    writeConnect(c);
+    return { meet_id: meet.meet_id, state: meet.state };
+  }
+
+  if (path === '/api/meet/inbox' && method === 'GET') {
+    const id = device(headers);
+    const conf = conferenceOf(query.get('event'));
+    const c = readConnect();
+    advanceMeets(c, conf.slug, id);
+    writeConnect(c);
+    const me = `dev:${id}`;
+    const now = Date.now();
+    const incoming = c.meets
+      .filter((m) => m.event_id === conf.slug && m.recipient === me && Date.parse(m.visible_at) <= now && !OVER.includes(m.state))
+      .flatMap((m) => {
+        const from = otherOf(m, me);
+        if (!from || blockedEitherWay(c, conf.slug, id, from.ref)) return [];
+        return [
+          {
+            meet_id: m.meet_id,
+            from: { ref: from.ref, display_name: from.display_name, about: from.about },
+            topic_label: m.topic_id ? topicRefs(conf.slug, [m.topic_id])[0].label : null,
+            note: m.note,
+            created_at: m.created_at,
+            state: m.state,
+          },
+        ];
+      });
+    const outgoing = c.meets
+      .filter((m) => m.event_id === conf.slug && m.requester === me && !OVER.includes(m.state))
+      .flatMap((m) => {
+        const to = otherOf(m, me);
+        if (!to || blockedEitherWay(c, conf.slug, id, to.ref)) return [];
+        return [{ meet_id: m.meet_id, to: { ref: to.ref, display_name: to.display_name }, state: m.state }];
+      });
+    return { incoming, outgoing };
+  }
+
+  const meetMatch = path.match(/^\/api\/meet\/([A-Za-z0-9_-]+)(?:\/(accept|decline|found|cancel|details))?$/);
+  if (meetMatch) {
+    const id = device(headers);
+    const c = readConnect();
+    const m = meetFor(c, meetMatch[1], id);
+    advanceMeets(c, m.event_id, id);
+    const me = `dev:${id}`;
+    const action = meetMatch[2];
+    const other = otherOf(m, me);
+    if (!action && method === 'GET') {
+      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'gone' });
+      writeConnect(c);
+      const active = m.state === 'active';
+      const otherKey = m.requester === me ? m.recipient : m.requester;
+      return {
+        state: m.state,
+        active_until: active ? m.expires_at : null,
+        other: {
+          display_name: other?.display_name ?? 'Someone',
+          zone: active ? (other?.presence_zone ?? null) : null,
+          spot: active ? (other?.presence_spot ?? null) : null,
+          spot_me: active ? (m.spot_me[otherKey] ?? null) : null,
+        },
+        rendezvous: m.rendezvous ?? (active ? (other?.presence_zone ?? myPresence(c, m.event_id, id)?.zone ?? null) : null),
+        mine: { spot_me: m.spot_me[me] ?? null },
+      };
+    }
+    if (action === 'details' && method === 'PUT') {
+      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'gone' });
+      if (body.spot_me !== undefined) {
+        if (filtered(body.spot_me)) throw new HttpError(400, FILTERED);
+        m.spot_me[me] = String(body.spot_me).slice(0, 60);
+      }
+      if (body.rendezvous !== undefined) m.rendezvous = String(body.rendezvous).slice(0, 120) || null;
+      writeConnect(c);
+      return { ok: true };
+    }
+    if (action && method === 'POST') {
+      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'gone' });
+      if (action === 'accept' || action === 'decline') {
+        if (m.recipient !== me || m.state !== 'requested') throw new HttpError(409, { error: 'state' });
+        m.state = action === 'accept' ? 'accepted' : 'declined';
+        advanceMeets(c, m.event_id, id);
+      } else if (action === 'found') {
+        m.state = 'found';
+      } else {
+        m.state = 'cancelled';
+      }
+      writeConnect(c);
+      return { ok: true, state: m.state };
+    }
   }
 
   if (path === '/api/circles/members' && method === 'POST') {

@@ -129,11 +129,12 @@ export function PresenceControls({
     }
   };
 
+  // The switch shows on while the zone is being picked; "Not now" or a second tap puts it back.
   const onSwitch = (on: boolean) => {
     if (on) openPanel(null);
     else {
       setPanel(false);
-      void turnOff(slug);
+      if (presence.on) void turnOff(slug);
     }
   };
 
@@ -153,7 +154,7 @@ export function PresenceControls({
           type="checkbox"
           role="switch"
           class="switch"
-          checked={presence.on}
+          checked={presence.on || panel}
           disabled={busy}
           onChange={(e) => onSwitch((e.target as HTMLInputElement).checked)}
         />

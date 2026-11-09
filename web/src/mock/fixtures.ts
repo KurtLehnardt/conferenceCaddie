@@ -29,6 +29,12 @@ export interface MockPerson {
   speak_topics: string[];
   shared_talk_ids: string[];
   open_to_meet: boolean;
+  /** Free text the people search matches on (Find & connect). */
+  expertise: string;
+  interests: string;
+  /** Zone-only presence of a sample person; null when they are not around. */
+  presence_zone: string | null;
+  presence_spot: string | null;
 }
 
 const A = 'sample-cloud-summit-2026';
@@ -232,6 +238,7 @@ function person(
   speak: string[],
   shared: string[],
   open_to_meet = true,
+  text: { expertise?: string; interests?: string; zone?: string | null; spot?: string | null } = {},
 ): MockPerson {
   return {
     ref: `mockref${String(n).padStart(9, '0')}`,
@@ -243,15 +250,89 @@ function person(
     speak_topics: speak,
     shared_talk_ids: shared,
     open_to_meet,
+    expertise: text.expertise ?? `Placeholder experience ${n}: ran sample clusters and wrote sample tooling.`,
+    interests: text.interests ?? `Placeholder interest ${n}: comparing notes on sample platforms.`,
+    presence_zone: text.zone ?? null,
+    presence_spot: text.spot ?? null,
   };
 }
 
-export const MOCK_PEOPLE: MockPerson[] = [
-  person(1, A, 'Avery', ['ebpf'], ['kubernetes', 'security'], [`${A}:1001`]),
-  person(2, A, 'Blake', ['security'], ['ebpf', 'observability'], [`${A}:1001`, `${A}:1003`]),
-  person(3, A, 'Casey', ['ai'], ['service-mesh'], [`${A}:1003`]),
-  person(4, A, 'Devon', ['kubernetes'], ['platform-engineering'], [], true),
-  person(5, A, 'Emery', ['observability'], ['wasm'], [`${A}:1001`], false),
-  person(6, B, 'Finley', ['agents'], ['mcp-servers'], [`${B}:1021`]),
-  person(7, B, 'Gray', ['mcp-servers'], ['ai', 'agents'], [`${B}:1021`]),
+// Extra sample people so the people search has more than one page of 20.
+const FILLER_EXPERTISE = [
+  'Ran Postgres operators on bare metal for 3 years and lived through two storage migrations.',
+  'Moved a 40-team platform to GitOps with Argo CD; wrote the rollback runbooks.',
+  'Built an internal developer portal on Backstage and then replaced half of it.',
+  'Tuned eBPF probes in production until the overhead fell under one percent.',
+  'Operated a multi-cluster service mesh across three clouds with mTLS everywhere.',
+  'Wrote admission policies in Rego and then migrated them to Kyverno.',
+  'Scaled a Kafka platform past a million messages a second on Kubernetes.',
+  'Shipped WebAssembly plugins for an API gateway and measured cold starts.',
+  'Set up GPU scheduling for an ML platform; fought the node autoscaler and won.',
+  'Debugged DNS in Kubernetes more times than anyone should.',
+  'Migrated CI from Jenkins to Tekton for a 200-developer org.',
+  'Built cost dashboards from OpenCost and cut the cloud bill by a third.',
+  'Ran an on-call rotation for a managed Kubernetes product with 400 clusters.',
 ];
+
+const FILLER_NAMES = [
+  'Harper', 'Indigo', 'Jules', 'Kai', 'Lennon', 'Marlowe', 'Noor', 'Oakley', 'Parker', 'Quinn', 'Reese', 'Sage', 'Tatum',
+  'Uma', 'Vesper', 'Wren', 'Xen', 'Yael', 'Zephyr', 'Arden', 'Bellamy', 'Cleo', 'Dakota', 'Ellis', 'Frankie', 'Greer',
+];
+const FILLER_TOPICS = ['kubernetes', 'ebpf', 'service-mesh', 'security', 'observability', 'ai', 'platform-engineering', 'wasm'];
+
+const FIXED_ZONE_SAMPLES = ['Hallway', 'Food and coffee', 'Sample Room 2', 'Registration', 'Outside', 'Expo hall'];
+
+const FILLER: MockPerson[] = FILLER_NAMES.map((name, i) =>
+  person(
+    100 + i,
+    A,
+    name,
+    [FILLER_TOPICS[(i + 3) % FILLER_TOPICS.length]],
+    [FILLER_TOPICS[i % FILLER_TOPICS.length]],
+    [],
+    true,
+    {
+      expertise: FILLER_EXPERTISE[i % FILLER_EXPERTISE.length],
+      zone: i % 5 === 0 ? FIXED_ZONE_SAMPLES[(i / 5) % FIXED_ZONE_SAMPLES.length] : null,
+    },
+  ),
+);
+
+export const MOCK_PEOPLE: MockPerson[] = [
+  person(1, A, 'Avery', ['ebpf'], ['kubernetes', 'security'], [`${A}:1001`], true, {
+    expertise: 'Ran Postgres operators on bare metal for 3 years; broke and fixed Kubernetes upgrades across 60 clusters.',
+    interests: 'Getting Postgres failover under a minute without a managed service.',
+    zone: 'Sample Room 1',
+    spot: 'back row, left',
+  }),
+  person(2, A, 'Blake', ['security'], ['ebpf', 'observability'], [`${A}:1001`, `${A}:1003`], true, {
+    expertise: 'Tuned eBPF probes in production until the overhead fell under one percent; built the tracing pipeline around them.',
+    interests: 'Supply-chain security for a platform team that ships 300 images a day.',
+    zone: 'Expo hall',
+    spot: 'by the coffee cart',
+  }),
+  person(3, A, 'Casey', ['ai'], ['service-mesh'], [`${A}:1003`], true, {
+    expertise: 'Operated a multi-cluster service mesh across three clouds; wrote the mTLS rotation tooling.',
+    interests: 'Running inference workloads next to the mesh without doubling latency.',
+  }),
+  person(4, A, 'Devon', ['kubernetes'], ['platform-engineering'], [], true, {
+    expertise: 'Moved a 40-team platform to GitOps with Argo CD; wrote the rollback runbooks.',
+    interests: 'Kubernetes multi-tenancy for teams that refuse to share a cluster.',
+  }),
+  person(5, A, 'Emery', ['observability'], ['wasm'], [`${A}:1001`], false, {
+    expertise: 'Shipped WebAssembly plugins for an API gateway and measured cold starts.',
+  }),
+  person(6, B, 'Finley', ['agents'], ['mcp-servers'], [`${B}:1021`], true, {
+    expertise: 'Wrote three MCP servers for internal tools and hardened them after a prompt-injection incident.',
+    interests: 'Evaluating agents without an eval team.',
+    zone: 'Sample Hall',
+  }),
+  person(7, B, 'Gray', ['mcp-servers'], ['ai', 'agents'], [`${B}:1021`], true, {
+    expertise: 'Built an agent platform on top of a message queue; learned why retries and tool calls do not mix.',
+    interests: 'Securing MCP servers that other teams write.',
+  }),
+  ...FILLER,
+];
+
+/** The sample person who asks the user to talk shop shortly after presence is turned on. */
+export const MOCK_REQUESTER_REF = 'mockref000000002';
