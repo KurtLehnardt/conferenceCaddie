@@ -2,6 +2,7 @@
 // which people it has seen (for the opener and about after a meet), and the block action.
 import { useEffect } from 'preact/hooks';
 import { blockPerson, fetchInbox, isAbort, PeopleApiError, unblockPerson } from './api';
+import { nudgeTick } from './nudges';
 import { addBlock, getPresence, isBlocked, notify, removeBlock, usePeopleStore } from './storage';
 import type { Inbox, InboxIncoming, InboxOutgoing, MeetState, PersonResult } from './types';
 import { confirm, toast } from './ui';
@@ -142,7 +143,10 @@ export function useInboxWatch(slug: string | null, always = false): void {
     if (!slug || !active) return;
     let timer: number | undefined;
     const tick = () => {
-      if (document.visibilityState !== 'hidden') void refreshInbox(slug);
+      if (document.visibilityState !== 'hidden') {
+        void refreshInbox(slug);
+        void nudgeTick(slug);
+      }
       timer = window.setTimeout(tick, INBOX_POLL_MS);
     };
     timer = window.setTimeout(tick, INBOX_POLL_MS);

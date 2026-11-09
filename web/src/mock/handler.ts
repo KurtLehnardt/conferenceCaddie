@@ -173,7 +173,7 @@ function personResult(
   p: MockPerson,
   me: Stored | undefined,
   interestedIds: string[],
-  extra: { terms?: string[]; meAround?: boolean } = {},
+  extra: { terms?: string[]; meAround?: boolean; zone?: string | null; broad?: boolean } = {},
 ) {
   const myLearn = (me?.profile.learn_topics as string[] | undefined) ?? [];
   const mySpeak = (me?.profile.speak_topics as string[] | undefined) ?? [];
@@ -184,14 +184,22 @@ function personResult(
   // Find & connect: the passage that matched the text search, with <mark> tags.
   const terms = extra.terms ?? [];
   const hit = terms.length ? (highlight(p.expertise, terms) ?? highlight(p.about, terms)) : null;
-  const evidence = hit ?? p.expertise.split(/(?<=\.)\s/)[0];
-  const around = !!p.presence_zone;
-  const zone = around && extra.meAround ? p.presence_zone : undefined;
-  if (hit) reasons.push(`They've worked on ${hit}`);
-  if (canTeach.length) reasons.push(`They can speak to ${label(canTeach)}, which you want to learn about.`);
-  if (wantsMine.length) reasons.push(`They want to learn about ${label(wantsMine)}, which you can speak to.`);
-  const both = p.shared_talk_ids.find((id) => interestedIds.includes(id));
-  if (both) reasons.push(`You are both interested in ${MOCK_TALKS.find((t) => t.talk_id === both)?.title}.`);
+  const presenceZone = extra.zone === undefined ? p.presence_zone : extra.zone;
+  const around = !!presenceZone;
+  const zone = around && extra.meAround ? presenceZone : undefined;
+  const broad = extra.broad === true;
+  // A broad match carries no evidence and leads with the shared common topic.
+  const evidence = broad ? null : (hit ?? p.expertise.split(/(?<=\.)\s/)[0]);
+  if (broad) {
+    const shared = [...new Set([...canTeach, ...wantsMine])];
+    reasons.push(`Also interested in ${label(shared.length ? shared : p.speak_topics.slice(0, 1))}.`);
+  } else {
+    if (hit) reasons.push(`They've worked on ${hit}`);
+    if (canTeach.length) reasons.push(`They can speak to ${label(canTeach)}, which you want to learn about.`);
+    if (wantsMine.length) reasons.push(`They want to learn about ${label(wantsMine)}, which you can speak to.`);
+    const both = p.shared_talk_ids.find((id) => interestedIds.includes(id));
+    if (both) reasons.push(`You are both interested in ${MOCK_TALKS.find((t) => t.talk_id === both)?.title}.`);
+  }
   if (zone) reasons.push(`They're in ${zone} right now.`);
   if (!reasons.length) reasons.push(`Ask them about ${label(p.speak_topics)}.`);
   return {
@@ -207,6 +215,7 @@ function personResult(
     evidence,
     around,
     ...(zone ? { zone } : {}),
+    ...(broad ? { broad: true } : {}),
   };
 }
 
@@ -278,6 +287,18 @@ function myPresence(c: Connect, slug: string, id: string) {
   return p;
 }
 
+type MyPresence = ReturnType<typeof myPresence>;
+
+/**
+ * Where a sample person is right now: their fixed zone, or, for the nudge fixtures, the
+ * requester's own zone once enough time has passed since the requester's presence went on.
+ */
+function zoneOf(p: MockPerson, mine: MyPresence): string | null {
+  if (p.joins_me_after_ms === undefined || p.joins_me_after_ms === null) return p.presence_zone;
+  if (!mine) return null;
+  return Date.now() - Date.parse(mine.since) >= p.joins_me_after_ms ? (p.joins_zone ?? mine.zone) : null;
+}
+
 function blockedEitherWay(c: Connect, slug: string, id: string, ref: string): boolean {
   return (c.blocks[`${slug}:${id}`] ?? []).includes(ref);
 }
@@ -301,14 +322,15 @@ function advanceMeets(c: Connect, slug: string, id: string) {
   for (const m of c.meets) {
     if (m.event_id !== slug || (m.requester !== me && m.recipient !== me)) continue;
     const other = otherOf(m, me);
-    if (m.state === 'requested' && m.requester === me && other?.presence_zone && now - Date.parse(m.created_at) > AUTO_ACCEPT_MS) {
+    const otherZone = other ? zoneOf(other, mine) : null;
+    if (m.state === 'requested' && m.requester === me && otherZone && now - Date.parse(m.created_at) > AUTO_ACCEPT_MS) {
       m.state = 'accepted';
     }
-    if (m.state === 'accepted' && mine && other?.presence_zone) {
+    if (m.state === 'accepted' && mine && otherZone) {
       m.state = 'active';
       m.active_since = new Date(now).toISOString();
       m.expires_at = new Date(now + ACTIVE_MS).toISOString();
-      if (!m.rendezvous) m.rendezvous = other.presence_zone;
+      if (!m.rendezvous) m.rendezvous = otherZone;
     }
     if (m.state === 'active' && (!mine || (m.expires_at && Date.parse(m.expires_at) <= now))) m.state = 'expired';
   }
@@ -427,20 +449,28 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
     const from = Math.max(0, Number(body.from) || 0);
     const size = Math.min(Math.max(1, Number(body.size) || 20), 20);
-    const meAround = !!myPresence(c, conf.slug, id);
+    const mine = myPresence(c, conf.slug, id);
+    const meAround = !!mine;
     const pool = MOCK_PEOPLE.filter(
       (p) =>
         p.event_id === conf.slug &&
         p.open_to_meet &&
         !blockedEitherWay(c, conf.slug, id, p.ref) &&
-        (body.when !== 'around_now' || !!p.presence_zone) &&
+        (body.when !== 'around_now' || !!zoneOf(p, mine)) &&
         (!terms.length || terms.some((w) => `${p.expertise} ${p.about}`.toLowerCase().includes(w))),
     );
     // Text hits first, then people who are around, as the real ranking would.
     const score = (p: MockPerson) =>
-      (terms.filter((w) => p.expertise.toLowerCase().includes(w)).length || 0) * 10 + (p.presence_zone ? 1 : 0);
-    const ranked = pool.sort((a, b) => score(b) - score(a));
-    const results = ranked.slice(from, from + size).map((p) => personResult(p, me, interestedIds, { terms, meAround }));
+      (terms.filter((w) => p.expertise.toLowerCase().includes(w)).length || 0) * 10 + (zoneOf(p, mine) ? 1 : 0);
+    const specific = pool.filter((p) => !p.broad_only).sort((a, b) => score(b) - score(a));
+    // Specificity rule: broad matches are left out of a text search and of the anyone view; the
+    // around_now view keeps those in the requester's own zone, after every specific match.
+    const broad =
+      body.when === 'around_now' && mine && !terms.length ? pool.filter((p) => p.broad_only && zoneOf(p, mine) === mine.zone) : [];
+    const ranked = [...specific, ...broad];
+    const results = ranked
+      .slice(from, from + size)
+      .map((p) => personResult(p, me, interestedIds, { terms, meAround, zone: zoneOf(p, mine), broad: !!p.broad_only }));
     writeConnect(c);
     return { results };
   }
@@ -612,16 +642,17 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       writeConnect(c);
       const active = m.state === 'active';
       const otherKey = m.requester === me ? m.recipient : m.requester;
+      const otherZone = other ? zoneOf(other, myPresence(c, m.event_id, id)) : null;
       return {
         state: m.state,
         active_until: active ? m.expires_at : null,
         other: {
           display_name: other?.display_name ?? 'Someone',
-          zone: active ? (other?.presence_zone ?? null) : null,
+          zone: active ? otherZone : null,
           spot: active ? (other?.presence_spot ?? null) : null,
           spot_me: active ? (m.spot_me[otherKey] ?? null) : null,
         },
-        rendezvous: m.rendezvous ?? (active ? (other?.presence_zone ?? myPresence(c, m.event_id, id)?.zone ?? null) : null),
+        rendezvous: m.rendezvous ?? (active ? (otherZone ?? myPresence(c, m.event_id, id)?.zone ?? null) : null),
         mine: { spot_me: m.spot_me[me] ?? null },
       };
     }

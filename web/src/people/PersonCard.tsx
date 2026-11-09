@@ -5,6 +5,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { ExternalLink, MapPin, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
 import { AskSheet, plainText } from './AskSheet';
+import { BroadLine, broadReason } from './BroadLine';
 import { blockWithConfirm, outgoingTo, rememberPerson, requestTo } from './connect';
 import { usePeopleStore } from './storage';
 import type { PersonResult, TopicRef } from './types';
@@ -35,15 +36,17 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
   const evidence = person.evidence ? plainText(person.evidence) : '';
   // The evidence block already shows the matched passage, so a reason that repeats it is left out.
   const repeats = (r: string) => !!evidence && plainText(r).includes(evidence);
-  const opener = person.opener && !repeats(person.opener) ? person.opener : '';
-  const reasons = (person.reasons ?? []).filter((r) => r && r !== person.opener && !repeats(r));
+  // A broad match leads with its "Also interested in" line instead of an opener (BroadLine).
+  const broad = person.broad === true;
+  const opener = !broad && person.opener && !repeats(person.opener) ? person.opener : '';
+  const reasons = (person.reasons ?? []).filter((r) => r && r !== person.opener && !repeats(r) && !(broad && r === broadReason(person)));
   const contact = person.contact;
   const hasContact = !!(contact && (contact.linkedin_url || contact.contact_note));
   const asked = requestTo(slug, person.ref);
   const open = asked && asked !== 'requested' ? outgoingTo(slug, person.ref) : null;
 
   return (
-    <article class="pp-person">
+    <article class={`pp-person${broad ? ' pp-person-broad' : ''}`}>
       <header class="pp-person-head">
         <h3 class="pp-person-name">{person.display_name}</h3>
         {person.sample && (
@@ -59,6 +62,7 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
           />
         </span>
       </header>
+      {broad && <BroadLine person={person} />}
       {person.around && (
         <p class="pp-around">
           <MapPin size={16} aria-hidden="true" />
@@ -66,7 +70,7 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
         </p>
       )}
       {person.about && <p class="pp-person-about">{person.about}</p>}
-      {person.evidence && (
+      {!broad && person.evidence && (
         <blockquote class="pp-evidence">
           <Marked text={person.evidence} />
         </blockquote>

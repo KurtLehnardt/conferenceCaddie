@@ -5,6 +5,8 @@ import { Check, MessagesSquare, Search, UserRound, Users, X } from 'lucide-preac
 import { fetchMatches, isAbort, MATCH_PAGE, PeopleApiError } from './api';
 import { takePendingSearch, withoutBlocked } from './connect';
 import { ForYouRow } from './ForYou';
+import { NudgeBanner } from './NudgeBanner';
+import { revealIn, useNudges } from './nudges';
 import { PersonCard, SampleNote } from './PersonCard';
 import { PresenceControls } from './PresenceControls';
 import { getPresence, getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
@@ -220,6 +222,10 @@ function PeopleList({
   const [error, setError] = useState<string | null>(null);
   const [more, setMore] = useState(false);
   const sentinel = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // Nudges: the key whose first page is on screen, so "See who" waits for the Around now list.
+  const loaded = useRef('');
+  const { reveal } = useNudges(slug);
   const searching = !!query.trim() || around;
   // Zones come back only while I am around, so the list is fetched again when that changes.
   const meAround = getPresence(slug).on;
@@ -244,6 +250,7 @@ function PeopleList({
       .then((r) => {
         if (ctl.signal.aborted) return;
         const results = r.results ?? [];
+        loaded.current = key;
         setPage({ results, done: results.length < MATCH_PAGE });
       })
       .catch((err) => {
@@ -288,6 +295,11 @@ function PeopleList({
     };
   }, [page]);
 
+  // Nudges: "See who" lands on that person's card once the Around now list has loaded.
+  useEffect(() => {
+    if (around && page && reveal && loaded.current === key) revealIn(slug, list.current, withoutBlocked(slug, page.results));
+  }, [around, page, reveal]);
+
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;
   if (error) return <p class="pp-error pp-pad">{error}</p>;
@@ -301,7 +313,7 @@ function PeopleList({
     );
   }
   return (
-    <div class="pp-list">
+    <div class="pp-list" ref={list}>
       <SampleNote people={results} />
       {results.map((p) => (
         <PersonCard key={p.ref} person={p} slug={slug} />
@@ -342,9 +354,18 @@ export function PeopleScreen({
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
+  // Nudges: "See who" opens the Around now view, where the person's card is.
+  const { reveal } = useNudges(conference.slug);
+  useEffect(() => {
+    if (!reveal) return;
+    onInput('');
+    setAround(true);
+  }, [reveal]);
+
   const searching = !!query.trim() || around;
   return (
     <div class="pp-screen">
+      <NudgeBanner conference={conference} />
       <PeopleSearchBar value={input} around={around} onInput={onInput} onAround={setAround} />
       <PresenceControls conference={conference} interested={interested} deepLink={hereZone} onDeepLinkHandled={onHereHandled} />
       {!searching && <EndedTalkBanner conference={conference} interested={interested} onOpenTalk={onOpenTalk} />}

@@ -52,6 +52,8 @@ export interface PersonResult {
   /** True while they are around; `zone` is sent only when both of us are around. */
   around?: boolean;
   zone?: string | null;
+  /** True for a broad match: found only through a common topic, so it carries no evidence. */
+  broad?: boolean;
 }
 
 /** Find & connect: device-side presence state (caddie.presence.v1.{slug}). */

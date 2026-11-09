@@ -35,6 +35,18 @@ export interface MockPerson {
   /** Zone-only presence of a sample person; null when they are not around. */
   presence_zone: string | null;
   presence_spot: string | null;
+  /**
+   * Stands in for the specificity rule: this person matches the requester only through a common
+   * topic, so they are a broad match (the real server reads this from the rrf explanation).
+   */
+  broad_only?: boolean;
+  /**
+   * Turns up this long after the requester's presence goes on, in `joins_zone` or, without one,
+   * the requester's own zone, so the nudge banner can be exercised; null or absent means
+   * presence_zone applies as fixed.
+   */
+  joins_me_after_ms?: number | null;
+  joins_zone?: string;
 }
 
 const A = 'sample-cloud-summit-2026';
@@ -230,6 +242,11 @@ export const MOCK_TOPICS: MockTopic[] = (() => {
   return out.sort((a, b) => b.talk_count - a.talk_count);
 })();
 
+/** How long after my presence goes on the nudge fixture person turns up in my zone. */
+const NUDGE_JOIN_MS = 8_000;
+/** How long after my presence goes on the watched fixture person turns up, in another zone. */
+const WATCH_JOIN_MS = 12_000;
+
 function person(
   n: number,
   event_id: string,
@@ -238,7 +255,15 @@ function person(
   speak: string[],
   shared: string[],
   open_to_meet = true,
-  text: { expertise?: string; interests?: string; zone?: string | null; spot?: string | null } = {},
+  text: {
+    expertise?: string;
+    interests?: string;
+    zone?: string | null;
+    spot?: string | null;
+    broad_only?: boolean;
+    joins_me_after_ms?: number | null;
+    joins_zone?: string;
+  } = {},
 ): MockPerson {
   return {
     ref: `mockref${String(n).padStart(9, '0')}`,
@@ -254,6 +279,9 @@ function person(
     interests: text.interests ?? `Placeholder interest ${n}: comparing notes on sample platforms.`,
     presence_zone: text.zone ?? null,
     presence_spot: text.spot ?? null,
+    ...(text.broad_only ? { broad_only: true } : {}),
+    ...(text.joins_me_after_ms !== undefined ? { joins_me_after_ms: text.joins_me_after_ms } : {}),
+    ...(text.joins_zone ? { joins_zone: text.joins_zone } : {}),
   };
 }
 
@@ -330,6 +358,26 @@ export const MOCK_PEOPLE: MockPerson[] = [
   person(7, B, 'Gray', ['mcp-servers'], ['ai', 'agents'], [`${B}:1021`], true, {
     expertise: 'Built an agent platform on top of a message queue; learned why retries and tool calls do not mix.',
     interests: 'Securing MCP servers that other teams write.',
+  }),
+  // Nudges: a specific match who walks into my zone about 8 s after I turn presence on.
+  person(8, A, 'Rowan', ['observability'], ['kubernetes', 'platform-engineering'], [], true, {
+    expertise: "Rebuilt a 3,000-node cluster's etcd from a snapshot during a live event. Wrote the runbook afterwards.",
+    interests: 'Making control-plane recovery boring.',
+    joins_me_after_ms: NUDGE_JOIN_MS,
+  }),
+  // Nudges: a broad match (common topic only) who is in my zone from the start and must never nudge.
+  person(9, A, 'Sawyer', ['security'], ['kubernetes'], [], true, {
+    expertise: 'Keeps a few clusters running for a small team.',
+    interests: 'Whatever everyone else is talking about this year.',
+    broad_only: true,
+    joins_me_after_ms: 0,
+  }),
+  // Nudges: someone to watch (caddie.watch.v1) who turns up in another zone ~12 s after I'm around.
+  person(10, A, 'Tenzin', ['wasm'], ['observability'], [], true, {
+    expertise: 'Ran the tracing backend for a payments company; cut cardinality by 90% without losing an alert.',
+    interests: 'Profiling in production without a sidecar per pod.',
+    joins_me_after_ms: WATCH_JOIN_MS,
+    joins_zone: 'Hallway',
   }),
   ...FILLER,
 ];

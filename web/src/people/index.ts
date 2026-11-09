@@ -1,6 +1,7 @@
 // Public surface of the people features (CONTRACT3 section 5). The shell imports
 // only from this file and from ./import.
 import './people.css';
+import './nudges.css';
 
 export { PeopleScreen, EndedTalkBanner } from './PeopleScreen';
 export { ForYouScreen } from './ForYou';
@@ -10,6 +11,7 @@ export { ShareAllControls } from './ShareAllControls';
 export { InboxScreen } from './InboxScreen';
 export { MeetScreen } from './MeetScreen';
 export { BlockedPeople, PeopleIMet } from './SettingsPeople';
+export { NudgeSetting } from './NudgeBanner';
 export { onInterestedChanged } from './sync';
 export { importProfile } from './import';
 export { registerPeopleUi } from './ui';

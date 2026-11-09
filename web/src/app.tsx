@@ -26,6 +26,7 @@ import {
   ForYouScreen,
   InboxScreen,
   MeetScreen,
+  NudgeSetting,
   PeopleIMet,
   PeopleScreen,
   ProfileScreen,
@@ -465,7 +466,7 @@ export function App() {
             <SettingsScreen
               theme={theme}
               onTheme={setTheme}
-              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /></> : null}
+              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><NudgeSetting conference={searchable} /></> : null}
             />
           ) : !searchable ? (
             blocker()
