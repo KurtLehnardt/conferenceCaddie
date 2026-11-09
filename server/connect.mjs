@@ -32,13 +32,16 @@
 // - "Not now" is silent: the requester keeps seeing "requested" until the request runs out.
 //   Three "Not now" replies in one day pause the requester until the next day. When a meet
 //   ends, only participants, topic, state and times are kept.
-// - Spot lines, notes and spot-me lines pass the wordlist filter in moderation.mjs.
+// - Spot lines, notes and spot-me lines pass the filter in moderation.mjs (rules, then the
+//   classifier). A rejected line is 400 filtered; a held line is stored with a *_pending flag,
+//   shown only to its author, answered with `held` on the 200 and reported as 'classifier'.
 // - Nothing from a request body, header or document is logged.
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
 import { refFor } from './device.mjs';
-import { isFiltered, FILTERED } from './moderation.mjs';
+import { moderate, HELD } from './moderation.mjs';
+import { classifierReport } from './report.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
@@ -86,13 +89,18 @@ function reader(req) {
   return device;
 }
 
-// A short line other people will read: trimmed, capped, and passed through the wordlist filter.
-// Returns null for an empty line.
-function line(value, name, max) {
+// A short line other people will read: trimmed, capped, and passed through the filter.
+// Returns { text, pending }: text is null for an empty line; pending is true when the classifier
+// held it (the line is then stored but shown only to its author until it is cleared).
+async function line(value, name, max) {
   const t = text(value, name, max);
-  if (t && isFiltered(t)) throw new HttpError(400, FILTERED);
-  return t || null;
+  if (!t) return { text: null, pending: false };
+  const verdict = await moderate(t);
+  if (verdict.outcome === 'reject') throw new HttpError(400, verdict.body);
+  return { text: t, pending: verdict.outcome === 'hold' };
 }
+// The extra key on a 200 response when a field was held. Old clients ignore it.
+const heldInfo = (fields) => (fields.length ? { held: { fields, message: HELD.message } } : {});
 
 function refOf(body) {
   if (typeof body.ref !== 'string' || !REF_RE.test(body.ref)) throw bad('ref must be a result reference');
@@ -143,6 +151,8 @@ function endMeet(s, state, nowMs) {
   s.note = null;
   s.rendezvous = null;
   s.spot_me = {};
+  s.spot_me_pending = {};
+  s.note_pending = false;
 }
 
 // Accept means now: both are around, and the meet runs for 20 minutes from this moment. In the
@@ -217,7 +227,8 @@ function meetView(s, me, other, labels, { withDistance = false } = {}) {
     same_zone: s.same_zone === true,
     topic,
     topic_label: topic?.label ?? null,
-    note: s.note ?? null,
+    // A held note reaches only its author until the filter clears it.
+    note: s.note_pending === true && s.requester_id !== me.profile_id ? '' : s.note ?? null,
     created_at: s.created_at ?? null,
     active_since: s.active_since ?? null,
     active_until: active ? s.expires_at ?? null : null,
@@ -230,8 +241,8 @@ function meetView(s, me, other, labels, { withDistance = false } = {}) {
       about: other?.about ?? '',
       around: Boolean(other) && isAround(other),
       zone: showZone ? other.presence_zone ?? null : null,
-      spot: active && together ? other.presence_spot ?? null : null,
-      spot_me: active && otherId ? s.spot_me?.[otherId] ?? null : null,
+      spot: active && together && other.presence_spot_pending !== true ? other.presence_spot ?? null : null,
+      spot_me: active && otherId && s.spot_me_pending?.[otherId] !== true ? s.spot_me?.[otherId] ?? null : null,
       ...position,
     },
   };
@@ -350,7 +361,7 @@ async function putPresence(req, res) {
   const body = await jsonBody(req, PRESENCE_KEYS);
   if (typeof body.zone !== 'string') throw bad('zone must be a string');
   const zone = body.zone.trim();
-  const spot = line(body.spot, 'spot', SPOT_MAX);
+  const { text: spot, pending: spotPending } = await line(body.spot, 'spot', SPOT_MAX);
   const location = locationFields(body.location);
   const mode = body.until === undefined || body.until === null ? 'hour' : body.until;
   if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour' or 'day'");
@@ -369,10 +380,12 @@ async function putPresence(req, res) {
   // A spot line hidden after reports stays off until the operator unhides it.
   const storedSpot = me.spot_hidden === true ? null : spot;
   // A write without a usable position clears any stored one, so the presence is zone-only again.
-  const presence = { presence_zone: zone, presence_spot: storedSpot, presence_since: since, presence_until: iso(untilMs), ...location };
+  const held = Boolean(storedSpot) && spotPending;
+  const presence = { presence_zone: zone, presence_spot: storedSpot, presence_spot_pending: held, presence_since: since, presence_until: iso(untilMs), ...location };
   const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: presence });
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null });
+  if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);
+  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null, ...heldInfo(held ? ['spot'] : []) });
 }
 
 async function deletePresence(req, res, url) {
@@ -400,7 +413,8 @@ async function requestMeet(req, res) {
   const ref = refOf(body);
   const topicId = body.topic_id === undefined || body.topic_id === null ? null : body.topic_id;
   if (topicId !== null && (typeof topicId !== 'string' || !TOPIC_ID_RE.test(topicId))) throw bad('topic_id must be a topic id or null');
-  const note = line(body.note, 'note', NOTE_MAX) ?? '';
+  const { text: noteText, pending: notePending } = await line(body.note, 'note', NOTE_MAX);
+  const note = noteText ?? '';
   const conf = await conferenceFor(body.event);
   const me = await requireProfile(device, conf.slug);
   // A profile hidden after reports must not surface in anyone's inbox.
@@ -448,8 +462,10 @@ async function requestMeet(req, res) {
     requester_id: me.profile_id,
     topic_id: topicId,
     note,
+    note_pending: notePending,
     rendezvous: null,
     spot_me: {},
+    spot_me_pending: {},
     state: 'requested',
     same_zone: sameZone(me, them),
     created_at: iso(now),
@@ -459,7 +475,8 @@ async function requestMeet(req, res) {
   };
   const { status } = await people('PUT', `${idx(MEETS_INDEX)}/_create/${encodeURIComponent(s.meet_id)}?refresh=wait_for`, s, { okStatuses: [409] });
   if (status === 409) throw new UpstreamError('meet id collision');
-  sendJson(res, 200, { ok: true, ...meetView(s, me, them, labels) });
+  if (notePending) await classifierReport(conf.slug, 'meet', s.meet_id, me.profile_id);
+  sendJson(res, 200, { ok: true, ...meetView(s, me, them, labels), ...heldInfo(notePending ? ['note'] : []) });
 }
 
 async function inbox(req, res, url) {
@@ -570,11 +587,16 @@ async function putDetails(req, res, id) {
   // Either participant may write their line or a meeting point while the meet is open; the
   // other person sees a spot-me line only once the meet is active.
   expectState(s, me, OPEN_STATES);
+  let heldFields = [];
   if (body.spot_me !== undefined) {
-    const spotMe = line(body.spot_me, 'spot_me', SPOT_MAX);
+    const { text: spotMe, pending } = await line(body.spot_me, 'spot_me', SPOT_MAX);
     s.spot_me = { ...(s.spot_me ?? {}) };
+    s.spot_me_pending = { ...(s.spot_me_pending ?? {}) };
     if (spotMe) s.spot_me[me.profile_id] = spotMe;
     else delete s.spot_me[me.profile_id];
+    if (spotMe && pending) s.spot_me_pending[me.profile_id] = true;
+    else delete s.spot_me_pending[me.profile_id];
+    heldFields = spotMe && pending ? ['spot_me'] : [];
   }
   if (body.rendezvous !== undefined) {
     if (body.rendezvous === null || body.rendezvous === '') {
@@ -587,7 +609,8 @@ async function putDetails(req, res, id) {
     }
   }
   await saveMeet(meet);
-  sendJson(res, 200, { ok: true, ...meetView(s, me, other, labels) });
+  if (heldFields.length) await classifierReport(s.event_id, 'meet', s.meet_id, me.profile_id);
+  sendJson(res, 200, { ok: true, ...meetView(s, me, other, labels), ...heldInfo(heldFields) });
 }
 
 // ---------------------------------------------------------------------------------------------

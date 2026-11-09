@@ -150,7 +150,7 @@ export const EXPIRED_PEOPLE_QUERY = {
 };
 export const EXPIRED_PRESENCE_QUERY = { range: { presence_until: { lt: 'now' } } };
 export const EXPIRED_MEETS_QUERY = { range: { expires_at: { lt: 'now' } } };
-export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null };
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null };
 
 async function purgeExpired() {
   if (!PEOPLE_KEY) return;
@@ -502,7 +502,7 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // ---------------------------------------------------------------------------------------------
 // People documents (people key).
 
-const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
+const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
 const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
 const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];

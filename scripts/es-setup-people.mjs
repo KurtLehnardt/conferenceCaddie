@@ -81,6 +81,8 @@ const connectProperties = {
   ref: { type: 'keyword' },
   presence_zone: { type: 'keyword' },
   presence_spot: { type: 'text' },
+  // True while the classifier holds the spot line: stored, shown only to its author.
+  presence_spot_pending: { type: 'boolean' },
   presence_since: { type: 'date' },
   presence_until: { type: 'date' },
   // GPS bands: the rounded position (5 decimals) and its accuracy in metres, written only when
@@ -132,6 +134,9 @@ const meetsProperties = {
   note: hidden,
   rendezvous: hidden,
   spot_me: { type: 'object', enabled: false },
+  // Classifier holds: a held note reaches only its author; spot_me_pending is { profile_id: true }.
+  note_pending: { type: 'boolean' },
+  spot_me_pending: { type: 'object', enabled: false },
   state: { type: 'keyword' },
   same_zone: { type: 'boolean' },
   created_at: { type: 'date' },

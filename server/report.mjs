@@ -20,6 +20,10 @@
 // - 20 reports per device per hour, on top of the shared per-address write limit.
 // - The response is { ok, hidden }. The reporter never learns who else reported, and no
 //   profile_id, reporter_id or report _id leaves the server. Nothing from the body is logged.
+// - The text filter (server/moderation.mjs, through connect.mjs) writes a report too when it holds
+//   a line: reporter_id 'classifier', reason 'classifier', on the author, so a held line counts
+//   as one of the two reports and shows up in the operator CLI. Repeated holds by the same
+//   author of the same target collapse into one report.
 
 import { clientIp } from './ratelimit.mjs';
 import { refFor } from './device.mjs';
@@ -101,6 +105,27 @@ async function hide(slug, kind, id, profileId) {
   const doc = kind === 'profile' ? { hidden: true } : { presence_spot: null, spot_hidden: true };
   const status = await bulkOne({ update: { _id: docId(slug, profileId) } }, { doc });
   if (status !== 404 && (status < 200 || status > 299)) throw new UpstreamError(`bulk item status ${status}`);
+}
+
+// The automatic report the filter files when it holds a line. The _id's reporter is the fixed
+// 'classifier', so repeated holds of the same target are one report, and the usual hide rule
+// applies: one human report plus a classifier hold hides the target. Never throws, so a report
+// that could not be written does not fail the write that was held.
+export async function classifierReport(slug, kind, id, profileId) {
+  try {
+    await people('PUT', `${idx(REPORTS_INDEX)}/_create/${encodeURIComponent(`${kind}:${id}:classifier`)}?refresh=wait_for`, {
+      event_id: slug,
+      target_kind: kind,
+      target_id: id,
+      target_profile_id: profileId,
+      reporter_id: 'classifier',
+      reason: 'classifier',
+      created_at: new Date().toISOString(),
+    }, { okStatuses: [409] });
+    if ((await reporterCount(slug, kind, id)) >= HIDE_AT) await hide(slug, kind, id, profileId);
+  } catch (err) {
+    console.error(`classifier report failed: ${err?.message ?? 'error'}`);
+  }
 }
 
 async function report(req, res) {

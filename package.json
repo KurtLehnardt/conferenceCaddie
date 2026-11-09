@@ -19,6 +19,8 @@
     "people:backfill-ref": "node scripts/backfill-ref.mjs",
     "reports:setup": "node scripts/es-setup-reports.mjs",
     "moderation": "node scripts/moderation.mjs",
+    "rules:setup": "node scripts/es-setup-rules.mjs",
+    "rules:reload": "node scripts/moderation-rules.mjs --reload-rules",
     "start": "node server/index.mjs",
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web ci && npm --prefix web run build",

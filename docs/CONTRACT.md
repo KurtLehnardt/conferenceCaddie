@@ -37,6 +37,12 @@ Root `package.json` scripts:
   "people:setup": "node scripts/es-setup-people.mjs",
   "people:seed": "node scripts/seed-people.mjs",
   "people:export": "node scripts/export-people.mjs",
+  "people:purge": "node scripts/purge-expired-people.mjs",
+  "people:backfill-ref": "node scripts/backfill-ref.mjs",
+  "reports:setup": "node scripts/es-setup-reports.mjs",
+  "moderation": "node scripts/moderation.mjs",
+  "rules:setup": "node scripts/es-setup-rules.mjs",
+  "rules:reload": "node scripts/moderation-rules.mjs --reload-rules",
   "start": "node server/index.mjs",
   "dev:web": "npm --prefix web run dev",
   "build": "npm --prefix web ci && npm --prefix web run build",
@@ -143,6 +149,7 @@ Every index is versioned behind an alias. The server reads alias names from env:
 | `ref` | keyword. The result reference (see below), stored on every write so a block or a meet request can name a person by it. |
 | `presence_zone` | keyword. The zone the person said they are in; absent or null while they are not around. |
 | `presence_spot` | text. Their optional "how to spot me where I am" line, 60 characters, filtered. |
+| `presence_spot_pending` | boolean. True while the classifier holds the spot line: it is stored and returned to its author only. Cleared with presence. |
 | `presence_since`, `presence_until` | date. Presence is live while `presence_until > now`. |
 | `presence_location` | geo_point `{ lat, lon }`, rounded to 5 decimals. Set only while the person is around and chose to send their position with an accuracy of 200 m or better; otherwise null. Read by the server to rank (a `distance_feature` leg), to band a result and to compute a distance and bearing inside an active meet; never returned. |
 | `presence_accuracy` | integer, metres, the reported accuracy of `presence_location`; null with it. Never returned. |
@@ -166,6 +173,8 @@ Every index is versioned behind an alias. The server reads alias names from env:
 | `event_id`, `meet_id`, `participants` (the two `profile_id`s), `requester_id`, `topic_id`, `state` | keyword |
 | `note`, `rendezvous` | keyword, `index: false` |
 | `spot_me` | object, `enabled: false`: `{ profile_id: line }` for each participant who set one |
+| `note_pending` | boolean. True while the classifier holds the note: everyone but the requester reads it as `""`. |
+| `spot_me_pending` | object, `enabled: false`: `{ profile_id: true }` for each participant whose spot-me line the classifier holds; the other participant then gets `spot_me: null`. |
 | `same_zone` | boolean. True when both were around in the same zone when the ask was made; recomputed on accept. |
 | `created_at`, `active_since`, `expires_at`, `ended_at` | date |
 
@@ -290,16 +299,27 @@ Reports live in `caddie-people-reports-v1` behind `caddie-people-reports` (env `
 
 ## Server
 
-- `server/index.mjs` uses `node:http` only and mounts search, conferences, people, circles, blocks, presence, meets (`server/connect.mjs`), recommendations and topics before the static handler. Env: `PORT` (default 8080), `ES_URL`, `ES_API_KEY`, `ES_PEOPLE_API_KEY`, `ES_INDEX`, `ES_CONFERENCES_INDEX`, `ES_TOPICS_INDEX`, `ES_PEOPLE_INDEX`, `ES_PEOPLE_BLOCKS_INDEX`, `ES_PEOPLE_MEETS_INDEX`, `REF_SALT` (optional, not a secret), `STATIC_DIR` (default `web/dist`). `server/moderation.mjs` reads `config/moderation-words.json` at start, so the runtime image must carry `config/`.
+- `server/index.mjs` uses `node:http` only and mounts search, conferences, people, circles, blocks, presence, meets (`server/connect.mjs`), recommendations and topics before the static handler. Env: `PORT` (default 8080), `ES_URL`, `ES_API_KEY`, `ES_PEOPLE_API_KEY`, `ES_INDEX`, `ES_CONFERENCES_INDEX`, `ES_TOPICS_INDEX`, `ES_PEOPLE_INDEX`, `ES_PEOPLE_BLOCKS_INDEX`, `ES_PEOPLE_MEETS_INDEX`, `REF_SALT` (optional, not a secret), `STATIC_DIR` (default `web/dist`), and for the filter `ES_RULES_INDEX` (default `caddie-people-rules`), `MOD_CLASSIFIER` (`auto` default, `on`, `off`), `MOD_CATEGORIES` (default `Toxic,Insult,Profanity,Derogatory,Sexual,Violent`), `MOD_REJECT` (default `0.8`), `MOD_HOLD` (default `0.5`), `MOD_TIMEOUT_MS` (default `3000`); `MOD_METADATA_URL` and `MOD_CLASSIFIER_URL` exist only to point a local run at stubs. `server/moderation.mjs` reads `config/moderation-words.json` at start, so the runtime image must carry `config/`.
 - It serves the built app from `STATIC_DIR`. Hashed files under `/assets/` get `Cache-Control: public, max-age=31536000, immutable`; `index.html` and `manifest.webmanifest` get `no-cache`. Other GET requests that accept HTML fall back to `index.html`.
 - Headers on every response: `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Strict-Transport-Security: max-age=31536000`, `Permissions-Policy: geolocation=(self), camera=(), microphone=()` (geolocation is allowed for the app's own origin only, for the optional position with presence).
 - It logs one line per request: method, path without the query string, status and duration. It never logs headers, bodies, search text, profile fields, zones, spot lines, notes or credentials.
 - Local runs set keys inline, for example `ES_API_KEY="$ELASTISEARCH_API_KEY" ES_PEOPLE_API_KEY="$ELASTISEARCH_API_KEY" PORT=8081 node server/index.mjs`. Never write a key to a file.
 
+## Moderation
+
+The filter for the lines other people read (`spot`, `note`, `spot_me`) lives in `server/moderation.mjs` and has three layers, in order. Copy says "filter", never "safe".
+
+1. **In process.** A web address other than `linkedin.com` is refused. The line is normalised: NFKC, lowercase, diacritics stripped, leet substitutions 0→o 1→i 3→e 4→a 5→s 7→t @→a $→s, punctuation to spaces.
+2. **Rules: `caddie-people-rules-v1` behind `caddie-people-rules`** (`node scripts/es-setup-rules.mjs`, idempotent). Mapping (`dynamic: false`): `query` percolator; `text` text with the custom analyzer `rule_text` (a `mapping` char_filter for the same leet table, `standard` tokenizer, `lowercase`, `asciifolding`); `rule`, `kind`, `source` keyword; `created_at` date. `node scripts/moderation-rules.mjs --reload-rules` replaces every rule with one document per entry of `config/moderation-words.json`: a word or phrase becomes `match_phrase` on `text`, an entry starting with `re:` a `regexp` on `text` (single tokens, lowercase); ids are `w-`/`re-` plus a hash of the entry. `--test "<text>"` percolates a line and prints the matching rule ids. The server percolates the normalised line (`percolate` query on `query`, `document: { text }`) and any hit rejects. When the call fails or the index is missing (checked at start and retried a minute after each failure), the in-process wordlist from the same file decides, so the MVP behaviour never goes away. The index must stay `caddie-people-rules*` because the server reads it with the people key.
+3. **Classifier.** `POST https://language.googleapis.com/v1/documents:moderateText` with `{ document: { type: 'PLAIN_TEXT', content } }`, a Bearer token from `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token` (`Metadata-Flavor: Google`, cached until 60 s before expiry). Of the watched categories (`MOD_CATEGORIES`), the highest `confidence` at or above `MOD_REJECT` rejects; at or above `MOD_HOLD` holds; any error or timeout (`MOD_TIMEOUT_MS`) holds. It fails closed. `MOD_CLASSIFIER=off`, or `auto` with no metadata server at start, turns it off and logs `classifier: off` once; `on` keeps it on regardless. It is a classification API, not a generative model, and it is English-centric. Setup: `gcloud services enable language.googleapis.com` once; `caddie-runtime` needs no IAM role for it (see `scripts/deploy.sh`).
+
+Outcomes: **reject** is 400 `{ error: "filtered", message: "That was held back by the filter. Edit it and try again." }`, unchanged from the MVP. **hold** is new: the line is stored with a `*_pending: true` flag, shown only to its author, answered with `{ error: "held", message: "Waiting for the filter; it will appear shortly." }` and reported with reason `classifier` (reporter `classifier`, one report per target, counted like a device's report by the hide-at-two rule). Per route: `PUT /api/presence` stores the spot with `presence_spot_pending: true` and `meetView` shows the other person's spot only while that flag is off; `POST /api/meet` stores `note_pending: true` and the meet shape gives the note as `""` to everyone but its author (the inbox too); `PUT /api/meet/{id}/details` stores `spot_me_pending: { profile_id: true }` and the other participant gets `spot_me: null` while it is set. In each case the 200 body gains `held: { fields: ['spot' | 'note' | 'spot_me'], message }` and the author keeps seeing their own text. A held line is replaced by the author's next write of that field (a new `moderate()` call), cleared with presence or when the meet ends, and otherwise waits for the operator. `isFiltered(line)` (boolean, in process only) and `FILTERED` keep their MVP contract; `moderate(line)` resolves to `{ outcome: 'accept' | 'reject' | 'hold', body, category }` and never throws. The server logs one line per checked text, `filter: accepted|rejected|held <category>`, and never the text, the scores or the device.
+
 ## Keys
 
 - **Read-only key** (Secret Manager `caddie-es-readonly`, env `ES_API_KEY`): `read` and `view_index_metadata` on `caddie-talks*`, `caddie-conferences*` and `caddie-topics*`.
-- **People key** (Secret Manager `caddie-es-people`, env `ES_PEOPLE_API_KEY`): `read`, `write` and `view_index_metadata` on `caddie-people*` only. The server uses it only for people, circles and the circle counts in recommendations.
+- **People key** (Secret Manager `caddie-es-people`, env `ES_PEOPLE_API_KEY`): `read`, `write` and `view_index_metadata` on `caddie-people*` only. The server uses it only for people, circles, the circle counts in recommendations and the filter rules index (`caddie-people-rules*`, named so that this key covers it; the server only searches it).
+- **Classifier**: no key. The server calls Google Cloud Natural Language with the runtime service account's own access token from the metadata server (Application Default Credentials). Nothing to mint, store or rotate.
 - The admin key is used only by the operator's CLI commands and is never deployed.
 - **GitHub token** (optional, Secret Manager `caddie-github-token`, env `GITHUB_TOKEN`): read-only public scope, sent as `Authorization: Bearer` to `api.github.com` by `POST /api/import/github` only; raises GitHub's rate limit from 60 to 5000 requests per hour. When it is absent the server calls GitHub unauthenticated.
 
