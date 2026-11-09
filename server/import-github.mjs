@@ -155,7 +155,8 @@ export function buildProposal(user, repos) {
     let part = `Built ${name}${language ? ` (${language})` : ''}: ${description}.`;
     const room = EXPERTISE_MAX - parts.join(' ').length - (parts.length ? 1 : 0);
     if (part.length > room) {
-      if (parts.length) break;
+      // The first sentence is cut to fit; a later one that does not fit is left out.
+      if (parts.length) continue;
       part = cut(part, room);
     }
     parts.push(part);
