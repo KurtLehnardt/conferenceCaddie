@@ -93,6 +93,11 @@ export interface Visibility {
   share_notice_seen: boolean;
   /** Ended talks whose banner the user has already seen or closed. */
   banner_seen: string[];
+  /**
+   * Device-only preference: sharing follows the Interested list, so marking a talk shares for
+   * it and unmarking stops. Off by default; the user turns it on from the Interested screen.
+   */
+  share_new: boolean;
 }
 
 export interface Device {

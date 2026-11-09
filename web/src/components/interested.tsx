@@ -2,6 +2,7 @@ import { Star } from 'lucide-preact';
 import type { Conference, InterestedTalk, Talk } from '../types';
 import { formatDayLong, localDay, zoneLabel, zoneOf } from '../lib/time';
 import { TalkCard } from './talk';
+import { ShareAllControls } from '../people/index';
 
 /** The talks the user marked, in time order and grouped by local day. No scheduling logic. */
 export function InterestedScreen({
@@ -37,6 +38,7 @@ export function InterestedScreen({
 
   return (
     <div class="interested">
+      <ShareAllControls conference={conference} interested={interested} />
       {[...days.entries()].map(([day, talks]) => (
         <section key={day} class="interested-day" aria-labelledby={`day-${day}`}>
           <h2 class="day-header" id={`day-${day}`}>

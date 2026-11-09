@@ -42,6 +42,38 @@ function toggleTag(f: SearchFilters, pair: TagRef): SearchFilters {
   };
 }
 
+/**
+ * Every tag value seen for a conference's groups so far, across responses. Facet counts are
+ * narrowed by the query and the other filters, so one response alone cannot say how many values a
+ * group has; the union only grows, so a group that has shown two values stays a dropdown.
+ */
+const seenTagValues = new Map<string, Map<string, Set<string>>>();
+
+function rememberTagValues(slug: string, facets: Facets | null, filters: SearchFilters): Map<string, Set<string>> {
+  let groups = seenTagValues.get(slug);
+  if (!groups) {
+    groups = new Map();
+    seenTagValues.set(slug, groups);
+  }
+  for (const t of facets?.tags ?? []) {
+    let set = groups.get(t.group);
+    if (!set) {
+      set = new Set();
+      groups.set(t.group, set);
+    }
+    for (const b of t.values) if (b.count > 0) set.add(String(b.value));
+  }
+  for (const t of filters.tags) {
+    let set = groups.get(t.group);
+    if (!set) {
+      set = new Set();
+      groups.set(t.group, set);
+    }
+    set.add(t.value);
+  }
+  return groups;
+}
+
 /** The "Has slides" control is hidden when no talk has slides and it is not selected. */
 function showSlides(f: SearchFilters, facets: Facets | null): boolean {
   if (f.has_slides !== null) return true;
@@ -175,6 +207,7 @@ export function ChipRow({
 }) {
   const count = activeFilterCount(filters);
   const time = timeValue(filters);
+  const seen = rememberTagValues(conference.slug, facets, filters);
   return (
     <div class="chip-row" role="toolbar" aria-label="Filters">
       <span class={`chip${count ? ' is-active' : ''}`}>
@@ -229,6 +262,23 @@ export function ChipRow({
       )}
       {conference.tag_groups.map((group) => {
         const values = tagValues(filters, group);
+        // A group with a single value (for example a feed group "End User Programming" whose only
+        // value is "End User Talk") reads better as a one-tap toggle named after the value than as
+        // a dropdown named after the group. The decision uses every value seen so far, not just
+        // this response's counts, and the dropdown stays whenever the selection holds anything the
+        // toggle could not show or clear.
+        const known = [...(seen.get(group) ?? [])];
+        const only = known.length === 1 && values.every((v) => v === known[0]) ? known[0] : null;
+        if (only !== null) {
+          return (
+            <Chip
+              key={group}
+              label={only}
+              active={values.includes(only)}
+              onOpen={() => onChange(toggleTag(filters, { group, value: only }))}
+            />
+          );
+        }
         return (
           <Chip
             key={group}

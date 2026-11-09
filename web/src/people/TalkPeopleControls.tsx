@@ -5,9 +5,9 @@ import { ChevronDown, ChevronUp, ExternalLink, Users } from 'lucide-preact';
 import { fetchCircleMembers, isAbort, PeopleApiError } from './api';
 import { PersonCard } from './PersonCard';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
-import { changeVisibility, getSaveCount } from './sync';
+import { getSaveCount, shareForTalks, unshareTalks } from './sync';
 import type { CircleMembers, ConferenceLike, InterestedProp, TalkLike } from './types';
-import { interestedIds, invalidateCount, peopleCountLabel, useCircleCount } from './util';
+import { interestedIds, invalidateCount, peopleCountLabel, SHARE_NOTICE, useCircleCount } from './util';
 
 export function CircleView({ conference, talkId }: { conference: ConferenceLike; talkId: string }) {
   const [data, setData] = useState<CircleMembers | null>(null);
@@ -87,9 +87,6 @@ export function CircleView({ conference, talkId }: { conference: ConferenceLike;
   );
 }
 
-const SHARE_NOTICE =
-  'Sharing stores your profile on our server until the conference ends. Only people who also shared for this talk can see it, including How to reach me. Everyone else sees only the count. It does not make you visible conference-wide. Turn it off at any time to remove it.';
-
 export function TalkPeopleControls({
   conference,
   talk,
@@ -123,10 +120,7 @@ export function TalkPeopleControls({
     }
     setBusy(true);
     setMessage(null);
-    const err = await changeVisibility(slug, {
-      shared_talk_ids: on ? [...ids, talk.talk_id] : ids,
-      ...(on ? { share_notice_seen: true } : {}),
-    });
+    const err = await (on ? shareForTalks(slug, [talk.talk_id]) : unshareTalks(slug, [talk.talk_id]));
     setBusy(false);
     setNotice(false);
     if (err) setMessage(err);
@@ -159,7 +153,7 @@ export function TalkPeopleControls({
             type="checkbox"
             role="switch"
             class="switch"
-            checked={shared || notice}
+            checked={shared}
             disabled={busy}
             onChange={(e) => onSwitch((e.target as HTMLInputElement).checked)}
           />

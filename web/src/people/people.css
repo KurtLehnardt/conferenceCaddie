@@ -664,3 +664,21 @@
   justify-self: start;
   margin-left: -8px;
 }
+
+/* ---------- Share for all (Interested screen) ---------- */
+
+.pp-share-all {
+  margin-bottom: 16px;
+}
+
+.pp-share-all .pp-count {
+  margin: 0;
+}
+
+.pp-shared-row {
+  justify-content: space-between;
+}
+
+.pp-shared-row .pp-hint {
+  margin: 0;
+}
