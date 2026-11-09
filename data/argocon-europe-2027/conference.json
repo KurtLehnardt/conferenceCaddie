@@ -1,0 +1,36 @@
+{
+  "slug": "argocon-europe-2027",
+  "name": "ArgoCon Europe",
+  "status": "unavailable",
+  "status_reason": "no_schedule_url",
+  "source": "sessionize",
+  "start_date": "2027-03-15",
+  "end_date": "2027-03-15",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "Barcelona",
+    "region": "",
+    "country": "Spain",
+    "virtual": false
+  },
+  "sessionize_api_code": null,
+  "sessionize_public_slug": null,
+  "sessionize_site_published": false,
+  "lf_event_id": 321283,
+  "lf_url": "https://events.linuxfoundation.org/kubecon-cloudnativecon-europe/co-located-events/argocon/",
+  "official_schedule_url": "https://events.linuxfoundation.org/kubecon-cloudnativecon-europe/co-located-events/argocon/",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:38:13.263Z"
+}

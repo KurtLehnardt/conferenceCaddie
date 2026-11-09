@@ -1,0 +1,36 @@
+{
+  "slug": "agntcon-mcpcon-europe-2027",
+  "name": "AGNTCon + MCPCon Europe 2027",
+  "status": "unavailable",
+  "status_reason": "no_schedule_url",
+  "source": "sessionize",
+  "start_date": "2027-09-15",
+  "end_date": "2027-09-16",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "London",
+    "region": "",
+    "country": "England",
+    "virtual": false
+  },
+  "sessionize_api_code": null,
+  "sessionize_public_slug": null,
+  "sessionize_site_published": false,
+  "lf_event_id": 317432,
+  "lf_url": "https://events.linuxfoundation.org/agntcon-mcpcon-europe-2027/",
+  "official_schedule_url": "https://events.linuxfoundation.org/agntcon-mcpcon-europe-2027/",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:38:41.472Z"
+}

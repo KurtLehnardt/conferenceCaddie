@@ -1,0 +1,36 @@
+{
+  "slug": "embedded-linux-conference-asia-2026",
+  "name": "Embedded Linux Conference Asia",
+  "status": "unavailable",
+  "status_reason": "no_sched_config",
+  "source": "sessionize",
+  "start_date": "2026-12-07",
+  "end_date": "2026-12-09",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "Tokyo",
+    "region": "",
+    "country": "Japan",
+    "virtual": false
+  },
+  "sessionize_api_code": null,
+  "sessionize_public_slug": null,
+  "sessionize_site_published": false,
+  "lf_event_id": 292114,
+  "lf_url": "https://events.linuxfoundation.org/embedded-linux-conference-asia/",
+  "official_schedule_url": "https://events.linuxfoundation.org/embedded-linux-conference-asia/program/schedule/",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:37:51.216Z"
+}

@@ -1,0 +1,42 @@
+{
+  "slug": "grpconf-india-2026",
+  "name": "gRPConf India",
+  "status": "searchable",
+  "status_reason": null,
+  "source": "sessionize",
+  "start_date": "2026-11-18",
+  "end_date": "2026-11-18",
+  "time_zone": "Asia/Calcutta",
+  "time_zone_windows": "India Standard Time",
+  "location": {
+    "city": "Bengaluru",
+    "region": "",
+    "country": "India",
+    "virtual": false
+  },
+  "sessionize_api_code": "kitgd26s",
+  "sessionize_public_slug": "grpconf-india-2026",
+  "sessionize_site_published": true,
+  "lf_event_id": 313155,
+  "lf_url": "https://events.linuxfoundation.org/grpconf-india/",
+  "official_schedule_url": "https://events.linuxfoundation.org/grpconf-india/program/schedule/",
+  "parent_slug": null,
+  "category_mapping": {
+    "track_group": "Session Type",
+    "level_group": "Level",
+    "tag_groups": [],
+    "hidden_groups": [],
+    "slides_question": "Presentation Slides"
+  },
+  "counts": {
+    "sessions": 38,
+    "talk": 32,
+    "ambient": 0,
+    "break": 6,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": "2026-11-09T21:37:33.228Z",
+  "raw_fetched_at": "2026-11-09T21:37:28.543Z"
+}

@@ -1,0 +1,36 @@
+{
+  "slug": "pytorch-day-china-2026",
+  "name": "PyTorch Day China",
+  "status": "unavailable",
+  "status_reason": "no_schedule_url",
+  "source": "sessionize",
+  "start_date": "2026-12-12",
+  "end_date": "2026-12-12",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "Beijing",
+    "region": "",
+    "country": "China",
+    "virtual": false
+  },
+  "sessionize_api_code": null,
+  "sessionize_public_slug": null,
+  "sessionize_site_published": false,
+  "lf_event_id": 325557,
+  "lf_url": "https://www.lfopensource.cn/pytorch-day-china/",
+  "official_schedule_url": "https://www.lfopensource.cn/pytorch-day-china/",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:38:08.335Z"
+}

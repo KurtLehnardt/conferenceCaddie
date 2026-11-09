@@ -1,0 +1,36 @@
+{
+  "slug": "opentofu-day-north-america-2026",
+  "name": "OpenTofu Day North America",
+  "status": "unavailable",
+  "status_reason": "no_sched_config",
+  "source": "sessionize",
+  "start_date": "2026-11-09",
+  "end_date": "2026-11-09",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "Salt Lake City",
+    "region": "",
+    "country": "United States",
+    "virtual": false
+  },
+  "sessionize_api_code": null,
+  "sessionize_public_slug": null,
+  "sessionize_site_published": false,
+  "lf_event_id": 311046,
+  "lf_url": "https://events.linuxfoundation.org/kubecon-cloudnativecon-north-america/co-located-events/opentofu-day/",
+  "official_schedule_url": "https://events.linuxfoundation.org/kubecon-cloudnativecon-north-america/co-located-events/opentofu-day/#schedule",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:37:26.530Z"
+}

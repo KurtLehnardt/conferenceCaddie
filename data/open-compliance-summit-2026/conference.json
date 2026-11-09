@@ -1,0 +1,36 @@
+{
+  "slug": "open-compliance-summit-2026",
+  "name": "Open Compliance Summit",
+  "status": "unavailable",
+  "status_reason": "time_zone_missing",
+  "source": "sessionize",
+  "start_date": "2026-12-10",
+  "end_date": "2026-12-11",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "Tokyo",
+    "region": "",
+    "country": "Japan",
+    "virtual": false
+  },
+  "sessionize_api_code": "ba6xx3yy",
+  "sessionize_public_slug": "open-compliance-summit-2026",
+  "sessionize_site_published": false,
+  "lf_event_id": 289690,
+  "lf_url": "https://events.linuxfoundation.org/open-compliance-summit/",
+  "official_schedule_url": "https://events.linuxfoundation.org/open-compliance-summit/program/schedule/",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:37:53.188Z"
+}

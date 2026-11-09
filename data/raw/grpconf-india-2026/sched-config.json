@@ -1,0 +1,51 @@
+{
+  "sessionizeAllDataUrl": "https://sessionize.com/api/v2/kitgd26s/view/All",
+  "sessionizeGridDataUrl": "https://sessionize.com/api/v2/kitgd26s/view/GridSmart",
+  "sessionizeApiCode": "kitgd26s",
+  "sessionizePublicSlug": "grpconf-india-2026",
+  "primaryFilterTitle": "Session Type",
+  "timeFormat": "24h",
+  "dateFormat": "dmy",
+  "defaultShowAllDays": true,
+  "hideTopControls": false,
+  "hideSessionTimes": false,
+  "enableGridView": true,
+  "enablePersonalAgenda": false,
+  "speakerTitleQuestionId": "Speaker Title",
+  "speakerCompanyQuestionId": "Company",
+  "speakerCompanyOverrideQuestionId": "Speaker Company Override",
+  "cardSpeakerOverrideQuestionId": null,
+  "presentationSlidesQuestionId": "Presentation Slides",
+  "customLinkField1QuestionId": "GitHub Repository",
+  "customLinkField2QuestionId": "Project Demo",
+  "customLinkField3QuestionId": "Event Website",
+  "customLinkField4QuestionId": null,
+  "customLinkField5QuestionId": null,
+  "includeSpeakerTitleForPrimaryValues": [
+    "Keynote Sessions"
+  ],
+  "companyRollupNames": [],
+  "hideAllChipsForPrimaryValues": [
+    "Registration + Badge Pick-up",
+    "Breaks"
+  ],
+  "hideSessionChipsForCategories": [],
+  "hiddenFilterCategories": [
+    "Session Format",
+    "PLT Project",
+    "Lightning Talk Topic",
+    "Presentation Language"
+  ],
+  "primaryColorOverrides": {
+    "Getting Started with gRPC": "#ff0000",
+    "gRPC in-production": "#ff8b00",
+    "gRPC + AI": "#f8ed00",
+    "User Stories + Case Studies": "#54ff00",
+    "Implementation": "#00ffcb",
+    "Ecosystem + Tooling": "#0003ff",
+    "Codelabs": "#a200ff",
+    "Registration + Badge Pickup": "#ff0057",
+    "Keynote Sessions": "#136c94",
+    "Breaks": "#f5c9ff"
+  }
+}

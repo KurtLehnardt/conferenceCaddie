@@ -1,0 +1,36 @@
+{
+  "slug": "agntsummit-sydney-2027",
+  "name": "AGNTSummit Sydney",
+  "status": "unavailable",
+  "status_reason": "no_schedule_url",
+  "source": "sessionize",
+  "start_date": "2027-06-16",
+  "end_date": "2027-06-17",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "Sydney",
+    "region": "",
+    "country": "Australia",
+    "virtual": false
+  },
+  "sessionize_api_code": null,
+  "sessionize_public_slug": null,
+  "sessionize_site_published": false,
+  "lf_event_id": 328329,
+  "lf_url": "https://events.linuxfoundation.org/agntsummit-sydney/",
+  "official_schedule_url": "https://events.linuxfoundation.org/agntsummit-sydney/",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:38:38.429Z"
+}

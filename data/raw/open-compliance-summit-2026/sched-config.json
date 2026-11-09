@@ -1,0 +1,52 @@
+{
+  "sessionizeAllDataUrl": "https://sessionize.com/api/v2/ba6xx3yy/view/All",
+  "sessionizeGridDataUrl": "https://sessionize.com/api/v2/ba6xx3yy/view/GridSmart",
+  "sessionizeApiCode": "ba6xx3yy",
+  "sessionizePublicSlug": "open-compliance-summit-2026",
+  "primaryFilterTitle": "All Sessions",
+  "timeFormat": "24h",
+  "dateFormat": "mdy",
+  "defaultShowAllDays": true,
+  "hideTopControls": false,
+  "hideSessionTimes": false,
+  "enableGridView": true,
+  "enablePersonalAgenda": false,
+  "speakerTitleQuestionId": "Speaker Title",
+  "speakerCompanyQuestionId": "Company",
+  "speakerCompanyOverrideQuestionId": "Speaker Company Override",
+  "cardSpeakerOverrideQuestionId": null,
+  "presentationSlidesQuestionId": "Presentation Slides",
+  "customLinkField1QuestionId": null,
+  "customLinkField2QuestionId": null,
+  "customLinkField3QuestionId": null,
+  "customLinkField4QuestionId": null,
+  "customLinkField5QuestionId": null,
+  "includeSpeakerTitleForPrimaryValues": [
+    "Keynote Sessions"
+  ],
+  "companyRollupNames": [],
+  "hideAllChipsForPrimaryValues": [
+    "Registration & Badge Pick-up",
+    "Breaks"
+  ],
+  "hideSessionChipsForCategories": [],
+  "hiddenFilterCategories": [
+    "Subtopic"
+  ],
+  "primaryColorOverrides": {
+    "AI Compliance": "#d600ff",
+    "Legal / IPR": "#f58db0",
+    "Licensing": "#2d00c7",
+    "M&A": "#c2e825",
+    "Other Process Management": "#3b9616",
+    "Patent": "#17ffff",
+    "Procurement": "#73cf74",
+    "SBOM Quality": "#ff00ae",
+    "Security / CRA": "#ab00ff",
+    "Supply Chain": "#0097ff",
+    "Technical Deep Dive": "#00ff2e",
+    "Keynote Sessions": "#ffe200",
+    "Registration & Badge Pick-up": "#ff9400",
+    "Breaks": "#ff0000"
+  }
+}

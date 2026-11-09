@@ -931,7 +931,24 @@
       "categoryItems": [
         496288
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/itzacvez~RTF6h4qbATXPmK8nvZ6Yay.pdf~slides.pdf"
+        },
+        {
+          "questionId": 137004,
+          "answerValue": "https://github.com/tektoncd/pipeline"
+        },
+        {
+          "questionId": 137005,
+          "answerValue": "https://git.sr.ht/~athorp96/software-security-at-home"
+        },
+        {
+          "questionId": 137006,
+          "answerValue": "https://tekton.dev/"
+        }
+      ],
       "roomId": 82957,
       "liveUrl": null,
       "recordingUrl": null,
@@ -1491,7 +1508,7 @@
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
-        "6c45a782-eb54-4742-b4cf-08838a75d909"
+        "73ae172a-d107-418a-97b0-84611ebdd3a1"
       ],
       "categoryItems": [
         496288,
@@ -2909,7 +2926,8 @@
       "isPlenumSession": false,
       "speakers": [
         "72a1ff4f-ba49-4e7f-9bef-9ff3503eb70b",
-        "ffd30091-56a9-4c6d-952f-a1f9c139d079"
+        "ffd30091-56a9-4c6d-952f-a1f9c139d079",
+        "ee3bfd9c-6d24-4764-bc7b-2494e87d26e2"
       ],
       "categoryItems": [
         496153
@@ -27023,6 +27041,7 @@
         }
       ],
       "sessions": [
+        1289901,
         1289647,
         1333748,
         1334821,
@@ -34587,6 +34606,11 @@
           "linkType": "Company_Website"
         },
         {
+          "title": "Portfolio",
+          "url": "https://pmady.github.io/",
+          "linkType": "Other"
+        },
+        {
           "title": "BlueSky",
           "url": "https://bsky.app/profile/pavanmadduri.bsky.social",
           "linkType": "Other"
@@ -34594,11 +34618,6 @@
         {
           "title": "Credly",
           "url": "https://www.credly.com/users/pavanmadduri",
-          "linkType": "Other"
-        },
-        {
-          "title": "Portfolio",
-          "url": "https://pmady.github.io/",
           "linkType": "Other"
         },
         {
@@ -38989,6 +39008,52 @@
       ]
     },
     {
+      "id": "ee3bfd9c-6d24-4764-bc7b-2494e87d26e2",
+      "firstName": "Stephen",
+      "lastName": "Lang",
+      "bio": "Stephen is a Staff Software Engineer on Grafana's Beyla team and an approver for the OpenTelemetry eBPF Instrumentation (OBI) project.",
+      "tagLine": "Staff Software Engineer at Grafana",
+      "profilePicture": "https://cdn.sessionize.com/image/91d9-400o400o1-3bKuWk3Ez5tAL66Aeq89iH.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://x.com/skl_",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/stephenkarllang",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://grafana.com",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/stephen-lang",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1335605
+      ],
+      "fullName": "Stephen Lang",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 128829,
+          "answerValue": "Grafana Labs"
+        },
+        {
+          "questionId": 128830,
+          "answerValue": "Staff Software Engineer"
+        }
+      ]
+    },
+    {
       "id": "8469681d-3827-40aa-b160-ab8fd49e0415",
       "firstName": "Stephen",
       "lastName": "Rust",
@@ -39082,7 +39147,6 @@
         }
       ],
       "sessions": [
-        1289901,
         1294761
       ],
       "fullName": "Suhani ‎",
@@ -41268,13 +41332,13 @@
           "linkType": "Company_Website"
         },
         {
-          "title": "Bluesky",
-          "url": "https://bsky.app/profile/wiggitywhitney.bsky.social",
+          "title": "YouTube",
+          "url": "https://www.youtube.com/@wiggitywhitney",
           "linkType": "Other"
         },
         {
-          "title": "YouTube",
-          "url": "https://www.youtube.com/@wiggitywhitney",
+          "title": "Bluesky",
+          "url": "https://bsky.app/profile/wiggitywhitney.bsky.social",
           "linkType": "Other"
         },
         {

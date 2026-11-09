@@ -1,0 +1,2699 @@
+{
+  "sessions": [
+    {
+      "id": "1341537",
+      "title": "Registration & Badge Pick-up",
+      "description": null,
+      "startsAt": "2026-12-10T08:00:00",
+      "endsAt": "2026-12-10T17:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515103
+      ],
+      "questionAnswers": [],
+      "roomId": 90761,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1341512",
+      "title": "Welcome & Opening Remarks",
+      "description": null,
+      "startsAt": "2026-12-10T09:15:00",
+      "endsAt": "2026-12-10T09:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "5c08bdcf-fcc3-410d-838e-115e115fba17"
+      ],
+      "categoryItems": [
+        515102
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1324814",
+      "title": "The AI Blackhole Information Paradox",
+      "description": "What does the blackhole information paradox, one of the most famous puzzles in modern theoretical physics has to do with AI and copyright? Can the legal profession learn something from Hawking and Susskind's famous battle of intellect, and the race to unify general relativity and quantum mechanics.\r\n\r\nWhen a book falls into a black hole, it is utterly destroyed, yet quantum physics dictates its underlying information must still exist somewhere, scrambled in the cosmic radiation. Can we apply some of these concepts to how copyrighted material is \"consumed\" by the digital blackhole when the AI is trained? \r\n\r\nAI developers are using this cosmic loophole to defend algorithmic training.\r\n\r\nThey vacuum up millions of copyrighted works, crush them into abstract mathematical weights, delete the source files, and claim the copyright has \"evaporated\". The AI output is just akin to Hawking radiation. But when an AI suddenly regurgitates a copyrighted article verbatim or spits out a garbled stock-image watermark, does the truth becomes undeniable: the information was never destroyed. It was just hidden?",
+      "startsAt": "2026-12-10T09:25:00",
+      "endsAt": "2026-12-10T09:45:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "bef0b00a-c949-40f6-8c01-7c8291563e3d"
+      ],
+      "categoryItems": [
+        469896,
+        515102,
+        515096
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1321076",
+      "title": "Open Source and NPEs - A Rising Threat, A Community Solution",
+      "description": "This talk will explain the increasing threat of Non-Practicing Entity (NPE / patent troll) approaches to companies over the use of open source technology, especially cloud technology, and it will reveal how companies across many industries are being approached by showing a detailed situation map. It will contextualize the issue based on how historical patent threats to open source were addressed, both from operating companies and NPEs. It will then explain how the current threat is being faced, progress so far, and what is needed in the mid-term to ensure damage to companies and communities is minimized. This talk will differ from previous discussions by providing the map of current challenges, and by going into detail only possible under Chatham House Rule. Attendees will come away understanding more about the urgency of our current community situation, and more clearly understanding the defenses available to projects and companies. The goal is to empower managers, legal teams and project teams to make good decisions if the need arises.",
+      "startsAt": "2026-12-10T09:45:00",
+      "endsAt": "2026-12-10T10:05:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "82e445a3-28fd-4fea-bd4f-c4a3493a9682"
+      ],
+      "categoryItems": [
+        469896,
+        515102,
+        515100
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1321391",
+      "title": "SPDX 3.1 Update",
+      "description": "SPDX 3.0 introduced the ability to track provenance of compliance information about data sets.    The combination of software and data provides the fundamentals for AI BOMs.   SPDX 3.1 continues to refine what is possible to track to license compliance, and enable regulatory policies like CRA to be supported.  Examples of what is possible using SPDX 3.1 and Zephyr builds will be demonstrated.\r\n\r\nThis talk will provide an update on the new capabilities that have been included into SPDX 3.1, and review the capabilities already in SPDX 3.0 that can support the 2026 CISA SBOM minimum elements.",
+      "startsAt": "2026-12-10T10:05:00",
+      "endsAt": "2026-12-10T10:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "9547eef2-a52c-4de6-9744-96dc7e309e27"
+      ],
+      "categoryItems": [
+        469896,
+        515102,
+        515095
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1292068",
+      "title": "From Open Source Principles to Open Source Practice: Building Trust  & Compliance at scale",
+      "description": "Open source is increasingly becoming critical digital infrastructure, but its sustainable adoption requires more than technology alone. In this keynote, Omar Mohsine, United Nations Open Source Coordinator, will share lessons from the United Nations’ journey to scale open source across a complex, global organization. Drawing on the development of the UN Open Source Principles, the UN Open Source Community of Practice, and initiatives to strengthen open source governance and capacity building, the keynote will explore how organizations can move from good intentions to practical, sustainable and compliant open source practices. It will highlight the importance of shared principles, clear responsibilities, automation, community collaboration and a culture of contribution, offering insights into how open compliance can become an enabler of innovation, trust and digital sovereignty.",
+      "startsAt": "2026-12-10T10:25:00",
+      "endsAt": "2026-12-10T10:45:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "13905034-ac12-461b-8f96-2275f372f9d9"
+      ],
+      "categoryItems": [
+        469895,
+        515102,
+        515094
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1341531",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-12-10T10:45:00",
+      "endsAt": "2026-12-10T11:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515104
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1303585",
+      "title": "When the Author Is an Algorithm: Reinventing AI-Generated Code Compliance",
+      "description": "Generative AI and agentic development — \"vibe coding,\" coding agents, and MCP-connected tools — are making AI-generated code an everyday reality in enterprises. It raises hard questions: open source pulled in unnoticed; no record of which model produced what; guardrails that ship off by default. License compliance, built for when humans wrote the code, now has to evolve — and the same tools can also help, like drafting SBOMs humans then verify.\r\nOpenChain is the Linux Foundation community behind ISO/IEC 5230, the standard for open source license compliance. Its Japan Work Group is compiling a cross-industry catalog of these issues, targeted for July 2026. This session introduces the catalog and frames it around two questions every team now faces: how to manage the risk, and how to capture the benefit. Practitioners from a range of industries — manufacturing, internet, the public sector — react from their own experience, then open the floor to engineers, enterprises, and AI vendors.\r\nAttendees leave with a concrete, field-sourced map of what's actually emerging — not theory — while builders of AI coding tools and the MCP ecosystem hear directly what enterprises need.",
+      "startsAt": "2026-12-10T11:30:00",
+      "endsAt": "2026-12-10T12:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "c3b30ede-b15b-4690-a676-155e2166e359",
+        "143e9837-083c-4e9d-b83b-7ef5be83f170",
+        "094b12da-7ef2-48e7-a393-7cb7a3839520",
+        "757782ad-d5f8-4a78-a71d-e7b72bcc309a",
+        "1fdbd127-088c-4f20-a03a-0bac46af5138"
+      ],
+      "categoryItems": [
+        469896,
+        470113
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1341535",
+      "title": "Lunch",
+      "description": null,
+      "startsAt": "2026-12-10T12:10:00",
+      "endsAt": "2026-12-10T13:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515104
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1297558",
+      "title": "AI is Changing the Landscape of Licensing",
+      "description": "AI's explosive growth reshapes open source licensing, bringing severe challenges and new opportunities.\r\n\r\n**Core Challenges**\r\nGenerative AI Risks: AI tools rewrite open source code, enabling Copyleft evasion (\"license laundering\"). A 68% conflict rate in AI codebases makes this a critical IP risk.\r\n\r\nUnclear Rules: Traditional licenses rely on \"human authorship.\" Pure AI works lack copyright protection, creating a \"copyright vacuum\" where standard terms fail.\r\n\r\nAgentic AI: Autonomous systems modify and distribute software beyond the tracking limits of manual reviews and current SCA tools.\r\nOpportunities\r\n\r\nAI automates license identification, compatibility checks, and reporting. It predicts pre-launch risks to prevent IP disputes and summarizes complex rules, boosting legal and R&D efficiency.\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n",
+      "startsAt": "2026-12-10T13:30:00",
+      "endsAt": "2026-12-10T13:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "e4c8576d-007d-48d1-a17a-e88ba8a19fc1"
+      ],
+      "categoryItems": [
+        469896,
+        470107
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1258360",
+      "title": "Open Source Management & Cybersecurity: Building a Resilient Digital Future",
+      "description": "This panel explores how the foundational principles of the open source movement such as collaboration, transparency, and community engagement can revolutionize management practices while embedding critical cybersecurity resilience. We will delve into how these values can be applied to projects, teams, and entire organizations to foster innovation, sustainable growth, and a robust security posture.\r\n\r\nFeaturing insights from experts Ayumi Watanabe, Mariya Kelsch, Takashi Ninjouji, and moderated by Marcel Kurzmann, the session will move beyond theory. Using real-world examples, our panelists will discuss successful open source management strategies, examine governance guides, and highlight the importance of integrating a strong cybersecurity angle into every stage of open source adoption and management. The discussion will also address the dual challenges of scaling open source initiatives securely and managing the complexities of the software supply chain.\r\n\r\nYou will leave with actionable insights on enhancing collaboration, agility, and organizational resilience in a landscape where security and trust increasingly go hand in hand.",
+      "startsAt": "2026-12-10T13:50:00",
+      "endsAt": "2026-12-10T14:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "10bb4aa0-7435-4e52-a926-31f5ecf81d8f",
+        "757782ad-d5f8-4a78-a71d-e7b72bcc309a",
+        "eb579b33-62e3-4432-9b7f-a8e210a64ec6",
+        "f6f40de5-469b-491d-af09-10cd628b6ae3"
+      ],
+      "categoryItems": [
+        469896,
+        470110
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1321299",
+      "title": "From ISO 26262 to Open Source: Safety Artifacts, Traceability, and the SPDX Safety Profile",
+      "description": "Safety standards such as ISO 26262 require far more than source code. Requirements, architecture descriptions, tests, safety analyses, verification results, and evidence of process compliance are essential artifacts for the development and assessment of safety-related systems. While these work products are well established in traditional development environments, their role and availability in open source projects are often less understood.\r\n\r\nThis presentation examines how safety-related artifacts are created and maintained in open source ecosystems, using Eclipse S-CORE and Zephyr as practical examples. It discusses which artifacts are needed, how they support compliance activities, and where challenges remain for transparent and collaborative safety development. \r\n\r\nThe session then introduces the SPDX Functional Safety Profile and shows how safety artifacts, evidence, and traceability information can be represented using a standardized, machine-readable format. Attendees will gain an overview of the profile structure, key relationships between artifacts, and how SPDX can support the exchange and management of functional safety information across organizations and supply chains.",
+      "startsAt": "2026-12-10T14:30:00",
+      "endsAt": "2026-12-10T14:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "390a8366-d056-46bc-8b92-9d1db9d1ae19",
+        "b903fc4e-121e-4d32-895d-71e313840c28"
+      ],
+      "categoryItems": [
+        469896,
+        470114
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1341530",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-12-10T14:50:00",
+      "endsAt": "2026-12-10T15:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515104
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1325156",
+      "title": "Trusted Central Repository — Foundation of Intelligent Development",
+      "description": "Software engineering has undergone continuous evolution and iteration over decades. From the early waterfall development model, to collaborative development enabled by Git, then to DevOps, and now to the current era of intelligent development empowered by agent skills — security has always been an indispensable component throughout the entire journey.\r\n\r\nWith nearly 20 years of industry accumulation, Open Source China has built robust tooling capabilities for intelligent development and management solutions under the AI paradigm. Today, I am delighted to share our  software factory development model and the governance framework for security solutions. At the core of the software factory architecture lies the Trusted Central Repository, with security capabilities natively integrated into its core design.\r\n\r\nOpen Source China is home to Gitee, the world's second-largest code hosting platform with 15 million developers. We boast China's largest productized DevSecOps solution, serving over 1,000 customers. We also operate MoArk, a platform hosting thousands of datasets and models, as well as the largest open-source technology forum community in China.",
+      "startsAt": "2026-12-10T15:25:00",
+      "endsAt": "2026-12-10T15:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "28a7fd22-a3f4-4cae-8af1-ca22ff86afe5"
+      ],
+      "categoryItems": [
+        469895,
+        470114
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1321181",
+      "title": "Expanding Open Source Governance to Public Research Institutes in Korea",
+      "description": "Managing open source compliance within a single organization is by no means an easy task. In particular, the recent exposure of security vulnerabilities due to source code disclosure and the combination of open source and AI technologies are making open source governance a very difficult challenge. Furthermore, the complexity is compounded by the need to establish common standards for many institutions in Korea that operate under the same government budget, each possessing its own unique legal teams, risk tolerance, and IT maturity levels.\r\nThis presentation introduces the process by which Korean government-funded research institutes spanning diverse fields moved beyond fragmented open source practices to become the \"GRI Open Source Council (a non-profit corporation).\" This single governance body was established to coordinate open source compliance, strategy, and community activities at the national level. It also examines specific governance design strategies to ensure that this organization—organized as a free community of eight government-funded institutes, including ETRI, rather than being government-led—can produce tangible results rather than remaining a mere symbolic body.",
+      "startsAt": "2026-12-10T15:40:00",
+      "endsAt": "2026-12-10T16:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "b833a2cb-0914-49cc-b200-3636daa9c81e"
+      ],
+      "categoryItems": [
+        469896,
+        470112
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1321223",
+      "title": "Academic OSPOs on the Frontline of OSS Compliance in the University Setting",
+      "description": "Universities are hubs of innovation and have played significant roles in many industries and in open source. Yet, despite the large footprint universities have within the open source community, knowledge about open source licensing remains uneven in academia. Academic OSPOS can help bridge this gap through outreach, training and open source SBOM tools. While these are fairly standard strategies employed by corporate OSPOs, these strategies must be adapted for academic communities, which are comprised of students, staff, researchers and faculty who may not share the same goals or technical abilities. This session focuses on the challenges and needed adaptations. It also highlights an area for improvement: creation of user friendly SBOM tools.\r\n\r\nBy focusing on licensing outreach, universities can produce:\r\n(i)\tsoftware that is compliant with applicable open source terms, easing potential downstream supply issues; and\r\n(ii)\tindividuals who can resolve license conflicts and intentionally select an appropriate license for their work.\r\n\r\nIn turn, this benefits industries that rely on work created at universities, and that hope to hire developers versed in open source matters.\r\n",
+      "startsAt": "2026-12-10T16:00:00",
+      "endsAt": "2026-12-10T16:20:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "6bbcad0b-14ac-4ba2-87c3-e0c5d3db670a"
+      ],
+      "categoryItems": [
+        469896,
+        470112
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1317204",
+      "title": "The Compliance Blind Spot: Commercial Obligations Hidden in Open Source",
+      "description": "Your scanner says MIT. Legal approves the ticket. But the package may call a commercial AI API, bundle a proprietary SDK, or depend on a non-FOSS container image. These obligations often sit outside LICENSE files and remain invisible to traditional compliance workflows. As open source increasingly relies on external commercial services, integration-driven obligations have become a major blind spot in enterprise FOSS compliance.\r\nIn this talk, we introduce Context-Aware, a system that detects commercial APIs, proprietary SDKs, AI/ML services, non-FOSS container images, and other integrations starting from a package or PURL. Findings are stored in a graph model for impact analysis, tracking, and compliance investigations.\r\nWe will share lessons learned from operating the system, including real-world examples of unexpected commercial dependencies in widely used projects, discuss detection techniques that worked, and approaches we abandoned due to excessive noise. \r\nAttendees will leave with a practical framework for uncovering compliance blind spots and identifying integration-driven obligations before they reach production.",
+      "startsAt": "2026-12-10T16:20:00",
+      "endsAt": "2026-12-10T16:35:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "b8e29e52-41e8-4bde-b93e-6bbf9da78593"
+      ],
+      "categoryItems": [
+        469896,
+        470107
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1368002",
+      "title": "Agent Connectivity to Supply-Chain Trust: OpenChain for MCP and Agentic Gateways",
+      "description": "MCP and A2A make it easy for AI agents to connect to tools and to each other. That raises a question connectivity alone can't answer: can the enterprise trust what the agent is connecting to?\r\n\r\nMCP servers and agent skills are becoming new software supply-chain artifacts. Before an agent uses one, an organization needs to know what it contains, who maintains it, what permissions it holds, and whether the process behind it is trustworthy.\r\n\r\nThis session follows a trust path: MCP/A2A → Gateway → Policy → Provenance → SBOM → OSS Compliance → Security Assurance. We review how an agent gateway can enforce policy at runtime. We then show how provenance and AI SBOM data support open source license compliance and vulnerability management.\r\n\r\nWe link this path to OpenChain ISO/IEC 5230 (open source license compliance) and ISO/IEC 18974 (security assurance). We also cover how these standards can extend to agentic AI governance and AI compliance.\r\n\r\nAttendees will leave with a practical model for treating agent tools and skills as governed supply-chain components. They will also see where existing OpenChain practices apply and where new community work is needed.",
+      "startsAt": "2026-12-10T16:35:00",
+      "endsAt": "2026-12-10T16:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "ff01b1c7-9ec8-48d3-8d0c-12cad131c1e6",
+        "c644a9e7-fed5-4cc4-b95c-a3fafa14eac5"
+      ],
+      "categoryItems": [
+        470113
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": false,
+      "isConfirmed": false
+    },
+    {
+      "id": "1320971",
+      "title": "Sharing is Caring: Open Data for Open Source Compliance",
+      "description": "Software compliance - whether for licensing or security - depends on accurate data about millions of open source components. Many organizations try to solve the same problems independently, scanning the same packages repeatedly and creating isolated knowledge bases that can't be shared or verified. This redundancy wastes resources and leads to inconsistent - and sometimes inaccurate - compliance outcomes across the industry.\r\n\r\nA better approach is open data for compliance and software supply chain security. Just as open source thrives on shared code, compliance can benefit from verified information about software origins, licenses, and vulnerabilities. AboutCode and ClearlyDefined are pioneering this model by creating community-curated datasets of transparent, verifiable compliance data that anyone can access and improve for digital sovereignty.\r\n\r\nThis talk will explain why open data is essential for scalable and accurate compliance workflows. We’ll demonstrate how to leverage this data in your compliance practices to enhance automation for compliance and software supply chain management.\r\n\r\nWhen compliance data is shared like public infrastructure, we all comply better, together.",
+      "startsAt": "2026-12-10T16:50:00",
+      "endsAt": "2026-12-10T16:55:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f81f15a9-3ed8-4bbe-81cd-a10b55f02704"
+      ],
+      "categoryItems": [
+        469896,
+        470110
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1319811",
+      "title": "Bringing OpenChain into the Public Sector: Compliance Lessons Across Government Levels",
+      "description": "After helping a local company establish an OpenChain ISO/IEC 5230 conformant program, OCF began asking how the same principles could support public-sector teams with different constraints.\r\n\r\nThis lightning talk shares how OCF used ISO/IEC 5230 and 18974 not as standards to impose wholesale, but as a vocabulary for roles, processes, and expectations. The work remains incomplete; our contribution is the translation and persuasion process, and the lessons it offers other Asian public-sector ecosystems.\r\n\r\nAt the central-government level, Taiwan's Ministry of Digital Affairs approached open source through Public Money, Public Code and the Standard for Public Code. OCF translated OpenChain's license-compliance and security-assurance principles into guidance that public servants, procurement teams, and vendors could discuss. Other agencies are exploring whether shared procurement requirements could create broader change.\r\n\r\nLocal governments followed different paths. Taipei added hackathons and community-response requirements to selected procurements, while Tainan's disaster-prevention and smart-city projects gained momentum through sustained engagement with local communities.\r\n",
+      "startsAt": "2026-12-10T16:55:00",
+      "endsAt": "2026-12-10T17:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "bbbb5fa3-6170-435d-ab14-7315f886c5fd"
+      ],
+      "categoryItems": [
+        469896,
+        470112
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1341525",
+      "title": "Closing Remarks",
+      "description": null,
+      "startsAt": "2026-12-10T17:00:00",
+      "endsAt": "2026-12-10T17:05:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "5c08bdcf-fcc3-410d-838e-115e115fba17"
+      ],
+      "categoryItems": [
+        515102
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1341538",
+      "title": "Registration & Badge Pick-up",
+      "description": null,
+      "startsAt": "2026-12-11T08:00:00",
+      "endsAt": "2026-12-11T17:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515103
+      ],
+      "questionAnswers": [],
+      "roomId": 90761,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1341526",
+      "title": "Welcome Back + Opening Remarks",
+      "description": null,
+      "startsAt": "2026-12-11T09:15:00",
+      "endsAt": "2026-12-11T09:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "5c08bdcf-fcc3-410d-838e-115e115fba17"
+      ],
+      "categoryItems": [
+        515102
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1297530",
+      "title": "From OpenChain to MCP: Can Community Conformance Scale Trust in Agentic AI?",
+      "description": "OpenChain demonstrates that enterprise adoption of an open standard requires more than a specification. As the Model Context Protocol (MCP) emerges as a key standard for agentic AI, similar questions are beginning to surface:\r\n\r\n- How can organizations show that implementations conform to the standard?\r\n- What role does conformance play in governance, procurement, interoperability, and trust? \r\n\r\nThis session explores the parallels between OpenChain and MCP, sharing early insights into how community-driven conformance could become a foundational layer for trustworthy AI infrastructure, while highlighting how OSPOs could bridge legal, security, and engineering teams as these standards mature",
+      "startsAt": "2026-12-11T09:45:00",
+      "endsAt": "2026-12-11T10:05:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "b50c081e-ceeb-48fc-81d5-d0bf5b9d8feb"
+      ],
+      "categoryItems": [
+        469896,
+        515102,
+        515096
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1325278",
+      "title": "Goodbye Copyright? The Brave New World for Compliance",
+      "description": "We're retrofitting existing solutions onto a new development methodology. It's not working.\r\n\r\nLLMs are a paradigm shift: fundamental assumptions about software development and rights in code are not working. Even defining \"software\" is now a challenge. \r\n\r\nThe legal and technical tools we have are patching existing modalities in a way that satisfies no one. \r\n\r\nAndrew Katz explores some of the fundamental questions: what is source code in the age of vibe coding? How can a constantly shifting code base comply with regulation (like the Cyber Resilience Act) which demands a fixed, deterministic SBOM per release? How can the subtle requirements of a copyleft licence be respected when the code is used in training data for an LLM which subsequently generates an output based on that code? \r\n\r\nAndrew will present a potential solution, based on solid research, and shows how it can be engineered to to meet the needs of the open source community, software development business, and individual developers. \r\n\r\nIt may even reveal a possible pathway to solve one of the most intractable and persistent FOSS issues: how to remunerate the developers.\r\n\r\nBut what does this solution mean for copyright itself?",
+      "startsAt": "2026-12-11T10:05:00",
+      "endsAt": "2026-12-11T10:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "0dd950fe-bdbf-47ae-98cd-a6db9e7c5a3a"
+      ],
+      "categoryItems": [
+        469895,
+        515102,
+        515096
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1340909",
+      "title": "Hayaku: A Fast and \"Good Enough\" License Scanner",
+      "description": "Scanning source code for license compliance and copyright extraction is\r\ncurrently the slowest step in most compliance pipelines. ScanCode\r\nToolkit is the scanner of choice for many organisations and although\r\nit's thorough it can take long enough that scanning ends up in a nightly\r\nbatch job rather than in CI, where it should run ideally for quick\r\nfeedback to developers and compliance managers.\r\n\r\nHayaku (速く, \"fast\") is a lightweight pre-scanner that makes a different\r\nset of trade-offs than existing scanners. It reuses ScanCode's vast\r\nlicense detection rule set but drops a few features such as partial\r\nmatching, which is the most expensive operation in ScanCode, but\r\ncompensates by tightening existing rules and adding new ones. Rules are\r\nconverted to run on YARA, the industry standard for malware detection at\r\nscale. Fact extraction is decoupled from interpretation, which makes\r\nresults cacheable across runs and projects. In our tests we have seen\r\nspeedups of up to 70x, in a bit over 1,400 lines of Python code,\r\nincluding documentation.\r\n\r\nHayaku isn't a ScanCode replacement. Rules are broadly interchangeable,\r\nand the efficient division of labour is to pre-scan with Hayaku on every\r\ncommit and run ScanCode periodically to fill in the blanks that Hayaku\r\nmissed.\r\n\r\nThe talk covers the design trade-offs and what they cost, the result\r\nformat, where Hayaku is currently the wrong tool, and how to try it.\r\n",
+      "startsAt": "2026-12-11T10:25:00",
+      "endsAt": "2026-12-11T10:45:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "1b91f7e4-4614-4ecb-aeb2-59ee1420dc62"
+      ],
+      "categoryItems": [
+        469896,
+        515102,
+        515097
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1341529",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-12-11T10:45:00",
+      "endsAt": "2026-12-11T11:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515104
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1310843",
+      "title": "Navigating the Standards Landscape for Supply Chain Maturity",
+      "description": "Software supply chains demand a holistic approach to maturity, integrating security, license compliance, and quality management. But how do standards like OpenChain ISO/IEC 5230 and ISO/IEC 18974 fit within a broader enterprise framework like ISO 9001? Navigating this landscape is a key challenge for every organization.\r\n\r\nIn this session, Marcel Kurzmann (OpenChain Board Member) and Nikola Babadzhanov (OpenChain Ambassador) share a practical blueprint from the Bosch OSPO. They reveal how a global technology leader leverages its foundational Quality Management System to systematically address open source compliance and security.\r\n\r\nWe will guide you through several different aspects of the supply chain maturity - the standards landscape, automation at scale and the OSPO's strategic role in preparation for regulations like the EU CRA.\r\n\r\nThis talk provides a clear map for integrating open source governance into your existing quality processes, ensuring a transparent, secure, and compliant supply chain.",
+      "startsAt": "2026-12-11T11:30:00",
+      "endsAt": "2026-12-11T11:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "10bb4aa0-7435-4e52-a926-31f5ecf81d8f"
+      ],
+      "categoryItems": [
+        469896,
+        470110
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1321378",
+      "title": "From Red Flags to Early Warnings: Rethinking Open Source Health Indicators",
+      "description": "This panel brings together end users, integrators, data providers, and developers to share hands-on experience of using open source health indicators for effective supply chain management.\r\n\r\nMaintenance, sustainability, and collaboration dynamics are increasingly used as early indicators and predictors of supply chain issues. Unmaintained repositories are an obvious red flag, but many “grey areas” offer crucial intelligence. The XZ Utils case is a flagship example: networks of trust, human activity patterns, and unexpected changes in code capabilities were key to early threat detection.\r\n\r\nThis panel shares that lens with the OpenChain community, building on the Capability Maturity Model (where these signals are already referenced) and talks at Open Compliance Summit 2025 on adding new security layers to close gaps in the existing supply chain.\r\n\r\nWe’ll ground the discussion in real-world examples, and share how to grow a high-quality dataset from scratch, why open sourcing the datasets matters as a foundation for future work, and how to build them in a community-driven way, with ecosystem collaborations like OpenChain central to that success.",
+      "startsAt": "2026-12-11T11:50:00",
+      "endsAt": "2026-12-11T12:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f8230e77-8549-4dad-ad21-220ff0318e3a",
+        "f0f90d8b-a0cc-4562-9191-4c9b3a2efb9e",
+        "8844e74e-c289-4e72-9971-45de462654fc"
+      ],
+      "categoryItems": [
+        469896,
+        470110
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1341534",
+      "title": "Lunch",
+      "description": null,
+      "startsAt": "2026-12-11T12:10:00",
+      "endsAt": "2026-12-11T13:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515104
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1321269",
+      "title": "Let Agents Investigate, Let Humans Decide: AI-Assisted Open Source License Compliance",
+      "description": "License scanners work well when source files contain standard license headers. However, code reuse does not always respect file boundaries. Copied code may lose its license info, a comment may mention GPL only to prohibit its use, and a proprietary notice may not match a known license. An LLM alone is not sufficient, because it may produce confident but unsupported compliance conclusions.\r\n\r\nWe present an agentic workflow for open source license compliance. The workflow combines existing scanner results with provenance analysis, retrieves license text to interpret variants and exceptions, and reconciles source, repo and package data, Git history, and upstream projects. Rather than returning a license label, the agent creates a case file with the relevant source lines, possible code origin, candidate license expression, uncertainty, potential impact, and recommended next action.\r\n\r\nHigh-confidence, low-impact findings can be saved automatically. Custom licenses, copyleft, conflicts, and other issues are escalated to a human regardless of model confidence. We show how AI can perform the most repetitive work while humans retain control over legally and operationally significant decisions.",
+      "startsAt": "2026-12-11T13:30:00",
+      "endsAt": "2026-12-11T13:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "bc2962fa-7bb4-4b8a-8dcd-01c4e740cc0f",
+        "de068cc8-d3e5-4b94-a986-316a12513c90"
+      ],
+      "categoryItems": [
+        469896,
+        470107
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1321270",
+      "title": "From Scanning to Continuous Open Source Governance with FOSSLight",
+      "description": "LG Electronics open sourced FOSSLight in 2021 to share the tools and practices it had developed through years of open source governance. Through continued development, FOSSLight has grown beyond scanning and compliance checks into a broader ecosystem that supports the ongoing management of open source.\r\nThis session shows how FOSSLight brings the different parts of this work together into a continuous open source governance workflow. It will explain how its components work together, moving from initial analysis to review, SBOM exchange, vulnerability follow-up, and automation.",
+      "startsAt": "2026-12-11T13:50:00",
+      "endsAt": "2026-12-11T14:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "a2c36cc5-bd5e-4ee4-9425-574d633afca8"
+      ],
+      "categoryItems": [
+        469896,
+        470112
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1321422",
+      "title": "Mapping SBOM with consistency",
+      "description": "This session will present Baseline-information Obligations Mapping (BOM) ontology that will help practitioners map SBOM minimum elements (or baseline attributes) to metadata standards in a more consistent and more machine-readable way.\r\n\r\nWe propose a bridge ontology that is designed to be used as a \"mapping justification\" with the Simple Standard for Sharing Ontological Mappings (SSSOM). A SSSOM mapping is a statement that there is a correspondence between two semantic entities. It comprises two components:\r\n\r\n1) the core mapping (subject, predicate, object; for example, g7ai:sbom-author, skos:broadMatch, spdx3:createdBy or ntia:author, skos:broadMatch, cdx:authors) \r\n\r\n2) the supplementary information about the core mapping (for example, map author, mapping confidence, and its justification). The BOM ontology provides SBOM minimum elements vocabulary that can be used with the justification, so we can know that both of the mappings in (1) above are based on the bom:doc-author concept for “Document Author” in SBOM minimum elements.\r\n\r\nWe will demonstrate how this can reduce SBOM mapping time while offer more consistent mapping.\r\n",
+      "startsAt": "2026-12-11T14:10:00",
+      "endsAt": "2026-12-11T14:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "cbc23f2d-d505-41f4-b987-98ad08390d5f"
+      ],
+      "categoryItems": [
+        469896,
+        470114
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1280925",
+      "title": "Frictionless Compliance: Leveraging Process Ergonomics to Mitigate Human Error in Open Source Supply",
+      "description": "In global supply chain security, process failure frequently stems from human error induced by cognitive overload. While automated scanners and SBOM tools exist to ensure compliance, the ultimate integrity of open technology management relies entirely on practitioner execution. When compliance interfaces and tooling workflows are overly complex, developers bypass protocols or misconfigure security policies, creating unintended process vulnerabilities. \r\n\r\nDrawing on practical experience as an open-source maintainer at the AsyncAPI Initiative, this session analyzes how optimizing the ergonomics of compliance processes reduces systemic friction. We present an actionable framework for:\r\n\r\n1. Identifying hidden cognitive bottlenecks in policy enforcement workflows that trigger practitioner resistance.\r\n2. Standardizing interaction heuristics across automated compliance tools to lower entry barriers.\r\n3. Structuring compliance pipelines to incentivize developer adherence rather than friction.\r\n\r\nThis session provides compliance officers and process managers with evidence-based strategies to secure the human element in open supply chains.",
+      "startsAt": "2026-12-11T14:30:00",
+      "endsAt": "2026-12-11T14:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "48cf4d5b-7880-4a11-ac23-c50bb17d2621"
+      ],
+      "categoryItems": [
+        469896,
+        470108
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1341533",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-12-11T14:50:00",
+      "endsAt": "2026-12-11T15:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        515104
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1313270",
+      "title": "Where Can AI Help with Compliance Reviews? Lessons from OSS License Compliance and Sustainable AI",
+      "description": "AI is becoming important in compliance work, but it is not always clear where and how to use it. Compliance rules are often spread across guidelines, checklists, procedures, and documents. In this session, we first list each requirement, the evidence needed to check it, what sources are available, what is missing, and who should make the final decision.\r\n\r\nWe consider how AI can help extract requirements, find related documents or records, and suggest evidence mappings and gaps. Human reviewers then confirm the meaning of the rule and evidence, and decide whether the requirement can be checked automatically, needs more evidence, or still requires human judgment.\r\n\r\nThe two speakers have worked on OSS license compliance and Sustainable AI, including Green Software. We use examples from both areas. For OSS license compliance, we look at obligations, usage conditions, and approval records. For Sustainable AI, we look at energy use, carbon emissions, and related information. By comparing these two areas, we try to find common points about where AI can help and where human judgment is still needed. We also look for a general way to use AI in compliance reviews that may apply to other areas.",
+      "startsAt": "2026-12-11T15:25:00",
+      "endsAt": "2026-12-11T15:45:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "b0801808-e7e2-4189-a218-484f14234fb8",
+        "9aaf6a89-5022-4ed4-8711-f81ab0b9d8dc"
+      ],
+      "categoryItems": [
+        469896,
+        470112
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1296962",
+      "title": "LLM-Enabled License Enrichment for SBOMs",
+      "description": "Whether an SBOM arrives with usable license and copyright data depends on the generator and the ecosystem, but enough entries come back without a concluded license or a copyright notice that filling them in by hand remains a real part of the audit effort.\r\nTo narrow that gap I built and open-sourced a tool, which has run in production for over 18 months across more than 30,000 entries.\r\nThe purpose of the talk is to show that a language model can genuinely help fill those gaps, and to be precise about where. Drawing on that experience, it looks at which parts of license identification the model handles well, which are better left to deterministic rules, and why the split fell further towards rules than I expected. It also covers why each determination has to carry its evidence and reasoning, and what that requirement rules out.",
+      "startsAt": "2026-12-11T15:45:00",
+      "endsAt": "2026-12-11T16:05:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "e6e12a16-6f14-4608-aee4-38bebbdbaf7b"
+      ],
+      "categoryItems": [
+        469896,
+        470114
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1309814",
+      "title": "Detect, Decide, Report: Automating CRA's 24-Hour Vulnerability Response with OpenSearch and Ansible",
+      "description": "Starting September 2026, the EU Cyber Resilience Act requires digital product manufacturers to detect, triage, and report actively exploited vulnerabilities within 24 hours. Manual triage can't keep pace across deep, distributed dependency trees.\r\n\r\nThis session presents a working automation setup using OpenSearch and Ansible. Every build produces a live SBOM in CycloneDX format, streamed into OpenSearch and enriched against CISA's KEV catalog and EPSS scores. \r\nOpenSearch Dashboards then shows what's actually being exploited, not just a generic CVSS score.\r\n\r\nThe second half covers what happens when a detection rule flags a compromised component. The system checks exposure and confidence, then either triggers a scoped Ansible playbook to isolate it, or routes it to an engineer. Every action is logged, becoming the draft of the report the regulator requires.\r\n\r\nAttendees will leave with:\r\n\r\n1. A reference architecture diagram and source code on GitHub\r\n2. Ansible roles for SBOM generation, KEV/EPSS enrichment, and remediation\r\n3. A working example turning logs into a compliance report draft\r\n4. An honest look at where automation is safe, and where judgment matters",
+      "startsAt": "2026-12-11T16:05:00",
+      "endsAt": "2026-12-11T16:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "b29d5315-2fec-4dd6-8a91-30efcd6d0a68"
+      ],
+      "categoryItems": [
+        469896,
+        470109
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1320972",
+      "title": "Open Source's Answer to CRA Compliance and Vulnerability Chaos",
+      "description": "Vulnerability data is broken in the same way software supply chains were a decade ago: fragmented, duplicative, and not trustworthy. The EU Cyber Resilience Act (CRA) makes that a legal problem, not just a technical one, requiring organizations to track, report, and respond to vulnerabilities across their software supply chain.\r\n\r\nThe open source community is addressing this head-on with three interlocking efforts:\r\n\r\n1) Data: vulnerability information as a shared, curated and verified commons, deduplicated and traceable to source. Teams can stop re-triaging the same advisory, and correct data produces the audit trail the CRA demands.\r\n\r\n2) Standards: open, ecosystem-agnostic identifiers (PURL, VERS, and a new identifier for security advisories) so any tool or organization can refer to the same vulnerability the same way, closing a gap that complicates CRA reporting across fragmented toolchains.\r\n\r\n3) Tools: practical open source software turns CRA and other regulatory compliance obligations into an automatable pipeline anyone can adopt.\r\n\r\nThe result is a new foundation for software supply chain security, built on data you can trust, standards you can share, and tools you can run.",
+      "startsAt": "2026-12-11T16:25:00",
+      "endsAt": "2026-12-11T16:45:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "82e0fb42-ea87-4337-ba7a-74337ac98295"
+      ],
+      "categoryItems": [
+        469896,
+        470109
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1324858",
+      "title": "Beyond SBOM: Turning Open Source Compliance into Product Security Evidence for CRA Readiness",
+      "description": "An SBOM identifies components, but it does not by itself show whether a vulnerability affects a product release, what action was taken, or whether the decision can be reconstructed. This session presents a practical evidence chain from SBOM validation through vulnerability correlation, product-specific applicability and impact assessment, remediation decisions, VEX statements or security advisories where appropriate, and retention of supporting rationale.\r\n\r\nIt examines common failures: incomplete SBOMs, scanner matches treated as conclusions, unclear ownership, weak links between assessments and product versions, and decisions that cannot be reproduced. Building on established open source governance and security assurance practices, including ISO/IEC 5230 and ISO/IEC 18974, the session shows how these practices can support product-level vulnerability handling, traceability, and evidence management for CRA readiness.",
+      "startsAt": "2026-12-11T16:45:00",
+      "endsAt": "2026-12-11T16:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "150af151-cb40-42ed-a57e-9041375ab950"
+      ],
+      "categoryItems": [
+        469896,
+        470109
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1321416",
+      "title": "A Tag Is a Lie",
+      "description": "We file digest pinning under reproducibility and build performance, somewhere near the bottom of a best practices page nobody reads. I think it is an evidentiary control and it belongs in policy.\r\n\r\nHere is the argument, and it takes about two minutes. The big compromises this year did not exploit anything. They swapped the artifact sitting behind a name that had already been reviewed and approved. A tag is a mutable pointer. If your approval is recorded against a mutable pointer then you have not approved a component, you have approved a label somebody else can redefine later. That will not read as an approval to an auditor, and it should not.\r\n\r\nThe rest of the time: what actually changes when pinning becomes a requirement rather than a suggestion, what it costs in practice, the places it genuinely breaks, and the two spots where every team I have looked at forgets to apply it.",
+      "startsAt": "2026-12-11T16:50:00",
+      "endsAt": "2026-12-11T16:55:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "a6c4864e-3c42-4166-b28a-1ebb7b34f835"
+      ],
+      "categoryItems": [
+        469896,
+        470108
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1341528",
+      "title": "Closing Remarks",
+      "description": null,
+      "startsAt": "2026-12-11T17:00:00",
+      "endsAt": "2026-12-11T17:05:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "5c08bdcf-fcc3-410d-838e-115e115fba17"
+      ],
+      "categoryItems": [
+        515102
+      ],
+      "questionAnswers": [],
+      "roomId": 83731,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    }
+  ],
+  "speakers": [
+    {
+      "id": "f8230e77-8549-4dad-ad21-220ff0318e3a",
+      "firstName": "Adam",
+      "lastName": "Herzog",
+      "bio": "Adam leads the community for AboutCode, reusable open source building blocks of reliable data, interoperable tools, and practical standards to automate and secure software supply chains. He previously worked in different roles at (mostly) developer-facing startups, including field marketing at Neo4j, community marketing at Docker, developer relations at Trifork, Chief of Staff at Humio (acquired by CrowdStrike), and product marketing at Sourcegraph.",
+      "tagLine": "Community at AboutCode",
+      "profilePicture": "https://cdn.sessionize.com/image/5cff-400o400o1-BFU23wtL335iLyyPD6PFac.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/herzogadam",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://aboutcode.org",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1321378
+      ],
+      "fullName": "Adam Herzog",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "AboutCode"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Community"
+        }
+      ]
+    },
+    {
+      "id": "48cf4d5b-7880-4a11-ac23-c50bb17d2621",
+      "firstName": "Aishat",
+      "lastName": "Muibudeen",
+      "bio": "Aishat Muibudeen is a Technical Product Designer at Open Elements GmbH, where she focuses on developer experience for critical open-source infrastructure in the Java ecosystem. She spent five years in the AsyncAPI Initiative, growing from contributor to Design Lead, and now serves on its Governance Board. A co-founder of OpenNest Africa, she was selected by the United Nations as a Round 1 Judge for the UN Tech Over Hackathon.",
+      "tagLine": "Technical Product Designer & Open Source Maintainer | Optimizing Process Ergonomics & Human-Centric Security",
+      "profilePicture": "https://cdn.sessionize.com/image/4cf9-400o400o1-wiYrv1x7os3B43CeMDoPVp.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/maya_ux_ui",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/aishatmuibudeen",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Facebook",
+          "url": "https://www.facebook.com/AishatMayaleee",
+          "linkType": "Facebook"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://www.instagram.com/maya_ux_ui/",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://medium.com/@muibudeenaishat",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.asyncapi.com",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1280925
+      ],
+      "fullName": "Aishat Muibudeen",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Open Elements GmbH"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Technical Product Designer"
+        }
+      ]
+    },
+    {
+      "id": "f0f90d8b-a0cc-4562-9191-4c9b3a2efb9e",
+      "firstName": "Alyssa",
+      "lastName": "Wright",
+      "bio": "Alyssa Wright helps lead Bloomberg's Open Source Program Office, applying the principle of \"be curious, solve problems, do good\" to drive sustainable open source impact. Her experience spans the World Bank, Samsung Research, and board roles with Open Source Collective and OpenStreetMap US. An MIT grad based in Brooklyn, she loves exercise, good food, and witty banter.",
+      "tagLine": "Open Source Program Office",
+      "profilePicture": "https://cdn.sessionize.com/image/2d07-400o400o1-Mg4CnkS6MfzNostentSXLc.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1321378
+      ],
+      "fullName": "Alyssa Wright",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Bloomberg"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Open Source Program Office"
+        }
+      ]
+    },
+    {
+      "id": "b8e29e52-41e8-4bde-b93e-6bbf9da78593",
+      "firstName": "Amy",
+      "lastName": "Wang",
+      "bio": "Amy Wang holds a Master's degree in Software Engineering and has over 13 years of experience in software licensing compliance. She excels in legal terms interpretation, reviewing open source licenses, commercial contracts, and web service terms, along with risk assessment. Currently leading a team for technical compliance review and compliance tooling implementation, Amy provides consultative advice and establishes processes to ensure legal and regulatory adherence.",
+      "tagLine": "Head of software licensing compliance team in SAP China",
+      "profilePicture": "https://cdn.sessionize.com/image/b9dc-400o400o1-EK5xfn5QxNGcDgQ172x5XR.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1317204
+      ],
+      "fullName": "Amy Wang",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "SAP"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Technical legal compliance specialist"
+        }
+      ]
+    },
+    {
+      "id": "b50c081e-ceeb-48fc-81d5-d0bf5b9d8feb",
+      "firstName": "Ana",
+      "lastName": "Jiménez Santamaría",
+      "bio": "Ana Jiménez is a community leader and data scientist with 5+ years of experience at the Linux Foundation. She is also an Agentic AI Foundation Ambassador, helping developers and OSPOs understand agentic AI projects and open standards.\r\n\r\nAna is involved in TODO Group’s Agentic AI to Empower OSPOs Working Group and co-chairs the PyTorch Academic Outreach Working Group. She worked at Bitergia on software development analytics and holds a master's in Data Science at Rey Juan Carlos University.",
+      "tagLine": "AAIF Ambassador, Sr. Project Manager at Linux Foundation",
+      "profilePicture": "https://cdn.sessionize.com/image/28a2-400o400o1-9XDFd3XnFLH9v35xw5pgas.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/ana-jim%C3%A9nez-santamar%C3%ADa/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/ana-jimenez-santamaria",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1297530
+      ],
+      "fullName": "Ana Jiménez Santamaría",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Linux Foundation (TODO Group, PyTorch Foundation)"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Sr. Project Manager, AAIF Ambassador"
+        }
+      ]
+    },
+    {
+      "id": "0dd950fe-bdbf-47ae-98cd-a6db9e7c5a3a",
+      "firstName": "Andrew",
+      "lastName": "Katz",
+      "bio": "Andrew Katz is a lawyer who has been advising on Open Source and Open Technologies for over 30 years. He is CEO of Orcro Limited, a specialist open source compliance consultancy, and Solicitor Consultant (Open Source) at Bristows LLP in the UK, one of London's leading technology law firms. He is an active member of the international OpenChain community. He has advised many businesses, foundations and NGOs on open source business models, licensing, compliance, and exit planning. ",
+      "tagLine": "CEO, Orcro Limited; Solicitor Consultant, Bristows LLP",
+      "profilePicture": "https://cdn.sessionize.com/image/48c0-400o400o1-QyxJN1PWjRSiAB1kryojui.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/andrewjskatz",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/andrewjskatz/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://www.linkedin.com/in/andrewjskatz/",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://orcro.co.uk",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1325278
+      ],
+      "fullName": "Andrew Katz",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Orcro Limited and Bristows LLP"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "CEO and Consultant Solicitor"
+        }
+      ]
+    },
+    {
+      "id": "1b91f7e4-4614-4ecb-aeb2-59ee1420dc62",
+      "firstName": "Armijn",
+      "lastName": "Hemel",
+      "bio": "Armijn Hemel, MSc is the owner of Tjaldur Software Governance Solutions, a consultancy specialized in open source license compliance, software provenance and binary analysis.",
+      "tagLine": "principal",
+      "profilePicture": "https://cdn.sessionize.com/image/f002-400o400o1-QdjsomA1RjkEiyj3ssmsYW.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1340909
+      ],
+      "fullName": "Armijn Hemel",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Tjaldur Software Governance Solutions"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "principal"
+        }
+      ]
+    },
+    {
+      "id": "cbc23f2d-d505-41f4-b987-98ad08390d5f",
+      "firstName": "Arthit",
+      "lastName": "Suriyawongkul",
+      "bio": "I’m researching AI accountability standards and semantic web technology. An SPDX core contributor, I co-lead its AI working group, review specification, and maintain the NTIA Conformance Checker, spdx-python-model, and SPDX online tools.\r\n\r\nI also created Pitloom, an AI SBOM generator creating SPDX 3 SBOM from Python projects and various AI model formats. Alongside my regulatory technology research, I volunteer with the Thai Netizen Network, a Bangkok-based digital rights group.",
+      "tagLine": "AI governance researcher, Trinity College Dublin",
+      "profilePicture": "https://cdn.sessionize.com/image/d9b9-400o400o1-NE7FNXdUSKh3socWa9UYCF.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/bact",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/arthit/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://www.instagram.com/bact/",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://bact.github.io/",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.tcd.ie/scss/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/arthit",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1321422
+      ],
+      "fullName": "Arthit Suriyawongkul",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Trinity College Dublin"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "PhD Researcher"
+        }
+      ]
+    },
+    {
+      "id": "757782ad-d5f8-4a78-a71d-e7b72bcc309a",
+      "firstName": "Ayumi",
+      "lastName": "Watanabe",
+      "bio": "Ayumi Watanabe is a core member of OpenChain Japan community and known as an evangelist who is certified by the Linux Foundation Japan. Her strong point is a knowledge of many tools for SBOM generation and management, a wide range of experiences as an OSS management consultant, and strong connection with communities regarding OSS compliance. She is also a member of Hitachi OSPO and a technical adviser of Information-technology Promotion Agency, Japan.",
+      "tagLine": "Senior OSS Specialist of Hitachi Solutions, Ltd.",
+      "profilePicture": "https://cdn.sessionize.com/image/3624-400o400o1-NDML68rDhMrcb6bphMDv5H.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/ayumi-watanabe-ossmanagement/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.hitachi-solutions.co.jp/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1303585,
+        1258360
+      ],
+      "fullName": "Ayumi Watanabe",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Hitachi Solutions, Ltd."
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Senior OSS Specialist"
+        }
+      ]
+    },
+    {
+      "id": "8844e74e-c289-4e72-9971-45de462654fc",
+      "firstName": "Daniel",
+      "lastName": "Izquierdo Cortázar",
+      "bio": "Daniel Izquierdo is currently working at Software Heritage running the State of Public Code Report. Daniel is a researcher and co-founded  Bitergia where he was the CEO from 2021 to 2026.  Daniel earned a PhD in free software engineering in 2012 focused on the analysis of buggy developers activity patterns in the Mozilla community. He's been board member as well as co-founder of the CHAOSS community and the InnerSource Commons Foundation, serving as President and Chair during the last years.",
+      "tagLine": "OSS intelligence, State of Public Code, Software Heritage",
+      "profilePicture": "https://cdn.sessionize.com/image/e959-400o400o1-f4GMKPjqfLeXVZjPiFMuTY.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/dizquierdo",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/dicortazar/",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1321378
+      ],
+      "fullName": "Daniel Izquierdo Cortázar",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Software Heritage"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "OSS Intelligence"
+        }
+      ]
+    },
+    {
+      "id": "b29d5315-2fec-4dd6-8a91-30efcd6d0a68",
+      "firstName": "Harmeet",
+      "lastName": "Singh",
+      "bio": "Harmeet Singh is the Automation and Observability Lead at MetLife, leading engineering teams building automation and observability platforms across the EMEA region. His work sits at the intersection of infrastructure automation, security observability, and compliance across regulated European environments. Over the past decade, he has worked in platform engineering and large-scale infrastructure automation, focused on systems that reduce manual intervention and improve operational reliability.",
+      "tagLine": "Automation and Observability Lead, MetLife",
+      "profilePicture": "https://cdn.sessionize.com/image/1253-400o400o1-n6Sb8KgjLsLgeBuWEpyNYf.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/helloharmeet/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://www.linkedin.com/in/helloharmeet/",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.metlife.com/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/harmeet-singh",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1309814
+      ],
+      "fullName": "Harmeet Singh",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "MetLife"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Automation & Observability Lead, MetLife"
+        }
+      ]
+    },
+    {
+      "id": "82e0fb42-ea87-4337-ba7a-74337ac98295",
+      "firstName": "Henrik",
+      "lastName": "Sandklef",
+      "bio": "Henrik has been engaged, in various roles, in the Free and Open Source communitity for some 20 years. He has long experience in telecom, embedded and automotive industry as well as teaching at universities but now works only with FOSS.",
+      "tagLine": "Software Compliance",
+      "profilePicture": "https://cdn.sessionize.com/image/dd77-400o400o1-NxHjVMC9UwZedxDRDGJBbo.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1320972
+      ],
+      "fullName": "Henrik Sandklef",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Sandklef Labs"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Consultant"
+        }
+      ]
+    },
+    {
+      "id": "1fdbd127-088c-4f20-a03a-0bac46af5138",
+      "firstName": "Hidekazu",
+      "lastName": "Kamino",
+      "bio": "Patent Attorney. Handled patent prosecution and litigation at an electronics manufacturer and a game company. Joined Mercari in August 2018 and is responsible for all intellectual property matters.",
+      "tagLine": "OSPO Lead, Mercari",
+      "profilePicture": "https://cdn.sessionize.com/image/772f-400o400o1-E2ofxNZtduvo3wk5ZTpvxU.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/hidekazu-k/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://jp.mercari.com/en",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1303585
+      ],
+      "fullName": "Hidekazu Kamino",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Mercari, inc."
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "OSPO Lead, Patent Attorney"
+        }
+      ]
+    },
+    {
+      "id": "bc2962fa-7bb4-4b8a-8dcd-01c4e740cc0f",
+      "firstName": "Jeff",
+      "lastName": "Shapiro",
+      "bio": "Jeff Shapiro is the Director of License Scanning for The Linux Foundation.  He has 30+ years of experience in the software industry, including over 10 years in software auditing, open source scanning, and training developers in OSS license compliance.  He also has extensive experience with SBOMs and software composition analysis tools.",
+      "tagLine": "Director of License Scanning at The Linux Foundation",
+      "profilePicture": "https://cdn.sessionize.com/image/d01d-400o400o1-9Y1tMrrUc5yafz1uogzzyo.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/jeffcshapiro/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.linuxfoundation.org",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1321269
+      ],
+      "fullName": "Jeff Shapiro",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "The Linux Foundation"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Director of License Scanning"
+        }
+      ]
+    },
+    {
+      "id": "ff01b1c7-9ec8-48d3-8d0c-12cad131c1e6",
+      "firstName": "Jeffrey",
+      "lastName": "Borek",
+      "bio": null,
+      "tagLine": null,
+      "profilePicture": null,
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1368002
+      ],
+      "fullName": "Jeffrey Borek",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "IBM Software"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "WW Sr. Program Director"
+        }
+      ]
+    },
+    {
+      "id": "b833a2cb-0914-49cc-b200-3636daa9c81e",
+      "firstName": "Jeongsook",
+      "lastName": "Park",
+      "bio": "Jeongsook Park works at ETRI's Quality Innovation Section(OSPO), where she focuses on open source governance and AI data governance for one of Korea's national research institutes. Her recent work includes coordinating the institutional design and nonprofit incorporation of the Government-Funded Research Institute Open Source Council, connecting it to national bodies such as NST.",
+      "tagLine": "The Leader of ETRI OSPO",
+      "profilePicture": "https://cdn.sessionize.com/image/ddb2-400o400o1-WG9hxMqqkTEbWXWw376Gx1.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/jeongsook-park-9745352a3",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.etri.re.kr",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1321181
+      ],
+      "fullName": "Jeongsook Park",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "ETRI"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Director"
+        }
+      ]
+    },
+    {
+      "id": "bef0b00a-c949-40f6-8c01-7c8291563e3d",
+      "firstName": "Jimmy",
+      "lastName": "Ahlberg",
+      "bio": "Currently Mr Ahlberg is Expert & Senior Legal Counsel, Open Source, Standards, and AI at Ericsson, former to this position he was Director of Open Source Policy with the Ericsson OSPO. \r\n\r\nJimmy Ahlberg is currently he chairperson of the OpenChain projects governing board. ",
+      "tagLine": "Director Open Source Policy",
+      "profilePicture": "https://cdn.sessionize.com/image/aa03-400o400o1-HDzg8yv5mPTFSLngZrhUse.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/jimmy-ahlberg-62581a79/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.ericsson.com/en",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/JimmyAhlberg",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1324814
+      ],
+      "fullName": "Jimmy Ahlberg",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Ericsson"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Expert & Senior Legal Counsel"
+        }
+      ]
+    },
+    {
+      "id": "6bbcad0b-14ac-4ba2-87c3-e0c5d3db670a",
+      "firstName": "Karla",
+      "lastName": "Padilla",
+      "bio": "Karla Padilla manages the University of California San Diego Open Source Program Office, which is part of a larger UC OPSO Network. She has over 20 years of experience in the tech industry. At Qualcomm, she worked in the Open Source Legal Group and wrote Qualcomm’s open source policy for the use, creation and distribution of open source software. Throughout her career, Karla worked to ensure compliance with third party licenses, often securing the needed rights for distribution and use. ",
+      "tagLine": "UC San Diego OSPO, Program Manager",
+      "profilePicture": "https://cdn.sessionize.com/image/e2af-400o400o1-7QwZsb7SwUe5c7T2Msq53V.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1321223
+      ],
+      "fullName": "Karla Padilla",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "University of California San Diego"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Program Manager, Open Source Program Office"
+        }
+      ]
+    },
+    {
+      "id": "9547eef2-a52c-4de6-9744-96dc7e309e27",
+      "firstName": "Kate",
+      "lastName": "Stewart",
+      "bio": "Kate Stewart works with the safety, security and license compliance communities to advance the adoption of best practices into embedded open source projects.   She was one of the cofounders of SPDX.  Since joining The Linux Foundation, she has launched the ELISA and Zephyr Projects, as well as supporting other embedded projects.  With more than 30 years of experience in the software industry primarily in the tooling and embedded ecosystem working with international teams. ",
+      "tagLine": "VP, Dependable Embedded Systems,  The Linux Foundation",
+      "profilePicture": "https://cdn.sessionize.com/image/a0af-400o400o1-KqCxJscCys4viX7LSPjUqF.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "Twitter",
+          "url": "https://twitter.com/_kate_stewart",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/katestewartaustin/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://linuxfoundation.org",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1321391
+      ],
+      "fullName": "Kate Stewart",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "The Linux Foundation"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "VP of Dependable Embedded Systems"
+        }
+      ]
+    },
+    {
+      "id": "094b12da-7ef2-48e7-a393-7cb7a3839520",
+      "firstName": "Kazuki",
+      "lastName": "Imamura",
+      "bio": "Born in 1974. I started my current job in March 2024. Prior to that, I worked in web development for 13 years. I started activities as a civic tech contributor in 2018.",
+      "tagLine": "Open Source Promotion, IPA:Innovation Platform Agency, Japan",
+      "profilePicture": "https://cdn.sessionize.com/image/80ae-400o400o1-JNFXuBdjFzZ4qUVXG5RXiW.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/kazuki-imamura/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.ipa.go.jp/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/kazuki-imamura",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1303585
+      ],
+      "fullName": "Kazuki Imamura",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "IPA: Innovation Platform Agency, Japan"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Open Source Promotion"
+        }
+      ]
+    },
+    {
+      "id": "143e9837-083c-4e9d-b83b-7ef5be83f170",
+      "firstName": "Kenji",
+      "lastName": "Tsuchie",
+      "bio": "Manager and in-house patent attorney overseeing comprehensive IP strategy for Daikin's solutions business. My responsibilities span across AI, IoT, and software IP, including OSS licensing compliance and AI copyright matters. Dedicated to supporting innovation and navigating complex IP landscapes.",
+      "tagLine": "Manager, Daikin Industries",
+      "profilePicture": "https://cdn.sessionize.com/image/f2af-400o400o1-R5ug4PEPh4xVmvAxbSxXzg.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/kenji-tsuchie-7a5581378?trk=contact-info",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.daikin.co.jp/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1303585
+      ],
+      "fullName": "Kenji Tsuchie",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Daikin Industries, Ltd."
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Manager"
+        }
+      ]
+    },
+    {
+      "id": "28a7fd22-a3f4-4cae-8af1-ca22ff86afe5",
+      "firstName": "King",
+      "lastName": "Gao",
+      "bio": "Once represented Huawei as a board member of OpenChain to contribute to the community, and also served as a maintainer of the CHAOSS community. Now he is the member of OIN license team.Additionally, [he/she] participated in contributing to ISO 5962 within the SPDX community and has given presentations at OSSEU and OSC conferences.",
+      "tagLine": "Open Source China CSPO",
+      "profilePicture": "https://cdn.sessionize.com/image/5d59-400o400o1-gei4nyq9XBsDfRtmp9eUA.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "Company Website",
+          "url": "https://www.oschina.net/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1325156
+      ],
+      "fullName": "King Gao",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Open Source China"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Chief Security Product Officer"
+        }
+      ]
+    },
+    {
+      "id": "b0801808-e7e2-4189-a218-484f14234fb8",
+      "firstName": "Kouki",
+      "lastName": "Hama",
+      "bio": "Kouki Hama is a Senior Research Engineer at NTT, Inc. Before joining NTT in 2024, he spent about eight years working on OSS license compliance at an electronics manufacturer. His current work mainly focuses on Green Software, while also exploring AI-assisted compliance reviews, software supply chain transparency, and SBOMs. Outside of work, he contributes to the OpenChain Japan SBOM Sub Working Group and is a co-leader of Eclipse SW360, an open-source SBOM catalog and management tool.",
+      "tagLine": " Senior Research Engineer at NTT, Inc., Computer & Data Science Laboratories.",
+      "profilePicture": "https://cdn.sessionize.com/image/d477-400o400o1-BEXVvm2rfLMzJs7MM6q1XZ.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://jp.linkedin.com/in/kouki-hama-841111187",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://group.ntt/en/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/kouki-hama",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1313270
+      ],
+      "fullName": "Kouki Hama",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "NTT, Inc"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Senior Research Engineer"
+        }
+      ]
+    },
+    {
+      "id": "9aaf6a89-5022-4ed4-8711-f81ab0b9d8dc",
+      "firstName": "Machiko",
+      "lastName": "Shinozuka",
+      "bio": "Machiko Shinozuka is a researcher in NTT, Inc. Her work focuses on operationalizing green software practices and governance, including carbon accounting rules and field trials for software CO2 measurement. She is also interested in Policy as Code to seamlessly integrate sustainability into development workflows, exploring sustainability use cases for OPA and recently sharing this work at OSS events.",
+      "tagLine": "Senior Research Engineer, NTT, Inc.  Computer and Data Science Laboratories",
+      "profilePicture": "https://cdn.sessionize.com/image/9515-400o400o1-ni9xJRZRBysqqbwfiHP1qC.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/m-shinozuka-5b04103b8/",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1313270
+      ],
+      "fullName": "Machiko Shinozuka",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "NTT, Inc."
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Senior Research Engineer"
+        }
+      ]
+    },
+    {
+      "id": "10bb4aa0-7435-4e52-a926-31f5ecf81d8f",
+      "firstName": "Marcel",
+      "lastName": "Kurzmann",
+      "bio": "Marcel Kurzmann joined Bosch in 1997. After working at Bosch Engineering , Automotive Electronics and Bosch Software Innovations in different roles, he is now member of the Center of Excellence Open Source and Inner Source at Bosch Digital. He represents Bosch in the OpenChain Governing Board and is active member of the OpenChain Tooling Workgroup and Co-Maintainer of the Eclipse Apoapsis Project. His newest endeavour is to forward Open Source awareness in his home region of Southern Germany.",
+      "tagLine": "Bosch Digital",
+      "profilePicture": "https://cdn.sessionize.com/image/596f-400o400o1-KLs8FhCeQtn17Ycsg835gZ.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/marcel-kurzmann/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://opensource.bosch.com/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1258360,
+        1310843
+      ],
+      "fullName": "Marcel Kurzmann",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Robert Bosch GmbH"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Software and Open Source Management Consultant"
+        }
+      ]
+    },
+    {
+      "id": "eb579b33-62e3-4432-9b7f-a8e210a64ec6",
+      "firstName": "Mariya",
+      "lastName": "Kelsch",
+      "bio": "Mariya Kelsch is a Software Engineer at Deutsche Bahn, with a focus on software development, software architecture, and cybersecurity. She is a contributor to the OpenRail Association community, a member of Women4Cyber Germany, and founder of the CYBER STORY meetup.  ",
+      "tagLine": "Software Engineer focused on Software Architecture and Cybersecurity at Deutsche Bahn",
+      "profilePicture": "https://cdn.sessionize.com/image/b377-400o400o1-XzKZrciefi4QKhqcKAbxeX.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/mariya-kelsch-a26220184/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.dbsystel.de/dbsystel-en",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/mariya-kelsch",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1258360
+      ],
+      "fullName": "Mariya Kelsch",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Deutsche Bahn | DB Systel"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Secure Software Engineer"
+        }
+      ]
+    },
+    {
+      "id": "c3b30ede-b15b-4690-a676-155e2166e359",
+      "firstName": "Masato",
+      "lastName": "Endo",
+      "bio": "Masato Endo is a Group Manager of TOYOTA. He focuses also on building the Open Source governance structure within Toyota and developing relationships with the Open Source community, through projects such as AGL and OIN. From 2017, he began to work with the OpenChain Project as a board member and set up OpenChain JP WG with Hitachi and Sony. In 2019, he launched OpenChain Automotive WG to promote Open Source Software Supply Chain Management (OSS SCM) and standardization in Automotive industry. ",
+      "tagLine": "Manager of OSPO, Toyota Motor Corporation",
+      "profilePicture": "https://cdn.sessionize.com/image/4171-400o400o1-MimMJxyghX7FV8vES8Ff8R.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "http://linkedin.com/in/masato-endo-279026159",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://global.toyota/en/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/masato-endo",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1303585
+      ],
+      "fullName": "Masato Endo",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Toyota Motor Corporation"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Manager of OSPO"
+        }
+      ]
+    },
+    {
+      "id": "5c08bdcf-fcc3-410d-838e-115e115fba17",
+      "firstName": "Meixia",
+      "lastName": "Wang",
+      "bio": "Mary Wang is the Executive Director of the OpenChain Foundation, part of the Linux Foundation.\r\n\r\nPrior to this role, she served as Director of the Open Source Ecosystem at Volvo Cars, where she led key initiatives including launching open source projects, building the supporting infrastructure for an open source ecosystem, and establishing the company’s Open Source Program Office (OSPO).\r\n\r\nBefore joining Volvo Cars, Mary spent nine years at Ericsson. During that time, she worked as a DevOps engineer, developing and implementing CI/CD pipelines, and later as a Technical Product Manager (TPM), taking end-to-end ownership of products.",
+      "tagLine": "Linux Foundation, Executive Director of Open Chain Project",
+      "profilePicture": "https://cdn.sessionize.com/image/d738-400o400o1-HFEDBLyHWFW58F4W9v8bbc.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/mary-meixia-wang-54182312a",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/meixia-wang",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1341512,
+        1341525,
+        1341526,
+        1341528
+      ],
+      "fullName": "Meixia Wang",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "c644a9e7-fed5-4cc4-b95c-a3fafa14eac5",
+      "firstName": "Mori",
+      "lastName": "Ohara",
+      "bio": null,
+      "tagLine": null,
+      "profilePicture": null,
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1368002
+      ],
+      "fullName": "Mori Ohara",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "IBM Research Tokyo"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Deputy Director, Distinguished Engineer, Chief SW Engineer for Hybrid Cloud on IBM HW"
+        }
+      ]
+    },
+    {
+      "id": "b903fc4e-121e-4d32-895d-71e313840c28",
+      "firstName": "Nicole",
+      "lastName": "Pappler",
+      "bio": "Nicole has worked in different projects developing safety relevant embedded software before starting as an independent assessor. \r\nWith now more than twenty years of experience in the industry, she supported several customers to show their compliance with safety, security and quality standards. Currently she is utilizing her experience regarding the development of highly reliable software to enable open source solutions to be used in critical products, focusing on everything dependability.\r\n",
+      "tagLine": "Senior Safety Expert at AlektoMetis.com",
+      "profilePicture": "https://cdn.sessionize.com/image/becd-400o400o1-Ug7MyWXaXnw28LBKWvDZPq.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://linkedin.com/in/nicpappler",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://alektometis.com",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/nicole-pappler",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1321299
+      ],
+      "fullName": "Nicole Pappler",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "AlektoMetis"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Senior Safety Expert"
+        }
+      ]
+    },
+    {
+      "id": "13905034-ac12-461b-8f96-2275f372f9d9",
+      "firstName": "Omar",
+      "lastName": "Mohsine",
+      "bio": "Omar Mohsine is a member of the United Nations Office of Digital and Emerging Technologies . He additionally leads the open source team within the UN Office of Information and Communication Technologies and serves as the co-chair of the UN Open Source Community of Practice. With over 15 years of experience working in various capacities across different continents, Omar has spearheaded numerous projects for the UN, focusing on public-private partnerships and innovation management.",
+      "tagLine": "United Nations - Office of Digital and Emerging Technologies",
+      "profilePicture": "https://cdn.sessionize.com/image/4b52-400o400o1-wDpz5pDGtc6Bg1qvCwBi5a.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1292068
+      ],
+      "fullName": "Omar Mohsine",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "United Nations"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "UN Open Source Coordinator"
+        }
+      ]
+    },
+    {
+      "id": "a2c36cc5-bd5e-4ee4-9425-574d633afca8",
+      "firstName": "Park",
+      "lastName": "Wonjae",
+      "bio": "Wonjae Park is an Open Source Program Manager at LG Electronics, where he works on company-wide open source compliance, governance, tooling, and education. He contributes to FOSSLight, an open source project supporting compliance and SBOM management, and is interested in practical ways to improve open source governance across product teams. He is also an OpenChain Ambassador and an active member of the OpenChain Korea Work Group.",
+      "tagLine": "LG Electronics / Open Source Program Manager",
+      "profilePicture": "https://cdn.sessionize.com/image/189c-400o400o1-TPkA1NdDcnTox3CUqhdE9.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/wonjae-park/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.lge.com",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1321270
+      ],
+      "fullName": "Park Wonjae",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "LG Electronics"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Open Source Program Manager"
+        }
+      ]
+    },
+    {
+      "id": "390a8366-d056-46bc-8b92-9d1db9d1ae19",
+      "firstName": "Philipp",
+      "lastName": "Ahmann",
+      "bio": "Philipp Ahmann is a Senior OSS Community Manager at ETAS (a Bosch subsidiary), specializing in safety-critical automotive open source software. With 15+ years' experience in Linux automotive platforms, he has held roles from software engineer to project & line manager. \r\nHe currently holds the position of the technical steering committee chair for the Linux Foundation ELISA project to Enable Linux in Safety Applications. Additionally, he is member of the Linux Foundation Europe Advisory Board",
+      "tagLine": "Sr. OSS Community Manager - Etas GmbH (BOSCH)",
+      "profilePicture": "https://cdn.sessionize.com/image/df68-400o400o1-RqkMpBQwHuGS7L9oSKBJjw.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/philipp-ahmann/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.etas.com",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/philipp-ahmann",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1321299
+      ],
+      "fullName": "Philipp Ahmann",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "ETAS GmbH"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Automotive OSS Process Lead"
+        }
+      ]
+    },
+    {
+      "id": "f81f15a9-3ed8-4bbe-81cd-a10b55f02704",
+      "firstName": "Philippe",
+      "lastName": "Ombredanne",
+      "bio": "Philippe Ombredanne is a FOSS hacker passionate about enabling easier and safer reuse of open source code. He is the lead maintainer of the AboutCode stack of open source tools for Software Composition Analysis and license and security compliance, including the industry-leading ScanCode, DejaCode, PurlDB, Package-URL, and VulnerableCode. Philippe contributes to other open source projects, including the Linux kernel SPDX-ification, SPDX, ClearlyDefined, strace, ORT, and several Python tools.",
+      "tagLine": "AboutCode Lead Maintainer",
+      "profilePicture": "https://cdn.sessionize.com/image/93c8-400o400o1-LwZMoqTX9AuyTup7PWQANf.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1320971
+      ],
+      "fullName": "Philippe Ombredanne",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "AboutCode"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Lead Maintainer"
+        }
+      ]
+    },
+    {
+      "id": "a6c4864e-3c42-4166-b28a-1ebb7b34f835",
+      "firstName": "Rushabh",
+      "lastName": "Shah",
+      "bio": "Rushabh Shah is a Docker Captain and Grafana Champion, working as a DevOps Engineer at Oro in Ahmedabad, India. He builds and operates production infrastructure on Kubernetes with GitOps and full-stack observability (Prometheus, Grafana LGTM stack, OpenTelemetry). He organizes Grafana & Friends Ahmedabad, serves on the CNCG Gandhinagar & Ahmedabad core team, translated eBPF.io into Hindi, and has taught 1,000+ engineers through hands-on workshops. He writes at rushabhshah.dev",
+      "tagLine": "Docker Captain & Grafana Champion | Kubernetes, GitOps & observability, helping teams build cloud-native systems that don't break at 2am",
+      "profilePicture": "https://cdn.sessionize.com/image/0486-400o400o1-41bJ2tnJSikhktWRZLo1uk.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/iamrushabhshahh",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/iamrushabhshahh",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://www.instagram.com/iamrushabhshahh/",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://rushabhshah.dev/blog/",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://rushabhshah.dev/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Speaking",
+          "url": "https://rushabhshah.dev/speaking/",
+          "linkType": "Other"
+        },
+        {
+          "title": "GitHub",
+          "url": "https://github.com/Iamrushabhshahh",
+          "linkType": "Other"
+        },
+        {
+          "title": "Grafana Champion (Credly)",
+          "url": "https://www.credly.com/badges/bbed2b05-b8d3-4fd7-bb35-fdd4a76c8d4d/public_url",
+          "linkType": "Other"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/iamrushabhshahh",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1321416
+      ],
+      "fullName": "Rushabh Shah",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "orocorp"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "DevOps Engineer"
+        }
+      ]
+    },
+    {
+      "id": "e6e12a16-6f14-4608-aee4-38bebbdbaf7b",
+      "firstName": "Ryan",
+      "lastName": "TAO",
+      "bio": "Attorney Ryan TAO specializes in open source compliance and governance.\r\n As an Open Source evangelist for the Linux Foundation APAC,  Tao Ye is deeply engaged with the open source community. Notably, he successfully defended the first case of GPL counterclaims in China.\r\n Active across various open source communities, Tao Ye was honored with the \"Open Source Star Award\" by the Linux Foundation Open Source Software Academy in 2023.",
+      "tagLine": "Grandall Law Firm, partner, lawyer",
+      "profilePicture": "https://cdn.sessionize.com/image/f849-400o400o1-PHb5rHgviP9iu1wS1DySxa.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/ryan-tao-8aa105336",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.grandall.com.cn/en/index.aspx",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1296962
+      ],
+      "fullName": "Ryan TAO",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Grandall Law Firm"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Partner"
+        }
+      ]
+    },
+    {
+      "id": "82e445a3-28fd-4fea-bd4f-c4a3493a9682",
+      "firstName": "Shane",
+      "lastName": "Coughlan",
+      "bio": "Shane leads the OIN 2.0 patent non-aggression community at Open Invention Network, building on his earlier work scaling OIN 1.0. As former OpenChain General Manager, he spearheaded the ISO/IEC 5230 and ISO/IEC 18974 standards alongside key SBOM and AI compliance guidance. A pioneer in open source governance, he founded the European Legal Network and co-founded the IFOSSLR journal. Shane serves on OpenForum Europe's General Assembly and as a board member and Vice President of InnerSource Commons.",
+      "tagLine": "Global Ambassador, OIN 2.0",
+      "profilePicture": "https://cdn.sessionize.com/image/4686-400o400o1-KdNLuEnH8nGSN9zG27DEi9.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/shanecoughlan/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://openinventionnetwork.com/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/scoughlan",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1321076
+      ],
+      "fullName": "Shane Coughlan",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Open Invention Network"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Global Ambassador, OIN 2.0"
+        }
+      ]
+    },
+    {
+      "id": "bbbb5fa3-6170-435d-ab14-7315f886c5fd",
+      "firstName": "Singing",
+      "lastName": "Li",
+      "bio": "Singing Li works with government, industry, and open source communities to advance open source governance and digital rights. She has supported OCF's work on public-sector open source policy, OpenChain adoption, community engagement, and cross-sector collaboration, helping translate open source principles into practices that institutions can use.",
+      "tagLine": "CEO of the Open Culture Foundation and OpenChain Ambassador",
+      "profilePicture": "https://cdn.sessionize.com/image/8180-400o400o1-GcyT4VKiKVEdYi4PErNALp.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "Company Website",
+          "url": "https://ocf.tw/en/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1319811
+      ],
+      "fullName": "Singing Li",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Open Culture Foundation"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Chief Executive Officer"
+        }
+      ]
+    },
+    {
+      "id": "150af151-cb40-42ed-a57e-9041375ab950",
+      "firstName": "SZ ",
+      "lastName": "Lin (林上智)",
+      "bio": "SZ Lin has extensive experience in OT cybersecurity, secure software development, and embedded Linux. He previously served on the Technical Steering Committee of the Civil Infrastructure Platform project and the Governing Board of the OpenChain Project at the Linux Foundation. As a Debian Developer, he actively contributes to open source communities and maintains security-related software packages. \r\n\r\nHe holds certifications including CISSP, ISSAP, CSSLP, GICSP (Gold), and ISA/IEC 62443 Expert.",
+      "tagLine": "#opensourcesupplychain #openchain #sbom",
+      "profilePicture": "https://cdn.sessionize.com/image/9f24-400o400o1-Ey2EThkQxj75nu3hKK19Xy.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/szlin/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://szlin.me",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://sunsquare.tech/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1324858
+      ],
+      "fullName": "SZ Lin (林上智)",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Sun Square"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Chief Cybersecurity Advisor"
+        }
+      ]
+    },
+    {
+      "id": "f6f40de5-469b-491d-af09-10cd628b6ae3",
+      "firstName": "Takashi",
+      "lastName": "Ninjouji",
+      "bio": "Takashi Ninjouji is a Chief Engineer at Honda Motor Co., Ltd., with a focus on Software-Defined Vehicles (SDV). He is a manager of the Open Source Program Office (OSPO). His interests also include AI-assisted engineering automation.",
+      "tagLine": "Honda Motor Co., Ltd., Chief Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/7a2e-400o400o1-S5JMRoUykV9bvJtK5xnwZi.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/takashi-ninjouji/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://global.honda/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/TakashiNinjouji",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1258360
+      ],
+      "fullName": "Takashi Ninjouji",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Honda Motor Co., Ltd."
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Chief Engineer"
+        }
+      ]
+    },
+    {
+      "id": "de068cc8-d3e5-4b94-a986-316a12513c90",
+      "firstName": "Yue",
+      "lastName": "Xiao",
+      "bio": "Yue Xiao is an assistant professor at William & Mary. Her research interests include GenAI Security, privacy compliance checks, vulnerability assessments, and supply chain security. Her research has unveiled vulnerabilities and privacy risks in major systems. Her work has generated real-world impact, with countermeasures and design changes being integrated into popular platforms like WeChat, Google, Twitter, Meta, and Opera. ",
+      "tagLine": "William and Mary",
+      "profilePicture": "https://cdn.sessionize.com/image/f004-400o400o1-rnkiXpWkxvSZ86q4H4YauC.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/yue-xiao-1a5b2015b/",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1321269
+      ],
+      "fullName": "Yue Xiao",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "William and Mary"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Assistant Professor"
+        }
+      ]
+    },
+    {
+      "id": "e4c8576d-007d-48d1-a17a-e88ba8a19fc1",
+      "firstName": "Zhonghua",
+      "lastName": "Zhu",
+      "bio": "Senior IP & Open Source Legal Counsel with 10+ years' experience. A qualified patent attorney with degrees in Physics and IP Law, he specializes in AI open source compliance for tech enterprises. His core practice includes end-to-end risk assessments for LLMs, pre-launch audits, compliance tool design, and legal support for external AI open source projects. An active OpenChain member, he frequently speaks at industry conferences and contributes to AI compliance whitepapers.",
+      "tagLine": "Open Source Legal from Bytedance, AI-focused",
+      "profilePicture": "https://cdn.sessionize.com/image/3b1b-400o400o1-S19xFNE9ggUQQHLL1XfNw1.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/%E4%B8%AD%E5%8D%8E-%E6%9C%B1-ba35a9139/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.bytedance.com/en/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/zhonghua-zhu",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1297558
+      ],
+      "fullName": "Zhonghua Zhu",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 129988,
+          "answerValue": "Bytedance"
+        },
+        {
+          "questionId": 129989,
+          "answerValue": "Open Source Legal"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": 129988,
+      "question": "Company",
+      "questionType": "Short_Text",
+      "sort": 26
+    },
+    {
+      "id": 129989,
+      "question": "Speaker Title",
+      "questionType": "Short_Text",
+      "sort": 27
+    }
+  ],
+  "categories": [
+    {
+      "id": 129995,
+      "title": "All Sessions",
+      "items": [
+        {
+          "id": 470113,
+          "name": "AI Compliance",
+          "sort": 1
+        },
+        {
+          "id": 470106,
+          "name": "Legal / IPR",
+          "sort": 2
+        },
+        {
+          "id": 470107,
+          "name": "Licensing",
+          "sort": 3
+        },
+        {
+          "id": 470105,
+          "name": "M&A",
+          "sort": 4
+        },
+        {
+          "id": 470112,
+          "name": "Other Process Management",
+          "sort": 5
+        },
+        {
+          "id": 470104,
+          "name": "Patent",
+          "sort": 6
+        },
+        {
+          "id": 470108,
+          "name": "Procurement",
+          "sort": 7
+        },
+        {
+          "id": 470114,
+          "name": "SBOM Quality",
+          "sort": 8
+        },
+        {
+          "id": 470109,
+          "name": "Security / CRA",
+          "sort": 9
+        },
+        {
+          "id": 470110,
+          "name": "Supply Chain",
+          "sort": 10
+        },
+        {
+          "id": 470111,
+          "name": "Technical Deep Dive",
+          "sort": 11
+        },
+        {
+          "id": 515102,
+          "name": "Keynote Sessions",
+          "sort": 12
+        },
+        {
+          "id": 515103,
+          "name": "Registration & Badge Pick-up",
+          "sort": 13
+        },
+        {
+          "id": 515104,
+          "name": "Breaks",
+          "sort": 14
+        }
+      ],
+      "sort": 1,
+      "type": "session"
+    },
+    {
+      "id": 129982,
+      "title": "Audience Level",
+      "items": [
+        {
+          "id": 469896,
+          "name": "Intermediate",
+          "sort": 1
+        },
+        {
+          "id": 469895,
+          "name": "Advanced",
+          "sort": 2
+        }
+      ],
+      "sort": 3,
+      "type": "session"
+    },
+    {
+      "id": 142122,
+      "title": "Subtopic",
+      "items": [
+        {
+          "id": 515096,
+          "name": "AI Compliance",
+          "sort": 1
+        },
+        {
+          "id": 515100,
+          "name": "Legal / IPR",
+          "sort": 2
+        },
+        {
+          "id": 515097,
+          "name": "Licensing",
+          "sort": 3
+        },
+        {
+          "id": 515091,
+          "name": "M&A",
+          "sort": 4
+        },
+        {
+          "id": 515092,
+          "name": "Other Process Management",
+          "sort": 5
+        },
+        {
+          "id": 515101,
+          "name": "Patent",
+          "sort": 6
+        },
+        {
+          "id": 515098,
+          "name": "Procurement",
+          "sort": 7
+        },
+        {
+          "id": 515093,
+          "name": "SBOM Quality",
+          "sort": 8
+        },
+        {
+          "id": 515099,
+          "name": "Security / CRA",
+          "sort": 9
+        },
+        {
+          "id": 515094,
+          "name": "Supply Chain",
+          "sort": 10
+        },
+        {
+          "id": 515095,
+          "name": "Technical Deep Dive",
+          "sort": 11
+        }
+      ],
+      "sort": 58,
+      "type": "session"
+    }
+  ],
+  "rooms": [
+    {
+      "id": 83731,
+      "name": "Hall A4 (5F)",
+      "sort": 0
+    },
+    {
+      "id": 90761,
+      "name": "Main Hall Foyer (5F)",
+      "sort": 1
+    },
+    {
+      "id": 90762,
+      "name": "Hall A4 (5F)",
+      "sort": 2
+    }
+  ]
+}

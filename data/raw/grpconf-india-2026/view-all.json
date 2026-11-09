@@ -1,0 +1,2505 @@
+{
+  "sessions": [
+    {
+      "id": "1317874",
+      "title": "Breakfast",
+      "description": null,
+      "startsAt": "2026-11-18T09:15:00",
+      "endsAt": "2026-11-18T10:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        505539
+      ],
+      "questionAnswers": [],
+      "roomId": 86557,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": false,
+      "isConfirmed": false
+    },
+    {
+      "id": "1316987",
+      "title": "Registration + Badge Pickup",
+      "description": null,
+      "startsAt": "2026-11-18T09:15:00",
+      "endsAt": "2026-11-18T17:15:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        505537
+      ],
+      "questionAnswers": [],
+      "roomId": 86557,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1317863",
+      "title": "Keynote: Welcome + Opening Remarks",
+      "description": "Kick-off Keynote session for gRPConf 2026",
+      "startsAt": "2026-11-18T10:00:00",
+      "endsAt": "2026-11-18T10:15:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "fb16279f-bc51-4a24-92b1-9356a2346c3d"
+      ],
+      "categoryItems": [
+        491157,
+        505538
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1317865",
+      "title": "Keynote: State of gRPC",
+      "description": "Find out about the latest developments and a look ahead for gRPC.",
+      "startsAt": "2026-11-18T10:15:00",
+      "endsAt": "2026-11-18T10:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f2d7930a-884d-4dbc-9379-832395dafd92"
+      ],
+      "categoryItems": [
+        491157,
+        505538
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1316393",
+      "title": "Keynote: Understanding gRPC: Core Architecture and Concepts",
+      "description": "Dive into the world of gRPC, a modern, open-source Remote Procedure Call (RPC) framework that's transforming how distributed systems communicate. This session will provide a comprehensive overview of gRPC, highlighting its core principles, benefits, and practical use cases. We'll explore how gRPC leverages HTTP/2 for efficient, bi-directional streaming and Protocol Buffers for language-agnostic, strongly-typed data serialization. Whether you're building microservices, real-time applications, or polyglot environments, discover why gRPC is a powerful choice for high-performance, low-latency communication.\r\n",
+      "startsAt": "2026-11-18T10:30:00",
+      "endsAt": "2026-11-18T10:55:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "ac0dbe93-f5c6-405c-8028-2299dbfad460"
+      ],
+      "categoryItems": [
+        491155,
+        505538
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1379554",
+      "title": "Lightning Tour of Google Cloud: From Code to Planet-Scale AI in 15 Minutes",
+      "description": "Are you curious about what makes Google Cloud tick, but don’t have hours to sift through product catalogs? Whether you're a cloud veteran or exploring multi-cloud architectures for the first time, this fast-paced 15-minute keynote cuts through the noise. Framed around five fundamental engineering questions—How do I build an app? Where does my data live? How do I analyze petabytes? How do I infuse AI? How do I secure it all?—this lightning tour demystifies Google Cloud's core offerings. You'll discover how Google's planetary network, pioneering open-source technologies (like Kubernetes), serverless developer tools (Cloud Run), unified data platforms (BigQuery), and next-generation foundation models (Gemini on Vertex AI) can supercharge your development velocity.",
+      "startsAt": "2026-11-18T10:55:00",
+      "endsAt": "2026-11-18T11:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "7613f34f-9a74-42e4-9bf7-fa1a7992f774"
+      ],
+      "categoryItems": [
+        491157,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1316998",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-11-18T11:10:00",
+      "endsAt": "2026-11-18T11:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        505539
+      ],
+      "questionAnswers": [],
+      "roomId": 86557,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1316180",
+      "title": "Demystifying gRPC Proxyless Service Mesh: Architecture and New Features",
+      "description": "In containerized environments, service meshes ensure reliable and secure communication. However, traditional sidecar proxies introduce latency hops, resource overhead, and operational burdens. Proxyless Service Mesh (PSM) solves this by embedding application networking directly into gRPC using open-source xDS APIs.\r\nIn this talk, we will demystify Proxyless Service Mesh with gRPC:\r\n• Fundamentals & Architecture: How gRPC acts as an xDS client for service discovery, per-RPC load balancing, and end-to-end mTLS without sidecars.\r\n• Sidecar vs. Proxyless: Key trade-offs in latency, resource efficiency, and deployment simplicity.\r\n• New Features & Capabilities: An overview of recent enhancements, best practices, and new developments in the proxyless ecosystem.\r\n• Live Demo: Deploying proxyless gRPC client/server workloads on GKE with gcloud and demonstrating dynamic traffic management.",
+      "startsAt": "2026-11-18T11:40:00",
+      "endsAt": "2026-11-18T12:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "aa50de99-ab6c-4627-8a04-91a49e947ca4",
+        "b2cc2fb0-e5e1-42f2-8625-eafa2c320572"
+      ],
+      "categoryItems": [
+        491155,
+        491163
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1299205",
+      "title": "Bridging Hypervisor Boundaries: gRPC as the Inter-Domain Communication Backbone in Auto Cockpit",
+      "description": "Modern automotive cockpit platforms run multiple operating systems — QNX for safety-critical functions, Linux for connectivity, and Android for infotainment — all isolated under a hypervisor on a single System-on-Chip. Traditional IPC mechanisms break down at domain boundaries, creating latency spikes, serialization overhead, and brittle coupling between subsystems responsible for diagnostics, power management, and HMI services.\r\n\r\nThis talk presents a production case study from a Tier-1 automotive supplier building next-generation In-Vehicle Head Units (IHU) for a global OEM. The engineering team evaluated multiple cross-domain communication approaches — SOME/IP, D-Bus bridging, proprietary shared-memory protocols, and gRPC — before selecting gRPC as the primary inter-domain message-passing framework spanning QNX, Linux, and Android partitions.",
+      "startsAt": "2026-11-18T11:40:00",
+      "endsAt": "2026-11-18T12:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "a8ec8cb5-a5b8-42f0-93b0-5df1842f16f5"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1303806",
+      "title": "Inference Engineering with gRPC: Building Low-Latency AI Systems That Scale",
+      "description": "Inference engineering is the biggest bottleneck in LLM-based AI systems today. Modern AI platform are increasingly relying on gRPC instead of REST, for communication between inference gateways, model servers, retrieval services, and orchestration layers because every millisecond matters.\r\n\r\nThis session introduces the engineering principles behind low-latency AI inference. It also highlights the tradeoffs between gRPC and REST as the protocol of choice for production LLM systems. Attendees will compare REST and gRPC for inference workloads, understand unary and streaming RPCs for real-time token generation, and learn how deadlines, cancellation, flow control, retries, and backpressure improve reliability under load. The session also explores how modern LLM serving stacks use gRPC to build scalable inference pipelines. Attendees will leave with practical guidance for designing faster, more resilient AI services using patterns they can immediately apply.",
+      "startsAt": "2026-11-18T11:40:00",
+      "endsAt": "2026-11-18T12:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "d83f4074-af2f-43c3-8778-234c543eae5f"
+      ],
+      "categoryItems": [
+        491157,
+        491164
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1302452",
+      "title": "Your First gRPC Service on Kubernetes: A Beginner's Roadmap",
+      "description": "Getting a gRPC service running on Kubernetes looks easy on paper, but beginners often hit the same surprises: gRPC needs HTTP/2, so standard Ingress setups can break. Health checks need a different kind of probe than plain HTTP services use. And gRPC connections stay open for a long time, so standard load balancing does not distribute traffic the way you expect.\r\n\r\nThis talk is a simple, beginner-friendly walkthrough of deploying your first gRPC service on Kubernetes. This will cover packaging the service, setting up health checks correctly, routing traffic using the Gateway API's GRPCRoute, and fixing the load-balancing surprise. Attendees will leave with a working mental model and a concrete checklist for standing up their first gRPC service in a cluster without the usual trial and error.\r\n",
+      "startsAt": "2026-11-18T11:40:00",
+      "endsAt": "2026-11-18T12:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f8261ce7-4581-42f5-b786-f312390ceb41"
+      ],
+      "categoryItems": [
+        491155,
+        491163
+      ],
+      "questionAnswers": [],
+      "roomId": 89173,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1313315",
+      "title": "Extending the gRPC Data Plane: Authorization, Processing & Interception with xDS",
+      "description": "This talk introduces service extentions added in gRPC: \r\n\r\nExtAuthz and ExtProc. Instead of relying on external proxies for interception, gRPC has added support for side channel callout to external services via xDS.\r\n\r\nExtAuthz: Perform real-time authorization by shipping  peer identity and metadata to external services. It enables dynamic \"allow/deny\" decisions before an RPC is processed.\r\n\r\nExtProc: Provide deep packet interception for headers and gRPC message bodies using a specialized \"GRPC\" processing mode. It allows for sophisticated payload transformation, message level filtering and header mutations.\r\n\r\nThis enables \"Security as a Service\" model by decoupling complex logic from application and centralising it into pluggable , xDS managed services.\r\n\r\nThis session is a technical roadmap for developers looking to inject custom security , logging and business logic directly into gRPC data plane.\r\n",
+      "startsAt": "2026-11-18T12:10:00",
+      "endsAt": "2026-11-18T12:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "6007c54c-81f6-4ae1-aa99-a5cb49edcea8",
+        "8fd66e06-eb3e-4f05-a007-bc2033dd1cbe"
+      ],
+      "categoryItems": [
+        491156,
+        491163
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1317587",
+      "title": "Advanced Traffic Management in gRPC: Deep Dive into gRPC Load Balancing",
+      "description": "Client-side load balancing is critical for scaling gRPC applications, but choosing the right strategy can be daunting. In this deep dive, gRPC maintainers will provide a comprehensive overview of traffic management in gRPC. We will start with the fundamentals, covering core policies like Pick First, and transition into advanced, xDS-driven policies such as Ring Hash and Autosharding.\r\n\r\nThe core of this session will unveil the upcoming autosharding_experimental load balancing policy. We will demonstrate how this powerful new feature enables dynamic routing by communicating with an external sharding service. Attendees will learn how gRPC partitions an application-defined keyspace into distinct ranges, dynamically maps client requests, and relies on robust fallback mechanisms to ensure system resilience. Join us to understand these inner workings and master advanced traffic management without sidecar proxies.",
+      "startsAt": "2026-11-18T12:10:00",
+      "endsAt": "2026-11-18T12:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f9f50aa6-ce94-404f-896a-1695154a7d49"
+      ],
+      "categoryItems": [
+        491154,
+        491160
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1312436",
+      "title": "Outside the Core: gRPC for Python, Ruby and Web",
+      "description": "In this session, we will dive into the architecture of gRPC Python and Ruby, exploring how they wrap around and seamlessly communicate with a shared C++ Core library. We will break down the underlying mechanics of these wrappers, helping developers better understand the performance, implementation details, and lifecycle of using gRPC in these popular language environments.\r\n\r\nAdditionally, we will explore the frontend ecosystem by discussing what is new in gRPC Web. We will cover recent feature updates, the current state of the project, and provide insights into how gRPC Web is maintained behind the scenes. Join us to gain a comprehensive understanding of both the backend wrapped-language architecture and the evolving frontend gRPC Web landscape.",
+      "startsAt": "2026-11-18T12:10:00",
+      "endsAt": "2026-11-18T12:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "81e32b48-d498-4b7e-8881-33420c700d7d"
+      ],
+      "categoryItems": [
+        491157,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1300038",
+      "title": "From REST to gRPC: A Practical Migration Story",
+      "description": "The switch from REST to gRPC is always pitched as an upgrade in terms of performance; however, the truth is that moving production services is not that simple. In this talk, we would like to present you with our practical experience of migrating a heavily used microservices architecture to gRPC, talking about the reasons behind the move, the implementation process, lessons learned, and the results achieved. We will go into details of making the decision to migrate, redesigning the API using protocol buffers, managing backward compatibility, and ways to deploy gRPC without breaking the existing client apps.",
+      "startsAt": "2026-11-18T12:10:00",
+      "endsAt": "2026-11-18T12:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "4b879233-171a-4b63-b464-aa1981f6c687"
+      ],
+      "categoryItems": [
+        491155,
+        491159
+      ],
+      "questionAnswers": [],
+      "roomId": 89173,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1317881",
+      "title": "Lunch",
+      "description": null,
+      "startsAt": "2026-11-18T12:30:00",
+      "endsAt": "2026-11-18T13:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        491157,
+        518561
+      ],
+      "questionAnswers": [],
+      "roomId": 86557,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1377865",
+      "title": "Not All Requests Are Equal : Cost-Aware Load Balancing with gRPC ORCA",
+      "description": "Round robin is gRPC's reliable default: simple, stateless, & fair by request count. Real traffic is rarely that uniform. A cache hit & a cold query, a new machine & an old one, a 50-token prompt & a 100k-token prompt to an LLM all cost very different amounts to serve, & round robin can't tell the difference.\r\nOpen Request Cost Aggregation (ORCA) lets backends report their real load (CPU, application utilization, or custom metrics) back to clients over gRPC itself. gRPC's Weighted Round Robin policy turns those reports into per-endpoint weights, so traffic follows actual capacity instead of request count.\r\nYou'll learn:\r\n - How ORCA reports load.\r\n - How Weighted Round Robin computes.\r\n - Production settings that matter\r\n - When round robin or least_request is still the better choice\r\nDemo running a mock LLM inference service with mixed prompt sizes, first on round robin, then on ORCA-driven Weighted Round Robin, & shows queue depth & p99 latency evening out across backends in real time.",
+      "startsAt": "2026-11-18T13:50:00",
+      "endsAt": "2026-11-18T14:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "eb1ea7f5-dd8c-4324-a369-33a74861cc45",
+        "35687732-e982-4b59-ac87-c7f32c264491"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1287552",
+      "title": "Building Low-Latency gRPC Architectures for Cloud Robotics and Industrial AI",
+      "description": "Industrial robotics platforms increasingly depend on gRPC for efficient communication between edge controllers, AI services, and cloud-native microservices. This session presents a multi-tier cloud architecture that combines operations sites, Local Zones, provider backbones, and cloud regions to deliver deterministic latency and resilient service communication. It discusses workload placement, scalable gRPC service design, BFD-assisted failure recovery, traffic engineering, and graceful degradation that enables robotic systems to continue operating during network disruptions. Attendees will gain practical guidance for designing reliable, low-latency gRPC-based architectures that support large robotic fleets and industrial AI applications while maintaining operational continuity and predictable performance.",
+      "startsAt": "2026-11-18T13:50:00",
+      "endsAt": "2026-11-18T14:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f954b1d0-3d83-401c-9958-b1b2c02f718f"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1303695",
+      "title": "gRPC Probes in Kubernetes: Evolution, Use Cases, Performance, and Security",
+      "description": "Health probes play an integral role in ensuring Kubernetes cluster reliability, but selecting the correct probe type is important for both security and performance. While exec, HTTP, and TCP probes are popular, gRPC probes provide superior efficiency in modern architectures with ephemeral workloads since they minimize overhead, achieving a 6 to 7x latency improvement from ~40ms down to ~6ms compared to Exec probes. This talk highlights a real world example where a large multi-CPU node with multiple pods had to be probed at intervals under 5 seconds. In such a scenario, exec probes became a bottleneck that impacted system responsiveness, making gRPC the ideal solution. This session will deep dive into gRPC probe (introduced in K8s 1.24) configuration in a cluster and examine how monitoring and overall system behavior is impacted by it. Ultimately, this talk explores recent enhancements to health probes, comparing them to gRPC probes up through the upcoming v1.37 release (KEP-4939).",
+      "startsAt": "2026-11-18T13:50:00",
+      "endsAt": "2026-11-18T14:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "b38b5ac2-7e4b-4c69-98c3-d70d2297a96e",
+        "bafd2271-dd87-40af-a1b9-b9b3e2472bf4"
+      ],
+      "categoryItems": [
+        491155,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1312393",
+      "title": "A Beginner's gRPC Codelab (Go, Java, Python)",
+      "description": "Are you new to gRPC and looking for a hands-on introduction? Join this beginner-friendly codelab where we will build a \"Hello World\" server and client using three of the most popular languages in the ecosystem: Go, Python, and Java. We will start by covering the basics of Protocol Buffers (protobuf) and how to define a service contract. Then, we will walk step-by-step through generating the client and server code for each language. By the end of this session, you will have a solid understanding of how gRPC facilitates seamless communication. Note: Attendees should bring a laptop with Go, Python, and Java environments installed.",
+      "startsAt": "2026-11-18T13:50:00",
+      "endsAt": "2026-11-18T14:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "81e32b48-d498-4b7e-8881-33420c700d7d",
+        "f9f50aa6-ce94-404f-896a-1695154a7d49",
+        "aa50de99-ab6c-4627-8a04-91a49e947ca4"
+      ],
+      "categoryItems": [
+        491155,
+        491162
+      ],
+      "questionAnswers": [],
+      "roomId": 89173,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1317634",
+      "title": "gRPC for the AI Era",
+      "description": "The AI era has shifted backend systems from simple request-response calls to continuous agent orchestration loops and distributed tool execution. To scale reliably, modern AI workloads require:\r\nStreaming agent interaction\r\nPassing Binary Payloads like dense vector embeddings, audio, and image context.\r\nFlow Control & Backpressure\r\nDistributed Deadlines & Retries\r\nChannel-level authZ/authN, mTLS, and proxy-less load balancing (xDS) across distributed clusters.\r\nIn this talk, we start with the workload rather than with a list of gRPC features: what does an AI workload actually need from its communication layer, and how well does gRPC meet those needs? \r\nFinally, we will demonstrate how these gRPC features map directly to agentic workloads and present gRPC as a high-performance, native transport for the Model Context Protocol (MCP).",
+      "startsAt": "2026-11-18T14:20:00",
+      "endsAt": "2026-11-18T14:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "e31d1543-7b79-412d-90ba-2915f33e8e8b",
+        "a11e177e-03d0-4a2f-b9c1-746de00efc56"
+      ],
+      "categoryItems": [
+        491155,
+        491164
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1304616",
+      "title": "Production-Grade gRPC APIs: Contract Governance, Security Validation, Zero-Breaking Deployments",
+      "description": "Building a gRPC service is straightforward; operating it safely in production is not. A seemingly harmless .proto change — a renamed field, a shifted field number — can silently break existing clients even after the build succeeds and the deployment ships. Most CI/CD pipelines validate application code but rarely check whether a gRPC contract stays backward compatible.\r\n\r\nThis session presents a Production Readiness Pipeline for gRPC that shifts API validation left. Using a live User Service demo, the speaker introduces a breaking proto change that slips past a traditional pipeline undetected, then rebuilds it with contract linting, compatibility checks, security validation, SDK verification, and contract testing gating the release, catching the change before production.\r\n\r\nThe talk focuses on the API layer, not Kubernetes or service mesh, using only open-source tooling that runs locally. Attendees leave with a reusable pipeline, governance patterns, and a deployment-gating checklist.",
+      "startsAt": "2026-11-18T14:20:00",
+      "endsAt": "2026-11-18T14:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "569e9fe9-78a2-45f1-a1b7-a51d62e9f4dc",
+        "5dc9b535-5602-47f9-8590-7521f6a295ca"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1302143",
+      "title": "The Hidden Backbone of Agentic AI: Why Every Multi-Agent Platform Needs gRPC",
+      "description": "Modern AI applications are rapidly evolving from single LLM calls into distributed networks of collaborating agents. While much attention is given to orchestration frameworks, the communication layer that connects these agents is often overlooked. REST APIs quickly become a bottleneck when agents continuously exchange context, stream responses, invoke tools, and coordinate long-running workflows.\r\n\r\nThis session explores how gRPC enables fast, type-safe, and streaming communication for production-grade multi-agent systems.We'll learn how gRPC powers agent-to-agent communication using bidirectional streaming, Protocol Buffers, service discovery, mTLS, and OpenTelemetry. We'll also compare REST and gRPC performance under real workloads and discuss deployment patterns, observability, and reliability practices for AI platforms operating at scale.\r\n\r\nThis talk provides practical guidance for designing low-latency, resilient, and production-ready distributed systems.",
+      "startsAt": "2026-11-18T14:20:00",
+      "endsAt": "2026-11-18T14:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "7035748c-ceda-43d5-bfca-ee5fea7dc8ab"
+      ],
+      "categoryItems": [
+        491157,
+        491164
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1314119",
+      "title": "gRPC Observability: A Guide to Distributed Debugging and Monitoring",
+      "description": "This session provides a comprehensive guide to gRPC observability, focusing on the essential tools and techniques for distributed debugging and monitoring. We will explore the modern ecosystem, highlighting the central role of OpenTelemetry and gRPC's deep integration with it. \r\n\r\nThe talk covers the latest advancements in OpenTelemetry Traces (including TCP traces in C++) and newly added OpenTelemetry Metrics. \r\n\r\nFinally, we will provide a sneak peek into proposed delay metrics and traces and review other critical observability tools in the ecosystem to give attendees a complete picture of gRPC's full observability stack.\r\n",
+      "startsAt": "2026-11-18T14:50:00",
+      "endsAt": "2026-11-18T15:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "056edec9-6262-42f7-98c2-9082ae42981f",
+        "ef01eb7b-5632-4c6d-8e26-40ee7f94f7d7"
+      ],
+      "categoryItems": [
+        491156,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1300673",
+      "title": "gRPC for People Who Live in ETL",
+      "description": "Data engineers live in a world of batch jobs, REST APIs, and \"eventually consistent\" pipelines. When I first had to connect two internal services in real time, my instinct was to reach for another REST call. Instead, I learned gRPC the hard way, mid-project, on a deadline. This talk is a data engineer's first encounter with gRPC. I will walk through what changed when I moved part of an ETL/ELT pipeline off REST onto gRPC. How Protocol Buffers forced me to finally define my schemas properly, why streaming solved a polling problem I did not know I had, and where gRPC's assumptions clashed with how data pipelines are usually built. I will share the mistakes I made, the moment gRPC finally clicked, and what I would tell any data engineer who has never touched it before.",
+      "startsAt": "2026-11-18T14:50:00",
+      "endsAt": "2026-11-18T15:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "124e9156-d348-45db-9c5a-8db9e6ff5b09"
+      ],
+      "categoryItems": [
+        491155,
+        491159
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1305963",
+      "title": "From Protobuf to Prompt: Auto-Generating AI Agent Tools From Your gRPC Services",
+      "description": "Enterprises already run hundreds of gRPC microservices with well-designed protobuf contracts. Now every team wants AI agents to call them, and the usual answer is hand-writing a brittle wrapper for each RPC. This session shows a better way, through a reference implementation the speaker built: a bridge that uses gRPC server reflection to discover services at runtime and generate agent tool definitions straight from protobuf descriptors. Proto messages become tool input schemas and RPC methods become callable tools, with no per-service glue code.\r\nThe talk walks through the mechanics: reflection, descriptor parsing, type mapping, and dynamic invocation. A live demo points the bridge at a running gRPC service and watches an agent invoke it instantly. Attendees leave with a concrete pattern for making their existing gRPC estate agent-ready without rewriting service code, plus an honest account of what worked and what's hard.",
+      "startsAt": "2026-11-18T14:50:00",
+      "endsAt": "2026-11-18T15:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "e771a707-33b5-424a-be0e-178505ebd015"
+      ],
+      "categoryItems": [
+        491156,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1298901",
+      "title": "Beyond Hello World: gRPC in Python for Real Systems",
+      "description": "gRPC tutorials make distributed systems look simple: define a .proto file, generate code, and call remote functions like local ones. That abstraction works - until production.\r\n\r\nThis talk explores four production challenges Python developers repeatedly encounter with gRPC. Through short live demonstrations where attendees predict the outcome before running the code, we'll uncover common misconceptions and build practical mental models.\r\n\r\nTopics include evolving Protocol Buffer schemas without breaking clients, handling streaming with flow control and backpressure, and building resilient services using deadlines, and interceptors for cross-cutting concerns like authentication and logging.\r\n\r\nAttendees will leave with a deeper understanding of how Python's gRPC ecosystem behaves in production and the confidence to design, debug, and evolve reliable gRPC services.",
+      "startsAt": "2026-11-18T14:50:00",
+      "endsAt": "2026-11-18T15:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "2053c342-e219-42d8-b988-c63182f5d919",
+        "28a2ff5b-2a2d-4487-8e85-b38d53938640"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 89173,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1329811",
+      "title": "Birds of a Feather - gRPC Troubleshooting: OpenTelemetry, Tracing, and Diagnostics",
+      "description": " An open discussion on using gRPC Observability ",
+      "startsAt": "2026-11-18T15:20:00",
+      "endsAt": "2026-11-18T15:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "ef01eb7b-5632-4c6d-8e26-40ee7f94f7d7"
+      ],
+      "categoryItems": [
+        491157,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": false,
+      "isConfirmed": false
+    },
+    {
+      "id": "1305556",
+      "title": "Dead Reckoning for gRPC Streams: Resumable AI Inference",
+      "description": "Server-streaming gRPC is the natural fit for LLM token delivery, until the stream drops. Today, a mid-stream failure means retrying from token zero: wasteful, expensive, and broken for users. HTTP solved this with Range headers in 1999. gRPC has no equivalent for streams.\r\n\r\nThis talk introduces a resumable streaming protocol built on top of standard gRPC. Using a session cursor, a lightweight server-side token journal, and periodic ACKs, dropped streams resume from the last confirmed token, not from scratch. We'll cover why this is a checkpointing problem (not a retry problem), how to size the journal TTL, and where LLM non-determinism makes naive resumption unsafe. Live demo: a gRPC-streamed LLM generation gets killed mid-sentence and resumes seamlessly on reconnect.",
+      "startsAt": "2026-11-18T15:20:00",
+      "endsAt": "2026-11-18T15:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "5339a0eb-2255-497f-bcd4-191af60bc145"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1296689",
+      "title": "Reachability Across the Wire: Extending Static Call Graphs Through gRPC Service Boundaries",
+      "description": "Static call graphs are the backbone of vulnerability triage: they answer \"this CVE is in my dependency tree but can an attacker actually reach it?\" Algorithms like CHA and RTA work well inside a single binary, then hit a gRPC stub call and go blind. To a static analyzer, a client invoking OrderService.Create() and the server handler implementing it are unrelated programs. The call graph dead-ends at the wire and with it, your ability to reason about exploitability across a microservices fleet, where most real attack paths live.\r\nThis talk shows how protobuf definitions can act as the missing linker: stitching client stubs to server handlers into a unified cross-service call graph. We'll cover why RPC boundaries break CHA/RTA analysis, the hard parts (streaming, interceptors, reflection-based dispatch), and applying the stitched graph to real triage, filtering fleet-wide vulnerability backlogs down to findings reachable from exposed RPC methods, with data from production-scale analysis.",
+      "startsAt": "2026-11-18T15:20:00",
+      "endsAt": "2026-11-18T15:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "0c21e4b5-9ce1-4190-944f-aa5c77651d78"
+      ],
+      "categoryItems": [
+        491156,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1306058",
+      "title": "Can Search Speak gRPC? Inside OpenSearch’s Journey Beyond REST",
+      "description": "What happens when a distributed search engine that has spoken REST and JSON for years learns a new language?\r\n\r\nOpenSearch is exploring that question with gRPC and Protocol Buffers, bringing a strongly typed, binary communication layer to workloads such as bulk ingestion, search, and vector retrieval. But moving beyond REST is more than adding another endpoint. It raises engineering questions around API design, performance, compatibility, security, tooling, and evolving a new transport without breaking the ecosystem.\r\n\r\nIn this talk, we’ll look at how OpenSearch is implementing gRPC, from its experimental beginnings to production-ready capabilities. We’ll explore its internals, how gRPC fits alongside REST, and where it can make a difference for high-throughput and latency-sensitive workloads\r\n\r\nWe’ll put theory to the test by comparing REST and gRPC using OpenSearch workloads, including bulk operations and vector search, while examining trade-offs rather than assuming gRPC is always faster.",
+      "startsAt": "2026-11-18T15:20:00",
+      "endsAt": "2026-11-18T15:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "2542d6d4-874b-4982-98e6-34ac15f33a20",
+        "920de0e0-2038-4dde-8946-082de60ebbd1"
+      ],
+      "categoryItems": [
+        491157,
+        491160
+      ],
+      "questionAnswers": [],
+      "roomId": 89173,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1316991",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-11-18T15:50:00",
+      "endsAt": "2026-11-18T16:20:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        505539
+      ],
+      "questionAnswers": [],
+      "roomId": 86557,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1317385",
+      "title": "Building the Future of gRPC in Rust: Delivering End-to-End Client and Server Support",
+      "description": "Following up on our update last year, gRPC Rust is advancing rapidly as the next-generation replacement for Tonic. Earlier this year, we released a preview featuring a client complete with TLS, authentication tokens, interceptors, request cancellation, and full support for the official Protobuf Rust crate.\r\n\r\nIn this session, we will deliver an end-to-end demo of both client and server support, previewing upcoming server APIs. You will learn how to implement familiar gRPC workflows natively in Rust, followed by a look at our project roadmap and upcoming milestones.",
+      "startsAt": "2026-11-18T16:20:00",
+      "endsAt": "2026-11-18T16:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "d3840983-064c-4c16-bc5d-57630fb7ae5d",
+        "ae6c85b9-30b9-4913-8a96-fc2c96983d29"
+      ],
+      "categoryItems": [
+        491156,
+        491163
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1303092",
+      "title": "Beyond the Happy Path: Designing Reliable gRPC APIs for Financial Transactions",
+      "description": "Financial transaction systems cannot treat a successful RPC response as proof that money moved correctly. Requests may time out after execution, retries may create duplicate operations, services may evolve their protobuf schemas independently, and asynchronous events may produce states that differ from the original request.\r\n\r\nThis session examines how to design reliable gRPC APIs for high-stakes, distributed transaction workflows. It presents practical patterns for idempotency, retry-safe operations, correlation and causation identifiers, explicit error semantics, deadline propagation, protobuf schema evolution, and reconciliation between synchronous RPC responses and asynchronous system-of-record events.\r\n\r\nThe talk will also explore common failure modes, including ambiguous timeouts, duplicate requests, backward-incompatible field changes, overloaded status codes, and APIs that expose transport success without communicating business outcome.",
+      "startsAt": "2026-11-18T16:20:00",
+      "endsAt": "2026-11-18T16:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f2380df9-658c-45c5-8c7a-39aa5167c292"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1316449",
+      "title": "Birds of a Feather - gRPC Community Roundtable: Support, Contribution, and New Use Cases",
+      "description": "This Birds of a Feather (BoF) session is an open, interactive roundtable for new developers, external contributors, experienced engineers, and maintainers to collaborate on the future of the gRPC ecosystem. Rather than a formal presentation, this session is a dedicated space to discuss the daily realities of working with gRPC, with a focus on lowering onboarding friction, reducing development pain points, and exploring new use cases.\r\n\r\nWe will focus on four core areas: 1) New Use Cases, including how gRPC is adapting to AI workloads, edge networks, and distributed agent communication; 2) The Contributor Pipeline, focusing on simplifying PR reviews and onboarding; 3) Developer Experience, addressing consistency and feature parity across language implementations (such as Go, Java, Python, Rust, and C++); and 4) Documentation, discussing how to make getting started and receiving community support more efficient for new developers.",
+      "startsAt": "2026-11-18T16:50:00",
+      "endsAt": "2026-11-18T17:20:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "ac0dbe93-f5c6-405c-8028-2299dbfad460"
+      ],
+      "categoryItems": [
+        491157,
+        491161
+      ],
+      "questionAnswers": [],
+      "roomId": 86556,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1314175",
+      "title": "Open Source Projects and AI Security",
+      "description": "gRPC team members will discuss how the gRPC team took a proactive stance on the new world of AI vulnerability identification.\r\n\r\nLearn how the gRPC team worked with the author of the newly open-sourced Mantis Skills (a Portable Toolkit for Building Security Review Harnesses) to identify and address vulnerabilities across their codebase, and build up continuous vulnerability scanning across the gRPC languages.\r\n",
+      "startsAt": "2026-11-18T16:50:00",
+      "endsAt": "2026-11-18T17:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "ae6c85b9-30b9-4913-8a96-fc2c96983d29",
+        "f3c19479-7339-4310-ad26-ff009a89e467"
+      ],
+      "categoryItems": [
+        491157,
+        491164
+      ],
+      "questionAnswers": [],
+      "roomId": 86555,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1301805",
+      "title": "When gRPC Breaks: Debugging the Invisible in Distributed Systems",
+      "description": "gRPC simplifies service-to-service communication, but debugging failures isn't always straightforward. Unlike traditional HTTP APIs, issues involving deadlines, retries, streaming, metadata, and HTTP/2 can be difficult to trace and often surface as cryptic errors.\r\n\r\nIn this session, we'll walk through a systematic approach to diagnosing common gRPC failures using practical examples and modern observability techniques. We'll explore gRPC status codes, interceptors, deadlines, metadata propagation, retries, streaming behavior, distributed tracing with OpenTelemetry, and logging strategies that make root-cause analysis significantly easier.\r\n\r\nWhether you're building new microservices or maintaining existing distributed systems, you'll leave with practical debugging workflows, best practices, and a mental model for understanding what really happens when a gRPC request fails.",
+      "startsAt": "2026-11-18T16:50:00",
+      "endsAt": "2026-11-18T17:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "1c72d8b1-6d86-4152-a9e8-52552facc4de"
+      ],
+      "categoryItems": [
+        491156,
+        491158
+      ],
+      "questionAnswers": [],
+      "roomId": 86560,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1317883",
+      "title": "Networking Reception",
+      "description": "Join gRPC Colleagues for a High Tea Networking Reception",
+      "startsAt": "2026-11-18T17:10:00",
+      "endsAt": "2026-11-18T18:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        491157,
+        505539
+      ],
+      "questionAnswers": [],
+      "roomId": 86557,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": false,
+      "isConfirmed": false
+    }
+  ],
+  "speakers": [
+    {
+      "id": "056edec9-6262-42f7-98c2-9082ae42981f",
+      "firstName": "Abhishek",
+      "lastName": "Agrawal",
+      "bio": "Hi, I’m Abhishek! I currently summon gRPC spells at Google, where proto files are my love language. Previously at Zepto, I built loyalty systems so sticky they probably violated user free will. Before that, I helped OYO sell hotel rooms faster than hot samosas. I enjoy debugging production at 3AM, arguing with YAML, and pretending microservices are my well-behaved children.",
+      "tagLine": "Google",
+      "profilePicture": "https://cdn.sessionize.com/image/7214-400o400o1-BneMjpwjgYeKaY8ATGKJqN.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/reachabhishekag/",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1314119
+      ],
+      "fullName": "Abhishek Agrawal",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "2542d6d4-874b-4982-98e6-34ac15f33a20",
+      "firstName": "Achanandhi",
+      "lastName": "M",
+      "bio": "Achanandhi is an open source advocate who enjoys exploring new technologies and loves building communities. He actively contributes to open source projects and frequently speaks at community events, sharing knowledge about cloud-native technologies and open source. He is passionate about helping others get started with open source and fostering collaborative developer communities.\r\n",
+      "tagLine": "Advanced Analyst at EY",
+      "profilePicture": "https://cdn.sessionize.com/image/8962-400o400o1-HpTnQzdCFmtuGxTQNbyyAt.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/achanandhi-m/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://medium.com/@achanandhi.m",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/achanandhi-m",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1306058
+      ],
+      "fullName": "Achanandhi M",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Advanced Analyst"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "EY"
+        }
+      ]
+    },
+    {
+      "id": "bafd2271-dd87-40af-a1b9-b9b3e2472bf4",
+      "firstName": "Amritansh",
+      "lastName": "Amritansh",
+      "bio": "I am an associate software engineer at Red Hat, working with the OpenShift Node team on kubelet and CRI components. I contribute to Kubernetes upstream across sig-node , I am the author of KEP-5999 (HTTP/2 cleartext container probes) and KEP-4939 (TLS support for gRPC probes), all targeting Kubernetes v1.37. I also contribute to CRI-O and have worked on kubelet bug fixes, probe handling, and memory QoS improvements in upstream Kubernetes. \r\n",
+      "tagLine": "Associate Software Engineer, Red Hat",
+      "profilePicture": "https://cdn.sessionize.com/image/c53d-400o400o1-aNkBe53ZgC5BFKjMVDtN77.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/amrit1502",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.redhat.com/en",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/amritansh-amritansh",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1303695
+      ],
+      "fullName": "Amritansh Amritansh",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Associate Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Red Hat"
+        }
+      ]
+    },
+    {
+      "id": "d3840983-064c-4c16-bc5d-57630fb7ae5d",
+      "firstName": "Arjan",
+      "lastName": "Bal",
+      "bio": "TODO",
+      "tagLine": "Google, Software Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/25b1-400o400o1-RzezoXKuG5FoDCxvtz3fRq.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://in.linkedin.com/in/arjan-s-bal",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1317385
+      ],
+      "fullName": "Arjan Bal",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "e771a707-33b5-424a-be0e-178505ebd015",
+      "firstName": "Arushi",
+      "lastName": "Garg",
+      "bio": "Arushi Garg is a platform engineer and researcher working at the intersection of AI systems and cloud-native infrastructure. She has industry experience at Adobe, building and scaling backend platforms in production. Alongside engineering, she contributes to AI research with peer-reviewed publications in deep learning and focuses on bridging AI research with secure, scalable Kubernetes-based systems.",
+      "tagLine": "Building production-grade AI agent platforms at the intersection of research and cloud-native engineering",
+      "profilePicture": "https://cdn.sessionize.com/image/ae59-400o400o1-ReFBunBVviYPGJJRZuVz6U.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/arushi-garg105",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://www.linkedin.com/in/arushi-garg105",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/arushi105",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1305963
+      ],
+      "fullName": "Arushi Garg",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "SDE-2"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Adobe"
+        }
+      ]
+    },
+    {
+      "id": "81e32b48-d498-4b7e-8881-33420c700d7d",
+      "firstName": "Ashesh",
+      "lastName": "Vidyut",
+      "bio": "gRPC Python maintainer",
+      "tagLine": "Senior Software Engineer, Google",
+      "profilePicture": "https://cdn.sessionize.com/image/de2e-400o400o1-XgE5H8Ho53BM48vyeb2Ky1.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/ashesh-vidyut/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://google.com",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1312436,
+        1312393
+      ],
+      "fullName": "Ashesh Vidyut",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Sr. Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "a11e177e-03d0-4a2f-b9c1-746de00efc56",
+      "firstName": "Ashish",
+      "lastName": "Srivastava",
+      "bio": "Ashish Srivastava is a senior engineering leader at Microsoft with experience building large-scale distributed systems, infrastructure, and developer platforms. Previously at Google, he has worked extensively on reliability, performance, and platform engineering. He was also an organizer of gRPConf India 2025 and is interested in the intersection of gRPC, distributed systems, and AI infrastructure.",
+      "tagLine": "Engineering Leader, Microsoft",
+      "profilePicture": "https://cdn.sessionize.com/image/9341-400o400o1-HjVMdeCag3j9ruvcpRrrF8.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1317634
+      ],
+      "fullName": "Ashish Srivastava",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Engineering Leader"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Microsoft"
+        }
+      ]
+    },
+    {
+      "id": "0c21e4b5-9ce1-4190-944f-aa5c77651d78",
+      "firstName": "Birajendu",
+      "lastName": "Sahu",
+      "bio": "Birajendu Sahu is a Senior Engineering Manager at Endor Labs in Bengaluru, where he leads the team building dependency resolution, call graph construction, and reachability analysis across 8+ language ecosystems.\r\nHe organized the first Bazel Bengaluru Meetup and speaks regularly on software supply chain security and AI-native engineering practices.\r\n",
+      "tagLine": "Senior Engineering Manager at Endor labs",
+      "profilePicture": "https://cdn.sessionize.com/image/864f-400o400o1-7qcD5pdAGJHpFTcHAvDFuf.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/birajendup/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.endorlabs.com",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/Birajendu",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1296689
+      ],
+      "fullName": "Birajendu Sahu",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Senior Engineering manager"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Endor Labs"
+        }
+      ]
+    },
+    {
+      "id": "7613f34f-9a74-42e4-9bf7-fa1a7992f774",
+      "firstName": "Chu",
+      "lastName": "Zhang",
+      "bio": "Chu Zhang is a Senior Software Engineer at Google Cloud based in Sunnyvale, California. Originally from Guangzhou, China, Chu earned an undergraduate degree at the University of Illinois Urbana-Champaign (UIUC) and completed graduate studies at Stanford University. At Google, Chu focuses on planetary-scale distributed infrastructure and the high-performance networking foundations that power modern cloud and AI/ML workloads.",
+      "tagLine": "Senior Software Engineer at Google Cloud",
+      "profilePicture": "https://cdn.sessionize.com/image/a2ed-400o400o1-hQHY3CYGz2bzboAL9KtmHR.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1379554
+      ],
+      "fullName": "Chu Zhang",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Senior Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Company"
+        }
+      ]
+    },
+    {
+      "id": "569e9fe9-78a2-45f1-a1b7-a51d62e9f4dc",
+      "firstName": "Dillibabu",
+      "lastName": "Sampath",
+      "bio": "Open-source enthusiast with a strong passion for technology and continuous learning. Thrives on collaboration, knowledge sharing, and exploring new ideas. Driven by curiosity and always eager to discover emerging technologies and opportunities for growth. Proud Golden Kubestronaut, actively engaged in the cloud-native and Kubernetes ecosystem.",
+      "tagLine": "Lead Software Engineer, Wells Fargo",
+      "profilePicture": "https://cdn.sessionize.com/image/8f3d-400o400o1-DLewEhPhRvaymt34qEwWbU.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/dillibabusampath/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.wellsfargo.com/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/dillibabu-sampath",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1304616
+      ],
+      "fullName": "Dillibabu Sampath",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Lead Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "WellsFargo"
+        }
+      ]
+    },
+    {
+      "id": "aa50de99-ab6c-4627-8a04-91a49e947ca4",
+      "firstName": "Eshita",
+      "lastName": "Chandwani",
+      "bio": "Eshita CHandwani is a Software Engineer on the gRPC team at Google, where she specializes in Golang development. Having previously interned with Google’s Dataplex team, she brings a wealth of experience in cloud-native technologies and distributed systems. She recently graduated from IIT Kharagpur with a BTech + MTech degree in Electrical and Electronics Communication Engineering (E&ECE), where she also contributed to research on weight constraint non-malleable code capacity.",
+      "tagLine": "Software engineer , gRPC, Google",
+      "profilePicture": "https://cdn.sessionize.com/image/f3f4-400o400o1-PjVHGbQxWa5SQmdHZtktVS.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://in.linkedin.com/in/eshita-chandwani-457915191",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://about.google/intl/ALL_in/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/eshita-chandwani",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1316180,
+        1312393
+      ],
+      "fullName": "Eshita Chandwani",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "5339a0eb-2255-497f-bcd4-191af60bc145",
+      "firstName": "Harish",
+      "lastName": "Kotra",
+      "bio": "DevX Lead at XO (https://xo.builders) - Launch your autonomous agents in seconds with private infra\r\n\r\nPreviously was a Developer Relations Lead at Gaia 🌱 (https://gaianet.ai). I focus on onboarding developers, enterprises create, launch and scale their own AI Agents.\r\n\r\nI was a Community Lead for AngelHack, a global company dedicated to Developer Relations and building diverse communities of change makers and innovators worldwide for over 11 years. ",
+      "tagLine": "Developer Relations, Hackathons Specialist & A No-Code Educator",
+      "profilePicture": "https://cdn.sessionize.com/image/4c28-400o400o1-NYwk8AHXf2Xo4wEWycQnPt.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/HarishKotra",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://in.linkedin.com/in/harishkotra",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://instagram.com/_thenocodeguy",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://tini.ltd/hk-blog",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://dailybuild.xyz",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/harish",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1305556
+      ],
+      "fullName": "Harish Kotra",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "DevX Lead"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Quirq"
+        }
+      ]
+    },
+    {
+      "id": "35687732-e982-4b59-ac87-c7f32c264491",
+      "firstName": "Indumathy ",
+      "lastName": "Thiagarajan ",
+      "bio": "Software Engineer with more than a decade of experience on multiple technology stacks and domains",
+      "tagLine": "Technology Enthusiast",
+      "profilePicture": "https://cdn.sessionize.com/image/bce6-400o400o1-Xq1QrUCjZnvAkBp1uSwi8h.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1377865
+      ],
+      "fullName": "Indumathy Thiagarajan",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Principal Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "WellsFargo"
+        }
+      ]
+    },
+    {
+      "id": "f2380df9-658c-45c5-8c7a-39aa5167c292",
+      "firstName": "Jai",
+      "lastName": "Narula",
+      "bio": "Jai Narula is a software engineer at Chime, where he works on large-scale financial transaction systems, API design, and distributed service reliability. His experience includes building and evolving gRPC and protobuf-based service contracts, designing event-driven transaction workflows, and improving consistency, observability, and failure handling across complex financial platforms.",
+      "tagLine": "Chime Financial Inc, Software Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/e354-400o400o1-UBF6Jx5mxnkrx8g1KZ7BDb.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/jainarula16/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.chime.com/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/jai-narula",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1303092
+      ],
+      "fullName": "Jai Narula",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Chime Financial Inc"
+        }
+      ]
+    },
+    {
+      "id": "920de0e0-2038-4dde-8946-082de60ebbd1",
+      "firstName": "Jeevitha",
+      "lastName": "G",
+      "bio": "Jeevitha G is an Observability Engineer focused on building AI-powered observability solutions using OpenSearch and cloud-native technologies. She works with Fluent Bit, RAG, and search-driven architectures to turn high-volume logs into actionable insights. She is passionate about practical AI use cases, scalable observability, and helping engineers troubleshoot distributed systems faster.",
+      "tagLine": "\"Engineering systems, inspiring minds — at the intersection of tech and transformation.",
+      "profilePicture": "https://cdn.sessionize.com/image/ae98-400o400o1-sZiBwrRkwRfueQBHRBYeNN.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/jeevitha-gajendran",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.hpe.com/in/en/home.html",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/jeevitha-gajendran",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1306058
+      ],
+      "fullName": "Jeevitha G",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Staff Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "HPE"
+        }
+      ]
+    },
+    {
+      "id": "8fd66e06-eb3e-4f05-a007-bc2033dd1cbe",
+      "firstName": "Kannan",
+      "lastName": "Jayaprakasam",
+      "bio": "Kannan works as a software engineer at Google in the gRPC team.",
+      "tagLine": "gRPC software engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/4423-400o400o1-VWaB53W56ajocY8BJZXA6r.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "Company Website",
+          "url": "https://about.google/intl/ALL_in/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1313315
+      ],
+      "fullName": "Kannan Jayaprakasam",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "fb16279f-bc51-4a24-92b1-9356a2346c3d",
+      "firstName": "Kevin",
+      "lastName": "Nilson",
+      "bio": "Kevin works at Google as a Software Engineer Manager on the gRPC team.  At Google Kevin has worked on projects such as Chromecast, Google Home, Stadia and now gRPC.  Kevin is a Java Champion and four time JavaOne Rock Star.  Kevin has spoken at conferences such as Google I/O, JavaOne, Devoxx, O'Reilly Fluent, NFJS SpringOne, AnDevCon, JAX, Open Web Camp, Silicon Valley Code Camp, HTML5DevConf, AppsWorld, swampUP, On Android and AjaxWorld. Kevin is the co-author of Web 2.0 Fundamentals.",
+      "tagLine": "Google, Software Engineering Manager",
+      "profilePicture": null,
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1317863
+      ],
+      "fullName": "Kevin Nilson",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "f3c19479-7339-4310-ad26-ff009a89e467",
+      "firstName": "Kshitij",
+      "lastName": "Jain",
+      "bio": "Software Engineer, gRPC",
+      "tagLine": "Software Engineer, Google",
+      "profilePicture": "https://cdn.sessionize.com/image/4266-400o400o1-3wPkb7spiXXS8JmYC5sUKA.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1314175
+      ],
+      "fullName": "Kshitij Jain",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "ef01eb7b-5632-4c6d-8e26-40ee7f94f7d7",
+      "firstName": "Madhav",
+      "lastName": "Bissa",
+      "bio": "Life was simpler when streams were just peaceful waterbodies and definitely not bidirectional!\r\n\r\ngrpc-go maintainer, grpc-observability",
+      "tagLine": "Senior Software Engineer, Google, gRPC-go",
+      "profilePicture": "https://cdn.sessionize.com/image/27cb-400o400o1-EHGVTAFQSTGDjhQ2PziMpm.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "Company Website",
+          "url": "https://google.com",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1314119,
+        1329811
+      ],
+      "fullName": "Madhav Bissa",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Senior Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "5dc9b535-5602-47f9-8590-7521f6a295ca",
+      "firstName": "Malik Chandra Pandian",
+      "lastName": "T",
+      "bio": "As a Senior Engineer in the Cloud Engineering domain with 6+ years of experience specializing in AWS, I focus on creating and maintaining dependable, scalable infrastructure while ensuring the seamless operation of applications.",
+      "tagLine": "Brillio, Senior Engineer, Cloud Engineering",
+      "profilePicture": "https://cdn.sessionize.com/image/2ad6-400o400o1-wM3ufKG1TkLEQ3ocnXD5xu.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/malikchandrapandian",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.brillio.com/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1304616
+      ],
+      "fullName": "Malik Chandra Pandian T",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Senior Engineer, Cloud Engineering"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Brillio"
+        }
+      ]
+    },
+    {
+      "id": "f9f50aa6-ce94-404f-896a-1695154a7d49",
+      "firstName": "MV",
+      "lastName": "Shiva",
+      "bio": "Shiva is a software engineer on the gRPC team at Google.",
+      "tagLine": "Google",
+      "profilePicture": "https://cdn.sessionize.com/image/1450-400o400o1-KVqo4Ku7141XWMqB6LgqoJ.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/mv-shiva/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/mv-shiva",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1317587,
+        1312393
+      ],
+      "fullName": "MV Shiva",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer "
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google "
+        }
+      ]
+    },
+    {
+      "id": "4b879233-171a-4b63-b464-aa1981f6c687",
+      "firstName": "Neel",
+      "lastName": "Shah",
+      "bio": "I help platform engineers and DevOps teams understand and adopt cloud-native infrastructure through talks, demos, and community building. I organise the CNCF Gandhinagar and Google Cloud Gandhinagar communities, and I have spoken at 40+ events, including KubeCon India, PlatformCon, HashiTalks, OpenSearchCon Korea, FOSS ASIA, and LinuxFest Northwest.\r\n\r\nMy core focus areas are Kubernetes, GitOps, IaC with Terraform/Vault, AI-powered DevOps tooling, and observability pipelines.",
+      "tagLine": "Developer Advocate @StackGen ·  KubeCon India speaker",
+      "profilePicture": "https://cdn.sessionize.com/image/dc9b-400o400o1-3rkgDovdUZgvanVZHeevzf.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/shahneel2409",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/neel-shah-07460218a/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://www.instagram.com/neel._.24",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://medium.com/@shahneel2409",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://stackgen.com",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Portfolio",
+          "url": "https://bento.me/neelshah",
+          "linkType": "Other"
+        },
+        {
+          "title": "Credly",
+          "url": "https://www.credly.com/users/neel-shah.b07ca52a",
+          "linkType": "Other"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/neel-shah",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1300038
+      ],
+      "fullName": "Neel Shah",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Developer Advocate"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "StackGen"
+        }
+      ]
+    },
+    {
+      "id": "b38b5ac2-7e4b-4c69-98c3-d70d2297a96e",
+      "firstName": "Neeraj Krishna",
+      "lastName": "Gopalakrishna",
+      "bio": "Neeraj Krishna is a Principal Software Engineer at Red Hat with over 20 years of experience in cloud computing, having worked at IBM, Oracle, and Stripe before joining Red Hat. He currently focuses on OpenShift components that run on the node and makes upstream contributions to sig-node components. Neeraj is a Kubernetes and CRI-O org member who has also worked on the Security Profiles Operator (SPO). Recently, for the Kubernetes v1.37 release, he co-authored several KEPs within sig-node.",
+      "tagLine": "Red Hat, Principal Software Engineer, OpenShift Node Team",
+      "profilePicture": "https://cdn.sessionize.com/image/fba2-400o400o1-wZuCPDG8kkmjUanSpQdTYR.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/neeraj-krishna/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://developers.redhat.com/author/neeraj-krishna-gopalakrishna",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.redhat.com/en",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/neeraj-krishna-gopalakrishna",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1303695
+      ],
+      "fullName": "Neeraj Krishna Gopalakrishna",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Principal Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Red Hat"
+        }
+      ]
+    },
+    {
+      "id": "f8261ce7-4581-42f5-b786-f312390ceb41",
+      "firstName": "Oshi",
+      "lastName": "Gupta",
+      "bio": "Oshi Gupta works as a Site Reliability Engineer at Improving Pune (Infracloud). She is CNCF Kubestronaut , AWS Solutions Architect-Associate certified and LFX mentee for CNCF Kyverno.",
+      "tagLine": "Site Reliability Engineer @Improving Pune",
+      "profilePicture": "https://cdn.sessionize.com/image/a9c0-400o400o1-nQXNuwqhsoJGvJTYu7i5Xw.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/oshi1136",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/oshi-gupta-512716178/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.infracloud.io/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/oshi-gupta",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1302452
+      ],
+      "fullName": "Oshi Gupta",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Site Reliability Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Improving Pune (Infracloud Technologies)"
+        }
+      ]
+    },
+    {
+      "id": "28a2ff5b-2a2d-4487-8e85-b38d53938640",
+      "firstName": "Palak",
+      "lastName": "Jain",
+      "bio": "I am a software engineer in HSBC with about 7 years of work experience. I advocate inclusion of diversity in its real form and thus passionate about technologies that brings the world closer.",
+      "tagLine": "Senior Software Engineer at HSBC",
+      "profilePicture": "https://cdn.sessionize.com/image/ddd2-400o400o1-Ke8Z67bHfmhwqx3KFSHozN.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/palak-jain-980622145/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/palak-jain",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1298901
+      ],
+      "fullName": "Palak Jain",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Senior Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "HSBC"
+        }
+      ]
+    },
+    {
+      "id": "eb1ea7f5-dd8c-4324-a369-33a74861cc45",
+      "firstName": "Paras",
+      "lastName": "Mamgain",
+      "bio": "Paras is a Technical Lead at Google Cloud and international tech speaker who has spoken at various conferences at the global stage. At Google, he leads a team dedicated to simplifying complex technological solutions. Drawing on his strong foundation in cloud solutions and backend development, he guides his team in architecting scalable and resilient infrastructure. Paras is also a passionate educator known for his ability to make advanced technology accessible to a wide audience.",
+      "tagLine": "Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/b1f3-400o400o1-BcApmMyZjYzPQqyBZQmBhw.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://x.com/mamgainparas/",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/parasmamgain/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://www.instagram.com/mamgainparas/",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://parasmamgain.medium.com/",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://parasmamgain.github.io/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/parasmamgain",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1377865
+      ],
+      "fullName": "Paras Mamgain",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Technical Lead"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "ac0dbe93-f5c6-405c-8028-2299dbfad460",
+      "firstName": "Pawan",
+      "lastName": "Bhardwaj",
+      "bio": "As a senior software engineer specializing in gRPC within Google's open source team, my focus lies in enhancing the performance and usability of networking systems for applications. My previous experience includes working with Cumulus Linux and Cisco NxOS on network forwarding plane.\r\n",
+      "tagLine": "Senior Software Engineer in gRPC OSS team at Google ",
+      "profilePicture": "https://cdn.sessionize.com/image/e405-400o400o1-YsibyLtSBbef5CHFRrwqus.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/bhardwajpawan",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/pawan-bhardwaj",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1316393,
+        1316449
+      ],
+      "fullName": "Pawan Bhardwaj",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Senior Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "b2cc2fb0-e5e1-42f2-8625-eafa2c320572",
+      "firstName": "Pranjali",
+      "lastName": "Saxena",
+      "bio": "Pranjali is a software engineer on the gRPC-Go team at Google. Prior to that, she worked as a software engineer on the Confidential Computing team at Google. Her interests include networking, virtualization, and Go.",
+      "tagLine": "Software Engineer, Google",
+      "profilePicture": "https://cdn.sessionize.com/image/8745-400o400o1-QpQCA1VkvJiMh8icpVD3TL.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/pranjali-saxena-201929205/",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1316180
+      ],
+      "fullName": "Pranjali Saxena",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "f2d7930a-884d-4dbc-9379-832395dafd92",
+      "firstName": "Prasanna",
+      "lastName": "Sathyanarayana",
+      "bio": "Engineering Director at Google Cloud India.",
+      "tagLine": "Engineering Director at Google Cloud India.",
+      "profilePicture": "https://cdn.sessionize.com/image/eca0-400o400o1-MCgq9wrBDQJKEGnQkuP5oh.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1317865
+      ],
+      "fullName": "Prasanna Sathyanarayana",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Engineering Director"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "6007c54c-81f6-4ae1-aa99-a5cb49edcea8",
+      "firstName": "Rishesh",
+      "lastName": "Agarwal",
+      "bio": "Rishesh is a software engineer with over four years of experience, currently contributing their expertise at Google. Prior to joining Google, he honed his skills as a backend engineer at Dish. A dedicated open-source advocate, Rishesh is deeply committed to the open-source community and possesses a keen interest in the complexities of distributed systems, an area in which they actively pursue learning and development.",
+      "tagLine": "Google",
+      "profilePicture": "https://cdn.sessionize.com/image/bf40-400o400o1-KnxVeH7j3Tzo9BzFGVX7hr.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1313315
+      ],
+      "fullName": "Rishesh Agarwal",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "1c72d8b1-6d86-4152-a9e8-52552facc4de",
+      "firstName": "Sahithya",
+      "lastName": "B A",
+      "bio": "Sahithya Balasubramaniam is a Senior Software Engineer, SelfPreneur, open-source contributor, and Founder of S South Hiring. She builds AI-powered and microSaaS products, with Product Hunt launches ranking 21st and 25th globally. She has delivered 25+ talks at events including Google DevFest and SheBuilds Conference. An Amazon bestselling, award-winning author of five books, she is passionate about AI, software engineering, open source, and community building.",
+      "tagLine": "Senior Software Engineer, Author, Public & Tech Speaker, MicroSaaS Product Builder, Writer, Poetess, Emcee / Host, Mentor, Digital Content Creator",
+      "profilePicture": "https://cdn.sessionize.com/image/a1da-400o400o1-hPF5QhUUrEAjD9xu49XoQb.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://x.com/SahithyaBA",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/sahithyaba/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Facebook",
+          "url": "https://www.facebook.com/sahithya.balasubramaniam/",
+          "linkType": "Facebook"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://www.instagram.com/sahithya_balasubramaniam/",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://medium.com/@sahithyabalasubramaniam",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.zensar.com/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "TopMate",
+          "url": "https://topmate.io/sahithyaba",
+          "linkType": "Other"
+        },
+        {
+          "title": "Website",
+          "url": "https://sahithyaba.baserock.in/",
+          "linkType": "Other"
+        },
+        {
+          "title": "Youtube",
+          "url": "https://www.youtube.com/c/SahithyaBalasubramaniam",
+          "linkType": "Other"
+        },
+        {
+          "title": "Newsletter",
+          "url": "https://thelogicsoullens.beehiiv.com/",
+          "linkType": "Other"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/sahithyaba",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1301805
+      ],
+      "fullName": "Sahithya B A",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Senior Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Zensar Technologies"
+        }
+      ]
+    },
+    {
+      "id": "7035748c-ceda-43d5-bfca-ee5fea7dc8ab",
+      "firstName": "Saurabh",
+      "lastName": "Mishra",
+      "bio": "Saurabh Mishra is a Cloud Evangelist and technology enthusiast specializing in cloud architecture, DevOps, automation, and Agentic AI. Through active community engagement, he shares practical knowledge on cloud-native solutions, AI-powered workflows, security best practices, and multi-cloud ecosystems.",
+      "tagLine": "Lead Consultant ",
+      "profilePicture": "https://cdn.sessionize.com/image/dae5-400o400o1-R8u3fBusyugv5T2MkMHKjD.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "X (Twitter)",
+          "url": "https://twitter.com/skmjss",
+          "linkType": "Twitter"
+        },
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/connectsaurabhmishra/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Instagram",
+          "url": "https://instagram.com/mishra_saurabh08",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Blog",
+          "url": "https://medium.com/@connectsaurabhmishra",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.vodafone.com/careers/professional-career-areas/shared-services",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/saurabh-mishra",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1302143
+      ],
+      "fullName": "Saurabh Mishra",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Lead Consultant"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Optum"
+        }
+      ]
+    },
+    {
+      "id": "ae6c85b9-30b9-4913-8a96-fc2c96983d29",
+      "firstName": "Saurav",
+      "lastName": ".",
+      "bio": "Software Engineer, Google",
+      "tagLine": "Software Engineer, Google",
+      "profilePicture": "https://cdn.sessionize.com/image/213e-400o400o1-pUdcuTmrU8osv5ZgJmdTXf.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1317385,
+        1314175
+      ],
+      "fullName": "Saurav .",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "d83f4074-af2f-43c3-8778-234c543eae5f",
+      "firstName": "Smridhi",
+      "lastName": "Gupta",
+      "bio": "Smridhi Gupta is a Technology Analyst at Citibank building production AI systems with a focus on LLM infrastructure, RAG, and AI reliability. She has authored six peer-reviewed publications in machine learning and AI and previously conducted research at the AI Institute of South Carolina. She also organizes the JS Community in Pune and runs an AI engineering community of 23.6K+ developers, where she shares practical insights on AI systems, infrastructure, and modern software engineering.",
+      "tagLine": "Tech Analyst 2@ Citibank | AI Infra | 23k+ Tech Community",
+      "profilePicture": "https://cdn.sessionize.com/image/2b40-400o400o1-79yqXZfVSm14ksQWMjJv1w.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/smridhi-gupta-74337a219",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Instagram",
+          "url": "http://instagram.com/thehalfstackgirl",
+          "linkType": "Instagram"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.instagram.com/thehalfstackgirl",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/smridhi-gupta",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1303806
+      ],
+      "fullName": "Smridhi Gupta",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Technology Analyst 2"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Citibank"
+        }
+      ]
+    },
+    {
+      "id": "e31d1543-7b79-412d-90ba-2915f33e8e8b",
+      "firstName": "Sreenithi",
+      "lastName": "Sridharan",
+      "bio": "I'm a Software Engineer at Google, currently on the gRPC team. With a background in AI & LLM applications, I'm now exploring the exciting world of cloud networking. An active community contributor, I've served on the program committee for gRPConf US & India 2025, and a frequent speaker, having delivered a keynote at gRPConf India 2025 and spoken at KubeCon India 2024.",
+      "tagLine": "Software Engineer - gRPC team, Google",
+      "profilePicture": "https://cdn.sessionize.com/image/a3b4-400o400o1-JAWv5FtxcqeCsZvkKiaUMT.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/sreenithi-sridharan/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://about.google/intl/ALL_in/",
+          "linkType": "Company_Website"
+        }
+      ],
+      "sessions": [
+        1317634
+      ],
+      "fullName": "Sreenithi Sridharan",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Google"
+        }
+      ]
+    },
+    {
+      "id": "2053c342-e219-42d8-b988-c63182f5d919",
+      "firstName": "Stuti",
+      "lastName": "Jain",
+      "bio": "I am SDE 2 at Adobe with 3 YOE in the industry. I have given talks at PyCon Korea and PyCon Indonesia. I have always been inclined towards speaking and attending the conferences. Would love to give back to the community which has taught me so much.",
+      "tagLine": "SDE 2 at Adobe, Ex-Microsoft",
+      "profilePicture": "https://cdn.sessionize.com/image/d9b5-400o400o1-GHBH3vmdHBjL4wtKerWHAz.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/stuti-jain-98630a197/",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1298901
+      ],
+      "fullName": "Stuti Jain",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Sodtware Development Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Adobe"
+        }
+      ]
+    },
+    {
+      "id": "a8ec8cb5-a5b8-42f0-93b0-5df1842f16f5",
+      "firstName": "Supriya",
+      "lastName": "Sirbi",
+      "bio": "Working as a SW Architect in Automotive Industry. I have passion for technology and love to talk about several tools and frameworks that enable development of useful products. I have attended several open source events in past and have been a professional speaker at events such as Car HMI USA 2024, AI Developers Conference India 2025. My interests include Automotive Android, Open Source Tools and AI.",
+      "tagLine": "Aptiv",
+      "profilePicture": "https://cdn.sessionize.com/image/7229-400o400o1-DZazbexpQ8KGE2Xz9ep4A7.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://in.linkedin.com/in/supriya-sirbi-aptiv",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://in.linkedin.com/in/supriya-sirbi-aptiv",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.aptiv.com/",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/SupriyaSirbi",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1299205
+      ],
+      "fullName": "Supriya Sirbi",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Architect"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Aptiv"
+        }
+      ]
+    },
+    {
+      "id": "f954b1d0-3d83-401c-9958-b1b2c02f718f",
+      "firstName": "Vijaya",
+      "lastName": "Methuku",
+      "bio": "Vijaya Bhaskar Methuku is a Senior Network Development Engineer based in Bangalore, specializing in hyperscale cloud networking. At Amazon/AWS, he's led AWS LocalZones and fulfillment network design, with expertise in SD-WAN, datacenter fabrics, automation, and security—mentoring teams while driving operational excellence.",
+      "tagLine": "Independent Researcher",
+      "profilePicture": "https://cdn.sessionize.com/image/1494-400o400o1-BUwQCf41UMU2SqwwtnFrnv.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/vijaya-methuku",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1287552
+      ],
+      "fullName": "Vijaya Methuku",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Snr Network Development Engineer"
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Amazon"
+        }
+      ]
+    },
+    {
+      "id": "124e9156-d348-45db-9c5a-8db9e6ff5b09",
+      "firstName": "Yashasvi",
+      "lastName": "Misra",
+      "bio": "Yashasvi Misra is a Software Engineer and Chair of the NumFOCUS Code of Conduct Working Group, fostering inclusive practices across the open-source ecosystem. She has contributed to NumPy and is an active member of the Kubernetes release team. A passionate advocate for diversity in tech, she introduced a period leave policy at a previous organization. She has spoken at PyCon India, PyCon Europe, PyLadiesCon, and PyData Global.",
+      "tagLine": "Software Engineer (Data & AI), open-source contributor, and inclusive-tech advocate.",
+      "profilePicture": "https://cdn.sessionize.com/image/c1ad-400o400o1-QaCUwiY8EEjuD6bJG8YJoc.png",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/misrayashasvi/",
+          "linkType": "LinkedIn"
+        }
+      ],
+      "sessions": [
+        1300673
+      ],
+      "fullName": "Yashasvi Misra",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 135541,
+          "answerValue": "Software Engineer (Data & AI), open-source contributor, and inclusive-tech advocate."
+        },
+        {
+          "questionId": 135542,
+          "answerValue": "Pure Storage"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": 135541,
+      "question": "Speaker Title",
+      "questionType": "Short_Text",
+      "sort": 34
+    },
+    {
+      "id": 135542,
+      "question": "Company",
+      "questionType": "Short_Text",
+      "sort": 33
+    },
+    {
+      "id": 137620,
+      "question": "Presentation Slides",
+      "questionType": "File_upload",
+      "sort": 51
+    }
+  ],
+  "categories": [
+    {
+      "id": 135557,
+      "title": "Session Type",
+      "items": [
+        {
+          "id": 491163,
+          "name": "Getting Started with gRPC",
+          "sort": 1
+        },
+        {
+          "id": 491158,
+          "name": "gRPC in-production",
+          "sort": 2
+        },
+        {
+          "id": 491164,
+          "name": "gRPC + AI",
+          "sort": 3
+        },
+        {
+          "id": 491159,
+          "name": "User Stories + Case Studies",
+          "sort": 4
+        },
+        {
+          "id": 491160,
+          "name": "Implementation",
+          "sort": 5
+        },
+        {
+          "id": 491161,
+          "name": "Ecosystem + Tooling",
+          "sort": 6
+        },
+        {
+          "id": 491162,
+          "name": "Codelabs",
+          "sort": 7
+        },
+        {
+          "id": 505537,
+          "name": "Registration + Badge Pickup",
+          "sort": 8
+        },
+        {
+          "id": 505538,
+          "name": "Keynote Sessions",
+          "sort": 9
+        },
+        {
+          "id": 505539,
+          "name": "Breaks",
+          "sort": 10
+        },
+        {
+          "id": 518561,
+          "name": "Lunch",
+          "sort": 11
+        }
+      ],
+      "sort": 1,
+      "type": "session"
+    },
+    {
+      "id": 135556,
+      "title": "Level",
+      "items": [
+        {
+          "id": 491157,
+          "name": "Any",
+          "sort": 1
+        },
+        {
+          "id": 491155,
+          "name": "Beginner",
+          "sort": 2
+        },
+        {
+          "id": 491156,
+          "name": "Intermediate",
+          "sort": 3
+        },
+        {
+          "id": 491154,
+          "name": "Advanced",
+          "sort": 4
+        }
+      ],
+      "sort": 4,
+      "type": "session"
+    }
+  ],
+  "rooms": [
+    {
+      "id": 86556,
+      "name": "Floor 10 | Shikhar",
+      "sort": 0
+    },
+    {
+      "id": 86555,
+      "name": "Floor 11 | Gandhi",
+      "sort": 1
+    },
+    {
+      "id": 86560,
+      "name": "Floor 11 | CV Raman",
+      "sort": 2
+    },
+    {
+      "id": 89173,
+      "name": "Floor 11 | DS Kothari",
+      "sort": 3
+    },
+    {
+      "id": 86557,
+      "name": "Floor 10",
+      "sort": 4
+    }
+  ]
+}

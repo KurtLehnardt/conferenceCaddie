@@ -1,0 +1,36 @@
+{
+  "slug": "agntsummit-new-york-city-2027",
+  "name": "AGNTSummit New York City",
+  "status": "unavailable",
+  "status_reason": "no_schedule_url",
+  "source": "sessionize",
+  "start_date": "2027-11-01",
+  "end_date": "2027-11-02",
+  "time_zone": null,
+  "time_zone_windows": null,
+  "location": {
+    "city": "New York",
+    "region": "",
+    "country": "United States",
+    "virtual": false
+  },
+  "sessionize_api_code": null,
+  "sessionize_public_slug": null,
+  "sessionize_site_published": false,
+  "lf_event_id": 328297,
+  "lf_url": "https://events.linuxfoundation.org/agntsummit-new-york-city/",
+  "official_schedule_url": "https://events.linuxfoundation.org/agntsummit-new-york-city/",
+  "parent_slug": null,
+  "category_mapping": null,
+  "counts": {
+    "sessions": 0,
+    "talk": 0,
+    "ambient": 0,
+    "break": 0,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T21:38:46.481Z"
+}
