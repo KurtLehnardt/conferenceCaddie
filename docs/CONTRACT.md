@@ -227,7 +227,7 @@ Every request may carry a same-origin `Origin` header or none. Writes and circle
 
 ### Rate limits
 
-In-memory token buckets per instance, keyed by device (`profile_id`) and by client IP: people writes 20 per minute per device and 60 per IP; matches and circle members 30 per minute per device and 90 per IP; search, circle counts, recommendations, topics and suggestions 60 per minute per IP; schedule exports 20 per minute per IP. The client IP is the last `X-Forwarded-For` entry, which Google's front end appends, capped at 45 characters; without the header it is the socket address. Earlier entries are chosen by the client and are ignored.
+In-memory token buckets per instance, keyed by device (`profile_id`) and by client IP: people writes 20 per minute per device and 60 per IP; matches and circle members 30 per minute per device and 90 per IP; search, circle counts, recommendations, topics and suggestions 60 per minute per IP; schedule exports 20 per minute per IP; the conference list 120 per minute per IP; the health check 600 per minute per IP (generous for monitors, but not exempt); and unknown `/api/*` paths 60 per minute per IP. Every `/api/*` route is therefore limited, and each returns 429 with `Retry-After` over its limit. The client IP is the last `X-Forwarded-For` entry, which Google's front end appends, capped at 45 characters; without the header it is the socket address. Earlier entries are chosen by the client and are ignored.
 
 ### `GET /api/health`
 

@@ -741,6 +741,20 @@ await check('rel2: GET /api/related validates its input', async () => {
     `bad id ${bad.status}, extra parameter ${extra.status}, unknown talk ${missing.status}, POST ${post.status}`);
 });
 
+// Rate limiting. The burst goes to an unknown /api path, which has a bucket of its own (60 a
+// minute per address), so no other check here is affected.
+
+await check('rl1: a burst of requests gets 429 with Retry-After, and the other endpoints still answer', async () => {
+  const burst = await Promise.all(Array.from({ length: 80 }, () =>
+    fetch(`${BASE_URL}/api/rate-limit-probe`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(async (r) => { await r.arrayBuffer(); return r; })));
+  const limited = burst.filter((r) => r.status === 429);
+  const retryAfter = Number(limited[0]?.headers.get('retry-after'));
+  const health = await fetch(`${BASE_URL}/api/health`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const ok = limited.length >= 1 && burst.every((r) => r.status === 404 || r.status === 429) && Number.isInteger(retryAfter) && retryAfter >= 1 && health.status === 200;
+  report(ok, 'rl1: a burst of requests gets 429 with Retry-After, and the other endpoints still answer',
+    `${limited.length} of ${burst.length} limited, Retry-After ${retryAfter}, health ${health.status}`);
+});
+
 // Install onboarding.
 
 await check('inst1: the manifest makes the app installable and the page links it', async () => {
