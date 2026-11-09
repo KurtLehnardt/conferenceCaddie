@@ -3,7 +3,7 @@
 import { useState } from 'preact/hooks';
 import { Users } from 'lucide-preact';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
-import { CUT_MESSAGE, followInterested, MAX_SHARED_TALKS, shareForTalks, unshareAll } from './sync';
+import { followInterested, isHintMessage, MAX_SHARED_TALKS, shareForTalks, unshareAll } from './sync';
 import type { ConferenceLike, InterestedProp } from './types';
 import { interestedIds, SHARE_NOTICE } from './util';
 
@@ -108,7 +108,7 @@ export function ShareAllControls({ conference, interested }: { conference: Confe
         </div>
       )}
       {message && (
-        <p class={message === CUT_MESSAGE ? 'pp-hint' : 'pp-error'} role="status">
+        <p class={isHintMessage(message) ? 'pp-hint' : 'pp-error'} role="status">
           {message}{' '}
           {message.includes('profile') && (
             <a class="pp-inline-link" href="#/profile">

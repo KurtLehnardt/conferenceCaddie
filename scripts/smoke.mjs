@@ -417,6 +417,7 @@ const B = newDevice(); // can speak to everything A wants to learn, visible
 const C = newDevice(); // can speak to the same, but only shares for the circle talk
 const D = newDevice(); // visible at another conference, with the same topics where possible
 const N = newDevice(); // visible, but never shares for the circle talk
+const E = newDevice(); // shares through the exact writes the Interested screen's auto-share switch sends
 const expiredId = `${PRIMARY}:${crypto.randomBytes(16).toString('base64url')}`;
 let expiredWritten = false;
 let circleTalk = null;
@@ -582,6 +583,47 @@ try {
     const count = await countOf();
     const ok = gone && off.status === 200 && count === (countBefore ?? 0) + 1;
     report(ok, 'p11: a deleted profile disappears at once', `delete ${del.status}, B ${gone ? 'gone' : 'still there'}; turning both choices off leaves the count at ${count}`);
+  });
+
+  await check('p12: the writes behind the auto-share switch are accepted, and a rejection says why', async () => {
+    // The web app sends this body shape for every share, unshare and auto-share write: the same
+    // eight profile keys, "contact_note" as an empty string, and the full list of shared talks.
+    const [t1, t2] = [...ownTalks.get(PRIMARY)].filter((id) => id !== T).slice(0, 2);
+    if (!t1 || !t2) {
+      skip('p12: the writes behind the auto-share switch are accepted, and a rejection says why', 'the conference has fewer than three talks');
+      return;
+    }
+    const body = (shared, over = {}) => ({
+      event: PRIMARY,
+      profile: { display_name: testName('E'), about: '', interests: '', expertise: '', learn_topics: [], speak_topics: [], linkedin_url: null, contact_note: '', ...over },
+      open_to_meet: false,
+      shared_talk_ids: shared,
+    });
+    const put = (b) => api('PUT', '/api/people/profile', b, { device: E, label: 'E-put' });
+    const problems = [];
+    const first = await put(body([t1]));
+    if (first.status === 200) created.push({ device: E, event: PRIMARY });
+    const again = await put(body([t1])); // switching auto-share on re-sends the list that is already shared
+    const marked = await put(body([t1, t2])); // a newly marked talk is shared
+    const unmarked = await put(body([t2])); // an unmarked talk is unshared
+    const steps = [['first share', first, 1], ['same list again', again, 1], ['a marked talk', marked, 2], ['an unmarked talk', unmarked, 1]];
+    for (const [label, r, count] of steps) {
+      if (r.status !== 200) problems.push(`${label} gave ${r.status} ${r.json.error ?? ''}`.trim());
+      else if (r.json.shared_talk_ids?.length !== count || r.json.open_to_meet !== false) problems.push(`${label} echoed the wrong list`);
+    }
+    // A topic the list does not offer is rejected with a message that names the topic field; the web
+    // app reads it, removes the topic from the phone's profile and sends the write again.
+    const retired = await put(body([t2], { learn_topics: ['no-such-topic-xyz'] }));
+    if (retired.status !== 400 || !/^learn_topics contains an unknown topic/.test(retired.json.error ?? '')) problems.push(`an unknown topic gave ${retired.status} ${retired.json.error ?? ''}`.trim());
+    const noName = await put(body([t2], { display_name: '' }));
+    if (noName.status !== 400 || !/^display_name is required/.test(noName.json.error ?? '')) problems.push(`no name gave ${noName.status} ${noName.json.error ?? ''}`.trim());
+    const extraKey = await put(body([t2], { auto_share: true }));
+    if (extraKey.status !== 400 || !/^Unknown key: profile\.auto_share/.test(extraKey.json.error ?? '')) problems.push(`an unknown profile key gave ${extraKey.status}`);
+    const topKey = await put({ ...body([t2]), share_new: true });
+    if (topKey.status !== 400 || !/^Unknown key: share_new/.test(topKey.json.error ?? '')) problems.push(`an unknown body key gave ${topKey.status}`);
+    const off = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: E, label: 'E-delete' });
+    if (off.status !== 200) problems.push(`delete gave ${off.status}`);
+    report(problems.length === 0, 'p12: the writes behind the auto-share switch are accepted, and a rejection says why', problems.length ? problems.join('; ') : 'share, re-send, mark and unmark all 200; unknown topic, missing name and unknown keys 400 with their reasons');
   });
 
   // ---------------------------------------------------------------------------------------------

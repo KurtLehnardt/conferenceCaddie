@@ -14,6 +14,34 @@ export class PeopleApiError extends Error {
   }
 }
 
+// The server explains a rejected write in its own words, naming the field ("display_name is
+// required"). The user gets the same fact in plain words, without field names or ids. Anything not
+// listed here keeps the generic text.
+const FIELD_LABELS: Record<string, string> = {
+  display_name: 'Your name',
+  about: 'About me',
+  interests: 'The text under "I want to learn about"',
+  expertise: 'The text under "I can speak to"',
+  contact_note: '"Another way to reach me"',
+};
+
+export function explainBadRequest(code: string | null): string | null {
+  if (!code) return null;
+  if (/^display_name is required/.test(code)) return 'Add your name to your profile first.';
+  const tooLong = /^(\w+) must be at most (\d+) characters$/.exec(code);
+  if (tooLong) return `${FIELD_LABELS[tooLong[1]] ?? 'One of your details'} is too long: ${tooLong[2]} characters at most. Shorten it in your profile.`;
+  if (/^linkedin_url must be/.test(code)) return 'The LinkedIn link should look like https://www.linkedin.com/in/your-name. Fix it in your profile.';
+  if (/^(learn|speak)_topics contains an unknown topic/.test(code)) return 'A topic you picked is no longer offered. Open your profile and remove it.';
+  if (/^(learn|speak)_topics must be an array/.test(code)) return 'Your topics could not be saved. Open your profile and check the topics you picked.';
+  if (/^shared_talk_ids (contains an unknown talk|must be talks of this conference)/.test(code)) {
+    return 'A talk you share for is no longer in the schedule. Tap "Stop sharing for all", then share again.';
+  }
+  if (/^shared_talk_ids must be an array/.test(code)) return 'You can share for up to 50 talks.';
+  if (/^conference has ended/.test(code)) return 'This conference has ended, so sharing is closed.';
+  if (/^conference is not available/.test(code)) return 'Sharing is not open for this conference.';
+  return null;
+}
+
 function friendly(status: number): string {
   if (status === 0) return 'You appear to be offline. Check your connection and try again.';
   if (status === 429) return 'Too many requests. Wait a minute and try again.';
@@ -47,7 +75,7 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
     } catch {
       // The body is not JSON; the status is enough.
     }
-    throw new PeopleApiError(friendly(res.status), res.status, code, count);
+    throw new PeopleApiError((res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status), res.status, code, count);
   }
   return (await res.json()) as T;
 }
