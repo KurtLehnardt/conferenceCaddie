@@ -26,14 +26,14 @@ interface RecView {
   /** True while the list on screen was computed for earlier inputs and a new one is on its way. */
   refreshing: boolean;
   /** The labels of the topics in the profile now, to check an earlier list against. */
-  now: { learn: Set<string>; speak: Set<string> };
+  now: { learn: Set<string> };
 }
 
 const FETCH_DELAY_MS = 400;
 
 /**
  * Suggestions for the profile as it is now. The request is keyed on everything that goes into it
- * (conference, topics of both sets, free text, the Interested list and the size), so any change
+ * (conference, learn topics, the learn free text, the Interested list and the size), so any change
  * to those, and every return of the tab to the foreground, asks again. A request that is no
  * longer current is aborted, so an old answer can never replace a newer one.
  *
@@ -51,9 +51,7 @@ function useRecommendations(conference: ConferenceLike, interested: InterestedPr
   const body: RecommendationBody = {
     event: slug,
     learn_topics: t.learn.map((x) => x.topic_id),
-    speak_topics: t.speak.map((x) => x.topic_id),
     interests: p?.interests.trim().slice(0, 500) ?? '',
-    expertise: p?.expertise.trim().slice(0, 500) ?? '',
     // Sorted, so the same list in another order is not a change.
     interested_talk_ids: [...new Set(interestedIds(interested))].sort().slice(0, 100),
     size,
@@ -105,21 +103,17 @@ function useRecommendations(conference: ConferenceLike, interested: InterestedPr
   return {
     state,
     refreshing,
-    now: { learn: new Set(t.learn.map((x) => x.label)), speak: new Set(t.speak.map((x) => x.label)) },
+    now: { learn: new Set(t.learn.map((x) => x.label)) },
   };
 }
 
-/** The topics a suggestion matched, by set. */
-function reasonsOf(rec: Recommendation, view: RecView): { learn: string[]; speak: string[] } {
-  const learn = rec.why?.learn_topics ?? [];
-  const speak = rec.why?.speak_topics ?? [];
+/** The learn topics a suggestion matched. */
+function reasonsOf(rec: Recommendation, view: RecView): string[] {
+  const learn = rec.why?.learn_topics ?? rec.why?.topics ?? [];
   // A list computed for earlier inputs may name a topic that has since been removed, so it is
   // checked against the profile as it is now. A final answer already holds only the request's topics.
-  if (!view.refreshing) return { learn, speak };
-  return {
-    learn: learn.filter((l) => view.now.learn.has(l)),
-    speak: speak.filter((l) => view.now.speak.has(l)),
-  };
+  if (!view.refreshing) return learn;
+  return learn.filter((l) => view.now.learn.has(l));
 }
 
 /** A thin bar along the bottom edge of its host, shown while an earlier list is being replaced. */
@@ -132,8 +126,8 @@ function PickTopicsPrompt() {
     <div class="pp-prompt">
       <Sparkles size={22} aria-hidden="true" class="pp-prompt-icon" />
       <div>
-        <p class="pp-prompt-title">Pick a few topics</p>
-        <p class="pp-prompt-body">Choose what you want to learn about, and we'll suggest talks.</p>
+        <p class="pp-prompt-title">Pick what you want to learn</p>
+        <p class="pp-prompt-body">Pick topics you want to learn, or describe a problem you're facing, to get talk suggestions.</p>
         <a class="btn btn-primary btn-small pp-prompt-btn" href="#/profile">
           Pick topics
         </a>
@@ -143,22 +137,12 @@ function PickTopicsPrompt() {
 }
 
 function Why({ rec, view }: { rec: Recommendation; view: RecView }) {
-  const { learn, speak } = reasonsOf(rec, view);
+  const learn = reasonsOf(rec, view);
   return (
     <>
-      {learn.length + speak.length > 0 && (
+      {learn.length > 0 && (
         <p class="pp-why">
-          {learn.length > 0 && (
-            <>
-              <span class="pp-why-label">You want to learn:</span> {learn.join(', ')}
-            </>
-          )}
-          {learn.length > 0 && speak.length > 0 && ' · '}
-          {speak.length > 0 && (
-            <>
-              <span class="pp-why-label">You can speak to:</span> {speak.join(', ')}
-            </>
-          )}
+          <span class="pp-why-label">You want to learn:</span> {learn.join(', ')}
         </p>
       )}
       {rec.why?.passage && (
@@ -170,12 +154,10 @@ function Why({ rec, view }: { rec: Recommendation; view: RecView }) {
   );
 }
 
-/** The short reason on a home-row card: at most three topics, learn first. */
+/** The short reason on a home-row card: at most two learn topics. */
 function miniWhy(rec: Recommendation, view: RecView): string {
-  const { learn, speak } = reasonsOf(rec, view);
-  const l = learn.slice(0, 2);
-  const s = speak.slice(0, l.length ? 1 : 2);
-  return [l.length ? `Learn: ${l.join(', ')}` : '', s.length ? `You speak: ${s.join(', ')}` : ''].filter(Boolean).join(' · ');
+  const learn = reasonsOf(rec, view).slice(0, 2);
+  return learn.length ? `Learn: ${learn.join(', ')}` : '';
 }
 
 /** A talk without the suggestion-only fields, for the shell's Interested list. */
@@ -261,7 +243,7 @@ export function ForYouScreen({
   return (
     <div class="pp-screen">
       <div class="pp-progress-host">
-        <p class="pp-lede">Talks picked from your topics. Ended talks and talks you marked are left out.</p>
+        <p class="pp-lede">Talks picked from what you want to learn. Ended talks and talks you marked are left out.</p>
         <RefreshBar on={view.refreshing} />
       </div>
       {state.kind === 'loading' && <p class="pp-hint pp-pad">Finding talks…</p>}

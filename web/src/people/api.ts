@@ -138,9 +138,7 @@ export function fetchCircleMembers(slug: string, talkId: string, signal?: AbortS
 export interface RecommendationBody {
   event: string;
   learn_topics: string[];
-  speak_topics: string[];
   interests: string;
-  expertise: string;
   interested_talk_ids: string[];
   size: number;
 }

@@ -178,11 +178,11 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
         />
         <TextField
           id="pp-interests"
-          label="Anything else? (optional)"
+          label="What do you want to learn, or what problem are you working on?"
           value={profile.interests}
           max={500}
           multiline
-          placeholder="For example: running Postgres on Kubernetes"
+          placeholder="For example: our GPU inference costs are too high"
           onInput={(v) => update({ interests: v })}
         />
       </section>

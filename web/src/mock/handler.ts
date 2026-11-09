@@ -226,11 +226,10 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
   if (path === '/api/recommendations' && method === 'POST') {
     const conf = conferenceOf(body.event);
     const learn = (body.learn_topics as string[]) ?? [];
-    const speak = (body.speak_topics as string[]) ?? [];
-    const text = `${body.interests ?? ''} ${body.expertise ?? ''}`.trim();
-    if (!learn.length && !speak.length && !text) return { results: [], needs_profile: true };
+    const text = `${body.interests ?? ''}`.trim();
+    if (!learn.length && !text) return { results: [], needs_profile: true };
     const skip = new Set((body.interested_talk_ids as string[]) ?? []);
-    const wanted = [...learn, ...speak];
+    const wanted = learn;
     const results = MOCK_TALKS.filter(
       (t) => t.conference === conf.slug && t.kind === 'talk' && Date.parse(t.end) > Date.now() && !skip.has(t.talk_id),
     )
@@ -239,7 +238,11 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       .map((t) => ({
         ...strip(t),
         evidence: t.abstract.slice(0, 160),
-        why: { topics: (t.topics ?? []).filter((tp) => wanted.includes(tp.topic_id)).map((tp) => tp.label), passage: null },
+        why: {
+          topics: (t.topics ?? []).filter((tp) => wanted.includes(tp.topic_id)).map((tp) => tp.label),
+          learn_topics: (t.topics ?? []).filter((tp) => wanted.includes(tp.topic_id)).map((tp) => tp.label),
+          passage: null,
+        },
         circle_count: MOCK_PEOPLE.filter((p) => p.shared_talk_ids.includes(t.talk_id)).length,
       }));
     return { results };

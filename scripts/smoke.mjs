@@ -761,7 +761,7 @@ try {
   });
 
   await check('p3: a chips-only profile gets people and talk suggestions', async () => {
-    const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: LEARN, speak_topics: [], interests: '', expertise: '', interested_talk_ids: [] }, { label: 'recs' });
+    const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: LEARN, interests: '', interested_talk_ids: [] }, { label: 'recs' });
     const ok = (matchesA?.length ?? 0) > 0 && recs.status === 200 && (recs.json.results ?? []).length > 0;
     report(ok, 'p3: a chips-only profile gets people and talk suggestions', `${matchesA?.length ?? 0} people, ${(recs.json.results ?? []).length} talks`);
   });
@@ -941,23 +941,19 @@ try {
     report(problems.length === 0, 'r2: For you does not cross conferences', problems.length ? problems.slice(0, 3).join('; ') : `${EXTRA.length} conferences checked`);
   });
 
-  // The reasons on a suggestion must name only topics the request sent. A user who removes
-  // Kubernetes from their profile must never be told a talk matched on it.
+  // For you is learn-only. The reasons on a suggestion must name only learn topics the request
+  // sent. A user who removes Kubernetes from their profile must never be told a talk matched on
+  // it, and a topic the user can speak to is never a signal and never named.
   const labelOf = new Map((topicsBySlug.get(PRIMARY) ?? []).map((t) => [t.topic_id, t.label]));
-  const ask = (learn, speak) => api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: learn, speak_topics: speak, interests: '', expertise: '', interested_talk_ids: [], size: 50 }, { label: 'recs' });
-  const whyProblems = (results, learn, speak) => {
-    const labels = (ids) => new Set(ids.map((id) => labelOf.get(id)));
-    const learnSet = labels(learn);
-    const speakSet = labels(speak);
-    const inSet = (list, set) => (list ?? []).every((l) => set.has(l));
+  const ask = (learn, speak = [], extra = {}) => api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: learn, speak_topics: speak, interests: '', expertise: '', interested_talk_ids: [], size: 50, ...extra }, { label: 'recs' });
+  const whyProblems = (results, learn) => {
+    const learnSet = new Set(learn.map((id) => labelOf.get(id)));
     const out = [];
     for (const r of results) {
       const w = r.why ?? {};
-      if (!inSet(w.topics, new Set([...learnSet, ...speakSet]))) out.push(`"${r.title}" names a topic that was not sent: ${(w.topics ?? []).join(', ')}`);
-      if (!inSet(w.learn_topics, learnSet)) out.push(`"${r.title}" lists a learn topic that was not sent`);
-      if (!inSet(w.speak_topics, speakSet)) out.push(`"${r.title}" lists a speak topic that was not sent`);
-      if ((w.speak_topics ?? []).some((l) => (w.learn_topics ?? []).includes(l))) out.push(`"${r.title}" repeats a topic in both sets`);
-      if (JSON.stringify(w.topics) !== JSON.stringify([...(w.learn_topics ?? []), ...(w.speak_topics ?? [])])) out.push(`"${r.title}" has a why.topics that is not learn then speak`);
+      if (!(w.learn_topics ?? []).every((l) => learnSet.has(l))) out.push(`"${r.title}" lists a learn topic that was not sent`);
+      if (JSON.stringify(w.topics) !== JSON.stringify(w.learn_topics)) out.push(`"${r.title}" has a why.topics that is not equal to learn_topics`);
+      if ('speak_topics' in w) out.push(`"${r.title}" returns speak_topics in why`);
     }
     return out;
   };
@@ -968,12 +964,12 @@ try {
       return;
     }
     const learn = ['ai', 'agents'];
-    const r = await ask(learn, []);
+    const r = await ask(learn);
     if (r.status !== 200) throw new Error(`status ${r.status}`);
     const results = r.json.results ?? [];
-    const problems = whyProblems(results, learn, []);
+    const problems = whyProblems(results, learn);
     for (const x of results) {
-      const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? []), ...(x.why?.speak_topics ?? [])];
+      const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? [])];
       if (named.some((l) => /kubernetes/i.test(l))) problems.push(`"${x.title}" names Kubernetes`);
     }
     // The check has teeth only when some returned talk really carries the kubernetes topic.
@@ -983,7 +979,7 @@ try {
     report(unique.length === 0, 'r3: a request without kubernetes never names kubernetes in why', unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions, none name Kubernetes`);
   });
 
-  await check('r4: the topics in why are a subset of the request, split by set', async () => {
+  await check('r4: the topics in why are a subset of the learn topics sent, with no speak topics', async () => {
     const have = (ids) => ids.filter((id) => labelOf.has(id));
     const cases = [
       [have(['ai', 'agents']), have(['kubernetes'])],
@@ -991,9 +987,9 @@ try {
       [have(['ebpf', 'gpu']), have(['llm', 'kubernetes'])],
       [have(['kubernetes', 'ai']), have(['kubernetes'])],
       [[...labelOf.keys()].slice(0, 5), [...labelOf.keys()].slice(3, 8)],
-    ].filter(([learn, speak]) => learn.length + speak.length > 0);
+    ].filter(([learn]) => learn.length > 0);
     const problems = [];
-    let sawSpeak = false;
+    let sawLearn = false;
     for (const [learn, speak] of cases) {
       const r = await ask(learn, speak);
       if (r.status !== 200) {
@@ -1001,12 +997,54 @@ try {
         continue;
       }
       const results = r.json.results ?? [];
-      problems.push(...whyProblems(results, learn, speak));
-      if (results.some((x) => (x.why?.speak_topics ?? []).length > 0)) sawSpeak = true;
+      problems.push(...whyProblems(results, learn));
+      if (results.some((x) => (x.why?.learn_topics ?? []).length > 0)) sawLearn = true;
     }
-    if (!sawSpeak) problems.push('no suggestion named a topic from the speak set, so the split is untested');
+    if (!sawLearn) problems.push('no suggestion named a learn topic, so the check proves nothing');
     const unique = [...new Set(problems)];
-    report(unique.length === 0, 'r4: the topics in why are a subset of the request, split by set', unique.length ? unique.slice(0, 3).join('; ') : `${cases.length} requests checked`);
+    report(unique.length === 0, 'r4: the topics in why are a subset of the learn topics sent, with no speak topics', unique.length ? unique.slice(0, 3).join('; ') : `${cases.length} requests checked`);
+  });
+
+  await check('r5: a request with only speak_topics and expertise needs a profile and returns nothing', async () => {
+    const speak = ['kubernetes', 'ai'].filter((id) => labelOf.has(id));
+    const r = await ask([], speak, { expertise: 'I run Kubernetes clusters and teach operators' });
+    const ok = r.status === 200 && r.json.needs_profile === true && (r.json.results ?? []).length === 0;
+    report(ok, 'r5: a request with only speak_topics and expertise needs a profile and returns nothing', `status ${r.status}, needs_profile ${r.json.needs_profile}, ${(r.json.results ?? []).length} results`);
+  });
+
+  await check('r6: speak topics change neither the ranking nor the reasons', async () => {
+    if (!labelOf.has('kubernetes') || !labelOf.has('ai')) {
+      skip('r6: speak topics change neither the ranking nor the reasons', 'the conference has no kubernetes or ai topic');
+      return;
+    }
+    const withSpeak = await ask(['ai'], ['kubernetes'], { expertise: 'Kubernetes operators and controllers', size: 10 });
+    const without = await ask(['ai'], [], { size: 10 });
+    if (withSpeak.status !== 200 || without.status !== 200) throw new Error(`status ${withSpeak.status}/${without.status}`);
+    const a = (withSpeak.json.results ?? []).map((x) => x.talk_id);
+    const b = (without.json.results ?? []).map((x) => x.talk_id);
+    const problems = [];
+    if (!a.length) problems.push('no results');
+    if (JSON.stringify(a) !== JSON.stringify(b)) problems.push('the top results differ when speak_topics is sent');
+    for (const x of withSpeak.json.results ?? []) {
+      const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? [])];
+      if (named.some((l) => /kubernetes/i.test(l)) || 'speak_topics' in (x.why ?? {})) problems.push(`"${x.title}" shows kubernetes in why`);
+    }
+    report(problems.length === 0, 'r6: speak topics change neither the ranking nor the reasons', problems.length ? problems.slice(0, 3).join('; ') : `${a.length} results identical with and without speak_topics`);
+  });
+
+  await check('r7: the learn and problems text alone returns talks with a relevant passage', async () => {
+    const r = await ask([], [], { interests: 'our GPU inference costs are too high', size: 10 });
+    if (r.status !== 200) throw new Error(`status ${r.status}`);
+    const results = r.json.results ?? [];
+    const relevant = /gpu|inference|cost|efficien|scal|latency|throughput|serving|accelerat|resource|utiliz|llm|model/i;
+    const top = results.slice(0, 5);
+    const withPassage = top.filter((x) => x.why?.passage && relevant.test(x.why.passage));
+    const problems = [];
+    if (r.json.needs_profile) problems.push('needs_profile was returned for a request with text');
+    if (results.length === 0) problems.push('no results');
+    if (top.length && withPassage.length < Math.min(3, top.length)) problems.push(`only ${withPassage.length} of the top ${top.length} have a relevant passage`);
+    if (results.some((x) => (x.why?.learn_topics ?? []).length > 0)) problems.push('a topic was named although no topic was sent');
+    report(problems.length === 0, 'r7: the learn and problems text alone returns talks with a relevant passage', problems.length ? problems.join('; ') : `${results.length} talks, first "${results[0].title}"`);
   });
 } catch (err) {
   report(false, 'people checks', err.message);

@@ -132,11 +132,10 @@ export function topicsFor(p: Profile | null, slug: string): { learn: TopicRef[];
   return p?.topics[slug] ?? { learn: [], speak: [] };
 }
 
-/** True when the profile has anything that talk suggestions can use. */
+/** True when the profile has anything that talk suggestions can use: what the user wants to learn. */
 export function hasProfileInput(p: Profile | null, slug: string): boolean {
   if (!p) return false;
-  const t = topicsFor(p, slug);
-  return t.learn.length + t.speak.length > 0 || !!p.interests.trim() || !!p.expertise.trim();
+  return topicsFor(p, slug).learn.length > 0 || !!p.interests.trim();
 }
 
 const EMPTY_VIS: Visibility = {

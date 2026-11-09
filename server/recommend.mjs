@@ -4,20 +4,20 @@
 // matching and ranking in one rrf retriever over the talks of one conference. This module builds
 // the query, validates input, and reshapes hits in the order Elasticsearch returned them.
 //
-// Retrievers, each skipped when its input is empty:
+// Talks are recommended only from what the user wants to learn or the problems they face. There
+// are two retrievers, each skipped when its input is empty:
 //   learn_topics  against the talk "topics" field   weight 1
-//   interests     against the talk "semantic" field weight 1
-//   speak_topics  against the talk "topics" field   weight 0.5
-//   expertise     against the talk "semantic" field weight 0.5
+//   interests     against the talk "semantic" field weight 1 (the learn and problems free text)
 //
-// Per-retriever weights are supported by the rrf retriever of Elasticsearch 9.5.6 through the
-// documented form "retrievers": [ { "retriever": { ... }, "weight": 2 } ]. A talk that matches
-// more of a retriever's topics scores higher in that retriever, because each topic is its own
+// What a person can speak to is never a signal for talks. The request still accepts speak_topics
+// and expertise so that cached clients keep working, but both are ignored.
+//
+// A talk that matches more of the learn topics scores higher, because each topic is its own
 // constant-score clause.
 //
-// Reasons: why.learn_topics and why.speak_topics name the topics of this request that the talk has,
-// by set (a speak-only topic is not repeated when it is also in learn). why.topics is their
-// concatenation, kept for one release. Nothing outside the request is ever named.
+// Reasons: why.learn_topics names the learn topics of this request that the talk has, and
+// why.topics is kept equal to it for clients that predate the split. Nothing outside the request
+// is ever named, and speak topics are never named.
 //
 // Filter: the conference, kind talk, end in the future, and not one of interested_talk_ids.
 // The same filter is carried by the semantic (knn) retrievers so it applies before the
@@ -230,12 +230,14 @@ function validate(body) {
     if (!Number.isInteger(body.size) || body.size < 1 || body.size > 50) throw new BadRequest('size must be an integer from 1 to 50');
     size = body.size;
   }
+  // speak_topics and expertise are accepted and ignored: talks are recommended from what the user
+  // wants to learn only. They are still checked, so a malformed value is a 400 as it always was.
+  validTopicIds(body.speak_topics, 'speak_topics');
+  validText(body.expertise, 'expertise');
   return {
     event: validEvent(body.event),
     learn: validTopicIds(body.learn_topics, 'learn_topics'),
-    speak: validTopicIds(body.speak_topics, 'speak_topics'),
     interests: validText(body.interests, 'interests'),
-    expertise: validText(body.expertise, 'expertise'),
     interestedIds: validTalkIds(body.interested_talk_ids, 'interested_talk_ids'),
     size,
   };
@@ -289,14 +291,12 @@ function buildSearch(p) {
   const weighted = [];
   if (p.learn.length) weighted.push({ retriever: topicRetriever(p.learn), weight: 1 });
   if (p.interests) weighted.push({ retriever: semanticRetriever(p.interests, filter), weight: 1 });
-  if (p.speak.length) weighted.push({ retriever: topicRetriever(p.speak), weight: 0.5 });
-  if (p.expertise) weighted.push({ retriever: semanticRetriever(p.expertise, filter), weight: 0.5 });
   const body = {
     retriever: { rrf: { retrievers: weighted, filter, rank_window_size: RANK_WINDOW } },
     size: p.size,
     _source: ['talk_id', 'conference', 'title', 'abstract', 'speakers', 'room', 'start', 'end', 'track', 'level', 'tags', 'slides_url', 'url', 'topics', 'speaker_profiles'],
   };
-  if (p.interests || p.expertise) {
+  if (p.interests) {
     body.highlight = { encoder: 'default', pre_tags: [''], post_tags: [''], fields: { semantic: { number_of_fragments: 2 } } };
   }
   return body;
@@ -359,8 +359,7 @@ async function recommend(p) {
   const hits = json.hits?.hits ?? [];
   // The reasons are built only from the topics of this request, never from anything remembered or
   // from the talk's other topics, so a topic the user has removed can never be named.
-  const speakOnly = p.speak.filter((t) => !p.learn.includes(t));
-  const topicIds = [...new Set([...p.learn, ...speakOnly, ...hits.flatMap((h) => h._source?.topics ?? [])])];
+  const topicIds = [...new Set([...p.learn, ...hits.flatMap((h) => h._source?.topics ?? [])])];
   const ids = hits.map((h) => String(h._source?.talk_id ?? h._id));
   const [labels, counts] = await Promise.all([topicLabels(p.event, topicIds), circleCounts(p.event, ids)]);
 
@@ -370,7 +369,6 @@ async function recommend(p) {
     const passage = passageFor(hit);
     const named = (ids) => ids.filter((t) => talkTopics.includes(t) && labels.has(t)).map((t) => labels.get(t));
     const learnMatched = named(p.learn);
-    const speakMatched = named(speakOnly);
     const talkId = String(s.talk_id ?? hit._id);
     return {
       talk_id: talkId,
@@ -388,8 +386,8 @@ async function recommend(p) {
       evidence: escapeHtml(passage ?? trimText(s.abstract || s.title || '', EVIDENCE_MAX)),
       topics: talkTopics.filter((t) => labels.has(t)).map((t) => ({ topic_id: t, label: labels.get(t) })),
       speaker_profiles: s.speaker_profiles ?? [],
-      // topics is learn_topics then speak_topics, kept for clients that predate the split.
-      why: { topics: [...learnMatched, ...speakMatched], learn_topics: learnMatched, speak_topics: speakMatched, passage },
+      // topics equals learn_topics, kept for clients that predate the split. Speak topics are never named.
+      why: { topics: learnMatched, learn_topics: learnMatched, passage },
       circle_count: counts[talkId] ?? 0,
     };
   });
@@ -408,7 +406,7 @@ export async function handleRecommendationsApi(req, res, url) {
   if (body === undefined) return true;
   try {
     const params = validate(body);
-    if (!params.learn.length && !params.speak.length && !params.interests && !params.expertise) {
+    if (!params.learn.length && !params.interests) {
       sendJson(res, 200, { results: [], needs_profile: true });
       return true;
     }
