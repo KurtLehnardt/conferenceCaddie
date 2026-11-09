@@ -1,0 +1,602 @@
+import { useEffect, useRef } from 'preact/hooks';
+import {
+  Bookmark,
+  CalendarPlus,
+  Check,
+  ChevronDown,
+  CircleExclamationPoint,
+  Clock,
+  ExternalLink,
+  MapPin,
+  Presentation,
+  Search,
+  SearchX,
+  SlidersHorizontal,
+  TriangleExclamationPoint,
+  X,
+} from 'lucide-preact';
+import type { Facets, FacetBucket, SavedTalk, SearchFilters, SearchResponse, SearchResult } from '../types';
+import { EMPTY_FILTERS } from '../types';
+import { Evidence } from '../lib/evidence';
+import { formatDay, formatWhen, overlaps } from '../lib/time';
+import { useFocusTrap } from '../lib/focus';
+import { Segmented } from './common';
+
+export type SheetSection = 'day' | 'time' | 'track' | 'level' | 'slides' | 'sponsor';
+
+export function activeFilterCount(f: SearchFilters): number {
+  return (
+    (f.day ? 1 : 0) +
+    (f.start_after || f.start_before ? 1 : 0) +
+    f.track.length +
+    f.level.length +
+    (f.has_slides !== null ? 1 : 0) +
+    (f.hide_sponsor ? 1 : 0)
+  );
+}
+
+type TimeValue = 'any' | 'morning' | 'afternoon';
+
+function timeValue(f: SearchFilters): TimeValue {
+  if (f.start_before === '12:00' && !f.start_after) return 'morning';
+  if (f.start_after === '12:00' && !f.start_before) return 'afternoon';
+  return 'any';
+}
+
+function withTime(f: SearchFilters, v: TimeValue): SearchFilters {
+  if (v === 'morning') return { ...f, start_after: null, start_before: '12:00' };
+  if (v === 'afternoon') return { ...f, start_after: '12:00', start_before: null };
+  return { ...f, start_after: null, start_before: null };
+}
+
+function groupLabel(name: string, values: string[]): string {
+  if (!values.length) return name;
+  if (values.length === 1) return values[0];
+  return `${name} · ${values.length}`;
+}
+
+/* ---------- Search field ---------- */
+
+export function SearchField({
+  value,
+  onInput,
+  onSubmit,
+  loading,
+}: {
+  value: string;
+  onInput: (v: string) => void;
+  onSubmit: () => void;
+  loading: boolean;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <div class="search-bar">
+      <form
+        class="search-field"
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          input.current?.blur();
+          onSubmit();
+        }}
+      >
+        <Search class="search-icon" size={20} aria-hidden="true" />
+        <input
+          ref={input}
+          type="search"
+          enterkeyhint="search"
+          inputMode="search"
+          autoComplete="off"
+          autoCorrect="off"
+          spellcheck={false}
+          maxLength={200}
+          placeholder="Search talks, topics, speakers"
+          aria-label="Search talks"
+          value={value}
+          onInput={(e) => onInput((e.target as HTMLInputElement).value)}
+        />
+        {value && (
+          <button
+            type="button"
+            class="icon-btn search-clear"
+            aria-label="Clear search"
+            onClick={() => {
+              onInput('');
+              input.current?.focus();
+            }}
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        )}
+      </form>
+      <div class={`progress${loading ? ' is-active' : ''}`} aria-hidden="true" />
+    </div>
+  );
+}
+
+/* ---------- Chip row ---------- */
+
+function Chip({
+  label,
+  active,
+  onOpen,
+  onClear,
+  clearLabel,
+  dropdown,
+}: {
+  label: string;
+  active: boolean;
+  onOpen: () => void;
+  onClear?: () => void;
+  clearLabel?: string;
+  dropdown?: boolean;
+}) {
+  return (
+    <span class={`chip${active ? ' is-active' : ''}`}>
+      <button type="button" class="chip-main" onClick={onOpen} aria-pressed={dropdown ? undefined : active}>
+        {!dropdown && active && <Check size={16} aria-hidden="true" />}
+        <span>{label}</span>
+        {dropdown && !active && <ChevronDown size={16} aria-hidden="true" />}
+      </button>
+      {active && onClear && (
+        <button type="button" class="chip-clear" aria-label={clearLabel} onClick={onClear}>
+          <X size={16} aria-hidden="true" />
+        </button>
+      )}
+    </span>
+  );
+}
+
+export function ChipRow({
+  filters,
+  onChange,
+  onOpenSheet,
+}: {
+  filters: SearchFilters;
+  onChange: (f: SearchFilters) => void;
+  onOpenSheet: (section?: SheetSection) => void;
+}) {
+  const count = activeFilterCount(filters);
+  const time = timeValue(filters);
+  return (
+    <div class="chip-row" role="toolbar" aria-label="Filters">
+      <span class={`chip${count ? ' is-active' : ''}`}>
+        <button
+          type="button"
+          class="chip-main"
+          onClick={() => onOpenSheet()}
+          aria-label={count ? `Filters, ${count} active` : 'Filters'}
+        >
+          <SlidersHorizontal size={16} aria-hidden="true" />
+          <span>Filters</span>
+          {count > 0 && (
+            <span class="badge" aria-hidden="true">
+              {count}
+            </span>
+          )}
+        </button>
+      </span>
+      <Chip
+        dropdown
+        label={filters.day ? formatDay(filters.day) : 'Day'}
+        active={!!filters.day}
+        onOpen={() => onOpenSheet('day')}
+        onClear={() => onChange({ ...filters, day: null })}
+        clearLabel="Clear day filter"
+      />
+      <Chip
+        dropdown
+        label={time === 'morning' ? 'Morning' : time === 'afternoon' ? 'Afternoon' : 'Time'}
+        active={time !== 'any'}
+        onOpen={() => onOpenSheet('time')}
+        onClear={() => onChange(withTime(filters, 'any'))}
+        clearLabel="Clear time filter"
+      />
+      <Chip
+        dropdown
+        label={groupLabel('Track', filters.track)}
+        active={filters.track.length > 0}
+        onOpen={() => onOpenSheet('track')}
+        onClear={() => onChange({ ...filters, track: [] })}
+        clearLabel="Clear track filter"
+      />
+      <Chip
+        dropdown
+        label={groupLabel('Level', filters.level)}
+        active={filters.level.length > 0}
+        onOpen={() => onOpenSheet('level')}
+        onClear={() => onChange({ ...filters, level: [] })}
+        clearLabel="Clear level filter"
+      />
+      <Chip
+        label={filters.has_slides === false ? 'No slides' : 'Has slides'}
+        active={filters.has_slides !== null}
+        onOpen={() => onChange({ ...filters, has_slides: filters.has_slides === null ? true : null })}
+      />
+      <Chip
+        label="Hide sponsor content"
+        active={filters.hide_sponsor}
+        onOpen={() => onChange({ ...filters, hide_sponsor: !filters.hide_sponsor })}
+      />
+      {count > 0 && (
+        <button type="button" class="chip-clear-all" onClick={() => onChange(EMPTY_FILTERS)}>
+          Clear all
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Filter sheet ---------- */
+
+/** Facet options with zero-count values hidden unless they are selected. */
+function visible<T>(buckets: FacetBucket<T>[], selected: T[]): FacetBucket<T>[] {
+  const shown = buckets.filter((b) => b.count > 0 || selected.includes(b.value));
+  for (const s of selected) {
+    if (!shown.some((b) => b.value === s)) shown.push({ value: s, count: 0 });
+  }
+  return shown;
+}
+
+export function FilterSheet({
+  open,
+  section,
+  filters,
+  facets,
+  total,
+  onChange,
+  onClose,
+}: {
+  open: boolean;
+  section?: SheetSection;
+  filters: SearchFilters;
+  facets: Facets | null;
+  total: number | null;
+  onChange: (f: SearchFilters) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useFocusTrap(ref, open, onClose);
+
+  useEffect(() => {
+    if (!open || !section) return;
+    const el = ref.current?.querySelector<HTMLElement>(`[data-section="${section}"]`);
+    el?.scrollIntoView({ block: 'start' });
+    el?.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true });
+  }, [open, section]);
+
+  if (!open) return null;
+  const days = visible(facets?.day ?? [], filters.day ? [filters.day] : []);
+  const tracks = visible(facets?.track ?? [], filters.track);
+  const levels = visible(facets?.level ?? [], filters.level);
+  const slides = visible(facets?.has_slides ?? [], filters.has_slides === null ? [] : [filters.has_slides]);
+  const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+  const count = activeFilterCount(filters);
+
+  return (
+    <div class="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" ref={ref} tabIndex={-1}>
+        <div class="sheet-handle" aria-hidden="true" />
+        <header class="sheet-header">
+          <h2 id="sheet-title">Filters</h2>
+          <button type="button" class="icon-btn" aria-label="Close filters" onClick={onClose}>
+            <X size={22} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div class="sheet-body">
+          <fieldset class="sheet-section" data-section="day">
+            <legend>Day</legend>
+            <label class="option">
+              <input
+                type="radio"
+                name="day"
+                checked={!filters.day}
+                onChange={() => onChange({ ...filters, day: null })}
+              />
+              <span class="option-label">Any day</span>
+            </label>
+            {days.map((d) => (
+              <label class="option" key={d.value}>
+                <input
+                  type="radio"
+                  name="day"
+                  checked={filters.day === d.value}
+                  onChange={() => onChange({ ...filters, day: d.value })}
+                />
+                <span class="option-label">{formatDay(d.value)}</span>
+                <span class="option-count">{d.count}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <fieldset class="sheet-section" data-section="time">
+            <legend>Time</legend>
+            <Segmented
+              label="Time of day"
+              value={timeValue(filters)}
+              onChange={(v) => onChange(withTime(filters, v))}
+              options={[
+                { value: 'any', label: 'Any time' },
+                { value: 'morning', label: 'Morning' },
+                { value: 'afternoon', label: 'Afternoon' },
+              ]}
+            />
+          </fieldset>
+
+          <fieldset class="sheet-section" data-section="track">
+            <legend>Track</legend>
+            {tracks.length === 0 && <p class="option-empty">No tracks in these results.</p>}
+            {tracks.map((t) => (
+              <label class="option" key={t.value}>
+                <input
+                  type="checkbox"
+                  checked={filters.track.includes(t.value)}
+                  onChange={() => onChange({ ...filters, track: toggle(filters.track, t.value) })}
+                />
+                <span class="option-label">{t.value}</span>
+                <span class="option-count">{t.count}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <fieldset class="sheet-section" data-section="level">
+            <legend>Level</legend>
+            {levels.length === 0 && <p class="option-empty">No levels in these results.</p>}
+            {levels.map((l) => (
+              <label class="option" key={l.value}>
+                <input
+                  type="checkbox"
+                  checked={filters.level.includes(l.value)}
+                  onChange={() => onChange({ ...filters, level: toggle(filters.level, l.value) })}
+                />
+                <span class="option-label">{l.value}</span>
+                <span class="option-count">{l.count}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <fieldset class="sheet-section" data-section="slides">
+            <legend>Slides</legend>
+            <label class="option">
+              <input
+                type="radio"
+                name="slides"
+                checked={filters.has_slides === null}
+                onChange={() => onChange({ ...filters, has_slides: null })}
+              />
+              <span class="option-label">Any</span>
+            </label>
+            {slides.map((s) => (
+              <label class="option" key={String(s.value)}>
+                <input
+                  type="radio"
+                  name="slides"
+                  checked={filters.has_slides === s.value}
+                  onChange={() => onChange({ ...filters, has_slides: s.value })}
+                />
+                <span class="option-label">{s.value ? 'Has slides' : 'No slides'}</span>
+                <span class="option-count">{s.count}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <fieldset class="sheet-section" data-section="sponsor">
+            <legend>Sponsor content</legend>
+            <label class="option option-switch">
+              <span class="option-label">Hide sponsor content</span>
+              <input
+                type="checkbox"
+                role="switch"
+                class="switch"
+                checked={filters.hide_sponsor}
+                onChange={() => onChange({ ...filters, hide_sponsor: !filters.hide_sponsor })}
+              />
+            </label>
+          </fieldset>
+        </div>
+
+        <footer class="sheet-footer">
+          <button type="button" class="btn btn-text" disabled={!count} onClick={() => onChange(EMPTY_FILTERS)}>
+            Clear all
+          </button>
+          <button type="button" class="btn btn-primary" onClick={onClose}>
+            {total === null ? 'Show talks' : `Show ${total} ${total === 1 ? 'talk' : 'talks'}`}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Result card ---------- */
+
+export function ResultCard({
+  result,
+  saved,
+  clash,
+  onToggle,
+}: {
+  result: SearchResult;
+  saved: boolean;
+  clash: boolean;
+  onToggle: () => void;
+}) {
+  const tags = [result.track, result.level, ...result.flags].filter((t) => t && t !== 'Not specified');
+  return (
+    <article class={`card${clash ? ' is-clash' : ''}`}>
+      <div class="card-head">
+        <h3 class="card-title">{result.title}</h3>
+        <button
+          type="button"
+          class={`icon-btn bookmark${saved ? ' is-on' : ''}`}
+          aria-pressed={saved}
+          aria-label={`Save ${result.title}`}
+          onClick={onToggle}
+        >
+          <Bookmark size={22} fill={saved ? 'currentColor' : 'none'} aria-hidden="true" />
+        </button>
+      </div>
+      {result.speakers.length > 0 && <p class="card-speakers">{result.speakers.join(', ')}</p>}
+      <p class="card-meta">
+        <span class="meta-item">
+          <Clock size={16} aria-hidden="true" />
+          {formatWhen(result.start, result.end)}
+        </span>
+        {result.room && (
+          <span class="meta-item">
+            <MapPin size={16} aria-hidden="true" />
+            {result.room}
+          </span>
+        )}
+      </p>
+      {tags.length > 0 && (
+        <ul class="tags" aria-label="Details">
+          {tags.map((t) => (
+            <li class="tag" key={t}>
+              {t}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p class="card-evidence">
+        <Evidence text={result.evidence} />
+      </p>
+      {clash && !saved && (
+        <p class="card-clash">
+          <TriangleExclamationPoint size={16} aria-hidden="true" />
+          Overlaps a talk in your agenda
+        </p>
+      )}
+      <div class="card-links">
+        <a href={result.url} target="_blank" rel="noopener noreferrer" class="link">
+          <ExternalLink size={16} aria-hidden="true" />
+          Session page
+        </a>
+        {result.slides_url && (
+          <a href={result.slides_url} target="_blank" rel="noopener noreferrer" class="link">
+            <Presentation size={16} aria-hidden="true" />
+            Slides
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div class="card skeleton" aria-hidden="true">
+      <div class="sk sk-title" />
+      <div class="sk sk-line sk-short" />
+      <div class="sk sk-line" />
+      <div class="sk sk-line" />
+      <div class="sk sk-line sk-mid" />
+    </div>
+  );
+}
+
+/* ---------- Results ---------- */
+
+export function Results({
+  data,
+  browse,
+  loading,
+  error,
+  saved,
+  building,
+  filtersActive,
+  onRetry,
+  onToggle,
+  onBuild,
+  onClearFilters,
+}: {
+  data: SearchResponse | null;
+  browse: boolean;
+  loading: boolean;
+  error: string | null;
+  saved: SavedTalk[];
+  building: boolean;
+  filtersActive: boolean;
+  onRetry: () => void;
+  onToggle: (r: SearchResult) => void;
+  onBuild: () => void;
+  onClearFilters: () => void;
+}) {
+  if (error && !data) {
+    return (
+      <div class="state">
+        <CircleExclamationPoint size={40} class="state-icon" aria-hidden="true" />
+        <p class="state-title">Something went wrong</p>
+        <p class="state-body">{error}</p>
+        <button type="button" class="btn btn-tonal" onClick={onRetry}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div class="results" aria-busy="true" aria-label="Loading talks">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    );
+  }
+
+  const savedIds = new Set(saved.map((s) => s.talk_id));
+  const n = data.total;
+  const countLabel = browse ? `All talks · ${n}` : `${n} ${n === 1 ? 'talk' : 'talks'}`;
+
+  return (
+    <div aria-busy={loading}>
+      {error && (
+        <div class="banner" role="alert">
+          <CircleExclamationPoint size={18} aria-hidden="true" />
+          <span>{error}</span>
+          <button type="button" class="btn btn-text btn-small" onClick={onRetry}>
+            Retry
+          </button>
+        </div>
+      )}
+      <div class="results-header">
+        <p class="results-count" aria-live="polite">
+          {countLabel}
+        </p>
+        <button
+          type="button"
+          class="btn btn-tonal btn-small"
+          onClick={onBuild}
+          disabled={building || data.results.length === 0}
+        >
+          <CalendarPlus size={18} aria-hidden="true" />
+          {building ? 'Building…' : 'Build my agenda'}
+        </button>
+      </div>
+      {data.results.length === 0 ? (
+        <div class="state">
+          <SearchX size={40} class="state-icon" aria-hidden="true" />
+          <p class="state-body">No talks match. Try removing a filter.</p>
+          {filtersActive && (
+            <button type="button" class="btn btn-tonal" onClick={onClearFilters}>
+              Clear all filters
+            </button>
+          )}
+        </div>
+      ) : (
+        <div class="results">
+          {data.results.map((r) => (
+            <ResultCard
+              key={r.talk_id}
+              result={r}
+              saved={savedIds.has(r.talk_id)}
+              clash={!savedIds.has(r.talk_id) && saved.some((s) => overlaps(s, r))}
+              onToggle={() => onToggle(r)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
