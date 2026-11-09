@@ -27,21 +27,24 @@ if (!ADMIN) {
   process.exit(1);
 }
 
-// Inference privileges let a key run semantic queries and index into semantic_text fields
-// with the default endpoint. They cannot create or change inference endpoints.
+// Neither key holds an inference privilege. Indexing into semantic_text fields and knn queries
+// with a query_vector_builder work without one, because Elasticsearch runs that inference itself.
+// monitor_inference would also allow calling the cluster's chat, completion and rerank endpoints
+// directly, and it cannot be limited to one endpoint, so it is left out. The verify step checks
+// that both keys are refused on the inference API.
 const KEYS = [
   {
     user: 'caddie-readonly-svc',
     role: 'caddie_readonly',
     secret: 'caddie-es-readonly',
-    cluster: ['monitor_inference'],
+    cluster: [],
     indices: [{ names: ['caddie-talks*', 'caddie-conferences*', 'caddie-topics*'], privileges: ['read', 'view_index_metadata'] }],
   },
   {
     user: 'caddie-people-svc',
     role: 'caddie_people',
     secret: 'caddie-es-people',
-    cluster: ['monitor_inference'],
+    cluster: [],
     indices: [{ names: ['caddie-people*'], privileges: ['read', 'write', 'view_index_metadata'] }],
   },
 ];
@@ -164,6 +167,16 @@ async function verify(readKey, peopleKey) {
   check(peopleReadTalks.status === 403, 'people key: cannot read caddie-talks');
   const peopleWriteTalks = await es('POST', '/caddie-talks/_delete_by_query', nothing, P);
   check(peopleWriteTalks.status === 403, 'people key: cannot write caddie-talks');
+
+  // Neither key may list or call inference endpoints. Only the listing is requested, so no
+  // endpoint is ever run, and has_privileges confirms that a call would be refused too.
+  const inferenceActions = ['monitor_inference', 'cluster:monitor/xpack/inference/post', 'cluster:monitor/xpack/inference/unified'];
+  for (const [label, auth] of [['read key', R], ['people key', P]]) {
+    const list = await es('GET', '/_inference/_all', undefined, auth);
+    check(list.status === 403, `${label}: cannot list inference endpoints`);
+    const priv = await es('POST', '/_security/user/_has_privileges', { cluster: inferenceActions }, auth);
+    check(priv.status === 200 && Object.values(priv.json?.cluster ?? { x: true }).every((v) => v === false), `${label}: cannot call inference endpoints`);
+  }
   return checks.every(Boolean);
 }
 

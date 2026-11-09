@@ -82,6 +82,9 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
   const vis = getVisibility(slug);
   const talkIds = interestedIds(interested);
   const [visBusy, setVisBusy] = useState(false);
+  // The switch shows the requested state while the first save, which can take a second or two,
+  // is running. If the save fails it falls back to the stored state and the message explains why.
+  const [visPending, setVisPending] = useState<boolean | null>(null);
   const [visMessage, setVisMessage] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -105,7 +108,9 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
 
   const toggleVisible = async (on: boolean) => {
     setVisBusy(true);
+    setVisPending(on);
     setVisMessage(await changeVisibility(slug, { open_to_meet: on }));
+    setVisPending(null);
     setVisBusy(false);
   };
 
@@ -237,11 +242,16 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
             type="checkbox"
             role="switch"
             class="switch"
-            checked={vis.open_to_meet}
+            checked={visPending ?? vis.open_to_meet}
             disabled={visBusy}
             onChange={(e) => toggleVisible((e.target as HTMLInputElement).checked)}
           />
         </label>
+        {visBusy && (
+          <p class="pp-status" role="status">
+            Saving…
+          </p>
+        )}
         <p class="pp-notice-text">{VISIBILITY_NOTICE}</p>
         {vis.shared_talk_ids.length > 0 && (
           <div class="pp-actions pp-shared-row">

@@ -15,6 +15,7 @@
     "people:setup": "node scripts/es-setup-people.mjs",
     "people:seed": "node scripts/seed-people.mjs",
     "people:export": "node scripts/export-people.mjs",
+    "people:purge": "node scripts/purge-expired-people.mjs",
     "start": "node server/index.mjs",
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web ci && npm --prefix web run build",

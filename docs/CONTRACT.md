@@ -143,6 +143,7 @@ Every index is versioned behind an alias. The server reads alias names from env:
 
 - A document exists only while `open_to_meet` is true or `shared_talk_ids` is not empty; otherwise the server deletes it.
 - `visible_until` is 23:59:59 on the conference's `end_date` in its `time_zone` (UTC-12 when the zone is unknown). Every people query filters on `event_id` and `visible_until > now`.
+- Expired documents are deleted, not only hidden: the server runs a delete-by-query on `visible_until < now` (and on documents without `visible_until`) when it starts and once an hour, and `npm run people:purge` runs the same delete from the CLI.
 - `secret_hash` is `sha256(secret)` in hex. `text_hash` is `sha256(JSON [about, interests, expertise])`. Writes whose text is unchanged use a Bulk partial `update` without the text fields, so nothing is re-embedded.
 
 ## Indexing rules
@@ -217,7 +218,7 @@ Every request may carry a same-origin `Origin` header or none. Writes and circle
 
 ### Rate limits
 
-In-memory token buckets per instance, keyed by device (`profile_id`) and by client IP (the first `X-Forwarded-For` entry, else the socket address): people writes 20 per minute per device and 60 per IP; matches and circle members 30 per minute per device and 90 per IP; circle counts, recommendations, topics and suggestions 60 per minute per IP.
+In-memory token buckets per instance, keyed by device (`profile_id`) and by client IP: people writes 20 per minute per device and 60 per IP; matches and circle members 30 per minute per device and 90 per IP; search, circle counts, recommendations, topics and suggestions 60 per minute per IP. The client IP is the last `X-Forwarded-For` entry, which Google's front end appends, capped at 45 characters; without the header it is the socket address. Earlier entries are chosen by the client and are ignored.
 
 ### `GET /api/health`
 

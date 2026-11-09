@@ -23,7 +23,7 @@
 //      ES_TOPICS_INDEX (default caddie-topics), ES_PEOPLE_API_KEY and ES_PEOPLE_INDEX (default
 //      caddie-people) for the circle counts.
 
-import { take } from './ratelimit.mjs';
+import { take, clientIp } from './ratelimit.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_API_KEY = process.env.ES_API_KEY || '';
@@ -60,12 +60,6 @@ export function sendJson(res, status, obj, extraHeaders = {}) {
     ...extraHeaders,
   });
   res.end(body);
-}
-
-export function clientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) return forwarded.split(',')[0].trim().slice(0, 64);
-  return req.socket?.remoteAddress ?? 'unknown';
 }
 
 // Returns true when the request may continue. Otherwise the response has been sent.

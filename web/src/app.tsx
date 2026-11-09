@@ -116,7 +116,12 @@ export function App() {
 
   useEffect(() => {
     loadList();
-    const onRoute = () => setRoute(readRoute());
+    // A navigation closes any open sheet, so it never stays over the next screen.
+    const onRoute = () => {
+      setSwitcherOpen(false);
+      setOpenTalk(null);
+      setRoute(readRoute());
+    };
     window.addEventListener('popstate', onRoute);
     window.addEventListener('hashchange', onRoute);
     window.addEventListener('caddie:route', onRoute);
@@ -386,12 +391,12 @@ export function App() {
           ) : (
             <>
               {tab === 'people' && (
-                <PeopleScreen conference={searchable} interested={talks} onOpenTalk={onOpenTalk} />
+                <PeopleScreen key={searchable.slug} conference={searchable} interested={talks} onOpenTalk={onOpenTalk} />
               )}
               {tab === 'for-you' && (
-                <ForYouScreen conference={searchable} interested={talks} onToggleInterested={toggleInterested} />
+                <ForYouScreen key={searchable.slug} conference={searchable} interested={talks} onToggleInterested={toggleInterested} />
               )}
-              {tab === 'profile' && <ProfileScreen conference={searchable} interested={talks} />}
+              {tab === 'profile' && <ProfileScreen key={searchable.slug} conference={searchable} interested={talks} />}
               {tab === 'search' && (
                 <>
                   <SearchField value={input} onInput={onInput} onSubmit={() => runSearch()} loading={loading} />

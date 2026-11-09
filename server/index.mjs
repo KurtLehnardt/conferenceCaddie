@@ -16,10 +16,14 @@ import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
+import { take, clientIp } from './ratelimit.mjs';
 
 const PORT = Number(process.env.PORT) || 8080;
 const STATIC_DIR = path.resolve(process.env.STATIC_DIR || 'web/dist');
 const MAX_BODY = 4096;
+// Every text search embeds its query, so searches share the per-address limit of the other
+// public endpoints.
+const SEARCH_PER_MIN = 60;
 
 const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
@@ -100,6 +104,11 @@ function readBody(req) {
 async function handleSearch(req, res) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Use POST' }, { Allow: 'POST' });
+    return;
+  }
+  const rate = take(`search:${clientIp(req)}`, SEARCH_PER_MIN);
+  if (!rate.ok) {
+    sendJson(res, 429, { error: 'Too many requests' }, { 'Retry-After': String(rate.retryAfterSec) });
     return;
   }
   const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();

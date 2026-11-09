@@ -23,7 +23,7 @@
 //   omits those fields, so toggling visibility or sharing never re-runs the embedding model.
 
 import crypto from 'node:crypto';
-import { take } from './ratelimit.mjs';
+import { take, clientIp } from './ratelimit.mjs';
 import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
@@ -104,6 +104,33 @@ const people = (method, path, body, opts) => es(PEOPLE_KEY, method, path, body, 
 const readOnly = (method, path, body, opts) => es(READ_KEY, method, path, body, opts);
 const idx = (name) => `/${encodeURIComponent(name)}`;
 const docId = (eventId, profileId) => `${eventId}:${profileId}`;
+
+// Profiles are stored only until their conference ends. Queries already hide a document once its
+// visible_until has passed; this deletes it as well. It runs when the server starts, which covers
+// every cold start, and then once an hour while an instance stays up. A document without
+// visible_until is never live, so it is deleted too.
+const PURGE_INTERVAL_MS = 60 * 60_000;
+const EXPIRED_PEOPLE_QUERY = {
+  bool: {
+    should: [{ range: { visible_until: { lt: 'now' } } }, { bool: { must_not: { exists: { field: 'visible_until' } } } }],
+    minimum_should_match: 1,
+  },
+};
+
+async function purgeExpired() {
+  if (!PEOPLE_KEY) return;
+  try {
+    const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_delete_by_query?conflicts=proceed`, {
+      query: EXPIRED_PEOPLE_QUERY,
+    });
+    if (json.deleted) console.log(`Deleted ${json.deleted} expired people profiles.`);
+  } catch (err) {
+    console.error(`Deleting expired people profiles failed: ${err.message}`);
+  }
+}
+
+purgeExpired();
+setInterval(purgeExpired, PURGE_INTERVAL_MS).unref();
 
 // ---------------------------------------------------------------------------------------------
 // Conferences, topics and talks (read-only key).
@@ -213,12 +240,6 @@ function sendJson(res, status, obj, headers = {}) {
     ...headers,
   });
   res.end(body);
-}
-
-function clientIp(req) {
-  const fwd = req.headers['x-forwarded-for'];
-  const first = typeof fwd === 'string' ? fwd.split(',')[0].trim() : '';
-  return first || req.socket?.remoteAddress || 'unknown';
 }
 
 function limit(key, perMinute) {
@@ -348,10 +369,15 @@ function validateProfile(p) {
   };
 }
 
-async function checkTopics(slug, ids, name) {
-  if (!ids.length) return;
+// Returns the topic ids to store. A topic the stored profile already holds may have been removed
+// from the conference's list by a later topics run; it is dropped, so the profile can still be
+// saved. Any other unknown topic is rejected.
+async function checkTopics(slug, ids, name, stored = []) {
+  if (!ids.length) return ids;
   const labels = await topicLabels(slug);
-  if (!ids.every((id) => labels.has(id))) throw bad(`${name} contains an unknown topic`);
+  const kept = ids.filter((id) => labels.has(id) || !stored.includes(id));
+  if (!kept.every((id) => labels.has(id))) throw bad(`${name} contains an unknown topic`);
+  return kept.filter((id) => labels.has(id));
 }
 
 async function checkSharedTalks(slug, ids) {
@@ -560,8 +586,8 @@ async function putProfile(req, res) {
   }
 
   if (Date.parse(conf.visibleUntil) <= Date.now()) throw bad('conference has ended');
-  await checkTopics(conf.slug, profile.learn_topics, 'learn_topics');
-  await checkTopics(conf.slug, profile.speak_topics, 'speak_topics');
+  profile.learn_topics = await checkTopics(conf.slug, profile.learn_topics, 'learn_topics', own.found ? own.source.learn_topics ?? [] : []);
+  profile.speak_topics = await checkTopics(conf.slug, profile.speak_topics, 'speak_topics', own.found ? own.source.speak_topics ?? [] : []);
   await checkSharedTalks(conf.slug, shared);
 
   const hash = textHash(profile);

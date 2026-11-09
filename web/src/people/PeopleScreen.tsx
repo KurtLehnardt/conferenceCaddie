@@ -30,7 +30,8 @@ export function EndedTalkBanner({
     .sort((a, b) => Date.parse(b.end) - Date.parse(a.end));
   // Keep showing the talk the user opened, even after it is marked as seen.
   const [pinned, setPinned] = useState<TalkLike | null>(null);
-  const talk = pinned ?? ended[0];
+  // A talk id starts with its conference's slug, so a talk pinned at another conference is ignored.
+  const talk = (pinned && pinned.talk_id.startsWith(`${conference.slug}:`) ? pinned : null) ?? ended[0];
   if (!talk) return null;
 
   const dismiss = () => {
