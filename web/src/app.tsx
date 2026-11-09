@@ -205,6 +205,15 @@ export function App() {
 
   // The people screens pass talk objects that carry the full search result shape
   // (recommendations and Interested entries), typed structurally as TalkLike.
+  // With "sharing follows Interested" on, a mark or unmark also changes the shared-talk list.
+  // Anything that stops the share (no name on the profile yet, the 50-talk limit, a failed write)
+  // is shown here, since the list changed on a screen without the sharing controls.
+  const followShare = (s: string, ids: string[], marked: boolean) =>
+    void onInterestedChanged(s, ids, marked).then((message) => {
+      if (!message) return;
+      showToast(message, message.includes('profile') ? { label: 'Open profile', onClick: () => (location.hash = '#/profile') } : undefined);
+    });
+
   const toggleInterested = (input: Talk | TalkLike | string) => {
     const s = latest.current.slug;
     if (!s) return;
@@ -215,14 +224,14 @@ export function App() {
     if (index >= 0) {
       const removed = current[index];
       setInterested(s, current.filter((x) => x.talk_id !== id));
-      void onInterestedChanged(s, id, false);
+      followShare(s, [id], false);
       showToast('Removed from Interested', {
         label: 'Undo',
         onClick: () => {
           const now = latest.current.talks.filter((x) => x.talk_id !== removed.talk_id);
           now.splice(Math.min(index, now.length), 0, removed);
           setInterested(s, now);
-          void onInterestedChanged(s, removed.talk_id, true);
+          followShare(s, [removed.talk_id], true);
         },
       });
       return;
@@ -230,12 +239,12 @@ export function App() {
     if (typeof t === 'string' || t.conference !== s) return;
     const added = toInterested(t);
     setInterested(s, [...current, added]);
-    void onInterestedChanged(s, added.talk_id, true);
+    followShare(s, [added.talk_id], true);
     showToast('Added to Interested', {
       label: 'Undo',
       onClick: () => {
         setInterested(s, latest.current.talks.filter((x) => x.talk_id !== added.talk_id));
-        void onInterestedChanged(s, added.talk_id, false);
+        followShare(s, [added.talk_id], false);
       },
     });
   };
@@ -259,8 +268,16 @@ export function App() {
       confirmLabel: 'Clear',
       onConfirm: () => {
         const before = latest.current.talks;
+        const ids = before.map((x) => x.talk_id);
         setInterested(s, []);
-        showToast('Interested list cleared', { label: 'Undo', onClick: () => setInterested(s, before) });
+        followShare(s, ids, false);
+        showToast('Interested list cleared', {
+          label: 'Undo',
+          onClick: () => {
+            setInterested(s, before);
+            followShare(s, ids, true);
+          },
+        });
       },
     });
   };

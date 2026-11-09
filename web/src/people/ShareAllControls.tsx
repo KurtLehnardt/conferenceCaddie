@@ -3,7 +3,7 @@
 import { useState } from 'preact/hooks';
 import { Users } from 'lucide-preact';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
-import { MAX_SHARED_TALKS, shareForTalks, unshareAll } from './sync';
+import { CUT_MESSAGE, followInterested, MAX_SHARED_TALKS, shareForTalks, unshareAll } from './sync';
 import type { ConferenceLike, InterestedProp } from './types';
 import { interestedIds, SHARE_NOTICE } from './util';
 
@@ -31,12 +31,9 @@ export function ShareAllControls({ conference, interested }: { conference: Confe
 
   const shareAll = () => run(() => shareForTalks(slug, ids));
   const stopAll = () => run(() => unshareAll(slug));
-  const followOn = () =>
-    run(async () => {
-      setVisibility(slug, { share_new: true, share_notice_seen: true });
-      // Turning it on also catches up: everything already marked is shared.
-      return shareForTalks(slug, ids);
-    });
+  // Turning the switch on also catches up: everything already marked is shared. The preference is
+  // stored only when that succeeds, so the switch stays off and the message explains a failure.
+  const followOn = () => run(() => followInterested(slug, ids));
 
   const onShareAll = () => (vis.share_notice_seen ? void shareAll() : setNotice('all'));
   const onFollow = (on: boolean) => {
@@ -106,7 +103,7 @@ export function ShareAllControls({ conference, interested }: { conference: Confe
         </div>
       )}
       {message && (
-        <p class="pp-error">
+        <p class={message === CUT_MESSAGE ? 'pp-hint' : 'pp-error'} role="status">
           {message}{' '}
           {message.includes('profile') && (
             <a class="pp-inline-link" href="#/profile">

@@ -5,7 +5,7 @@ import { ChevronDown, ChevronUp, ExternalLink, Users } from 'lucide-preact';
 import { fetchCircleMembers, isAbort, PeopleApiError } from './api';
 import { PersonCard } from './PersonCard';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
-import { changeVisibility, getSaveCount } from './sync';
+import { getSaveCount, shareForTalks, unshareTalks } from './sync';
 import type { CircleMembers, ConferenceLike, InterestedProp, TalkLike } from './types';
 import { interestedIds, invalidateCount, peopleCountLabel, SHARE_NOTICE, useCircleCount } from './util';
 
@@ -120,10 +120,7 @@ export function TalkPeopleControls({
     }
     setBusy(true);
     setMessage(null);
-    const err = await changeVisibility(slug, {
-      shared_talk_ids: on ? [...ids, talk.talk_id] : ids,
-      ...(on ? { share_notice_seen: true } : {}),
-    });
+    const err = await (on ? shareForTalks(slug, [talk.talk_id]) : unshareTalks(slug, [talk.talk_id]));
     setBusy(false);
     setNotice(false);
     if (err) setMessage(err);

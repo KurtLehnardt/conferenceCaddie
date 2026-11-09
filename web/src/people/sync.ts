@@ -112,11 +112,30 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>)
 export const MAX_SHARED_TALKS = 50;
 
 /**
+ * Writes to the shared-talk list run one at a time. Each one reads the list after the previous
+ * write has landed, so two quick taps (mark A, mark B; or unmark, then Undo) cannot read the same
+ * stale list and overwrite each other.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const p = queue.then(fn, fn);
+  queue = p.catch(() => undefined);
+  return p;
+}
+
+/**
  * Shares for every talk in `talkIds` (keeping existing shares), up to the server's limit of 50.
  * Returns an error message, or null. When the limit cuts the list, the message says so but the
  * shares that fit are still written.
  */
-export async function shareForTalks(slug: string, talkIds: string[]): Promise<string | null> {
+export function shareForTalks(slug: string, talkIds: string[]): Promise<string | null> {
+  return serial(async () => (await shareNow(slug, talkIds)).message);
+}
+
+export const CUT_MESSAGE = `You can share for up to ${MAX_SHARED_TALKS} talks, so the first ${MAX_SHARED_TALKS} are shared.`;
+
+/** The write behind shareForTalks; `ok` is true when the shares that fit were written. */
+async function shareNow(slug: string, talkIds: string[]): Promise<{ ok: boolean; message: string | null }> {
   const current = getVisibility(slug).shared_talk_ids;
   const union = [...new Set([...current, ...talkIds])];
   const cut = union.length > MAX_SHARED_TALKS;
@@ -124,27 +143,47 @@ export async function shareForTalks(slug: string, talkIds: string[]): Promise<st
     shared_talk_ids: union.slice(0, MAX_SHARED_TALKS),
     share_notice_seen: true,
   });
-  if (err) return err;
-  return cut ? `You can share for up to ${MAX_SHARED_TALKS} talks, so the first ${MAX_SHARED_TALKS} are shared.` : null;
+  if (err) return { ok: false, message: err };
+  return { ok: true, message: cut ? CUT_MESSAGE : null };
+}
+
+/** Stops sharing for the given talks. Returns an error message, or null. */
+export function unshareTalks(slug: string, talkIds: string[]): Promise<string | null> {
+  return serial(() => {
+    const current = getVisibility(slug).shared_talk_ids;
+    const next = current.filter((id) => !talkIds.includes(id));
+    if (next.length === current.length) return Promise.resolve(null);
+    return changeVisibility(slug, { shared_talk_ids: next });
+  });
 }
 
 /** Stops sharing for every talk at this conference. Conference-wide visibility is unchanged. */
 export function unshareAll(slug: string): Promise<string | null> {
-  return changeVisibility(slug, { shared_talk_ids: [] });
+  return serial(() => changeVisibility(slug, { shared_talk_ids: [] }));
 }
 
 /**
- * Called by the shell when a talk is marked or unmarked. With the "sharing follows Interested"
- * preference on, a marked talk is shared and an unmarked one is unshared. Otherwise nothing
- * happens here; the per-talk switch stays the only way to share. Failures are shown by the
- * sync status, not thrown.
+ * Turns on "sharing follows Interested" and catches up by sharing for every talk already marked.
+ * The preference is stored only once that share has succeeded, so a failed catch-up leaves the
+ * switch off and the message returned here tells the user why.
  */
-export async function onInterestedChanged(slug: string, talkId: string, marked: boolean): Promise<void> {
-  const v = getVisibility(slug);
-  if (!v.share_new) return;
-  const shared = v.shared_talk_ids.includes(talkId);
-  if (marked && !shared) await shareForTalks(slug, [talkId]);
-  else if (!marked && shared) await changeVisibility(slug, { shared_talk_ids: v.shared_talk_ids.filter((i) => i !== talkId) });
+export function followInterested(slug: string, talkIds: string[]): Promise<string | null> {
+  return serial(async () => {
+    const r = await shareNow(slug, talkIds);
+    if (r.ok) setVisibility(slug, { share_new: true, share_notice_seen: true });
+    return r.message;
+  });
+}
+
+/**
+ * Called by the shell when talks are marked or unmarked. With the "sharing follows Interested"
+ * preference on, marked talks are shared and unmarked ones are unshared. Otherwise nothing
+ * happens and null is returned; the per-talk switch stays the only way to share. A returned
+ * message (profile incomplete, the 50-talk limit, a failed write) is for the shell to show.
+ */
+export function onInterestedChanged(slug: string, talkIds: string[], marked: boolean): Promise<string | null> {
+  if (!talkIds.length || !getVisibility(slug).share_new) return Promise.resolve(null);
+  return marked ? shareForTalks(slug, talkIds) : unshareTalks(slug, talkIds);
 }
 
 let timer: number | undefined;
