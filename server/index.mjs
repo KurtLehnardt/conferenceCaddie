@@ -18,6 +18,7 @@ import { handlePeopleApi } from './people.mjs';
 import { handleConnectApi } from './connect.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
+import { handleImportGithubApi } from './import-github.mjs';
 import { handleSchedule } from './schedule.mjs';
 import { take, clientIp } from './ratelimit.mjs';
 
@@ -286,6 +287,7 @@ async function handleApi(req, res) {
   if (await handleConnectApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
+  if (await handleImportGithubApi(req, res, url)) return;
   sendJson(res, 404, { error: 'Not found' });
 }
 
