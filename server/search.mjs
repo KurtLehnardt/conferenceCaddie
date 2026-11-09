@@ -16,7 +16,8 @@
 //
 // Facet and total definition
 // - Let M be the documents the main query matches: for a text query, the union of the lexical
-//   matches and the SEMANTIC_K nearest neighbours; in browse mode, every document.
+//   matches (multi_match with minimum_should_match LEXICAL_MIN_MATCH) and the SEMANTIC_K nearest
+//   neighbours; in browse mode, every document.
 // - Let B be the base filters: kind is "talk", the start_after and start_before window,
 //   hide_sponsor, and the must_not clauses for saved-talk overlaps.
 // - Let S(g) be the selection in facet group g (day, track, level, has_slides).
@@ -35,6 +36,10 @@ const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
 const ES_TIMEOUT_MS = 8000;
 
 const LEXICAL_FIELDS = ['title^2', 'abstract', 'speakers', 'speaker_taglines'];
+// Queries of one or two terms must match every term; longer ones must match 60% of them. Without
+// this, a long natural-language query lexically matches any talk that shares one common word
+// (for example "cluster"), and that noise outranks the semantic matches in rrf.
+const LEXICAL_MIN_MATCH = '2<60%';
 const RANK_WINDOW = 50;
 const SEMANTIC_K = 50;
 const SEMANTIC_CANDIDATES = 200;
@@ -257,7 +262,7 @@ function retrieverFor(query, filter) {
   return {
     rrf: {
       retrievers: [
-        { standard: { query: { multi_match: { query, fields: LEXICAL_FIELDS } } } },
+        { standard: { query: { multi_match: { query, fields: LEXICAL_FIELDS, minimum_should_match: LEXICAL_MIN_MATCH } } } },
         {
           standard: {
             query: {
@@ -296,7 +301,7 @@ function mainSearch(query, filter, size) {
       fields: {
         abstract: { fragment_size: 200, number_of_fragments: 1, no_match_size: 200 },
         title: { number_of_fragments: 0, no_match_size: 300 },
-        semantic: { number_of_fragments: 1 },
+        semantic: { number_of_fragments: 2 },
       },
     };
   } else {
@@ -330,13 +335,18 @@ function trimText(text) {
 }
 
 // Evidence preference: a lexical abstract fragment with marks, then a title with marks, then
-// the top semantic chunk, then the start of the abstract, then the title. The semantic
+// the best semantic chunk, then the start of the abstract, then the title. The semantic
 // highlighter does not apply the html encoder, so its chunk is escaped here; it has no marks.
+// copy_to sends the title to the semantic field as its own chunk, so a chunk that only repeats
+// the title is skipped in favour of the next-best chunk, which comes from the abstract.
+const normalize = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+
 function evidenceFor(hit) {
   const hl = hit.highlight ?? {};
   const abstract = hl.abstract?.[0];
   const title = hl.title?.[0];
-  const chunk = hl.semantic?.[0];
+  const plainTitle = normalize(hit._source?.title);
+  const chunk = (hl.semantic ?? []).find((c) => normalize(c) && normalize(c) !== plainTitle);
   if (abstract?.includes('<mark>')) return abstract;
   if (title?.includes('<mark>')) return title;
   if (chunk && chunk.trim()) return escapeHtml(trimText(chunk));
