@@ -1,0 +1,23 @@
+# Secrets and credentials. Never commit these.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*credentials*.json
+*service-account*.json
+*sa-key*.json
+gcp-key*.json
+application_default_credentials.json
+.secrets/
+
+# Dependencies and build output
+node_modules/
+dist/
+
+# Local tooling
+.claude/worktrees/
+.claude/settings.local.json
+.DS_Store
+*.log
