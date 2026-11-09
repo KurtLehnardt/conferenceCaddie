@@ -21,7 +21,7 @@ import { InterestedScreen } from './components/interested';
 import { SettingsScreen } from './components/settings';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
-import { ForYouScreen, PeopleScreen, ProfileScreen } from './people/index';
+import { ForYouScreen, PeopleScreen, ProfileScreen, type TalkLike } from './people/index';
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 20;
@@ -203,9 +203,12 @@ export function App() {
     timer.current = window.setTimeout(() => runSearch(), DEBOUNCE_MS);
   };
 
-  const toggleInterested = (t: Talk | string) => {
+  // The people screens pass talk objects that carry the full search result shape
+  // (recommendations and Interested entries), typed structurally as TalkLike.
+  const toggleInterested = (input: Talk | TalkLike | string) => {
     const s = latest.current.slug;
     if (!s) return;
+    const t = input as Talk | string;
     const current = latest.current.talks;
     const id = typeof t === 'string' ? t : t.talk_id;
     const index = current.findIndex((x) => x.talk_id === id);
@@ -231,7 +234,8 @@ export function App() {
     });
   };
 
-  const onOpenTalk = (t: Talk | string) => {
+  const onOpenTalk = (input: Talk | TalkLike | string) => {
+    const t = input as Talk | string;
     if (typeof t !== 'string') return setOpenTalk(t);
     const found =
       latest.current.talks.find((x) => x.talk_id === t) ?? latest.current.data?.results.find((x) => x.talk_id === t);
