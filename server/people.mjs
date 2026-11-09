@@ -29,8 +29,12 @@
 //   name an Elasticsearch status.
 // - Writes whose about, interests and expertise are unchanged use a Bulk API partial update that
 //   omits those fields, so toggling visibility, sharing or presence never re-runs the model.
-// - Presence (zone, spot, since, until) lives on the people document and is returned to another
-//   person only while both are around. Blocks and meets are deleted with the profile.
+// - Presence (zone, spot, since, until, and an optional rounded location with its accuracy) lives
+//   on the people document and is returned to another person only while both are around. The
+//   location itself is returned to nobody: it ranks nearby people higher through a
+//   distance_feature leg and becomes a band (same_zone, near, around, venue) on a result; only an
+//   active meet learns a distance and a bearing (connect.mjs). Blocks and meets are deleted with
+//   the profile.
 //
 // The block, presence and meet routes themselves are in connect.mjs, which uses the transport,
 // plumbing and lookups exported here.
@@ -134,7 +138,7 @@ export const docId = (eventId, profileId) => `${eventId}:${profileId}`;
 // visible_until has passed; this deletes it as well. It runs when the server starts, which covers
 // every cold start, and then once an hour while an instance stays up. A document without
 // visible_until is never live, so it is deleted too. The same pass clears presence that has
-// expired (a Bulk partial update of the four presence fields, so nothing is re-embedded) and
+// expired (a Bulk partial update of the six presence fields, so nothing is re-embedded) and
 // deletes meets whose expires_at has passed. The purge CLI runs the same three steps.
 const PURGE_INTERVAL_MS = 60 * 60_000;
 const PURGE_PRESENCE_PAGE = 500;
@@ -146,7 +150,7 @@ export const EXPIRED_PEOPLE_QUERY = {
 };
 export const EXPIRED_PRESENCE_QUERY = { range: { presence_until: { lt: 'now' } } };
 export const EXPIRED_MEETS_QUERY = { range: { expires_at: { lt: 'now' } } };
-export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null };
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null };
 
 async function purgeExpired() {
   if (!PEOPLE_KEY) return;
@@ -498,7 +502,7 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // ---------------------------------------------------------------------------------------------
 // People documents (people key).
 
-const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_since', 'presence_until'];
+const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
 const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
 const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
@@ -518,6 +522,52 @@ export async function ownDoc(eventId, profileId) {
 export const isLive = (source) => typeof source.visible_until === 'string' && Date.parse(source.visible_until) > Date.now();
 // True while the person has said they are around and that has not run out.
 export const isAround = (source) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > Date.now();
+
+// ---------------------------------------------------------------------------------------------
+// Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre). It is read
+// here only to rank, to band and, inside an active meet, to give a distance and a bearing.
+
+export const PROXIMITY_NEAR_M = 75;
+export const PROXIMITY_AROUND_M = 300;
+const EARTH_RADIUS_M = 6_371_000;
+const rad = (deg) => (deg * Math.PI) / 180;
+
+// The location of a person who is around and opted in, else null.
+export function locationOf(source) {
+  if (!isAround(source)) return null;
+  const l = source.presence_location;
+  if (!l || typeof l !== 'object' || !Number.isFinite(l.lat) || !Number.isFinite(l.lon)) return null;
+  return { lat: l.lat, lon: l.lon };
+}
+
+// Great-circle distance in metres (haversine).
+export function distanceM(a, b) {
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Initial bearing from a to b, 0 to 360 degrees clockwise from north.
+export function bearingDeg(a, b) {
+  const dLon = rad(b.lon - a.lon);
+  const y = Math.sin(dLon) * Math.cos(rad(b.lat));
+  const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// The band between two people who are both around: the same zone first, then distance when both
+// have a location, else the venue as a whole. Never a number.
+export function proximityBand(me, them) {
+  if (me.presence_zone && me.presence_zone === them.presence_zone) return 'same_zone';
+  const a = locationOf(me);
+  const b = locationOf(them);
+  if (!a || !b) return 'venue';
+  const d = distanceM(a, b);
+  if (d < PROXIMITY_NEAR_M) return 'near';
+  if (d < PROXIMITY_AROUND_M) return 'around';
+  return 'venue';
+}
 
 // One bulk action on the people index with refresh=wait_for. Returns the item status.
 export async function bulkOne(action, doc) {
@@ -635,16 +685,21 @@ export async function deleteConnections(eventId, profileId) {
 //   4. in a search, the same text against their about (semantic),
 //   5. my expertise against their interests (semantic),
 //   6. in a search, the query as a lexical match on their expertise and about,
+//   7. in matches, when the requester is around with a location, a distance_feature on
+//      presence_location (100 m pivot, origin the requester's rounded location) over people who
+//      are around now, so nearby people rank higher; it is a ranking signal and nothing else,
 // skipping any whose input is empty. Circles add a retriever that matches every member, so a
 // member with nothing in common is still listed, below everyone who shares something. Every
 // retriever is named so that the explanation of a hit says which ones it came from.
 
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
-const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until'];
+const DISTANCE_PIVOT = '100m';
+// presence_location is read to compute the band of a result and is never passed on.
+const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_location'];
 
-// Returns { body, legs } where legs names each retriever in order ('topics', 'text' or
-// 'everyone'), or null when there is nothing to rank by.
-function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false }) {
+// Returns { body, legs } where legs names each retriever in order ('topics', 'text', 'distance'
+// or 'everyone'), or null when there is nothing to rank by.
+function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false, origin = null }) {
   const filter = {
     bool: {
       filter: [{ term: { event_id: me.event_id } }, { range: { visible_until: { gt: 'now' } } }, ...filters],
@@ -692,6 +747,16 @@ function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, que
     add('text', { query: { multi_match: { query, fields: ['expertise', 'about'], minimum_should_match: '2<60%' } } });
     highlight.expertise = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
     highlight.about = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
+  }
+  if (origin) {
+    add('distance', {
+      query: {
+        bool: {
+          must: [{ distance_feature: { field: 'presence_location', pivot: DISTANCE_PIVOT, origin } }],
+          filter: [{ range: { presence_until: { gt: 'now' } } }],
+        },
+      },
+    });
   }
   if (includeEveryone) add('everyone', { query: { match_all: {} }, sort: [{ updated_at: 'desc' }] });
   if (!retrievers.length) return null;
@@ -774,14 +839,17 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
 }
 
 // Shapes one hit for the requester. In a text search (query given) the evidence leads the
-// reasons; zone is included only while both the requester and this person are around. A broad
-// match carries no evidence and is labelled with the common topic it shares instead.
+// reasons; zone and the proximity band are included only while both the requester and this
+// person are around. A broad match carries no evidence and is labelled with the common topic it
+// shares instead. The location a hit may carry is read for the band and goes no further.
 function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
   const s = hit._source ?? {};
   const topicsOf = (ids) => (ids ?? []).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) }));
   const evidence = broad ? null : evidenceFor(hit);
   const around = isAround(s);
-  const zone = around && isAround(me) && s.presence_zone ? s.presence_zone : null;
+  const both = around && isAround(me);
+  const zone = both && s.presence_zone ? s.presence_zone : null;
+  const proximity = both ? proximityBand(me, s) : null;
   let reasons;
   if (broad) {
     const shared = sharedTopics(me, s).filter((t) => labels.has(t)).map((t) => labels.get(t));
@@ -803,6 +871,7 @@ function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, b
     evidence,
     around,
     zone,
+    proximity,
     broad,
   };
 }
@@ -974,10 +1043,11 @@ function sharedTopics(me, s) {
 
 // The specificity rule: a hit is a broad match when it was found only by the topic retrievers and
 // every topic it shares with the requester is one of the conference's ten most common. A hit found
-// by a text retriever, or one whose explanation is missing, is specific.
+// by a text retriever, or one whose explanation is missing, is specific. Being nearby is not
+// experience, so the distance leg counts neither way.
 function isBroad(hit, legs, me, common) {
   const matched = matchedLegs(hit, legs);
-  if (!matched || matched.some((i) => legs[i] !== 'topics')) return false;
+  if (!matched || matched.some((i) => legs[i] !== 'topics' && legs[i] !== 'distance')) return false;
   return sharedTopics(me, hit._source ?? {}).every((t) => common.has(t));
 }
 
@@ -1003,7 +1073,9 @@ async function matches(req, res) {
   const filters = [{ term: { open_to_meet: true } }];
   if (when === 'around_now') filters.push({ range: { presence_until: { gt: 'now' } } });
   const blocked = await blockedIds(conf.slug, me.profile_id);
-  const q = peopleQuery(me, filters, { size, from, query, blocked, explain: true });
+  // A requester who is around with a position gets the distance leg; the origin is their own
+  // stored, rounded location and never leaves the query.
+  const q = peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: locationOf(me) });
   if (!q) {
     sendJson(res, 200, { results: [], from, size, has_more: false });
     return;

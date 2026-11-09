@@ -52,7 +52,12 @@ export interface PersonResult {
   /** True while they are around; `zone` is sent only when both of us are around. */
   around?: boolean;
   zone?: string | null;
+  /** A band only, sent only when both of us are around; never a distance. */
+  proximity?: Proximity | null;
 }
+
+/** How close someone who is around is: the same zone, under 75 m, under 300 m, or just the venue. */
+export type Proximity = 'same_zone' | 'near' | 'around' | 'venue';
 
 /** Find & connect: device-side presence state (caddie.presence.v1.{slug}). */
 export interface Presence {
@@ -62,6 +67,27 @@ export interface Presence {
   /** ISO time when presence turns off by itself; null while off. */
   until: string | null;
   notice_seen: boolean;
+  /** GPS bands: true while the device also sends its position with presence. */
+  position: boolean;
+  /** The answer to "Use my position too", asked once; null until answered. */
+  position_choice: 'yes' | 'no' | null;
+  /** How long presence runs: an hour, or until turned off, at the latest at the end of the day. */
+  mode: PresenceMode;
+  /** ISO time the zone was last chosen, confirmed or dismissed; null while off. */
+  confirmed_at: string | null;
+  /** True once the app came back to the foreground with a zone older than the threshold. */
+  confirm_pending: boolean;
+  /** Zones chosen on this device, most recent first, for ordering the "Still in" chips. */
+  recent_zones: string[];
+}
+
+export type PresenceMode = 'hour' | 'day';
+
+/** A position as sent with presence: degrees and the accuracy in metres. */
+export interface Position {
+  lat: number;
+  lon: number;
+  accuracy: number;
 }
 
 /** One blocked person, cached on the device (caddie.blocks.v1.{slug}). */
@@ -109,7 +135,18 @@ export interface MeetDetail {
   state: MeetState;
   active_until: string | null;
   same_zone?: boolean;
-  other: { ref?: string | null; display_name: string; zone: string | null; spot: string | null; spot_me: string | null; about?: string | null };
+  other: {
+    ref?: string | null;
+    display_name: string;
+    zone: string | null;
+    spot: string | null;
+    spot_me: string | null;
+    about?: string | null;
+    /** Only while the meet is active and both of us sent a position: metres, rounded to 10. */
+    distance_m?: number;
+    /** With `distance_m`: degrees clockwise from north, from me to them. */
+    bearing_deg?: number;
+  };
   rendezvous: string | null;
   mine: { spot_me: string | null };
 }

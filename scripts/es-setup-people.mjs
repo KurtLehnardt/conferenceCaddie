@@ -10,7 +10,8 @@
 //
 // Every step is idempotent, so the command can be re-run after a release that adds fields:
 // - A people index that already exists is kept, and only the fields that Find & connect added
-//   (ref and the presence fields) are PUT to its mapping. That is additive and never touches the
+//   (ref, the presence fields and, from the GPS bands release, presence_location and
+//   presence_accuracy) are PUT to its mapping. That is additive and never touches the
 //   semantic_text fields, so nothing is re-embedded. --recreate deletes and recreates it instead.
 // - The blocks index (caddie-people-blocks-v1 behind caddie-people-blocks) and the meets index
 //   (caddie-people-meets-v1 behind caddie-people-meets) are created when missing. With a custom
@@ -82,6 +83,10 @@ const connectProperties = {
   presence_spot: { type: 'text' },
   presence_since: { type: 'date' },
   presence_until: { type: 'date' },
+  // GPS bands: the rounded position (5 decimals) and its accuracy in metres, written only when
+  // the person opted in and the fix was within 200 m. Used for ranking; never returned as such.
+  presence_location: { type: 'geo_point' },
+  presence_accuracy: { type: 'integer' },
 };
 
 const properties = {
@@ -171,8 +176,8 @@ if (exists.status === 200 && recreate) {
 if (exists.status !== 200 || recreate) {
   await ensureIndex(index, properties, lexicalOnly ? ' (lexical only, no semantic fields)' : '');
 } else {
-  // Additive only: the fields are new keyword, text and date fields. Putting the same field
-  // again is a no-op for Elasticsearch, and the semantic_text fields are never sent.
+  // Additive only: the fields are new keyword, text, date, geo_point and integer fields. Putting
+  // the same field again is a no-op for Elasticsearch, and the semantic_text fields are never sent.
   const put = await es('PUT', `/${index}/_mapping`, { properties: connectProperties });
   if (put.status !== 200) fail(`Adding the Find & connect fields to ${index}`, put);
   console.log(`Index ${index} already exists; added or confirmed ${Object.keys(connectProperties).join(', ')}.`);

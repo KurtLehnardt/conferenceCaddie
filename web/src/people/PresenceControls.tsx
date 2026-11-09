@@ -1,13 +1,24 @@
-// The "I'm around" switch on the People tab: zone picker, optional spot line, the first-time
-// notice, the remaining time (tap extends), and the #/here/{zone} deep link.
+// The "I'm around" switch on the People tab: zone picker, duration ("For an hour" or "Until I
+// turn it off today"), optional spot line, the first-time notice, the remaining time (tap
+// extends), the optional "Use my position too" step once the zone is chosen, the #/here/{zone}
+// deep link, and the "Still in {zone}?" row that the tab shows when the app comes back to the
+// foreground with a zone that is more than ten minutes old.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { MapPin } from 'lucide-preact';
+import { LocateFixed, MapPin, X } from 'lucide-preact';
 import {
+  confirmZone,
+  dismissZoneCheck,
+  DURATION_LABELS,
   extend,
+  geolocationAvailable,
   lastChosenZone,
+  likelyZones,
   matchZone,
   minutesLeft,
+  POSITION_EXPLAINER,
+  POSITION_LABEL,
   PRESENCE_NOTICE,
+  sharePosition,
   turnOff,
   turnOn,
   useMinuteTick,
@@ -15,12 +26,95 @@ import {
   zonesFor,
 } from './presence';
 import { getPresence, getProfile, getVisibility, usePeopleStore } from './storage';
-import type { ConferenceLike, InterestedProp } from './types';
+import type { ConferenceLike, InterestedProp, PresenceMode } from './types';
 import { toast } from './ui';
 import { interestedTalks } from './util';
 
 export const PRESENCE_LABEL = 'Around and up for a conversation (while the app is open)';
+export const DAY_HINT = "Stays on until you turn it off or the day ends. Whenever you come back to the app after a while, it asks whether you're still in the same zone.";
 const SPOT_MAX = 60;
+const LIKELY_ZONES = 4;
+
+/**
+ * "Still in {zone}?" with Yes, the likeliest other zones and "Other…" (the full picker). Shown at
+ * the top of the People tab while a confirmation is pending; one tap confirms or moves the zone,
+ * and closing the row counts as a confirmation.
+ */
+export function StillHereRow({ conference, interested }: { conference: ConferenceLike; interested: InterestedProp }) {
+  usePeopleStore();
+  const slug = conference.slug;
+  const presence = getPresence(slug);
+  const zones = useZones(slug, interestedTalks(interested));
+  const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [other, setOther] = useState('');
+  if (!presence.on || !presence.zone || !presence.confirm_pending) return null;
+  const zone = presence.zone;
+  const likely = likelyZones(slug, zones, LIKELY_ZONES);
+
+  const answer = async (z: string) => {
+    setBusy(true);
+    const err = await confirmZone(slug, z);
+    setBusy(false);
+    if (err) toast(err);
+    else {
+      setPicking(false);
+      if (z !== zone) toast(`Now in ${z}`);
+    }
+  };
+
+  return (
+    <div class="pp-still" role="region" aria-label="Still in the same zone?">
+      <div class="pp-still-head">
+        <p class="pp-still-title">Still in {zone}?</p>
+        <button type="button" class="icon-btn" aria-label="Close" disabled={busy} onClick={() => dismissZoneCheck(slug)}>
+          <X size={20} aria-hidden="true" />
+        </button>
+      </div>
+      {!picking ? (
+        <div class="pp-still-chips">
+          <span class="chip is-active">
+            <button type="button" class="chip-main" disabled={busy} onClick={() => void answer(zone)}>
+              Yes
+            </button>
+          </span>
+          {likely.map((z) => (
+            <span key={z} class="chip">
+              <button type="button" class="chip-main" disabled={busy} onClick={() => void answer(z)}>
+                {z}
+              </button>
+            </span>
+          ))}
+          <span class="chip">
+            <button
+              type="button"
+              class="chip-main"
+              disabled={busy}
+              onClick={() => {
+                setOther(zones.find((z) => z !== zone && !likely.includes(z)) ?? zones[0] ?? '');
+                setPicking(true);
+              }}
+            >
+              Other…
+            </button>
+          </span>
+        </div>
+      ) : (
+        <>
+          <ZoneSelect id="pp-still-zone" label="Zone" zones={zones} value={other || zones[0] || ''} onChange={setOther} />
+          <div class="pp-actions">
+            <button type="button" class="btn btn-primary btn-small" disabled={busy} onClick={() => void answer(other || zones[0])}>
+              I'm here
+            </button>
+            <button type="button" class="btn btn-text btn-small" disabled={busy} onClick={() => setPicking(false)}>
+              Back
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function ZoneSelect({
   id,
@@ -71,6 +165,7 @@ export function PresenceControls({
   useMinuteTick(presence.on);
   const [panel, setPanel] = useState(false);
   const [zone, setZone] = useState('');
+  const [mode, setMode] = useState<PresenceMode>(presence.mode);
   const [spot, setSpot] = useState(presence.spot);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +177,7 @@ export function PresenceControls({
   const openPanel = (preset: string | null) => {
     setZone(preset ?? presence.zone ?? lastChosenZone() ?? zones[0] ?? '');
     setSpot(getPresence(slug).spot);
+    setMode(getPresence(slug).mode);
     setError(null);
     setPanel(true);
   };
@@ -120,7 +216,7 @@ export function PresenceControls({
     if (!z) return;
     setBusy(true);
     setError(null);
-    const err = await turnOn(slug, z, spot);
+    const err = await turnOn(slug, z, spot, mode);
     setBusy(false);
     if (err) setError(err);
     else {
@@ -146,6 +242,16 @@ export function PresenceControls({
     else toast('Extended for another hour');
   };
 
+  // The optional step after the zone is chosen, shown once; the choice is kept on the device.
+  const canLocate = geolocationAvailable();
+  const askPosition = presence.on && !panel && canLocate && presence.position_choice === null;
+  const choosePosition = async (on: boolean) => {
+    setBusy(true);
+    await sharePosition(slug, on);
+    setBusy(false);
+    if (on) toast('Using your position while you are around');
+  };
+
   return (
     <section class="pp-card pp-presence" aria-label="I'm around">
       <label class="pp-switch-row">
@@ -166,14 +272,43 @@ export function PresenceControls({
             {presence.zone}
             {presence.spot && ` · ${presence.spot}`}
           </p>
+          {presence.position && (
+            <p class="pp-hint pp-position-on">
+              <LocateFixed size={16} aria-hidden="true" />
+              Using your position too
+            </p>
+          )}
           <div class="pp-actions">
-            <button type="button" class="btn btn-tonal btn-small" disabled={busy} onClick={onExtend}>
-              Turns off in {minutesLeft(presence.until)} min · Extend
-            </button>
+            {presence.mode === 'day' ? (
+              <span class="pp-hint pp-asked">On until you turn it off today</span>
+            ) : (
+              <button type="button" class="btn btn-tonal btn-small" disabled={busy} onClick={onExtend}>
+                Turns off in {minutesLeft(presence.until)} min · Extend
+              </button>
+            )}
             <button type="button" class="btn btn-text btn-small" disabled={busy} onClick={() => openPanel(null)}>
               Change zone
             </button>
+            {canLocate && presence.position_choice !== null && (
+              <button type="button" class="btn btn-text btn-small" disabled={busy} onClick={() => void choosePosition(!presence.position)}>
+                {presence.position ? 'Stop using position' : 'Use my position too'}
+              </button>
+            )}
           </div>
+          {askPosition && (
+            <div class="pp-notice pp-position-step" role="region" aria-label={POSITION_LABEL}>
+              <p class="pp-subhead">{POSITION_LABEL}</p>
+              <p>{POSITION_EXPLAINER}</p>
+              <div class="pp-actions">
+                <button type="button" class="btn btn-primary btn-small" disabled={busy} onClick={() => void choosePosition(true)}>
+                  Use my position
+                </button>
+                <button type="button" class="btn btn-text btn-small" disabled={busy} onClick={() => void choosePosition(false)}>
+                  Zone only
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
       {panel && (
@@ -193,6 +328,16 @@ export function PresenceControls({
             </p>
           )}
           <ZoneSelect id="pp-zone" label="Zone" zones={zones} value={zone || zones[0] || ''} onChange={setZone} />
+          <fieldset class="pp-duration">
+            <legend class="pp-label">How long</legend>
+            {(Object.keys(DURATION_LABELS) as PresenceMode[]).map((m) => (
+              <label key={m} class="pp-radio">
+                <input type="radio" name="pp-duration" value={m} checked={mode === m} onChange={() => setMode(m)} />
+                <span>{DURATION_LABELS[m]}</span>
+              </label>
+            ))}
+            {mode === 'day' && <p class="pp-hint">{DAY_HINT}</p>}
+          </fieldset>
           <div class="pp-text">
             <label class="pp-label" for="pp-spot">
               Where in the zone (optional)

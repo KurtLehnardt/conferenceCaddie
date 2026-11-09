@@ -735,6 +735,100 @@
   flex: none;
 }
 
+/* "Still in {zone}?" at the top of the People tab */
+
+.pp-still {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-tint);
+}
+
+.pp-still-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pp-still-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.pp-still-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pp-duration {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.pp-radio {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  font-size: 15px;
+}
+
+.pp-radio input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* GPS bands: the proximity label on a card is a band, never a number. */
+.pp-band {
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.pp-position-on {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pp-position-step {
+  display: grid;
+  gap: 8px;
+}
+
+.pp-position-step .pp-subhead {
+  margin: 0;
+}
+
+.pp-distance {
+  gap: 10px;
+}
+
+.pp-arrow {
+  display: flex;
+  justify-content: center;
+  margin: 0;
+  color: var(--accent-ink);
+}
+
+.pp-arrow svg {
+  transition: transform 200ms ease-out;
+}
+
 .pp-evidence {
   margin: 0;
   padding: 8px 12px;
