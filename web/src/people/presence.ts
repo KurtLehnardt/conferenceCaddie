@@ -15,7 +15,7 @@ import { getPresence, setPresence } from './storage';
 import type { Position, PresenceMode, TalkLike } from './types';
 
 export const PRESENCE_NOTICE =
-  "While this is on, people you can see can also see that you're around and which zone you're in. How to spot you is shared only with someone you accept, only until you meet, and never stored after. Your exact position is shared only with someone you accept, only until you meet, and never stored after. It turns off by itself in an hour.";
+  "While this is on, people you can see can also see that you're around and which zone you're in. How to spot you is shared only with someone you accept, only until you meet, and never stored after. Your exact position is shared only with someone you accept, only until you meet, and never stored after. It turns off by itself after an hour unless you choose to stay around for the day.";
 
 export const POSITION_LABEL = 'Use my position too (optional)';
 export const POSITION_EXPLAINER =

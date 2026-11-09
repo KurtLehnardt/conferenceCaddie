@@ -1,5 +1,8 @@
-// The home tab: the ended-talk banner, the people search ("What are you working on, or about
-// to?") with "Around now", the "I'm around" switch, People to meet, and the "For you" row.
+// The home tab. Home is Around: while presence is on it opens on the Around view ("Still in
+// {zone}?", the nudge banner, the presence card, then who's around, my zone first), with the text
+// search collapsed to one "Find someone specific" button. While presence is off it opens as
+// before: the presence switch on top, the people search ("What are you working on, or about to?")
+// with "Around now", People to meet, and the "For you" row.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, MessagesSquare, Search, UserRound, Users, X } from 'lucide-preact';
 import { fetchMatches, isAbort, MATCH_PAGE, PeopleApiError } from './api';
@@ -20,6 +23,9 @@ export const VISIBILITY_NOTICE =
 
 export const SEARCH_PLACEHOLDER = 'What are you working on, or about to?';
 export const SEARCH_EMPTY = "Nobody's profile matches that yet. Try different words, or fewer.";
+export const FIND_LABEL = 'Find someone specific';
+export const AROUND_TITLE = "Who's around";
+export const AROUND_EMPTY = "Nobody else is around right now. People show up here as they turn on \"Around and up for a conversation\".";
 const DEBOUNCE_MS = 350;
 
 export function EndedTalkBanner({
@@ -204,11 +210,14 @@ function PeopleList({
   interested,
   query,
   around,
+  groupZone,
 }: {
   conference: ConferenceLike;
   interested: InterestedProp;
   query: string;
   around: boolean;
+  /** The Around home view: people in this zone are listed first, then the rest of the venue. */
+  groupZone?: string | null;
 }) {
   usePeopleStore();
   const slug = conference.slug;
@@ -308,14 +317,24 @@ function PeopleList({
   if (!results.length) {
     return (
       <p class="pp-hint pp-pad">
-        {searching ? SEARCH_EMPTY : 'No matches yet. Add more topics to your profile, or check back as more people join.'}
+        {groupZone ? AROUND_EMPTY : searching ? SEARCH_EMPTY : 'No matches yet. Add more topics to your profile, or check back as more people join.'}
       </p>
     );
   }
+  // The Around home view groups by zone (server order kept inside each group): my zone first.
+  const inZone = groupZone ? results.filter((p) => p.proximity === 'same_zone' || p.zone === groupZone) : [];
+  const elsewhere = groupZone ? results.filter((p) => !inZone.includes(p)) : results;
   return (
     <div class="pp-list" ref={list}>
       <SampleNote people={results} />
-      {results.map((p) => (
+      {groupZone && (
+        <h3 class="pp-group-title">{inZone.length ? `In ${groupZone}` : `Nobody else in ${groupZone} yet`}</h3>
+      )}
+      {inZone.map((p) => (
+        <PersonCard key={p.ref} person={p} slug={slug} />
+      ))}
+      {groupZone && elsewhere.length > 0 && <h3 class="pp-group-title">Elsewhere at the venue</h3>}
+      {elsewhere.map((p) => (
         <PersonCard key={p.ref} person={p} slug={slug} />
       ))}
       {!page.done && (
@@ -341,10 +360,25 @@ export function PeopleScreen({
   hereZone?: string | null;
   onHereHandled?: () => void;
 }) {
-  const [input, setInput] = useState(() => takePendingSearch() ?? '');
+  usePeopleStore();
+  const slug = conference.slug;
+  const pending = useRef(takePendingSearch());
+  const [input, setInput] = useState(() => pending.current ?? '');
   const [query, setQuery] = useState(input);
-  const [around, setAround] = useState(false);
+  // The "Around now" chip of the search bar; the Around home view is around whatever it says.
+  const [aroundChip, setAroundChip] = useState(false);
+  // "Find someone specific": the search bar, collapsed while presence is on until it is tapped
+  // (a search handed over from a topic chip opens it at once).
+  const [findOpen, setFindOpen] = useState(() => !!pending.current);
   const timer = useRef<number | undefined>(undefined);
+  const searchInput = useRef<HTMLDivElement>(null);
+
+  const presence = getPresence(slug);
+  const presenceOn = presence.on && !!presence.zone;
+  // Home is Around: with presence on and the search collapsed, the tab shows who's around.
+  const aroundHome = presenceOn && !findOpen;
+  const searchOpen = !presenceOn || findOpen;
+  const around = aroundHome ? true : aroundChip;
 
   const onInput = (v: string) => {
     setInput(v);
@@ -354,30 +388,68 @@ export function PeopleScreen({
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  // Nudges: "See who" opens the Around now view, where the person's card is.
-  const { reveal } = useNudges(conference.slug);
+  const openFind = () => {
+    setAroundChip(presenceOn);
+    setFindOpen(true);
+    window.setTimeout(() => searchInput.current?.querySelector('input')?.focus(), 0);
+  };
+  const closeFind = () => {
+    onInput('');
+    setFindOpen(false);
+  };
+
+  // Nudges: "See who" opens the Around view, where the person's card is.
+  const { reveal } = useNudges(slug);
   useEffect(() => {
     if (!reveal) return;
     onInput('');
-    setAround(true);
+    if (presenceOn) setFindOpen(false);
+    else {
+      setAroundChip(true);
+      setFindOpen(true);
+    }
   }, [reveal]);
 
-  const searching = !!query.trim() || around;
+  const searching = !aroundHome && (!!query.trim() || around);
+  const title = aroundHome
+    ? AROUND_TITLE
+    : searching
+      ? around && !query.trim()
+        ? 'People around now'
+        : 'People who match'
+      : 'People to meet';
+  const findButton = (
+    <button type="button" class="btn btn-tonal pp-find-btn" onClick={openFind}>
+      <Search size={18} aria-hidden="true" />
+      {FIND_LABEL}
+    </button>
+  );
+  const searchBar = (
+    <div ref={searchInput}>
+      <PeopleSearchBar value={input} around={around} onInput={onInput} onAround={setAroundChip} />
+      {presenceOn && (
+        <button type="button" class="btn btn-text btn-small pp-find-back" onClick={closeFind}>
+          Back to who's around
+        </button>
+      )}
+    </div>
+  );
   return (
     <div class="pp-screen">
       <StillHereRow conference={conference} interested={interested} />
       <NudgeBanner conference={conference} />
-      <PeopleSearchBar value={input} around={around} onInput={onInput} onAround={setAround} />
       <PresenceControls conference={conference} interested={interested} deepLink={hereZone} onDeepLinkHandled={onHereHandled} />
+      {searchOpen && searchBar}
       {!searching && <EndedTalkBanner conference={conference} interested={interested} onOpenTalk={onOpenTalk} />}
       <section class="pp-section" aria-labelledby="pp-people-title">
         <div class="pp-section-head">
           <h2 id="pp-people-title" class="pp-section-title">
-            {searching ? (around && !query.trim() ? 'People around now' : 'People who match') : 'People to meet'}
+            {title}
           </h2>
         </div>
-        <PeopleList conference={conference} interested={interested} query={query} around={around} />
+        <PeopleList conference={conference} interested={interested} query={query} around={around} groupZone={aroundHome ? presence.zone : null} />
       </section>
+      {aroundHome && findButton}
       {!searching && <ForYouRow conference={conference} interested={interested} onOpenTalk={onOpenTalk} />}
     </div>
   );

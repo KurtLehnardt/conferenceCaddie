@@ -1086,3 +1086,22 @@
   top: 4px;
   left: 24px;
 }
+
+/* Home is Around: the collapsed search and the zone groups of the Around view. */
+.pp-find-btn {
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+.pp-find-back {
+  justify-self: start;
+  margin-top: 4px;
+}
+.pp-group-title {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}

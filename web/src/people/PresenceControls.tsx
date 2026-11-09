@@ -30,7 +30,7 @@ import type { ConferenceLike, InterestedProp, PresenceMode } from './types';
 import { toast } from './ui';
 import { interestedTalks } from './util';
 
-export const PRESENCE_LABEL = 'Around and up for a conversation (while the app is open)';
+export const PRESENCE_LABEL = 'Around and up for a conversation';
 export const DAY_HINT = "Stays on until you turn it off or the day ends. Whenever you come back to the app after a while, it asks whether you're still in the same zone.";
 const SPOT_MAX = 60;
 const LIKELY_ZONES = 4;
