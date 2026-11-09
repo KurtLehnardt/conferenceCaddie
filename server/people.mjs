@@ -16,8 +16,10 @@
 // - Elasticsearch does all matching, ranking and filtering. People are ranked by one rrf
 //   retriever; this module only builds queries and reshapes hits in the order returned. The
 //   reasons shown with a result are built from the topic lists and titles of that result, which
-//   explains a rank but never changes it. The one result a search drops afterwards is a person
-//   whose only link to the requester is a topic the whole conference shares (see matches).
+//   explains a rank but never changes it. The one exception is the specificity rule in matches:
+//   a person whose only link to the requester is a topic the whole conference shares is a broad
+//   match, left out of a text search, and shown in the "around now" view only when both are in
+//   the same zone, after the specific matches of the page.
 // - A people document exists only while its owner is visible conference-wide or shares for at
 //   least one talk. Every people query filters on event_id and on visible_until > now, and
 //   leaves out anyone the requester has blocked or who has blocked the requester.
@@ -401,7 +403,7 @@ function readBody(req) {
   });
 }
 
-export const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 export async function jsonBody(req, allowedKeys) {
   const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -769,14 +771,22 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
 }
 
 // Shapes one hit for the requester. In a text search (query given) the evidence leads the
-// reasons; zone is included only while both the requester and this person are around.
-function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false } = {}) {
+// reasons; zone is included only while both the requester and this person are around. A broad
+// match carries no evidence and is labelled with the common topic it shares instead.
+function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
   const s = hit._source ?? {};
   const topicsOf = (ids) => (ids ?? []).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) }));
-  const evidence = evidenceFor(hit);
+  const evidence = broad ? null : evidenceFor(hit);
   const around = isAround(s);
   const zone = around && isAround(me) && s.presence_zone ? s.presence_zone : null;
-  const reasons = reasonsFor(me, s, labels, talkTitles, passageFrom(hit), circleTalkId, { evidence: search ? evidence : null, zone });
+  let reasons;
+  if (broad) {
+    const shared = sharedTopics(me, s).filter((t) => labels.has(t)).map((t) => labels.get(t));
+    reasons = shared.length ? [`Also interested in ${listFormat.format(shared.slice(0, 4))}.`] : [];
+    if (zone) reasons.push(`They're in ${zone} right now.`);
+  } else {
+    reasons = reasonsFor(me, s, labels, talkTitles, passageFrom(hit), circleTalkId, { evidence: search ? evidence : null, zone });
+  }
   return {
     ref: refFor(me.event_id, s.profile_id ?? hit._id),
     display_name: s.display_name ?? '',
@@ -790,6 +800,7 @@ function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false } 
     evidence,
     around,
     zone,
+    broad,
   };
 }
 
@@ -947,17 +958,20 @@ async function searchPeople(body) {
   }
 }
 
-// The specificity rule: a hit is dropped when it was found only by the topic retrievers and every
-// topic it shares with the requester is one of the conference's ten most common. A hit found by a
-// text retriever, or one whose explanation is missing, is kept.
-function specific(hit, legs, me, common) {
-  const matched = matchedLegs(hit, legs);
-  if (!matched || matched.some((i) => legs[i] !== 'topics')) return true;
-  const s = hit._source ?? {};
+// The topics a hit shares with the requester, in either direction.
+function sharedTopics(me, s) {
   const theirSpeak = new Set(s.speak_topics ?? []);
   const theirLearn = new Set(s.learn_topics ?? []);
-  const overlap = [...(me.learn_topics ?? []).filter((t) => theirSpeak.has(t)), ...(me.speak_topics ?? []).filter((t) => theirLearn.has(t))];
-  return overlap.some((t) => !common.has(t));
+  return [...new Set([...(me.learn_topics ?? []).filter((t) => theirSpeak.has(t)), ...(me.speak_topics ?? []).filter((t) => theirLearn.has(t))])];
+}
+
+// The specificity rule: a hit is a broad match when it was found only by the topic retrievers and
+// every topic it shares with the requester is one of the conference's ten most common. A hit found
+// by a text retriever, or one whose explanation is missing, is specific.
+function isBroad(hit, legs, me, common) {
+  const matched = matchedLegs(hit, legs);
+  if (!matched || matched.some((i) => legs[i] !== 'topics')) return false;
+  return sharedTopics(me, hit._source ?? {}).every((t) => common.has(t));
 }
 
 async function matches(req, res) {
@@ -993,12 +1007,18 @@ async function matches(req, res) {
   const talkIds = interested.filter((id) => mine.has(id));
   const [json, topics] = await Promise.all([searchPeople(q.body), topicsOf(conf.slug)]);
   const all = json.hits?.hits ?? [];
-  const hits = all.filter((h) => specific(h, q.legs, me, topics.common));
+  // Broad matches are dropped from a text search and from the "anyone" view. The "around now"
+  // view keeps those who are in the requester's own zone right now, after every specific match
+  // on the page; that is the only place this module changes the order Elasticsearch returned.
+  const broad = new Set(all.filter((h) => isBroad(h, q.legs, me, topics.common)));
+  const sameZone = (h) => isAround(me) && isAround(h._source ?? {}) && h._source.presence_zone === me.presence_zone;
+  const specific = all.filter((h) => !broad.has(h));
+  const hits = query || when !== 'around_now' ? specific : [...specific, ...all.filter((h) => broad.has(h) && sameZone(h))];
   const usedTalks = talkIds.filter((id) => hits.some((h) => (h._source?.shared_talk_ids ?? []).includes(id)));
   const talks = await talksById(conf.slug, usedTalks, ['title']);
   const titles = new Map([...talks].map(([id, s]) => [id, s.title ?? '']));
   sendJson(res, 200, {
-    results: hits.map((h) => toPerson(h, me, topics.labels, titles, null, { search: Boolean(query) })),
+    results: hits.map((h) => toPerson(h, me, topics.labels, titles, null, { search: Boolean(query), broad: broad.has(h) })),
     from,
     size,
     has_more: all.length === size,

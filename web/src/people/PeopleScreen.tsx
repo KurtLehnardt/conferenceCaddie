@@ -7,7 +7,7 @@ import { takePendingSearch, withoutBlocked } from './connect';
 import { ForYouRow } from './ForYou';
 import { PersonCard, SampleNote } from './PersonCard';
 import { PresenceControls } from './PresenceControls';
-import { getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
+import { getPresence, getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
 import { changeVisibility, getSaveCount } from './sync';
 import { TalkPeopleControls } from './TalkPeopleControls';
 import type { ConferenceLike, InterestedProp, PersonResult, TalkLike } from './types';
@@ -221,7 +221,9 @@ function PeopleList({
   const [more, setMore] = useState(false);
   const sentinel = useRef<HTMLDivElement>(null);
   const searching = !!query.trim() || around;
-  const key = `${slug}|${query.trim()}|${around}`;
+  // Zones come back only while I am around, so the list is fetched again when that changes.
+  const meAround = getPresence(slug).on;
+  const key = `${slug}|${query.trim()}|${around}|${meAround}`;
   const current = useRef(key);
   current.current = key;
 
@@ -256,10 +258,11 @@ function PeopleList({
     return () => ctl.abort();
   }, [slug, vis.open_to_meet, saves, idsKey, key]);
 
-  // Appends the next page when the end of the list comes into view.
+  // Appends the next page when the end of the list comes into view. The effect depends on the
+  // page only: the "more" flag is for display, so setting it must not abort the fetch.
   useEffect(() => {
     const el = sentinel.current;
-    if (!el || !page || page.done || more || typeof IntersectionObserver === 'undefined') return;
+    if (!el || !page || page.done || typeof IntersectionObserver === 'undefined') return;
     const ctl = new AbortController();
     const io = new IntersectionObserver((entries) => {
       if (!entries.some((e) => e.isIntersecting)) return;
@@ -276,14 +279,14 @@ function PeopleList({
         .catch((err) => {
           if (!isAbort(err)) setPage({ ...page, done: true });
         })
-        .finally(() => !ctl.signal.aborted && setMore(false));
+        .finally(() => setMore(false));
     });
     io.observe(el);
     return () => {
       io.disconnect();
       ctl.abort();
     };
-  }, [page, more]);
+  }, [page]);
 
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;

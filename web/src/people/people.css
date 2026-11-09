@@ -703,9 +703,11 @@
 
 .pp-search {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
   gap: 8px;
+}
+
+.pp-search .chip {
+  justify-self: start;
 }
 
 .pp-search .search-field {
@@ -717,7 +719,7 @@
 }
 
 .pp-search .chip {
-  height: 44px;
+  height: 40px;
 }
 
 .pp-around {

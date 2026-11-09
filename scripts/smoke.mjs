@@ -10,12 +10,13 @@
 //   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when web/dist has not been built.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
 //   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only to write and remove one
-//                        expired test profile directly, because the API can never create one. Without
-//                        a key that check is skipped.
+//                        expired test profile directly, because the API can never create one, and to
+//                        age one test profile's presence, because the API can never set it in the
+//                        past. Without a key those two checks are skipped.
 //
 // The script creates its own temporary test profiles, each with a random device secret, and
-// deletes them at the end. It never changes the seeded sample profiles. Key values are compared
-// in-process and never printed.
+// deletes them at the end, together with the blocks and meets they made. It never changes the
+// seeded sample profiles. Key values are compared in-process and never printed.
 //
 // Each check prints one PASS, FAIL or SKIP line. The script exits 1 if any check fails.
 
@@ -53,6 +54,15 @@ const CIRCLE_TALK_TITLE = 'From Bytes to Traces: A Deep Dive into OpenTelemetry 
 // Topics the test profiles use. The requester wants to learn all three, and exactly one test
 // profile can speak to all three, which no sample does.
 const LEARN = ['ebpf', 'gpu', 'llm'];
+
+// Find & connect. The passage is specific enough that its author ranks first for the query, and
+// the common topic is the one everyone at this conference matches on.
+const FIND_PASSAGE = 'ran Postgres operators on bare metal for three years and debugged WAL corruption after a power cut';
+const FIND_QUERY = 'postgres operators on bare metal';
+const COMMON_TOPIC = 'kubernetes';
+const ZONE_A = 'Registration';
+const ZONE_F = 'Expo hall';
+const WORDLIST = JSON.parse(readFileSync(join(ROOT, 'config', 'moderation-words.json'), 'utf8')).words ?? [];
 
 const BUNDLE_SECRET_VARS = ['ELASTISEARCH_API_KEY', 'GC_API_KEY', 'ES_READONLY_KEY', 'ES_PEOPLE_API_KEY'];
 const BUNDLE_PATTERNS = ['ApiKey ', '.es.io', 'AIza', 'BEGIN PRIVATE KEY', 'MOCK_FIXTURE_DO_NOT_SHIP'];
@@ -417,6 +427,10 @@ const B = newDevice(); // can speak to everything A wants to learn, visible
 const C = newDevice(); // can speak to the same, but only shares for the circle talk
 const D = newDevice(); // visible at another conference, with the same topics where possible
 const N = newDevice(); // visible, but never shares for the circle talk
+const F = newDevice(); // Find & connect: the person with the specific passage, can speak to LEARN
+const K = newDevice(); // Find & connect: shares only the common topic with A, no text
+const X = newDevice(); // Find & connect: never gets a profile
+const spotMarker = `smoke-spot-${runTag}`;
 const expiredId = `${PRIMARY}:${crypto.randomBytes(16).toString('base64url')}`;
 let expiredWritten = false;
 let circleTalk = null;
@@ -574,6 +588,193 @@ try {
     report(r.status === 403, 'p10: a cross-origin write is rejected', `status ${r.status}`);
   });
 
+  // ---------------------------------------------------------------------------------------------
+  // Find & connect: search by text, presence, meets and blocks. A is the requester.
+
+  const findMatches = (device, label, extra = {}) => api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], query: FIND_QUERY, ...extra }, { device, label });
+  const personIn = (r, who) => (r.json.results ?? []).find((p) => p.display_name === testName(who));
+  let refF = null;
+  let refA = null;
+
+  await check('q1: a specific query ranks the person with the matching passage first and returns it as evidence', async () => {
+    const f = await putProfile(F, PRIMARY, 'F', { speak: LEARN, expertise: FIND_PASSAGE }, { open: true });
+    const k = await putProfile(K, PRIMARY, 'K', { learn: [COMMON_TOPIC] }, { open: true });
+    if (f.status !== 200 || k.status !== 200) throw new Error(`profiles gave ${f.status}/${k.status}`);
+    const r = await findMatches(A, 'A-find');
+    if (r.status !== 200) throw new Error(`status ${r.status}`);
+    const rank = names(r.json.results).indexOf(testName('F'));
+    const p = r.json.results?.[rank];
+    refF = p?.ref ?? null;
+    const problems = [];
+    if (rank !== 0) problems.push(rank === -1 ? 'F not returned' : `F at rank ${rank + 1}`);
+    if (!p?.evidence || !/postgres/i.test(p.evidence.replace(/<\/?mark>/g, ''))) problems.push(`evidence "${p?.evidence}"`);
+    if (!p?.reasons?.[0]?.startsWith("They've worked on")) problems.push(`first reason "${p?.reasons?.[0]}"`);
+    if (p && (p.around !== false || p.zone !== null)) problems.push('around or zone set before anyone is around');
+    if (r.json.from !== 0 || r.json.size !== 20 || typeof r.json.has_more !== 'boolean') problems.push('paging fields missing');
+    report(problems.length === 0, 'q1: a specific query ranks the person with the matching passage first and returns it as evidence', problems.length ? problems.join('; ') : `rank 1, evidence "${p.evidence.slice(0, 60)}"`);
+  });
+
+  await check('q2: a result sharing only the common topic is dropped', async () => {
+    const plain = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
+    const text = await findMatches(A, 'A-find');
+    const problems = [];
+    if (plain.status !== 200 || text.status !== 200) throw new Error(`status ${plain.status}/${text.status}`);
+    if (names(plain.json.results).includes(testName('K'))) problems.push('K in profile matches');
+    if (names(text.json.results).includes(testName('K'))) problems.push('K in text matches');
+    if (!names(plain.json.results).includes(testName('F'))) problems.push('F (specific topics) missing from profile matches');
+    const whenBad = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], when: 'soon' }, { device: A, label: 'A-matches' });
+    if (whenBad.status !== 400) problems.push(`when=soon gave ${whenBad.status}`);
+    report(problems.length === 0, 'q2: a result sharing only the common topic is dropped', problems.length ? problems.join('; ') : `K absent, F present among ${plain.json.results.length}`);
+  });
+
+  await check('q3: presence needs a visible profile', async () => {
+    const none = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: X, label: 'X-presence' });
+    const circleOnly = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: C, label: 'C-presence' });
+    const badZone = await api('PUT', '/api/presence', { event: PRIMARY, zone: 'No Such Zone', spot: '' }, { device: A, label: 'A-presence' });
+    const ok = none.status === 403 && none.json.error === 'profile_required' && circleOnly.status === 403 && circleOnly.json.error === 'profile_required' && badZone.status === 400;
+    report(ok, 'q3: presence needs a visible profile', `no profile ${none.status} ${none.json.error}, circle-only ${circleOnly.status} ${circleOnly.json.error}, unknown zone ${badZone.status}`);
+  });
+
+  await check('q4: a listed word is rejected', async () => {
+    if (!WORDLIST.length) throw new Error('config/moderation-words.json has no words');
+    const word = WORDLIST[0];
+    const leet = word.replace(/o/g, '0').replace(/i/g, '1').replace(/e/g, '3').replace(/a/g, '4').replace(/s/g, '5');
+    const spot = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: `by the ${word} stand` }, { device: A, label: 'A-presence' });
+    const leetSpot = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: `by the ${leet.toUpperCase()} stand` }, { device: A, label: 'A-presence' });
+    const url = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: 'see example.com/me' }, { device: A, label: 'A-presence' });
+    const linkedin = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: 'see linkedin.com/in/me' }, { device: A, label: 'A-presence' });
+    const filtered = (r) => r.status === 400 && r.json.error === 'filtered' && r.json.message === 'That was held back by the filter. Edit it and try again.';
+    report(filtered(spot) && filtered(leetSpot) && filtered(url) && linkedin.status === 200, 'q4: a listed word is rejected', `word ${spot.status}, leet ${leetSpot.status}, url ${url.status}, linkedin.com ${linkedin.status}`);
+  });
+
+  await check('q5: results carry no zone unless both are around', async () => {
+    const a = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: spotMarker }, { device: A, label: 'A-presence' });
+    if (a.status !== 200) throw new Error(`A presence gave ${a.status}`);
+    const onlyA = await findMatches(A, 'A-find');
+    const f1 = personIn(onlyA, 'F');
+    const f = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_F, spot: `${spotMarker}-f` }, { device: F, label: 'F-presence' });
+    if (f.status !== 200) throw new Error(`F presence gave ${f.status}`);
+    const both = await findMatches(A, 'A-find');
+    const f2 = personIn(both, 'F');
+    const around = await findMatches(A, 'A-find', { when: 'around_now' });
+    // K shares only the common topic with A: absent until K is around in A's own zone, then last
+    // in the "around now" view only, labelled with the topic.
+    const k = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: K, label: 'K-presence' });
+    if (k.status !== 200) throw new Error(`K presence gave ${k.status}`);
+    const aroundView = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], when: 'around_now' }, { device: A, label: 'A-matches' });
+    const kView = personIn(aroundView, 'K');
+    const anyoneView = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
+    const fromN = await findMatches(N, 'N-find');
+    const f3 = personIn(fromN, 'F');
+    refA = personIn(await findMatches(F, 'F-find', { query: 'eBPF GPU LLM' }), 'A')?.ref ?? null;
+    const problems = [];
+    if (!f1 || f1.around !== false || f1.zone !== null) problems.push('F not around yet shows around or a zone');
+    if (!f2 || f2.around !== true || f2.zone !== ZONE_F) problems.push(`both around: F around ${f2?.around}, zone ${f2?.zone}`);
+    if (f2 && !f2.reasons.includes(`They're in ${ZONE_F} right now.`)) problems.push('no zone reason');
+    if (!names(around.json.results).includes(testName('F'))) problems.push('around_now misses F');
+    if (names(around.json.results).includes(testName('K'))) problems.push('around_now lists K before K is around');
+    const kRank = names(aroundView.json.results).indexOf(testName('K'));
+    if (kRank === -1 || kRank !== aroundView.json.results.length - 1) problems.push(`K at rank ${kRank + 1} of ${aroundView.json.results.length} in the around-now view`);
+    if (kView && !(kView.broad === true && kView.evidence === null && kView.reasons[0] === 'Also interested in Kubernetes.')) problems.push(`K is labelled ${JSON.stringify(kView.reasons)}`);
+    if (names(anyoneView.json.results).includes(testName('K'))) problems.push('K in the anyone view');
+    if (!f3 || f3.around !== true || f3.zone !== null) problems.push(`N (not around) sees F zone ${f3?.zone}`);
+    if (typeof a.json.presence_until !== 'string' || Date.parse(a.json.presence_until) - Date.now() > 61 * 60_000) problems.push('presence_until is not within an hour');
+    report(problems.length === 0, 'q5: results carry no zone unless both are around', problems.length ? problems.join('; ') : `F zone ${ZONE_F} shown to A only`);
+  });
+
+  let meetId = null;
+  await check('q6: a third device gets 403 from a meet, and 410 after found', async () => {
+    if (!refF) throw new Error('F has no ref');
+    const noted = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: `see ${WORDLIST[0] ?? 'example.com'}` }, { device: A, label: 'A-meet' });
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: 'ebpf', note: 'compare notes on Postgres operators' }, { device: A, label: 'A-meet' });
+    if (r.status !== 200) throw new Error(`request gave ${r.status} ${r.json.error ?? ''}`);
+    meetId = r.json.meet_id;
+    const again = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
+    const inbox = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: F, label: 'F-inbox' });
+    const third = await api('GET', `/api/meet/${meetId}`, undefined, { device: N, label: 'N-meet' });
+    const nobody = await api('GET', `/api/meet/${meetId}`, undefined, { device: X, label: 'X-meet' });
+    const thirdAccept = await api('POST', `/api/meet/${meetId}/accept`, {}, { device: N, label: 'N-meet' });
+    const accept = await api('POST', `/api/meet/${meetId}/accept`, {}, { device: F, label: 'F-meet' });
+    const details = await api('PUT', `/api/meet/${meetId}/details`, { spot_me: `${spotMarker}-me`, rendezvous: ZONE_A }, { device: F, label: 'F-meet' });
+    const seen = await api('GET', `/api/meet/${meetId}`, undefined, { device: A, label: 'A-meet' });
+    const found = await api('POST', `/api/meet/${meetId}/found`, {}, { device: A, label: 'A-meet' });
+    const after = await api('GET', `/api/meet/${meetId}`, undefined, { device: F, label: 'F-meet' });
+    const problems = [];
+    if (noted.status !== 400 || noted.json.error !== 'filtered') problems.push(`a listed word in a note gave ${noted.status}`);
+    if (r.json.state !== 'requested') problems.push(`state after request ${r.json.state}`);
+    if (again.status !== 409) problems.push(`a second open request gave ${again.status}`);
+    if (!(inbox.json.incoming ?? []).some((m) => m.meet_id === meetId && m.from?.display_name === testName('A') && m.topic_label === 'eBPF')) problems.push('F\'s inbox lacks the request');
+    if (third.status !== 403 || nobody.status !== 403 || thirdAccept.status !== 403) problems.push(`third devices got ${third.status}/${nobody.status}/${thirdAccept.status}`);
+    if (accept.status !== 200 || accept.json.state !== 'active') problems.push(`accept gave ${accept.status} ${accept.json.state}`);
+    if (details.status !== 200) problems.push(`details gave ${details.status}`);
+    if (seen.status !== 200 || seen.json.other?.zone !== ZONE_F || seen.json.other?.spot_me !== `${spotMarker}-me` || seen.json.rendezvous !== ZONE_A) problems.push(`A sees ${JSON.stringify(seen.json.other ?? {})}`);
+    if (found.status !== 200 || found.json.state !== 'found') problems.push(`found gave ${found.status}`);
+    if (after.status !== 410 || after.json.state !== 'found') problems.push(`after found: ${after.status}`);
+    report(problems.length === 0, 'q6: a third device gets 403 from a meet, and 410 after found', problems.length ? problems.join('; ') : 'requested, active with zone and spot-me, found, then 410');
+  });
+
+  await check('q7: presence expires', async () => {
+    if (!ES_WRITE_KEY) {
+      skip('q7: presence expires', 'no Elasticsearch write key in the environment');
+      return;
+    }
+    // Aged directly with a Bulk partial update (the write the server itself uses, so nothing is
+    // re-embedded), because the API always sets presence_until an hour ahead.
+    const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
+      method: 'POST',
+      headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
+      body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${A.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const aged = res.ok ? await res.json().catch(() => ({})) : {};
+    if (!res.ok) await res.body?.cancel();
+    if (!res.ok || aged.errors) throw new Error(`aging A's presence gave ${res.status}`);
+    const r = await findMatches(A, 'A-find');
+    const f = personIn(r, 'F');
+    const fromF = personIn(await findMatches(F, 'F-find', { query: 'eBPF GPU LLM' }), 'A');
+    const ok = f && f.around === true && f.zone === null && fromF && fromF.around === false;
+    report(Boolean(ok), 'q7: presence expires', ok ? 'an aged presence_until hides the zone and shows A as not around' : `F zone ${f?.zone}, A around ${fromF?.around}`);
+  });
+
+  await check('q8: block is symmetric and refuses a meet either way with the same body', async () => {
+    if (!refF || !refA) throw new Error('refs missing');
+    const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
+    const fromA = await findMatches(A, 'A-find');
+    const fromF = await findMatches(F, 'F-find', { query: 'eBPF GPU LLM' });
+    const aToF = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
+    const fToA = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: F, label: 'F-meet' });
+    const list = await api('GET', `/api/people/blocks?event=${PRIMARY}`, undefined, { device: A, label: 'A-blocks' });
+    const un = await api('DELETE', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
+    const back = await findMatches(A, 'A-find');
+    const problems = [];
+    if (blk.status !== 200) problems.push(`block gave ${blk.status}`);
+    if (names(fromA.json.results).includes(testName('F'))) problems.push('F still in A\'s results');
+    if (names(fromF.json.results).includes(testName('A'))) problems.push('A still in F\'s results');
+    if (aToF.status !== 403 || fToA.status !== 403 || aToF.json.error !== 'blocked' || JSON.stringify(aToF.json) !== JSON.stringify(fToA.json)) problems.push(`meets gave ${aToF.status} ${JSON.stringify(aToF.json)} and ${fToA.status} ${JSON.stringify(fToA.json)}`);
+    if (!(list.json.refs ?? []).includes(refF) || !(list.json.blocks ?? []).some((b) => b.ref === refF && b.display_name === testName('F'))) problems.push('blocks list lacks F');
+    if (un.status !== 200 || !names(back.json.results).includes(testName('F'))) problems.push('F not back after unblock');
+    report(problems.length === 0, 'q8: block is symmetric and refuses a meet either way with the same body', problems.length ? problems.join('; ') : 'hidden both ways, 403 blocked both ways, listed, unblocked');
+  });
+
+  await check('q9: delete removes everything', async () => {
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
+    const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refA }, { device: F, label: 'F-block' });
+    if (r.status !== 200 || blk.status !== 200) throw new Error(`setup gave ${r.status}/${blk.status}`);
+    const del = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: F, label: 'F-delete' });
+    const meet = await api('GET', `/api/meet/${r.json.meet_id}`, undefined, { device: A, label: 'A-meet' });
+    const inbox = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: A, label: 'A-inbox' });
+    const found = await findMatches(A, 'A-find');
+    const problems = [];
+    if (del.status !== 200) problems.push(`delete gave ${del.status}`);
+    if (meet.status !== 404) problems.push(`the meet still answers ${meet.status}`);
+    if ((inbox.json.outgoing ?? []).some((m) => m.meet_id === r.json.meet_id)) problems.push('the meet is still in A\'s inbox');
+    if (names(found.json.results).includes(testName('F'))) problems.push('F still found');
+    // A blocked by F: F's block went with F's profile, so A is not hidden from anyone now.
+    const fromN = await findMatches(N, 'N-find', { query: 'eBPF GPU LLM' });
+    if (fromN.status !== 200) problems.push(`N's search gave ${fromN.status}`);
+    report(problems.length === 0, 'q9: delete removes everything', problems.length ? problems.join('; ') : 'profile, meet and block gone');
+  });
+
   await check('p11: a deleted profile disappears at once', async () => {
     const del = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: B, label: 'B-delete' });
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
@@ -671,11 +872,13 @@ try {
   // l. secret_hash and other private fields never leak, and a test profile's contact details
   // reach only people allowed to see them.
   const hits = [];
-  const secrets = [A, B, C, D, N].flatMap((d) => [d.secret, d.profileId]);
-  const hashes = [A, B, C, D, N].map((d) => crypto.createHash('sha256').update(d.secret).digest('hex'));
+  const secrets = [A, B, C, D, N, F, K, X].flatMap((d) => [d.secret, d.profileId]);
+  const hashes = [A, B, C, D, N, F, K, X].map((d) => crypto.createHash('sha256').update(d.secret).digest('hex'));
   for (const r of responses) {
-    for (const word of ['secret_hash', 'text_hash', '"profile_id"', '_semantic']) if (r.text.includes(word)) hits.push(`${word} in ${r.path}`);
+    for (const word of ['secret_hash', 'text_hash', '"profile_id"', '_semantic', 'presence_spot', 'blocker_id', 'blocked_id']) if (r.text.includes(word)) hits.push(`${word} in ${r.path}`);
     for (const s of [...secrets, ...hashes]) if (r.text.includes(s)) hits.push(`a device secret, id or hash in ${r.path}`);
+    // Spot lines and spot-me lines leave the server only to the meet's two participants, inside the meet.
+    if (r.text.includes(spotMarker) && !(['A-meet', 'F-meet'].includes(r.label) && r.path.startsWith('/api/meet/')) && !['A-presence', 'F-presence'].includes(r.label)) hits.push(`a spot line in ${r.label} ${r.path}`);
     // C shared only for the circle talk, so only fellow sharers (A) may see C's contact.
     if (r.text.includes(contactMarker('C')) && r.label !== 'A-members') hits.push(`C's contact in ${r.label}`);
     // Nobody may see the expired profile's contact.

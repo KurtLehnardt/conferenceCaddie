@@ -102,7 +102,7 @@ export interface Inbox {
 export interface MeetDetail {
   state: MeetState;
   active_until: string | null;
-  other: { display_name: string; zone: string | null; spot: string | null; spot_me: string | null };
+  other: { display_name: string; zone: string | null; spot: string | null; spot_me: string | null; about?: string | null };
   rendezvous: string | null;
   mine: { spot_me: string | null };
 }

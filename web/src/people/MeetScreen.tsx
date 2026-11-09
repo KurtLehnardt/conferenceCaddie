@@ -67,7 +67,7 @@ export function MeetScreen({
       }
       if (d.rendezvous) setRendezvous(d.rendezvous);
       // The other side ended it, or it ran out.
-      if (d.state === 'found') setView({ kind: 'found', name: d.other.display_name, about: personForMeet(meetId)?.about ?? null });
+      if (d.state === 'found') setView({ kind: 'found', name: d.other.display_name, about: d.other.about ?? personForMeet(meetId)?.about ?? null });
       else if (d.state === 'cancelled' || d.state === 'declined' || d.state === 'expired') {
         setView({ kind: 'error', message: d.state === 'declined' ? 'They said not now.' : 'This meet-up is over.', over: true });
       }
@@ -105,12 +105,12 @@ export function MeetScreen({
     try {
       await meetAction(meetId, 'found');
       end();
-      setView({ kind: 'found', name: view.detail.other.display_name, about: personForMeet(meetId)?.about ?? null });
+      setView({ kind: 'found', name: view.detail.other.display_name, about: view.detail.other.about ?? personForMeet(meetId)?.about ?? null });
     } catch (err) {
       const p = problem(err);
       if (p.over) {
         end();
-        setView({ kind: 'found', name: view.detail.other.display_name, about: personForMeet(meetId)?.about ?? null });
+        setView({ kind: 'found', name: view.detail.other.display_name, about: view.detail.other.about ?? personForMeet(meetId)?.about ?? null });
       } else toast(p.message);
     }
     setBusy(false);

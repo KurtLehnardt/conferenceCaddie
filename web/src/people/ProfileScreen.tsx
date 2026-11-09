@@ -288,7 +288,10 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
           </button>
         ) : (
           <div class="pp-notice">
-            <p>This removes your profile from this phone and from our server, for every conference. It cannot be undone.</p>
+            <p>
+              This removes your profile from this phone and from our server, for every conference, along with your
+              presence, your requests to talk shop and the people you blocked. It cannot be undone.
+            </p>
             <div class="pp-actions">
               <button type="button" class="btn btn-danger btn-small" disabled={deleting} onClick={removeEverything}>
                 {deleting ? 'Deleting…' : 'Delete my profile'}

@@ -13,6 +13,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json ./
 COPY server/ ./server/
+COPY config/moderation-words.json ./config/moderation-words.json
 COPY --from=web-build /build/web/dist ./web/dist
 USER node
 EXPOSE 8080

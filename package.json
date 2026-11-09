@@ -16,6 +16,7 @@
     "people:seed": "node scripts/seed-people.mjs",
     "people:export": "node scripts/export-people.mjs",
     "people:purge": "node scripts/purge-expired-people.mjs",
+    "people:backfill-ref": "node scripts/backfill-ref.mjs",
     "start": "node server/index.mjs",
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web ci && npm --prefix web run build",
