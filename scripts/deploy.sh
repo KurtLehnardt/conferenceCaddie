@@ -15,14 +15,8 @@ ES_INDEX="caddie-talks"
 
 cd "$(dirname "$0")/.."
 
-# Use the dedicated runtime service account when it exists, else the default compute one.
-if [ -n "${GC_SERVICE_USER:-}" ] && gcloud iam service-accounts describe "$GC_SERVICE_USER" --project "$PROJECT" >/dev/null 2>&1; then
-  RUNTIME_SA="$GC_SERVICE_USER"
-  echo "Runtime service account: GC_SERVICE_USER"
-else
-  RUNTIME_SA="265846417372-compute@developer.gserviceaccount.com"
-  echo "Runtime service account: compute default"
-fi
+# The runtime identity is always the dedicated caddie-runtime service account. It holds no project-level roles.
+RUNTIME_SA="caddie-runtime@$PROJECT.iam.gserviceaccount.com"
 
 # The runtime service account may read these two secrets and nothing else in Secret Manager.
 for secret in "$READ_SECRET" "$PEOPLE_SECRET"; do

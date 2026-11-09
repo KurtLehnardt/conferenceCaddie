@@ -1,8 +1,20 @@
 # Conference Caddie
 
-A mobile-first web app for attendees of Linux Foundation conferences whose schedules are on Sessionize. It answers two questions: **who here should I talk to?** and **which talks would I like?** It is not a scheduling tool; each talk links to the conference's official schedule with "Add to my schedule on the official site".
+## Why this exists
 
-Live: https://conference-caddie-265846417372.us-west1.run.app
+The most valuable thing an attendee takes home is the people they met. Talks
+are the shared context that starts those conversations. Every screen should
+make it easier to find the right person and give the two of you something to
+talk about. When a choice comes up, pick the option that leads to more good
+conversations.
+
+Pitch for judges: "Find the right talk, and the right people around it." The
+hackathon track is Elasticsearch's "Find the Right Talk"; people-matching is
+a search problem, and the app treats it as one.
+
+A mobile-first web app for attendees of Linux Foundation conferences whose schedules are on Sessionize. It answers two questions, in this order: **who here should I talk to?** and then **which talks give us something to talk about?** It is not a scheduling tool; each talk links to the conference's official schedule with "Add to my schedule on the official site".
+
+Live: https://conference-caddie-265846417372.us-west1.run.app (KubeCon + CloudNativeCon North America 2026 runs 9 to 12 November in Salt Lake City; 8 November is the Maintainer Summit).
 
 ## What it does
 
@@ -19,6 +31,6 @@ There is no sign-in. A profile is written to Elasticsearch only when you turn on
 - Conference schedules are committed snapshots of public Sessionize feeds. Nothing is fetched at runtime.
 - Elasticsearch is the only data store and does all matching, ranking and filtering: lexical plus `semantic_text` retrievers fused with reciprocal rank fusion for search, people and suggestions. No generative model is used.
 - Each conference's topic list is built from its talk titles at ingestion, with an Elasticsearch analyzer and aggregation.
-- One Node.js service on Cloud Run serves the app and the API. It holds two scoped keys from Secret Manager: a read-only key for talks, conferences and topics, and a people key that can only read and write the people index.
+- One Node.js service on Cloud Run serves the app and the API. It runs as the dedicated `caddie-runtime` service account, which can read only the two secrets below and has no project-level roles. It holds two scoped keys from Secret Manager: a read-only key for talks, conferences and topics, and a people key that can only read and write the people index.
 
 For the API and index shapes, see [docs/CONTRACT.md](docs/CONTRACT.md). Design choices are recorded in [DECISIONS.md](DECISIONS.md).
