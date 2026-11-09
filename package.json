@@ -1,0 +1,20 @@
+{
+  "name": "conference-caddie",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-first web app for finding the right talks at KubeCon + CloudNativeCon North America 2026 with Elasticsearch hybrid search",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "data": "node scripts/build-data.mjs",
+    "es:setup": "node scripts/es-setup.mjs",
+    "ingest": "node scripts/ingest.mjs",
+    "start": "node server/index.mjs",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web ci && npm --prefix web run build",
+    "smoke": "node scripts/smoke.mjs",
+    "deploy": "bash scripts/deploy.sh"
+  }
+}
