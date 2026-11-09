@@ -1,4 +1,4 @@
-import { Star } from 'lucide-preact';
+import { FileUp, Star } from 'lucide-preact';
 import type { Conference, InterestedTalk, Talk } from '../types';
 import { formatDayLong, localDay, zoneLabel, zoneOf } from '../lib/time';
 import { TalkCard } from './talk';
@@ -11,11 +11,13 @@ export function InterestedScreen({
   interested,
   onToggle,
   onBrowse,
+  onImport,
 }: {
   conference: Conference;
   interested: InterestedTalk[];
   onToggle: (t: Talk) => void;
   onBrowse: () => void;
+  onImport: () => void;
 }) {
   // Sharing needs the server, so offline the list shows without the share controls.
   const online = useOnline();
@@ -23,7 +25,15 @@ export function InterestedScreen({
     return (
       <div class="state">
         <Star size={40} class="state-icon" aria-hidden="true" />
-        <p class="state-body">No talks marked yet. Tap “I'm interested” on any talk to keep it here.</p>
+        <p class="state-body">
+          No talks marked yet. Tap “I'm interested” on any talk to keep it here, or import a schedule you already have.
+        </p>
+        {online && (
+          <button type="button" class="btn btn-primary" onClick={onImport}>
+            <FileUp size={18} aria-hidden="true" />
+            Import my schedule
+          </button>
+        )}
         <button type="button" class="btn btn-tonal" onClick={onBrowse}>
           Find talks
         </button>

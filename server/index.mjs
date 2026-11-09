@@ -18,6 +18,7 @@ import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
 import { handleRelatedApi } from './related.mjs';
 import { handleSchedule } from './schedule.mjs';
+import { handleImportApi } from './import.mjs';
 import { take, clientIp } from './ratelimit.mjs';
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -294,14 +295,15 @@ const server = http.createServer((req, res) => {
   handleStatic(req, res, pathname);
 });
 
-// The people, circles, recommendations and topics routes. Each handler reads its own body with
-// its own size limit and resolves to true when it handled the request.
+// The people, circles, recommendations, topics, related and import routes. Each handler reads its
+// own body with its own size limit and resolves to true when it handled the request.
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
   if (await handleRelatedApi(req, res, url)) return;
+  if (await handleImportApi(req, res, url)) return;
   if (!withinLimit(req, res, 'api-unknown', UNKNOWN_API_PER_MIN)) return;
   sendJson(res, 404, { error: 'Not found' });
 }

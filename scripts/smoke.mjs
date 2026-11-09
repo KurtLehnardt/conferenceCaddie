@@ -12,6 +12,8 @@
 //   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only to write and remove one
 //                        expired test profile directly, because the API can never create one. Without
 //                        a key that check is skipped.
+//   ELASTISEARCH_API_KEY used also to compare index document counts before and after the schedule
+//                        imports (the import must store nothing). Without it that check is skipped.
 //
 // The script creates its own temporary test profiles, each with a random device secret, and
 // deletes them at the end. It never changes the seeded sample profiles. Key values are compared
@@ -548,6 +550,140 @@ await check('t3: type-ahead and suggestions return topics with talk counts', asy
     && sug.status === 200 && (sug.json.topics ?? []).some((t) => t.topic_id === 'ebpf');
   report(ok, 't3: type-ahead and suggestions return topics with talk counts', `type-ahead ${status}, suggest ${sug.status}`);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Import my schedule. Every file here is synthetic, built from public talk titles of the primary
+// conference. The import makes seven requests, under the endpoint's limit of ten a minute. It runs
+// before the people checks, so no smoke write happens while the index doc counts are compared.
+
+// Five talks with a unique, plain ASCII title of at least four words, spread over the schedule.
+function importPicks(slug, n) {
+  const talks = readNdjson(slug).filter((d) => d.kind === 'talk');
+  const seen = new Map();
+  for (const t of talks) seen.set(t.title, (seen.get(t.title) ?? 0) + 1);
+  const pool = talks
+    .filter((t) => seen.get(t.title) === 1 && /^[\x20-\x7e]+$/.test(t.title) && t.title.trim().split(/\s+/).length >= 4)
+    .sort((a, b) => (a.talk_id < b.talk_id ? -1 : 1));
+  const step = Math.max(1, Math.floor(pool.length / n));
+  return pool.filter((_, i) => i % step === 0).slice(0, n);
+}
+
+// A schedule as an attendee might save it: day headers, time ranges, titles, speakers, rooms and
+// calendar links.
+function scheduleText(talks, timeZone) {
+  const day = (iso) => new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(iso));
+  const time = (iso) => new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+  const lines = ['My schedule', ''];
+  for (const t of [...talks].sort((a, b) => Date.parse(a.start) - Date.parse(b.start))) {
+    lines.push(day(t.start), '', `${time(t.start)} – ${time(t.end)}`, t.title, `Speakers: ${t.speakers.join(', ')}`, t.room ?? 'Room 1', 'Add to calendar', '');
+  }
+  return lines.join('\n');
+}
+
+// A minimal one-page PDF (Helvetica, WinAnsi text) with one line per item, for the Tika path.
+function makePdf(lines) {
+  const esc = (s) => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const content = ['BT', '/F1 9 Tf', '40 800 Td', '12 TL', ...lines.map((l) => `(${esc(l)}) Tj T*`), 'ET'].join('\n');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`,
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  objs.forEach((o, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+
+// Document counts of every non-hidden index, except caddie-people, where live attendees may save
+// profiles at any moment (the import's key cannot touch it). Needs ELASTISEARCH_API_KEY.
+// The deployed import key cannot write any index at all; scripts/create-es-keys.mjs checks that.
+async function indexCounts() {
+  const res = await fetch(`${ES_URL}/_cat/indices?format=json&h=index,docs.count&expand_wildcards=open`, {
+    headers: { Authorization: `ApiKey ${process.env.ELASTISEARCH_API_KEY}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`index listing gave ${res.status}`);
+  const rows = await res.json();
+  return new Map(rows.filter((r) => !r.index.startsWith('.') && !r.index.startsWith('caddie-people')).map((r) => [r.index, r['docs.count']]));
+}
+
+const IMPORT_OTHER = EXTRA[0];
+const picks = importPicks(PRIMARY, 5);
+const pickIds = new Set(picks.map((t) => t.talk_id));
+const importBody = scheduleText(picks, confBySlug.get(PRIMARY)?.time_zone ?? 'UTC');
+let countsBefore = null;
+if (process.env.ELASTISEARCH_API_KEY) {
+  try {
+    countsBefore = await indexCounts();
+  } catch (err) {
+    report(false, 'im5: an import adds nothing to any index', err.message);
+  }
+}
+const exactHits = (json) => (json.matched ?? []).filter((m) => pickIds.has(m.talk?.talk_id) && m.confidence === 'exact_title').length;
+
+await check('im1: a text file with 5 real titles gets at least 4 matches at "exact title"', async () => {
+  const { status, json } = await api('POST', '/api/import/schedule', { event: PRIMARY, text: importBody });
+  if (status !== 200) throw new Error(`status ${status}`);
+  const exact = exactHits(json);
+  const foreign = (json.matched ?? []).filter((m) => m.talk?.conference !== PRIMARY).length;
+  report(picks.length === 5 && exact >= 4 && foreign === 0, 'im1: a text file with 5 real titles gets at least 4 matches at "exact title"',
+    `${exact} of ${picks.length} at exact title, ${json.matched?.length ?? 0} matched, ${json.unmatched_count} unmatched, ${json.extracted_chars} characters`);
+});
+
+await check(`im2: the same file against ${IMPORT_OTHER} gets none of the first conference's talks`, async () => {
+  const { status, json } = await api('POST', '/api/import/schedule', { event: IMPORT_OTHER, text: importBody });
+  if (status !== 200) throw new Error(`status ${status}`);
+  const primaryTalks = ownTalks.get(PRIMARY);
+  const crossed = (json.matched ?? []).filter((m) => primaryTalks.has(m.talk?.talk_id) || m.talk?.conference !== IMPORT_OTHER);
+  report(crossed.length === 0, `im2: the same file against ${IMPORT_OTHER} gets none of the first conference's talks`,
+    crossed.length ? `${crossed.length} crossed, for example "${crossed[0].talk?.title}"` : `${json.matched?.length ?? 0} matched, all of ${IMPORT_OTHER}`);
+});
+
+await check('im3: a PDF goes through the attachment processor and finds the same talks', async () => {
+  const pdf = makePdf(importBody.split('\n'));
+  const { status, json } = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'schedule.pdf', mime: 'application/pdf', content_base64: pdf.toString('base64') });
+  if (status !== 200) throw new Error(`status ${status}${json.error ? `: ${json.error}` : ''}`);
+  const exact = exactHits(json);
+  report(exact >= 4, 'im3: a PDF goes through the attachment processor and finds the same talks', `${exact} of ${picks.length} at exact title, ${json.extracted_chars} characters extracted`);
+});
+
+await check('im4: a 6 MB upload gets 413, and unknown keys, binary files and unknown conferences are refused', async () => {
+  const big = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'big.txt', mime: 'text/plain', content_base64: Buffer.alloc(6 * 1024 * 1024, 0x41).toString('base64') });
+  const unknownKey = await api('POST', '/api/import/schedule', { event: PRIMARY, text: 'Kubernetes 101 New Contributor Orientation', store: true });
+  const binary = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'x.png', mime: 'image/png', content_base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x80]).toString('base64') });
+  const unknownEvent = await api('POST', '/api/import/schedule', { event: 'no-such-conference-2026', text: 'Kubernetes 101 New Contributor Orientation' });
+  report(big.status === 413 && unknownKey.status === 400 && binary.status === 415 && unknownEvent.status === 400,
+    'im4: a 6 MB upload gets 413, and unknown keys, binary files and unknown conferences are refused',
+    `6 MB ${big.status}, unknown key ${unknownKey.status}, binary ${binary.status}, unknown conference ${unknownEvent.status}`);
+});
+
+if (!process.env.ELASTISEARCH_API_KEY) {
+  skip('im5: an import adds nothing to any index', 'ELASTISEARCH_API_KEY is not set');
+} else if (countsBefore) {
+  await check('im5: an import adds nothing to any index', async () => {
+    // A write would be searchable after the one-second refresh interval.
+    await new Promise((r) => setTimeout(r, 1500));
+    const after = await indexCounts();
+    const changed = [...new Set([...countsBefore.keys(), ...after.keys()])].filter((i) => countsBefore.get(i) !== after.get(i));
+    const describe = (list) => list.map((i) => `${i}: ${countsBefore.get(i) ?? 'none'} -> ${after.get(i) ?? 'none'}`).join('; ');
+    // The indices the import reads must not change at all, and no new index may appear under their
+    // names. Other sessions and operators share the cluster and may build their own indices during
+    // the run, so a change elsewhere is listed but not judged.
+    const judged = changed.filter((i) => /^caddie-(talks|conferences|topics)/.test(i));
+    const others = changed.filter((i) => !judged.includes(i));
+    report(judged.length === 0, 'im5: an import adds nothing to any index',
+      judged.length ? describe(judged) : `${after.size} indices compared, the talks, conferences and topics indices unchanged${others.length ? `; changed by other writers: ${describe(others)}` : ', and every other index unchanged too'}`);
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // People, circles and talks for you. Every test profile is created here and deleted at the end.

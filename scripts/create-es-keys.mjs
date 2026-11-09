@@ -1,21 +1,28 @@
 // Mints the two scoped Elasticsearch API keys the deployed service uses and stores them in
 // Google Secret Manager. It never prints, logs or writes a key value or a password.
 //
-//   ELASTISEARCH_API_KEY=... node scripts/create-es-keys.mjs [--verify-only]
+//   ELASTISEARCH_API_KEY=... node scripts/create-es-keys.mjs [--verify-only] [--only <secret>]
+//
+// --only caddie-es-readonly (or caddie-es-people) re-mints just that key; the other is only
+// verified.
 //
 // An API key cannot mint a derived key that carries privileges, so each key is minted by a
 // native user that holds exactly the key's privileges:
 //   caddie-readonly-svc: read and view_index_metadata on caddie-talks*, caddie-conferences*
-//                        and caddie-topics*. Stored in the secret caddie-es-readonly.
+//                        and caddie-topics*, plus the one cluster action
+//                        cluster:admin/ingest/pipeline/simulate, which "Import my schedule" needs
+//                        to run the attachment processor (Apache Tika) in a simulated pipeline
+//                        that indexes nothing. Stored in the secret caddie-es-readonly.
 //   caddie-people-svc:   read, write and view_index_metadata on caddie-people*.
 //                        Stored in the secret caddie-es-people.
 // Each user gets a random in-memory password, mints its key, and then has its password reset
 // to another random value that is discarded, so nobody can sign in as it afterwards.
 // Key values reach gcloud only through the child process's stdin.
 //
-// The script then checks, in process, that the read key can search talks but cannot write,
-// and that the people key can write people but cannot read or write talks. It prints only
-// PASS or FAIL for each check.
+// The script then checks, in process, that the read key can search talks and extract text but
+// cannot write, read pipelines or call inference, and that the people key can write people but
+// cannot read or write talks or run a simulated pipeline. It prints only PASS or FAIL for each
+// check.
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
@@ -32,12 +39,18 @@ if (!ADMIN) {
 // monitor_inference would also allow calling the cluster's chat, completion and rerank endpoints
 // directly, and it cannot be limited to one endpoint, so it is left out. The verify step checks
 // that both keys are refused on the inference API.
+//
+// The read key's simulate action is narrower than the named privilege read_pipeline, which would
+// also let it read every stored pipeline definition. A simulated pipeline can hold any processor,
+// including an inline inference processor, which Elasticsearch runs without checking inference
+// privileges (verified on 9.5.6 with the embedding model only). The server only ever sends its
+// own fixed attachment pipeline and never takes processors from a request.
 const KEYS = [
   {
     user: 'caddie-readonly-svc',
     role: 'caddie_readonly',
     secret: 'caddie-es-readonly',
-    cluster: [],
+    cluster: ['cluster:admin/ingest/pipeline/simulate'],
     indices: [{ names: ['caddie-talks*', 'caddie-conferences*', 'caddie-topics*'], privileges: ['read', 'view_index_metadata'] }],
   },
   {
@@ -152,6 +165,19 @@ async function verify(readKey, peopleKey) {
   const readReadPeople = await es('POST', '/caddie-people/_search', { size: 0 }, R);
   check(readReadPeople.status === 403, 'read key: cannot read caddie-people');
 
+  // Schedule import: a tiny text document through the attachment processor, indexed nowhere.
+  const extract = {
+    pipeline: { processors: [{ attachment: { field: 'data', target_field: 'doc', indexed_chars: 1000, properties: ['content'], remove_binary: true } }] },
+    docs: [{ _source: { data: Buffer.from('Key check').toString('base64') } }],
+  };
+  const sim = await es('POST', '/_ingest/pipeline/_simulate', extract, R);
+  check(sim.status === 200 && sim.json?.docs?.[0]?.doc?._source?.doc?.content === 'Key check', 'read key: can extract text with the attachment processor in a simulated pipeline');
+  const getPipelines = await es('GET', '/_ingest/pipeline', undefined, R);
+  check(getPipelines.status === 403, 'read key: cannot read stored pipelines');
+  // An invalid body: refused with 403 when unauthorized, and it could never be stored anyway.
+  const putPipeline = await es('PUT', '/_ingest/pipeline/caddie-keycheck-never', { processors: [{ caddie_no_such_processor: {} }] }, R);
+  check(putPipeline.status === 403, 'read key: cannot create a pipeline');
+
   // A keyword-only document, so nothing is embedded. Its event id matches no conference.
   const id = encodeURIComponent('caddie-keycheck:' + randomBytes(8).toString('hex'));
   const write = await es(
@@ -167,6 +193,8 @@ async function verify(readKey, peopleKey) {
   check(peopleReadTalks.status === 403, 'people key: cannot read caddie-talks');
   const peopleWriteTalks = await es('POST', '/caddie-talks/_delete_by_query', nothing, P);
   check(peopleWriteTalks.status === 403, 'people key: cannot write caddie-talks');
+  const peopleSim = await es('POST', '/_ingest/pipeline/_simulate', extract, P);
+  check(peopleSim.status === 403, 'people key: cannot run a simulated pipeline');
 
   // Neither key may list or call inference endpoints. Only the listing is requested, so no
   // endpoint is ever run, and has_privileges confirms that a call would be refused too.
@@ -181,8 +209,10 @@ async function verify(readKey, peopleKey) {
 }
 
 try {
+  const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
+  if (only && !KEYS.some((k) => k.secret === only)) throw new Error(`--only takes ${KEYS.map((k) => k.secret).join(' or ')}`);
   if (!process.argv.includes('--verify-only')) {
-    for (const k of KEYS) await mint(k);
+    for (const k of KEYS) if (!only || k.secret === only) await mint(k);
   }
   const ok = await verify(readSecret('caddie-es-readonly'), readSecret('caddie-es-people'));
   process.exit(ok ? 0 : 1);

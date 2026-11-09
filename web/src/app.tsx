@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { ArrowLeft, CalendarX, CircleExclamationPoint, CircleUserRound, ExternalLink, X } from 'lucide-preact';
-import type { Conference, InterestedTalk, SearchFilters, SearchResponse, Talk } from './types';
+import { ArrowLeft, CalendarX, CircleExclamationPoint, CircleUserRound, ExternalLink, FileUp, X } from 'lucide-preact';
+import type { Conference, InterestedTalk, SearchFilters, SearchResponse, SearchResult, Talk } from './types';
 import { EMPTY_FILTERS } from './types';
 import { ApiError, getConferences, isAbort, search } from './api';
 import {
@@ -18,6 +18,7 @@ import { useFocusTrap } from './lib/focus';
 import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, type ToastData } from './components/common';
 import { ChipRow, FilterSheet, Results, SearchField, activeFilterCount, type SheetSection } from './components/search';
 import { InterestedScreen } from './components/interested';
+import { ImportSheet } from './components/import';
 import { SettingsScreen } from './components/settings';
 import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
@@ -81,6 +82,7 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmData | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [openTalk, setOpenTalk] = useState<Talk | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   // Search state lives here so it survives tab switches; it resets per conference.
   const [input, setInput] = useState('');
@@ -128,6 +130,7 @@ export function App() {
     const onRoute = () => {
       setSwitcherOpen(false);
       setOpenTalk(null);
+      setImportOpen(false);
       setRoute(readRoute());
     };
     window.addEventListener('popstate', onRoute);
@@ -164,6 +167,7 @@ export function App() {
     setError(null);
     setLoading(false);
     setOpenTalk(null);
+    setImportOpen(false);
     setSheet({ open: false });
   }, [slug]);
 
@@ -307,6 +311,30 @@ export function App() {
     if (found) setOpenTalk(found);
   };
 
+  // Imported talks are added to the device list only. Sharing changes only when the user turned on
+  // "share automatically" themselves, through the same rule as a single mark.
+  const markImported = (found: SearchResult[]) => {
+    const s = latest.current.slug;
+    if (!s) return;
+    const current = latest.current.talks;
+    const have = new Set(current.map((x) => x.talk_id));
+    const added = found.filter((t) => t.conference === s && !have.has(t.talk_id)).map(toInterested);
+    setImportOpen(false);
+    if (!added.length) return;
+    const ids = added.map((t) => t.talk_id);
+    setInterested(s, [...current, ...added]);
+    followShare(s, ids, true);
+    offerInstallOnce();
+    showToast(`Marked ${added.length} ${added.length === 1 ? 'talk' : 'talks'} as Interested`, {
+      label: 'Undo',
+      onClick: () => {
+        const remove = new Set(ids);
+        setInterested(s, latest.current.talks.filter((x) => !remove.has(x.talk_id)));
+        followShare(s, ids, false);
+      },
+    });
+  };
+
   const clearInterested = () => {
     const s = latest.current.slug;
     if (!s) return;
@@ -364,6 +392,20 @@ export function App() {
   const actions = (
     <>
       {!online && <OfflineBadge />}
+      {tab === 'interested' && searchable && online && (
+        <button
+          type="button"
+          class="icon-btn"
+          aria-label="Import my schedule"
+          title="Import my schedule"
+          onClick={() => {
+            setToast(null);
+            setImportOpen(true);
+          }}
+        >
+          <FileUp size={22} aria-hidden="true" />
+        </button>
+      )}
       {tab === 'interested' && searchable && (
         <OverflowMenu
           label="Interested options"
@@ -497,6 +539,10 @@ export function App() {
                   interested={talks}
                   onToggle={toggleInterested}
                   onBrowse={() => (location.hash = '#/search')}
+                  onImport={() => {
+                    setToast(null);
+                    setImportOpen(true);
+                  }}
                 />
               )}
             </>
@@ -522,6 +568,19 @@ export function App() {
           interested={!!openTalk && interestedIds.has(openTalk.talk_id)}
           onToggle={toggleInterested}
           onClose={() => setOpenTalk(null)}
+        />
+      )}
+      {searchable && (
+        <ImportSheet
+          open={importOpen && online}
+          conference={searchable}
+          interestedIds={interestedIds}
+          onClose={() => setImportOpen(false)}
+          onMark={markImported}
+          onSwitchConference={() => {
+            setImportOpen(false);
+            setSwitcherOpen(true);
+          }}
         />
       )}
       <SwitcherSheet

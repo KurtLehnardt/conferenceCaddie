@@ -75,7 +75,7 @@ export async function checkRate(req, res, name) {
 }
 
 // A browser sends Origin on a cross-origin POST. When it is present it must name this host.
-function sameOrigin(req) {
+export function sameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return true;
   try {
