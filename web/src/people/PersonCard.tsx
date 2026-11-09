@@ -1,15 +1,26 @@
 // One person in People to meet, a search result or a talk circle: the opener, the passage that
 // matched, the other reasons, their topics and, when present, "How to reach me". Every card has
-// Report and Block in its overflow menu and "Ask to talk shop".
+// Report and Block in its overflow menu. Asks are now-only: "Ask to talk shop" only while they are
+// around (one-tap "Wave" when they are in my zone); otherwise "Tell me when they're around" toggles
+// a device-side watch.
 import { useEffect, useState } from 'preact/hooks';
-import { ExternalLink, MapPin, MessageCircle } from 'lucide-preact';
+import { Bell, BellOff, ExternalLink, Hand, MapPin, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
-import { AskSheet, plainText } from './AskSheet';
-import { blockWithConfirm, outgoingTo, rememberPerson, requestTo } from './connect';
+import { requestMeet } from './api';
+import { AskSheet, isMeetOpen, plainText, problem } from './AskSheet';
+import { blockWithConfirm, noteSentRequest, outgoingTo, rememberPerson, requestTo } from './connect';
 import { ReportSheet } from './ReportSheet';
-import { usePeopleStore } from './storage';
+import { getPresence, usePeopleStore } from './storage';
 import type { PersonResult, TopicRef } from './types';
+import { toast } from './ui';
 import { Marked } from './util';
+import { isWatched, toggleWatch } from './watch';
+
+export const WAVED_COPY = "Waved. You'll hear back here.";
+export const waveNote = (zone: string) => `I'm in ${zone} too — want to talk shop?`.slice(0, 140);
+
+// Refs this device waved at, so the card says "Waved" rather than "No reply yet".
+const waved = new Set<string>();
 
 function Topics({ label, topics }: { label: string; topics: TopicRef[] }) {
   if (!topics?.length) return null;
@@ -43,6 +54,28 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
   const hasContact = !!(contact && (contact.linkedin_url || contact.contact_note));
   const asked = requestTo(slug, person.ref);
   const open = asked && asked !== 'requested' ? outgoingTo(slug, person.ref) : null;
+  const around = person.around === true;
+  const presence = getPresence(slug);
+  const myZone = presence.on ? presence.zone : null;
+  const sameZone = around && !!myZone && person.zone === myZone;
+  const watched = isWatched(slug, person.ref);
+  const [waving, setWaving] = useState(false);
+
+  // One tap: the ask goes out with a default note, no sheet.
+  const wave = async () => {
+    if (!myZone) return;
+    setWaving(true);
+    try {
+      const res = await requestMeet(slug, person.ref, null, waveNote(myZone));
+      waved.add(person.ref);
+      noteSentRequest(slug, person.ref, res.meet_id);
+      toast(WAVED_COPY);
+    } catch (err) {
+      if (isMeetOpen(err)) noteSentRequest(slug, person.ref, `pending:${person.ref}`);
+      toast(problem(err));
+    }
+    setWaving(false);
+  };
 
   return (
     <article class="pp-person">
@@ -110,16 +143,34 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
       <div class="pp-actions pp-person-actions">
         {asked === 'requested' ? (
           <span class="pp-hint pp-asked" role="status">
-            No reply yet
+            {waved.has(person.ref) ? 'Waved' : 'No reply yet'}
           </span>
         ) : open ? (
           <a class="btn btn-tonal btn-small" href={`#/meet/${encodeURIComponent(open.meet_id)}`}>
             Open meet-up
           </a>
-        ) : (
+        ) : sameZone ? (
+          <button type="button" class="btn btn-primary btn-small" disabled={waving} onClick={wave}>
+            <Hand size={16} aria-hidden="true" />
+            {waving ? 'Waving…' : 'Wave'}
+          </button>
+        ) : around ? (
           <button type="button" class="btn btn-tonal btn-small" onClick={() => setAsking(true)}>
             <MessageCircle size={16} aria-hidden="true" />
             Ask to talk shop
+          </button>
+        ) : (
+          <button
+            type="button"
+            class={`btn btn-small ${watched ? 'btn-tonal pp-watching' : 'btn-text'}`}
+            aria-pressed={watched}
+            onClick={() => {
+              const on = toggleWatch(slug, person);
+              toast(on ? `You'll be told when ${person.display_name} is around.` : `Stopped watching ${person.display_name}.`);
+            }}
+          >
+            {watched ? <BellOff size={16} aria-hidden="true" /> : <Bell size={16} aria-hidden="true" />}
+            {watched ? 'Watching' : "Tell me when they're around"}
           </button>
         )}
       </div>

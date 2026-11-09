@@ -1,21 +1,32 @@
 // Requests to talk shop: incoming cards with Accept / Not now / Block, and this device's own
-// open requests. Reached from the People tab header; polls while open.
+// open requests. Reached from the People tab header; polls while open. Asks are now-only: each
+// runs out 15 minutes after it was made, and accept opens the meet screen at once.
 import { useState } from 'preact/hooks';
 import { Inbox, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
 import { meetAction, PeopleApiError } from './api';
 import { blockWithConfirm, dropIncoming, getInbox, OPEN_STATES, setIncomingState, useInboxWatch } from './connect';
-import { usePeopleStore } from './storage';
+import { getPresence, usePeopleStore } from './storage';
 import type { ConferenceLike, InboxIncoming } from './types';
 import { toast } from './ui';
 
-export const ACCEPTED_COPY = "You'll both see where to meet once you're both around.";
+export const RAN_OUT_COPY = 'That ask has run out.';
+
+/** "Expires in N min" for an ask, or null when the time is unknown. */
+export function expiresIn(expiresAt: string | null | undefined, now = Date.now()): string | null {
+  if (!expiresAt) return null;
+  const ms = Date.parse(expiresAt) - now;
+  if (Number.isNaN(ms)) return null;
+  return `Expires in ${Math.max(1, Math.ceil(ms / 60_000))} min`;
+}
 
 function IncomingCard({ slug, request }: { slug: string; request: InboxIncoming }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = request.from.display_name;
   const waiting = request.state === 'requested';
+  const zone = request.same_zone ? (request.other?.zone ?? getPresence(slug).zone) : null;
+  const hint = waiting ? expiresIn(request.expires_at) : null;
 
   const act = async (action: 'accept' | 'decline') => {
     setBusy(true);
@@ -23,15 +34,16 @@ function IncomingCard({ slug, request }: { slug: string; request: InboxIncoming 
     try {
       const res = await meetAction(request.meet_id, action);
       if (action === 'accept') {
-        setIncomingState(slug, request.meet_id, res.state ?? 'accepted');
-        toast(ACCEPTED_COPY);
+        setIncomingState(slug, request.meet_id, res.state ?? 'active');
         location.hash = `#/meet/${encodeURIComponent(request.meet_id)}`;
       } else {
         dropIncoming(slug, request.meet_id);
       }
     } catch (err) {
-      if (err instanceof PeopleApiError && (err.status === 404 || err.status === 410)) dropIncoming(slug, request.meet_id);
-      else setError(err instanceof PeopleApiError ? err.message : 'That could not be saved. Please try again.');
+      if (err instanceof PeopleApiError && (err.status === 404 || err.status === 410)) {
+        dropIncoming(slug, request.meet_id);
+        if (action === 'accept') toast(RAN_OUT_COPY);
+      } else setError(err instanceof PeopleApiError ? err.message : 'That could not be saved. Please try again.');
     }
     setBusy(false);
   };
@@ -40,7 +52,11 @@ function IncomingCard({ slug, request }: { slug: string; request: InboxIncoming 
     <article class="pp-person pp-inbox-card">
       <header class="pp-person-head">
         <h3 class="pp-person-name">
-          {request.topic_label ? (
+          {zone ? (
+            <>
+              {name} is in {zone} with you and would like to talk shop.
+            </>
+          ) : request.topic_label ? (
             <>
               {name} would like to talk shop about {request.topic_label}.
             </>
@@ -78,6 +94,7 @@ function IncomingCard({ slug, request }: { slug: string; request: InboxIncoming 
             <button type="button" class="btn btn-text btn-small" disabled={busy} onClick={() => act('decline')}>
               Not now
             </button>
+            {hint && <span class="pp-hint pp-expires">{hint}</span>}
           </>
         ) : (
           <a class="btn btn-tonal btn-small" href={`#/meet/${encodeURIComponent(request.meet_id)}`}>

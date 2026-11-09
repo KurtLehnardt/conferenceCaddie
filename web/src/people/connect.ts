@@ -8,8 +8,8 @@ import { confirm, toast } from './ui';
 
 export const INBOX_POLL_MS = 20_000;
 
-/** States that still wait for something to happen. */
-export const OPEN_STATES: MeetState[] = ['requested', 'accepted', 'active'];
+/** States that still wait for something to happen. Asks are now-only, so accept goes straight to active. */
+export const OPEN_STATES: MeetState[] = ['requested', 'active'];
 
 let inboxSlug: string | null = null;
 let inbox: Inbox = { incoming: [], outgoing: [] };

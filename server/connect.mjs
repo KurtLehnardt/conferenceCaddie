@@ -20,9 +20,13 @@
 // - A person's zone and spot reach another person only inside an active meet, which exists only
 //   while both are around; a how-to-spot-me line reaches only the other participant, only while
 //   the meet is active. Search results carry a zone only when both people are around (people.mjs).
-// - "Not now" is silent: the requester keeps seeing "requested" until the request runs out at
-//   the end of the conference day. Three "Not now" replies in one day pause the requester until
-//   the next day. When a meet ends, only participants, topic, state and times are kept.
+// - Asks are now-only: you can ask only someone who is around, and only while you are around
+//   yourself; the ask runs out 15 minutes after it was made; accept means now, so it moves the
+//   meet straight to active (20 minutes). Nothing is booked for later. The legacy state
+//   "accepted" is never written; a document still carrying it reads as expired.
+// - "Not now" is silent: the requester keeps seeing "requested" until the request runs out.
+//   Three "Not now" replies in one day pause the requester until the next day. When a meet
+//   ends, only participants, topic, state and times are kept.
 // - Spot lines, notes and spot-me lines pass the wordlist filter in moderation.mjs.
 // - Nothing from a request body, header or document is logged.
 
@@ -39,6 +43,7 @@ import {
 
 const PRESENCE_MS = 60 * 60_000;
 const ACTIVE_MS = 20 * 60_000;
+const REQUEST_MS = 15 * 60_000;
 const HOUR_MS = 60 * 60_000;
 const SPOT_MAX = 60;
 const NOTE_MAX = 140;
@@ -46,7 +51,8 @@ const MEET_REQUESTS_PER_HOUR = 10;
 const DECLINES_PER_DAY = 3;
 const INBOX_SIZE = 100;
 const BLOCKS_SIZE = 1000;
-const OPEN_STATES = ['requested', 'accepted', 'active'];
+// "accepted" (a request accepted for later) is no longer a state: asks are now-only.
+const OPEN_STATES = ['requested', 'active'];
 const TOPIC_ID_RE = /^[a-z0-9][a-z0-9-]{0,99}$/;
 const MEET_PATH_RE = /^\/api\/meet\/([A-Za-z0-9_-]{22})(?:\/(accept|decline|found|cancel|details))?$/;
 
@@ -54,6 +60,8 @@ const iso = (ms) => new Date(ms).toISOString();
 const profileRequired = () => new HttpError(403, { error: 'profile_required' });
 const blocked = () => new HttpError(403, { error: 'blocked' });
 const notFound = () => new HttpError(404, { error: 'not_found' });
+const presenceRequired = () => new HttpError(403, { error: 'presence_required', message: "Turn on 'Around and up for a conversation' first." });
+const notAround = () => new HttpError(409, { error: 'not_around', message: "They're not around right now." });
 
 // The write and read rate limits of people.mjs, so the buckets are shared. Each returns the device.
 function writer(req) {
@@ -101,7 +109,10 @@ async function requireProfile(device, slug) {
 async function loadMeet(id) {
   const { status, json } = await people('GET', `${idx(MEETS_INDEX)}/_doc/${encodeURIComponent(id)}`, undefined, { okStatuses: [404] });
   if (status === 404 || !json.found) return null;
-  return { source: json._source ?? {}, seqNo: json._seq_no, primaryTerm: json._primary_term };
+  const source = json._source ?? {};
+  // A document from before asks were now-only: tolerated on read, never written again.
+  if (source.state === 'accepted') source.state = 'expired';
+  return { source, seqNo: json._seq_no, primaryTerm: json._primary_term };
 }
 
 // Writes a meet back, guarded by the sequence number it was read with.
@@ -125,14 +136,18 @@ function endMeet(s, state, nowMs) {
   s.spot_me = {};
 }
 
-// Both are around: the meet runs for 20 minutes, or until the request would have run out.
-function activate(s, nowMs) {
+// Accept means now: both are around, and the meet runs for 20 minutes from this moment. In the
+// same zone the shared zone is the meeting point unless someone set another.
+function activate(s, me, other, nowMs) {
   s.state = 'active';
   s.active_since = iso(nowMs);
-  s.expires_at = iso(Math.min(nowMs + ACTIVE_MS, Date.parse(s.expires_at)));
+  s.expires_at = iso(nowMs + ACTIVE_MS);
+  s.same_zone = sameZone(me, other);
+  if (s.same_zone && !s.rendezvous) s.rendezvous = me.presence_zone;
 }
 
 const bothAround = (me, other) => isAround(me) && Boolean(other) && isAround(other);
+const sameZone = (me, other) => bothAround(me, other) && typeof me.presence_zone === 'string' && me.presence_zone === other.presence_zone;
 
 // Closes every open meet that matches the filters, in the state endState(source) gives. A meet
 // changed by someone else in the meantime keeps that change; its own transition applies then.
@@ -152,26 +167,33 @@ async function closeMeets(slug, filters, endState) {
   await people('POST', `${idx(MEETS_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
 }
 
-// The state one participant sees. "Not now" is silent, so the requester of a declined meet sees
+// The state one participant sees. An open meet past expires_at reads "expired" even before a
+// read has written that. "Not now" is silent, so the requester of a declined meet sees
 // "requested" until it runs out, and "expired" afterwards.
 function stateFor(s, me) {
+  const ranOut = Date.parse(s.expires_at) <= Date.now();
+  if (OPEN_STATES.includes(s.state)) return ranOut ? 'expired' : s.state;
   if (s.state !== 'declined' || s.requester_id !== me.profile_id) return s.state;
-  return Date.parse(s.expires_at) > Date.now() ? 'requested' : 'expired';
+  return ranOut ? 'expired' : 'requested';
 }
 
 const over = (s, me) => new HttpError(410, { error: 'over', state: stateFor(s, me) });
 
 // What a participant may see of a meet. The other person's zone and spot appear only while the
-// meet is active (so while both are around), their spot-me line only then as well.
+// meet is active (so while both are around), their spot-me line only then as well. A same-zone
+// ask also carries the zone while it waits: both are around and it is the reader's own zone.
 function meetView(s, me, other, labels) {
   const state = stateFor(s, me);
   const active = s.state === 'active';
   const otherId = (s.participants ?? []).find((p) => p !== me.profile_id) ?? null;
   const topic = s.topic_id && labels.has(s.topic_id) ? { topic_id: s.topic_id, label: labels.get(s.topic_id) } : null;
+  const together = bothAround(me, other);
+  const showZone = together && (active || (s.state === 'requested' && s.same_zone === true && sameZone(me, other)));
   return {
     meet_id: s.meet_id,
     state,
     requested_by_me: s.requester_id === me.profile_id,
+    same_zone: s.same_zone === true,
     topic,
     topic_label: topic?.label ?? null,
     note: s.note ?? null,
@@ -186,8 +208,8 @@ function meetView(s, me, other, labels) {
       display_name: other?.display_name ?? '',
       about: other?.about ?? '',
       around: Boolean(other) && isAround(other),
-      zone: active && bothAround(me, other) ? other.presence_zone ?? null : null,
-      spot: active && bothAround(me, other) ? other.presence_spot ?? null : null,
+      zone: showZone ? other.presence_zone ?? null : null,
+      spot: active && together ? other.presence_spot ?? null : null,
       spot_me: active && otherId ? s.spot_me?.[otherId] ?? null : null,
     },
   };
@@ -339,6 +361,9 @@ async function requestMeet(req, res) {
   const them = await personByRef(me, ref);
   if (!them) throw notFound();
   if (await blockedBetween(conf.slug, me.profile_id, them.profile_id)) throw blocked();
+  // Now-only: both must be around. A match who is not around is watched on the device, not booked.
+  if (!isAround(me)) throw presenceRequired();
+  if (!isAround(them)) throw notAround();
 
   const now = Date.now();
   const day = dayBounds(now, conf.timeZone);
@@ -363,7 +388,8 @@ async function requestMeet(req, res) {
 
   const labels = await topicLabels(conf.slug);
   if (topicId !== null && !labels.has(topicId)) throw bad('topic_id is not a topic of this conference');
-  const expiresMs = Math.min(day.end, Date.parse(conf.visibleUntil));
+  // The ask runs out in 15 minutes: an answer later than that would be a booking.
+  const expiresMs = Math.min(now + REQUEST_MS, Date.parse(conf.visibleUntil));
   if (expiresMs <= now) throw bad('conference has ended');
 
   const s = {
@@ -376,6 +402,7 @@ async function requestMeet(req, res) {
     rendezvous: null,
     spot_me: {},
     state: 'requested',
+    same_zone: sameZone(me, them),
     created_at: iso(now),
     active_since: null,
     expires_at: iso(expiresMs),
@@ -432,17 +459,11 @@ async function getMeet(req, res, id) {
   const { meet, me, other, labels } = await participantMeet(device, id);
   let s = meet.source;
   const now = Date.now();
-  // The transitions that time or presence cause are applied when the meet is read.
+  // The transitions that time or presence cause are applied when the meet is read: an ask or an
+  // active meet past expires_at, or an active meet with either presence gone, is over.
   if (OPEN_STATES.includes(s.state)) {
-    let changed = false;
     if (Date.parse(s.expires_at) <= now || (s.state === 'active' && !bothAround(me, other))) {
       endMeet(s, 'expired', now);
-      changed = true;
-    } else if (s.state === 'accepted' && bothAround(me, other)) {
-      activate(s, now);
-      changed = true;
-    }
-    if (changed) {
       try {
         await saveMeet(meet);
       } catch (err) {
@@ -468,8 +489,15 @@ async function action(req, res, id, name) {
     if (s.requester_id === me.profile_id) throw forbidden();
     expectState(s, me, ['requested']);
     if (name === 'accept') {
-      s.state = 'accepted';
-      if (bothAround(me, other)) activate(s, now);
+      // Accept means now. The one accepting must be around; if the asker has meanwhile left,
+      // the ask is over.
+      if (!isAround(me)) throw presenceRequired();
+      if (!bothAround(me, other)) {
+        endMeet(s, 'expired', now);
+        await saveMeet(meet);
+        throw over(s, me);
+      }
+      activate(s, me, other, now);
     } else {
       endMeet(s, 'declined', now);
     }
@@ -490,7 +518,9 @@ async function putDetails(req, res, id) {
   const body = await jsonBody(req, DETAILS_KEYS);
   const { meet, me, other, labels } = await participantMeet(device, id);
   const s = meet.source;
-  expectState(s, me, ['accepted', 'active']);
+  // Either participant may write their line or a meeting point while the meet is open; the
+  // other person sees a spot-me line only once the meet is active.
+  expectState(s, me, OPEN_STATES);
   if (body.spot_me !== undefined) {
     const spotMe = line(body.spot_me, 'spot_me', SPOT_MAX);
     s.spot_me = { ...(s.spot_me ?? {}) };

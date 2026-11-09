@@ -315,9 +315,17 @@ export const MOCK_PEOPLE: MockPerson[] = [
     expertise: 'Operated a multi-cluster service mesh across three clouds; wrote the mTLS rotation tooling.',
     interests: 'Running inference workloads next to the mesh without doubling latency.',
   }),
+  // Devon is never around: the card offers "Tell me when they're around" instead of an ask.
   person(4, A, 'Devon', ['kubernetes'], ['platform-engineering'], [], true, {
     expertise: 'Moved a 40-team platform to GitOps with Argo CD; wrote the rollback runbooks.',
     interests: 'Kubernetes multi-tenancy for teams that refuse to share a cluster.',
+  }),
+  // Hollis is in the Expo hall, the zone the drive turns presence on in, so a card shows "Wave".
+  person(8, A, 'Hollis', ['wasm'], ['kubernetes'], [], true, {
+    expertise: 'Scaled a Kafka platform past a million messages a second on Kubernetes; wrote the partition rebalancing runbook.',
+    interests: 'Running stateful workloads without a storage team.',
+    zone: 'Expo hall',
+    spot: 'tall, by the espresso machine',
   }),
   person(5, A, 'Emery', ['observability'], ['wasm'], [`${A}:1001`], false, {
     expertise: 'Shipped WebAssembly plugins for an API gateway and measured cold starts.',
