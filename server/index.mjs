@@ -2,7 +2,8 @@
 //
 // Env: PORT (default 8080), ES_URL, ES_API_KEY, ES_INDEX (default caddie-talks),
 //      ES_CONFERENCES_INDEX (default caddie-conferences), ES_TOPICS_INDEX (default caddie-topics),
-//      STATIC_DIR (default web/dist).
+//      STATIC_DIR (default web/dist), ES_PEOPLE_API_KEY (people, circles and circle counts only),
+//      ES_PEOPLE_INDEX (default caddie-people), REF_SALT (optional).
 //
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
@@ -12,6 +13,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validate, search, BadRequest, UpstreamError } from './search.mjs';
 import { publicConferences } from './conferences.mjs';
+import { handlePeopleApi } from './people.mjs';
+import { handleRecommendationsApi } from './recommend.mjs';
+import { handleTopicsApi } from './topics-api.mjs';
 
 const PORT = Number(process.env.PORT) || 8080;
 const STATIC_DIR = path.resolve(process.env.STATIC_DIR || 'web/dist');
@@ -245,11 +249,24 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (pathname === '/api' || pathname.startsWith('/api/')) {
-    sendJson(res, 404, { error: 'Not found' });
+    handleApi(req, res).catch(() => {
+      if (!res.headersSent) sendJson(res, 502, { error: 'Service is temporarily unavailable' });
+      else res.destroy();
+    });
     return;
   }
   handleStatic(req, res, pathname);
 });
+
+// The people, circles, recommendations and topics routes. Each handler reads its own body with
+// its own size limit and resolves to true when it handled the request.
+async function handleApi(req, res) {
+  const url = new URL(req.url || '/', 'http://localhost');
+  if (await handlePeopleApi(req, res, url)) return;
+  if (await handleRecommendationsApi(req, res, url)) return;
+  if (await handleTopicsApi(req, res, url)) return;
+  sendJson(res, 404, { error: 'Not found' });
+}
 
 server.requestTimeout = 30_000;
 server.headersTimeout = 15_000;

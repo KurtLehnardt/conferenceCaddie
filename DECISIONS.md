@@ -17,16 +17,16 @@ This file records the decisions and fallbacks taken while building Conference Ca
 
 ## Search
 
-- **Index.** The real index is `caddie-talks-v1` behind the alias `caddie-talks`. It holds all 600 feed items, and every search filters on `kind: talk`. The development index `caddie-dev-b` was deleted after integration.
+- **Index.** In the MVP the real index was `caddie-talks-v1` behind the alias `caddie-talks`. Phase 2 moved the alias to `caddie-talks-v2`, which holds every feed item of every searchable conference; every search filters on `conference` and `kind: talk`.
 - **Mapping.** The mapping uses `dynamic: false` instead of `strict`, so an extra field in `talks.ndjson` is stored in `_source` but never blocks ingestion. `title`, `abstract` and `speaker_taglines` use the english analyzer and `speakers` uses the standard analyzer.
 - **Embedding model.** The `semantic_text` field has no explicit `inference_id`, so it uses the cluster default, `.jina-embeddings-v5-text-small`, a dense embedding model. No chat, completion or rerank endpoint is used anywhere.
 - **No fallback was needed.** Semantic search, `copy_to` into `semantic_text`, an `rrf` retriever with a filter, aggregations with `rrf` and highlighting with `rrf` all work in one request on Elasticsearch 9.5.6. The lexical-only fallback was not taken.
 - **Semantic retriever.** The contract asks for a `semantic` query. The server instead runs a `knn` query on the `semantic_text` field with `k` 50 and `num_candidates` 200, and Elasticsearch builds the query vector from the field's own inference endpoint. A `semantic` query on a dense field sizes its neighbour set from the request size, so `total` would change when `size` changed; a fixed `k` avoids that. This is still hybrid search with the same model, combined with the lexical query by an `rrf` retriever (`rank_window_size` 50, default `rank_constant`).
-- **kNN pre-filter.** The knn query is pre-filtered only by the base filters: talks only, the start-time window, sponsor hiding and saved-talk conflicts. Day, track, level and slides selections are applied afterwards by the `rrf` retriever's filter. This keeps the nearest-neighbour set the same whatever the user selects, so the count shown next to a facet value is exactly the total the user gets after selecting it. The cost is some semantic recall under a narrow selection.
+- **kNN pre-filter.** The knn query is pre-filtered only by the base filters: talks only, the conference, the start-time window and sponsor hiding. Day, track, level and slides selections are applied afterwards by the `rrf` retriever's filter. This keeps the nearest-neighbour set the same whatever the user selects, so the count shown next to a facet value is exactly the total the user gets after selecting it. The cost is some semantic recall under a narrow selection.
 - **Lexical matching.** The `multi_match` over `title^2`, `abstract`, `speakers` and `speaker_taglines` uses `minimum_should_match: "2<60%"`. Queries of one or two terms must match every term, and longer queries must match 60% of them. Without this, a long natural-language query such as "making my cluster greener and using less energy" matched hundreds of talks on a single common word, and the right talk (the Kepler lightning talk) fell to rank 18. With it, the Kepler talk ranks first and no tested query got worse.
 - **Facets and total.** Let M be the documents the main query matches: for a text query, the lexical matches plus the 50 nearest neighbours among documents that pass the base filters; in browse mode, every talk. Let B be the base filters and S(g) the selection in facet group g (day, track, level, has_slides). Then `total` = |M ∩ B ∩ every S(g)|, and the counts for group g are a terms aggregation over M ∩ B ∩ S(every other group). They are computed in one `_msearch`: the main query plus one size-0 query for each facet group that has a selection. `post_filter` is not used, because it would run after the neighbour search and lose recall. Because the start-time window is a base filter, the Morning and Afternoon totals of a text query need not add up to the unfiltered total; the time chips show no counts, so the UI shows no contradiction.
 - **Text-query totals.** A text query's total is the lexical matches plus up to 50 semantic neighbours, so typical totals are about 50 to 120 even for a narrow query.
-- **Saved-talk conflicts.** The server looks up the saved talks by `talk_id` in one search and ignores unknown ids. For each saved talk it adds a `must_not` clause matching `kind: talk` documents with `start < saved.end` and `end > saved.start`, so the saved talks drop out too.
+- **Saved talks.** The MVP removed saved talks and every talk overlapping them in time. The direction change of 2026-11-09 removed that filter: `saved_talk_ids` is still validated but never filters anything.
 - **Browse mode.** An empty query is a bool filter query sorted by `start` ascending, then `talk_id`, by Elasticsearch.
 - **Evidence.** Evidence prefers a highlighted abstract fragment, then a highlighted title, then the best semantic chunk, then the start of the abstract (`no_match_size` 200), then the title. The title reaches the semantic field as its own chunk through `copy_to`, so a semantic chunk that only repeats the title is skipped in favour of the best abstract chunk. The semantic highlighter ignores `encoder: html`, so the server HTML-escapes the semantic chunk itself, collapses its whitespace and cuts it to 300 characters at a word boundary. This only chooses the evidence text and never changes ranking.
 - **Ranking.** All ranking happens in Elasticsearch. The server never reorders hits, and the browser never filters or reorders results.
@@ -79,3 +79,57 @@ This file records the decisions and fallbacks taken while building Conference Ca
 | how do I start contributing to the kubernetes project | Kubernetes 101: New Contributor Orientation |
 
 Run it with `BASE_URL=http://localhost:8080 npm run smoke`. Set `SMOKE_SKIP_BUNDLE=1` when `web/dist` has not been built. It retries a request once on a 5xx or network error, because connections to Elastic Cloud were sometimes slow. The full smoke test, including the bundle check, passed against the merged build on 2026-11-09.
+
+## Direction change: people first, no scheduling (2026-11-09)
+
+- The user changed the product's purpose. Conference Caddie now answers "Who here should I talk to?" first and "Which talks would I like?" second. It is not a scheduling tool, because each conference's official schedule already handles calendars and clashes.
+- Removed: "Build my agenda", the saved-talk `must_not` time-overlap filter in `server/search.mjs`, its effect on facets, the "Overlaps a talk in your agenda" hint, every clash warning and every "conflict-free" or agenda-building wording. The stretch items "shareable agenda" and anything about agenda building are dropped.
+- "Saved agenda" becomes "Interested": a plain list of marked talks in time order, on the device only. `POST /api/search` still accepts `saved_talk_ids` so older clients keep working, but no longer filters on it.
+- Every talk links to its official session page with the label "Add to my schedule on the official site".
+- Navigation order is People, For you, Search, Interested, and the home screen leads with people and suggested talks.
+- New parts: conference topics built from talk titles, profiles with topic chips, People to meet, talk circles and Talks for you, all described in `docs/CONTRACT.md`.
+
+## Phase 2: any Linux Foundation conference on Sessionize
+
+- Phase 2 means "works for any Linux Foundation conference whose schedule is on Sessionize". Letting people sign in and add their own conferences is deferred to a separate project, saved in `docs/FUTURE_user_added_conferences.md`. The conference document keeps a `source` field, with `sessionize` as the only value, so that project is not blocked.
+- Conferences are discovered from the LF events list and each schedule page's `data-sched-config`. The API code is never guessed. Events without a Sessionize config or without a schedule are listed as "Schedule not available here yet" with a link to the official schedule.
+- The slug is derived from the event name plus the start year, because the LF list has no slug.
+- The time zone comes from Sessionize's `api/data` Windows zone, mapped to IANA through the CLDR table in `data/windows-zones.json`, else from the operator file `data/conference-overrides.json`. It is never guessed. PyTorch Day Japan's Sessionize site is unpublished and gives no zone, so the override maps it to Asia/Tokyo.
+- Track is the group named by `primaryFilterTitle`, level is a group whose title contains "level", and every other visible group becomes generic tags stored as a U+001F-separated keyword plus a display object. No KubeCon-specific category name or id remains in code.
+- Sponsor detection was generalised to any category item or group named "sponsor", which now also flags sponsored keynotes (72 sponsor items on KubeCon).
+- `presentationSlidesQuestionId` in the config is a question title, so it is matched as a title.
+- Talk ids are `{conference}:{session_id}`. The old `caddie.saved.v1` data is not migrated.
+- Ingestion is safe to re-run: unchanged sessions are skipped by `content_hash`, metadata-only changes use a Bulk partial `update` that omits `title` and `abstract`, and the Update API is never used because it re-runs inference.
+- `filters.level` may be an empty array for a conference without a level group, so the frontend can always send the full filters object. `saved_talk_ids` must carry the request's conference prefix.
+
+## Topics
+
+- Topics are analysed in Elasticsearch in a temporary work index per conference: a curly-apostrophe fix, the standard tokenizer, lowercase, stop (`_english_` plus `config/topic-stoplist.txt`), a possessive strip, a filter that drops numbers and single characters, and shingles. The stop and length filters leave position gaps, so a bigram never spans a removed word. Counting uses a terms aggregation on the analysed title with `fielddata`, so neither the `_analyze` nor the script-counting fallback was needed.
+- Labels come from `_mtermvectors` offsets on the original titles; the most common casing wins.
+- Lucene's English stopword list is short, so words such as "from", "what" and "when" passed the analyser. Per-conference fix-up files in `data/topics/` remove them and merge plurals and synonyms as aliases (for example k8s into Kubernetes). Fix-ups exist for KubeCon, MCP Dev Summit Nairobi and PyTorch Day Japan. A fix-up never adds a topic.
+- Talks get their `topics` through a Bulk partial update, so tagging never re-embeds anything. Topic documents are rewritten only when they differ, so a re-run writes nothing.
+
+## People and talk circles
+
+- There is no sign-in. On first opt-in the device generates a random `profile_id` and secret; the server stores only `sha256(secret)` and requires the secret for every write and every circle read. The first write uses `op_type: create`, so an existing profile can never be taken over.
+- Conference-wide matches are reciprocal: a person sees matches only while they are visible conference-wide themselves. Sharing for one talk and conference-wide visibility are independent; sharing never puts a profile in conference-wide matches.
+- A match reason names a shared talk only when the requester has also shared for it, so matches never reveal a circle the requester has not joined.
+- The semantic people retrievers use a `knn` query on the `semantic_text` fields, as talk search does. Circles add a match-all retriever so every sharer is listed, below everyone who shares something with the requester.
+- Profile writes whose text is unchanged use a Bulk partial update without the text fields, so toggling visibility or sharing never re-embeds anything.
+- Profiles expire at 23:59:59 on the conference's last day in its own time zone, and every people query filters on that.
+- The 30 seeded sample profiles for KubeCon are labelled "Sample · ..." with the contact note "Sample profile, not a real person". Several share for the same three talks. Sample topics that are not topics of the conference are skipped with a warning.
+- Rate limits: people writes 20 per minute per device and 60 per IP; matches and circle members 30 per device and 90 per IP, because many attendees share a conference NAT; counts, recommendations and topics 60 per IP.
+
+## Talks for you
+
+- Elasticsearch 9.5.6 supports per-retriever `weight` in `rrf` in the wrapped form `{ "retriever": ..., "weight": n }`. Learn topics and interests have weight 1; speak topics and expertise have weight 0.5.
+- Suggestions exclude ended talks (`end > now`) and talks the user already marked. Nothing in the request is stored or logged.
+- `circle_count` uses the people key. If the people index cannot be read, every count is 0 and the suggestions still return.
+
+## Integration of phase 2 and people first
+
+- The talks index was rebuilt as `caddie-talks-v2` from the committed raw files with `--no-fetch`. The first ingest embedded 600 KubeCon, 60 MCP Dev Summit Nairobi and 19 PyTorch Day Japan documents. A second run of all three reported 0 index and 0 update operations, so it made no model calls. The alias `caddie-talks` was then switched to `caddie-talks-v2` in one atomic call.
+- Open Source Summit Japan (a Sched page, no Sessionize config) and Yocto Project Virtual Summit (no schedule URL) are indexed as unavailable conferences. `--all-upcoming` was not run.
+- In the saved-ids check, the smoke test compares text queries only by their totals and compares the browse listing in exact order, because two identical text requests can order tied semantic scores differently.
+- `caddie-talks-v1`, the MVP index, was kept after the smoke test passed instead of being deleted. The deployed MVP service still reads the `caddie-talks` alias, and keeping v1 allows switching the alias back until the new server is deployed. Deleting it is irreversible, so it waits for the user's confirmation.
+- The smoke test creates its own test profiles with random secrets and deletes them at the end. It writes one expired profile straight to Elasticsearch, because the API can never create one, and removes it afterwards.

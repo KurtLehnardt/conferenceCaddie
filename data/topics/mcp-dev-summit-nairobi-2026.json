@@ -1,0 +1,7 @@
+{
+  "rename": {},
+  "merge": {
+    "agent": "agents"
+  },
+  "remove": ["from", "when", "what", "workshop", "designing", "multi", "action"]
+}

@@ -21,3 +21,6 @@ dist/
 .claude/settings.local.json
 .DS_Store
 *.log
+
+# Local exports of people data. Never commit these.
+data/exports/

@@ -304,14 +304,14 @@ async function writeConference(conf) {
 
 // ======================= TOPICS HOOK =======================
 // After an event is indexed and searchable, the topic list for that conference is rebuilt by
-// "node scripts/topics.mjs --event <slug>" (written by another task). The talks index this run wrote
-// to is passed as ES_INDEX. When scripts/topics.mjs does not exist yet, the hook only says so.
+// "node scripts/topics.mjs --event <slug> --talks-index <index>", where the index is the one this run
+// wrote to. A topics failure prints a warning and does not change the exit code.
 // Pass --skip-topics to leave it out.
 function runTopicsHook(slug) {
   const script = join(root, 'scripts/topics.mjs');
   if (opts.skipTopics) return '  topics: skipped (--skip-topics)';
   if (!existsSync(script)) return '  topics: skipped, scripts/topics.mjs is not present';
-  const res = spawnSync(process.execPath, [script, '--event', slug], {
+  const res = spawnSync(process.execPath, [script, '--event', slug, '--talks-index', opts.index], {
     stdio: 'inherit',
     env: { ...process.env, ES_INDEX: opts.index },
   });
