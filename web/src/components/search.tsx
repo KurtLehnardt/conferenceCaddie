@@ -229,6 +229,21 @@ export function ChipRow({
       )}
       {conference.tag_groups.map((group) => {
         const values = tagValues(filters, group);
+        // A group with a single value (for example a feed group "End User Programming" whose only
+        // value is "End User Talk") reads better as a one-tap toggle named after the value than as
+        // a dropdown named after the group.
+        const facetValues = (facets?.tags?.find((t) => t.group === group)?.values ?? []).filter((b) => b.count > 0);
+        const only = facetValues.length === 1 ? String(facetValues[0].value) : values.length === 1 && !facetValues.length ? values[0] : null;
+        if (only !== null) {
+          return (
+            <Chip
+              key={group}
+              label={only}
+              active={values.includes(only)}
+              onOpen={() => onChange(toggleTag(filters, { group, value: only }))}
+            />
+          );
+        }
         return (
           <Chip
             key={group}

@@ -7,13 +7,15 @@
 //
 // How it works:
 // 1. The titles of the conference's kind:talk documents are copied into a temporary work index whose
-//    title field is analysed in Elasticsearch: standard tokenizer, lowercase, a stop filter that uses
-//    _english_ plus config/topic-stoplist.txt, no stemming, unigrams and bigrams, and no numbers or
-//    single characters. A bigram never spans a removed word, because the shingle filter fills the gap
-//    with a filler token and every token that contains the filler is dropped.
+//    title field is analysed in Elasticsearch: standard tokenizer, lowercase, a trailing 's stripped,
+//    a stop filter that uses _english_ plus config/topic-stoplist.txt, no stemming, unigrams and
+//    bigrams, and no numbers or single characters. A bigram never spans a removed word, because the
+//    shingle filter fills the gap with a filler token and every token that contains the filler is dropped.
 // 2. A terms aggregation on that field counts talks per term (at least 3 talks, at most 150 topics).
 // 3. Term vector offsets give each term its most common original casing, and give each talk its terms.
 // 4. data/topics/{slug}.json can rename, merge (as aliases) or remove topics. It never adds one.
+//    Then a single word that nearly always appears inside a kept two-word topic is collapsed into
+//    it, so "cloud" and "native" do not sit beside "cloud native" (see COLLAPSE_COVERAGE).
 // 5. The conference's topic documents are replaced (only when they differ), and talks.topics is set
 //    with a Bulk API partial update that omits title and abstract, only where the value changed.
 // The work index is deleted at the end. Re-running with the same data changes nothing.
@@ -50,6 +52,10 @@ if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug)) {
 
 const MIN_TALKS = 3;
 const MAX_TOPICS = 150;
+// A single-word topic is dropped when at least this share of the talks that hold it hold it as
+// part of a kept two-word topic. At 0.75, "cloud" (28 of 37 talks inside "cloud native") goes and
+// "llm" (13 of 20 inside "llm inference") stays. Measured on the KubeCon NA 2026 titles.
+const COLLAPSE_COVERAGE = 0.75;
 const CANDIDATES = 400; // the aggregation returns more than the cap so fix-ups can remove some
 
 async function es(method, urlPath, body, ndjson = false) {
@@ -127,7 +133,8 @@ async function createWorkIndex(stopwords) {
         },
         filter: {
           topic_stop: { type: 'stop', stopwords: ['_english_', ...stopwords] },
-          // Strips a trailing 's after the stop filter, so "what's" is still removed by the stoplist.
+          // Strips a trailing 's before the stop filter, so "what's", "here's" and "let's" are
+          // removed by the plain words in the stoplist.
           possessive: { type: 'pattern_replace', pattern: '\'s$', replacement: '' },
           // Drops tokens that are shorter than two characters or hold no letter (numbers). The token
           // position gap stays, so no bigram can span it.
@@ -155,7 +162,7 @@ async function createWorkIndex(stopwords) {
             type: 'custom',
             char_filter: ['curly_apostrophe'],
             tokenizer: 'standard',
-            filter: ['lowercase', 'topic_stop', 'possessive', 'keep_words', 'topic_shingle', 'drop_filled'],
+            filter: ['lowercase', 'possessive', 'topic_stop', 'keep_words', 'topic_shingle', 'drop_filled'],
           },
         },
       },
@@ -292,6 +299,30 @@ async function main() {
       if (!topic) console.warn(`Fix-up rename: unknown topic ${id}, ignored.`);
       else topic.label = label;
     }
+
+    // Collapse single words into the two-word topics that almost always contain them. A talk
+    // "holds" a topic when its title has any of the topic's member terms.
+    const holds = (set, t) => [...t.members].some((m) => set.has(m));
+    const bigramTopics = [...topicIds.values()].filter((t) => t.term.includes(' '));
+    const collapsed = [];
+    for (const [id, t] of topicIds) {
+      if (t.term.includes(' ')) continue;
+      const words = new Set([...t.members].filter((m) => !m.includes(' ')));
+      const containing = bigramTopics.filter((b) => b.term.split(' ').some((w) => words.has(w)));
+      if (!containing.length) continue;
+      let withWord = 0;
+      let covered = 0;
+      for (const set of talkTerms.values()) {
+        if (!holds(set, t)) continue;
+        withWord++;
+        if (containing.some((b) => holds(set, b))) covered++;
+      }
+      if (withWord && covered / withWord >= COLLAPSE_COVERAGE) {
+        topicIds.delete(id);
+        collapsed.push(`${t.term} (${covered}/${withWord})`);
+      }
+    }
+    if (collapsed.length) console.log(`Collapsed into two-word topics: ${collapsed.join(', ')}.`);
 
     // Talk counts: the number of talks holding the topic term or one of its merged alias terms.
     const topics = [];

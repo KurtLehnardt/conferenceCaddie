@@ -159,7 +159,7 @@ export function TalkPeopleControls({
             type="checkbox"
             role="switch"
             class="switch"
-            checked={shared || notice}
+            checked={shared}
             disabled={busy}
             onChange={(e) => onSwitch((e.target as HTMLInputElement).checked)}
           />

@@ -32,19 +32,24 @@ function Chip({
   disabled?: boolean;
   onToggle: () => void;
 }) {
+  const count = !on && typeof topic.talk_count === 'number' ? topic.talk_count : null;
+  // An explicit name, so assistive technology reads "eBPF, 7 talks" and the pressed state,
+  // whatever the icon and count spans render as.
+  const name = count === null ? topic.label : `${topic.label}, ${count} ${count === 1 ? 'talk' : 'talks'}`;
   return (
     <button
       type="button"
       class={`pp-chip${on ? ' is-on' : ''}`}
+      aria-label={name}
       aria-pressed={on}
       disabled={disabled && !on}
       onClick={onToggle}
     >
       {on ? <Check size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}
-      <span>{topic.label}</span>
-      {!on && typeof topic.talk_count === 'number' && (
-        <span class="pp-chip-count" aria-label={`${topic.talk_count} talks`}>
-          {topic.talk_count}
+      <span aria-hidden="true">{topic.label}</span>
+      {count !== null && (
+        <span class="pp-chip-count" aria-hidden="true">
+          {count}
         </span>
       )}
     </button>
