@@ -321,6 +321,46 @@ await check('u: a conference that is not on Sessionize is listed as not searchab
 });
 
 // ---------------------------------------------------------------------------------------------
+// Offline schedule export.
+
+const SCHEDULE_KEYS = ['talk_id', 'conference', 'title', 'speakers', 'room', 'start', 'end', 'track', 'level', 'tags', 'topics', 'url', 'slides_url', 'abstract'].sort().join(',');
+await check('o: /api/schedule returns only that conference\'s talks, with no other kinds and no people fields', async () => {
+  const problems = [];
+  let count = 0;
+  for (const slug of [PRIMARY, ...EXTRA]) {
+    const r = await api('GET', `/api/schedule?event=${encodeURIComponent(slug)}`);
+    if (r.status !== 200) {
+      problems.push(`${slug} gave ${r.status}`);
+      continue;
+    }
+    if (!/max-age=300/.test(r.headers.get('cache-control') ?? '')) problems.push(`${slug} has Cache-Control "${r.headers.get('cache-control')}"`);
+    const own = ownTalks.get(slug);
+    const talks = r.json.talks ?? [];
+    count += talks.length;
+    if (r.json.conference !== slug) problems.push(`${slug} names conference ${r.json.conference}`);
+    if (talks.length !== own.size) problems.push(`${slug} has ${talks.length} talks, expected ${own.size} of kind talk`);
+    for (const t of talks) {
+      if (!own.has(t.talk_id) || t.conference !== slug) problems.push(`${slug} has "${t.title}", which is not one of its talks`);
+      const keys = Object.keys(t).sort().join(',');
+      if (keys !== SCHEDULE_KEYS) problems.push(`${slug} talk keys are ${keys}`);
+      if (typeof t.abstract !== 'string' || t.abstract.length > 410) problems.push(`${slug} "${t.title}" abstract is not trimmed`);
+    }
+    if (/display_name|learn_topics|speak_topics|linkedin_url|contact_note|open_to_meet|shared_talk_ids|secret_hash|"kind"/.test(JSON.stringify(r.json))) {
+      problems.push(`${slug} holds a people field or a kind`);
+    }
+  }
+  const unknown = await api('GET', '/api/schedule?event=no-such-conference-anywhere');
+  if (unknown.status !== 400) problems.push(`an unknown slug gave ${unknown.status}`);
+  const unavailable = conferences.find((c) => c.status === 'unavailable');
+  if (unavailable) {
+    const u = await api('GET', `/api/schedule?event=${encodeURIComponent(unavailable.slug)}`);
+    if (u.status !== 400) problems.push(`an unavailable conference gave ${u.status}`);
+  }
+  const unique = [...new Set(problems)];
+  report(unique.length === 0, 'o: /api/schedule returns only that conference\'s talks, with no other kinds and no people fields', unique.length ? unique.slice(0, 3).join('; ') : `${count} talks in ${1 + EXTRA.length} conferences`);
+});
+
+// ---------------------------------------------------------------------------------------------
 // Topics.
 
 const stoplist = readFileSync(join(ROOT, 'config', 'topic-stoplist.txt'), 'utf8').split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);

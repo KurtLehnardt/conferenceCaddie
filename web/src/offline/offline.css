@@ -1,0 +1,39 @@
+/* Offline mode: the app bar indicator, the search label and the calm "needs a connection" note. */
+
+.offline-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.offline-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px var(--gutter) 10px;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.offline-pad {
+  padding: 8px var(--gutter);
+}
+
+.offline-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--text-2);
+  font-size: 13px;
+}

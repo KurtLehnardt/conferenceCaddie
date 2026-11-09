@@ -22,6 +22,8 @@ import { SettingsScreen } from './components/settings';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
 import { ForYouScreen, PeopleScreen, ProfileScreen, onInterestedChanged, type TalkLike } from './people/index';
+import { saveForOffline, useOnline } from './offline/status';
+import { NeedsConnection, OfflineBadge, OfflineSearch } from './offline/OfflineSearch';
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 20;
@@ -87,6 +89,7 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<{ open: boolean; section?: SheetSection }>({ open: false });
+  const online = useOnline();
 
   const { slug, tab } = route;
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
@@ -167,6 +170,21 @@ export function App() {
 
   useEffect(() => applyTheme(theme), [theme]);
 
+  // Back online: refresh the conference list. Online: save the current conference's schedule
+  // shortly after it opens, so airplane mode works right away.
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    if (online && !wasOnline.current) loadList();
+    wasOnline.current = online;
+  }, [online]);
+
+  useEffect(() => {
+    if (!online || !searchable) return;
+    const s = searchable.slug;
+    const t = window.setTimeout(() => saveForOffline(s), 1500);
+    return () => window.clearTimeout(t);
+  }, [online, searchable?.slug]);
+
   const setInterested = useCallback((forSlug: string, next: InterestedTalk[]) => {
     setInterestedState({ slug: forSlug, talks: next });
     storeInterested(forSlug, next);
@@ -198,13 +216,22 @@ export function App() {
   // Search runs when the Search tab is shown and its conference or filters changed.
   useEffect(() => {
     if (tab !== 'search' || !searchable) return;
+    // Offline, the keyword search over the saved schedule runs instead; the next online visit
+    // searches again.
+    if (!online) {
+      controller.current?.abort();
+      window.clearTimeout(timer.current);
+      searchedKey.current = '';
+      return;
+    }
     if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}`) runSearch();
-  }, [tab, searchable?.slug, filters]);
+  }, [tab, searchable?.slug, filters, online]);
 
   const onInput = (v: string) => {
     setInput(v);
     latest.current.input = v;
     window.clearTimeout(timer.current);
+    if (!online) return;
     timer.current = window.setTimeout(() => runSearch(), DEBOUNCE_MS);
   };
 
@@ -318,6 +345,7 @@ export function App() {
 
   const actions = (
     <>
+      {!online && <OfflineBadge />}
       {tab === 'interested' && searchable && (
         <OverflowMenu
           label="Interested options"
@@ -390,14 +418,26 @@ export function App() {
             blocker()
           ) : (
             <>
-              {tab === 'people' && (
+              {!online && (tab === 'people' || tab === 'for-you') && (
+                <NeedsConnection
+                  title={tab === 'people' ? 'People to meet needs a connection' : 'Suggestions need a connection'}
+                  body="They will load when you're back online. Search, your Interested list and your profile still work on this phone."
+                />
+              )}
+              {online && tab === 'people' && (
                 <PeopleScreen key={searchable.slug} conference={searchable} interested={talks} onOpenTalk={onOpenTalk} />
               )}
-              {tab === 'for-you' && (
+              {online && tab === 'for-you' && (
                 <ForYouScreen key={searchable.slug} conference={searchable} interested={talks} onToggleInterested={toggleInterested} />
               )}
               {tab === 'profile' && <ProfileScreen key={searchable.slug} conference={searchable} interested={talks} />}
-              {tab === 'search' && (
+              {tab === 'search' && !online && (
+                <>
+                  <SearchField value={input} onInput={onInput} onSubmit={() => undefined} loading={false} />
+                  <OfflineSearch conference={searchable} query={input} interestedIds={interestedIds} onToggle={toggleInterested} />
+                </>
+              )}
+              {tab === 'search' && online && (
                 <>
                   <SearchField value={input} onInput={onInput} onSubmit={() => runSearch()} loading={loading} />
                   <ChipRow

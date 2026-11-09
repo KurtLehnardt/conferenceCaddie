@@ -3,6 +3,7 @@ import type { Conference, InterestedTalk, Talk } from '../types';
 import { formatDayLong, localDay, zoneLabel, zoneOf } from '../lib/time';
 import { TalkCard } from './talk';
 import { ShareAllControls } from '../people/index';
+import { useOnline } from '../offline/status';
 
 /** The talks the user marked, in time order and grouped by local day. No scheduling logic. */
 export function InterestedScreen({
@@ -16,6 +17,8 @@ export function InterestedScreen({
   onToggle: (t: Talk) => void;
   onBrowse: () => void;
 }) {
+  // Sharing needs the server, so offline the list shows without the share controls.
+  const online = useOnline();
   if (!interested.length) {
     return (
       <div class="state">
@@ -38,7 +41,7 @@ export function InterestedScreen({
 
   return (
     <div class="interested">
-      <ShareAllControls conference={conference} interested={interested} />
+      {online && <ShareAllControls conference={conference} interested={interested} />}
       {[...days.entries()].map(([day, talks]) => (
         <section key={day} class="interested-day" aria-labelledby={`day-${day}`}>
           <h2 class="day-header" id={`day-${day}`}>

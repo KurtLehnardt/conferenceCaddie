@@ -188,6 +188,10 @@ Response: `{ total, conference, results, facets }`. Each result has `talk_id`, `
 
 Sorted by `start_date`, then `name`, with `Cache-Control: public, max-age=60`. Each entry has exactly `slug`, `name`, `start_date`, `end_date`, `time_zone`, `location: { city, region, country, virtual }`, `status` (`searchable` or `unavailable`), `official_schedule_url`, `source`, `has_level`, `track_group`, `tag_groups` and `talk_count`. API codes, LF ids, `status_reason` and the other counts are never returned. Methods other than GET or HEAD get 405.
 
+### `GET /api/schedule?event={slug}` (offline mode)
+
+The conference's `kind: talk` documents, read with the read-only key and sorted by `start`, then `talk_id`, for the app's offline keyword search. Returns `{ conference, talks }`; each talk has exactly `talk_id`, `conference`, `title`, `speakers`, `room`, `start`, `end`, `track`, `level`, `tags`, `topics: [{ topic_id, label }]`, `url`, `slides_url` and `abstract`, trimmed to about 400 characters. No people data and no other kinds. `Cache-Control: public, max-age=300`, gzip when the client accepts it, and 20 requests per minute per IP. The only accepted parameter is `event`; an unknown or unavailable slug gets 400, methods other than GET or HEAD get 405.
+
 ### `GET /api/topics?event={slug}&q={prefix}&size={n}`
 
 With an empty `q`, the conference's topics sorted by `rank` (default size 150). Otherwise a `bool_prefix` multi_match on `label`, `aliases` and their subfields (default size 10). `size` is at most 150 and `q` at most 60 characters. Returns `{ topics: [{ topic_id, label, talk_count }] }`.
@@ -218,7 +222,7 @@ Every request may carry a same-origin `Origin` header or none. Writes and circle
 
 ### Rate limits
 
-In-memory token buckets per instance, keyed by device (`profile_id`) and by client IP: people writes 20 per minute per device and 60 per IP; matches and circle members 30 per minute per device and 90 per IP; search, circle counts, recommendations, topics and suggestions 60 per minute per IP. The client IP is the last `X-Forwarded-For` entry, which Google's front end appends, capped at 45 characters; without the header it is the socket address. Earlier entries are chosen by the client and are ignored.
+In-memory token buckets per instance, keyed by device (`profile_id`) and by client IP: people writes 20 per minute per device and 60 per IP; matches and circle members 30 per minute per device and 90 per IP; search, circle counts, recommendations, topics and suggestions 60 per minute per IP; schedule exports 20 per minute per IP. The client IP is the last `X-Forwarded-For` entry, which Google's front end appends, capped at 45 characters; without the header it is the socket address. Earlier entries are chosen by the client and are ignored.
 
 ### `GET /api/health`
 

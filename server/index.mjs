@@ -16,6 +16,7 @@ import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
+import { handleSchedule } from './schedule.mjs';
 import { take, clientIp } from './ratelimit.mjs';
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -182,7 +183,8 @@ function sendFile(req, res, filePath, cacheControl) {
 
 function cacheControlFor(rel) {
   if (rel.startsWith('assets/')) return 'public, max-age=31536000, immutable';
-  if (rel === 'index.html' || rel === 'manifest.webmanifest') return 'no-cache';
+  // The service worker script must be checked on every load, so a new build replaces it.
+  if (rel === 'index.html' || rel === 'manifest.webmanifest' || rel === 'sw.js') return 'no-cache';
   return 'public, max-age=3600';
 }
 
@@ -254,6 +256,13 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/conferences') {
     handleConferences(req, res).catch(() => {
       if (!res.headersSent) sendJson(res, 502, { error: 'Conferences are temporarily unavailable' });
+    });
+    return;
+  }
+  if (pathname === '/api/schedule') {
+    handleSchedule(req, res, new URL(req.url || '/', 'http://localhost')).catch(() => {
+      if (!res.headersSent) sendJson(res, 502, { error: 'The schedule is temporarily unavailable' });
+      else res.destroy();
     });
     return;
   }

@@ -1,8 +1,9 @@
-import { Clock, ExternalLink, MapPin, Presentation, Star } from 'lucide-preact';
+import { Clock, ExternalLink, MapPin, Presentation, Star, WifiOff } from 'lucide-preact';
 import type { Conference, Talk } from '../types';
 import { Evidence } from '../lib/evidence';
 import { formatWhen, hasEnded, zoneOf } from '../lib/time';
 import { TalkPeopleControls } from '../people/index';
+import { useOnline } from '../offline/status';
 
 /** Track, level and tag chips, skipping placeholders. Tags carry their group name as a tooltip. */
 function talkTags(talk: Talk): { label: string; title?: string }[] {
@@ -44,6 +45,8 @@ export function TalkCard({
   headingLevel?: 2 | 3;
 }) {
   const tags = talkTags(talk);
+  // Talk circles need the server, so offline they give way to a calm note on marked talks.
+  const online = useOnline();
   const Heading = headingLevel === 2 ? 'h2' : 'h3';
   return (
     <article class="card">
@@ -78,7 +81,16 @@ export function TalkCard({
       <div class="card-actions">
         <InterestedToggle talk={talk} on={interested} onToggle={() => onToggleInterested(talk)} />
       </div>
-      <TalkPeopleControls conference={conference} talk={talk} interested={interested} />
+      {online ? (
+        <TalkPeopleControls conference={conference} talk={talk} interested={interested} />
+      ) : (
+        interested && (
+          <p class="offline-note">
+            <WifiOff size={14} aria-hidden="true" />
+            Talk circles need a connection.
+          </p>
+        )
+      )}
       <div class="card-links">
         <a href={talk.url} target="_blank" rel="noopener noreferrer" class="link">
           <ExternalLink size={16} aria-hidden="true" />
