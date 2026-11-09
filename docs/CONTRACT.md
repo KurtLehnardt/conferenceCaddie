@@ -287,6 +287,7 @@ Returns `{"ok": true}` without calling Elasticsearch.
 - **Read-only key** (Secret Manager `caddie-es-readonly`, env `ES_API_KEY`): `read` and `view_index_metadata` on `caddie-talks*`, `caddie-conferences*` and `caddie-topics*`.
 - **People key** (Secret Manager `caddie-es-people`, env `ES_PEOPLE_API_KEY`): `read`, `write` and `view_index_metadata` on `caddie-people*` only. The server uses it only for people, circles and the circle counts in recommendations.
 - The admin key is used only by the operator's CLI commands and is never deployed.
+- **GitHub token** (optional, Secret Manager `caddie-github-token`, env `GITHUB_TOKEN`): read-only public scope, sent as `Authorization: Bearer` to `api.github.com` by `POST /api/import/github` only; raises GitHub's rate limit from 60 to 5000 requests per hour. When it is absent the server calls GitHub unauthenticated.
 
 ## Frontend brief
 
@@ -316,3 +317,28 @@ Stack: Vite, Preact and TypeScript; plain CSS with custom properties; `lucide-pr
 - Task agents work in their own worktree branch and never push to main.
 - Integrators merge task commits by SHA and push to `origin main`. The user said "no branch ceremony", which overrides the usual pull-request flow for this repo.
 - End every commit message with: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
+
+## Import from GitHub (public)
+
+The first profile import. No sign-in and no OAuth: the person types a public GitHub handle, the server reads the public GitHub REST API, the app proposes text and topic chips, and the person edits and accepts. The handle and the raw repository data are never stored anywhere (not on the server, not in Elasticsearch, not in device storage) and never logged; only what the person accepts lands in the existing profile fields through `PUT /api/people/profile`. No generative model is used: every sentence is a fixed template over GitHub's own fields.
+
+### `POST /api/import/github`
+
+Body `{ event, handle }`, at most 8 KB, unknown keys get 400. `handle` matches `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`. No device header, because nothing is written. Rate limit 5 per IP per 10 minutes through the existing buckets (`{ error: "Too many requests" }` with `Retry-After`).
+
+- The server fetches `GET https://api.github.com/users/{handle}` and `GET https://api.github.com/users/{handle}/repos?per_page=100&sort=pushed&type=owner` with `User-Agent: ConferenceCaddie/0.2`, `Accept: application/vnd.github+json`, `Authorization: Bearer <GITHUB_TOKEN>` only when the env var is set, and an 8 s timeout. Forks and archived repositories are excluded.
+- From the remaining repositories: primary languages (counted per repository), repository topics and descriptions, with the 15 most recently pushed repositories counting double.
+- Response `{ ok: true, proposal }` where `proposal` is:
+
+| Field | Rule |
+|---|---|
+| `about` | The GitHub bio on one line, at most 280 characters; `""` when there is none. |
+| `expertise` | `"Built {repo} ({language}): {description}."` for up to 6 of the most recently pushed repositories that have a description, joined by spaces, at most 500 characters. No adjectives and no invented facts. |
+| `topic_candidates` | Up to 20 lowercased strings: the top languages, then the repository topics. |
+| `repo_count` | The number of repositories kept. |
+| `suggested_speak_topics` | At most 15 `{ topic_id, label }` of the conference's topics whose label equals a candidate or starts with it as a whole word. The lookup is the same `bool_prefix` type-ahead query `/api/topics` runs, in one request, through the topics module. |
+| `extra_terms` | The candidates that matched no topic of this conference. |
+
+- Errors: 400 for bad input; 404 `{ error: "not_found" }` for an unknown handle; 429 `{ error: "rate_limited" }` with `Retry-After: 600` when GitHub rate-limits the server; 502 `{ error: "upstream" }` for any other GitHub failure. A failed topics lookup does not fail the call: every candidate is then returned in `extra_terms` and the log says `GitHub import topic lookup unavailable`.
+- The log never holds the handle: only the failure class and GitHub's status (`GitHub import rate_limited: 403`).
+- Client: the "Import from GitHub" control in the profile's About you card (`web/src/people/ImportGitHub.tsx`). The preview shows the proposed About, the proposed "Things I've built, run or broken" text and the suggested chips pre-selected; "Use this" appends the text after a blank line (never overwriting), fills About only when it is empty and adds the chips to "I can speak to". Error copy: "No GitHub user with that name.", "GitHub is busy; try again in a few minutes." (GitHub's limit and our own), "Could not reach GitHub.". `importProfile('github')` returns `{ ok: true }` because the component handles the flow; `importProfile('linkedin')` still returns `{ ok: false, error: "not implemented" }`.
