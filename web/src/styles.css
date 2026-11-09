@@ -1495,7 +1495,10 @@ mark {
 }
 
 .settings-link {
+  border: 0;
+  background: transparent;
   color: var(--accent-ink);
+  text-align: left;
   text-decoration: none;
 }
 
@@ -1563,5 +1566,77 @@ mark {
     left: 0;
     width: 100%;
     transform: none;
+  }
+}
+
+/* ---------- Install card ---------- */
+
+.install-region {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--nav-h) + var(--safe-bottom) + 76px);
+  z-index: 41;
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--gutter);
+  pointer-events: none;
+}
+
+.install-card {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  padding: 16px 52px 8px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+  animation: rise 200ms var(--ease);
+}
+
+.install-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.install-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.install-body {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.install-steps {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  font-size: 15px;
+}
+
+.install-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+}
+
+.install-later {
+  margin-left: -12px;
+}
+
+@media (min-width: 768px) {
+  .install-region {
+    left: var(--rail-w);
+    bottom: calc(88px + var(--safe-bottom));
+    justify-content: flex-start;
   }
 }

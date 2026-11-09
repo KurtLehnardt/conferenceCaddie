@@ -705,6 +705,17 @@ await check('rel2: GET /api/related validates its input', async () => {
     `bad id ${bad.status}, extra parameter ${extra.status}, unknown talk ${missing.status}, POST ${post.status}`);
 });
 
+// Install onboarding.
+
+await check('inst1: the manifest makes the app installable and the page links it', async () => {
+  const m = await fetch(`${BASE_URL}/manifest.webmanifest`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const manifest = await m.json();
+  const page = await (await fetch(`${BASE_URL}/`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })).text();
+  const icons = manifest.icons ?? [];
+  const ok = m.status === 200 && manifest.display === 'standalone' && manifest.start_url && icons.some((i) => i.sizes === '192x192') && icons.some((i) => i.sizes === '512x512') && /rel="manifest"/.test(page);
+  report(ok, 'inst1: the manifest makes the app installable and the page links it', `display ${manifest.display}, ${icons.length} icons`);
+});
+
 // ---------------------------------------------------------------------------------------------
 // Checks over every response seen.
 
@@ -779,6 +790,10 @@ await check('rel2: GET /api/related validates its input', async () => {
       }
       if (/\.(js|html)$/.test(file) && /clash|conflict-free|build my agenda|agenda building/i.test(content.toString('utf8'))) hits.push(`scheduling wording in ${file.slice(ROOT.length)}`);
     }
+    // i. The install card ships in the bundle with its Android and iOS wording.
+    const js = files.filter((f) => f.endsWith('.js')).map((f) => readFileSync(f, 'utf8')).join('\n');
+    const wording = ['beforeinstallprompt', 'Add to Home screen', 'Add to Home Screen', 'caddie.install.offered.v1'].filter((w) => !js.includes(w));
+    report(wording.length === 0, 'inst2: the bundle ships the install card with the Android and iOS wording', wording.length ? `missing ${wording.join(', ')}` : 'all four strings found');
     report(hits.length === 0, 'e: bundle holds no keys, key-shaped strings or scheduling wording', hits.length ? hits.join('; ') : `${files.length} files, ${secrets.length} key values and ${patterns.length} patterns checked`);
   }
 }

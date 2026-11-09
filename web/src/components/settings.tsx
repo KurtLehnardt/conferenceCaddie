@@ -1,6 +1,7 @@
-import { ExternalLink } from 'lucide-preact';
+import { ExternalLink, Smartphone } from 'lucide-preact';
 import type { ThemePref } from '../lib/storage';
 import { Segmented } from './common';
+import { isStandalone, openInstallCard } from './install';
 
 declare const __APP_VERSION__: string;
 
@@ -29,6 +30,20 @@ export function SettingsScreen({ theme, onTheme }: { theme: ThemePref; onTheme: 
           </div>
         </div>
       </section>
+
+      {!isStandalone() && (
+        <section class="settings-group" aria-labelledby="set-install">
+          <h2 class="settings-heading" id="set-install">
+            Home screen
+          </h2>
+          <div class="settings-card">
+            <button type="button" class="settings-row settings-link" onClick={openInstallCard}>
+              <span>Add Conference Caddie to your home screen</span>
+              <Smartphone size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </section>
+      )}
 
       <section class="settings-group" aria-labelledby="set-about">
         <h2 class="settings-heading" id="set-about">

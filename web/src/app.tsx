@@ -19,6 +19,7 @@ import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, t
 import { ChipRow, FilterSheet, Results, SearchField, activeFilterCount, type SheetSection } from './components/search';
 import { InterestedScreen } from './components/interested';
 import { SettingsScreen } from './components/settings';
+import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
 import { ForYouScreen, PeopleScreen, ProfileScreen, onInterestedChanged, type TalkLike } from './people/index';
@@ -272,6 +273,7 @@ export function App() {
     const added = toInterested(t);
     setInterested(s, [...current, added]);
     followShare(s, [added.talk_id], true);
+    offerInstallOnce();
     showToast('Added to Interested', {
       label: 'Undo',
       onClick: () => {
@@ -507,6 +509,7 @@ export function App() {
       />
       <ConfirmDialog data={confirm} onClose={() => setConfirm(null)} />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
+      <InstallCard />
     </div>
   );
 }
