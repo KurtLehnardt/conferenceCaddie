@@ -60,10 +60,10 @@ if (inferenceId) semantic.inference_id = inferenceId;
 const properties = {
   talk_id: { type: 'keyword' },
   kind: { type: 'keyword' },
-  title: lexicalOnly ? { type: 'text' } : { type: 'text', copy_to: 'semantic' },
-  abstract: lexicalOnly ? { type: 'text' } : { type: 'text', copy_to: 'semantic' },
+  title: lexicalOnly ? { type: 'text', analyzer: 'english' } : { type: 'text', analyzer: 'english', copy_to: 'semantic' },
+  abstract: lexicalOnly ? { type: 'text', analyzer: 'english' } : { type: 'text', analyzer: 'english', copy_to: 'semantic' },
   speakers: { type: 'text' },
-  speaker_taglines: { type: 'text' },
+  speaker_taglines: { type: 'text', analyzer: 'english' },
   room: { type: 'keyword' },
   track: { type: 'keyword' },
   level: { type: 'keyword' },
