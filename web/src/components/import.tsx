@@ -48,6 +48,7 @@ export function ImportSheet({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const controller = useRef<AbortController | null>(null);
+  const pressedInside = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
@@ -134,7 +135,18 @@ export function ImportSheet({
   const fewMatched = !!result && (strong === 0 || (unmatched >= 5 && strong * 4 < unmatched));
 
   return (
-    <div class="scrim scrim-full">
+    <div
+      class="scrim scrim-full"
+      onPointerDown={(e) => {
+        pressedInside.current = e.target !== e.currentTarget;
+      }}
+      onClick={(e) => {
+        // A drag that starts in the paste field and ends on the backdrop is not a tap on it.
+        const inside = pressedInside.current;
+        pressedInside.current = false;
+        if (e.target === e.currentTarget && !inside) close();
+      }}
+    >
       <div class="sheet sheet-full" role="dialog" aria-modal="true" aria-labelledby="import-title" ref={ref} tabIndex={-1}>
         <header class="sheet-header">
           <h2 id="import-title">Import my schedule</h2>

@@ -14,6 +14,7 @@ import {
   type ThemePref,
 } from './lib/storage';
 import { decodeParam, defaultConference, goToConference, readRoute, replaceConference, type Route, type Tab } from './lib/route';
+import { visit } from './lib/trail';
 import { useFocusTrap } from './lib/focus';
 import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, type ToastData } from './components/common';
 import { ChipRow, FilterSheet, Results, SearchField, SuggestionRow, activeFilterCount, type SheetSection } from './components/search';
@@ -116,12 +117,11 @@ export function App() {
   const online = useOnline();
 
   const { slug, tab, param } = route;
-  // The screen before this one, so Back from Settings, Profile, Requests or a meet can pop history
-  // instead of pushing. #/here/{zone} is not remembered, because it turns presence on.
-  const routeRef = useRef(route);
+  // The screen in the history entry behind this one, so Back from Settings, Profile, Requests or a
+  // meet can pop history instead of pushing. Null when it is not known, for example after a reload.
+  // #/here/{zone} is never the screen Back leads to, because it turns presence on.
   const prevRoute = useRef<Route | null>(null);
   const lastTabScreen = useRef<Route | null>(null);
-  routeRef.current = route;
   if (isTab(route.tab) && route.tab !== 'here') lastTabScreen.current = route;
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
   const searchable = conference?.status === 'searchable' ? conference : null;
@@ -163,13 +163,18 @@ export function App() {
 
   useEffect(() => {
     loadList();
+    visit(readRoute());
     // A navigation closes any open sheet, so it never stays over the next screen.
     const onRoute = () => {
+      const next = readRoute();
+      const { duplicate, previous } = visit(next);
+      // Chrome fires popstate and hashchange for one hash navigation, so the second is skipped.
+      if (duplicate) return;
       setSwitcherOpen(false);
       setOpenTalk(null);
       setImportOpen(false);
-      prevRoute.current = routeRef.current;
-      setRoute(readRoute());
+      prevRoute.current = previous;
+      setRoute(next);
     };
     window.addEventListener('popstate', onRoute);
     window.addEventListener('hashchange', onRoute);
@@ -410,7 +415,7 @@ export function App() {
   // #/here/{zone} is the People tab with presence turned on; once handled, the hash becomes #/people.
   const hereHandled = () => {
     if (readRoute().tab !== 'here') return;
-    history.replaceState(null, '', `${location.pathname}#/people`);
+    history.replaceState(history.state, '', `${location.pathname}#/people`);
     window.dispatchEvent(new Event('caddie:route'));
   };
 
