@@ -1,0 +1,28 @@
+{
+  "note": "Two sample profiles for the three-minute demo of KubeCon + CloudNativeCon North America 2026. Neither is a real person. Demo A wants to learn what Demo B can speak to, and Demo B wants to learn what Demo A can speak to. Both are open to meet and both share for the same talk, which ends on 12 November. Topics are labels from the conference's topics index and shared_talks holds a real talk title; both are resolved at seed time. Seed them with: node scripts/seed-people.mjs --event kubecon-cloudnativecon-north-america-2026 --file data/samples/demo-people.json --label demo",
+  "shared_talks": [
+    "Platform-First AI Agent Security: Zero-Trust Patterns for Kubernetes"
+  ],
+  "profiles": [
+    {
+      "display_name": "Sample · Demo A",
+      "about": "Sample profile for the demo. Runs an internal platform and wants to see inside it.",
+      "interests": "Tracing and profiling workloads without changing application code, and securing the platform around them.",
+      "expertise": "Building an internal developer platform and rolling out changes through GitOps.",
+      "learn": ["eBPF", "Observability", "OpenTelemetry", "Security"],
+      "speak": ["Platform", "GitOps"],
+      "open_to_meet": true,
+      "share": [0]
+    },
+    {
+      "display_name": "Sample · Demo B",
+      "about": "Sample profile for the demo. Works on observability and runtime security, and wants a better platform story.",
+      "interests": "Turning platform delivery and GitOps practices into something a small team can run.",
+      "expertise": "eBPF instrumentation, OpenTelemetry pipelines and runtime security for Kubernetes.",
+      "learn": ["Platform", "GitOps"],
+      "speak": ["eBPF", "Observability", "OpenTelemetry", "Security"],
+      "open_to_meet": true,
+      "share": [0]
+    }
+  ]
+}

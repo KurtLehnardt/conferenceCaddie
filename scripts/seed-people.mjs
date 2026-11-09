@@ -1,6 +1,7 @@
 // Writes the sample attendee profiles from data/samples/people.json for one conference.
 //
 // Usage: node scripts/seed-people.mjs --event <slug> [--talk "<title>"]... [--limit n]
+//                                     [--file <path> --label <tag>]
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY) to write people;
 //        ES_API_KEY (or ELASTISEARCH_API_KEY) to read conferences, topics and talks;
 //        ES_PEOPLE_INDEX, ES_INDEX, ES_TOPICS_INDEX, ES_CONFERENCES_INDEX as for the server.
@@ -13,6 +14,14 @@
 // conference's previous samples, so it can be re-run. --talk replaces the file's shared_talks
 // titles, in order. --limit writes only the first n profiles, which keeps development indices
 // within the embedding budget.
+//
+// --file reads the profiles from another file in the same format, for example
+// data/samples/demo-people.json. --label tags the run (lowercase letters and digits, at most 8
+// characters). A labelled profile gets a profile_id that starts with "lbl-<tag>-", and a run with a
+// label deletes only the earlier profiles of that conference that carry that prefix. A run without a
+// label deletes the conference's samples that carry no label prefix, so the two kinds never touch
+// each other. The index keeps no separate label field because its mapping is fixed, so the profile_id
+// prefix is the label.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,18 +48,22 @@ if (!WRITE_KEY || !READ_KEY) {
 const args = process.argv.slice(2);
 let slug = null;
 let limit = Infinity;
+let fileArg = null;
+let label = null;
 const talkArgs = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--event') slug = args[++i];
   else if (args[i] === '--talk') talkArgs.push(args[++i]);
   else if (args[i] === '--limit') limit = Number(args[++i]);
+  else if (args[i] === '--file') fileArg = args[++i];
+  else if (args[i] === '--label') label = args[++i];
   else {
     console.error(`Unknown argument: ${args[i]}`);
     process.exit(1);
   }
 }
-if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug) || !(limit > 0)) {
-  console.error('Usage: node scripts/seed-people.mjs --event <slug> [--talk "<title>"]... [--limit n]');
+if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug) || !(limit > 0) || (label !== null && !/^[a-z0-9]{1,8}$/.test(label)) || (fileArg !== null && !fileArg)) {
+  console.error('Usage: node scripts/seed-people.mjs --event <slug> [--talk "<title>"]... [--limit n] [--file <path> --label <tag>]');
   process.exit(1);
 }
 
@@ -81,7 +94,8 @@ const read = (method, p, body) => es(READ_KEY, method, p, body);
 const write = (method, p, body, ndjson) => es(WRITE_KEY, method, p, body, ndjson);
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'samples', 'people.json');
+const file = fileArg ? path.resolve(fileArg) : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'samples', 'people.json');
+const LABEL_PREFIX = label ? `lbl-${label}-` : null;
 const samples = JSON.parse(fs.readFileSync(file, 'utf8'));
 
 // The conference and its last visible instant.
@@ -139,11 +153,13 @@ for (const title of titles) {
   }
 }
 
-// Remove the previous samples of this conference.
-const deleted = await write('POST', `/${PEOPLE_INDEX}/_delete_by_query?refresh=true`, {
-  query: { bool: { filter: [{ term: { event_id: slug } }, { term: { sample: true } }] } },
-});
-console.log(`Deleted ${deleted.deleted ?? 0} previous samples.`);
+// Remove the previous samples of this conference: those with this label, or, without a label,
+// those that carry no label prefix.
+const sameKind = { bool: { filter: [{ term: { event_id: slug } }, { term: { sample: true } }] } };
+if (LABEL_PREFIX) sameKind.bool.filter.push({ prefix: { profile_id: LABEL_PREFIX } });
+else sameKind.bool.must_not = [{ prefix: { profile_id: 'lbl-' } }];
+const deleted = await write('POST', `/${PEOPLE_INDEX}/_delete_by_query?refresh=true`, { query: sameKind });
+console.log(`Deleted ${deleted.deleted ?? 0} previous ${label ? `"${label}" ` : ''}samples.`);
 
 const now = new Date().toISOString();
 const docs = [];
@@ -155,6 +171,7 @@ for (const p of samples.profiles.slice(0, limit)) {
     continue;
   }
   const device = newDevice();
+  if (LABEL_PREFIX) device.profileId = (LABEL_PREFIX + device.profileId).slice(0, 22);
   const text = { about: p.about ?? '', interests: p.interests ?? '', expertise: p.expertise ?? '' };
   docs.push({
     _id: `${slug}:${device.profileId}`,
