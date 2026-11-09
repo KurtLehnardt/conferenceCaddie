@@ -1,0 +1,241 @@
+import type { ComponentChildren } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { CalendarCheck, EllipsisVertical, Search, Settings } from 'lucide-preact';
+import { useFocusTrap } from '../lib/focus';
+
+export type Tab = 'search' | 'agenda' | 'settings';
+
+const TABS: { id: Tab; label: string; Icon: typeof Search }[] = [
+  { id: 'search', label: 'Search', Icon: Search },
+  { id: 'agenda', label: 'Agenda', Icon: CalendarCheck },
+  { id: 'settings', label: 'Settings', Icon: Settings },
+];
+
+/** Bottom tab bar on phones; the same element becomes a left rail from 768px. */
+export function NavBar({ tab, savedCount }: { tab: Tab; savedCount: number }) {
+  return (
+    <nav class="nav" aria-label="Main">
+      <div class="nav-brand" aria-hidden="true">
+        <img src="/icons/icon-192.png" alt="" width={32} height={32} />
+      </div>
+      {TABS.map(({ id, label, Icon }) => (
+        <a
+          key={id}
+          href={`#/${id}`}
+          class="nav-item"
+          aria-current={tab === id ? 'page' : undefined}
+          aria-label={id === 'agenda' && savedCount ? `Agenda, ${savedCount} saved` : undefined}
+        >
+          <span class="nav-icon">
+            <Icon size={24} strokeWidth={tab === id ? 2.25 : 1.75} aria-hidden="true" />
+            {id === 'agenda' && savedCount > 0 && (
+              <span class="badge nav-badge" aria-hidden="true">
+                {savedCount > 99 ? '99+' : savedCount}
+              </span>
+            )}
+          </span>
+          <span class="nav-label">{label}</span>
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+export function AppBar({ title, actions }: { title: string; actions?: ComponentChildren }) {
+  return (
+    <header class="appbar">
+      <h1 class="appbar-title">{title}</h1>
+      <div class="appbar-actions">{actions}</div>
+    </header>
+  );
+}
+
+export interface ToastData {
+  id: number;
+  message: string;
+  action?: { label: string; onClick: () => void };
+}
+
+export function Toast({ toast, onDismiss }: { toast: ToastData | null; onDismiss: () => void }) {
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(onDismiss, 5000);
+    return () => clearTimeout(t);
+  }, [toast?.id]);
+
+  return (
+    <div class="toast-region" role="status" aria-live="polite">
+      {toast && (
+        <div class="toast" key={toast.id}>
+          <span class="toast-msg">{toast.message}</span>
+          {toast.action && (
+            <button
+              type="button"
+              class="toast-action"
+              onClick={() => {
+                toast.action!.onClick();
+                onDismiss();
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export interface ConfirmData {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+}
+
+export function ConfirmDialog({ data, onClose }: { data: ConfirmData | null; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useFocusTrap(ref, !!data, onClose, '[data-autofocus]');
+  if (!data) return null;
+  return (
+    <div class="scrim scrim-center" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div
+        class="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="dialog-title"
+        aria-describedby="dialog-body"
+        ref={ref}
+        tabIndex={-1}
+      >
+        <h2 id="dialog-title" class="dialog-title">
+          {data.title}
+        </h2>
+        <p id="dialog-body" class="dialog-body">
+          {data.body}
+        </p>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-text" data-autofocus onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn btn-danger"
+            onClick={() => {
+              data.onConfirm();
+              onClose();
+            }}
+          >
+            {data.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export interface MenuItem {
+  label: string;
+  onSelect: () => void;
+  destructive?: boolean;
+  disabled?: boolean;
+}
+
+/** A vertical-dots overflow menu anchored to the right of the app bar. */
+export function OverflowMenu({ items, label = 'More options' }: { items: MenuItem[]; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const first = wrap.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])');
+    first?.focus();
+    const onDown = (e: PointerEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        button.current?.focus();
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const els = Array.from(wrap.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+        const i = els.indexOf(document.activeElement as HTMLElement);
+        const next = e.key === 'ArrowDown' ? (i + 1) % els.length : (i - 1 + els.length) % els.length;
+        els[next]?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div class="menu-wrap" ref={wrap}>
+      <button
+        ref={button}
+        type="button"
+        class="icon-btn"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <EllipsisVertical size={22} aria-hidden="true" />
+      </button>
+      {open && (
+        <div class="menu" role="menu">
+          {items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              role="menuitem"
+              class={`menu-item${it.destructive ? ' is-danger' : ''}`}
+              disabled={it.disabled}
+              onClick={() => {
+                setOpen(false);
+                it.onSelect();
+              }}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  return (
+    <div class="segmented" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          class="segment"
+          onClick={() => onChange(o.value)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
