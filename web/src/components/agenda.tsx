@@ -1,6 +1,6 @@
 import { Bookmark, CalendarCheck, MapPin, TriangleExclamationPoint } from 'lucide-preact';
 import type { SavedTalk } from '../types';
-import { formatDayLong, formatTimeRange, overlaps, venueDay } from '../lib/time';
+import { formatDayLong, formatTime, formatTimeRange, overlaps, venueDay } from '../lib/time';
 
 export function AgendaScreen({
   saved,
@@ -43,7 +43,11 @@ export function AgendaScreen({
               const clash = talks.some((o) => o.talk_id !== t.talk_id && overlaps(o, t));
               return (
                 <li class="agenda-row" key={t.talk_id}>
-                  <div class="agenda-time">{formatTimeRange(t.start, t.end)}</div>
+                  <div class="agenda-time">
+                    <span class="sr-only">{`${formatTimeRange(t.start, t.end)} MT`}</span>
+                    <span class="agenda-start" aria-hidden="true">{formatTime(t.start)}</span>
+                    <span class="agenda-end" aria-hidden="true">{formatTime(t.end)}</span>
+                  </div>
                   <div class="agenda-main">
                     <a class="agenda-title" href={t.url} target="_blank" rel="noopener noreferrer">
                       {t.title}

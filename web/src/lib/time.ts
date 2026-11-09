@@ -58,6 +58,11 @@ function splitTime(iso: string): { clock: string; period: string } {
   return { clock, period };
 }
 
+/** "9:00 AM" */
+export function formatTime(iso: string): string {
+  return timeFmt.format(new Date(iso));
+}
+
 /** "9:00–9:30 AM" or "11:30 AM–12:15 PM" */
 export function formatTimeRange(startIso: string, endIso: string): string {
   const a = splitTime(startIso);

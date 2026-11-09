@@ -187,6 +187,7 @@ export function App() {
   };
 
   const clearAgenda = () => {
+    setToast(null);
     setConfirm({
       title: 'Clear your agenda?',
       body: `This removes all ${saved.length} saved ${saved.length === 1 ? 'talk' : 'talks'} from this device.`,
@@ -221,7 +222,11 @@ export function App() {
           {tab === 'search' && (
             <>
               <SearchField value={input} onInput={onInput} onSubmit={() => runSearch()} loading={loading} />
-              <ChipRow filters={filters} onChange={setFilters} onOpenSheet={(section) => setSheet({ open: true, section })} />
+              <ChipRow filters={filters} onChange={setFilters} onOpenSheet={(section) => {
+                  setToast(null);
+                  setSheet({ open: true, section });
+                }}
+              />
               <Results
                 data={data}
                 browse={browse}
@@ -245,14 +250,15 @@ export function App() {
               theme={theme}
               onTheme={setTheme}
               savedCount={saved.length}
-              onClearSaved={() =>
+              onClearSaved={() => {
+                setToast(null);
                 setConfirm({
                   title: 'Clear saved talks?',
                   body: `This removes all ${saved.length} saved ${saved.length === 1 ? 'talk' : 'talks'} from this device. This cannot be undone.`,
                   confirmLabel: 'Clear',
                   onConfirm: () => setSaved([]),
-                })
-              }
+                });
+              }}
             />
           )}
         </main>
