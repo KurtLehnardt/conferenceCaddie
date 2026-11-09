@@ -196,7 +196,19 @@ export function slugsOnServer(): string[] {
 
 /* ---------- Find & connect: presence, blocks, people I met ---------- */
 
-const EMPTY_PRESENCE: Presence = { on: false, zone: null, spot: '', until: null, notice_seen: false };
+const EMPTY_PRESENCE: Presence = {
+  on: false,
+  zone: null,
+  spot: '',
+  until: null,
+  notice_seen: false,
+  position: false,
+  position_choice: null,
+  mode: 'hour',
+  confirmed_at: null,
+  confirm_pending: false,
+  recent_zones: [],
+};
 const presenceMem = new Map<string, Presence>();
 
 export function getPresence(slug: string): Presence {
@@ -212,6 +224,12 @@ export function getPresence(slug: string): Presence {
       spot: str(raw.spot, 60),
       until: live ? until : null,
       notice_seen: raw.notice_seen === true,
+      position: live && raw.position === true,
+      position_choice: raw.position_choice === 'yes' || raw.position_choice === 'no' ? raw.position_choice : null,
+      mode: raw.mode === 'day' ? 'day' : 'hour',
+      confirmed_at: live && typeof raw.confirmed_at === 'string' && Number.isFinite(Date.parse(raw.confirmed_at)) ? raw.confirmed_at : null,
+      confirm_pending: live && raw.confirm_pending === true,
+      recent_zones: Array.isArray(raw.recent_zones) ? raw.recent_zones.filter((z): z is string => typeof z === 'string').slice(0, 8) : [],
     };
     presenceMem.set(slug, p);
   }

@@ -2,7 +2,7 @@
 // The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence
 // and /api/meet/*. This is the only place that reads the device secret.
 import { getDevice } from './storage';
-import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Recommendation, TopicHit } from './types';
+import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, TopicHit } from './types';
 
 export class PeopleApiError extends Error {
   constructor(
@@ -134,10 +134,17 @@ export function fetchBlocks(slug: string, signal?: AbortSignal) {
   );
 }
 
-export function putPresence(slug: string, zone: string, spot: string) {
-  return call<{ ok: boolean; presence_until: string }>('/api/presence', {
+/**
+ * With a position, the server keeps it (rounded) only while its accuracy is within 200 m. `until`
+ * 'day' runs presence to the end of the conference day instead of an hour.
+ */
+export function putPresence(slug: string, zone: string, spot: string, location: Position | null = null, until: PresenceMode = 'hour') {
+  const body: Record<string, unknown> = { event: slug, zone, spot: spot.trim().slice(0, 60) };
+  if (location) body.location = { lat: location.lat, lon: location.lon, accuracy: Math.round(location.accuracy) };
+  if (until !== 'hour') body.until = until;
+  return call<{ ok: boolean; presence_until: string; located?: boolean }>('/api/presence', {
     method: 'PUT',
-    body: JSON.stringify({ event: slug, zone, spot: spot.trim().slice(0, 60) }),
+    body: JSON.stringify(body),
     device: true,
   });
 }

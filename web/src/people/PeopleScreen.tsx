@@ -6,7 +6,7 @@ import { fetchMatches, isAbort, MATCH_PAGE, PeopleApiError } from './api';
 import { takePendingSearch, withoutBlocked } from './connect';
 import { ForYouRow } from './ForYou';
 import { PersonCard, SampleNote } from './PersonCard';
-import { PresenceControls } from './PresenceControls';
+import { PresenceControls, StillHereRow } from './PresenceControls';
 import { getPresence, getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
 import { changeVisibility, getSaveCount } from './sync';
 import { TalkPeopleControls } from './TalkPeopleControls';
@@ -345,6 +345,7 @@ export function PeopleScreen({
   const searching = !!query.trim() || around;
   return (
     <div class="pp-screen">
+      <StillHereRow conference={conference} interested={interested} />
       <PeopleSearchBar value={input} around={around} onInput={onInput} onAround={setAround} />
       <PresenceControls conference={conference} interested={interested} deepLink={hereZone} onDeepLinkHandled={onHereHandled} />
       {!searching && <EndedTalkBanner conference={conference} interested={interested} onOpenTalk={onOpenTalk} />}

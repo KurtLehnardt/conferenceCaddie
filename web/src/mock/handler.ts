@@ -169,11 +169,52 @@ function topicRefs(conference: string, ids: string[]) {
   }));
 }
 
+/* ---------- GPS bands (mock): positions are made up around the requester's own ---------- */
+
+type Proximity = 'same_zone' | 'near' | 'around' | 'venue';
+interface LatLon {
+  lat: number;
+  lon: number;
+}
+const EARTH_M = 6_371_000;
+const ACCURACY_MAX_M = 200;
+const rad = (d: number) => (d * Math.PI) / 180;
+
+function distanceM(a: LatLon, b: LatLon): number {
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** A point `metres` away from `from` in direction `bearing` (degrees clockwise from north). */
+function offset(from: LatLon, metres: number, bearing: number): LatLon {
+  const dLat = (metres * Math.cos(rad(bearing))) / EARTH_M;
+  const dLon = (metres * Math.sin(rad(bearing))) / (EARTH_M * Math.cos(rad(from.lat)));
+  return { lat: from.lat + (dLat * 180) / Math.PI, lon: from.lon + (dLon * 180) / Math.PI };
+}
+
+/** Sample people who are around stand at a fixed, made-up distance and bearing from the requester. */
+function samplePosition(p: MockPerson, mine: LatLon): LatLon | null {
+  if (!p.presence_zone) return null;
+  const n = Number(p.ref.replace(/\D/g, '')) || 1;
+  const metres = [40, 120, 260, 500, 900][n % 5];
+  return offset(mine, metres, (n * 73) % 360);
+}
+
+function band(myZone: string, mine: LatLon | undefined, p: MockPerson): Proximity {
+  if (p.presence_zone === myZone) return 'same_zone';
+  const theirs = mine ? samplePosition(p, mine) : null;
+  if (!mine || !theirs) return 'venue';
+  const d = distanceM(mine, theirs);
+  return d < 75 ? 'near' : d < 300 ? 'around' : 'venue';
+}
+
 function personResult(
   p: MockPerson,
   me: Stored | undefined,
   interestedIds: string[],
-  extra: { terms?: string[]; meAround?: boolean } = {},
+  extra: { terms?: string[]; meAround?: boolean; myZone?: string; myLocation?: LatLon } = {},
 ) {
   const myLearn = (me?.profile.learn_topics as string[] | undefined) ?? [];
   const mySpeak = (me?.profile.speak_topics as string[] | undefined) ?? [];
@@ -187,6 +228,8 @@ function personResult(
   const evidence = hit ?? p.expertise.split(/(?<=\.)\s/)[0];
   const around = !!p.presence_zone;
   const zone = around && extra.meAround ? p.presence_zone : undefined;
+  // The band only, and only when both are around; the mock never puts a distance on a result.
+  const proximity: Proximity | null = around && extra.meAround ? band(extra.myZone ?? '', extra.myLocation, p) : null;
   if (hit) reasons.push(`They've worked on ${hit}`);
   if (canTeach.length) reasons.push(`They can speak to ${label(canTeach)}, which you want to learn about.`);
   if (wantsMine.length) reasons.push(`They want to learn about ${label(wantsMine)}, which you can speak to.`);
@@ -207,6 +250,7 @@ function personResult(
     evidence,
     around,
     ...(zone ? { zone } : {}),
+    proximity,
   };
 }
 
@@ -234,7 +278,7 @@ interface MockMeet {
 
 interface Connect {
   blocks: Record<string, string[]>;
-  presence: Record<string, { zone: string; spot: string; since: string; until: string }>;
+  presence: Record<string, { zone: string; spot: string; since: string; until: string; location?: LatLon | null }>;
   meets: MockMeet[];
   seeded: string[];
 }
@@ -427,7 +471,8 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
     const from = Math.max(0, Number(body.from) || 0);
     const size = Math.min(Math.max(1, Number(body.size) || 20), 20);
-    const meAround = !!myPresence(c, conf.slug, id);
+    const mine = myPresence(c, conf.slug, id);
+    const meAround = !!mine;
     const pool = MOCK_PEOPLE.filter(
       (p) =>
         p.event_id === conf.slug &&
@@ -436,11 +481,18 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
         (body.when !== 'around_now' || !!p.presence_zone) &&
         (!terms.length || terms.some((w) => `${p.expertise} ${p.about}`.toLowerCase().includes(w))),
     );
-    // Text hits first, then people who are around, as the real ranking would.
+    // Text hits first, then people who are around (nearer first when I sent a position), as the
+    // real ranking would.
+    const near = (p: MockPerson) => {
+      const theirs = mine?.location ? samplePosition(p, mine.location) : null;
+      return theirs && mine?.location ? Math.max(0, 1 - distanceM(mine.location, theirs) / 1000) : 0;
+    };
     const score = (p: MockPerson) =>
-      (terms.filter((w) => p.expertise.toLowerCase().includes(w)).length || 0) * 10 + (p.presence_zone ? 1 : 0);
+      (terms.filter((w) => p.expertise.toLowerCase().includes(w)).length || 0) * 10 + (p.presence_zone ? 1 : 0) + near(p);
     const ranked = pool.sort((a, b) => score(b) - score(a));
-    const results = ranked.slice(from, from + size).map((p) => personResult(p, me, interestedIds, { terms, meAround }));
+    const results = ranked
+      .slice(from, from + size)
+      .map((p) => personResult(p, me, interestedIds, { terms, meAround, myZone: mine?.zone, myLocation: mine?.location ?? undefined }));
     writeConnect(c);
     return { results };
   }
@@ -483,11 +535,23 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     if (!zone) throw new HttpError(400, { error: 'zone' });
     const spot = String(body.spot ?? '').slice(0, 60);
     if (filtered(spot)) throw new HttpError(400, FILTERED);
+    // GPS bands: an optional { lat, lon, accuracy }; worse than 200 m, or absent, means zone-only.
+    let location: LatLon | null = null;
+    if (body.location !== undefined && body.location !== null) {
+      const l = body.location as Partial<Record<'lat' | 'lon' | 'accuracy', unknown>>;
+      if (typeof l.lat !== 'number' || typeof l.lon !== 'number' || typeof l.accuracy !== 'number') throw new HttpError(400, { error: 'location' });
+      if (l.accuracy <= ACCURACY_MAX_M) location = { lat: Number(l.lat.toFixed(5)), lon: Number(l.lon.toFixed(5)) };
+    }
+    if (body.until !== undefined && body.until !== null && body.until !== 'hour' && body.until !== 'day') throw new HttpError(400, { error: 'until' });
     const c = readConnect();
     const now = Date.now();
-    const until = new Date(now + PRESENCE_MS).toISOString();
+    // 'day' runs to the end of the day (the browser's clock stands in for the conference's time zone).
+    const dayEnd = new Date(now);
+    dayEnd.setHours(23, 59, 59, 0);
+    const until = new Date(body.until === 'day' ? dayEnd.getTime() : now + PRESENCE_MS).toISOString();
     const key = `${conf.slug}:${id}`;
-    c.presence[key] = { zone, spot, since: new Date(now).toISOString(), until };
+    const since = c.presence[key]?.since ?? new Date(now).toISOString();
+    c.presence[key] = { zone, spot, since, until, location };
     // Once per session: a sample person asks to talk shop a few seconds after presence goes on.
     const requester = personByRef(conf.slug, MOCK_REQUESTER_REF);
     if (requester && !c.seeded.includes(key) && !blockedEitherWay(c, conf.slug, id, requester.ref)) {
@@ -509,7 +573,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       });
     }
     writeConnect(c);
-    return { ok: true, presence_until: until };
+    return { ok: true, until: body.until === 'day' ? 'day' : 'hour', presence_until: until, located: location !== null };
   }
   if (path === '/api/presence' && method === 'DELETE') {
     const id = device(headers);
@@ -612,6 +676,15 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       writeConnect(c);
       const active = m.state === 'active';
       const otherKey = m.requester === me ? m.recipient : m.requester;
+      // GPS bands: with my position stored, the sample partner starts 240 m away at a fixed
+      // bearing and walks closer at about a metre a second, down to 10 m. Only on this read.
+      const mine = myPresence(c, m.event_id, id);
+      const position: { distance_m?: number; bearing_deg?: number } = {};
+      if (active && mine?.location && other?.presence_zone && m.active_since) {
+        const walked = (Date.now() - Date.parse(m.active_since)) / 1000;
+        position.distance_m = Math.max(10, Math.round((240 - walked) / 10) * 10);
+        position.bearing_deg = 45;
+      }
       return {
         state: m.state,
         active_until: active ? m.expires_at : null,
@@ -620,6 +693,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
           zone: active ? (other?.presence_zone ?? null) : null,
           spot: active ? (other?.presence_spot ?? null) : null,
           spot_me: active ? (m.spot_me[otherKey] ?? null) : null,
+          ...position,
         },
         rendezvous: m.rendezvous ?? (active ? (other?.presence_zone ?? myPresence(c, m.event_id, id)?.zone ?? null) : null),
         mine: { spot_me: m.spot_me[me] ?? null },

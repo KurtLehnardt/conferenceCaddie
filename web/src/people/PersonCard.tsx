@@ -21,6 +21,14 @@ function Topics({ label, topics }: { label: string; topics: TopicRef[] }) {
   );
 }
 
+/** The short label of a proximity band; nothing for the venue as a whole. */
+export function proximityLabel(band: PersonResult['proximity']): string | null {
+  if (band === 'same_zone') return 'Same zone';
+  if (band === 'near') return 'Near';
+  if (band === 'around') return 'Around';
+  return null;
+}
+
 // A line to show under a list of people when any of them is a sample profile.
 export function SampleNote({ people }: { people: PersonResult[] }) {
   if (!people.some((p) => p.sample)) return null;
@@ -41,6 +49,8 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
   const hasContact = !!(contact && (contact.linkedin_url || contact.contact_note));
   const asked = requestTo(slug, person.ref);
   const open = asked && asked !== 'requested' ? outgoingTo(slug, person.ref) : null;
+  // A band only; the server never sends a distance here.
+  const band = person.around ? proximityLabel(person.proximity) : null;
 
   return (
     <article class="pp-person">
@@ -63,6 +73,7 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
         <p class="pp-around">
           <MapPin size={16} aria-hidden="true" />
           {person.zone ? `Around · ${person.zone}` : 'Around now'}
+          {band && <span class="pp-band">{band}</span>}
         </p>
       )}
       {person.about && <p class="pp-person-about">{person.about}</p>}

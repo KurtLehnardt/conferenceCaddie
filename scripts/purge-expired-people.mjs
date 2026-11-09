@@ -46,9 +46,9 @@ const expiredProfiles = {
 const profiles = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_delete_by_query?conflicts=proceed`, { query: expiredProfiles });
 console.log(`Deleted ${profiles.deleted ?? 0} expired profiles.`);
 
-// Presence that has run out is cleared with a Bulk partial update of its four fields, the same
-// write the server uses, so nothing is re-embedded.
-const off = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null };
+// Presence that has run out is cleared with a Bulk partial update of its six fields (the
+// position among them), the same write the server uses, so nothing is re-embedded.
+const off = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null };
 let cleared = 0;
 for (;;) {
   const found = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_search`, {

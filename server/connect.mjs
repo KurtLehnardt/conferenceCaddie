@@ -14,9 +14,14 @@
 //   A meet is read or changed only by its two participants; everyone else gets 403.
 // - A block is symmetric and silent: both people vanish from each other's matches, circles and
 //   meets, and a meet attempt in either direction gets the same 403 { error: "blocked" }.
-// - Presence lives on the people document and is written with a Bulk partial update of its four
+// - Presence lives on the people document and is written with a Bulk partial update of its six
 //   fields only, so it never re-runs the embedding model. It ends 60 minutes after it was turned
-//   on, at the latest at the end of the conference.
+//   on, or with until: 'day' at the end of the conference day, at the latest at the end of the
+//   conference.
+// - A position is optional: rounded to 5 decimals, dropped when its accuracy is worse than 200 m,
+//   cleared with presence. It is never returned. It ranks nearby people higher and becomes a band
+//   on a result (people.mjs); only an active meet turns it into a distance rounded to 10 m and a
+//   bearing, for its two participants, through GET /api/meet/{id} and nowhere else.
 // - A person's zone and spot reach another person only inside an active meet, which exists only
 //   while both are around; a how-to-spot-me line reaches only the other participant, only while
 //   the meet is active. Search results carry a zone only when both people are around (people.mjs).
@@ -35,12 +40,16 @@ import {
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
   conferenceFor, dayBounds, topicLabels, zonesFor, authenticated, bulkOne, isAround, PRESENCE_OFF,
   peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch,
+  locationOf, distanceM, bearingDeg,
 } from './people.mjs';
 
 const PRESENCE_MS = 60 * 60_000;
 const ACTIVE_MS = 20 * 60_000;
 const HOUR_MS = 60 * 60_000;
 const SPOT_MAX = 60;
+const ACCURACY_MAX_M = 200;
+const COORD_DECIMALS = 5;
+const DISTANCE_STEP_M = 10;
 const NOTE_MAX = 140;
 const MEET_REQUESTS_PER_HOUR = 10;
 const DECLINES_PER_DAY = 3;
@@ -162,12 +171,24 @@ function stateFor(s, me) {
 const over = (s, me) => new HttpError(410, { error: 'over', state: stateFor(s, me) });
 
 // What a participant may see of a meet. The other person's zone and spot appear only while the
-// meet is active (so while both are around), their spot-me line only then as well.
-function meetView(s, me, other, labels) {
+// meet is active (so while both are around), their spot-me line only then as well. With
+// withDistance (the meet read only, never the inbox or an action), an active meet between two
+// people who both have a position adds the distance (to 10 m) and the bearing from me to them;
+// otherwise neither key is present. No coordinate ever leaves here.
+function meetView(s, me, other, labels, { withDistance = false } = {}) {
   const state = stateFor(s, me);
   const active = s.state === 'active';
   const otherId = (s.participants ?? []).find((p) => p !== me.profile_id) ?? null;
   const topic = s.topic_id && labels.has(s.topic_id) ? { topic_id: s.topic_id, label: labels.get(s.topic_id) } : null;
+  const position = {};
+  if (withDistance && active && other) {
+    const a = locationOf(me);
+    const b = locationOf(other);
+    if (a && b) {
+      position.distance_m = Math.round(distanceM(a, b) / DISTANCE_STEP_M) * DISTANCE_STEP_M;
+      position.bearing_deg = Math.round(bearingDeg(a, b)) % 360;
+    }
+  }
   return {
     meet_id: s.meet_id,
     state,
@@ -189,6 +210,7 @@ function meetView(s, me, other, labels) {
       zone: active && bothAround(me, other) ? other.presence_zone ?? null : null,
       spot: active && bothAround(me, other) ? other.presence_spot ?? null : null,
       spot_me: active && otherId ? s.spot_me?.[otherId] ?? null : null,
+      ...position,
     },
   };
 }
@@ -277,7 +299,27 @@ async function blocks(req, res, url) {
 // ---------------------------------------------------------------------------------------------
 // Presence.
 
-const PRESENCE_KEYS = new Set(['event', 'zone', 'spot']);
+const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until']);
+const PRESENCE_MODES = new Set(['hour', 'day']);
+const LOCATION_KEYS = new Set(['lat', 'lon', 'accuracy']);
+
+// The optional position of a presence write: { lat, lon, accuracy } with accuracy in metres.
+// Returns { presence_location: { lat, lon }, presence_accuracy } rounded to 5 decimals and whole
+// metres, or the two fields as null when there is no position or it is worse than 200 m, in
+// which case the presence is zone-only. A malformed location is 400.
+function locationFields(value) {
+  const none = { presence_location: null, presence_accuracy: null };
+  if (value === undefined || value === null) return none;
+  if (typeof value !== 'object' || Array.isArray(value)) throw bad('location must be an object or null');
+  for (const k of Object.keys(value)) if (!LOCATION_KEYS.has(k)) throw bad(`Unknown key: location.${k.slice(0, 40)}`);
+  const { lat, lon, accuracy } = value;
+  if (typeof lat !== 'number' || !Number.isFinite(lat) || Math.abs(lat) > 90) throw bad('location.lat must be a latitude');
+  if (typeof lon !== 'number' || !Number.isFinite(lon) || Math.abs(lon) > 180) throw bad('location.lon must be a longitude');
+  if (typeof accuracy !== 'number' || !Number.isFinite(accuracy) || accuracy < 0) throw bad('location.accuracy must be metres');
+  if (accuracy > ACCURACY_MAX_M) return none;
+  const round = (v) => Number(v.toFixed(COORD_DECIMALS));
+  return { presence_location: { lat: round(lat), lon: round(lon) }, presence_accuracy: Math.round(accuracy) };
+}
 
 async function putPresence(req, res) {
   const device = writer(req);
@@ -285,19 +327,26 @@ async function putPresence(req, res) {
   if (typeof body.zone !== 'string') throw bad('zone must be a string');
   const zone = body.zone.trim();
   const spot = line(body.spot, 'spot', SPOT_MAX);
+  const location = locationFields(body.location);
+  const mode = body.until === undefined || body.until === null ? 'hour' : body.until;
+  if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour' or 'day'");
   const conf = await conferenceFor(body.event);
   const me = await authenticated(device, conf.slug);
   if (!me || me.open_to_meet !== true) throw profileRequired();
   if (!(await zonesFor(conf.slug)).has(zone)) throw bad("zone must be one of the conference's zones");
   const now = Date.now();
-  const untilMs = Math.min(now + PRESENCE_MS, Date.parse(conf.visibleUntil));
+  // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
+  // the client's zone confirmation does the safeguarding instead. Never past visible_until.
+  const span = mode === 'day' ? dayBounds(now, conf.timeZone).end : now + PRESENCE_MS;
+  const untilMs = Math.min(span, Date.parse(conf.visibleUntil));
   if (untilMs <= now) throw bad('conference has ended');
   // Turning it on again while it is on extends it; since keeps the first time.
   const since = isAround(me) && typeof me.presence_since === 'string' ? me.presence_since : iso(now);
-  const presence = { presence_zone: zone, presence_spot: spot, presence_since: since, presence_until: iso(untilMs) };
+  // A write without a usable position clears any stored one, so the presence is zone-only again.
+  const presence = { presence_zone: zone, presence_spot: spot, presence_since: since, presence_until: iso(untilMs), ...location };
   const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: presence });
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, { ok: true, zone, spot, presence_since: since, presence_until: presence.presence_until });
+  sendJson(res, 200, { ok: true, zone, spot, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null });
 }
 
 async function deletePresence(req, res, url) {
@@ -446,7 +495,7 @@ async function getMeet(req, res, id) {
     }
   }
   if (!OPEN_STATES.includes(stateFor(s, me))) throw over(s, me);
-  sendJson(res, 200, meetView(s, me, other, labels));
+  sendJson(res, 200, meetView(s, me, other, labels, { withDistance: true }));
 }
 
 async function action(req, res, id, name) {
