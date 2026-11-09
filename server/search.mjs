@@ -37,6 +37,20 @@
 //   retriever, same filters, minus that group's selection) runs in the same _msearch request.
 // - A selected value that has no matching documents is still listed, with count 0, so the UI
 //   can show it as selected.
+//
+// Ranking drawer ("debug": true)
+// - Only a text query with "debug": true pays for it; every other request sends exactly the
+//   searches above. The main query is the same with or without debug.
+// - The same _msearch request then also runs the rrf retriever's two child retrievers on their
+//   own, each as a standard retriever carrying the same filter the rrf retriever passes down to
+//   it, and each sized to the rank window. Elasticsearch orders both lists, so a talk's keyword
+//   rank and semantic rank are its positions in those lists, which are the ranks rrf fused. A
+//   talk outside a list's top window gets null, which rrf also treats as "not found".
+// - Each result then carries ranking: { rank, keyword_rank, semantic_rank }, and the response
+//   carries ranking: { rank_window, semantic_k, filters }, where filters echoes the validated
+//   filters that every query of the request applied.
+// - A debug request sets one msearch preference on all its searches, so every one of them reads
+//   the same shard copies.
 
 import { searchableConference } from './conferences.mjs';
 
@@ -105,8 +119,10 @@ export async function esRequest(path, body, options = {}) {
   }
 }
 
-async function msearch(searches) {
-  const body = searches.flatMap((s) => ['{}', JSON.stringify(s)]).join('\n') + '\n';
+// header is the msearch header line sent with every search, for example a shared preference.
+async function msearch(searches, header = {}) {
+  const head = JSON.stringify(header);
+  const body = searches.flatMap((s) => [head, JSON.stringify(s)]).join('\n') + '\n';
   const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_msearch`, body, { contentType: 'application/x-ndjson' });
   const responses = json.responses ?? [];
   if (responses.length !== searches.length || responses.some((r) => r.error)) {
@@ -154,7 +170,7 @@ function knownValues(slug) {
 // Validation. Only the documented keys are accepted, and filter values must be known values of
 // the requested conference.
 
-const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size']);
+const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'debug']);
 const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor']);
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const TALK_ID_RE = /^([a-z0-9][a-z0-9-]{0,119}):[A-Za-z0-9_-]{1,64}$/;
@@ -222,6 +238,8 @@ export async function validate(body) {
     size = body.size;
   }
 
+  if (body.debug !== undefined && typeof body.debug !== 'boolean') throw new BadRequest('debug must be a boolean');
+
   // saved_talk_ids is still accepted, so older clients keep working, but it never filters.
   if (body.saved_talk_ids !== undefined) {
     const ids = body.saved_talk_ids;
@@ -264,6 +282,7 @@ export async function validate(body) {
     tagGroups,
     query,
     size,
+    debug: body.debug === true,
     filters: {
       day: f.day ?? null,
       startAfter,
@@ -312,30 +331,42 @@ const AGGS = {
   tag_keys: { terms: { field: 'tag_keys', size: 2000 } },
 };
 
+// The rrf retriever's two children: the lexical query, then the knn query.
+function childQueries(query, knnFilter) {
+  return [
+    { multi_match: { query, fields: LEXICAL_FIELDS, minimum_should_match: LEXICAL_MIN_MATCH } },
+    {
+      knn: {
+        field: 'semantic',
+        k: SEMANTIC_K,
+        num_candidates: SEMANTIC_CANDIDATES,
+        filter: knnFilter,
+        query_vector_builder: { text_embedding: { model_text: query } },
+      },
+    },
+  ];
+}
+
 // knnFilter holds only the base filters, so the nearest-neighbour set does not depend on the
 // facet selections; the selections are applied to it afterwards through the rrf filter.
 function retrieverFor(query, filter, knnFilter) {
   return {
     rrf: {
-      retrievers: [
-        { standard: { query: { multi_match: { query, fields: LEXICAL_FIELDS, minimum_should_match: LEXICAL_MIN_MATCH } } } },
-        {
-          standard: {
-            query: {
-              knn: {
-                field: 'semantic',
-                k: SEMANTIC_K,
-                num_candidates: SEMANTIC_CANDIDATES,
-                filter: knnFilter,
-                query_vector_builder: { text_embedding: { model_text: query } },
-              },
-            },
-          },
-        },
-      ],
+      retrievers: childQueries(query, knnFilter).map((q) => ({ standard: { query: q } })),
       filter,
       rank_window_size: RANK_WINDOW,
     },
+  };
+}
+
+// One child retriever on its own, with the filter the rrf retriever passes down to it, for the
+// ranking drawer. Only talk_id is returned; Elasticsearch's order is the child's ranking.
+function childSearch(childQuery, filter) {
+  return {
+    retriever: { standard: { query: childQuery, filter } },
+    size: RANK_WINDOW,
+    track_total_hits: false,
+    _source: ['talk_id'],
   };
 }
 
@@ -490,6 +521,9 @@ function tagValues(group, buckets, filters) {
   return values;
 }
 
+// Minutes after midnight back to "HH:MM", or null.
+const hhmm = (m) => (m === null ? null : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+
 // ---------------------------------------------------------------------------------------------
 
 export async function search(params) {
@@ -501,8 +535,15 @@ export async function search(params) {
   if (hasLevel) mainAggs.level = AGGS.level;
   const searches = [mainSearch(query, [...base, ...selectionClauses(groups, null)], base, size, mainAggs)];
   for (const g of groups) searches.push(facetSearch(query, [...base, ...selectionClauses(groups, g.name)], base, g.agg));
+  const debug = params.debug && Boolean(query);
+  if (debug) {
+    for (const q of childQueries(query, base)) searches.push(childSearch(q, [...base, ...selectionClauses(groups, null)]));
+  }
 
-  const [main, ...rest] = await msearch(searches);
+  // A debug request sends every search to the same shard copies, so the child rankings use the
+  // same term statistics as the fused ranking they explain.
+  const all = await msearch(searches, debug ? { preference: 'caddie-ranking-drawer' } : {});
+  const [main, ...rest] = all.slice(0, 1 + groups.length);
   const aggsFor = (name) => {
     const i = groups.findIndex((g) => g.name === name);
     return i === -1 ? main.aggregations : rest[i].aggregations;
@@ -520,10 +561,40 @@ export async function search(params) {
   const hits = main.hits?.hits ?? [];
   const labels = await topicLabels(conference, hits.flatMap((h) => asArray(h._source?.topics)));
 
-  return {
+  const response = {
     total: main.hits?.total?.value ?? 0,
     conference,
     results: hits.map((h) => toResult(h, labels)),
     facets,
   };
+  if (debug) {
+    // Position in each Elasticsearch-ordered child list, 1-based; nothing is re-sorted here.
+    const positions = all.slice(1 + groups.length).map((r) => {
+      const at = new Map();
+      (r.hits?.hits ?? []).forEach((h, i) => at.set(String(h._source?.talk_id ?? h._id), i + 1));
+      return at;
+    });
+    response.results.forEach((r, i) => {
+      r.ranking = { rank: i + 1, keyword_rank: positions[0].get(r.talk_id) ?? null, semantic_rank: positions[1].get(r.talk_id) ?? null };
+    });
+    response.ranking = {
+      rank_window: RANK_WINDOW,
+      semantic_k: SEMANTIC_K,
+      filters: {
+        kind: 'talk',
+        day: filters.day,
+        start_after: hhmm(filters.startAfter),
+        start_before: hhmm(filters.startBefore),
+        track: filters.track,
+        level: filters.level,
+        tags: [...filters.tags.values()].flat().map((key) => {
+          const [group, value] = key.split(TAG_SEP);
+          return { group, value };
+        }),
+        has_slides: filters.hasSlides,
+        hide_sponsor: filters.hideSponsor,
+      },
+    };
+  }
+  return response;
 }

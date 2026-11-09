@@ -255,6 +255,42 @@ await check('f2: a search without a conference, or for an unknown one, returns 4
   report(none.status === 400 && unknown.status === 400, 'f2: a search without a conference, or for an unknown one, returns 400', `status ${none.status} and ${unknown.status}`);
 });
 
+// The ranking drawer: "debug": true adds each result's keyword and semantic rank from
+// Elasticsearch, and a normal search carries none of it. The reciprocal rank fusion score the
+// reported ranks imply must never rise down the list, which shows the ranks are the ones fused.
+// The plain and debug result lists are not compared: the primary and replica shard copies hold
+// different numbers of deleted documents, so keyword scores, and sometimes the order, can differ
+// between two identical requests.
+await check('k1: the ranking drawer reports the keyword and semantic ranks that were fused', async () => {
+  const body = { query: 'kubernetes security', size: 15, filters: { hide_sponsor: true } };
+  const plain = await search(body);
+  const debug = await search({ ...body, debug: true });
+  if (plain.status !== 200 || debug.status !== 200) throw new Error(`status ${plain.status} and ${debug.status}`);
+  const problems = [];
+  if ('ranking' in plain.json || (plain.json.results ?? []).some((r) => 'ranking' in r)) problems.push('a normal search carries ranking details');
+  const info = debug.json.ranking;
+  if (!info || info.filters?.hide_sponsor !== true || info.filters?.kind !== 'talk') problems.push('the applied filters are missing');
+  const rrf = (n) => (Number.isInteger(n) && n > 0 ? 1 / (60 + n) : 0);
+  let previous = Infinity;
+  (debug.json.results ?? []).forEach((r, i) => {
+    const g = r.ranking;
+    if (!g || g.rank !== i + 1) return problems.push(`result ${i + 1} has no rank`);
+    if (g.keyword_rank === null && g.semantic_rank === null) problems.push(`"${r.title}" is in neither ranking`);
+    const score = rrf(g.keyword_rank) + rrf(g.semantic_rank);
+    if (score > previous + 1e-9) problems.push(`"${r.title}" at ${g.rank} outscores the talk above it`);
+    previous = score;
+  });
+  const first = debug.json.results?.[0]?.ranking;
+  report(problems.length === 0, 'k1: the ranking drawer reports the keyword and semantic ranks that were fused', problems.length ? problems.slice(0, 3).join('; ') : `top result keyword ${first?.keyword_rank}, semantic ${first?.semantic_rank}`);
+});
+
+await check('k2: debug must be a boolean, and browse mode has no ranking details', async () => {
+  const bad = await search({ query: 'kubernetes', debug: 'yes' });
+  const browse = await search({ query: '', debug: true });
+  const ok = bad.status === 400 && browse.status === 200 && !('ranking' in browse.json);
+  report(ok, 'k2: debug must be a boolean, and browse mode has no ranking details', `status ${bad.status} and ${browse.status}`);
+});
+
 // ---------------------------------------------------------------------------------------------
 // The smaller events: own talks only, own categories, own time zone.
 

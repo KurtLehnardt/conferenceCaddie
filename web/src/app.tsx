@@ -102,6 +102,8 @@ export function App() {
   const latest = useRef({ input, filters, slug: searchable?.slug ?? null, talks, data });
   latest.current = { input, filters, slug: searchable?.slug ?? null, talks, data };
   const searchedKey = useRef('');
+  // The request behind the results on screen, so the ranking drawer can ask for the same search.
+  const dataParams = useRef<{ s: string; q: string; f: SearchFilters } | null>(null);
 
   const showToast = useCallback((message: string, action?: ToastData['action']) => {
     setToast({ id: Date.now(), message, action });
@@ -203,6 +205,7 @@ export function App() {
     try {
       const res = await search(s, q, f, PAGE_SIZE, ctrl.signal);
       if (ctrl.signal.aborted || latest.current.slug !== s) return;
+      dataParams.current = { s, q, f };
       setData(res);
       setLastQuery(q.trim());
       setError(null);
@@ -463,6 +466,11 @@ export function App() {
                     onRetry={() => runSearch()}
                     onToggle={toggleInterested}
                     onClearFilters={() => setFilters(EMPTY_FILTERS)}
+                    onExplain={() => {
+                      const p = dataParams.current;
+                      if (!p) return Promise.reject(new Error('no search'));
+                      return search(p.s, p.q, p.f, PAGE_SIZE, new AbortController().signal, true);
+                    }}
                   />
                 </>
               )}

@@ -56,6 +56,8 @@ export interface SearchRequest {
   filters?: SearchFilters;
   saved_talk_ids?: string[];
   size?: number;
+  /** Asks for the ranking drawer's details; normal searches leave it out. */
+  debug?: boolean;
 }
 
 export interface Talk {
@@ -75,8 +77,34 @@ export interface Talk {
   url: string;
 }
 
+/** Where a result stood in each of the two rankings Elasticsearch fused; null is outside the window. */
+export interface ResultRanking {
+  rank: number;
+  keyword_rank: number | null;
+  semantic_rank: number | null;
+}
+
 export interface SearchResult extends Talk {
   evidence: string;
+  /** Only present when the request asked for debug. */
+  ranking?: ResultRanking;
+}
+
+/** The ranking window sizes and the filters every query of a debug search applied. */
+export interface RankingInfo {
+  rank_window: number;
+  semantic_k: number;
+  filters: {
+    kind: string;
+    day: string | null;
+    start_after: string | null;
+    start_before: string | null;
+    track: string[];
+    level: string[];
+    tags: TagRef[];
+    has_slides: boolean | null;
+    hide_sponsor: boolean;
+  };
 }
 
 /** A talk the user marked as interesting, stored on the device without its evidence. */
@@ -107,6 +135,8 @@ export interface SearchResponse {
   conference: string;
   results: SearchResult[];
   facets: Facets;
+  /** Only present when the request asked for debug. */
+  ranking?: RankingInfo;
 }
 
 export interface ErrorResponse {

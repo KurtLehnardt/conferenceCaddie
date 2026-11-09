@@ -28,6 +28,7 @@ export function search(
   filters: SearchFilters,
   size: number,
   signal: AbortSignal,
+  debug = false,
 ): Promise<SearchResponse> {
   const body: SearchRequest = {
     conference,
@@ -35,6 +36,7 @@ export function search(
     filters,
     size,
   };
+  if (debug) body.debug = true;
   return post<SearchResponse>('/api/search', body, signal, 'That search could not be run. Try removing a filter.');
 }
 

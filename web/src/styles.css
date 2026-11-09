@@ -927,6 +927,67 @@ mark {
   font-size: 13px;
 }
 
+/* Ranking drawer on search results. */
+.rank-drawer {
+  margin-top: 4px;
+}
+
+.rank-toggle {
+  margin-left: -14px;
+  gap: 6px;
+}
+
+.rank-chevron {
+  transition: transform var(--motion) var(--ease);
+}
+
+.rank-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.rank-panel {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--fill);
+  font-size: 14px;
+}
+
+.rank-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.rank-list dt {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rank-list dd {
+  margin: 2px 0 0;
+  color: var(--text);
+}
+
+.rank-filters {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.rank-note {
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.rank-list + .rank-note {
+  margin-top: 10px;
+}
+
+.rank-panel > .rank-note:first-child {
+  margin-top: 0;
+}
+
 .card-links {
   display: flex;
   flex-wrap: wrap;

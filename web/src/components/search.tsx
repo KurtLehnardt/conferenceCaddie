@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   Check,
   ChevronDown,
@@ -8,7 +8,7 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-preact';
-import type { Conference, Facets, FacetBucket, SearchFilters, SearchResponse, Talk, TagRef } from '../types';
+import type { Conference, Facets, FacetBucket, RankingInfo, SearchFilters, SearchResponse, Talk, TagRef } from '../types';
 import { EMPTY_FILTERS } from '../types';
 import { formatDay } from '../lib/time';
 import { useFocusTrap } from '../lib/focus';
@@ -537,6 +537,136 @@ function SkeletonCard() {
   );
 }
 
+/* ---------- Ranking drawer ---------- */
+
+/** Plain lines for the filters a debug search reports it applied. */
+function filterLines(info: RankingInfo, conference: Conference): string[] {
+  const f = info.filters;
+  const lines = [`${conference.name} only`, 'Talks only, without breaks or housekeeping'];
+  if (f.day) lines.push(`Day: ${formatDay(f.day)}`);
+  if (f.start_before === '12:00' && !f.start_after) lines.push('Morning: starts before 12:00');
+  else if (f.start_after === '12:00' && !f.start_before) lines.push('Afternoon: starts at 12:00 or later');
+  else {
+    if (f.start_after) lines.push(`Starts at ${f.start_after} or later`);
+    if (f.start_before) lines.push(`Starts before ${f.start_before}`);
+  }
+  if (f.track.length) lines.push(`Track: ${f.track.join(', ')}`);
+  if (f.level.length) lines.push(`Level: ${f.level.join(', ')}`);
+  const groups = new Map<string, string[]>();
+  for (const t of f.tags) groups.set(t.group, [...(groups.get(t.group) ?? []), t.value]);
+  for (const [group, values] of groups) lines.push(`${group}: ${values.join(', ')}`);
+  if (f.has_slides !== null) lines.push(f.has_slides ? 'Has slides' : 'No slides');
+  if (f.hide_sponsor) lines.push('Sponsor talks hidden');
+  return lines;
+}
+
+type DrawerState = { status: 'idle' | 'loading' | 'error' } | { status: 'ready'; res: SearchResponse };
+
+/**
+ * "Why this rank": a collapsible panel on a search result. It asks the server for the same search
+ * with debug on, once per set of results, and shows where Elasticsearch placed the talk in the
+ * keyword and meaning rankings it fused, and the filters it applied.
+ */
+function RankDrawer({
+  talkId,
+  index,
+  conference,
+  data,
+  load,
+}: {
+  talkId: string;
+  index: number;
+  conference: Conference;
+  data: SearchResponse;
+  load: () => Promise<SearchResponse>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<DrawerState>({ status: 'idle' });
+  useEffect(() => {
+    setOpen(false);
+    setState({ status: 'idle' });
+  }, [data]);
+
+  const fetchRanking = () => {
+    setState({ status: 'loading' });
+    load().then(
+      (res) => setState({ status: 'ready', res }),
+      () => setState({ status: 'error' }),
+    );
+  };
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && (state.status === 'idle' || state.status === 'error')) fetchRanking();
+  };
+
+  const id = `rank-drawer-${index}`;
+  let body;
+  if (state.status === 'ready') {
+    const r = state.res.results.find((x) => x.talk_id === talkId)?.ranking;
+    const info = state.res.ranking;
+    if (!r || !info) {
+      body = <p class="rank-note">Ranking details are not available for this talk right now.</p>;
+    } else {
+      body = (
+        <>
+          <dl class="rank-list">
+            <div>
+              <dt>Place in the fused ranking</dt>
+              <dd>{r.rank}</dd>
+            </div>
+            <div>
+              <dt>Keyword match</dt>
+              <dd>{r.keyword_rank ? `${r.keyword_rank} of the top ${info.rank_window}` : `Not in the top ${info.rank_window}`}</dd>
+            </div>
+            <div>
+              <dt>Meaning match</dt>
+              <dd>{r.semantic_rank ? `${r.semantic_rank} of the ${info.semantic_k} nearest` : `Not among the ${info.semantic_k} nearest`}</dd>
+            </div>
+            <div>
+              <dt>Filters applied</dt>
+              <dd>
+                <ul class="rank-filters">
+                  {filterLines(info, conference).map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </dd>
+            </div>
+          </dl>
+          <p class="rank-note">
+            Elasticsearch ranks talks by keywords and by meaning, then fuses the two lists with reciprocal rank fusion.
+            A high place in either list lifts a talk.
+          </p>
+        </>
+      );
+    }
+  } else if (state.status === 'error') {
+    body = (
+      <p class="rank-note">
+        The ranking details could not be loaded.{' '}
+        <button type="button" class="btn btn-text btn-small" onClick={fetchRanking}>
+          Retry
+        </button>
+      </p>
+    );
+  } else {
+    body = <p class="rank-note">Loading the ranking details…</p>;
+  }
+
+  return (
+    <div class="rank-drawer">
+      <button type="button" class="btn btn-text btn-small rank-toggle" aria-expanded={open} aria-controls={id} onClick={toggle}>
+        <ChevronDown size={18} class={`rank-chevron${open ? ' is-open' : ''}`} aria-hidden="true" />
+        Why this rank
+      </button>
+      <div id={id} class="rank-panel" hidden={!open} aria-live="polite">
+        {open && body}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Results ---------- */
 
 export function Results({
@@ -550,6 +680,7 @@ export function Results({
   onRetry,
   onToggle,
   onClearFilters,
+  onExplain,
 }: {
   conference: Conference;
   data: SearchResponse | null;
@@ -561,7 +692,23 @@ export function Results({
   onRetry: () => void;
   onToggle: (t: Talk) => void;
   onClearFilters: () => void;
+  /** Runs the search behind the results again with debug on, for the ranking drawer. */
+  onExplain?: () => Promise<SearchResponse>;
 }) {
+  // One debug request per set of results, shared by every drawer; a failure lets the next try run.
+  const explained = useRef<{ data: SearchResponse | null; promise: Promise<SearchResponse> | null }>({ data: null, promise: null });
+  const loadRanking = () => {
+    const c = explained.current;
+    if (c.data !== data || !c.promise) {
+      const promise = onExplain ? onExplain() : Promise.reject(new Error('unavailable'));
+      explained.current = { data, promise };
+      promise.catch(() => {
+        if (explained.current.promise === promise) explained.current.promise = null;
+      });
+    }
+    return explained.current.promise as Promise<SearchResponse>;
+  };
+
   if (error && !data) {
     return (
       <div class="state">
@@ -615,7 +762,7 @@ export function Results({
         </div>
       ) : (
         <div class="results">
-          {data.results.map((r) => (
+          {data.results.map((r, i) => (
             <TalkCard
               key={r.talk_id}
               talk={r}
@@ -623,6 +770,11 @@ export function Results({
               evidence={r.evidence}
               interested={interestedIds.has(r.talk_id)}
               onToggleInterested={onToggle}
+              extra={
+                !browse && onExplain ? (
+                  <RankDrawer talkId={r.talk_id} index={i} conference={conference} data={data} load={loadRanking} />
+                ) : undefined
+              }
             />
           ))}
         </div>

@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { useRef, useState } from 'preact/hooks';
 import { Clock, ExternalLink, MapPin, Presentation, Star, WifiOff } from 'lucide-preact';
 import { getRelated, isAbort } from '../api';
@@ -87,6 +88,7 @@ export function TalkCard({
   onToggleInterested,
   evidence,
   headingLevel = 3,
+  extra,
 }: {
   talk: Talk;
   conference: Conference;
@@ -94,6 +96,8 @@ export function TalkCard({
   onToggleInterested: (talk: Talk) => void;
   evidence?: string | null;
   headingLevel?: 2 | 3;
+  /** Optional content under the actions, such as the ranking drawer on search results. */
+  extra?: ComponentChildren;
 }) {
   const tags = talkTags(talk);
   // Talk circles need the server, so offline they give way to a calm note on marked talks.
@@ -132,6 +136,7 @@ export function TalkCard({
       <div class="card-actions">
         <InterestedToggle talk={talk} on={interested} onToggle={() => onToggleInterested(talk)} />
       </div>
+      {extra}
       {online ? (
         <TalkPeopleControls conference={conference} talk={talk} interested={interested} />
       ) : (
