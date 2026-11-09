@@ -85,6 +85,8 @@ export function App() {
   // Search state lives here so it survives tab switches; it resets per conference.
   const [input, setInput] = useState('');
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
+  // Time phrases ("tuesday", "after lunch") whose chip the person removed.
+  const [ignored, setIgnored] = useState<string[]>([]);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [lastQuery, setLastQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -99,11 +101,11 @@ export function App() {
 
   const controller = useRef<AbortController | null>(null);
   const timer = useRef<number | undefined>(undefined);
-  const latest = useRef({ input, filters, slug: searchable?.slug ?? null, talks, data });
-  latest.current = { input, filters, slug: searchable?.slug ?? null, talks, data };
+  const latest = useRef({ input, filters, ignored, slug: searchable?.slug ?? null, talks, data });
+  latest.current = { input, filters, ignored, slug: searchable?.slug ?? null, talks, data };
   const searchedKey = useRef('');
   // The request behind the results on screen, so the ranking drawer can ask for the same search.
-  const dataParams = useRef<{ s: string; q: string; f: SearchFilters } | null>(null);
+  const dataParams = useRef<{ s: string; q: string; f: SearchFilters; ig: string[] } | null>(null);
 
   const showToast = useCallback((message: string, action?: ToastData['action']) => {
     setToast({ id: Date.now(), message, action });
@@ -155,7 +157,9 @@ export function App() {
     searchedKey.current = '';
     // Filters name the old conference's values, so they must not reach the next search.
     latest.current.filters = EMPTY_FILTERS;
+    latest.current.ignored = [];
     setFilters(EMPTY_FILTERS);
+    setIgnored([]);
     setData(null);
     setError(null);
     setLoading(false);
@@ -196,18 +200,27 @@ export function App() {
   const runSearch = useCallback(async () => {
     window.clearTimeout(timer.current);
     controller.current?.abort();
-    const { input: q, filters: f, slug: s } = latest.current;
+    const { input: q, filters: f, ignored: ig, slug: s } = latest.current;
     if (!s) return;
     const ctrl = new AbortController();
     controller.current = ctrl;
-    searchedKey.current = `${s}|${JSON.stringify(f)}`;
+    searchedKey.current = `${s}|${JSON.stringify(f)}|${ig.join(',')}`;
     setLoading(true);
     try {
-      const res = await search(s, q, f, PAGE_SIZE, ctrl.signal);
+      const res = await search(s, q, f, PAGE_SIZE, ctrl.signal, false, ig);
       if (ctrl.signal.aborted || latest.current.slug !== s) return;
-      dataParams.current = { s, q, f };
+      dataParams.current = { s, q, f, ig };
       setData(res);
-      setLastQuery(q.trim());
+      // The text the search really ran on: time phrases have left it.
+      setLastQuery((res.search_text ?? q).trim());
+      // A removed phrase that is no longer in the text is forgotten, so typing it again filters
+      // again. Dropping it changes nothing about this search, so no new search is needed.
+      const kept = ig.filter((k) => res.time_phrases?.some((p) => p.key === k));
+      if (kept.length !== ig.length && latest.current.ignored === ig) {
+        latest.current.ignored = kept;
+        searchedKey.current = `${s}|${JSON.stringify(f)}|${kept.join(',')}`;
+        setIgnored(kept);
+      }
       setError(null);
     } catch (err) {
       if (isAbort(err)) return;
@@ -228,8 +241,8 @@ export function App() {
       searchedKey.current = '';
       return;
     }
-    if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}`) runSearch();
-  }, [tab, searchable?.slug, filters, online]);
+    if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}|${ignored.join(',')}`) runSearch();
+  }, [tab, searchable?.slug, filters, ignored, online]);
 
   const onInput = (v: string) => {
     setInput(v);
@@ -449,6 +462,8 @@ export function App() {
                     conference={searchable}
                     filters={filters}
                     facets={data?.facets ?? null}
+                    phrases={(data?.time_phrases ?? []).filter((p) => p.applied)}
+                    onRemovePhrase={(key) => setIgnored([...ignored, key])}
                     onChange={setFilters}
                     onOpenSheet={(section) => {
                       setToast(null);
@@ -469,7 +484,7 @@ export function App() {
                     onExplain={() => {
                       const p = dataParams.current;
                       if (!p) return Promise.reject(new Error('no search'));
-                      return search(p.s, p.q, p.f, PAGE_SIZE, new AbortController().signal, true);
+                      return search(p.s, p.q, p.f, PAGE_SIZE, new AbortController().signal, true, p.ig);
                     }}
                   />
                 </>

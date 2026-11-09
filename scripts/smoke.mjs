@@ -291,6 +291,39 @@ await check('k2: debug must be a boolean, and browse mode has no ranking details
   report(ok, 'k2: debug must be a boolean, and browse mode has no ranking details', `status ${bad.status} and ${browse.status}`);
 });
 
+// Time phrases: "tuesday afternoon" leaves the text and becomes two filters. The expectation is
+// computed from the committed data, not from the response: every talk starts on that day at or
+// after 12:00, and the day's lunch from the break items bounds "after lunch".
+const minutesOf = (iso) => Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+await check('m1: "tuesday afternoon" leaves the text, filters the results and can be removed', async () => {
+  const start = confBySlug.get(PRIMARY)?.start_date;
+  const tuesday = ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12'].find((d) => new Date(`${d}T12:00:00Z`).getUTCDay() === 2);
+  if (!start || !tuesday) throw new Error('the primary conference has no Tuesday in the data');
+  const r = await search({ query: 'kubernetes tuesday afternoon', size: 50 });
+  if (r.status !== 200) throw new Error(`status ${r.status}`);
+  const keys = (r.json.time_phrases ?? []).filter((p) => p.applied).map((p) => p.key).sort().join(',');
+  const wrong = (r.json.results ?? []).filter((t) => !t.start.startsWith(tuesday) || minutesOf(t.start) < 720);
+  const off = await search({ query: 'kubernetes tuesday afternoon', size: 50, ignore_phrases: ['tuesday', 'afternoon'] });
+  const offApplied = (off.json.time_phrases ?? []).filter((p) => p.applied).length;
+  const ok = keys === 'afternoon,tuesday' && r.json.search_text === 'kubernetes' && (r.json.results ?? []).length > 0 && wrong.length === 0
+    && off.status === 200 && offApplied === 0 && off.json.total > r.json.total;
+  report(ok, 'm1: "tuesday afternoon" leaves the text, filters the results and can be removed', `phrases ${keys}, text "${r.json.search_text}", ${r.json.total} talks, ${wrong.length} outside the filter, ${off.json.total} with both removed`);
+});
+
+await check('m2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', async () => {
+  const day2 = '2026-11-10';
+  const lunch = readNdjson(PRIMARY).filter((d) => d.kind === 'break' && d.day === day2 && /lunch/i.test(d.title));
+  if (!lunch.length) throw new Error('no lunch break on day 2 in the data');
+  const lunchEnd = Math.max(...lunch.map((d) => d.end_minutes));
+  const r = await search({ query: 'after lunch day 2', size: 50 });
+  if (r.status !== 200) throw new Error(`status ${r.status}`);
+  const wrong = (r.json.results ?? []).filter((t) => !t.start.startsWith(day2) || minutesOf(t.start) < lunchEnd);
+  const unknown = await search({ query: 'day 9 friday', size: 5 });
+  const ok = r.json.search_text === '' && (r.json.results ?? []).length > 0 && wrong.length === 0
+    && unknown.status === 200 && (unknown.json.time_phrases ?? []).length === 0 && unknown.json.search_text === 'day 9 friday';
+  report(ok, 'm2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', `${r.json.total} talks, ${wrong.length} outside the window, lunch ends at minute ${lunchEnd}`);
+});
+
 // ---------------------------------------------------------------------------------------------
 // The smaller events: own talks only, own categories, own time zone.
 

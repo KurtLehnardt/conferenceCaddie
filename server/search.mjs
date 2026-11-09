@@ -23,7 +23,8 @@
 //   neighbours among the documents that pass B; in browse mode, every document. M does not depend
 //   on any facet selection.
 // - Let B be the base filters: kind is "talk", the start_after and start_before window,
-//   hide_sponsor, and the conference term. Every query this module sends, including the
+//   hide_sponsor, the clauses of the time phrases found in the query (see phrases.mjs), and the
+//   conference term. Every query this module sends, including the
 //   known-values aggregation, carries the conference term, so no talk of another conference can
 //   appear in results or counts.
 // - Let S(g) be the selection in facet group g: day, track, level, has_slides, and one group per
@@ -53,6 +54,7 @@
 //   the same shard copies.
 
 import { searchableConference } from './conferences.mjs';
+import { parseTimePhrases } from './phrases.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
@@ -170,7 +172,7 @@ function knownValues(slug) {
 // Validation. Only the documented keys are accepted, and filter values must be known values of
 // the requested conference.
 
-const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'debug']);
+const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'debug', 'ignore_phrases']);
 const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor']);
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const TALK_ID_RE = /^([a-z0-9][a-z0-9-]{0,119}):[A-Za-z0-9_-]{1,64}$/;
@@ -240,6 +242,16 @@ export async function validate(body) {
 
   if (body.debug !== undefined && typeof body.debug !== 'boolean') throw new BadRequest('debug must be a boolean');
 
+  // ignore_phrases names time phrases the person removed; an unknown name simply has no effect.
+  let ignored = new Set();
+  if (body.ignore_phrases !== undefined) {
+    const list = body.ignore_phrases;
+    if (!Array.isArray(list) || list.length > 20 || !list.every((k) => typeof k === 'string' && k.length <= 30)) {
+      throw new BadRequest('ignore_phrases must be an array of at most 20 short strings');
+    }
+    ignored = new Set(list);
+  }
+
   // saved_talk_ids is still accepted, so older clients keep working, but it never filters.
   if (body.saved_talk_ids !== undefined) {
     const ids = body.saved_talk_ids;
@@ -276,11 +288,15 @@ export async function validate(body) {
   const known = needsKnown ? await knownValues(slug) : { day: new Set(), track: new Set(), level: new Set(), tagKeys: new Set() };
   if (f.day !== undefined && f.day !== null && !known.day.has(f.day)) throw new BadRequest('filters.day is not a known day');
 
+  // Time phrases leave the text and become filter clauses of their own.
+  const time = await parseTimePhrases(query, conference, ignored);
+
   return {
     conference: slug,
     hasLevel: Boolean(levelGroup),
     tagGroups,
-    query,
+    query: time.text,
+    timePhrases: time.phrases,
     size,
     debug: body.debug === true,
     filters: {
@@ -292,6 +308,7 @@ export async function validate(body) {
       tags: tagSelection(tagPairs, known.tagKeys),
       hasSlides: f.has_slides ?? null,
       hideSponsor: f.hide_sponsor ?? false,
+      phraseClauses: time.clauses,
     },
   };
 }
@@ -306,6 +323,7 @@ function baseClauses(conference, filters) {
   if (filters.startBefore !== null) minutes.lt = filters.startBefore;
   if (Object.keys(minutes).length) clauses.push({ range: { start_minutes: minutes } });
   if (filters.hideSponsor) clauses.push({ bool: { must_not: [{ term: { sponsor: true } }] } });
+  clauses.push(...filters.phraseClauses);
   return clauses;
 }
 
@@ -564,6 +582,9 @@ export async function search(params) {
   const response = {
     total: main.hits?.total?.value ?? 0,
     conference,
+    // The text the retrievers saw, after time phrases left it, and the phrases found in it.
+    search_text: query,
+    time_phrases: params.timePhrases.map((p) => ({ key: p.key, label: p.label, days: p.days, applied: p.applied })),
     results: hits.map((h) => toResult(h, labels)),
     facets,
   };
@@ -593,6 +614,7 @@ export async function search(params) {
         }),
         has_slides: filters.hasSlides,
         hide_sponsor: filters.hideSponsor,
+        time_phrases: params.timePhrases.filter((p) => p.applied).map((p) => p.label),
       },
     };
   }

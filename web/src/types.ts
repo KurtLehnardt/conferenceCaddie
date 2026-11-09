@@ -58,6 +58,18 @@ export interface SearchRequest {
   size?: number;
   /** Asks for the ranking drawer's details; normal searches leave it out. */
   debug?: boolean;
+  /** Keys of time phrases the person removed; the server then stops filtering by them. */
+  ignore_phrases?: string[];
+}
+
+/** A time phrase the server found in the search text, such as "after lunch" or "Tuesday". */
+export interface TimePhrase {
+  key: string;
+  label: string;
+  /** The conference days a day or weekday phrase stands for; empty for the other phrases. */
+  days: string[];
+  /** False when the person removed it: it left the text but no longer filters. */
+  applied: boolean;
 }
 
 export interface Talk {
@@ -104,6 +116,7 @@ export interface RankingInfo {
     tags: TagRef[];
     has_slides: boolean | null;
     hide_sponsor: boolean;
+    time_phrases?: string[];
   };
 }
 
@@ -133,6 +146,9 @@ export interface Facets {
 export interface SearchResponse {
   total: number;
   conference: string;
+  /** The text the search ran on, after time phrases left it. */
+  search_text?: string;
+  time_phrases?: TimePhrase[];
   results: SearchResult[];
   facets: Facets;
   /** Only present when the request asked for debug. */

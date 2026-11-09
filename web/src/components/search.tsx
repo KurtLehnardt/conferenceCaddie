@@ -8,7 +8,7 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-preact';
-import type { Conference, Facets, FacetBucket, RankingInfo, SearchFilters, SearchResponse, Talk, TagRef } from '../types';
+import type { Conference, Facets, FacetBucket, RankingInfo, SearchFilters, SearchResponse, Talk, TagRef, TimePhrase } from '../types';
 import { EMPTY_FILTERS } from '../types';
 import { formatDay } from '../lib/time';
 import { useFocusTrap } from '../lib/focus';
@@ -196,12 +196,17 @@ export function ChipRow({
   conference,
   filters,
   facets,
+  phrases,
+  onRemovePhrase,
   onChange,
   onOpenSheet,
 }: {
   conference: Conference;
   filters: SearchFilters;
   facets: Facets | null;
+  /** Time phrases the server took out of the search text, shown as chips that can be removed. */
+  phrases: TimePhrase[];
+  onRemovePhrase: (key: string) => void;
   onChange: (f: SearchFilters) => void;
   onOpenSheet: (section?: SheetSection) => void;
 }) {
@@ -210,6 +215,16 @@ export function ChipRow({
   const seen = rememberTagValues(conference.slug, facets, filters);
   return (
     <div class="chip-row" role="toolbar" aria-label="Filters">
+      {phrases.map((p) => (
+        <Chip
+          key={p.key}
+          label={p.days.length === 1 ? `${p.label} · ${formatDay(p.days[0])}` : p.label}
+          active
+          onOpen={() => onRemovePhrase(p.key)}
+          onClear={() => onRemovePhrase(p.key)}
+          clearLabel={`Remove ${p.label} from this search`}
+        />
+      ))}
       <span class={`chip${count ? ' is-active' : ''}`}>
         <button
           type="button"
@@ -555,6 +570,7 @@ function filterLines(info: RankingInfo, conference: Conference): string[] {
   const groups = new Map<string, string[]>();
   for (const t of f.tags) groups.set(t.group, [...(groups.get(t.group) ?? []), t.value]);
   for (const [group, values] of groups) lines.push(`${group}: ${values.join(', ')}`);
+  if (f.time_phrases?.length) lines.push(`From your words: ${f.time_phrases.join(', ')}`);
   if (f.has_slides !== null) lines.push(f.has_slides ? 'Has slides' : 'No slides');
   if (f.hide_sponsor) lines.push('Sponsor talks hidden');
   return lines;
