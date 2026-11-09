@@ -462,6 +462,7 @@ export function App() {
                     conference={searchable}
                     filters={filters}
                     facets={data?.facets ?? null}
+                    nowAvailable={data?.happening_now?.available ?? null}
                     phrases={(data?.time_phrases ?? []).filter((p) => p.applied)}
                     onRemovePhrase={(key) => setIgnored([...ignored, key])}
                     onChange={setFilters}

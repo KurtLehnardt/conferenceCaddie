@@ -48,6 +48,8 @@ export interface SearchFilters {
   tags: TagRef[];
   has_slides: boolean | null;
   hide_sponsor: boolean;
+  /** Talks in progress or starting within 60 minutes, judged by Elasticsearch against its clock. */
+  happening_now: boolean;
 }
 
 export interface SearchRequest {
@@ -116,6 +118,7 @@ export interface RankingInfo {
     tags: TagRef[];
     has_slides: boolean | null;
     hide_sponsor: boolean;
+    happening_now?: boolean;
     time_phrases?: string[];
   };
 }
@@ -149,6 +152,8 @@ export interface SearchResponse {
   /** The text the search ran on, after time phrases left it. */
   search_text?: string;
   time_phrases?: TimePhrase[];
+  /** Whether the conference has talks today in its own time zone, so the Happening now chip can be used. */
+  happening_now?: { available: boolean };
   results: SearchResult[];
   facets: Facets;
   /** Only present when the request asked for debug. */
@@ -168,4 +173,5 @@ export const EMPTY_FILTERS: SearchFilters = {
   tags: [],
   has_slides: null,
   hide_sponsor: false,
+  happening_now: false,
 };

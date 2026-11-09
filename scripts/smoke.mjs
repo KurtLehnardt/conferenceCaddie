@@ -310,6 +310,43 @@ await check('m1: "tuesday afternoon" leaves the text, filters the results and ca
   report(ok, 'm1: "tuesday afternoon" leaves the text, filters the results and can be removed', `phrases ${keys}, text "${r.json.search_text}", ${r.json.total} talks, ${wrong.length} outside the filter, ${off.json.total} with both removed`);
 });
 
+// Happening now: the chip's window is judged by Elasticsearch against its own clock, and the chip is
+// available only on days the conference is running in its own time zone. Both expectations are
+// computed here from the committed data and the local clock, with two minutes of slack for skew.
+const localDayIn = (ms, timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+await check('n1: Happening now is available exactly when the conference has talks today in its own zone', async () => {
+  const problems = [];
+  let checked = 0;
+  for (const slug of [PRIMARY, ...EXTRA.slice(0, 1)]) {
+    const zone = confBySlug.get(slug)?.time_zone;
+    if (!zone) throw new Error(`${slug} has no time zone`);
+    const before = localDayIn(Date.now(), zone);
+    const r = await api('POST', '/api/search', { conference: slug, query: '', size: 1 });
+    const after = localDayIn(Date.now(), zone);
+    if (r.status !== 200) throw new Error(`status ${r.status}`);
+    if (before !== after) continue; // the zone's midnight passed during the request; skip rather than guess
+    const days = new Set(readNdjson(slug).filter((d) => d.kind === 'talk').map((d) => d.day));
+    const expected = days.has(before);
+    checked++;
+    if (r.json.happening_now?.available !== expected) problems.push(`${slug}: expected ${expected} on ${before}, got ${JSON.stringify(r.json.happening_now)}`);
+  }
+  report(problems.length === 0, 'n1: Happening now is available exactly when the conference has talks today in its own zone', problems.length ? problems.join('; ') : `checked ${checked} conferences against the local date in their zones`);
+});
+
+await check('n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', async () => {
+  const slack = 2 * 60_000;
+  const at = Date.now();
+  const r = await search({ query: '', size: 50, filters: { happening_now: true } });
+  const all = await search({ query: '', size: 1 });
+  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
+  if (r.status !== 200 || all.status !== 200) throw new Error(`status ${r.status} and ${all.status}`);
+  const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
+  const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+  const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
+  const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
+  report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
+});
+
 await check('m2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', async () => {
   const day2 = '2026-11-10';
   const lunch = readNdjson(PRIMARY).filter((d) => d.kind === 'break' && d.day === day2 && /lunch/i.test(d.title));

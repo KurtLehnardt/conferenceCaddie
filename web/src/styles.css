@@ -726,6 +726,19 @@ a.conf-row .conf-check {
   margin-left: 2px;
 }
 
+.chip.is-disabled:not(.is-active) {
+  border-style: dashed;
+  color: var(--text-2);
+  opacity: 0.65;
+}
+
+.now-note {
+  margin: -4px var(--gutter) 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
 .chip-clear-all {
   flex: none;
   min-height: 44px;

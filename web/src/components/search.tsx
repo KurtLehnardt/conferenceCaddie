@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   Check,
   ChevronDown,
+  Clock,
   CircleExclamationPoint,
   Search,
   SearchX,
@@ -10,7 +11,7 @@ import {
 } from 'lucide-preact';
 import type { Conference, Facets, FacetBucket, RankingInfo, SearchFilters, SearchResponse, Talk, TagRef, TimePhrase } from '../types';
 import { EMPTY_FILTERS } from '../types';
-import { formatDay } from '../lib/time';
+import { formatDateRange, formatDay, zoneOf } from '../lib/time';
 import { useFocusTrap } from '../lib/focus';
 import { Segmented } from './common';
 import { TalkCard } from './talk';
@@ -26,7 +27,8 @@ export function activeFilterCount(f: SearchFilters): number {
     f.level.length +
     f.tags.length +
     (f.has_slides !== null ? 1 : 0) +
-    (f.hide_sponsor ? 1 : 0)
+    (f.hide_sponsor ? 1 : 0) +
+    (f.happening_now ? 1 : 0)
   );
 }
 
@@ -196,6 +198,7 @@ export function ChipRow({
   conference,
   filters,
   facets,
+  nowAvailable,
   phrases,
   onRemovePhrase,
   onChange,
@@ -204,6 +207,8 @@ export function ChipRow({
   conference: Conference;
   filters: SearchFilters;
   facets: Facets | null;
+  /** False when the server says the conference has no talks today; unknown (null) counts as usable. */
+  nowAvailable: boolean | null;
   /** Time phrases the server took out of the search text, shown as chips that can be removed. */
   phrases: TimePhrase[];
   onRemovePhrase: (key: string) => void;
@@ -211,9 +216,11 @@ export function ChipRow({
   onOpenSheet: (section?: SheetSection) => void;
 }) {
   const count = activeFilterCount(filters);
+  const nowOff = nowAvailable === false;
   const time = timeValue(filters);
   const seen = rememberTagValues(conference.slug, facets, filters);
   return (
+    <>
     <div class="chip-row" role="toolbar" aria-label="Filters">
       {phrases.map((p) => (
         <Chip
@@ -239,6 +246,21 @@ export function ChipRow({
               {count}
             </span>
           )}
+        </button>
+      </span>
+      <span class={`chip${filters.happening_now ? ' is-active' : ''}${nowOff ? ' is-disabled' : ''}`}>
+        <button
+          type="button"
+          class="chip-main"
+          aria-pressed={filters.happening_now}
+          aria-disabled={(nowOff && !filters.happening_now) || undefined}
+          aria-describedby={nowOff ? 'now-note' : undefined}
+          onClick={() => {
+            if (!nowOff || filters.happening_now) onChange({ ...filters, happening_now: !filters.happening_now });
+          }}
+        >
+          {filters.happening_now ? <Check size={16} aria-hidden="true" /> : <Clock size={16} aria-hidden="true" />}
+          <span>Happening now</span>
         </button>
       </span>
       <Chip
@@ -324,6 +346,13 @@ export function ChipRow({
         </button>
       )}
     </div>
+    {nowOff && (
+      <p class="now-note" id="now-note">
+        Happening now is off: {conference.name} is not running today
+        {conference.start_date && conference.end_date ? ` (${formatDateRange(conference.start_date, conference.end_date)}, ${zoneOf(conference)} time)` : ''}.
+      </p>
+    )}
+    </>
   );
 }
 
@@ -573,6 +602,7 @@ function filterLines(info: RankingInfo, conference: Conference): string[] {
   if (f.time_phrases?.length) lines.push(`From your words: ${f.time_phrases.join(', ')}`);
   if (f.has_slides !== null) lines.push(f.has_slides ? 'Has slides' : 'No slides');
   if (f.hide_sponsor) lines.push('Sponsor talks hidden');
+  if (f.happening_now) lines.push('Happening now: in progress or starting within 60 minutes');
   return lines;
 }
 

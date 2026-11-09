@@ -23,7 +23,8 @@
 //   neighbours among the documents that pass B; in browse mode, every document. M does not depend
 //   on any facet selection.
 // - Let B be the base filters: kind is "talk", the start_after and start_before window,
-//   hide_sponsor, the clauses of the time phrases found in the query (see phrases.mjs), and the
+//   hide_sponsor, the happening_now window (end after now and start before now plus 60 minutes,
+//   both evaluated by Elasticsearch), the clauses of the time phrases found in the query (see phrases.mjs), and the
 //   conference term. Every query this module sends, including the
 //   known-values aggregation, carries the conference term, so no talk of another conference can
 //   appear in results or counts.
@@ -173,7 +174,7 @@ function knownValues(slug) {
 // the requested conference.
 
 const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'debug', 'ignore_phrases']);
-const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor']);
+const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor', 'happening_now']);
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const TALK_ID_RE = /^([a-z0-9][a-z0-9-]{0,119}):[A-Za-z0-9_-]{1,64}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -269,6 +270,7 @@ export async function validate(body) {
     throw new BadRequest('filters.has_slides must be null, true or false');
   }
   if (f.hide_sponsor !== undefined && typeof f.hide_sponsor !== 'boolean') throw new BadRequest('filters.hide_sponsor must be a boolean');
+  if (f.happening_now !== undefined && typeof f.happening_now !== 'boolean') throw new BadRequest('filters.happening_now must be a boolean');
   if (f.day !== undefined && f.day !== null && typeof f.day !== 'string') throw new BadRequest('filters.day must be null or a known day');
   const startAfter = parseTime(f.start_after, 'start_after');
   const startBefore = parseTime(f.start_before, 'start_before');
@@ -299,6 +301,7 @@ export async function validate(body) {
     timePhrases: time.phrases,
     size,
     debug: body.debug === true,
+    timeZone: conference.time_zone || 'UTC',
     filters: {
       day: f.day ?? null,
       startAfter,
@@ -308,6 +311,7 @@ export async function validate(body) {
       tags: tagSelection(tagPairs, known.tagKeys),
       hasSlides: f.has_slides ?? null,
       hideSponsor: f.hide_sponsor ?? false,
+      happeningNow: f.happening_now ?? false,
       phraseClauses: time.clauses,
     },
   };
@@ -316,6 +320,27 @@ export async function validate(body) {
 // ---------------------------------------------------------------------------------------------
 // Query building.
 
+const HAPPENING_NOW_AHEAD = 'now+60m';
+
+// Whether the conference has a talk starting today. "Today" is the current calendar day in the
+// conference's own time zone: Elasticsearch rounds now/d in that zone, so the chip is available
+// exactly on the days the conference is running, whatever zone the person's phone is in.
+function runningTodaySearch(conference, timeZone) {
+  return {
+    query: {
+      bool: {
+        filter: [
+          { term: { conference } },
+          { term: { kind: 'talk' } },
+          { range: { start: { gte: 'now/d', lt: 'now+1d/d', time_zone: timeZone } } },
+        ],
+      },
+    },
+    size: 0,
+    track_total_hits: 1,
+  };
+}
+
 function baseClauses(conference, filters) {
   const clauses = [{ term: { conference } }, { term: { kind: 'talk' } }];
   const minutes = {};
@@ -323,6 +348,9 @@ function baseClauses(conference, filters) {
   if (filters.startBefore !== null) minutes.lt = filters.startBefore;
   if (Object.keys(minutes).length) clauses.push({ range: { start_minutes: minutes } });
   if (filters.hideSponsor) clauses.push({ bool: { must_not: [{ term: { sponsor: true } }] } });
+  // Happening now: in progress, or starting within the next 60 minutes. Elasticsearch compares
+  // the absolute start and end instants with its own current time, so no clock or zone is used here.
+  if (filters.happeningNow) clauses.push({ range: { end: { gt: 'now' } } }, { range: { start: { lt: HAPPENING_NOW_AHEAD } } });
   clauses.push(...filters.phraseClauses);
   return clauses;
 }
@@ -553,6 +581,7 @@ export async function search(params) {
   if (hasLevel) mainAggs.level = AGGS.level;
   const searches = [mainSearch(query, [...base, ...selectionClauses(groups, null)], base, size, mainAggs)];
   for (const g of groups) searches.push(facetSearch(query, [...base, ...selectionClauses(groups, g.name)], base, g.agg));
+  searches.push(runningTodaySearch(conference, params.timeZone));
   const debug = params.debug && Boolean(query);
   if (debug) {
     for (const q of childQueries(query, base)) searches.push(childSearch(q, [...base, ...selectionClauses(groups, null)]));
@@ -562,6 +591,7 @@ export async function search(params) {
   // same term statistics as the fused ranking they explain.
   const all = await msearch(searches, debug ? { preference: 'caddie-ranking-drawer' } : {});
   const [main, ...rest] = all.slice(0, 1 + groups.length);
+  const today = all[1 + groups.length];
   const aggsFor = (name) => {
     const i = groups.findIndex((g) => g.name === name);
     return i === -1 ? main.aggregations : rest[i].aggregations;
@@ -585,12 +615,14 @@ export async function search(params) {
     // The text the retrievers saw, after time phrases left it, and the phrases found in it.
     search_text: query,
     time_phrases: params.timePhrases.map((p) => ({ key: p.key, label: p.label, days: p.days, applied: p.applied })),
+    // Whether the Happening now chip can be used: the conference has talks today in its own zone.
+    happening_now: { available: (today?.hits?.total?.value ?? 0) > 0 },
     results: hits.map((h) => toResult(h, labels)),
     facets,
   };
   if (debug) {
     // Position in each Elasticsearch-ordered child list, 1-based; nothing is re-sorted here.
-    const positions = all.slice(1 + groups.length).map((r) => {
+    const positions = all.slice(2 + groups.length).map((r) => {
       const at = new Map();
       (r.hits?.hits ?? []).forEach((h, i) => at.set(String(h._source?.talk_id ?? h._id), i + 1));
       return at;
@@ -614,6 +646,7 @@ export async function search(params) {
         }),
         has_slides: filters.hasSlides,
         hide_sponsor: filters.hideSponsor,
+        happening_now: filters.happeningNow,
         time_phrases: params.timePhrases.filter((p) => p.applied).map((p) => p.label),
       },
     };

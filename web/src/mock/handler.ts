@@ -47,6 +47,10 @@ function passes(t: MockTalk, f: SearchFilters, skip: Group): boolean {
   }
   if (skip !== 'has_slides' && f.has_slides !== null && (t.slides_url !== null) !== f.has_slides) return false;
   if (f.hide_sponsor && t.sponsor) return false;
+  if (f.happening_now) {
+    const now = Date.now();
+    if (!(Date.parse(t.end) > now && Date.parse(t.start) < now + 60 * 60_000)) return false;
+  }
   return true;
 }
 
