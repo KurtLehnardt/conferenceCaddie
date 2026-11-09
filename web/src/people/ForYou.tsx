@@ -127,7 +127,7 @@ function PickTopicsPrompt() {
       <Sparkles size={22} aria-hidden="true" class="pp-prompt-icon" />
       <div>
         <p class="pp-prompt-title">Pick what you want to learn</p>
-        <p class="pp-prompt-body">Pick topics you want to learn, or describe a problem you're facing, to get talk suggestions.</p>
+        <p class="pp-prompt-body">Pick topics you want to learn, or write what you're trying to learn or figure out next, to get talk suggestions.</p>
         <a class="btn btn-primary btn-small pp-prompt-btn" href="#/profile">
           Pick topics
         </a>

@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { ChevronRight, ExternalLink, FileUp, Smartphone, UserRound } from 'lucide-preact';
 import type { ThemePref } from '../lib/storage';
 import { useProfileName } from '../people/index';
@@ -12,6 +13,7 @@ export function SettingsScreen({
   canImport,
   importNote,
   onImport,
+  people,
 }: {
   theme: ThemePref;
   onTheme: (t: ThemePref) => void;
@@ -20,6 +22,8 @@ export function SettingsScreen({
   /** Why import is unavailable, shown in place of the usual hint. */
   importNote: string | null;
   onImport: () => void;
+  /** The people sections (blocked people, people I met, people I watch) for the current conference. */
+  people?: ComponentChildren;
 }) {
   const name = useProfileName();
   return (
@@ -47,6 +51,8 @@ export function SettingsScreen({
           </button>
         </div>
       </section>
+
+      {people}
 
       <section class="settings-group" aria-labelledby="set-appearance">
         <h2 class="settings-heading" id="set-appearance">

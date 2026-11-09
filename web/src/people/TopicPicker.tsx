@@ -9,13 +9,17 @@
 // as an unselected ghost until taps have paused for a moment, so the chips beside
 // it do not slide.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { Check, Plus, Search, X } from 'lucide-preact';
+import { Check, Plus, Search, Users, X } from 'lucide-preact';
 import { fetchTopics, isAbort, suggestTopics } from './api';
+import { setPendingSearch } from './connect';
 import type { TopicHit, TopicRef } from './types';
 
 const MAX_TOPICS = 30;
 const FIRST = 12;
 const GHOST_MS = 1200;
+const HOLD_MS = 450;
+
+type Group = 'pinned' | 'hits' | 'suggested' | 'popular';
 
 const topCache = new Map<string, Promise<TopicHit[]>>();
 
@@ -34,17 +38,23 @@ function Chip({
   on,
   disabled,
   onToggle,
+  onHold,
 }: {
   topic: TopicRef & { talk_count?: number };
   on: boolean;
   disabled?: boolean;
   onToggle: () => void;
+  /** A long press or a right click: "Find people who've done this". */
+  onHold?: () => void;
 }) {
   // The count stays when a chip is on, so the chip keeps its width and its neighbours keep their places.
   const count = typeof topic.talk_count === 'number' ? topic.talk_count : null;
   // An explicit name, so assistive technology reads "eBPF, 7 talks" and the pressed state,
   // whatever the icon and count spans render as.
   const name = count === null ? topic.label : `${topic.label}, ${count} ${count === 1 ? 'talk' : 'talks'}`;
+  const hold = useRef(0);
+  const held = useRef(false);
+  const cancelHold = () => window.clearTimeout(hold.current);
   return (
     <button
       type="button"
@@ -52,7 +62,33 @@ function Chip({
       aria-label={name}
       aria-pressed={on}
       disabled={disabled && !on}
-      onClick={onToggle}
+      onClick={() => {
+        // The press that opened the action must not also toggle the chip.
+        if (held.current) {
+          held.current = false;
+          return;
+        }
+        onToggle();
+      }}
+      onPointerDown={(e) => {
+        if (!onHold || e.button !== 0) return;
+        held.current = false;
+        cancelHold();
+        hold.current = window.setTimeout(() => {
+          held.current = true;
+          onHold();
+        }, HOLD_MS);
+      }}
+      onPointerUp={cancelHold}
+      onPointerLeave={cancelHold}
+      onPointerCancel={cancelHold}
+      onContextMenu={(e) => {
+        if (!onHold) return;
+        e.preventDefault();
+        cancelHold();
+        held.current = true;
+        onHold();
+      }}
     >
       {on ? <Check size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}
       <span aria-hidden="true">{topic.label}</span>
@@ -97,6 +133,8 @@ export function TopicPicker({
   const anchorTop = useRef<number | null>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  // The chip that was long-pressed, and the group it sits in, so the action appears under it.
+  const [held, setHeld] = useState<{ topic: TopicRef; group: Group } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -206,6 +244,26 @@ export function TopicPicker({
   const sugg = suggested.slice(0, 12);
   const headingId = `pp-tp-${title.replace(/\W+/g, '-').toLowerCase()}`;
 
+  const findPeople = (t: TopicRef) => {
+    setPendingSearch(t.label);
+    setHeld(null);
+    location.hash = '#/people';
+  };
+
+  const action = (group: Group) =>
+    held && held.group === group ? (
+      <div class="pp-chip-action" role="group" aria-label={`Actions for ${held.topic.label}`}>
+        <button type="button" class="btn btn-tonal btn-small" onClick={() => findPeople(held.topic)}>
+          <Users size={16} aria-hidden="true" />
+          Find people who've done this
+        </button>
+        <span class="pp-hint">{held.topic.label}</span>
+        <button type="button" class="icon-btn" aria-label="Close" onClick={() => setHeld(null)}>
+          <X size={18} aria-hidden="true" />
+        </button>
+      </div>
+    ) : null;
+
   return (
     <section class="pp-picker" aria-labelledby={headingId}>
       <div class="pp-picker-head">
@@ -217,12 +275,14 @@ export function TopicPicker({
         </span>
       </div>
       {hint && <p class="pp-hint">{hint}</p>}
+      <p class="pp-hint pp-hold-hint">Hold a topic to find people who've done it.</p>
 
       {order.length > 0 && (
         <div class="pp-chips" role="group" aria-label="Chosen topics">
           {order.map((t) => (
-            <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} onToggle={() => toggle(t)} />
+            <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} onToggle={() => toggle(t)} onHold={() => setHeld({ topic: t, group: 'pinned' })} />
           ))}
+          {action('pinned')}
         </div>
       )}
 
@@ -249,8 +309,9 @@ export function TopicPicker({
         <div class="pp-chips" role="group" aria-label="Matching topics">
           {hits.length === 0 && <p class="pp-hint">No topic matches that. Try another word.</p>}
           {hits.map((t) => (
-            <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} />
+            <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} onHold={() => setHeld({ topic: t, group: 'hits' })} />
           ))}
+          {action('hits')}
         </div>
       )}
 
@@ -259,8 +320,9 @@ export function TopicPicker({
           <h4 class="pp-subhead">Suggested for you</h4>
           <div class="pp-chips" role="group" aria-label="Suggested topics">
             {sugg.map((t) => (
-              <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} />
+              <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} onHold={() => setHeld({ topic: t, group: 'suggested' })} />
             ))}
+            {action('suggested')}
           </div>
         </>
       )}
@@ -272,8 +334,9 @@ export function TopicPicker({
           {!top && !topError && <p class="pp-hint">Loading topics…</p>}
           <div class="pp-chips" role="group" aria-label="Common topics">
             {shownPopular.map((t) => (
-              <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} />
+              <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} onHold={() => setHeld({ topic: t, group: 'popular' })} />
             ))}
+            {action('popular')}
           </div>
           {popular.length > FIRST && (
             <button type="button" class="btn btn-text btn-small pp-more" onClick={() => setShowAll((s) => !s)}>

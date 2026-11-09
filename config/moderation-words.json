@@ -1,0 +1,21 @@
+{
+  "_comment": "OPERATOR: this is a short starter list of plain profanity only. Replace `words` with the full LDNOOBW English list (the `en` file of the repository named in `source`, one entry per line, CC-BY 4.0) before a public run. Entries are matched as whole words or phrases after lowercasing, NFKC, diacritic stripping and leet substitution, so write them in plain lowercase letters. Do not add slurs by hand; take them from the list.",
+  "source": "https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words (English list), CC-BY 4.0",
+  "words": [
+    "fuck",
+    "fucking",
+    "fucker",
+    "motherfucker",
+    "shit",
+    "bullshit",
+    "asshole",
+    "arsehole",
+    "bitch",
+    "bastard",
+    "dickhead",
+    "cunt",
+    "wanker",
+    "twat",
+    "piss off"
+  ]
+}

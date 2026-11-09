@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { ArrowLeft, CalendarX, ChevronLeft, CircleExclamationPoint, ExternalLink, Settings, X } from 'lucide-preact';
+import { ArrowLeft, CalendarX, ChevronLeft, CircleExclamationPoint, ExternalLink, Inbox, Settings, X } from 'lucide-preact';
 import type { Conference, Facets, InterestedTalk, SearchFilters, SearchResponse, SearchResult, Talk } from './types';
 import { EMPTY_FILTERS } from './types';
 import { ApiError, getConferences, isAbort, search } from './api';
@@ -13,7 +13,18 @@ import {
   toInterested,
   type ThemePref,
 } from './lib/storage';
-import { defaultConference, goToConference, readRoute, replaceConference, replaceTabParams, tabHash, type Route, type Tab, type TabParams } from './lib/route';
+import {
+  decodeParam,
+  defaultConference,
+  goToConference,
+  readRoute,
+  replaceConference,
+  replaceTabParams,
+  tabHash,
+  type Route,
+  type Tab,
+  type TabParams,
+} from './lib/route';
 import { visit } from './lib/trail';
 import { useFocusTrap } from './lib/focus';
 import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Segmented, Toast, type ConfirmData, type ToastData } from './components/common';
@@ -25,12 +36,31 @@ import { SettingsScreen } from './components/settings';
 import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
-import { ForYouScreen, PeopleScreen, ProfileScreen, onInterestedChanged, type TalkLike } from './people/index';
+import {
+  BlockedPeople,
+  ForYouScreen,
+  InboxScreen,
+  MeetScreen,
+  PeopleIMet,
+  PeopleIWatch,
+  PeopleScreen,
+  ProfileScreen,
+  onInterestedChanged,
+  registerPeopleUi,
+  useInboxCount,
+  useInboxWatch,
+  usePresenceWatch,
+  type TalkLike,
+} from './people/index';
 import { saveForOffline, useOnline } from './offline/status';
 import { NeedsConnection, OfflineBadge, OfflineSearch } from './offline/OfflineSearch';
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 20;
+
+// The screens reached from the tab bar. Settings, Profile, Requests and a meet sit on top of them
+// and get a Back button instead.
+const isTab = (t: Tab) => t !== 'profile' && t !== 'settings' && t !== 'inbox' && t !== 'meet';
 
 function errorMessage(err: unknown): string {
   return err instanceof ApiError ? err.message : 'Search is unavailable right now. Please try again.';
@@ -101,20 +131,26 @@ export function App() {
   const [schedFacets, setSchedFacets] = useState<{ facets: Facets | null; total: number | null }>({ facets: null, total: null });
   const online = useOnline();
 
-  const { slug, tab, params } = route;
+  const { slug, tab, param, params } = route;
   const searchView = params.view === 'schedule' ? 'schedule' : 'search';
   // The view and day last shown on each tab of this conference, so the tab bar returns to them.
   const tabViews = useRef<{ slug: string | null; views: Partial<Record<Tab, TabParams>> }>({ slug: null, views: {} });
   if (tabViews.current.slug !== slug) tabViews.current = { slug, views: {} };
   tabViews.current.views[tab] = params;
-  // The screen in the history entry behind this one, so Back from Settings or Profile can pop
-  // history instead of pushing. Null when it is not known, for example after a reload.
+  // The screen in the history entry behind this one, so Back from Settings, Profile, Requests or a
+  // meet can pop history instead of pushing. Null when it is not known, for example after a reload.
+  // #/here/{zone} is never the screen Back leads to, because it turns presence on.
   const prevRoute = useRef<Route | null>(null);
   const lastTabScreen = useRef<Route | null>(null);
-  if (route.tab !== 'profile' && route.tab !== 'settings') lastTabScreen.current = route;
+  if (isTab(route.tab) && route.tab !== 'here') lastTabScreen.current = route;
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
   const searchable = conference?.status === 'searchable' ? conference : null;
   const talks = interested.slug === slug ? interested.talks : [];
+
+  // Find & connect: presence timers and the inbox poll run on every tab while the app is open.
+  usePresenceWatch(searchable?.slug ?? null);
+  useInboxWatch(searchable?.slug ?? null);
+  const inboxCount = useInboxCount(searchable?.slug ?? null);
 
   const controller = useRef<AbortController | null>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -127,6 +163,12 @@ export function App() {
   const showToast = useCallback((message: string, action?: ToastData['action']) => {
     setToast({ id: Date.now(), message, action });
   }, []);
+
+  // The people screens use the shell's one Toast and ConfirmDialog.
+  useEffect(() => {
+    registerPeopleUi({ toast: showToast, confirm: (d) => setConfirm(d) });
+    return () => registerPeopleUi(null);
+  }, [showToast]);
 
   const loadList = useCallback(async () => {
     try {
@@ -384,14 +426,24 @@ export function App() {
     });
   };
 
+  // Screens that belong to one conference and one moment go back to People on a switch.
+  const perConference = tab === 'inbox' || tab === 'meet' || tab === 'here';
   const pickConference = (next: string) => {
     setSwitcherOpen(false);
-    if (next !== slug) goToConference(next, tab);
+    if (next !== slug) goToConference(next, perConference ? 'people' : tab);
+  };
+
+  // #/here/{zone} is the People tab with presence turned on; once handled, the hash becomes #/people.
+  const hereHandled = () => {
+    if (readRoute().tab !== 'here') return;
+    history.replaceState(history.state, '', `${location.pathname}#/people`);
+    window.dispatchEvent(new Event('caddie:route'));
   };
 
   const interestedIds = new Set(talks.map((t) => t.talk_id));
   const base = slug ? `/e/${encodeURIComponent(slug)}` : '';
-  const isTabScreen = tab !== 'profile' && tab !== 'settings';
+  const isTabScreen = isTab(tab);
+  const navTab = tab === 'here' || tab === 'inbox' || tab === 'meet' ? 'people' : tab;
 
   // Back pops history when the previous screen is the one Back leads to, so the browser's Back
   // button and this one agree. Otherwise it links there, for a deep link or a reload.
@@ -399,7 +451,10 @@ export function App() {
   const backTo =
     tab === 'profile'
       ? { href: '#/settings', pops: prev?.slug === slug && prev?.tab === 'settings' }
-      : { href: lastTabScreen.current?.slug === slug ? tabHash(lastTabScreen.current.tab, lastTabScreen.current.params) : '#/people', pops: prev?.slug === slug && prev?.tab !== 'profile' && prev?.tab !== 'settings' };
+      : {
+          href: lastTabScreen.current?.slug === slug ? tabHash(lastTabScreen.current.tab, lastTabScreen.current.params) : '#/people',
+          pops: prev?.slug === slug && isTab(prev.tab) && prev.tab !== 'here',
+        };
   const leading = !isTabScreen ? (
     <a
       class={tab === 'profile' ? 'appbar-back-labeled' : 'icon-btn appbar-back'}
@@ -432,6 +487,10 @@ export function App() {
     />
   ) : tab === 'profile' ? (
     'Profile'
+  ) : tab === 'inbox' ? (
+    'Requests'
+  ) : tab === 'meet' ? (
+    'Meet up'
   ) : (
     'Settings'
   );
@@ -444,6 +503,16 @@ export function App() {
           label="Interested options"
           items={[{ label: 'Clear list', destructive: true, disabled: !talks.length, onSelect: clearInterested }]}
         />
+      )}
+      {isTabScreen && (tab === 'people' || tab === 'here') && searchable && (
+        <a class="icon-btn appbar-inbox" href="#/inbox" aria-label={inboxCount ? `Requests, ${inboxCount} new` : 'Requests'}>
+          <Inbox size={24} aria-hidden="true" />
+          {inboxCount > 0 && (
+            <span class="badge nav-badge" aria-hidden="true">
+              {inboxCount > 99 ? '99+' : inboxCount}
+            </span>
+          )}
+        </a>
       )}
       {isTabScreen && (
         <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">
@@ -501,7 +570,7 @@ export function App() {
 
   return (
     <div class="shell">
-      <NavBar tab={tab} base={base} interestedCount={talks.length} views={tabViews.current.views} />
+      <NavBar tab={navTab} base={base} interestedCount={talks.length} peopleCount={inboxCount} views={tabViews.current.views} />
       <div class="content">
         <AppBar leading={leading} title={title} actions={actions} />
         <main class="main" id="main">
@@ -515,19 +584,31 @@ export function App() {
                 setToast(null);
                 setImportOpen(true);
               }}
+              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /></> : null}
             />
           ) : !searchable ? (
             blocker()
           ) : (
             <>
-              {!online && (tab === 'people' || tab === 'for-you') && (
+              {!online && (tab === 'people' || tab === 'here' || tab === 'for-you' || tab === 'inbox' || tab === 'meet') && (
                 <NeedsConnection
-                  title={tab === 'people' ? 'People to meet needs a connection' : 'Suggestions need a connection'}
+                  title={tab === 'for-you' ? 'Suggestions need a connection' : 'People to meet needs a connection'}
                   body="They will load when you're back online. Search, your Interested list and your profile still work on this phone."
                 />
               )}
-              {online && tab === 'people' && (
-                <PeopleScreen key={searchable.slug} conference={searchable} interested={talks} onOpenTalk={onOpenTalk} />
+              {online && (tab === 'people' || tab === 'here') && (
+                <PeopleScreen
+                  key={searchable.slug}
+                  conference={searchable}
+                  interested={talks}
+                  onOpenTalk={onOpenTalk}
+                  hereZone={tab === 'here' ? param : null}
+                  onHereHandled={hereHandled}
+                />
+              )}
+              {online && tab === 'inbox' && <InboxScreen key={searchable.slug} conference={searchable} />}
+              {online && tab === 'meet' && param && (
+                <MeetScreen key={`${searchable.slug}:${param}`} conference={searchable} meetId={decodeParam(param)} interested={talks} />
               )}
               {online && tab === 'for-you' && (
                 <ForYouScreen key={searchable.slug} conference={searchable} interested={talks} onToggleInterested={toggleInterested} />

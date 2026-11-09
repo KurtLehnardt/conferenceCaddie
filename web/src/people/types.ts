@@ -47,6 +47,71 @@ export interface PersonResult {
   reasons: string[];
   opener: string;
   contact: Contact | null;
+  /** The highlighted passage that matched a text search (Find & connect, M2). */
+  evidence?: string | null;
+  /** True while they are around; `zone` is sent only when both of us are around. */
+  around?: boolean;
+  zone?: string | null;
+}
+
+/** Find & connect: device-side presence state (caddie.presence.v1.{slug}). */
+export interface Presence {
+  on: boolean;
+  zone: string | null;
+  spot: string;
+  /** ISO time when presence turns off by itself; null while off. */
+  until: string | null;
+  notice_seen: boolean;
+}
+
+/** One blocked person, cached on the device (caddie.blocks.v1.{slug}). */
+export interface BlockedPerson {
+  ref: string;
+  display_name: string | null;
+}
+
+/** Someone saved from a finished meet (caddie.met.v1.{slug}); device-only. */
+export interface MetPerson {
+  display_name: string;
+  about: string;
+  met_at: string;
+}
+
+/** Asks are now-only: accept moves a meet straight to `active`. `accepted` is a legacy value the server no longer sends. */
+export type MeetState = 'requested' | 'accepted' | 'declined' | 'active' | 'found' | 'cancelled' | 'expired';
+
+export interface InboxIncoming {
+  meet_id: string;
+  from: { ref: string; display_name: string; about: string | null };
+  topic_label: string | null;
+  note: string;
+  created_at: string;
+  /** When the ask runs out: 15 minutes after it was made. */
+  expires_at?: string | null;
+  /** True when both were around in the same zone when the ask was made; `other.zone` is then set. */
+  same_zone?: boolean;
+  other?: { zone?: string | null };
+  state: MeetState;
+}
+
+export interface InboxOutgoing {
+  meet_id: string;
+  to: { ref: string; display_name: string };
+  state: MeetState;
+}
+
+export interface Inbox {
+  incoming: InboxIncoming[];
+  outgoing: InboxOutgoing[];
+}
+
+export interface MeetDetail {
+  state: MeetState;
+  active_until: string | null;
+  same_zone?: boolean;
+  other: { display_name: string; zone: string | null; spot: string | null; spot_me: string | null; about?: string | null };
+  rendezvous: string | null;
+  mine: { spot_me: string | null };
 }
 
 export interface SpeakerProfile {

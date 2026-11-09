@@ -16,14 +16,23 @@ export function NavBar({
   tab,
   base,
   interestedCount,
+  peopleCount = 0,
   views = {},
 }: {
   tab: Tab;
   base: string;
   interestedCount: number;
+  /** Requests waiting in the inbox, shown on the People tab. */
+  peopleCount?: number;
   /** The view and day last shown on each tab, so going back to a tab keeps them. */
   views?: Partial<Record<Tab, TabParams>>;
 }) {
+  const badge = (id: Tab) => (id === 'interested' ? interestedCount : id === 'people' ? peopleCount : 0);
+  const name = (id: Tab) => {
+    if (id === 'interested' && interestedCount) return `Interested, ${interestedCount} talks`;
+    if (id === 'people' && peopleCount) return `People, ${peopleCount} new ${peopleCount === 1 ? 'request' : 'requests'}`;
+    return undefined;
+  };
   return (
     <nav class="nav" aria-label="Main">
       <div class="nav-brand" aria-hidden="true">
@@ -35,13 +44,13 @@ export function NavBar({
           href={`${base}${tabHash(id, views[id])}`}
           class="nav-item"
           aria-current={tab === id ? 'page' : undefined}
-          aria-label={id === 'interested' && interestedCount ? `Interested, ${interestedCount} talks` : undefined}
+          aria-label={name(id)}
         >
           <span class="nav-icon">
             <Icon size={24} strokeWidth={tab === id ? 2.25 : 1.75} aria-hidden="true" />
-            {id === 'interested' && interestedCount > 0 && (
+            {badge(id) > 0 && (
               <span class="badge nav-badge" aria-hidden="true">
-                {interestedCount > 99 ? '99+' : interestedCount}
+                {badge(id) > 99 ? '99+' : badge(id)}
               </span>
             )}
           </span>

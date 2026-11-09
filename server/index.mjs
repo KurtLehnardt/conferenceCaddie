@@ -3,7 +3,8 @@
 // Env: PORT (default 8080), ES_URL, ES_API_KEY, ES_INDEX (default caddie-talks),
 //      ES_CONFERENCES_INDEX (default caddie-conferences), ES_TOPICS_INDEX (default caddie-topics),
 //      STATIC_DIR (default web/dist), ES_PEOPLE_API_KEY (people, circles and circle counts only),
-//      ES_PEOPLE_INDEX (default caddie-people), REF_SALT (optional).
+//      ES_PEOPLE_INDEX (default caddie-people), ES_PEOPLE_BLOCKS_INDEX (default
+//      caddie-people-blocks), ES_PEOPLE_MEETS_INDEX (default caddie-people-meets), REF_SALT (optional).
 //
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
@@ -14,6 +15,7 @@ import path from 'node:path';
 import { validate, search, BadRequest, UpstreamError } from './search.mjs';
 import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
+import { handleConnectApi } from './connect.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
 import { handleRelatedApi } from './related.mjs';
@@ -295,11 +297,13 @@ const server = http.createServer((req, res) => {
   handleStatic(req, res, pathname);
 });
 
-// The people, circles, recommendations, topics, related and import routes. Each handler reads its
-// own body with its own size limit and resolves to true when it handled the request.
+// The people, circles, blocks, presence, meets, recommendations, topics, related and import routes.
+// Each handler reads its own body with its own size limit and resolves to true when it handled the
+// request.
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
+  if (await handleConnectApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
   if (await handleRelatedApi(req, res, url)) return;

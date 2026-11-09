@@ -17,6 +17,7 @@ The app began as an entry in the Elasticsearch "Find the Right Talk" track at a 
 ## What it does
 
 - **People** (the home tab): build a profile on your device with topics you want to learn about and topics you can speak to, then choose to be visible at that conference. People to meet are ranked by Elasticsearch, and each match shows why and an opener from fixed templates.
+- **Find & connect**: type what you're working on, or about to, and get everyone whose own words about what they've built match it, with the passage that matched shown as evidence; rare, specific experience outranks common topics. Flip "Around and up for a conversation" and pick a zone (a room, the expo hall, registration, food, hallway, outside) to be findable right now; it turns itself off in an hour. Ask someone who's around to talk shop with a short note (in the same zone, a one-tap Wave); the ask runs out in 15 minutes, accept means now, and you agree a meeting point and each say how to spot you. Someone who isn't around can be watched, not booked: the app tells you when they're around. Your zone is visible only to people who are also around; how to spot you only to the one person you accepted, only until you meet; nothing about where you were is kept. Block is symmetric and silent. Short texts pass a wordlist filter.
 - **Talk circles**: mark a talk "I'm interested", and separately choose to share your profile with others interested in that talk. Everyone sees how many people want to talk about it; only people who shared can see who else did.
 - **For you**: talk suggestions from your topics and free text, with the matching topics and passage shown.
 - **Search**: hybrid lexical and semantic search over one conference's talks, with filters for day, time, track and the conference's own tag groups.
@@ -27,7 +28,7 @@ The app began as an entry in the Elasticsearch "Find the Right Talk" track at a 
 
 - **Offline**: after one online visit, the app shell and the conference's schedule are kept on the phone. Without a connection, Search runs a keyword search over that saved schedule, labelled "Offline: keyword search only", and Interested and the profile still work. People, For you and talk circles say they need a connection.
 
-There is no sign-in. A profile is written to Elasticsearch only when you turn on a visibility choice; a random device secret, stored only as a hash on the server, protects every edit. Profiles expire after the conference's last day, and "Delete my profile" removes them at once. The sample profiles you may see are labelled "Sample" and are not real people.
+There is no sign-in, no scheduling, no sponsor features and no chat: Sched covers attendee lists, profile sharing and messaging, so this app does not. A profile is written to Elasticsearch only when you turn on a visibility choice; a random device secret, stored only as a hash on the server, protects every edit. Profiles expire after the conference's last day, and "Delete my profile" removes them at once. The sample profiles you may see are labelled "Sample" and are not real people.
 
 ## Demo
 

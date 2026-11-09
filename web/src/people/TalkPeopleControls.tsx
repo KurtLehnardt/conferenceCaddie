@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { ChevronDown, ChevronUp, ExternalLink, Users } from 'lucide-preact';
 import { fetchCircleMembers, isAbort, PeopleApiError } from './api';
+import { withoutBlocked } from './connect';
 import { PersonCard, SampleNote } from './PersonCard';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
 import { getSaveCount, shareForTalks, unshareTalks } from './sync';
@@ -45,6 +46,7 @@ export function CircleView({ conference, talkId }: { conference: ConferenceLike;
   if (!data) return <p class="pp-hint">Loading…</p>;
 
   const speakers = data.speakers ?? [];
+  const members = withoutBlocked(conference.slug, data.members ?? []);
   return (
     <div class="pp-circle">
       {speakers.length > 0 && (
@@ -74,13 +76,13 @@ export function CircleView({ conference, talkId }: { conference: ConferenceLike;
         </>
       )}
       <h4 class="pp-subhead">Others who shared</h4>
-      {data.members.length === 0 ? (
+      {members.length === 0 ? (
         <p class="pp-hint">No one else has shared yet. Check back later.</p>
       ) : (
         <div class="pp-list">
-          <SampleNote people={data.members} />
-          {data.members.map((m) => (
-            <PersonCard key={m.ref} person={m} />
+          <SampleNote people={members} />
+          {members.map((m) => (
+            <PersonCard key={m.ref} person={m} slug={conference.slug} />
           ))}
         </div>
       )}

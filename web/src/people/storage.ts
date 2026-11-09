@@ -2,11 +2,14 @@
 // and the per-conference visibility choices. Every write notifies subscribers so
 // all mounted people components stay in step.
 import { useEffect, useState } from 'preact/hooks';
-import type { Device, Profile, TopicRef, Visibility } from './types';
+import type { BlockedPerson, Device, MetPerson, Presence, Profile, TopicRef, Visibility } from './types';
 
 const DEVICE_KEY = 'caddie.device.v1';
 const PROFILE_KEY = 'caddie.profile.v1';
 const VIS_PREFIX = 'caddie.visibility.v1.';
+const PRESENCE_PREFIX = 'caddie.presence.v1.';
+const BLOCKS_PREFIX = 'caddie.blocks.v1.';
+const MET_PREFIX = 'caddie.met.v1.';
 
 const listeners = new Set<() => void>();
 let version = 0;
@@ -190,13 +193,137 @@ export function slugsOnServer(): string[] {
   return [...out];
 }
 
-/** Removes the profile, the device identity and every visibility record from the device. */
+/* ---------- Find & connect: presence, blocks, people I met ---------- */
+
+const EMPTY_PRESENCE: Presence = { on: false, zone: null, spot: '', until: null, notice_seen: false };
+const presenceMem = new Map<string, Presence>();
+
+export function getPresence(slug: string): Presence {
+  let p = presenceMem.get(slug);
+  if (!p) {
+    const raw = read<Partial<Presence>>(PRESENCE_PREFIX + slug) ?? {};
+    const until = typeof raw.until === 'string' && Number.isFinite(Date.parse(raw.until)) ? raw.until : null;
+    // Presence that has run out while the app was closed is already off on the server.
+    const live = raw.on === true && until !== null && Date.parse(until) > Date.now();
+    p = {
+      on: live,
+      zone: live && typeof raw.zone === 'string' ? raw.zone.slice(0, 120) : null,
+      spot: str(raw.spot, 60),
+      until: live ? until : null,
+      notice_seen: raw.notice_seen === true,
+    };
+    presenceMem.set(slug, p);
+  }
+  return p ?? EMPTY_PRESENCE;
+}
+
+export function setPresence(slug: string, patch: Partial<Presence>): Presence {
+  const next = { ...getPresence(slug), ...patch };
+  presenceMem.set(slug, next);
+  write(PRESENCE_PREFIX + slug, next);
+  notify();
+  return next;
+}
+
+const blocksMem = new Map<string, BlockedPerson[]>();
+
+function blockList(v: unknown): BlockedPerson[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((b) => b && typeof b.ref === 'string')
+    .map((b) => ({ ref: b.ref as string, display_name: typeof b.display_name === 'string' ? b.display_name.slice(0, 60) : null }))
+    .slice(0, 500);
+}
+
+/** The people this device has blocked at one conference; `ref` is a key only and never shown. */
+export function getBlocks(slug: string): BlockedPerson[] {
+  let b = blocksMem.get(slug);
+  if (!b) {
+    b = blockList(read<unknown>(BLOCKS_PREFIX + slug));
+    blocksMem.set(slug, b);
+  }
+  return b;
+}
+
+export function isBlocked(slug: string, ref: string): boolean {
+  return getBlocks(slug).some((b) => b.ref === ref);
+}
+
+export function setBlocks(slug: string, next: BlockedPerson[]): void {
+  blocksMem.set(slug, next);
+  write(BLOCKS_PREFIX + slug, next);
+  notify();
+}
+
+export function addBlock(slug: string, ref: string, display_name: string | null): void {
+  const current = getBlocks(slug).filter((b) => b.ref !== ref);
+  setBlocks(slug, [...current, { ref, display_name }]);
+}
+
+export function removeBlock(slug: string, ref: string): void {
+  setBlocks(
+    slug,
+    getBlocks(slug).filter((b) => b.ref !== ref),
+  );
+}
+
+/**
+ * Replaces the cached list with the server's, taking the server's display names where it has them
+ * and keeping the names this device already knows otherwise.
+ */
+export function mergeBlocks(slug: string, entries: { ref: string; display_name?: string | null }[]): void {
+  const known = new Map(getBlocks(slug).map((b) => [b.ref, b.display_name]));
+  setBlocks(
+    slug,
+    entries.slice(0, 500).map((e) => ({ ref: e.ref, display_name: e.display_name ?? known.get(e.ref) ?? null })),
+  );
+}
+
+const metMem = new Map<string, MetPerson[]>();
+
+/** People saved after a meet, on this device only. */
+export function getMet(slug: string): MetPerson[] {
+  let m = metMem.get(slug);
+  if (!m) {
+    const raw = read<unknown>(MET_PREFIX + slug);
+    m = Array.isArray(raw)
+      ? raw
+          .filter((p) => p && typeof p.display_name === 'string')
+          .map((p) => ({ display_name: str(p.display_name, 60), about: str(p.about, 280), met_at: str(p.met_at, 40) }))
+          .slice(0, 500)
+      : [];
+    metMem.set(slug, m);
+  }
+  return m;
+}
+
+export function addMet(slug: string, person: { display_name: string; about: string | null }): void {
+  const next = [
+    ...getMet(slug),
+    { display_name: person.display_name.slice(0, 60), about: (person.about ?? '').slice(0, 280), met_at: new Date().toISOString() },
+  ].slice(-500);
+  metMem.set(slug, next);
+  write(MET_PREFIX + slug, next);
+  notify();
+}
+
+export function removeMet(slug: string, index: number): void {
+  const next = getMet(slug).filter((_, i) => i !== index);
+  metMem.set(slug, next);
+  write(MET_PREFIX + slug, next);
+  notify();
+}
+
+/**
+ * Removes the profile, the device identity and every visibility, presence and block record from
+ * the device. The "People I met" list is the user's own notes and stays, like the Interested list.
+ */
 export function clearAllPeopleData(): void {
   const keys: string[] = [DEVICE_KEY, PROFILE_KEY];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith(VIS_PREFIX)) keys.push(key);
+      if (key?.startsWith(VIS_PREFIX) || key?.startsWith(PRESENCE_PREFIX) || key?.startsWith(BLOCKS_PREFIX)) keys.push(key);
     }
   } catch {
     // Nothing to enumerate.
@@ -205,6 +332,8 @@ export function clearAllPeopleData(): void {
   deviceMem = null;
   profileMem = null;
   visMem.clear();
+  presenceMem.clear();
+  blocksMem.clear();
   notify();
 }
 

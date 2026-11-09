@@ -5,9 +5,9 @@ import type { Conference } from '../types';
 // #/search?view=schedule&day=2026-11-10, so Back and a reload keep the view.
 // The server serves index.html for unknown HTML paths, so no router library is needed.
 
-export type Tab = 'people' | 'for-you' | 'search' | 'interested' | 'profile' | 'settings';
+export type Tab = 'people' | 'for-you' | 'search' | 'interested' | 'profile' | 'settings' | 'inbox' | 'meet' | 'here';
 
-const TABS: Tab[] = ['people', 'for-you', 'search', 'interested', 'profile', 'settings'];
+const TABS: Tab[] = ['people', 'for-you', 'search', 'interested', 'profile', 'settings', 'inbox', 'meet', 'here'];
 const SLUG = /^[a-z0-9][a-z0-9-]{0,119}$/;
 
 /** The view inside a tab: List or Day on Interested, Search or Schedule on Search. */
@@ -25,6 +25,8 @@ export interface TabParams {
 export interface Route {
   slug: string | null;
   tab: Tab;
+  /** The rest of the hash for `#/meet/{id}` and `#/here/{zone}`, raw (still encoded). */
+  param: string | null;
   params: TabParams;
 }
 
@@ -40,14 +42,30 @@ export function readRoute(): Route {
     }
   }
   const [h, query = ''] = location.hash.replace(/^#\/?/, '').split('?');
-  const tab = TABS.includes(h as Tab) ? (h as Tab) : 'people';
   const q = new URLSearchParams(query);
   const params: TabParams = {};
   const view = q.get('view') as TabView | null;
   if (view && VIEWS.includes(view)) params.view = view;
   const day = q.get('day');
   if (day && DAY.test(day)) params.day = day;
-  return { slug, tab, params };
+  const slash = h.indexOf('/');
+  const head = (slash >= 0 ? h.slice(0, slash) : h) as Tab;
+  const rest = slash >= 0 ? h.slice(slash + 1) : '';
+  if (!TABS.includes(head)) return { slug, tab: 'people', param: null, params: {} };
+  // Only the meet and here routes take a parameter, and they need one.
+  if (head === 'meet' || head === 'here') {
+    return rest ? { slug, tab: head, param: rest.slice(0, 200), params: {} } : { slug, tab: 'people', param: null, params: {} };
+  }
+  return { slug, tab: head, param: null, params };
+}
+
+/** A route parameter as written in the hash, decoded; the raw value when it is not valid encoding. */
+export function decodeParam(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 /** "#/interested?view=day&day=2026-11-10", leaving out what is not set. */
