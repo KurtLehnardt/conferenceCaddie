@@ -22,6 +22,9 @@ export function useOnline(): boolean {
     const update = () => setOnline(navigator.onLine !== false);
     window.addEventListener('online', update);
     window.addEventListener('offline', update);
+    // The connection can change between the first render and this effect, before the listeners
+    // exist, so the state is read again once they are in place.
+    update();
     return () => {
       window.removeEventListener('online', update);
       window.removeEventListener('offline', update);
