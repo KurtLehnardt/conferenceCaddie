@@ -15,7 +15,8 @@
 //   from the request "size", which would make "total" change with "size"; the fixed k avoids
 //   that. The query embedding is built by Elasticsearch from the semantic_text field's own
 //   inference endpoint.
-// - Empty query (browse mode): a bool filter query sorted by start ascending, then talk_id.
+// - Empty query (browse mode): a bool filter query sorted by start ascending, then talk_id. It
+//   pages with "from" (at most MAX_FROM), so the app can list a whole day in schedule order.
 //
 // Facet and total definition
 // - Let M be the documents the main query matches: for a text query, the union of the lexical
@@ -178,7 +179,10 @@ function knownValues(slug) {
 // Validation. Only the documented keys are accepted, and filter values must be known values of
 // the requested conference.
 
-const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'debug', 'ignore_phrases']);
+const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'from', 'debug', 'ignore_phrases']);
+// Browse mode pages with "from" over the Elasticsearch sort (start, then talk_id). The cap keeps
+// from + size far below the index's result window; a conference day holds a few hundred items.
+const MAX_FROM = 1000;
 const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'speaker', 'room', 'hide_sponsor', 'happening_now', 'include_events']);
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const TALK_ID_RE = /^([a-z0-9][a-z0-9-]{0,119}):[A-Za-z0-9_-]{1,64}$/;
@@ -256,6 +260,12 @@ export async function validate(body) {
     size = body.size;
   }
 
+  let from = 0;
+  if (body.from !== undefined) {
+    if (!Number.isInteger(body.from) || body.from < 0 || body.from > MAX_FROM) throw new BadRequest(`from must be an integer from 0 to ${MAX_FROM}`);
+    from = body.from;
+  }
+
   if (body.debug !== undefined && typeof body.debug !== 'boolean') throw new BadRequest('debug must be a boolean');
 
   // ignore_phrases names time phrases the person removed; an unknown name simply has no effect.
@@ -308,6 +318,8 @@ export async function validate(body) {
 
   // Time phrases leave the text and become filter clauses of their own.
   const time = await parseTimePhrases(query, conference, ignored);
+  // Only browse mode has a stable sort to page through; a ranked search always starts at the top.
+  if (from > 0 && time.text) throw new BadRequest('from is only accepted with an empty query');
 
   return {
     conference: slug,
@@ -316,6 +328,7 @@ export async function validate(body) {
     query: time.text,
     timePhrases: time.phrases,
     size,
+    from,
     debug: body.debug === true,
     timeZone: conference.time_zone || 'UTC',
     filters: {
@@ -446,7 +459,7 @@ function matchBody(query, filter, knnFilter) {
   return query ? { retriever: retrieverFor(query, filter, knnFilter) } : { query: { bool: { filter } } };
 }
 
-function mainSearch(query, filter, knnFilter, size, aggs) {
+function mainSearch(query, filter, knnFilter, size, aggs, from = 0) {
   const body = {
     ...matchBody(query, filter, knnFilter),
     size,
@@ -465,6 +478,7 @@ function mainSearch(query, filter, knnFilter, size, aggs) {
     };
   } else {
     body.sort = [{ start: 'asc' }, { talk_id: 'asc' }];
+    if (from) body.from = from;
     body.highlight = {
       ...HIGHLIGHT_BASE,
       fields: {
@@ -600,13 +614,13 @@ const hhmm = (m) => (m === null ? null : `${String(Math.floor(m / 60)).padStart(
 // ---------------------------------------------------------------------------------------------
 
 export async function search(params) {
-  const { conference, hasLevel, tagGroups, query, size, filters } = params;
+  const { conference, hasLevel, tagGroups, query, size, from, filters } = params;
   const base = baseClauses(conference, filters);
   const groups = selectedGroups(filters);
 
   const mainAggs = { day: AGGS.day, track: AGGS.track, has_slides: AGGS.has_slides, tag_keys: AGGS.tag_keys };
   if (hasLevel) mainAggs.level = AGGS.level;
-  const searches = [mainSearch(query, [...base, ...selectionClauses(groups, null)], base, size, mainAggs)];
+  const searches = [mainSearch(query, [...base, ...selectionClauses(groups, null)], base, size, mainAggs, query ? 0 : from)];
   for (const g of groups) searches.push(facetSearch(query, [...base, ...selectionClauses(groups, g.name)], base, g.agg));
   searches.push(runningTodaySearch(conference, params.timeZone));
   const debug = params.debug && Boolean(query);

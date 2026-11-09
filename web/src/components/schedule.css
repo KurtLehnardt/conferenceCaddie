@@ -1,0 +1,305 @@
+/* Schedule views: My schedule's header and Day timeline, and the full schedule on the Search tab. */
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px var(--gutter) 12px;
+}
+
+.screen-title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.screen-head .segmented {
+  flex: none;
+  width: 168px;
+}
+
+.view-switch {
+  padding: 4px var(--gutter) 10px;
+}
+
+/* ---------- Day chips ---------- */
+
+.day-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px var(--gutter) 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.day-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.day-chip {
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.day-chip:focus-visible {
+  border-radius: 999px;
+}
+
+.day-chip .chip-main {
+  gap: 6px;
+}
+
+.day-chip-today {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.day-chip.is-active .day-chip-today {
+  background: var(--surface);
+  color: var(--accent-ink);
+}
+
+.sk-chip {
+  width: 104px;
+  border-style: dashed;
+  background: var(--fill);
+}
+
+/* ---------- My schedule: Day timeline ---------- */
+
+.tl {
+  position: relative;
+  margin: 12px var(--gutter) 20px;
+}
+
+.tl-hour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--border);
+}
+
+.tl-hour-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 46px;
+  transform: translateY(-50%);
+  padding-right: 6px;
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-events {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50px;
+  right: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tl-item {
+  position: absolute;
+  padding: 0 2px 2px;
+}
+
+.tl-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  padding: 5px 8px;
+  border: 0;
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: linear-gradient(var(--accent-tint), var(--accent-tint)), var(--surface);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  transition: background-color var(--motion) var(--ease);
+}
+
+.tl-card:focus-visible {
+  border-radius: 8px;
+}
+
+@media (hover: hover) {
+  .tl-card:hover {
+    background: linear-gradient(var(--accent-tint), var(--accent-tint)), var(--fill);
+  }
+}
+
+.tl-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.tl-meta {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tl-now {
+  position: absolute;
+  left: 44px;
+  right: 0;
+  z-index: 2;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--danger);
+  pointer-events: none;
+}
+
+.tl-now::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.tl-now-label {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: -8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+/* ---------- Full schedule ---------- */
+
+.sched-slot {
+  margin-bottom: 12px;
+}
+
+.sched-time {
+  position: sticky;
+  top: calc(var(--appbar-h) + var(--safe-top));
+  z-index: 10;
+  scroll-margin-top: calc(var(--appbar-h) + var(--safe-top));
+  padding: 8px var(--gutter);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sched-time:focus-visible {
+  outline-offset: -2px;
+}
+
+.sched-list {
+  margin: 0 var(--gutter);
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.sched-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.sched-row + .sched-row {
+  border-top: 1px solid var(--border);
+}
+
+.sched-open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 10px 6px 10px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+
+.sched-open:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  button.sched-open:hover .sched-title {
+    text-decoration: underline;
+  }
+}
+
+.sched-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.sched-speakers,
+.sched-meta {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.sched-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sched-star.is-on {
+  color: var(--accent);
+}
+
+.sched-row.skeleton {
+  padding-bottom: 0;
+}
+
+.sched-more,
+.sched-foot {
+  margin-top: 12px;
+}

@@ -83,8 +83,11 @@ const responses = [];
 // Every search result seen, for the evidence check.
 const allResults = [];
 
+const MAX_RATE_WAITS = 8;
+
 async function api(method, path, body, { device, label = '', origin } = {}) {
   let lastError;
+  let rateWaits = 0;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const headers = {};
@@ -98,6 +101,16 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       const text = await res.text();
+      // A local server answers fast enough for the checks to outrun the per-address search limit
+      // (60 per minute), so a 429 waits for its Retry-After and asks again. Only the rate-limit
+      // check rl1 wants a 429, and it calls fetch directly.
+      if (res.status === 429 && rateWaits < MAX_RATE_WAITS) {
+        rateWaits++;
+        const sec = Math.min(15, Math.max(1, Number(res.headers.get('retry-after')) || 1));
+        await new Promise((resolve) => setTimeout(resolve, sec * 1000));
+        attempt--;
+        continue;
+      }
       if (res.status >= 500 && attempt === 0) {
         lastError = new Error(`status ${res.status}`);
         continue;
@@ -1120,6 +1133,64 @@ try {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The full schedule view.
+
+// sch. The full schedule view lists one day in Elasticsearch's start order, page by page with
+// "from" (browse mode only). The busiest day needs several pages; together they must hold exactly
+// that day's talks, with no duplicates and starts that never go backwards. These checks run after
+// the people checks, so the search requests near the top have left the per-minute search limit.
+await check('sch1: browsing one day pages through only that day\'s talks in start order, with no duplicates', async () => {
+  const docs = new Map(readNdjson(PRIMARY).map((d) => [d.talk_id, d]));
+  const first = await search({ query: '', size: 1 });
+  if (first.status !== 200) throw new Error(`status ${first.status}`);
+  const busiest = [...(first.json.facets?.day ?? [])].sort((a, b) => b.count - a.count)[0];
+  if (!busiest) throw new Error('no day facet values');
+  const day = busiest.value;
+  const expected = [...docs.values()].filter((d) => d.kind === 'talk' && d.day === day).length;
+  const seen = [];
+  let total = null;
+  for (let from = 0; from <= 1000; from += 50) {
+    const r = await search({ query: '', size: 50, from, filters: { day } });
+    if (r.status !== 200) throw new Error(`page from ${from} gave ${r.status}`);
+    total = r.json.total;
+    seen.push(...(r.json.results ?? []));
+    if (!r.json.results?.length || seen.length >= total) break;
+  }
+  const problems = [];
+  const ids = seen.map((r) => r.talk_id);
+  if (new Set(ids).size !== ids.length) problems.push(`${ids.length - new Set(ids).size} duplicates across pages`);
+  if (seen.length !== total || total !== expected) problems.push(`${seen.length} listed, total ${total}, expected ${expected} talks`);
+  for (const r of seen) {
+    const d = docs.get(r.talk_id);
+    if (!d || d.kind !== 'talk' || d.day !== day || r.kind !== 'talk') problems.push(`"${r.title}" is not a talk on ${day}`);
+  }
+  for (let i = 1; i < seen.length; i++) {
+    if (Date.parse(seen[i].start) < Date.parse(seen[i - 1].start)) problems.push(`start goes backwards at position ${i + 1}`);
+  }
+  if (Math.ceil(expected / 50) < 2) problems.push(`the busiest day has only ${expected} talks, so paging was not exercised`);
+  report(problems.length === 0, 'sch1: browsing one day pages through only that day\'s talks in start order, with no duplicates',
+    problems.length ? problems.slice(0, 3).join('; ') : `${day}: ${seen.length} talks in ${Math.ceil(seen.length / 50)} pages`);
+});
+
+await check('sch2: "from" is validated and accepted only in browse mode', async () => {
+  const bad = [
+    { query: 'kubernetes', from: 50 },
+    { query: '', from: -1 },
+    { query: '', from: 1001 },
+    { query: '', from: '50' },
+    { query: '', from: 1.5 },
+  ];
+  const wrong = [];
+  for (const body of bad) {
+    const r = await search({ size: 10, ...body });
+    if (r.status !== 400) wrong.push(`${JSON.stringify(body)} gave ${r.status}`);
+  }
+  const ok = await search({ query: '', size: 10, from: 0 });
+  if (ok.status !== 200) wrong.push(`from 0 gave ${ok.status}`);
+  report(wrong.length === 0, 'sch2: "from" is validated and accepted only in browse mode', wrong.length ? wrong.join('; ') : `${bad.length} bad requests refused`);
+});
+
+// ---------------------------------------------------------------------------------------------
 // Related talks.
 
 await check('rel1: GET /api/related returns up to five other talks of the same conference', async () => {
@@ -1217,7 +1288,8 @@ await check('inst1: the manifest makes the app installable and the page links it
 }
 
 {
-  // e. The built bundle holds no credential values, credential-shaped strings or scheduling words.
+  // e. The built bundle holds no credential values, credential-shaped strings or scheduling words
+  // ("clash", "conflict", "Build my agenda"); the schedule views only show talks.
   const dist = join(ROOT, 'web', 'dist');
   if (!existsSync(dist)) {
     if (process.env.SMOKE_SKIP_BUNDLE === '1') skip('e: bundle scan', 'web/dist does not exist and SMOKE_SKIP_BUNDLE=1');
@@ -1240,7 +1312,7 @@ await check('inst1: the manifest makes the app installable and the page links it
       for (const { label, bytes } of [...secrets, ...patterns]) {
         if (content.includes(bytes)) hits.push(`${label} in ${file.slice(ROOT.length)}`);
       }
-      if (/\.(js|html)$/.test(file) && /clash|conflict-free|build my agenda|agenda building/i.test(content.toString('utf8'))) hits.push(`scheduling wording in ${file.slice(ROOT.length)}`);
+      if (/\.(js|html)$/.test(file) && /clash|conflict|build my agenda|agenda building/i.test(content.toString('utf8'))) hits.push(`scheduling wording in ${file.slice(ROOT.length)}`);
     }
     // i. The install card ships in the bundle with its Android and iOS wording.
     const js = files.filter((f) => f.endsWith('.js')).map((f) => readFileSync(f, 'utf8')).join('\n');

@@ -246,10 +246,13 @@ export function ChipRow({
   onRemovePhrase,
   onChange,
   onOpenSheet,
+  schedule = false,
 }: {
   conference: Conference;
   filters: SearchFilters;
   facets: Facets | null;
+  /** The full schedule picks its day with day chips and has Jump to now, so it hides the time chips. */
+  schedule?: boolean;
   /** False when the server says the conference has no talks today; unknown (null) counts as usable. */
   nowAvailable: boolean | null;
   /** Time phrases the server took out of the search text, shown as chips that can be removed. */
@@ -259,13 +262,13 @@ export function ChipRow({
   onOpenSheet: (section?: SheetSection) => void;
 }) {
   const count = activeFilterCount(filters);
-  const nowOff = nowAvailable === false;
+  const nowOff = !schedule && nowAvailable === false;
   const time = timeValue(filters);
   const seen = rememberTagValues(conference.slug, facets, filters);
   return (
     <>
     <div class="chip-row" role="toolbar" aria-label="Filters">
-      {phrases.map((p) => (
+      {!schedule && phrases.map((p) => (
         <Chip
           key={p.key}
           label={p.days.length === 1 ? `${p.label} · ${formatDay(p.days[0])}` : p.label}
@@ -291,6 +294,7 @@ export function ChipRow({
           )}
         </button>
       </span>
+      {!schedule && (
       <span class={`chip${filters.happening_now ? ' is-active' : ''}${nowOff ? ' is-disabled' : ''}`}>
         <button
           type="button"
@@ -306,6 +310,8 @@ export function ChipRow({
           <span>Happening now</span>
         </button>
       </span>
+      )}
+      {!schedule && (
       <Chip
         dropdown
         label={filters.day ? formatDay(filters.day) : 'Day'}
@@ -314,6 +320,8 @@ export function ChipRow({
         onClear={() => onChange({ ...filters, day: null })}
         clearLabel="Clear day filter"
       />
+      )}
+      {!schedule && (
       <Chip
         dropdown
         label={time === 'morning' ? 'Morning' : time === 'afternoon' ? 'Afternoon' : 'Time'}
@@ -322,6 +330,7 @@ export function ChipRow({
         onClear={() => onChange(withTime(filters, 'any'))}
         clearLabel="Clear time filter"
       />
+      )}
       <Chip
         dropdown
         label={groupLabel('Track', filters.track)}
@@ -444,8 +453,11 @@ export function FilterSheet({
   total,
   onChange,
   onClose,
+  schedule = false,
 }: {
   conference: Conference;
+  /** The full schedule has its own day chips, so the sheet leaves out Day and Time. */
+  schedule?: boolean;
   open: boolean;
   section?: SheetSection;
   filters: SearchFilters;
@@ -491,6 +503,7 @@ export function FilterSheet({
         </header>
 
         <div class="sheet-body">
+          {!schedule && (
           <fieldset class="sheet-section" data-section="day">
             <legend>Day</legend>
             <label class="option">
@@ -515,7 +528,9 @@ export function FilterSheet({
               </label>
             ))}
           </fieldset>
+          )}
 
+          {!schedule && (
           <fieldset class="sheet-section" data-section="time">
             <legend>Time</legend>
             <Segmented
@@ -529,6 +544,7 @@ export function FilterSheet({
               ]}
             />
           </fieldset>
+          )}
 
           <fieldset class="sheet-section" data-section="track">
             <legend>Track</legend>

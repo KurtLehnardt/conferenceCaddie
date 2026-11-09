@@ -42,6 +42,16 @@ export function search(
   return post<SearchResponse>('/api/search', body, signal, 'That search could not be run. Try removing a filter.');
 }
 
+/**
+ * One page of the browse listing: an empty query, so Elasticsearch filters and sorts by start
+ * time, then talk id. "from" pages through a day longer than one page.
+ */
+export function browse(conference: string, filters: SearchFilters, from: number, size: number, signal: AbortSignal): Promise<SearchResponse> {
+  const body: SearchRequest = { conference, query: '', filters, size };
+  if (from) body.from = from;
+  return post<SearchResponse>('/api/search', body, signal, 'The schedule could not be loaded. Try removing a filter.');
+}
+
 export async function getConferences(signal?: AbortSignal): Promise<ConferencesResponse> {
   let res: Response;
   try {
