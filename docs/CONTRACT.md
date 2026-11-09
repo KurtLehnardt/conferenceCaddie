@@ -192,6 +192,10 @@ Sorted by `start_date`, then `name`, with `Cache-Control: public, max-age=60`. E
 
 The conference's `kind: talk` documents, read with the read-only key and sorted by `start`, then `talk_id`, for the app's offline keyword search. Returns `{ conference, talks }`; each talk has exactly `talk_id`, `conference`, `title`, `speakers`, `room`, `start`, `end`, `track`, `level`, `tags`, `topics: [{ topic_id, label }]`, `url`, `slides_url` and `abstract`, trimmed to about 400 characters. No people data and no other kinds. `Cache-Control: public, max-age=300`, gzip when the client accepts it, and 20 requests per minute per IP. The only accepted parameter is `event`; an unknown or unavailable slug gets 400, methods other than GET or HEAD get 405.
 
+### `GET /api/related?event={slug}&talk_id={id}`
+
+Up to five other talks of the same conference that are closest in meaning to one talk. Elasticsearch fetches the talk's title and abstract, then runs a knn query on the `semantic` field with that text as `model_text`, filtered to the conference and `kind: talk` and excluding the talk itself. No time or schedule filter applies. Returns `{ results: [{ talk_id, conference, title, speakers, room, start, end, track, level, tags, slides_url, url }] }` in the order Elasticsearch returned them. Only `event` and `talk_id` are accepted; an invalid value or an unknown parameter gets 400, an unknown talk 404, methods other than GET or HEAD 405, and more than 60 requests per minute per IP 429. `Cache-Control: private, max-age=300`.
+
 ### `GET /api/topics?event={slug}&q={prefix}&size={n}`
 
 With an empty `q`, the conference's topics sorted by `rank` (default size 150). Otherwise a `bool_prefix` multi_match on `label`, `aliases` and their subfields (default size 10). `size` is at most 150 and `q` at most 60 characters. Returns `{ topics: [{ topic_id, label, talk_count }] }`.

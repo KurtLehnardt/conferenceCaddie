@@ -1,4 +1,6 @@
+import { useRef, useState } from 'preact/hooks';
 import { Clock, ExternalLink, MapPin, Presentation, Star, WifiOff } from 'lucide-preact';
+import { getRelated, isAbort } from '../api';
 import type { Conference, Talk } from '../types';
 import { Evidence } from '../lib/evidence';
 import { formatWhen, hasEnded, zoneOf } from '../lib/time';
@@ -22,6 +24,55 @@ export function InterestedToggle({ talk, on, onToggle }: { talk: Talk; on: boole
       <Star size={18} fill={on ? 'currentColor' : 'none'} aria-hidden="true" />
       <span>{label}</span>
     </button>
+  );
+}
+
+/** Up to five talks of the same conference with the closest meaning, fetched when first opened. */
+function RelatedTalks({ talk, conference }: { talk: Talk; conference: Conference }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'error' | Talk[]>('idle');
+  const started = useRef(false);
+  const load = () => {
+    setState('loading');
+    getRelated(conference.slug, talk.talk_id)
+      .then(setState)
+      .catch((err) => {
+        if (!isAbort(err)) setState('error');
+      });
+  };
+  const onToggle = (e: Event) => {
+    if (!(e.currentTarget as HTMLDetailsElement).open || started.current) return;
+    started.current = true;
+    load();
+  };
+  return (
+    <details class="related" onToggle={onToggle}>
+      <summary>Related talks</summary>
+      {state === 'loading' && <p class="related-note">Finding related talks...</p>}
+      {state === 'error' && (
+        <p class="related-note">
+          Related talks are unavailable right now.{' '}
+          <button type="button" class="link" onClick={load}>
+            Try again
+          </button>
+        </p>
+      )}
+      {Array.isArray(state) && state.length === 0 && <p class="related-note">No related talks found.</p>}
+      {Array.isArray(state) && state.length > 0 && (
+        <ul class="related-list">
+          {state.map((r) => (
+            <li key={r.talk_id}>
+              <a href={r.url} target="_blank" rel="noopener noreferrer" class="link">
+                {r.title}
+              </a>
+              <span class="related-meta">
+                {r.speakers.length > 0 ? `${r.speakers.join(', ')} · ` : ''}
+                {formatWhen(r.start, r.end, zoneOf(conference))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }
 
@@ -91,6 +142,7 @@ export function TalkCard({
           </p>
         )
       )}
+      {online && <RelatedTalks talk={talk} conference={conference} />}
       <div class="card-links">
         <a href={talk.url} target="_blank" rel="noopener noreferrer" class="link">
           <ExternalLink size={16} aria-hidden="true" />

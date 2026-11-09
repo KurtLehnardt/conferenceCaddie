@@ -1,4 +1,4 @@
-import type { ConferencesResponse, SearchFilters, SearchRequest, SearchResponse } from './types';
+import type { ConferencesResponse, SearchFilters, SearchRequest, SearchResponse, Talk } from './types';
 
 // In development with VITE_MOCK=1, main.tsx installs an in-browser stand-in for
 // every /api route before the app renders, so this module always uses fetch.
@@ -48,6 +48,19 @@ export async function getConferences(signal?: AbortSignal): Promise<ConferencesR
   }
   if (!res.ok) throw new ApiError('Conferences are temporarily unavailable. Please try again.');
   return (await res.json()) as ConferencesResponse;
+}
+
+/** Up to five talks of the same conference that are closest in meaning to one talk. */
+export async function getRelated(conference: string, talkId: string, signal?: AbortSignal): Promise<Talk[]> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/related?event=${encodeURIComponent(conference)}&talk_id=${encodeURIComponent(talkId)}`, { signal });
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    throw new ApiError('You appear to be offline. Check your connection and try again.');
+  }
+  if (!res.ok) throw new ApiError('Related talks are unavailable right now. Please try again.');
+  return ((await res.json()) as { results: Talk[] }).results;
 }
 
 export function isAbort(err: unknown): boolean {

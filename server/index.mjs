@@ -16,6 +16,7 @@ import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
+import { handleRelatedApi } from './related.mjs';
 import { handleSchedule } from './schedule.mjs';
 import { take, clientIp } from './ratelimit.mjs';
 
@@ -283,6 +284,7 @@ async function handleApi(req, res) {
   if (await handlePeopleApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
+  if (await handleRelatedApi(req, res, url)) return;
   sendJson(res, 404, { error: 'Not found' });
 }
 

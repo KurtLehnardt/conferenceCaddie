@@ -889,6 +889,44 @@ mark {
   border-radius: 999px;
 }
 
+.related {
+  margin-top: 8px;
+}
+
+.related summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent-ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.related-note {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.related-list {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.related-list li {
+  display: flex;
+  flex-direction: column;
+}
+
+.related-meta {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
 .card-links {
   display: flex;
   flex-wrap: wrap;

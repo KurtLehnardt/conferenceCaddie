@@ -682,6 +682,30 @@ try {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Related talks.
+
+await check('rel1: GET /api/related returns up to five other talks of the same conference', async () => {
+  if (!firstTopResult) throw new Error('query 1 returned no results');
+  const self = firstTopResult.talk_id;
+  const { status, json } = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent(self)}`);
+  if (status !== 200) throw new Error(`status ${status}`);
+  const results = json.results ?? [];
+  const ids = results.map((r) => r.talk_id);
+  const ok = results.length >= 1 && results.length <= 5 && !ids.includes(self) && new Set(ids).size === ids.length && results.every((r) => r.conference === PRIMARY && r.title && r.url);
+  report(ok, 'rel1: GET /api/related returns up to five other talks of the same conference', `${results.length} results, the first is "${results[0]?.title ?? ''}"`);
+});
+
+await check('rel2: GET /api/related validates its input', async () => {
+  const good = firstTopResult?.talk_id ?? `${PRIMARY}:1`;
+  const bad = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent('not an id')}`);
+  const extra = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent(good)}&x=1`);
+  const missing = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent(`${PRIMARY}:no-such-talk`)}`);
+  const post = await api('POST', '/api/related', {});
+  report(bad.status === 400 && extra.status === 400 && missing.status === 404 && post.status === 405, 'rel2: GET /api/related validates its input',
+    `bad id ${bad.status}, extra parameter ${extra.status}, unknown talk ${missing.status}, POST ${post.status}`);
+});
+
+// ---------------------------------------------------------------------------------------------
 // Checks over every response seen.
 
 {
