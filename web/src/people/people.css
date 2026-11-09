@@ -822,6 +822,85 @@
   border-color: transparent;
 }
 
+/* Push nudges */
+
+.pp-push {
+  display: grid;
+  gap: 8px;
+}
+
+.pp-presence .pp-push {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.pp-push-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pp-push-label svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+.pp-push-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.pp-push-state {
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pp-push-panel {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 6px;
+}
+
+.pp-push-settings .pp-push-panel {
+  padding: 0 16px 12px;
+}
+
+.pp-push-ios {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-tint);
+  font-size: 14px;
+}
+
+.pp-push-settings .pp-push-ios {
+  margin: 0 16px 12px;
+  padding: 12px 14px;
+}
+
+.pp-push-ios-title {
+  font-weight: 600;
+}
+
+.pp-push-ios-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.45;
+}
+
+.pp-push-ios-step svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.pp-push-hint {
+  padding-bottom: 6px;
+}
+
 /* Ask sheet */
 
 .pp-ask-body {

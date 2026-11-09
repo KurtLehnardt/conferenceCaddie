@@ -2,12 +2,13 @@
 // and the per-conference visibility choices. Every write notifies subscribers so
 // all mounted people components stay in step.
 import { useEffect, useState } from 'preact/hooks';
-import type { BlockedPerson, Device, MetPerson, Presence, Profile, TopicRef, Visibility } from './types';
+import type { BlockedPerson, Device, MetPerson, Presence, Profile, PushState, TopicRef, Visibility } from './types';
 
 const DEVICE_KEY = 'caddie.device.v1';
 const PROFILE_KEY = 'caddie.profile.v1';
 const VIS_PREFIX = 'caddie.visibility.v1.';
 const PRESENCE_PREFIX = 'caddie.presence.v1.';
+const PUSH_PREFIX = 'caddie.push.v1.';
 const BLOCKS_PREFIX = 'caddie.blocks.v1.';
 const MET_PREFIX = 'caddie.met.v1.';
 
@@ -228,6 +229,46 @@ export function setPresence(slug: string, patch: Partial<Presence>): Presence {
   return next;
 }
 
+const EMPTY_PUSH: PushState = { on: false, endpoint: null, notice_seen: false };
+const pushMem = new Map<string, PushState>();
+
+/** Whether this browser gets push nudges for one conference, and the subscription's endpoint. */
+export function getPush(slug: string): PushState {
+  let p = pushMem.get(slug);
+  if (!p) {
+    const raw = read<Partial<PushState>>(PUSH_PREFIX + slug) ?? {};
+    const endpoint = typeof raw.endpoint === 'string' && raw.endpoint.startsWith('https://') ? raw.endpoint.slice(0, 2048) : null;
+    p = { on: raw.on === true && endpoint !== null, endpoint, notice_seen: raw.notice_seen === true };
+    pushMem.set(slug, p);
+  }
+  return p ?? EMPTY_PUSH;
+}
+
+export function setPush(slug: string, patch: Partial<PushState>): PushState {
+  const next = { ...getPush(slug), ...patch };
+  pushMem.set(slug, next);
+  write(PUSH_PREFIX + slug, next);
+  notify();
+  return next;
+}
+
+/** The conferences whose push state is on, from the device. */
+export function slugsWithPush(): string[] {
+  const out = new Set<string>();
+  for (const [slug, p] of pushMem) if (p.on) out.add(slug);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(PUSH_PREFIX)) continue;
+      const slug = key.slice(PUSH_PREFIX.length);
+      if (getPush(slug).on) out.add(slug);
+    }
+  } catch {
+    // Fall back to the in-memory list.
+  }
+  return [...out];
+}
+
 const blocksMem = new Map<string, BlockedPerson[]>();
 
 function blockList(v: unknown): BlockedPerson[] {
@@ -318,15 +359,16 @@ export function removeMet(slug: string, index: number): void {
 }
 
 /**
- * Removes the profile, the device identity and every visibility, presence and block record from
- * the device. The "People I met" list is the user's own notes and stays, like the Interested list.
+ * Removes the profile, the device identity and every visibility, presence, push and block record
+ * from the device. The "People I met" list is the user's own notes and stays, like the Interested
+ * list.
  */
 export function clearAllPeopleData(): void {
   const keys: string[] = [DEVICE_KEY, PROFILE_KEY];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith(VIS_PREFIX) || key?.startsWith(PRESENCE_PREFIX) || key?.startsWith(BLOCKS_PREFIX)) keys.push(key);
+      if (key?.startsWith(VIS_PREFIX) || key?.startsWith(PRESENCE_PREFIX) || key?.startsWith(PUSH_PREFIX) || key?.startsWith(BLOCKS_PREFIX)) keys.push(key);
     }
   } catch {
     // Nothing to enumerate.
@@ -336,6 +378,7 @@ export function clearAllPeopleData(): void {
   profileMem = null;
   visMem.clear();
   presenceMem.clear();
+  pushMem.clear();
   blocksMem.clear();
   notify();
 }

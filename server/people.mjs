@@ -10,6 +10,8 @@
 //   ES_CONFERENCES_INDEX  default caddie-conferences.
 //   ES_PEOPLE_BLOCKS_INDEX default caddie-people-blocks (who blocked whom).
 //   ES_PEOPLE_MEETS_INDEX default caddie-people-meets (ask to talk shop).
+//   ES_PEOPLE_PUSH_INDEX  default caddie-people-push (Web Push subscriptions, push.mjs).
+//   ES_PEOPLE_NUDGES_INDEX default caddie-people-nudges (nudges sent, nudge.mjs).
 //   REF_SALT              optional salt for the opaque result reference.
 //
 // Rules this module keeps:
@@ -45,6 +47,8 @@ const READ_KEY = process.env.ES_API_KEY || '';
 export const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 export const BLOCKS_INDEX = process.env.ES_PEOPLE_BLOCKS_INDEX || 'caddie-people-blocks';
 export const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
+export const PUSH_INDEX = process.env.ES_PEOPLE_PUSH_INDEX || 'caddie-people-push';
+export const NUDGES_INDEX = process.env.ES_PEOPLE_NUDGES_INDEX || 'caddie-people-nudges';
 const TALKS_INDEX = process.env.ES_INDEX || 'caddie-talks';
 const TOPICS_INDEX = process.env.ES_TOPICS_INDEX || 'caddie-topics';
 const CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conferences';
@@ -135,7 +139,8 @@ export const docId = (eventId, profileId) => `${eventId}:${profileId}`;
 // every cold start, and then once an hour while an instance stays up. A document without
 // visible_until is never live, so it is deleted too. The same pass clears presence that has
 // expired (a Bulk partial update of the four presence fields, so nothing is re-embedded) and
-// deletes meets whose expires_at has passed. The purge CLI runs the same three steps.
+// deletes meets whose expires_at has passed, then push subscriptions and nudge records whose
+// expires_at (the end of their conference) has passed. The purge CLI runs the same steps.
 const PURGE_INTERVAL_MS = 60 * 60_000;
 const PURGE_PRESENCE_PAGE = 500;
 export const EXPIRED_PEOPLE_QUERY = {
@@ -146,6 +151,7 @@ export const EXPIRED_PEOPLE_QUERY = {
 };
 export const EXPIRED_PRESENCE_QUERY = { range: { presence_until: { lt: 'now' } } };
 export const EXPIRED_MEETS_QUERY = { range: { expires_at: { lt: 'now' } } };
+export const EXPIRED_AT_QUERY = { range: { expires_at: { lt: 'now' } } };
 export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null };
 
 async function purgeExpired() {
@@ -180,6 +186,16 @@ async function purgeExpired() {
     if (json.deleted) console.log(`Deleted ${json.deleted} expired meets.`);
   } catch (err) {
     console.error(`Deleting expired meets failed: ${err.message}`);
+  }
+  for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records']]) {
+    try {
+      const { json } = await people('POST', `${idx(name)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
+        query: EXPIRED_AT_QUERY,
+      });
+      if (json.deleted) console.log(`Deleted ${json.deleted} expired ${what}.`);
+    } catch (err) {
+      console.error(`Deleting expired ${what} failed: ${err.message}`);
+    }
   }
 }
 
@@ -609,9 +625,9 @@ export async function blockedBetween(eventId, a, b) {
 // The filter clause that hides blocked pairs from a people query.
 const notBlocked = (eventId, ids) => (ids.size ? [{ ids: { values: [...ids].map((id) => docId(eventId, id)) } }] : []);
 
-// Everything that connects a person to others at one conference: their blocks in both directions
-// and every meet they take part in. Runs when the profile is deleted. refresh=true, so the next
-// request already sees them gone.
+// Everything that connects a person to others at one conference: their blocks in both directions,
+// every meet they take part in, their push subscriptions and the nudges they were part of. Runs
+// when the profile is deleted. refresh=true, so the next request already sees them gone.
 export async function deleteConnections(eventId, profileId) {
   await people('POST', `${idx(BLOCKS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
     query: {
@@ -624,6 +640,12 @@ export async function deleteConnections(eventId, profileId) {
   });
   await people('POST', `${idx(MEETS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
     query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } },
+  });
+  await people('POST', `${idx(PUSH_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
+    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } },
+  });
+  await people('POST', `${idx(NUDGES_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
+    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } },
   });
 }
 
@@ -643,8 +665,9 @@ const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</m
 const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until'];
 
 // Returns { body, legs } where legs names each retriever in order ('topics', 'text' or
-// 'everyone'), or null when there is nothing to rank by.
-function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false }) {
+// 'everyone'), or null when there is nothing to rank by. nudge.mjs runs the same query as the
+// person whose presence was just written, so the push rule and the matches view agree.
+export function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false }) {
   const filter = {
     bool: {
       filter: [{ term: { event_id: me.event_id } }, { range: { visible_until: { gt: 'now' } } }, ...filters],
@@ -721,9 +744,9 @@ function matchedLegs(hit, legs) {
 
 const listFormat = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-const unescapeHtml = (s) => s.replace(/<\/?mark>/g, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+export const unescapeHtml = (s) => s.replace(/<\/?mark>/g, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
-function cutText(raw, max) {
+export function cutText(raw, max) {
   let t = String(raw).replace(/\s+/g, ' ').trim().replace(/[.!?;:,\s]+$/, '');
   if (t.length > max) {
     const cut = t.slice(0, max);
@@ -742,7 +765,7 @@ function passageFrom(hit) {
 // The passage that matched, with <mark> tags as the only markup: a lexical fragment of expertise
 // or about when the query matched words there, else the best semantic chunk of expertise or
 // about, else the start of their expertise (or about). Null for a profile with no text at all.
-function evidenceFor(hit) {
+export function evidenceFor(hit) {
   const hl = hit.highlight ?? {};
   const s = hit._source ?? {};
   const lexical = [hl.expertise?.[0], hl.about?.[0]].find((f) => typeof f === 'string' && f.includes('<mark>'));
@@ -955,7 +978,7 @@ const MATCHES_KEYS = new Set(['event', 'interested_talk_ids', 'query', 'when', '
 
 // Runs a people search. Should the cluster refuse the explanation, the search runs again without
 // it and every hit is kept.
-async function searchPeople(body) {
+export async function searchPeople(body) {
   try {
     return (await people('POST', `${idx(PEOPLE_INDEX)}/_search`, body)).json;
   } catch (err) {
@@ -975,7 +998,7 @@ function sharedTopics(me, s) {
 // The specificity rule: a hit is a broad match when it was found only by the topic retrievers and
 // every topic it shares with the requester is one of the conference's ten most common. A hit found
 // by a text retriever, or one whose explanation is missing, is specific.
-function isBroad(hit, legs, me, common) {
+export function isBroad(hit, legs, me, common) {
   const matched = matchedLegs(hit, legs);
   if (!matched || matched.some((i) => legs[i] !== 'topics')) return false;
   return sharedTopics(me, hit._source ?? {}).every((t) => common.has(t));

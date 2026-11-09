@@ -18,11 +18,16 @@
     "people:purge": "node scripts/purge-expired-people.mjs",
     "people:backfill-ref": "node scripts/backfill-ref.mjs",
     "reports:setup": "node scripts/es-setup-reports.mjs",
+    "push:setup": "node scripts/es-setup-push.mjs",
+    "push:vapid-keys": "node scripts/vapid-keys.mjs",
     "moderation": "node scripts/moderation.mjs",
     "start": "node server/index.mjs",
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web ci && npm --prefix web run build",
     "smoke": "node scripts/smoke.mjs",
     "deploy": "bash scripts/deploy.sh"
+  },
+  "dependencies": {
+    "web-push": "4.0.0"
   }
 }

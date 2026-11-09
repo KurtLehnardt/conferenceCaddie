@@ -64,6 +64,15 @@ export interface Presence {
   notice_seen: boolean;
 }
 
+/** Web Push nudges: device-side state (caddie.push.v1.{slug}). */
+export interface PushState {
+  /** True while this browser holds a subscription the server knows about. */
+  on: boolean;
+  /** The subscription's endpoint, so it can be removed by name; null while off. */
+  endpoint: string | null;
+  notice_seen: boolean;
+}
+
 /** One blocked person, cached on the device (caddie.blocks.v1.{slug}). */
 export interface BlockedPerson {
   ref: string;

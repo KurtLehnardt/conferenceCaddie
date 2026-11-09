@@ -24,12 +24,14 @@
 //   the end of the conference day. Three "Not now" replies in one day pause the requester until
 //   the next day. When a meet ends, only participants, topic, state and times are kept.
 // - Spot lines, notes and spot-me lines pass the wordlist filter in moderation.mjs.
+// - After a presence write has been answered, nudge.mjs runs the push rule for that person.
 // - Nothing from a request body, header or document is logged.
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
 import { refFor } from './device.mjs';
 import { isFiltered, FILTERED } from './moderation.mjs';
+import { nudgeAfterPresence } from './nudge.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
@@ -302,6 +304,8 @@ async function putPresence(req, res) {
   const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: presence });
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
   sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, presence_since: since, presence_until: presence.presence_until });
+  // After the answer: the push nudge for strong matches in this zone (nudge.mjs never throws).
+  void nudgeAfterPresence({ ...me, ...presence }, conf);
 }
 
 async function deletePresence(req, res, url) {

@@ -1,5 +1,6 @@
 // The "I'm around" switch on the People tab: zone picker, optional spot line, the first-time
-// notice, the remaining time (tap extends), and the #/here/{zone} deep link.
+// notice, the remaining time (tap extends), the #/here/{zone} deep link, and under it the push
+// nudge switch (PushControls).
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { MapPin } from 'lucide-preact';
 import {
@@ -14,6 +15,7 @@ import {
   useZones,
   zonesFor,
 } from './presence';
+import { PushSwitch } from './PushControls';
 import { getPresence, getProfile, getVisibility, usePeopleStore } from './storage';
 import type { ConferenceLike, InterestedProp } from './types';
 import { toast } from './ui';
@@ -159,6 +161,7 @@ export function PresenceControls({
           onChange={(e) => onSwitch((e.target as HTMLInputElement).checked)}
         />
       </label>
+      <PushSwitch slug={slug} variant="card" />
       {presence.on && presence.zone && (
         <div class="pp-presence-on">
           <p class="pp-around">

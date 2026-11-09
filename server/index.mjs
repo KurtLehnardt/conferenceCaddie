@@ -5,7 +5,9 @@
 //      STATIC_DIR (default web/dist), ES_PEOPLE_API_KEY (people, circles and circle counts only),
 //      ES_PEOPLE_INDEX (default caddie-people), ES_PEOPLE_BLOCKS_INDEX (default
 //      caddie-people-blocks), ES_PEOPLE_MEETS_INDEX (default caddie-people-meets),
-//      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), REF_SALT (optional).
+//      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), ES_PEOPLE_PUSH_INDEX (default
+//      caddie-people-push), ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges), REF_SALT
+//      (optional), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (secret) and VAPID_SUBJECT for push nudges.
 //
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
@@ -18,6 +20,7 @@ import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleConnectApi } from './connect.mjs';
 import { handleReportApi } from './report.mjs';
+import { handlePushApi } from './push.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
 import { handleImportGithubApi } from './import-github.mjs';
@@ -281,13 +284,14 @@ const server = http.createServer((req, res) => {
   handleStatic(req, res, pathname);
 });
 
-// The people, circles, blocks, presence, meets, recommendations and topics routes. Each handler
+// The people, circles, blocks, presence, meets, reports, push, recommendations and topics routes. Each handler
 // reads its own body with its own size limit and resolves to true when it handled the request.
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
   if (await handleConnectApi(req, res, url)) return;
   if (await handleReportApi(req, res, url)) return;
+  if (await handlePushApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
   if (await handleImportGithubApi(req, res, url)) return;

@@ -321,6 +321,7 @@ export function PeopleScreen({
   onOpenTalk,
   hereZone,
   onHereHandled,
+  aroundNow,
 }: {
   conference: ConferenceLike;
   interested: InterestedProp;
@@ -328,11 +329,17 @@ export function PeopleScreen({
   /** The raw zone of a #/here/{zone} deep link, if the tab was opened through one. */
   hereZone?: string | null;
   onHereHandled?: () => void;
+  /** True when opened as #/people?around=1 (from a push nudge): "Around now" starts on. */
+  aroundNow?: boolean;
 }) {
   const [input, setInput] = useState(() => takePendingSearch() ?? '');
   const [query, setQuery] = useState(input);
-  const [around, setAround] = useState(false);
+  const [around, setAround] = useState(!!aroundNow);
   const timer = useRef<number | undefined>(undefined);
+  // A nudge tapped while the app is already open turns "Around now" on too.
+  useEffect(() => {
+    if (aroundNow) setAround(true);
+  }, [aroundNow]);
 
   const onInput = (v: string) => {
     setInput(v);
