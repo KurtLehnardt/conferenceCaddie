@@ -8,6 +8,10 @@ Orchestrator prompt. `docs/CONTRACT.md`, `DECISIONS.md` and the handoff rules ap
 
 Twenty thousand people attend. Somewhere among them are the people who have done the specific thing you are stuck on, or know the topic you want to pick up next, and you will never meet them by chance. Sched already shows who attended a talk, has a my-code profile share, and lets attendees message, so Caddie builds none of that. Caddie does two things: **find them** (a search over everyone's own words about what they have built and want to build, where rare, specific experience outranks common topics, and nearby people rank first) and **sync up** (say you are around, ask to talk shop, agree where).
 
+## The default state is passive
+
+You are not trying to meet people. You are in the coffee line, in the expo hall, waiting for a keynote, and the app notices that someone worth talking to is right there. Searching is the active fallback, not the main loop. Everything that follows is judged by one question: does it shorten the path from "my phone noticed" to "we're talking", for someone who was not looking? So: zones must be cheap to keep current (a one-tap "Still in {zone}?" when the app comes back to the foreground; a "until I turn it off today" duration); asks are now-only and a match who is not around is watched, never booked; two matched people in the same zone get a mutual nudge and a one-tap wave that reveals "how to spot me" with no meeting point; and Web Push is the next unlock after this phase, because it is what makes the pocket case work.
+
 ## Build order
 
 **MVP (deploy this first, then review):** block → find people by text → zone-only presence → ask to talk shop → meet screen. **Then:** GPS bands, report, classifier, percolator. **Stretch:** chat. One worktree branch and PR for the MVP; another for "Then"; never push to main. The MVP review is the only review; "Then" and the stretch ship without one.
