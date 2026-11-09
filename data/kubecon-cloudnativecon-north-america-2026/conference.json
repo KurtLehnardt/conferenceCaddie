@@ -1,0 +1,49 @@
+{
+  "slug": "kubecon-cloudnativecon-north-america-2026",
+  "name": "KubeCon + CloudNativeCon North America",
+  "status": "searchable",
+  "status_reason": null,
+  "source": "sessionize",
+  "start_date": "2026-11-09",
+  "end_date": "2026-11-12",
+  "time_zone": "America/Denver",
+  "time_zone_windows": "Mountain Standard Time",
+  "location": {
+    "city": "Salt Lake City",
+    "region": "UT",
+    "country": "United States",
+    "virtual": false
+  },
+  "sessionize_api_code": "svi82w6c",
+  "sessionize_public_slug": "kubecon-cloudnativecon-north-america-2026",
+  "sessionize_site_published": true,
+  "lf_event_id": 225690,
+  "lf_url": "https://events.linuxfoundation.org/kubecon-cloudnativecon-north-america/",
+  "official_schedule_url": "https://events.linuxfoundation.org/kubecon-cloudnativecon-north-america/program/schedule/",
+  "parent_slug": null,
+  "category_mapping": {
+    "track_group": "All Sessions",
+    "level_group": "Audience Level",
+    "tag_groups": [
+      "End User Programming",
+      "Solutions Showcase Programming"
+    ],
+    "hidden_groups": [
+      "SubTopic",
+      "CNCF Projects",
+      "Is Sponsored Keynote"
+    ],
+    "slides_question": "Presentation Slides"
+  },
+  "counts": {
+    "sessions": 600,
+    "talk": 484,
+    "ambient": 76,
+    "break": 21,
+    "housekeeping": 19,
+    "with_slides": 114,
+    "sponsor": 72
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T20:11:30.873Z"
+}

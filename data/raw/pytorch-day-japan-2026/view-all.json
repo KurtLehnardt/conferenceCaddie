@@ -1,0 +1,804 @@
+{
+  "sessions": [
+    {
+      "id": "1361491",
+      "title": "Registration & Badge Pick-Up",
+      "description": null,
+      "startsAt": "2026-12-10T09:00:00",
+      "endsAt": "2026-12-10T18:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        519566
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1361523",
+      "title": "Keynote Sessions to be Announced",
+      "description": null,
+      "startsAt": "2026-12-10T10:00:00",
+      "endsAt": "2026-12-10T11:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        519580
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1361488",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-12-10T11:10:00",
+      "endsAt": "2026-12-10T11:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        519565
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1343025",
+      "title": "Beyond GPUs: A Practical Playbook for Bringing ExecuTorch to a New Edge Accelerator",
+      "description": "Edge and on-prem AI inference increasingly runs on silicon that isn't a GPU. This talk tells the story of bringing ExecuTorch — PyTorch's on-device inference runtime — to IBM's AIU, a purpose-built accelerator for enterprise inference, entirely through ExecuTorch's public backend-delegate extension points: a custom partitioner, an AOT-only compilation path with well-defined CPU-fallback boundaries, a mixed-dtype tensor bridge, and static bucketing for dynamic shapes.\r\n\r\nWe'll walk through the concrete design decisions and dead ends behind a working, device-verified delegate running real language models (Granite) end-to-end on the AIU, then generalize them into a practical checklist for anyone extending ExecuTorch to a new, independent accelerator. Attendees will leave with a concrete map of ExecuTorch's backend extension surface — what's genuinely reusable, what's hardware-specific, and where the sharp edges are — whether their target is a novel edge chip, an emerging vendor's silicon, or an in-house accelerator.",
+      "startsAt": "2026-12-10T11:30:00",
+      "endsAt": "2026-12-10T11:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "d2f0452a-2f46-41c2-b83b-d47cf1a5ba36",
+        "0a454633-5fec-45fb-a412-15ba01cc4124"
+      ],
+      "categoryItems": [
+        504302
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1342950",
+      "title": "Five Bits on Metal: Adding Q5_K Quantization to ExecuTorch's MLX Backend",
+      "description": "Run a GGUF model on a Mac and most of the work happens in a few hundred lines of Metal you've never read. This talk opens up one of them.\r\n\r\nQ5_K is among the most-used quantization formats in the GGUF ecosystem, and until recently ExecuTorch's MLX backend couldn't execute it. I'll walk through the upstream contribution that added it.\r\n\r\nWe'll cover what's actually inside a Q5_K super-block, an affine d/dmin block, 6-bit packed sub-block scales, and a separate array holding each weight's 5th bit, and why that layout forces real kernel design rather than a copy of Q4_K. Then the two kernels every decoder needs: a mat-vec for decode, a tiled simdgroup mat-mat for prefill, and dynamic-M dispatch between them. With benchmarks: Q4_K vs Q5_K vs Q6_K tokens/sec and memory on Apple silicon.\r\n\r\nYou'll leave knowing how block quantization really works on-device, and how to get your own kernel merged into a PyTorch runtime.",
+      "startsAt": "2026-12-10T12:10:00",
+      "endsAt": "2026-12-10T12:30:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "ceb969d0-839e-4cda-b59e-dd5c714e0b79",
+        "5c0e7a6b-a0d3-40aa-a1a9-aa669d70d434"
+      ],
+      "categoryItems": [
+        509273
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1343099",
+      "title": "OneComp: One-Command LLM Quantization",
+      "description": "Deploying large language models (LLMs) on limited hardware is challenging. Models may exceed available memory, and selecting quantization methods and bit widths requires specialist expertise. OneComp is an open-source Python library for resource-adaptive post-training quantization. With a single command, it detects available GPU memory, assigns layer-wise bit widths using AutoBit, performs quantization and error correction, evaluates the result, and saves the compressed model. OneComp incorporates Fujitsu’s latest model compression technologies, including Quantization Error Propagation (QEP) and JointQ. This talk will introduce how these techniques help preserve model quality at low precision and explain OneComp’s approach to making LLM compression more accessible.",
+      "startsAt": "2026-12-10T12:30:00",
+      "endsAt": "2026-12-10T12:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "118f89fd-13fd-4225-a884-c7b7b688233a"
+      ],
+      "categoryItems": [
+        504301
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1343042",
+      "title": "From Learners to Contributors: Growing the PyTorch Ecosystem through PyTorchKR",
+      "description": "How can a local PyTorch community turn learners into open-source contributors?\r\n\r\nThis talk shares lessons from eight years of PyTorch Korea, focusing on tutorials-kr, a community-maintained Korean translation of the official PyTorch tutorials. We explain how translated learning resources, university lectures, and open-source mentoring create entry points for developers, researchers, and students to contribute.\r\n\r\nOur mentoring efforts supported 26 first-time contributors and 51 merged PRs to tutorials-kr, which has welcomed more than 160 contributors overall. We use this experience to discuss lowering the barrier to a first contribution, supporting contributors through review, and connecting learning activities with open-source participation. We also share how the vLLM Korea Meetup broadened knowledge exchange across the PyTorch ecosystem.\r\n\r\nAttendees will leave with practical lessons for organizing contribution opportunities, connecting education with project maintenance, and measuring community reach and contribution outcomes separately.",
+      "startsAt": "2026-12-10T12:40:00",
+      "endsAt": "2026-12-10T13:00:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "f9bbab45-3489-4949-a142-b59b504f19ae",
+        "5fcfc4a1-e0d5-4113-ba1b-ac0eaba3a7bb"
+      ],
+      "categoryItems": [
+        509273
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1361432",
+      "title": "Attendee Lunch",
+      "description": null,
+      "startsAt": "2026-12-10T13:00:00",
+      "endsAt": "2026-12-10T14:15:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        519565
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1341807",
+      "title": "Training Robot Policies from Object Storage: LeRobot's Native LanceDB Backend",
+      "description": "LeRobot is Hugging Face's PyTorch library for real-world robotics, and its dataset format gave the community a shared standard. But robot learning data is multimodal and growing fast: long multi-camera videos, states, actions and language instructions in every episode. Training from object storage with global shuffling, and finding the right episodes first, still means copying data or stitching systems together.\r\n\r\nLanceDB and the LeRobot team upstreamed LanceDB as the first non-LeRobot storage backend. Users keep the familiar LeRobotDataset API and read Lance datasets in place from the Hub, HF buckets or S3.\r\n\r\nThis session covers:\r\n- How episodes, frames and videos are laid out as tables for random access\r\n- Feeding PyTorch: map-style datasets, global shuffle from object storage, and pitfalls with parallel workers\r\n- Using the same table to search, curate and train, with vector and full-text search\r\n- What it took to move from an external plugin into LeRobot core\r\n\r\nYou'll leave with steps to try in your own LeRobot setup, and a clear view of when this design helps and its current limits.\r\n",
+      "startsAt": "2026-12-10T14:15:00",
+      "endsAt": "2026-12-10T14:35:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "9114f766-b127-4e17-9ec8-8a91145faded"
+      ],
+      "categoryItems": [
+        504302
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1343167",
+      "title": "From PyTorch to Physical Action: Building Real-Time VLA Inference on Edge Devices",
+      "description": "Vision-Language-Action (VLA) models enable AI systems to perceive their environment, understand instructions, and perform physical actions; however, deploying VLA models on edge devices requires more than just getting inference running. Real-world systems have to satisfy strict requirements concerning latency, memory, power, thermal behavior, reliability, and security.\r\n\r\nThe talk describes a complete process for moving from a PyTorch VLA model to real-time on-device inference using torch.export and ExecuTorch on ARM-based edge devices. The deployment pipeline includes model optimization, quantization, hardware acceleration, and runtime execution.\r\nSystematic examines the entire perception-to-action process, measuring end-to-end latency, memory usage, power consumption, sustained performance, thermal behavior, and task success. The presentation examines how various optimization techniques and hardware acceleration affect real-time performance.\r\n\r\nThe aim is to develop a practical method for determining when a PyTorch VLA model is ready for real-time Physical AI, moving beyond the simple criterion of \"it runs\" to \"it responds, performs, and acts reliably on the edge.\"",
+      "startsAt": "2026-12-10T14:35:00",
+      "endsAt": "2026-12-10T14:45:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "56be4dff-6c99-4b27-8276-ed710005fff4"
+      ],
+      "categoryItems": [
+        504302
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1318087",
+      "title": "Kernels Without Borders: Unifying the Kernel Ecosystem",
+      "description": "High-performance PyTorch applications increasingly depend on specialized kernels, but writing a fast kernel is only part of the problem. Projects also need to build across hardware and software configurations, distribute kernels, manage compatibility, version them safely, and integrate them into their own stacks.\r\n\r\nIn this talk, Sayak Paul and Aritra Roy Gosthipaty will introduce Hugging Face Kernels and show how the Kernel Hub provides a common layer for building, versioning, distributing, and consuming optimized kernels across the PyTorch ecosystem.\r\n\r\nWe will show how this abstraction lets projects share optimized implementations without maintaining their own packaging and distribution infrastructure, from declaring kernel dependencies to selecting compatible builds and locking versions for reproducible deployments.\r\n\r\nWe will also discuss how Kernel Hub is evolving beyond PyTorch, with support for interfaces such as TVM-FFI, and examine adoption in projects such as SGLang to show how shared kernel infrastructure can reduce integration overhead.",
+      "startsAt": "2026-12-10T14:45:00",
+      "endsAt": "2026-12-10T15:05:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "6fe12f66-25c9-4b02-b071-6aa347be8d46",
+        "43829f01-f979-48a4-9e05-eb794b92d64f"
+      ],
+      "categoryItems": [
+        504302
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1342758",
+      "title": "Adapting vLLM and SGLang to Diverse AI Accelerators with FlagOS",
+      "description": "Adapting inference frameworks to different AI accelerators requires coordinated work across operators, compilers, runtimes, and communication. This talk uses vLLM and SGLang to show how FlagOS organizes that adaptation while preserving familiar serving interfaces.\r\n\r\nWe connect engine plugins to FlagGems operators and explain the roles of FlagTree's supported compiler paths and optional FlagCX communication. A concrete RMSNorm example shows how two engine interfaces reach shared computation while retaining framework-specific handling. Device-independent installation and vendor fallback illustrate additional hardware integration requirements.\r\n\r\nWe then examine validation across eager and graph modes, text and image requests, and cold-start behavior, using public vLLM plugin tests and documented SGLang deployment cases.\r\n\r\nAttendees will learn how to structure multi-accelerator adaptation, decide what can be reused across frameworks and chips, and verify correctness and performance. The session is grounded in open-source code, upstream changes, and deployment evidence.",
+      "startsAt": "2026-12-10T15:05:00",
+      "endsAt": "2026-12-10T15:25:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "8473124e-ba04-45a0-9d97-502baa1b8b96"
+      ],
+      "categoryItems": [
+        509273
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1331879",
+      "title": "Accelerating PyTorch on Apple silicon",
+      "description": "At the start of 2026, running models on PyTorch's MPS backend would mean working around unsupported operations, performance bottlenecks and memory growth even for small models. Since then, MPS has become much more mature platform to run the regular models on locally.\r\n\r\nThis talk goes through the progress on the backend such as, fused attention for prefill/decode workloads, Flex Attention, native Metal kernels for linear algebra operations, convolutions, porting MPS Graph to Metal kernels and memory allocator changes which fixes unexpected memory growth. I'll connect these changes to real model workloads from Hugging Face across language, image and video models, showing how improvements across the backend add up to better user experience.\r\n\r\nWe'll look at where MPS stands today, where are it's limitations compared to MLX and what are the upcoming changes we can expect for the backend in the near future. ",
+      "startsAt": "2026-12-10T15:20:00",
+      "endsAt": "2026-12-10T15:40:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "dfbe966e-f6cd-4150-914c-f4dabc26c22d",
+        "b357fc92-c327-4570-a459-0c24d7f710fd"
+      ],
+      "categoryItems": [
+        509273
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1361490",
+      "title": "Coffee Break",
+      "description": null,
+      "startsAt": "2026-12-10T15:45:00",
+      "endsAt": "2026-12-10T16:15:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        519565
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1343050",
+      "title": "Rethinking Model Loading: safetensors, Portability, and IBM Spyre",
+      "description": "safetensors is widely used to distribute model checkpoints, especially through Hugging Face. fastsafetensors is a high-performance loader that reduces loading overhead through optimized file access and device transfers. The speaker is a maintainer of fastsafetensors, which is integrated with PyTorch systems including vLLM and SGLang.\r\n\r\nPortable checkpoints do not always match the tensor formats accelerators need. Loading may require data-type and memory-layout conversions in addition to I/O and transfers, and these conversions can remain a bottleneck even after I/O is optimized.\r\n\r\nUsing IBM Spyre as a case study, this talk presents extensions to fastsafetensors. Converted weights are written directly into output files in parallel across shards, reducing intermediate copies. Later loads reuse cached weights when the source weights, conversion settings, and environment remain compatible.\r\n\r\nWe discuss cache validation, creation cost, storage overhead, and the boundary between generic file handling and device-specific conversion. Attendees will learn how to preserve portable model distribution while efficiently preparing tensors for accelerator execution.\r\n",
+      "startsAt": "2026-12-10T16:15:00",
+      "endsAt": "2026-12-10T16:35:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "092d4cd8-736a-48a9-bded-6a754e15239b"
+      ],
+      "categoryItems": [
+        509273
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1361901",
+      "title": "Where Do RL Environments Come From? Turning Real Data into Tasks, Rewards and Training",
+      "description": "\r\nFrontier labs post-train models across thousands of RL environments. At their core, these environments expose two things: tasks for models to solve and verifiers that determine whether they succeed. The challenge is scaling both: generating diverse, high-quality tasks from real-world data and building robust verifiers that provide reliable rewards. Yet very little of this work is being done openly at scale.\r\nWe walk through four key decisions in building RL environments: choosing domains with real, verifiable data; turning that data into tasks with controlled difficulty; designing robust rewards that resist hacking; and packaging everything with OpenEnv and Harbor for scalable training and evaluation.\r\nWe then explore how these environments integrate with TRL for GRPO training, including agents running behind a proxy, and share practical examples across coding, games, multilingual OCR and speech, design, biology, and more, highlighting how the environments were built and what training showed.\r\nAll environments and recipes are open in FineEnvs: https://huggingface.co/FineEnvs",
+      "startsAt": "2026-12-10T16:35:00",
+      "endsAt": "2026-12-10T16:55:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "61d7a90f-9744-4ad8-bb0d-34e5961881e6",
+        "245793f5-74a9-4abd-a3e3-c011fc394297"
+      ],
+      "categoryItems": [
+        504301
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1325509",
+      "title": "When the KV Cache Cannot Roll Back: Prefix Reuse on Android",
+      "description": "An agent prompt on a phone can open with about 2,050 tokens of harness, 1,700 of them tool definitions. On a Dimensity 9500s, a 1,036-token prefix takes 9.3 s to prefill on LFM2.5-1.2B and 45 s on SmolLM3-3B; faster decode does nothing to that wait. We solved it with prefix reuse, built twice because our open source app ships two runtimes with different cache constraints.\r\n\r\nExecuTorch's Android API exposes prefill and full reset, but no partial rollback. We prefill the shared head at model load, then feed only the unmatched suffix while the prompt is an exact extension. On Qwen3-1.7B, a second turn reused 1,192 tokens and fed 20 new ones, cutting prefill to 215 ms, 27 times faster than the first turn. On our llama.cpp path, LFM2.5's recurrent state cannot rewind without per-token snapshots, so we snapshot the warmed 12 MB state and restore it; that 1,018-token prefix falls from 9,326 ms to 235 ms.\r\n\r\nCorrectness depends on byte identity. The date is pinned per conversation, history replays the engine's own bytes, changing reasoning mode invalidates the prefix, and truncated replies are never reused. We show cache rules, failures and regression tests; measurements and logs are public.\r\n",
+      "startsAt": "2026-12-10T17:15:00",
+      "endsAt": "2026-12-10T17:35:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "eb1c0730-ac16-4794-9f15-edb9ac0e612c",
+        "eccc54f0-91d7-4694-8b66-f3e68449423c"
+      ],
+      "categoryItems": [
+        504302
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1343082",
+      "title": "DeepSpeed at the Frontier: Community-Driven Optimizations for State-of-the-Art Training Performance",
+      "description": "DeepSpeed is a pioneering distributed training framework built on top of PyTorch, combining performance and scalability with ease of use. It has over 43,000 GitHub stars and one million+ monthly PyPI downloads. DeepSpeed now delivers performance competitive with other state-of-the-art frameworks on frontier models, with just a configuration change. This talk presents the key recent optimizations and benchmark results.\r\nBest known for ZeRO, DeepSpeed has since added expert, sequence, and tensor parallelism (AutoEP, AutoSP, AutoTP) that compose with ZeRO and work with a wide range of models, including many Hugging Face models. Much of this progress has come from contributions by researchers and engineers across many organizations. AutoEP, for instance, brings optimized kernels and communication to large-scale MoE training, while DeepCompile optimizes communication scheduling and memory offloading at the compiler level using torch.compile. This success reflects DeepSpeed's open development, which draws a wide variety of contributions, including experimental and research-oriented features.",
+      "startsAt": "2026-12-10T17:55:00",
+      "endsAt": "2026-12-10T18:15:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "c9095c0b-90d0-42bd-8756-b466acb78617"
+      ],
+      "categoryItems": [
+        509273
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
+    },
+    {
+      "id": "1361487",
+      "title": "Attendee Reception",
+      "description": null,
+      "startsAt": "2026-12-10T18:15:00",
+      "endsAt": "2026-12-10T19:15:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        519565
+      ],
+      "questionAnswers": [],
+      "roomId": 89038,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    }
+  ],
+  "speakers": [
+    {
+      "id": "245793f5-74a9-4abd-a3e3-c011fc394297",
+      "firstName": "Adithya S",
+      "lastName": "Kolavi",
+      "bio": "Adithya S Kolavi works on post-training and reinforcement learning at HuggingFace, where he builds open RL environments and training recipes and contributes to OpenEnv. He was previously at Apple and Microsoft Research, and founded CognitiveLab a open source first research lab which received a grant from Meta for building foundation multilingual ,multimodal models. He wrote the ultimate guide to RL environments, read by over 30,000 people, and has 13k+ stars across his open source repositories.",
+      "tagLine": "Post-Training & RL, Hugging Face",
+      "profilePicture": "https://cdn.sessionize.com/image/1dfc-400o400o1-7n9C663Rf7pSbrBUScXEQN.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1361901
+      ],
+      "fullName": "Adithya S Kolavi",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "118f89fd-13fd-4225-a884-c7b7b688233a",
+      "firstName": "Akihiro",
+      "lastName": "Yoshida",
+      "bio": "Akihiro Yoshida is a Senior Researcher at Fujitsu and a Visiting Assistant Professor at the Institute of Science Tokyo. His research focuses on efficient and reliable LLMs, including mixed-precision quantization and model controllability. He is a core maintainer of OneComp, an open-source framework for automated, resource-adaptive LLM compression. He received his Ph.D. in Functional Mathematics from Kyushu University in 2025, specializing in mathematical optimization and machine learning.",
+      "tagLine": "Senior Researcher, Artificial Intelligence Laboratory, Fujitsu Ltd",
+      "profilePicture": "https://cdn.sessionize.com/image/3b14-400o400o1-h5b11FqoVXr6xbAGfEeeiw.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343099
+      ],
+      "fullName": "Akihiro Yoshida",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "eb1c0730-ac16-4794-9f15-edb9ac0e612c",
+      "firstName": "Alpha Romer",
+      "lastName": "Coma",
+      "bio": "Alpha Romer Coma is a PyTorch Foundation Ambassador and Senior Data Engineer at ViableView, in the Philippines. He develops OpenWeights, an Apache-2.0 Android app that runs open-weight LLMs entirely on device, where he added ExecuTorch beside llama.cpp for eight model families and measured both runtimes on five SoCs.\r\n\r\nAt PyTorch Conference Europe 2026 in Paris he presented on when to move PyTorch development to AI accelerators, benchmarking H100, TPU v6e and Trainium1.",
+      "tagLine": "ML Researcher & PyTorch Foundation Ambassador",
+      "profilePicture": "https://cdn.sessionize.com/image/a447-400o400o1-QfuRDzM6UGJoeW7n8MAPAf.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1325509
+      ],
+      "fullName": "Alpha Romer Coma",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "5c0e7a6b-a0d3-40aa-a1a9-aa669d70d434",
+      "firstName": "Anika",
+      "lastName": "Tibrewala",
+      "bio": "Hello there! About myself, I’m currently working as a Software Engineer at Visa, and I absolutely love communities and hackathons. Love coding and all things tech, interacting with tech enthusiasts, organising various community events, workshops and more!",
+      "tagLine": "SWE@Visa",
+      "profilePicture": "https://cdn.sessionize.com/image/b195-400o400o1-uWwQYpo3LAXJGAmhb3Gcn.jpeg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1342950
+      ],
+      "fullName": "Anika Tibrewala",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "6fe12f66-25c9-4b02-b071-6aa347be8d46",
+      "firstName": "Aritra",
+      "lastName": "Roy Gosthipaty",
+      "bio": "Aritra Roy Gosthipaty is a Machine Learning Engineer at Hugging Face. With extensive experience in artificial intelligence, he specializes in developing and advancing vision-language models, contributing to cutting-edge innovations in multimodal systems. Aritra delivers authoritative insights into emerging technologies, equipping audiences with a deeper understanding of machine learning applications.\r\n\r\n",
+      "tagLine": "Machine Learning Engineer at Hugging Face",
+      "profilePicture": "https://cdn.sessionize.com/image/c944-400o400o1-ppY8m6vW7DnLivwxB7zHWT.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1318087
+      ],
+      "fullName": "Aritra Roy Gosthipaty",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "eccc54f0-91d7-4694-8b66-f3e68449423c",
+      "firstName": "Arjhine",
+      "lastName": "Ty",
+      "bio": "Arjhine A. Ty is a Machine Learning Engineer, AI Strategist at Moovsoon, and co-founder of Experimental Machines.\r\n\r\nHe develops OpenGrad, an open research program on post-training, evaluation, and inference for small open-weight models.\r\n\r\nHis work also explores provenance-first research retrieval, reproducible ML experimentation, quantization, distributed training, and PyTorch-based systems across accelerator and edge hardware.",
+      "tagLine": "ML Research Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/b4bd-400o400o1-prTTRpeujfY3uQqJc31L9X.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1325509
+      ],
+      "fullName": "Arjhine Ty",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "9114f766-b127-4e17-9ec8-8a91145faded",
+      "firstName": "Daisuke",
+      "lastName": "Kobayashi",
+      "bio": "Daisuke Kobayashi is a Support Engineer at LanceDB, which builds the Multimodal Lakehouse for AI. Before joining LanceDB, he spent many years at Cloudera and Redpanda troubleshooting distributed processing and storage systems for enterprise customers.",
+      "tagLine": "LanceDB, Support Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/637d-400o400o1-ss8njPfT9tjvQoBh5zX9Gk.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1341807
+      ],
+      "fullName": "Daisuke Kobayashi",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "dfbe966e-f6cd-4150-914c-f4dabc26c22d",
+      "firstName": "Irakli",
+      "lastName": "Salia",
+      "bio": "Irakli Salia is a Machine Learning Engineer at Hugging Face, working on model performance and GPU kernels. He won the PyTorch Contributor Award for 2025 and contributes actively to PyTorch, focused on making its MPS backend competitive so that fast local inference is available to everyone on an Apple-silicon Mac.",
+      "tagLine": "HuggingFace - Machine Learning Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/8a51-400o400o1-nxzGbxmmWWbCNGpymAx2rQ.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1331879
+      ],
+      "fullName": "Irakli Salia",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "5fcfc4a1-e0d5-4113-ba1b-ac0eaba3a7bb",
+      "firstName": "Jiho",
+      "lastName": "Kim",
+      "bio": "Jiho Kim is a PyTorch Ambassador and an organizer of PyTorchKR. She maintains tutorials-kr, the Korean translation of the official PyTorch tutorials, and mentors first-time open-source contributors. She speaks at international meetups, universities, and community events, sharing the latest PyTorch releases, AI research trends, and real-world applications. By day, she builds production AI systems for robotics startups in Korea using PyTorch.",
+      "tagLine": "PyTorch Foundation Ambassador · Organizer, PyTorch Korea User Group",
+      "profilePicture": "https://cdn.sessionize.com/image/db95-400o400o1-4v7ympRdwLKzVD92duxJxX.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343042
+      ],
+      "fullName": "Jiho Kim",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "f9bbab45-3489-4949-a142-b59b504f19ae",
+      "firstName": "Junghwan",
+      "lastName": "Park",
+      "bio": "- AI/Data engineer at telecommunication company in Korea\r\n- Lead maintainer at PyTorch Korea User Group\r\n- PyTorch Ambassador since 2025/09 ~\r\n- AAIF Ambassador since 2026/07 ~\r\n- Interested in open-source, community and time-series forecasting",
+      "tagLine": "Lead Maintainer @ PyTorchKR | PyTorch & AAIF Ambassador",
+      "profilePicture": "https://cdn.sessionize.com/image/6dc1-400o400o1-3MeRtQbhSQoxJcBow1ix4s.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343042
+      ],
+      "fullName": "Junghwan Park",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "c9095c0b-90d0-42bd-8756-b466acb78617",
+      "firstName": "Masahiro",
+      "lastName": "Tanaka",
+      "bio": "Masahiro Tanaka is a member of the DeepSpeed Technical Steering Committee. His work focuses on distributed training, automatic parallelization, and high-performance AI systems. He has led or contributed to DeepSpeed-Ulysses, DeepCompile, and large-scale LLM training projects including Phi and MAI-DS-R1, where the training infrastructure operated across thousands of GPUs.",
+      "tagLine": "DeepSpeed",
+      "profilePicture": "https://cdn.sessionize.com/image/5133-400o400o1-LSqGr6syxXzDqhTW852fvm.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343082
+      ],
+      "fullName": "Masahiro Tanaka",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "d2f0452a-2f46-41c2-b83b-d47cf1a5ba36",
+      "firstName": "Michiaki",
+      "lastName": "Tatsubori",
+      "bio": "Mich Tatsubori, PhD., is a Senior Technical Staff Member at IBM Research, specializing in AI hardware and ML system software. He leads efforts to bring PyTorch-based inference stacks to IBM's purpose-built accelerators, including the ExecuTorch backend delegate described in this talk. His work bridges compiler infrastructure, runtime design, and silicon bring-up across IBM Research and product teams.",
+      "tagLine": "ExecuTorch for IBM AIU",
+      "profilePicture": "https://cdn.sessionize.com/image/d6a5-400o400o1-VVYduC1cxWR1URf1V85vCY.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343025
+      ],
+      "fullName": "Michiaki Tatsubori",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "b357fc92-c327-4570-a459-0c24d7f710fd",
+      "firstName": "Nikita",
+      "lastName": "Shulga",
+      "bio": "Nikita has been working on the PyTorch for the last 6 years, touching range of topics from maintaining continuous integration and deployment systems to enabling PyTorch on emerging hardware platforms.",
+      "tagLine": "PyTorch Maintainer",
+      "profilePicture": "https://cdn.sessionize.com/image/b35e-400o400o1-aCFUAgRwM5vSja6J3uWWHS.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1331879
+      ],
+      "fullName": "Nikita Shulga",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "56be4dff-6c99-4b27-8276-ed710005fff4",
+      "firstName": "Parichay",
+      "lastName": "Das",
+      "bio": "Parichay is a technology leader with 15 years of experience in AI, Generative AI, Solution Architecture, Strategy, Data Analytics, and Cloud. A gold medalist and Master’s graduate, he advises global enterprises on AI transformation. He is a Distinguished ARM Ambassador, industry speaker, panelist, mentor, and judge, with 1,000+ mentees. He has also been a speaker at PyTorch Conference North America 2025 and 2026.",
+      "tagLine": "Principal Architect – AI Solutions at LTM Limited | Distinguished Arm Ambassador",
+      "profilePicture": "https://cdn.sessionize.com/image/01ee-400o400o1-366nLMYWnZx9KXfSHwHJHv.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343167
+      ],
+      "fullName": "Parichay Das",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "43829f01-f979-48a4-9e05-eb794b92d64f",
+      "firstName": "Sayak",
+      "lastName": "Paul",
+      "bio": "Sayak works on image and video generation at Hugging Face. His day to day includes contributing to the Diffusers library, training, and babysitting models, and making and breaking CIs. ",
+      "tagLine": "Research Engineer at Hugging Face",
+      "profilePicture": "https://cdn.sessionize.com/image/02a8-400o400o1-Ru7UdQVghnLNv6YWtLXTBj.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1318087
+      ],
+      "fullName": "Sayak Paul",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "61d7a90f-9744-4ad8-bb0d-34e5961881e6",
+      "firstName": "Sergio",
+      "lastName": "Paniego Blanco",
+      "bio": "Sergio Paniego is a Machine Learning Engineer at Hugging Face, where he does advocacy for post-training, around TRL and OpenEnv, turning what frontier labs do into recipes other people can actually run. He holds a PhD in artificial intelligence and has spent years contributing to open source, as a developer and as a mentor.",
+      "tagLine": "Hugging Face - Machine Learning Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/68af-400o400o1-RRNN68UU8NVDPFmAzzQ3Kz.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1361901
+      ],
+      "fullName": "Sergio Paniego Blanco",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "ceb969d0-839e-4cda-b59e-dd5c714e0b79",
+      "firstName": "Suvrakamal",
+      "lastName": "Das",
+      "bio": "Suvrakamal is an ML Engineer at Mattoboard. He works on AI for interior design. He is passionate about applying machine learning and data engineering to bring real design workflows to life.\r\nHe has given talks and published papers across AI, and recently presented a poster/papers at PyCon US 2026, Pytorch 2025.\r\n",
+      "tagLine": "Machine Learning Engineer",
+      "profilePicture": "https://cdn.sessionize.com/image/0b4d-400o400o1-MzpDarNdpaz1UyBd9jUKXK.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1342950
+      ],
+      "fullName": "Suvrakamal Das",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "092d4cd8-736a-48a9-bded-6a754e15239b",
+      "firstName": "Takeshi",
+      "lastName": "Yoshimura",
+      "bio": "Takeshi Yoshimura is a Research Scientist at IBM Research, where he specializes in cloud infrastructure software. His expertise spans operating systems, parallel distributed systems, containers, and high-performance storage software. His research has been published in IEEE Cloud, IEEE MASCOTS, BigData, and USENIX HotStorage.\r\nhttps://research.ibm.com/people/takeshi-yoshimura",
+      "tagLine": "IBM Research - Tokyo",
+      "profilePicture": "https://cdn.sessionize.com/image/d5b5-400o400o1-Usc7D6e86mLsqNsXrsmCEX.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343050
+      ],
+      "fullName": "Takeshi Yoshimura",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "0a454633-5fec-45fb-a412-15ba01cc4124",
+      "firstName": "Tatsuhiro",
+      "lastName": "Chiba",
+      "bio": "Tatsuhiro Chiba is a STSM and Manager at IBM Research, specialized in performance optimization and acceleration of large scale AI and HPC workloads on Hybrid Cloud. He is leading a project to enhance OpenShift performance and sustainability for AI and HPC by exploiting various cloud infrastructure capabilities such as high-performance network, object storage, AI accelerators, and so on. He has presented his research papers at many conferences such as IEEE CLOUD, MASCOTS and USENIX HotStorage. ",
+      "tagLine": "IBM Research",
+      "profilePicture": "https://cdn.sessionize.com/image/13fe-400o400o1-QeTwnskU1yjaUpnLmRouuX.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1343025
+      ],
+      "fullName": "Tatsuhiro Chiba",
+      "categoryItems": [],
+      "questionAnswers": []
+    },
+    {
+      "id": "8473124e-ba04-45a0-9d97-502baa1b8b96",
+      "firstName": "Yunbo",
+      "lastName": "Wang",
+      "bio": "Yunbo Wang is Product Lead for the FlagOS community and Deputy Secretary-General of CCF's Open Source Development Technical Committee. Previously: Chief Open Source Evangelist and AI Product Director at ByteDance; Tencent Open Source Alliance member; open-source technology lead at DiDi; Alibaba Cloud architect and Apsara 5K core developer; senior technical expert at Baidu. Wang focuses on AI, cloud-native technologies, and open-source community governance.",
+      "tagLine": "Product Lead, FlagOS Community | BAAI",
+      "profilePicture": "https://cdn.sessionize.com/image/db06-400o400o1-MSqKTvA9gpaYXYfSXLrM97.jpg",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1342758
+      ],
+      "fullName": "Yunbo Wang",
+      "categoryItems": [],
+      "questionAnswers": []
+    }
+  ],
+  "questions": [
+    {
+      "id": 143484,
+      "question": "Presentation File (PDF)",
+      "questionType": "File_upload",
+      "sort": 45
+    }
+  ],
+  "categories": [
+    {
+      "id": 139161,
+      "title": "Topic",
+      "items": [
+        {
+          "id": 504301,
+          "name": "Sovereign AI",
+          "sort": 1
+        },
+        {
+          "id": 504302,
+          "name": "Physical AI/Edge AI",
+          "sort": 2
+        },
+        {
+          "id": 509273,
+          "name": "PyTorch Ecosystem",
+          "sort": 3
+        },
+        {
+          "id": 519565,
+          "name": "Breaks + Meals + Special Events",
+          "sort": 4
+        },
+        {
+          "id": 519566,
+          "name": "Registration",
+          "sort": 5
+        },
+        {
+          "id": 519580,
+          "name": "Keynote Sessions",
+          "sort": 6
+        }
+      ],
+      "sort": 1,
+      "type": "session"
+    }
+  ],
+  "rooms": [
+    {
+      "id": 89038,
+      "name": "2F Hall",
+      "sort": 0
+    },
+    {
+      "id": 89039,
+      "name": "Room B",
+      "sort": 1
+    },
+    {
+      "id": 89040,
+      "name": "Room C",
+      "sort": 2
+    }
+  ]
+}

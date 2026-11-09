@@ -1,0 +1,45 @@
+{
+  "sessionizeAllDataUrl": "https://sessionize.com/api/v2/15c7gkws/view/All",
+  "sessionizeGridDataUrl": "https://sessionize.com/api/v2/15c7gkws/view/GridSmart",
+  "sessionizeApiCode": "15c7gkws",
+  "sessionizePublicSlug": "pytorch-day-japan-2026",
+  "primaryFilterTitle": "Topic",
+  "timeFormat": "12h",
+  "dateFormat": "mdy",
+  "defaultShowAllDays": true,
+  "hideTopControls": false,
+  "hideSessionTimes": false,
+  "enableGridView": true,
+  "enablePersonalAgenda": false,
+  "speakerTitleQuestionId": "Speaker Title",
+  "speakerCompanyQuestionId": "Company",
+  "speakerCompanyOverrideQuestionId": "Speaker Company Override",
+  "cardSpeakerOverrideQuestionId": null,
+  "presentationSlidesQuestionId": "Presentation Slides",
+  "customLinkField1QuestionId": "GitHub Repository",
+  "customLinkField2QuestionId": "Project Demo",
+  "customLinkField3QuestionId": "Event Website",
+  "customLinkField4QuestionId": null,
+  "customLinkField5QuestionId": null,
+  "includeSpeakerTitleForPrimaryValues": [
+    "Keynote Session"
+  ],
+  "companyRollupNames": [],
+  "hideAllChipsForPrimaryValues": [
+    "Registration",
+    "Keynote Sessions",
+    "Breaks+Meals+Special Events"
+  ],
+  "hideSessionChipsForCategories": [],
+  "hiddenFilterCategories": [
+    "Submission Type"
+  ],
+  "primaryColorOverrides": {
+    "Registration": "#a6d926",
+    "Breaks+Meals+Special Events": "#d307e7",
+    "Sovereign AI": "#26b5d9",
+    "Physical AI/Edge AI": "#8b26d9",
+    "PyTorch Ecosystem": "#d97126",
+    "Keynote Sessions": "#2656d9"
+  }
+}

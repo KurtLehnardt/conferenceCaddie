@@ -1,0 +1,52 @@
+{
+  "sessionizeAllDataUrl": "https://sessionize.com/api/v2/v9t5e38o/view/All",
+  "sessionizeGridDataUrl": "https://sessionize.com/api/v2/v9t5e38o/view/GridSmart",
+  "sessionizeApiCode": "v9t5e38o",
+  "sessionizePublicSlug": "mcp-dev-summit-nairobi-2026",
+  "primaryFilterTitle": "Topic",
+  "timeFormat": "24h",
+  "dateFormat": "dmy",
+  "defaultShowAllDays": true,
+  "hideTopControls": false,
+  "hideSessionTimes": false,
+  "enableGridView": true,
+  "enablePersonalAgenda": false,
+  "speakerTitleQuestionId": "Speaker Title",
+  "speakerCompanyQuestionId": "Company",
+  "speakerCompanyOverrideQuestionId": null,
+  "cardSpeakerOverrideQuestionId": null,
+  "presentationSlidesQuestionId": "Presentation Slides",
+  "customLinkField1QuestionId": null,
+  "customLinkField2QuestionId": null,
+  "customLinkField3QuestionId": null,
+  "customLinkField4QuestionId": null,
+  "customLinkField5QuestionId": null,
+  "includeSpeakerTitleForPrimaryValues": [
+    "Keynote Sessions"
+  ],
+  "companyRollupNames": [],
+  "hideAllChipsForPrimaryValues": [
+    "Registration + Badge Pick-up",
+    "Breaks"
+  ],
+  "hideSessionChipsForCategories": [],
+  "hiddenFilterCategories": [
+    "Session Format",
+    "PLT Project",
+    "Lightning Talk Topic",
+    "Presentation Language"
+  ],
+  "primaryColorOverrides": {
+    "MCP Protocol in Depth": "#ff0000",
+    "Building with MCP": "#ff6000",
+    "Security, Identity + Trust": "#fff300",
+    "Enterprise Adoption + Integration": "#43ff00",
+    "Ecosystem, Registries + Platform Infrastructure": "#007dff",
+    "Agent Architecture + Orchestration": "#6e00ff",
+    "Workshops": "#813939",
+    "Keynote Sessions": "#ff00e2",
+    "Breaks + Meals + Special Events": "#00ffee",
+    "Registration": "#7e6300",
+    "Solutions Showcase": "#e3d17e"
+  }
+}
