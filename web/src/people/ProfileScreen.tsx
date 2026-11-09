@@ -3,6 +3,7 @@
 import { useState } from 'preact/hooks';
 import { ChevronRight, EyeOff, Settings, Trash2 } from 'lucide-preact';
 import { deleteProfile, PeopleApiError } from './api';
+import { forgetPush } from './push';
 import { ImportGitHub, mergeGithubImport } from './ImportGitHub';
 import { VISIBILITY_NOTICE } from './PeopleScreen';
 import {
@@ -133,6 +134,8 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
           if (!(err instanceof PeopleApiError && err.status === 404)) throw err;
         }
       }
+      // The server deleted the push subscriptions with the profile; the browser's own goes too.
+      await forgetPush();
       clearAllPeopleData();
       setConfirmDelete(false);
       setDeleteMessage('Your profile was deleted from this phone and from our server.');

@@ -1,12 +1,32 @@
 // Settings sections for Find & connect: the people this device has blocked (refreshed from the
-// server when Settings opens), the device-only "People I met" list and the device-only
-// "People I'm watching" list.
+// server when Settings opens), the device-only "People I met" list, the device-only "People I'm
+// watching" list and the push nudge switch.
 import { useEffect, useState } from 'preact/hooks';
 import { fetchBlocks, isAbort } from './api';
 import { unblock } from './connect';
+import { pushAvailable, PushSwitch } from './PushControls';
 import { getBlocks, getMet, mergeBlocks, removeMet, usePeopleStore } from './storage';
 import type { ConferenceLike } from './types';
 import { getWatches, removeWatch } from './watch';
+
+/** The same nudge switch as the presence card, mirroring its state. */
+export function NudgeSettings({ conference }: { conference: ConferenceLike }) {
+  if (!pushAvailable()) return null;
+  return (
+    <section class="settings-group" aria-labelledby="set-nudges">
+      <h2 class="settings-heading" id="set-nudges">
+        Nudges
+      </h2>
+      <div class="settings-card">
+        <PushSwitch slug={conference.slug} variant="settings" />
+        <p class="settings-row settings-text">
+          While you're around, a nudge tells you when someone whose experience matches yours is in your zone. It never
+          says who until you open the app.
+        </p>
+      </div>
+    </section>
+  );
+}
 
 export function BlockedPeople({ conference }: { conference: ConferenceLike }) {
   usePeopleStore();

@@ -394,6 +394,7 @@ export function PeopleScreen({
   onOpenTalk,
   hereZone,
   onHereHandled,
+  aroundNow,
 }: {
   conference: ConferenceLike;
   interested: InterestedProp;
@@ -401,6 +402,8 @@ export function PeopleScreen({
   /** The raw zone of a #/here/{zone} deep link, if the tab was opened through one. */
   hereZone?: string | null;
   onHereHandled?: () => void;
+  /** True when opened as #/people?around=1 (from a push nudge): "Around now" starts on. */
+  aroundNow?: boolean;
 }) {
   usePeopleStore();
   const slug = conference.slug;
@@ -408,7 +411,8 @@ export function PeopleScreen({
   const [input, setInput] = useState(() => pending.current ?? '');
   const [query, setQuery] = useState(input);
   // The "Around now" chip of the search bar; the Around home view is around whatever it says.
-  const [aroundChip, setAroundChip] = useState(false);
+  // A push nudge opens #/people?around=1, which starts the chip on.
+  const [aroundChip, setAroundChip] = useState(!!aroundNow);
   // "Find someone specific": the search bar, collapsed while presence is on until it is tapped
   // (a search handed over from a topic chip opens it at once).
   const [findOpen, setFindOpen] = useState(() => !!pending.current);
@@ -440,17 +444,18 @@ export function PeopleScreen({
     setFindOpen(false);
   };
 
-  // Nudges: "See who" opens the Around view, where the person's card is.
+  // Nudges: "See who" on the in-app banner, and a push nudge tapped while the app is already
+  // open (#/people?around=1), open the Around view, where the person's card is.
   const { reveal } = useNudges(slug);
   useEffect(() => {
-    if (!reveal) return;
+    if (!reveal && !aroundNow) return;
     onInput('');
     if (presenceOn) setFindOpen(false);
     else {
       setAroundChip(true);
       setFindOpen(true);
     }
-  }, [reveal]);
+  }, [reveal, aroundNow]);
 
   const searching = !aroundHome && (!!query.trim() || around);
   const title = aroundHome

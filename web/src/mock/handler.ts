@@ -297,6 +297,8 @@ interface Connect {
   seeded: string[];
   /** Reports sent from this browser, as `{slug}:{kind}:{id}`; a second one of the same target hides it. */
   reports: string[];
+  /** Push subscription endpoints by `{slug}:{profile_id}`. */
+  push: Record<string, string>;
 }
 
 const CONNECT_KEY = 'caddie.mock.connect';
@@ -319,9 +321,9 @@ const NOT_AROUND = { error: 'not_around', message: "They're not around right now
 function readConnect(): Connect {
   try {
     const c = JSON.parse(sessionStorage.getItem(CONNECT_KEY) ?? '{}');
-    return { blocks: c.blocks ?? {}, presence: c.presence ?? {}, meets: c.meets ?? [], seeded: c.seeded ?? [], reports: c.reports ?? [] };
+    return { blocks: c.blocks ?? {}, presence: c.presence ?? {}, meets: c.meets ?? [], seeded: c.seeded ?? [], reports: c.reports ?? [], push: c.push ?? {} };
   } catch {
-    return { blocks: {}, presence: {}, meets: [], seeded: [], reports: [] };
+    return { blocks: {}, presence: {}, meets: [], seeded: [], reports: [], push: {} };
   }
 }
 
@@ -860,6 +862,26 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     c.reports.push(key);
     writeConnect(c);
     return { ok: true, hidden: reportCount(c, key) >= HIDE_AT };
+  }
+
+  // Web Push: the key is a stand-in, subscriptions are accepted for a visible profile and kept
+  // only in this browser's session.
+  if (path === '/api/push/vapid' && method === 'GET') return { publicKey: 'BMockVapidPublicKeyNotReal_000000000000000000000000000000000000000000000000000000000000000' };
+  if (path === '/api/push/subscription' && (method === 'PUT' || method === 'DELETE')) {
+    const id = device(headers);
+    const conf = conferenceOf(body.event);
+    if (!readStore()[`${conf.slug}:${id}`]) throw new HttpError(403, { error: 'profile_required' });
+    const c = readConnect();
+    const key = `${conf.slug}:${id}`;
+    if (method === 'PUT') {
+      const sub = (body.subscription ?? {}) as Json;
+      if (typeof sub.endpoint !== 'string' || !sub.endpoint.startsWith('https://')) throw new HttpError(400, { error: 'endpoint' });
+      c.push[key] = sub.endpoint;
+    } else if (c.push[key] === body.endpoint) {
+      delete c.push[key];
+    }
+    writeConnect(c);
+    return { ok: true };
   }
 
   if (path === '/api/import/github' && method === 'POST') return mockImportGithub(String(body.handle ?? ''), (s, b) => new HttpError(s, b));

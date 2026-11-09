@@ -27,6 +27,7 @@ import {
   InboxScreen,
   MeetScreen,
   NudgeSetting,
+  NudgeSettings,
   PeopleIMet,
   PeopleIWatch,
   PeopleScreen,
@@ -108,6 +109,8 @@ export function App() {
   const online = useOnline();
 
   const { slug, tab, param } = route;
+  // A push nudge opens #/people?around=1: the People tab with "Around now" on.
+  const aroundNow = route.query.get('around') === '1';
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
   const searchable = conference?.status === 'searchable' ? conference : null;
   const talks = interested.slug === slug ? interested.talks : [];
@@ -467,7 +470,7 @@ export function App() {
             <SettingsScreen
               theme={theme}
               onTheme={setTheme}
-              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /><NudgeSetting conference={searchable} /></> : null}
+              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /><NudgeSetting conference={searchable} /><NudgeSettings conference={searchable} /></> : null}
             />
           ) : !searchable ? (
             blocker()
@@ -487,6 +490,7 @@ export function App() {
                   onOpenTalk={onOpenTalk}
                   hereZone={tab === 'here' ? param : null}
                   onHereHandled={hereHandled}
+                  aroundNow={aroundNow}
                 />
               )}
               {online && tab === 'inbox' && <InboxScreen key={searchable.slug} conference={searchable} />}

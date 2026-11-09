@@ -1,8 +1,9 @@
 // The "I'm around" switch on the People tab: zone picker, duration ("For an hour" or "Until I
 // turn it off today"), optional spot line, the first-time notice, the remaining time (tap
-// extends), the optional "Use my position too" step once the zone is chosen, the #/here/{zone}
-// deep link, and the "Still in {zone}?" row that the tab shows when the app comes back to the
-// foreground with a zone that is more than ten minutes old.
+// extends), the optional "Use my position too" step once the zone is chosen, the push nudge
+// switch (PushControls) under it, the #/here/{zone} deep link, and the "Still in {zone}?" row
+// that the tab shows when the app comes back to the foreground with a zone that is more than ten
+// minutes old.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { LocateFixed, MapPin, X } from 'lucide-preact';
 import {
@@ -25,6 +26,7 @@ import {
   useZones,
   zonesFor,
 } from './presence';
+import { PushSwitch } from './PushControls';
 import { getPresence, getProfile, getVisibility, usePeopleStore } from './storage';
 import type { ConferenceLike, InterestedProp, PresenceMode } from './types';
 import { toast } from './ui';
@@ -265,6 +267,7 @@ export function PresenceControls({
           onChange={(e) => onSwitch((e.target as HTMLInputElement).checked)}
         />
       </label>
+      <PushSwitch slug={slug} variant="card" />
       {presence.on && presence.zone && (
         <div class="pp-presence-on">
           <p class="pp-around">

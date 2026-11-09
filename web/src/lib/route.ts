@@ -13,6 +13,8 @@ export interface Route {
   tab: Tab;
   /** The rest of the hash for `#/meet/{id}` and `#/here/{zone}`, raw (still encoded). */
   param: string | null;
+  /** The query after the tab, as in `#/people?around=1` (a push nudge opens Around now). */
+  query: URLSearchParams;
 }
 
 export function readRoute(): Route {
@@ -26,16 +28,19 @@ export function readRoute(): Route {
       slug = '';
     }
   }
-  const h = location.hash.replace(/^#\/?/, '');
+  const full = location.hash.replace(/^#\/?/, '');
+  const qm = full.indexOf('?');
+  const query = new URLSearchParams(qm >= 0 ? full.slice(qm + 1) : '');
+  const h = qm >= 0 ? full.slice(0, qm) : full;
   const slash = h.indexOf('/');
   const head = (slash >= 0 ? h.slice(0, slash) : h) as Tab;
   const rest = slash >= 0 ? h.slice(slash + 1) : '';
-  if (!TABS.includes(head)) return { slug, tab: 'people', param: null };
+  if (!TABS.includes(head)) return { slug, tab: 'people', param: null, query };
   // Only the meet and here routes take a parameter, and they need one.
   if (head === 'meet' || head === 'here') {
-    return rest ? { slug, tab: head, param: rest.slice(0, 200) } : { slug, tab: 'people', param: null };
+    return rest ? { slug, tab: head, param: rest.slice(0, 200), query } : { slug, tab: 'people', param: null, query };
   }
-  return { slug, tab: head, param: null };
+  return { slug, tab: head, param: null, query };
 }
 
 /** A route parameter as written in the hash, decoded; the raw value when it is not valid encoding. */

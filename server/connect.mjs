@@ -35,6 +35,7 @@
 // - Spot lines, notes and spot-me lines pass the filter in moderation.mjs (rules, then the
 //   classifier). A rejected line is 400 filtered; a held line is stored with a *_pending flag,
 //   shown only to its author, answered with `held` on the 200 and reported as 'classifier'.
+// - After a presence write has been answered, nudge.mjs runs the push rule for that person.
 // - Nothing from a request body, header or document is logged.
 
 import crypto from 'node:crypto';
@@ -42,6 +43,7 @@ import { clientIp } from './ratelimit.mjs';
 import { refFor } from './device.mjs';
 import { moderate, HELD } from './moderation.mjs';
 import { classifierReport } from './report.mjs';
+import { nudgeAfterPresence } from './nudge.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
@@ -386,6 +388,8 @@ async function putPresence(req, res) {
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
   if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);
   sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null, ...heldInfo(held ? ['spot'] : []) });
+  // After the answer: the push nudge for strong matches in this zone (nudge.mjs never throws).
+  void nudgeAfterPresence({ ...me, ...presence }, conf);
 }
 
 async function deletePresence(req, res, url) {

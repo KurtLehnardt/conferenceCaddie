@@ -13,6 +13,9 @@
 //   every non-GET request always go to the network, so no profile or match data is ever stored.
 // - At activation, the data cache of an older build is copied into this build's data cache, so a
 //   saved schedule survives an update, and every older cache is then deleted.
+// - Web Push: a push event shows its payload as a notification ("Conference Caddie" with the
+//   nudge sentence; the payload never carries a name). A tap focuses the app, or opens it, at the
+//   payload's url (the People tab with "Around now" on).
 
 const BUILD = (new URL(self.location.href).searchParams.get('build') || 'dev').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 const PREFIX = 'caddie-';
@@ -179,5 +182,49 @@ self.addEventListener('message', (event) => {
         }
       }),
     ),
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
+// Web Push nudges. The payload is { title, body, data: { url } }, built by the server's nudge.mjs.
+
+const NUDGE_TAG = 'caddie-nudge';
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    payload = {};
+  }
+  const title = typeof payload.title === 'string' && payload.title ? payload.title : 'Conference Caddie';
+  const body = typeof payload.body === 'string' ? payload.body : '';
+  const url = typeof payload.data?.url === 'string' && payload.data.url.startsWith('/') ? payload.data.url : '/';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: NUDGE_TAG,
+      renotify: true,
+      data: { url },
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const open = windows.find((c) => new URL(c.url).origin === self.location.origin);
+      if (open) {
+        await open.focus();
+        if ('navigate' in open) await open.navigate(url).catch(() => undefined);
+        return;
+      }
+      await self.clients.openWindow(url);
+    })(),
   );
 });

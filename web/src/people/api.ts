@@ -1,6 +1,6 @@
 // Calls to the people, circles, recommendations and topics endpoints of CONTRACT3.
-// The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence
-// and /api/meet/*. This is the only place that reads the device secret.
+// The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence,
+// /api/meet/* and /api/push/subscription. This is the only place that reads the device secret.
 import { getDevice } from './storage';
 import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, ReportKind, ReportReason, TopicHit } from './types';
 
@@ -162,6 +162,35 @@ export function putPresence(slug: string, zone: string, spot: string, location: 
 
 export function deletePresence(slug: string) {
   return call<{ ok: boolean }>(`/api/presence?event=${encodeURIComponent(slug)}`, { method: 'DELETE', device: true });
+}
+
+/* ---------- Web Push nudges ---------- */
+
+/** The browser's PushSubscription.toJSON() shape, as the server stores it. */
+export interface PushSubscriptionBody {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
+/** The server's public VAPID key; null when push is not set up on the server. */
+export function fetchVapidKey(signal?: AbortSignal) {
+  return call<{ publicKey: string | null }>('/api/push/vapid', { signal });
+}
+
+export function putPushSubscription(slug: string, subscription: PushSubscriptionBody) {
+  return call<{ ok: boolean }>('/api/push/subscription', {
+    method: 'PUT',
+    body: JSON.stringify({ event: slug, subscription }),
+    device: true,
+  });
+}
+
+export function deletePushSubscription(slug: string, endpoint: string) {
+  return call<{ ok: boolean }>('/api/push/subscription', {
+    method: 'DELETE',
+    body: JSON.stringify({ event: slug, endpoint }),
+    device: true,
+  });
 }
 
 export function requestMeet(slug: string, ref: string, topicId: string | null, note: string) {
