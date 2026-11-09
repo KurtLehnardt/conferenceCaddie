@@ -368,7 +368,7 @@ export const MOCK_PEOPLE: MockPerson[] = [
     interests: 'Securing MCP servers that other teams write.',
   }),
   // Nudges: a specific match who walks into my zone about 8 s after I turn presence on.
-  person(8, A, 'Rowan', ['observability'], ['kubernetes', 'platform-engineering'], [], true, {
+  person(11, A, 'Rowan', ['observability'], ['kubernetes', 'platform-engineering'], [], true, {
     expertise: "Rebuilt a 3,000-node cluster's etcd from a snapshot during a live event. Wrote the runbook afterwards.",
     interests: 'Making control-plane recovery boring.',
     joins_me_after_ms: NUDGE_JOIN_MS,

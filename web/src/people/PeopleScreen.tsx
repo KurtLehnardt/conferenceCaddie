@@ -27,6 +27,8 @@ export const FIND_LABEL = 'Find someone specific';
 export const AROUND_TITLE = "Who's around";
 export const AROUND_EMPTY = "Nobody else is around right now. People show up here as they turn on \"Around and up for a conversation\".";
 const DEBOUNCE_MS = 350;
+// The Around home list is refreshed quietly this often while the tab is visible: people come and go.
+const AROUND_REFRESH_MS = 60_000;
 
 export function EndedTalkBanner({
   conference,
@@ -304,10 +306,49 @@ function PeopleList({
     };
   }, [page]);
 
-  // Nudges: "See who" lands on that person's card once the Around now list has loaded.
+  // The Around home view: a quiet refresh of the first page while the tab is visible, so the list
+  // follows people as they come and go without a flash. A list the person scrolled further is
+  // left alone.
   useEffect(() => {
-    if (around && page && reveal && loaded.current === key) revealIn(slug, list.current, withoutBlocked(slug, page.results));
-  }, [around, page, reveal]);
+    if (!groupZone || !vis.open_to_meet) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible' || !page || page.results.length > MATCH_PAGE) return;
+      const ctl = new AbortController();
+      const startKey = current.current;
+      load(0, ctl.signal)
+        .then((r) => {
+          if (ctl.signal.aborted || current.current !== startKey) return;
+          const results = r.results ?? [];
+          setPage({ results, done: results.length < MATCH_PAGE });
+        })
+        .catch(() => {});
+    }, AROUND_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [groupZone, key, vis.open_to_meet, page]);
+
+  // Nudges: "See who" fetches the list again (the person arrived after it loaded) and then lands
+  // on their card, in the order the cards are rendered.
+  const shown = useRef<PersonResult[]>([]);
+  const [revealAt, setRevealAt] = useState(0);
+  useEffect(() => {
+    if (!around || !reveal || !vis.open_to_meet) return;
+    const ctl = new AbortController();
+    load(0, ctl.signal)
+      .then((r) => {
+        if (ctl.signal.aborted) return;
+        const results = r.results ?? [];
+        loaded.current = key;
+        setPage({ results, done: results.length < MATCH_PAGE });
+        setRevealAt(Date.now());
+      })
+      .catch((err) => {
+        if (!isAbort(err)) setRevealAt(Date.now());
+      });
+    return () => ctl.abort();
+  }, [reveal, key]);
+  useEffect(() => {
+    if (revealAt) revealIn(slug, list.current, shown.current);
+  }, [revealAt]);
 
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;
@@ -324,6 +365,7 @@ function PeopleList({
   // The Around home view groups by zone (server order kept inside each group): my zone first.
   const inZone = groupZone ? results.filter((p) => p.proximity === 'same_zone' || p.zone === groupZone) : [];
   const elsewhere = groupZone ? results.filter((p) => !inZone.includes(p)) : results;
+  shown.current = [...inZone, ...elsewhere];
   return (
     <div class="pp-list" ref={list}>
       <SampleNote people={results} />
