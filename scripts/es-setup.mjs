@@ -96,7 +96,9 @@ if (exists.status === 200) {
 
 const created = await es('PUT', `/${index}`, {
   settings: { number_of_shards: 1 },
-  mappings: { dynamic: 'strict', properties },
+  // Fields outside the contract are kept in _source but not indexed, so an extra field in the
+  // data file never blocks ingestion.
+  mappings: { dynamic: false, properties },
 });
 if (created.status !== 200) {
   console.error(`Creating ${index} failed with status ${created.status}:`, JSON.stringify(created.json.error?.reason ?? created.json));
