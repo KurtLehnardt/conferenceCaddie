@@ -128,7 +128,10 @@ export function unblockPerson(slug: string, ref: string) {
 }
 
 export function fetchBlocks(slug: string, signal?: AbortSignal) {
-  return call<{ refs: string[] }>(`/api/people/blocks?event=${encodeURIComponent(slug)}`, { signal, device: true });
+  return call<{ refs: string[]; blocks?: { ref: string; display_name: string | null; created_at: string }[] }>(
+    `/api/people/blocks?event=${encodeURIComponent(slug)}`,
+    { signal, device: true },
+  );
 }
 
 export function putPresence(slug: string, zone: string, spot: string) {

@@ -268,12 +268,15 @@ export function removeBlock(slug: string, ref: string): void {
   );
 }
 
-/** Replaces the cached list with the server's refs, keeping the names this device already knows. */
-export function mergeBlocks(slug: string, refs: string[]): void {
+/**
+ * Replaces the cached list with the server's, taking the server's display names where it has them
+ * and keeping the names this device already knows otherwise.
+ */
+export function mergeBlocks(slug: string, entries: { ref: string; display_name?: string | null }[]): void {
   const known = new Map(getBlocks(slug).map((b) => [b.ref, b.display_name]));
   setBlocks(
     slug,
-    refs.slice(0, 500).map((ref) => ({ ref, display_name: known.get(ref) ?? null })),
+    entries.slice(0, 500).map((e) => ({ ref: e.ref, display_name: e.display_name ?? known.get(e.ref) ?? null })),
   );
 }
 

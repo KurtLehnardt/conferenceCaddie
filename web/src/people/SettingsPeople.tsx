@@ -16,7 +16,15 @@ export function BlockedPeople({ conference }: { conference: ConferenceLike }) {
   useEffect(() => {
     const ctl = new AbortController();
     fetchBlocks(slug, ctl.signal)
-      .then((r) => !ctl.signal.aborted && Array.isArray(r.refs) && mergeBlocks(slug, r.refs.filter((x) => typeof x === 'string')))
+      .then((r) => {
+        if (ctl.signal.aborted) return;
+        const entries = Array.isArray(r.blocks)
+          ? r.blocks.filter((b) => typeof b?.ref === 'string')
+          : Array.isArray(r.refs)
+            ? r.refs.filter((x) => typeof x === 'string').map((ref) => ({ ref }))
+            : null;
+        if (entries) mergeBlocks(slug, entries);
+      })
       .catch((err) => {
         // No device yet, or offline: the cached list stands.
         if (!isAbort(err)) return;
