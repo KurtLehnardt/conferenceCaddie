@@ -7,7 +7,9 @@
 //      caddie-people-blocks), ES_PEOPLE_MEETS_INDEX (default caddie-people-meets),
 //      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), ES_PEOPLE_PUSH_INDEX (default
 //      caddie-people-push), ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges), REF_SALT
-//      (optional), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (secret) and VAPID_SUBJECT for push nudges.
+//      (optional), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (secret) and VAPID_SUBJECT for push nudges,
+//      BLE_NEAR_RSSI (default -75, the Bluetooth "a few metres" threshold of ble.mjs), and the
+//      filter's ES_RULES_INDEX and MOD_* (moderation.mjs).
 //
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
@@ -19,6 +21,7 @@ import { validate, search, BadRequest, UpstreamError } from './search.mjs';
 import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleConnectApi } from './connect.mjs';
+import { handleBleApi } from './ble.mjs';
 import { handleReportApi } from './report.mjs';
 import { handlePushApi } from './push.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
@@ -290,6 +293,7 @@ async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
   if (await handleConnectApi(req, res, url)) return;
+  if (await handleBleApi(req, res, url)) return;
   if (await handleReportApi(req, res, url)) return;
   if (await handlePushApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;

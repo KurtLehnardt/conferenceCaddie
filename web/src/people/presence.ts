@@ -126,8 +126,17 @@ let watchId: number | null = null;
 let watchSlug: string | null = null;
 let lastSentAt = 0;
 let pendingFix: Position | null = null;
+let lastSentFix: Position | null = null;
 let sendTimer: number | undefined;
 let sending = false;
+
+/**
+ * The last position sent with presence for this conference while the watch is on, so another
+ * presence write (the Android companion's Bluetooth switch) can carry it instead of clearing it.
+ */
+export function lastPositionFix(slug: string): Position | null {
+  return watchSlug === slug && getPresence(slug).position ? lastSentFix : null;
+}
 
 export const geolocationAvailable = () => typeof navigator !== 'undefined' && 'geolocation' in navigator;
 
@@ -155,6 +164,7 @@ async function sendFix(slug: string) {
   lastSentAt = Date.now();
   try {
     await putPresence(slug, p.zone, p.spot, fix, p.mode);
+    lastSentFix = fix;
   } catch (err) {
     // A profile that is gone, or presence the server no longer accepts: stop sending positions;
     // the zone-only timers decide the rest.
@@ -205,6 +215,7 @@ function stopPositionWatch() {
   watchId = null;
   watchSlug = null;
   pendingFix = null;
+  lastSentFix = null;
   window.clearTimeout(sendTimer);
   sendTimer = undefined;
 }

@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, MessagesSquare, Search, UserRound, Users, X } from 'lucide-preact';
 import { fetchMatches, isAbort, MATCH_PAGE, PeopleApiError } from './api';
+import { revealBleCard, useBleReveal } from './ble';
 import { takePendingSearch, withoutBlocked } from './connect';
 import { ForYouRow } from './ForYou';
 import { NudgeBanner } from './NudgeBanner';
@@ -237,6 +238,8 @@ function PeopleList({
   // Nudges: the key whose first page is on screen, so "See who" waits for the Around now list.
   const loaded = useRef('');
   const { reveal } = useNudges(slug);
+  // Android app: a tapped "right near you" notification lands on that card the same way.
+  const bleReveal = useBleReveal(slug);
   const searching = !!query.trim() || around;
   // Zones come back only while I am around, so the list is fetched again when that changes.
   const meAround = getPresence(slug).on;
@@ -326,12 +329,13 @@ function PeopleList({
     return () => window.clearInterval(id);
   }, [groupZone, key, vis.open_to_meet, page]);
 
-  // Nudges: "See who" fetches the list again (the person arrived after it loaded) and then lands
-  // on their card, in the order the cards are rendered.
+  // Nudges: "See who" (and a tapped Bluetooth "right near you" notification in the Android app)
+  // fetches the list again (the person arrived after it loaded) and then lands on their card, in
+  // the order the cards are rendered.
   const shown = useRef<PersonResult[]>([]);
   const [revealAt, setRevealAt] = useState(0);
   useEffect(() => {
-    if (!around || !reveal || !vis.open_to_meet) return;
+    if (!around || (!reveal && !bleReveal) || !vis.open_to_meet) return;
     const ctl = new AbortController();
     load(0, ctl.signal)
       .then((r) => {
@@ -345,9 +349,11 @@ function PeopleList({
         if (!isAbort(err)) setRevealAt(Date.now());
       });
     return () => ctl.abort();
-  }, [reveal, key]);
+  }, [reveal, bleReveal, key]);
   useEffect(() => {
-    if (revealAt) revealIn(slug, list.current, shown.current);
+    if (!revealAt) return;
+    revealIn(slug, list.current, shown.current);
+    revealBleCard(slug, list.current, shown.current);
   }, [revealAt]);
 
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
@@ -444,18 +450,20 @@ export function PeopleScreen({
     setFindOpen(false);
   };
 
-  // Nudges: "See who" on the in-app banner, and a push nudge tapped while the app is already
-  // open (#/people?around=1), open the Around view, where the person's card is.
+  // Nudges: "See who" on the in-app banner, a push nudge tapped while the app is already open
+  // (#/people?around=1) and, in the Android app, a tapped "right near you" notification open the
+  // Around view, where the person's card is.
   const { reveal } = useNudges(slug);
+  const bleReveal = useBleReveal(slug);
   useEffect(() => {
-    if (!reveal && !aroundNow) return;
+    if (!reveal && !aroundNow && !bleReveal) return;
     onInput('');
     if (presenceOn) setFindOpen(false);
     else {
       setAroundChip(true);
       setFindOpen(true);
     }
-  }, [reveal, aroundNow]);
+  }, [reveal, aroundNow, bleReveal]);
 
   const searching = !aroundHome && (!!query.trim() || around);
   const title = aroundHome

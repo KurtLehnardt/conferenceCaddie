@@ -89,6 +89,9 @@ const connectProperties = {
   // the person opted in and the fix was within 200 m. Used for ranking; never returned as such.
   presence_location: { type: 'geo_point' },
   presence_accuracy: { type: 'integer' },
+  // The Android companion's Bluetooth token (server/ble.mjs): resolved by exact value, ten minutes.
+  ble_token: { type: 'keyword' },
+  ble_token_until: { type: 'date' },
 };
 
 const properties = {

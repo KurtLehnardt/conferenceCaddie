@@ -6,6 +6,7 @@
 // minutes old.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { LocateFixed, MapPin, X } from 'lucide-preact';
+import { BleControls } from './BleControls';
 import {
   confirmZone,
   dismissZoneCheck,
@@ -267,7 +268,6 @@ export function PresenceControls({
           onChange={(e) => onSwitch((e.target as HTMLInputElement).checked)}
         />
       </label>
-      <PushSwitch slug={slug} variant="card" />
       {presence.on && presence.zone && (
         <div class="pp-presence-on">
           <p class="pp-around">
@@ -381,6 +381,9 @@ export function PresenceControls({
           </div>
         </div>
       )}
+      {/* Under the zone, duration and position: the push nudge switch, then (Android app only) Bluetooth. */}
+      <PushSwitch slug={slug} variant="card" />
+      <BleControls conference={conference} />
     </section>
   );
 }

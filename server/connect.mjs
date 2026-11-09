@@ -44,6 +44,7 @@ import { refFor } from './device.mjs';
 import { moderate, HELD } from './moderation.mjs';
 import { classifierReport } from './report.mjs';
 import { nudgeAfterPresence } from './nudge.mjs';
+import { mintBleToken, bleView, BLE_OFF } from './ble.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
@@ -336,7 +337,7 @@ async function blocks(req, res, url) {
 // ---------------------------------------------------------------------------------------------
 // Presence.
 
-const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until']);
+const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until', 'ble']);
 const PRESENCE_MODES = new Set(['hour', 'day']);
 const LOCATION_KEYS = new Set(['lat', 'lon', 'accuracy']);
 
@@ -367,6 +368,7 @@ async function putPresence(req, res) {
   const location = locationFields(body.location);
   const mode = body.until === undefined || body.until === null ? 'hour' : body.until;
   if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour' or 'day'");
+  if (body.ble !== undefined && typeof body.ble !== 'boolean') throw bad('ble must be a boolean');
   const conf = await conferenceFor(body.event);
   const me = await authenticated(device, conf.slug);
   if (!me || me.open_to_meet !== true) throw profileRequired();
@@ -384,10 +386,13 @@ async function putPresence(req, res) {
   // A write without a usable position clears any stored one, so the presence is zone-only again.
   const held = Boolean(storedSpot) && spotPending;
   const presence = { presence_zone: zone, presence_spot: storedSpot, presence_spot_pending: held, presence_since: since, presence_until: iso(untilMs), ...location };
-  const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: presence });
+  // Android companion (ble.mjs): ble: true mints a ten-minute Bluetooth token in the same bulk
+  // update as the presence, ble: false clears it, and a write that says nothing leaves it as it was.
+  const ble = body.ble === true ? mintBleToken(now, untilMs) : body.ble === false ? BLE_OFF : {};
+  const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: { ...presence, ...ble } });
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
   if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);
-  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null, ...heldInfo(held ? ['spot'] : []) });
+  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null, ...(body.ble === true ? { ble: bleView(ble) } : {}), ...heldInfo(held ? ['spot'] : []) });
   // After the answer: the push nudge for strong matches in this zone (nudge.mjs never throws).
   void nudgeAfterPresence({ ...me, ...presence }, conf);
 }

@@ -156,7 +156,8 @@ export const EXPIRED_PEOPLE_QUERY = {
 export const EXPIRED_PRESENCE_QUERY = { range: { presence_until: { lt: 'now' } } };
 export const EXPIRED_MEETS_QUERY = { range: { expires_at: { lt: 'now' } } };
 export const EXPIRED_AT_QUERY = { range: { expires_at: { lt: 'now' } } };
-export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null };
+// The Bluetooth token (ble.mjs) rides along with presence: cleared with it, carried through a reindex.
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, ble_token: null, ble_token_until: null };
 
 async function purgeExpired() {
   if (!PEOPLE_KEY) return;
@@ -519,7 +520,9 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // People documents (people key).
 
 const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
-const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS];
+// The Bluetooth token of ble.mjs: the owner's own document carries it; it is never read for others.
+const BLE_FIELDS = ['ble_token', 'ble_token_until'];
+const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
 const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
 
@@ -720,8 +723,9 @@ const DISTANCE_PIVOT = '100m';
 const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_location'];
 
 // Returns { body, legs } where legs names each retriever in order ('topics', 'text', 'distance'
-// or 'everyone'), or null when there is nothing to rank by. nudge.mjs runs the same query as the
-// person whose presence was just written, so the push rule and the matches view agree.
+// or 'everyone'), or null when there is nothing to rank by. nudge.mjs and ble.mjs run the same
+// query as the person whose presence was just written or who is scanning, so the push rule, the
+// Bluetooth matches and the matches view agree.
 export function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false, origin = null }) {
   const filter = {
     bool: {
@@ -865,7 +869,7 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
 // reasons; zone and the proximity band are included only while both the requester and this
 // person are around. A broad match carries no evidence and is labelled with the common topic it
 // shares instead. The location a hit may carry is read for the band and goes no further.
-function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
+export function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
   const s = hit._source ?? {};
   const topicsOf = (ids) => (ids ?? []).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) }));
   const evidence = broad ? null : evidenceFor(hit);
@@ -974,7 +978,7 @@ async function putProfile(req, res) {
   };
   // Presence needs conference-wide visibility, so turning that off clears it. Otherwise a full
   // reindex carries the stored presence over and a partial update leaves it alone.
-  const presence = own.found ? Object.fromEntries(PRESENCE_FIELDS.map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
+  const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
   if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
   // The report flags live on the document too; a full reindex would otherwise unhide silently.
   const flags = own.found ? { hidden: own.source.hidden === true, spot_hidden: own.source.spot_hidden === true } : {};
