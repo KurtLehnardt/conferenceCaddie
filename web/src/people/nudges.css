@@ -1,0 +1,67 @@
+/* Find & connect, "Then": broad matches in the Around now list and the one nudge banner. */
+
+/* ---------- Broad match ---------- */
+
+/* Found only through a common topic: muted, no evidence, after every specific match. */
+.pp-person-broad {
+  background: transparent;
+  box-shadow: none;
+  border-style: dashed;
+}
+
+.pp-person-broad .pp-person-name,
+.pp-person-broad .pp-person-about,
+.pp-person-broad .pp-reasons,
+.pp-person-broad .pp-person-topics,
+.pp-person-broad .pp-person-topics-label {
+  color: var(--text-2);
+}
+
+.pp-person-broad .pp-person-name {
+  font-weight: 500;
+}
+
+.pp-broad {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.pp-broad svg {
+  flex: none;
+  margin-top: 3px;
+}
+
+/* ---------- Nudge banner ---------- */
+
+.pp-nudge {
+  border: 1px solid var(--accent-ink);
+}
+
+.pp-nudge .pp-banner-text {
+  font-weight: 500;
+}
+
+/* "See who": the card the nudge pointed at, for a moment. */
+.pp-person-revealed {
+  animation: pp-reveal 4s var(--ease) both;
+}
+
+@keyframes pp-reveal {
+  0%,
+  60% {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  100% {
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-person-revealed {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+}

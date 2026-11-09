@@ -54,6 +54,8 @@ export interface PersonResult {
   zone?: string | null;
   /** A band only, sent only when both of us are around; never a distance. */
   proximity?: Proximity | null;
+  /** True for a broad match: found only through a common topic, so it carries no evidence. */
+  broad?: boolean;
 }
 
 /** How close someone who is around is: the same zone, under 75 m, under 300 m, or just the venue. */
