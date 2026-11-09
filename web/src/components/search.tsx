@@ -1,28 +1,22 @@
 import { useEffect, useRef } from 'preact/hooks';
 import {
-  Bookmark,
-  CalendarPlus,
   Check,
   ChevronDown,
   CircleExclamationPoint,
-  Clock,
-  ExternalLink,
-  MapPin,
-  Presentation,
   Search,
   SearchX,
   SlidersHorizontal,
-  TriangleExclamationPoint,
   X,
 } from 'lucide-preact';
-import type { Facets, FacetBucket, SavedTalk, SearchFilters, SearchResponse, SearchResult } from '../types';
+import type { Conference, Facets, FacetBucket, SearchFilters, SearchResponse, Talk, TagRef } from '../types';
 import { EMPTY_FILTERS } from '../types';
-import { Evidence } from '../lib/evidence';
-import { formatDay, formatWhen, overlaps } from '../lib/time';
+import { formatDay } from '../lib/time';
 import { useFocusTrap } from '../lib/focus';
 import { Segmented } from './common';
+import { TalkCard } from './talk';
 
-export type SheetSection = 'day' | 'time' | 'track' | 'level' | 'slides' | 'sponsor';
+/** A sheet section id: a fixed group, or "tag:" plus a tag group name. */
+export type SheetSection = string;
 
 export function activeFilterCount(f: SearchFilters): number {
   return (
@@ -30,9 +24,28 @@ export function activeFilterCount(f: SearchFilters): number {
     (f.start_after || f.start_before ? 1 : 0) +
     f.track.length +
     f.level.length +
+    f.tags.length +
     (f.has_slides !== null ? 1 : 0) +
     (f.hide_sponsor ? 1 : 0)
   );
+}
+
+function tagValues(f: SearchFilters, group: string): string[] {
+  return f.tags.filter((t) => t.group === group).map((t) => t.value);
+}
+
+function toggleTag(f: SearchFilters, pair: TagRef): SearchFilters {
+  const on = f.tags.some((t) => t.group === pair.group && t.value === pair.value);
+  return {
+    ...f,
+    tags: on ? f.tags.filter((t) => !(t.group === pair.group && t.value === pair.value)) : [...f.tags, pair],
+  };
+}
+
+/** The "Has slides" control is hidden when no talk has slides and it is not selected. */
+function showSlides(f: SearchFilters, facets: Facets | null): boolean {
+  if (f.has_slides !== null) return true;
+  return (facets?.has_slides ?? []).some((b) => b.value === true && b.count > 0);
 }
 
 type TimeValue = 'any' | 'morning' | 'afternoon';
@@ -148,11 +161,15 @@ function Chip({
 }
 
 export function ChipRow({
+  conference,
   filters,
+  facets,
   onChange,
   onOpenSheet,
 }: {
+  conference: Conference;
   filters: SearchFilters;
+  facets: Facets | null;
   onChange: (f: SearchFilters) => void;
   onOpenSheet: (section?: SheetSection) => void;
 }) {
@@ -200,19 +217,37 @@ export function ChipRow({
         onClear={() => onChange({ ...filters, track: [] })}
         clearLabel="Clear track filter"
       />
-      <Chip
-        dropdown
-        label={groupLabel('Level', filters.level)}
-        active={filters.level.length > 0}
-        onOpen={() => onOpenSheet('level')}
-        onClear={() => onChange({ ...filters, level: [] })}
-        clearLabel="Clear level filter"
-      />
-      <Chip
-        label={filters.has_slides === false ? 'No slides' : 'Has slides'}
-        active={filters.has_slides !== null}
-        onOpen={() => onChange({ ...filters, has_slides: filters.has_slides === null ? true : null })}
-      />
+      {conference.has_level && (
+        <Chip
+          dropdown
+          label={groupLabel('Level', filters.level)}
+          active={filters.level.length > 0}
+          onOpen={() => onOpenSheet('level')}
+          onClear={() => onChange({ ...filters, level: [] })}
+          clearLabel="Clear level filter"
+        />
+      )}
+      {conference.tag_groups.map((group) => {
+        const values = tagValues(filters, group);
+        return (
+          <Chip
+            key={group}
+            dropdown
+            label={groupLabel(group, values)}
+            active={values.length > 0}
+            onOpen={() => onOpenSheet(`tag:${group}`)}
+            onClear={() => onChange({ ...filters, tags: filters.tags.filter((t) => t.group !== group) })}
+            clearLabel={`Clear ${group} filter`}
+          />
+        );
+      })}
+      {showSlides(filters, facets) && (
+        <Chip
+          label={filters.has_slides === false ? 'No slides' : 'Has slides'}
+          active={filters.has_slides !== null}
+          onOpen={() => onChange({ ...filters, has_slides: filters.has_slides === null ? true : null })}
+        />
+      )}
       <Chip
         label="Hide sponsor content"
         active={filters.hide_sponsor}
@@ -239,6 +274,7 @@ function visible<T>(buckets: FacetBucket<T>[], selected: T[]): FacetBucket<T>[] 
 }
 
 export function FilterSheet({
+  conference,
   open,
   section,
   filters,
@@ -247,6 +283,7 @@ export function FilterSheet({
   onChange,
   onClose,
 }: {
+  conference: Conference;
   open: boolean;
   section?: SheetSection;
   filters: SearchFilters;
@@ -260,7 +297,9 @@ export function FilterSheet({
 
   useEffect(() => {
     if (!open || !section) return;
-    const el = ref.current?.querySelector<HTMLElement>(`[data-section="${section}"]`);
+    const el = Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-section]') ?? []).find(
+      (e) => e.dataset.section === section,
+    );
     el?.scrollIntoView({ block: 'start' });
     el?.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true });
   }, [open, section]);
@@ -269,6 +308,11 @@ export function FilterSheet({
   const days = visible(facets?.day ?? [], filters.day ? [filters.day] : []);
   const tracks = visible(facets?.track ?? [], filters.track);
   const levels = visible(facets?.level ?? [], filters.level);
+  const tagGroups = conference.tag_groups.map((group) => {
+    const selected = tagValues(filters, group);
+    const facet = facets?.tags?.find((t) => t.group === group);
+    return { group, selected, values: visible(facet?.values ?? [], selected) };
+  });
   const slides = visible(facets?.has_slides ?? [], filters.has_slides === null ? [] : [filters.has_slides]);
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const count = activeFilterCount(filters);
@@ -340,46 +384,68 @@ export function FilterSheet({
             ))}
           </fieldset>
 
-          <fieldset class="sheet-section" data-section="level">
-            <legend>Level</legend>
-            {levels.length === 0 && <p class="option-empty">No levels in these results.</p>}
-            {levels.map((l) => (
-              <label class="option" key={l.value}>
-                <input
-                  type="checkbox"
-                  checked={filters.level.includes(l.value)}
-                  onChange={() => onChange({ ...filters, level: toggle(filters.level, l.value) })}
-                />
-                <span class="option-label">{l.value}</span>
-                <span class="option-count">{l.count}</span>
-              </label>
-            ))}
-          </fieldset>
+          {conference.has_level && (
+            <fieldset class="sheet-section" data-section="level">
+              <legend>Level</legend>
+              {levels.length === 0 && <p class="option-empty">No levels in these results.</p>}
+              {levels.map((l) => (
+                <label class="option" key={l.value}>
+                  <input
+                    type="checkbox"
+                    checked={filters.level.includes(l.value)}
+                    onChange={() => onChange({ ...filters, level: toggle(filters.level, l.value) })}
+                  />
+                  <span class="option-label">{l.value}</span>
+                  <span class="option-count">{l.count}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
 
-          <fieldset class="sheet-section" data-section="slides">
-            <legend>Slides</legend>
-            <label class="option">
-              <input
-                type="radio"
-                name="slides"
-                checked={filters.has_slides === null}
-                onChange={() => onChange({ ...filters, has_slides: null })}
-              />
-              <span class="option-label">Any</span>
-            </label>
-            {slides.map((s) => (
-              <label class="option" key={String(s.value)}>
+          {tagGroups.map(({ group, selected, values }) => (
+            <fieldset class="sheet-section" data-section={`tag:${group}`} key={group}>
+              <legend>{group}</legend>
+              {values.length === 0 && <p class="option-empty">None in these results.</p>}
+              {values.map((v) => (
+                <label class="option" key={v.value}>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(v.value)}
+                    onChange={() => onChange(toggleTag(filters, { group, value: v.value }))}
+                  />
+                  <span class="option-label">{v.value}</span>
+                  <span class="option-count">{v.count}</span>
+                </label>
+              ))}
+            </fieldset>
+          ))}
+
+          {showSlides(filters, facets) && (
+            <fieldset class="sheet-section" data-section="slides">
+              <legend>Slides</legend>
+              <label class="option">
                 <input
                   type="radio"
                   name="slides"
-                  checked={filters.has_slides === s.value}
-                  onChange={() => onChange({ ...filters, has_slides: s.value })}
+                  checked={filters.has_slides === null}
+                  onChange={() => onChange({ ...filters, has_slides: null })}
                 />
-                <span class="option-label">{s.value ? 'Has slides' : 'No slides'}</span>
-                <span class="option-count">{s.count}</span>
+                <span class="option-label">Any</span>
               </label>
-            ))}
-          </fieldset>
+              {slides.map((s) => (
+                <label class="option" key={String(s.value)}>
+                  <input
+                    type="radio"
+                    name="slides"
+                    checked={filters.has_slides === s.value}
+                    onChange={() => onChange({ ...filters, has_slides: s.value })}
+                  />
+                  <span class="option-label">{s.value ? 'Has slides' : 'No slides'}</span>
+                  <span class="option-count">{s.count}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
 
           <fieldset class="sheet-section" data-section="sponsor">
             <legend>Sponsor content</legend>
@@ -409,81 +475,6 @@ export function FilterSheet({
   );
 }
 
-/* ---------- Result card ---------- */
-
-export function ResultCard({
-  result,
-  saved,
-  clash,
-  onToggle,
-}: {
-  result: SearchResult;
-  saved: boolean;
-  clash: boolean;
-  onToggle: () => void;
-}) {
-  const tags = [result.track, result.level, ...result.flags].filter((t) => t && t !== 'Not specified');
-  return (
-    <article class={`card${clash ? ' is-clash' : ''}`}>
-      <div class="card-head">
-        <h3 class="card-title">{result.title}</h3>
-        <button
-          type="button"
-          class={`icon-btn bookmark${saved ? ' is-on' : ''}`}
-          aria-pressed={saved}
-          aria-label={`Save ${result.title}`}
-          onClick={onToggle}
-        >
-          <Bookmark size={22} fill={saved ? 'currentColor' : 'none'} aria-hidden="true" />
-        </button>
-      </div>
-      {result.speakers.length > 0 && <p class="card-speakers">{result.speakers.join(', ')}</p>}
-      <p class="card-meta">
-        <span class="meta-item">
-          <Clock size={16} aria-hidden="true" />
-          {formatWhen(result.start, result.end)}
-        </span>
-        {result.room && (
-          <span class="meta-item">
-            <MapPin size={16} aria-hidden="true" />
-            {result.room}
-          </span>
-        )}
-      </p>
-      {tags.length > 0 && (
-        <ul class="tags" aria-label="Details">
-          {tags.map((t) => (
-            <li class="tag" key={t}>
-              {t}
-            </li>
-          ))}
-        </ul>
-      )}
-      <p class="card-evidence">
-        <Evidence text={result.evidence} />
-      </p>
-      {clash && !saved && (
-        <p class="card-clash">
-          <TriangleExclamationPoint size={16} aria-hidden="true" />
-          Overlaps a talk in your agenda
-        </p>
-      )}
-      <div class="card-links">
-        <a href={result.url} target="_blank" rel="noopener noreferrer" class="link">
-          <ExternalLink size={16} aria-hidden="true" />
-          Session page
-        </a>
-        {result.slides_url && (
-          <a href={result.slides_url} target="_blank" rel="noopener noreferrer" class="link">
-            <Presentation size={16} aria-hidden="true" />
-            Slides
-          </a>
-        )}
-      </div>
-    </article>
-  );
-}
-
 function SkeletonCard() {
   return (
     <div class="card skeleton" aria-hidden="true">
@@ -499,28 +490,26 @@ function SkeletonCard() {
 /* ---------- Results ---------- */
 
 export function Results({
+  conference,
   data,
   browse,
   loading,
   error,
-  saved,
-  building,
+  interestedIds,
   filtersActive,
   onRetry,
   onToggle,
-  onBuild,
   onClearFilters,
 }: {
+  conference: Conference;
   data: SearchResponse | null;
   browse: boolean;
   loading: boolean;
   error: string | null;
-  saved: SavedTalk[];
-  building: boolean;
+  interestedIds: Set<string>;
   filtersActive: boolean;
   onRetry: () => void;
-  onToggle: (r: SearchResult) => void;
-  onBuild: () => void;
+  onToggle: (t: Talk) => void;
   onClearFilters: () => void;
 }) {
   if (error && !data) {
@@ -545,7 +534,6 @@ export function Results({
     );
   }
 
-  const savedIds = new Set(saved.map((s) => s.talk_id));
   const n = data.total;
   const countLabel = browse ? `All talks · ${n}` : `${n} ${n === 1 ? 'talk' : 'talks'}`;
 
@@ -564,15 +552,6 @@ export function Results({
         <p class="results-count" aria-live="polite">
           {countLabel}
         </p>
-        <button
-          type="button"
-          class="btn btn-tonal btn-small"
-          onClick={onBuild}
-          disabled={building || data.results.length === 0}
-        >
-          <CalendarPlus size={18} aria-hidden="true" />
-          {building ? 'Building…' : 'Build my agenda'}
-        </button>
       </div>
       {data.results.length === 0 ? (
         <div class="state">
@@ -587,12 +566,13 @@ export function Results({
       ) : (
         <div class="results">
           {data.results.map((r) => (
-            <ResultCard
+            <TalkCard
               key={r.talk_id}
-              result={r}
-              saved={savedIds.has(r.talk_id)}
-              clash={!savedIds.has(r.talk_id) && saved.some((s) => overlaps(s, r))}
-              onToggle={() => onToggle(r)}
+              talk={r}
+              conference={conference}
+              evidence={r.evidence}
+              interested={interestedIds.has(r.talk_id)}
+              onToggleInterested={onToggle}
             />
           ))}
         </div>

@@ -1,18 +1,18 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { CalendarCheck, EllipsisVertical, Search, Settings } from 'lucide-preact';
+import { EllipsisVertical, Search, Sparkles, Star, Users } from 'lucide-preact';
 import { useFocusTrap } from '../lib/focus';
-
-export type Tab = 'search' | 'agenda' | 'settings';
+import type { Tab } from '../lib/route';
 
 const TABS: { id: Tab; label: string; Icon: typeof Search }[] = [
+  { id: 'people', label: 'People', Icon: Users },
+  { id: 'for-you', label: 'For you', Icon: Sparkles },
   { id: 'search', label: 'Search', Icon: Search },
-  { id: 'agenda', label: 'Agenda', Icon: CalendarCheck },
-  { id: 'settings', label: 'Settings', Icon: Settings },
+  { id: 'interested', label: 'Interested', Icon: Star },
 ];
 
 /** Bottom tab bar on phones; the same element becomes a left rail from 768px. */
-export function NavBar({ tab, savedCount }: { tab: Tab; savedCount: number }) {
+export function NavBar({ tab, base, interestedCount }: { tab: Tab; base: string; interestedCount: number }) {
   return (
     <nav class="nav" aria-label="Main">
       <div class="nav-brand" aria-hidden="true">
@@ -21,16 +21,16 @@ export function NavBar({ tab, savedCount }: { tab: Tab; savedCount: number }) {
       {TABS.map(({ id, label, Icon }) => (
         <a
           key={id}
-          href={`#/${id}`}
+          href={`${base}#/${id}`}
           class="nav-item"
           aria-current={tab === id ? 'page' : undefined}
-          aria-label={id === 'agenda' && savedCount ? `Agenda, ${savedCount} saved` : undefined}
+          aria-label={id === 'interested' && interestedCount ? `Interested, ${interestedCount} talks` : undefined}
         >
           <span class="nav-icon">
             <Icon size={24} strokeWidth={tab === id ? 2.25 : 1.75} aria-hidden="true" />
-            {id === 'agenda' && savedCount > 0 && (
+            {id === 'interested' && interestedCount > 0 && (
               <span class="badge nav-badge" aria-hidden="true">
-                {savedCount > 99 ? '99+' : savedCount}
+                {interestedCount > 99 ? '99+' : interestedCount}
               </span>
             )}
           </span>
@@ -41,9 +41,18 @@ export function NavBar({ tab, savedCount }: { tab: Tab; savedCount: number }) {
   );
 }
 
-export function AppBar({ title, actions }: { title: string; actions?: ComponentChildren }) {
+export function AppBar({
+  leading,
+  title,
+  actions,
+}: {
+  leading?: ComponentChildren;
+  title: ComponentChildren;
+  actions?: ComponentChildren;
+}) {
   return (
-    <header class="appbar">
+    <header class={`appbar${leading ? ' has-leading' : ''}`}>
+      {leading}
       <h1 class="appbar-title">{title}</h1>
       <div class="appbar-actions">{actions}</div>
     </header>

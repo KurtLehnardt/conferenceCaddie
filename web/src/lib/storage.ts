@@ -1,46 +1,85 @@
-import type { SavedTalk, SearchResult } from '../types';
+import type { Conference, InterestedTalk, Talk } from '../types';
 
-const SAVED_KEY = 'caddie.saved.v1';
+// Every read and write is wrapped: storage can be full, blocked or missing.
+const INTERESTED_PREFIX = 'caddie.interested.v1.';
+const CONFERENCES_KEY = 'caddie.conferences.v1';
 const THEME_KEY = 'caddie.theme';
 
 export type ThemePref = 'system' | 'light' | 'dark';
 
-function isSavedTalk(v: unknown): v is SavedTalk {
-  const t = v as SavedTalk;
+function isInterested(v: unknown, slug: string): v is InterestedTalk {
+  const t = v as InterestedTalk;
   return (
     !!t &&
     typeof t.talk_id === 'string' &&
+    t.conference === slug &&
     typeof t.title === 'string' &&
     typeof t.start === 'string' &&
     typeof t.end === 'string' &&
+    typeof t.url === 'string' &&
     Array.isArray(t.speakers) &&
-    Array.isArray(t.flags)
+    Array.isArray(t.tags)
   );
 }
 
-export function loadSaved(): SavedTalk[] {
+/** The talks marked "I'm interested" for one conference, on this device only. */
+export function loadInterested(slug: string): InterestedTalk[] {
   try {
-    const raw = localStorage.getItem(SAVED_KEY);
+    const raw = localStorage.getItem(INTERESTED_PREFIX + slug);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isSavedTalk) : [];
+    return Array.isArray(parsed) ? parsed.filter((t) => isInterested(t, slug)) : [];
   } catch {
     return [];
   }
 }
 
-export function storeSaved(talks: SavedTalk[]): void {
+export function storeInterested(slug: string, talks: InterestedTalk[]): void {
   try {
-    localStorage.setItem(SAVED_KEY, JSON.stringify(talks));
+    localStorage.setItem(INTERESTED_PREFIX + slug, JSON.stringify(talks));
   } catch {
-    // Storage may be full or blocked; the in-memory agenda still works.
+    // The in-memory list still works for this visit.
   }
 }
 
-/** Drops the evidence so only talk details are stored on the device. */
-export function toSaved(r: SearchResult | SavedTalk): SavedTalk {
-  const { evidence: _evidence, ...rest } = r as SearchResult;
-  return rest;
+/** Keeps only the talk fields, so evidence and recommendation reasons are never stored. */
+export function toInterested(t: Talk): InterestedTalk {
+  return {
+    talk_id: t.talk_id,
+    conference: t.conference,
+    title: t.title,
+    speakers: t.speakers,
+    room: t.room,
+    start: t.start,
+    end: t.end,
+    track: t.track,
+    level: t.level,
+    tags: t.tags ?? [],
+    topics: t.topics,
+    speaker_profiles: t.speaker_profiles,
+    slides_url: t.slides_url,
+    url: t.url,
+    marked_at: new Date().toISOString(),
+  };
+}
+
+export function loadConferences(): Conference[] | null {
+  try {
+    const raw = localStorage.getItem(CONFERENCES_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.conferences) ? (parsed.conferences as Conference[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeConferences(conferences: Conference[]): void {
+  try {
+    localStorage.setItem(CONFERENCES_KEY, JSON.stringify({ conferences }));
+  } catch {
+    // The list is fetched again on the next visit.
+  }
 }
 
 export function loadTheme(): ThemePref {
