@@ -1,0 +1,666 @@
+/* People features. Uses only the shell's custom properties, so light and dark follow the shell. */
+
+.pp-screen {
+  display: grid;
+  gap: 20px;
+  padding: 4px var(--gutter) 24px;
+  min-width: 0;
+}
+
+.pp-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pp-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.pp-section-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.pp-see-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 4px;
+  color: var(--accent-ink);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pp-lede {
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.pp-hint {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.pp-error {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.pp-pad {
+  padding: 8px 0;
+}
+
+.pp-inline-link {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.pp-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pp-subhead {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.pp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- Prompts and notices ---------- */
+
+.pp-prompt {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.pp-prompt-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.pp-prompt-title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.pp-prompt-body {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.pp-prompt-btn {
+  margin-top: 12px;
+  text-decoration: none;
+}
+
+.pp-notice {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-tint);
+  font-size: 14px;
+}
+
+.pp-notice-text {
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ---------- Banner ---------- */
+
+.pp-banner {
+  display: grid;
+  gap: 8px;
+  padding: 10px 6px 12px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-tint);
+  color: var(--text);
+}
+
+.pp-banner-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pp-banner-icon {
+  flex: none;
+  margin-top: 12px;
+  color: var(--accent-ink);
+}
+
+.pp-banner-text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 10px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.pp-banner-actions {
+  margin-left: 30px;
+}
+
+.pp-banner .pp-talk {
+  margin: 0 8px 0 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* ---------- Person ---------- */
+
+.pp-person {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pp-person-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pp-person-name {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.pp-sample {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pp-person-about {
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.pp-opener {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-tint);
+  color: var(--text);
+  font-size: 15px;
+}
+
+.pp-opener svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-ink);
+}
+
+.pp-reasons {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.pp-person-topics {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.pp-person-topics-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pp-contact {
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pp-contact .link {
+  justify-self: start;
+}
+
+.pp-contact-note {
+  font-size: 15px;
+}
+
+/* ---------- Talk controls and circle ---------- */
+
+.pp-talk {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pp-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pp-count svg {
+  flex: none;
+}
+
+.pp-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.pp-see {
+  justify-self: start;
+}
+
+.pp-circle {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.pp-speakers {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pp-speaker {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--fill);
+  overflow-wrap: anywhere;
+}
+
+.pp-speaker-name {
+  font-weight: 600;
+}
+
+.pp-speaker-tagline {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.pp-speaker-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+
+/* ---------- For you ---------- */
+
+.pp-row {
+  display: flex;
+  gap: 10px;
+  margin: 0 calc(-1 * var(--gutter));
+  padding: 2px var(--gutter) 6px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-padding: 0 var(--gutter);
+  scrollbar-width: none;
+  list-style: none;
+}
+
+.pp-row::-webkit-scrollbar {
+  display: none;
+}
+
+.pp-row-item {
+  flex: none;
+  width: min(78%, 280px);
+  scroll-snap-align: start;
+}
+
+.pp-mini {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  min-height: 132px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+}
+
+.pp-mini-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.pp-mini-when {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.pp-mini-why {
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pp-talk-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pp-talk-card .link {
+  justify-self: start;
+}
+
+.pp-talk-title {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.pp-talk-speakers,
+.pp-talk-meta {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.pp-why {
+  font-size: 14px;
+}
+
+.pp-why-label {
+  font-weight: 600;
+}
+
+.pp-passage {
+  color: var(--text-2);
+  font-size: 14px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pp-talk-card .pp-actions {
+  margin-top: 4px;
+}
+
+/* ---------- Profile ---------- */
+
+.pp-status {
+  min-height: 20px;
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: right;
+}
+
+.pp-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.pp-card-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.pp-text {
+  display: grid;
+  gap: 6px;
+}
+
+.pp-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pp-text input,
+.pp-text textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.pp-text textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.pp-text input:focus,
+.pp-text textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: transparent;
+}
+
+.pp-text [aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.pp-import {
+  justify-self: start;
+}
+
+.pp-danger {
+  justify-self: start;
+  padding-left: 8px;
+  color: var(--danger);
+}
+
+.pp-settings-row {
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  min-height: 56px;
+  padding: 0 16px;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.pp-settings-row svg {
+  color: var(--text-2);
+}
+
+/* ---------- Topic picker ---------- */
+
+.pp-picker {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pp-picker-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pp-picker-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.pp-picker-count {
+  color: var(--text-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0 14px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  transition: background-color var(--motion) var(--ease), border-color var(--motion) var(--ease);
+}
+
+.pp-chip span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-chip svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+.pp-chip.is-on {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.pp-chip.is-on svg {
+  color: var(--on-accent);
+}
+
+.pp-chip:disabled {
+  opacity: 0.45;
+}
+
+.pp-chip-count {
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (hover: hover) {
+  .pp-chip:not(.is-on):not(:disabled):hover {
+    background: var(--fill);
+  }
+}
+
+.pp-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border-radius: 999px;
+  background: var(--fill);
+}
+
+.pp-field-icon {
+  flex: none;
+  margin-left: 14px;
+  color: var(--text-2);
+}
+
+.pp-field input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.pp-field input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.pp-field:focus-within {
+  outline: 2px solid var(--accent);
+}
+
+.pp-more {
+  justify-self: start;
+  margin-left: -8px;
+}
