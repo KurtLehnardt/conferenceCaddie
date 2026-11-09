@@ -1,7 +1,7 @@
 {
   "name": "Conference Caddie",
   "short_name": "Conference Caddie",
-  "description": "Find the right talks at KubeCon + CloudNativeCon North America 2026 and build a clash-free agenda.",
+  "description": "Find the people to talk to and the talks you would like at Linux Foundation conferences.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
