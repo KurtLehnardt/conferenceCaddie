@@ -5,10 +5,10 @@ import { fetchMatches, isAbort, PeopleApiError } from './api';
 import { ForYouRow } from './ForYou';
 import { PersonCard, SampleNote } from './PersonCard';
 import { getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
-import { changeVisibility, getSaveCount } from './sync';
+import { changeVisibility, getSaveCount, getSyncStatus } from './sync';
 import { TalkPeopleControls } from './TalkPeopleControls';
 import type { ConferenceLike, InterestedProp, PersonResult, TalkLike } from './types';
-import { hasEnded, interestedIds, interestedTalks } from './util';
+import { hasEnded, interestedIds, interestedTalks, useVisibleTick } from './util';
 
 export const VISIBILITY_NOTICE =
   'Turning this on stores your profile on our server until the conference ends: your name, about, topics, free text and How to reach me. Other attendees who are also visible at this conference can see it and may be matched with you. People who are not visible see nothing. Turn it off at any time to remove it from the server, or delete your profile.';
@@ -132,22 +132,27 @@ function CreateProfilePrompt() {
 
 function PeopleToMeet({ conference, interested }: { conference: ConferenceLike; interested: InterestedProp }) {
   usePeopleStore();
+  const visibleTick = useVisibleTick();
   const slug = conference.slug;
   const profile = getProfile();
   const vis = getVisibility(slug);
   const saves = getSaveCount();
+  // Matches come from the copy of the profile on the server, so while an edit is still being
+  // written they would describe the old profile; the fetch waits for the write to finish.
+  const saving = getSyncStatus().state === 'saving';
   const ids = useRef<string[]>([]);
   ids.current = interestedIds(interested);
   const idsKey = ids.current.join(',');
-  const [results, setResults] = useState<PersonResult[] | null>(null);
+  const key = `${slug}|${saves}|${idsKey}`;
+  const [loaded, setLoaded] = useState<{ key: string; results: PersonResult[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!vis.open_to_meet) return;
+    if (!vis.open_to_meet || saving) return;
     const ctl = new AbortController();
     setError(null);
     fetchMatches(slug, ids.current, ctl.signal)
-      .then((r) => !ctl.signal.aborted && setResults(r.results ?? []))
+      .then((r) => !ctl.signal.aborted && setLoaded({ key, results: r.results ?? [] }))
       .catch((err) => {
         if (isAbort(err)) return;
         if (err instanceof PeopleApiError && (err.code === 'visibility_required' || err.code === 'no_device')) {
@@ -158,13 +163,16 @@ function PeopleToMeet({ conference, interested }: { conference: ConferenceLike; 
         setError(err instanceof PeopleApiError ? err.message : 'People are unavailable right now.');
       });
     return () => ctl.abort();
-  }, [slug, vis.open_to_meet, saves, idsKey]);
+  }, [key, vis.open_to_meet, saving, visibleTick]);
 
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;
   if (error) return <p class="pp-error pp-pad">{error}</p>;
-  if (!results) return <p class="pp-hint pp-pad">Finding people…</p>;
-  if (!results.length) {
+  // The earlier list stays, dimmed, until the one for the current profile arrives.
+  const shown = loaded && loaded.key.startsWith(`${slug}|`) ? loaded : null;
+  if (!shown) return <p class="pp-hint pp-pad">Finding people…</p>;
+  const refreshing = saving || shown.key !== key;
+  if (!shown.results.length) {
     return (
       <p class="pp-hint pp-pad">
         No matches yet. Add more topics to your profile, or check back as more people join.
@@ -172,11 +180,14 @@ function PeopleToMeet({ conference, interested }: { conference: ConferenceLike; 
     );
   }
   return (
-    <div class="pp-list">
-      <SampleNote people={results} />
-      {results.map((p) => (
-        <PersonCard key={p.ref} person={p} />
-      ))}
+    <div class="pp-progress-host">
+      <div class={`pp-progress pp-progress-top${refreshing ? ' is-active' : ''}`} aria-hidden="true" />
+      <div class={`pp-list${refreshing ? ' is-refreshing' : ''}`} aria-busy={refreshing}>
+        <SampleNote people={shown.results} />
+        {shown.results.map((p) => (
+          <PersonCard key={p.ref} person={p} />
+        ))}
+      </div>
     </div>
   );
 }

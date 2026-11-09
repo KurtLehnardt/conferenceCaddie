@@ -408,6 +408,11 @@
   color: var(--accent-ink);
   font-size: 13px;
   font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .pp-talk-card {
@@ -436,6 +441,50 @@
 .pp-talk-meta {
   color: var(--text-2);
   font-size: 14px;
+}
+
+/* A thin bar on the bottom edge of its host (or the top edge, with pp-progress-top) and a dimmed
+   list, shown while an earlier list is being replaced. Neither takes any room in the layout. */
+.pp-progress-host {
+  position: relative;
+}
+
+.pp-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion) var(--ease);
+}
+
+.pp-progress-top {
+  top: -6px;
+  bottom: auto;
+}
+
+.pp-progress.is-active {
+  opacity: 1;
+}
+
+.pp-progress.is-active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: progress 1s ease-in-out infinite;
+}
+
+.is-refreshing {
+  opacity: 0.55;
+  transition: opacity var(--motion) var(--ease);
 }
 
 .pp-why {

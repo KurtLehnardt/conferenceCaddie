@@ -804,6 +804,74 @@ try {
     }
     report(problems.length === 0, 'r2: For you does not cross conferences', problems.length ? problems.slice(0, 3).join('; ') : `${EXTRA.length} conferences checked`);
   });
+
+  // The reasons on a suggestion must name only topics the request sent. A user who removes
+  // Kubernetes from their profile must never be told a talk matched on it.
+  const labelOf = new Map((topicsBySlug.get(PRIMARY) ?? []).map((t) => [t.topic_id, t.label]));
+  const ask = (learn, speak) => api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: learn, speak_topics: speak, interests: '', expertise: '', interested_talk_ids: [], size: 50 }, { label: 'recs' });
+  const whyProblems = (results, learn, speak) => {
+    const labels = (ids) => new Set(ids.map((id) => labelOf.get(id)));
+    const learnSet = labels(learn);
+    const speakSet = labels(speak);
+    const inSet = (list, set) => (list ?? []).every((l) => set.has(l));
+    const out = [];
+    for (const r of results) {
+      const w = r.why ?? {};
+      if (!inSet(w.topics, new Set([...learnSet, ...speakSet]))) out.push(`"${r.title}" names a topic that was not sent: ${(w.topics ?? []).join(', ')}`);
+      if (!inSet(w.learn_topics, learnSet)) out.push(`"${r.title}" lists a learn topic that was not sent`);
+      if (!inSet(w.speak_topics, speakSet)) out.push(`"${r.title}" lists a speak topic that was not sent`);
+      if ((w.speak_topics ?? []).some((l) => (w.learn_topics ?? []).includes(l))) out.push(`"${r.title}" repeats a topic in both sets`);
+      if (JSON.stringify(w.topics) !== JSON.stringify([...(w.learn_topics ?? []), ...(w.speak_topics ?? [])])) out.push(`"${r.title}" has a why.topics that is not learn then speak`);
+    }
+    return out;
+  };
+
+  await check('r3: a request without kubernetes never names kubernetes in why', async () => {
+    if (!labelOf.has('kubernetes') || !labelOf.has('ai') || !labelOf.has('agents')) {
+      skip('r3: a request without kubernetes never names kubernetes in why', 'the conference has no kubernetes, ai or agents topic');
+      return;
+    }
+    const learn = ['ai', 'agents'];
+    const r = await ask(learn, []);
+    if (r.status !== 200) throw new Error(`status ${r.status}`);
+    const results = r.json.results ?? [];
+    const problems = whyProblems(results, learn, []);
+    for (const x of results) {
+      const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? []), ...(x.why?.speak_topics ?? [])];
+      if (named.some((l) => /kubernetes/i.test(l))) problems.push(`"${x.title}" names Kubernetes`);
+    }
+    // The check has teeth only when some returned talk really carries the kubernetes topic.
+    const carries = results.some((x) => (x.topics ?? []).some((t) => t.topic_id === 'kubernetes'));
+    if (!carries) problems.push('no returned talk carries the kubernetes topic, so the check proves nothing');
+    const unique = [...new Set(problems)];
+    report(unique.length === 0, 'r3: a request without kubernetes never names kubernetes in why', unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions, none name Kubernetes`);
+  });
+
+  await check('r4: the topics in why are a subset of the request, split by set', async () => {
+    const have = (ids) => ids.filter((id) => labelOf.has(id));
+    const cases = [
+      [have(['ai', 'agents']), have(['kubernetes'])],
+      [have(['kubernetes']), have(['ai'])],
+      [have(['ebpf', 'gpu']), have(['llm', 'kubernetes'])],
+      [have(['kubernetes', 'ai']), have(['kubernetes'])],
+      [[...labelOf.keys()].slice(0, 5), [...labelOf.keys()].slice(3, 8)],
+    ].filter(([learn, speak]) => learn.length + speak.length > 0);
+    const problems = [];
+    let sawSpeak = false;
+    for (const [learn, speak] of cases) {
+      const r = await ask(learn, speak);
+      if (r.status !== 200) {
+        problems.push(`status ${r.status}`);
+        continue;
+      }
+      const results = r.json.results ?? [];
+      problems.push(...whyProblems(results, learn, speak));
+      if (results.some((x) => (x.why?.speak_topics ?? []).length > 0)) sawSpeak = true;
+    }
+    if (!sawSpeak) problems.push('no suggestion named a topic from the speak set, so the split is untested');
+    const unique = [...new Set(problems)];
+    report(unique.length === 0, 'r4: the topics in why are a subset of the request, split by set', unique.length ? unique.slice(0, 3).join('; ') : `${cases.length} requests checked`);
+  });
 } catch (err) {
   report(false, 'people checks', err.message);
 } finally {

@@ -214,7 +214,7 @@ Body `{ event, learn_topics, speak_topics, interests, expertise, interested_talk
 
 - One `rrf` retriever over the conference's talks, filtered to `kind: talk`, `end > now` and not in `interested_talk_ids`. Retrievers, each skipped when its input is empty: `learn_topics` against `topics` (weight 1), `interests` against `semantic` (weight 1), `speak_topics` against `topics` (weight 0.5) and `expertise` against `semantic` (weight 0.5). Weights use the rrf per-retriever `weight` of Elasticsearch 9.5.
 - No inputs at all gives `{ results: [], needs_profile: true }`.
-- Results use the search result shape plus `why: { topics: [labels], passage }` and `circle_count`.
+- Results use the search result shape plus `why` and `circle_count`. `why` is `{ topics, learn_topics, speak_topics, passage }`. `learn_topics` holds the labels of the request's `learn_topics` that the talk has, and `speak_topics` those of the request's `speak_topics` that the talk has and that are not also in `learn_topics`. Both hold only topics sent in this request, so a topic the user has removed is never named. `topics` is `learn_topics` followed by `speak_topics`; it is kept for one release for clients that predate the split and is then removed. A client shows the two sets apart ("You want to learn" and "You can speak to"), because a talk can match on either.
 
 ### People and circles
 

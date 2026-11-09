@@ -15,6 +15,10 @@
 // more of a retriever's topics scores higher in that retriever, because each topic is its own
 // constant-score clause.
 //
+// Reasons: why.learn_topics and why.speak_topics name the topics of this request that the talk has,
+// by set (a speak-only topic is not repeated when it is also in learn). why.topics is their
+// concatenation, kept for one release. Nothing outside the request is ever named.
+//
 // Filter: the conference, kind talk, end in the future, and not one of interested_talk_ids.
 // The same filter is carried by the semantic (knn) retrievers so it applies before the
 // nearest-neighbour search.
@@ -353,8 +357,10 @@ async function topicLabels(event, topicIds) {
 async function recommend(p) {
   const json = await searchTalks(buildSearch(p));
   const hits = json.hits?.hits ?? [];
-  const wanted = [...p.learn, ...p.speak.filter((t) => !p.learn.includes(t))];
-  const topicIds = [...new Set([...wanted, ...hits.flatMap((h) => h._source?.topics ?? [])])];
+  // The reasons are built only from the topics of this request, never from anything remembered or
+  // from the talk's other topics, so a topic the user has removed can never be named.
+  const speakOnly = p.speak.filter((t) => !p.learn.includes(t));
+  const topicIds = [...new Set([...p.learn, ...speakOnly, ...hits.flatMap((h) => h._source?.topics ?? [])])];
   const ids = hits.map((h) => String(h._source?.talk_id ?? h._id));
   const [labels, counts] = await Promise.all([topicLabels(p.event, topicIds), circleCounts(p.event, ids)]);
 
@@ -362,7 +368,9 @@ async function recommend(p) {
     const s = hit._source ?? {};
     const talkTopics = s.topics ?? [];
     const passage = passageFor(hit);
-    const matched = wanted.filter((t) => talkTopics.includes(t) && labels.has(t)).map((t) => labels.get(t));
+    const named = (ids) => ids.filter((t) => talkTopics.includes(t) && labels.has(t)).map((t) => labels.get(t));
+    const learnMatched = named(p.learn);
+    const speakMatched = named(speakOnly);
     const talkId = String(s.talk_id ?? hit._id);
     return {
       talk_id: talkId,
@@ -380,7 +388,8 @@ async function recommend(p) {
       evidence: escapeHtml(passage ?? trimText(s.abstract || s.title || '', EVIDENCE_MAX)),
       topics: talkTopics.filter((t) => labels.has(t)).map((t) => ({ topic_id: t, label: labels.get(t) })),
       speaker_profiles: s.speaker_profiles ?? [],
-      why: { topics: matched, passage },
+      // topics is learn_topics then speak_topics, kept for clients that predate the split.
+      why: { topics: [...learnMatched, ...speakMatched], learn_topics: learnMatched, speak_topics: speakMatched, passage },
       circle_count: counts[talkId] ?? 0,
     };
   });

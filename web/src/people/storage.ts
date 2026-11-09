@@ -209,6 +209,30 @@ export function clearAllPeopleData(): void {
   notify();
 }
 
+// Another tab or window of this site shares localStorage but not these in-memory copies. When it
+// writes, the copies are dropped and read again, so this tab never keeps working from an older
+// profile, and the screens that depend on it fetch again.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    const key = e.key;
+    // A null key means the other tab cleared all storage.
+    if (key === null) {
+      profileMem = undefined;
+      deviceMem = undefined;
+      visMem.clear();
+    } else if (key === PROFILE_KEY) {
+      profileMem = undefined;
+    } else if (key === DEVICE_KEY) {
+      deviceMem = undefined;
+    } else if (key.startsWith(VIS_PREFIX)) {
+      visMem.delete(key.slice(VIS_PREFIX.length));
+    } else {
+      return;
+    }
+    notify();
+  });
+}
+
 /** Re-renders the calling component whenever people state changes. */
 export function usePeopleStore(): number {
   const [, setV] = useState(version);
