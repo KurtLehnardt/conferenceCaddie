@@ -2,12 +2,13 @@
 //
 // Usage: node scripts/seed-people.mjs --event <slug> [--talk "<title>"]... [--limit n]
 //                                     [--file <path> --label <tag>]
+//        node scripts/seed-people.mjs --event <slug> --label <tag> --remove
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY) to write people;
 //        ES_API_KEY (or ELASTISEARCH_API_KEY) to read conferences, topics and talks;
 //        ES_PEOPLE_INDEX, ES_INDEX, ES_TOPICS_INDEX, ES_CONFERENCES_INDEX as for the server.
 //
 // Every sample has sample: true, a display name starting "Sample · ", the contact note
-// "Sample profile, not a real person" and no LinkedIn URL. Topic labels are resolved against the
+// "Sample profile, not a real person" and no LinkedIn URL unless the file gives one. Topic labels are resolved against the
 // conference's topics and talk titles against its talks; anything that does not resolve is
 // skipped with a warning. Each profile gets a random device secret that is hashed and then
 // discarded, so nobody can edit a sample through the API. The command first deletes the
@@ -21,7 +22,13 @@
 // label deletes only the earlier profiles of that conference that carry that prefix. A run without a
 // label deletes the conference's samples that carry no label prefix, so the two kinds never touch
 // each other. The index keeps no separate label field because its mapping is fixed, so the profile_id
-// prefix is the label.
+// prefix is the label. With --remove (which needs a label) the run only deletes that label's
+// profiles and writes nothing.
+//
+// A profile may also carry learn_ids and speak_ids (topic ids, used instead of the label lists when
+// present), shared_talk_ids (talk ids of that conference, used as they are, with the file's
+// "share" indexes still allowed beside them), linkedin_url (it must pass the server's pattern) and
+// contact_note. data/samples/dummy-people.json, written by scripts/make-dummy-people.mjs, uses all of these.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,6 +46,7 @@ const CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conference
 const SAMPLE_PREFIX = 'Sample · ';
 const CONTACT_NOTE = 'Sample profile, not a real person';
 const BATCH = 10;
+const LINKEDIN_RE = /^https:\/\/(www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]{3,100}\/?$/;
 
 if (!WRITE_KEY || !READ_KEY) {
   console.error('Set ES_PEOPLE_API_KEY and ES_API_KEY, or ELASTISEARCH_API_KEY.');
@@ -50,6 +58,7 @@ let slug = null;
 let limit = Infinity;
 let fileArg = null;
 let label = null;
+let removeOnly = false;
 const talkArgs = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--event') slug = args[++i];
@@ -57,13 +66,14 @@ for (let i = 0; i < args.length; i++) {
   else if (args[i] === '--limit') limit = Number(args[++i]);
   else if (args[i] === '--file') fileArg = args[++i];
   else if (args[i] === '--label') label = args[++i];
+  else if (args[i] === '--remove') removeOnly = true;
   else {
     console.error(`Unknown argument: ${args[i]}`);
     process.exit(1);
   }
 }
-if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug) || !(limit > 0) || (label !== null && !/^[a-z0-9]{1,8}$/.test(label)) || (fileArg !== null && !fileArg)) {
-  console.error('Usage: node scripts/seed-people.mjs --event <slug> [--talk "<title>"]... [--limit n] [--file <path> --label <tag>]');
+if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug) || !(limit > 0) || (label !== null && !/^[a-z0-9]{1,8}$/.test(label)) || (fileArg !== null && !fileArg) || (removeOnly && !label)) {
+  console.error('Usage: node scripts/seed-people.mjs --event <slug> [--talk "<title>"]... [--limit n] [--file <path> --label <tag>] | --label <tag> --remove');
   process.exit(1);
 }
 
@@ -123,7 +133,13 @@ for (const h of topicHits.hits?.hits ?? []) {
   byLabel.set(norm(t.topic_id), t.topic_id);
   for (const a of [].concat(t.aliases ?? [])) if (!byLabel.has(norm(a))) byLabel.set(norm(a), t.topic_id);
 }
+const knownIds = new Set([...byLabel.values()]);
 const unresolved = new Set();
+const keepKnownIds = (ids) => [...new Set(ids ?? [])].filter((id) => {
+  if (knownIds.has(id)) return true;
+  unresolved.add(id);
+  return false;
+});
 const resolveTopics = (labels) => {
   const ids = [];
   for (const label of labels ?? []) {
@@ -160,12 +176,18 @@ if (LABEL_PREFIX) sameKind.bool.filter.push({ prefix: { profile_id: LABEL_PREFIX
 else sameKind.bool.must_not = [{ prefix: { profile_id: 'lbl-' } }];
 const deleted = await write('POST', `/${PEOPLE_INDEX}/_delete_by_query?refresh=true`, { query: sameKind });
 console.log(`Deleted ${deleted.deleted ?? 0} previous ${label ? `"${label}" ` : ''}samples.`);
+if (removeOnly) process.exit(0);
 
 const now = new Date().toISOString();
 const docs = [];
 for (const p of samples.profiles.slice(0, limit)) {
   const name = p.display_name.startsWith(SAMPLE_PREFIX) ? p.display_name : SAMPLE_PREFIX + p.display_name;
-  const shared = [...new Set((p.share ?? []).map((i) => talkIds[i]).filter(Boolean))];
+  const shared = [...new Set([...(p.share ?? []).map((i) => talkIds[i]), ...(p.shared_talk_ids ?? [])].filter(Boolean))].slice(0, 50);
+  const linkedin = p.linkedin_url ?? null;
+  if (linkedin !== null && !LINKEDIN_RE.test(linkedin)) {
+    console.error(`${name}: linkedin_url does not pass the server's pattern.`);
+    process.exit(1);
+  }
   if (!p.open_to_meet && !shared.length) {
     console.warn(`Warning: ${name} would be neither visible nor sharing; skipped.`);
     continue;
@@ -180,15 +202,15 @@ for (const p of samples.profiles.slice(0, limit)) {
       profile_id: device.profileId,
       display_name: name,
       ...text,
-      learn_topics: resolveTopics(p.learn).slice(0, 30),
-      speak_topics: resolveTopics(p.speak).slice(0, 30),
+      learn_topics: (p.learn_ids ? keepKnownIds(p.learn_ids) : resolveTopics(p.learn)).slice(0, 30),
+      speak_topics: (p.speak_ids ? keepKnownIds(p.speak_ids) : resolveTopics(p.speak)).slice(0, 30),
       open_to_meet: p.open_to_meet === true,
       sample: true,
       shared_talk_ids: shared,
       visible_until: until,
       updated_at: now,
-      linkedin_url: null,
-      contact_note: CONTACT_NOTE,
+      linkedin_url: linkedin,
+      contact_note: String(p.contact_note ?? CONTACT_NOTE).slice(0, 120),
       secret_hash: hashSecret(device.secret),
       text_hash: textHash(text),
     },
@@ -207,6 +229,14 @@ for (let i = 0; i < docs.length; i += BATCH) {
   }
 }
 
+if (!talkIds.length) {
+  const counts = new Map();
+  for (const d of docs) for (const id of d.doc.shared_talk_ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+  console.log(`Wrote ${written} of ${docs.length} samples for ${slug}, visible until ${until}.`);
+  console.log(`Visible conference-wide: ${docs.filter((d) => d.doc.open_to_meet).length}. Distinct shared talks: ${counts.size}.`);
+  if (written !== docs.length) process.exit(2);
+  process.exit(0);
+}
 const perTalk = talkIds.map((id, i) => `${titles[i]}: ${id ? docs.filter((d) => d.doc.shared_talk_ids.includes(id)).length : 0}`);
 console.log(`Wrote ${written} of ${docs.length} samples for ${slug}, visible until ${until}.`);
 console.log(`Visible conference-wide: ${docs.filter((d) => d.doc.open_to_meet).length}. Sharing per talk:`);
