@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowLeft, CalendarX, ChevronLeft, CircleExclamationPoint, ExternalLink, Inbox, Settings, X } from 'lucide-preact';
-import type { Conference, InterestedTalk, SearchFilters, SearchResponse, SearchResult, Talk } from './types';
+import type { Conference, Facets, InterestedTalk, SearchFilters, SearchResponse, SearchResult, Talk } from './types';
 import { EMPTY_FILTERS } from './types';
 import { ApiError, getConferences, isAbort, search } from './api';
 import {
@@ -13,13 +13,25 @@ import {
   toInterested,
   type ThemePref,
 } from './lib/storage';
-import { decodeParam, defaultConference, goToConference, readRoute, replaceConference, type Route, type Tab } from './lib/route';
+import {
+  decodeParam,
+  defaultConference,
+  goToConference,
+  readRoute,
+  replaceConference,
+  replaceTabParams,
+  tabHash,
+  type Route,
+  type Tab,
+  type TabParams,
+} from './lib/route';
 import { visit } from './lib/trail';
 import { useFocusTrap } from './lib/focus';
-import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, type ToastData } from './components/common';
+import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Segmented, Toast, type ConfirmData, type ToastData } from './components/common';
 import { ChipRow, FilterSheet, Results, SearchField, SuggestionRow, activeFilterCount, type SheetSection } from './components/search';
 import { InterestedScreen } from './components/interested';
 import { ImportSheet } from './components/import';
+import { FullSchedule } from './components/schedule';
 import { SettingsScreen } from './components/settings';
 import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
@@ -114,9 +126,17 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<{ open: boolean; section?: SheetSection }>({ open: false });
+  // The full schedule (Search tab, Schedule view) keeps its own filters; its day comes from day chips.
+  const [schedFilters, setSchedFilters] = useState<SearchFilters>(EMPTY_FILTERS);
+  const [schedFacets, setSchedFacets] = useState<{ facets: Facets | null; total: number | null }>({ facets: null, total: null });
   const online = useOnline();
 
-  const { slug, tab, param } = route;
+  const { slug, tab, param, params } = route;
+  const searchView = params.view === 'schedule' ? 'schedule' : 'search';
+  // The view and day last shown on each tab of this conference, so the tab bar returns to them.
+  const tabViews = useRef<{ slug: string | null; views: Partial<Record<Tab, TabParams>> }>({ slug: null, views: {} });
+  if (tabViews.current.slug !== slug) tabViews.current = { slug, views: {} };
+  tabViews.current.views[tab] = params;
   // The screen in the history entry behind this one, so Back from Settings, Profile, Requests or a
   // meet can pop history instead of pushing. Null when it is not known, for example after a reload.
   // #/here/{zone} is never the screen Back leads to, because it turns presence on.
@@ -205,6 +225,8 @@ export function App() {
     latest.current.filters = EMPTY_FILTERS;
     latest.current.ignored = [];
     setFilters(EMPTY_FILTERS);
+    setSchedFilters(EMPTY_FILTERS);
+    setSchedFacets({ facets: null, total: null });
     setIgnored([]);
     setData(null);
     setError(null);
@@ -277,9 +299,9 @@ export function App() {
     }
   }, []);
 
-  // Search runs when the Search tab is shown and its conference or filters changed.
+  // Search runs when the Search tab's Search view is shown and its conference or filters changed.
   useEffect(() => {
-    if (tab !== 'search' || !searchable) return;
+    if (tab !== 'search' || searchView !== 'search' || !searchable) return;
     // Offline, the keyword search over the saved schedule runs instead; the next online visit
     // searches again.
     if (!online) {
@@ -289,7 +311,7 @@ export function App() {
       return;
     }
     if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}|${ignored.join(',')}`) runSearch();
-  }, [tab, searchable?.slug, filters, ignored, online]);
+  }, [tab, searchView, searchable?.slug, filters, ignored, online]);
 
   const onInput = (v: string) => {
     setInput(v);
@@ -355,29 +377,28 @@ export function App() {
   };
 
   // Imported talks are added to the device list only. Sharing changes only when the user turned on
-  // "share automatically" themselves, through the same rule as a single mark.
-  const markImported = (found: SearchResult[]) => {
+  // "share automatically" themselves, through the same rule as a single mark. The import sheet then
+  // confirms, offers Undo, and offers "View my schedule".
+  const markImported = (found: SearchResult[]): string[] => {
     const s = latest.current.slug;
-    if (!s) return;
+    if (!s) return [];
     const current = latest.current.talks;
     const have = new Set(current.map((x) => x.talk_id));
     const added = found.filter((t) => t.conference === s && !have.has(t.talk_id)).map(toInterested);
-    setImportOpen(false);
-    if (!added.length) return;
+    if (!added.length) return [];
     const ids = added.map((t) => t.talk_id);
     setInterested(s, [...current, ...added]);
     followShare(s, ids, true);
     offerInstallOnce();
-    // The imported talks live on Interested, so show them there.
-    location.hash = '#/interested';
-    showToast(`Marked ${added.length} ${added.length === 1 ? 'talk' : 'talks'} as Interested`, {
-      label: 'Undo',
-      onClick: () => {
-        const remove = new Set(ids);
-        setInterested(s, latest.current.talks.filter((x) => !remove.has(x.talk_id)));
-        followShare(s, ids, false);
-      },
-    });
+    return ids;
+  };
+
+  const unmarkImported = (ids: string[]) => {
+    const s = latest.current.slug;
+    if (!s) return;
+    const remove = new Set(ids);
+    setInterested(s, latest.current.talks.filter((x) => !remove.has(x.talk_id)));
+    followShare(s, ids, false);
   };
 
   const clearInterested = () => {
@@ -430,7 +451,10 @@ export function App() {
   const backTo =
     tab === 'profile'
       ? { href: '#/settings', pops: prev?.slug === slug && prev?.tab === 'settings' }
-      : { href: `#/${lastTabScreen.current?.slug === slug ? lastTabScreen.current.tab : 'people'}`, pops: prev?.slug === slug && isTab(prev.tab) && prev.tab !== 'here' };
+      : {
+          href: lastTabScreen.current?.slug === slug ? tabHash(lastTabScreen.current.tab, lastTabScreen.current.params) : '#/people',
+          pops: prev?.slug === slug && isTab(prev.tab) && prev.tab !== 'here',
+        };
   const leading = !isTabScreen ? (
     <a
       class={tab === 'profile' ? 'appbar-back-labeled' : 'icon-btn appbar-back'}
@@ -546,7 +570,7 @@ export function App() {
 
   return (
     <div class="shell">
-      <NavBar tab={navTab} base={base} interestedCount={talks.length} peopleCount={inboxCount} />
+      <NavBar tab={navTab} base={base} interestedCount={talks.length} peopleCount={inboxCount} views={tabViews.current.views} />
       <div class="content">
         <AppBar leading={leading} title={title} actions={actions} />
         <main class="main" id="main">
@@ -590,13 +614,56 @@ export function App() {
                 <ForYouScreen key={searchable.slug} conference={searchable} interested={talks} onToggleInterested={toggleInterested} />
               )}
               {tab === 'profile' && <ProfileScreen key={searchable.slug} conference={searchable} interested={talks} />}
-              {tab === 'search' && !online && (
+              {tab === 'search' && (
+                <div class="view-switch">
+                  <Segmented
+                    label="Search or browse the schedule"
+                    value={searchView}
+                    onChange={(v) => replaceTabParams('search', v === 'schedule' ? { view: 'schedule', day: params.day } : {})}
+                    options={[
+                      { value: 'search', label: 'Search' },
+                      { value: 'schedule', label: 'Schedule' },
+                    ]}
+                  />
+                </div>
+              )}
+              {tab === 'search' && searchView === 'schedule' && (
+                <FullSchedule
+                  key={searchable.slug}
+                  conference={searchable}
+                  online={online}
+                  filters={schedFilters}
+                  day={params.day ?? null}
+                  onDay={(day) => replaceTabParams('search', { view: 'schedule', day })}
+                  interestedIds={interestedIds}
+                  onToggle={toggleInterested}
+                  onOpen={onOpenTalk}
+                  onFacets={(facets, total) => setSchedFacets({ facets, total })}
+                  filterRow={
+                    <ChipRow
+                      schedule
+                      conference={searchable}
+                      filters={schedFilters}
+                      facets={schedFacets.facets}
+                      nowAvailable={null}
+                      phrases={[]}
+                      onRemovePhrase={() => undefined}
+                      onChange={setSchedFilters}
+                      onOpenSheet={(section) => {
+                        setToast(null);
+                        setSheet({ open: true, section });
+                      }}
+                    />
+                  }
+                />
+              )}
+              {tab === 'search' && searchView === 'search' && !online && (
                 <>
                   <SearchField value={input} onInput={onInput} onSubmit={() => undefined} loading={false} />
                   <OfflineSearch conference={searchable} query={input} interestedIds={interestedIds} onToggle={toggleInterested} />
                 </>
               )}
-              {tab === 'search' && online && (
+              {tab === 'search' && searchView === 'search' && online && (
                 <>
                   <SearchField value={input} onInput={onInput} onSubmit={() => runSearch()} loading={loading} />
                   <ChipRow
@@ -637,7 +704,10 @@ export function App() {
                 <InterestedScreen
                   conference={searchable}
                   interested={talks}
+                  params={params}
+                  onParams={(p) => replaceTabParams('interested', p)}
                   onToggle={toggleInterested}
+                  onOpen={onOpenTalk}
                   onBrowse={() => (location.hash = '#/search')}
                 />
               )}
@@ -650,10 +720,9 @@ export function App() {
           conference={searchable}
           open={sheet.open}
           section={sheet.section}
-          filters={filters}
-          facets={data?.facets ?? null}
-          total={data && !loading ? data.total : null}
-          onChange={setFilters}
+          {...(tab === 'search' && searchView === 'schedule'
+            ? { schedule: true, filters: schedFilters, facets: schedFacets.facets, total: schedFacets.total, onChange: setSchedFilters }
+            : { filters, facets: data?.facets ?? null, total: data && !loading ? data.total : null, onChange: setFilters })}
           onClose={() => setSheet({ open: false })}
         />
       )}
@@ -673,6 +742,11 @@ export function App() {
           interestedIds={interestedIds}
           onClose={() => setImportOpen(false)}
           onMark={markImported}
+          onUndo={unmarkImported}
+          onViewSchedule={(day) => {
+            setImportOpen(false);
+            location.hash = tabHash('interested', { view: 'day', day });
+          }}
           onSwitchConference={() => {
             setImportOpen(false);
             setSwitcherOpen(true);

@@ -63,6 +63,8 @@ export interface SearchRequest {
   filters?: SearchFilters;
   saved_talk_ids?: string[];
   size?: number;
+  /** Browse mode only: how many results to skip, for paging through a day in start order. */
+  from?: number;
   /** Asks for the ranking drawer's details; normal searches leave it out. */
   debug?: boolean;
   /** Keys of time phrases the person removed; the server then stops filtering by them. */

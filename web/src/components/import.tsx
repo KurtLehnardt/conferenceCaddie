@@ -1,12 +1,14 @@
 // "Import my schedule": a full-screen sheet that sends a schedule file (or pasted text) once to
 // the server, which finds the conference's talks in it with Elasticsearch. The user reviews the
-// matches and marks the ones they keep as Interested on this device. Nothing is shared.
+// matches and marks the ones they keep as Interested on this device. Nothing is shared. After
+// marking, the sheet confirms and offers "View my schedule", which opens My schedule's Day view on
+// the first imported day.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { CircleExclamationPoint, ClipboardPaste, FileUp, Info, LoaderCircle, X } from 'lucide-preact';
+import { CircleCheck, CircleExclamationPoint, ClipboardPaste, FileUp, Info, LoaderCircle, X } from 'lucide-preact';
 import type { Conference, SearchResult } from '../types';
 import { ApiError, importSchedule, isAbort, type ImportConfidence, type ImportPayload, type ImportResponse } from '../api';
 import { useFocusTrap } from '../lib/focus';
-import { formatWhen, zoneOf } from '../lib/time';
+import { formatWhen, localDay, zoneOf } from '../lib/time';
 import './import.css';
 
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -37,13 +39,19 @@ export function ImportSheet({
   interestedIds,
   onClose,
   onMark,
+  onUndo,
+  onViewSchedule,
   onSwitchConference,
 }: {
   open: boolean;
   conference: Conference;
   interestedIds: Set<string>;
   onClose: () => void;
-  onMark: (talks: SearchResult[]) => void;
+  /** Marks the talks as Interested and returns the ids it added. */
+  onMark: (talks: SearchResult[]) => string[];
+  onUndo: (ids: string[]) => void;
+  /** Opens My schedule in Day view on the given local day. */
+  onViewSchedule: (day: string) => void;
   onSwitchConference: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -55,6 +63,8 @@ export function ImportSheet({
   const [pasteText, setPasteText] = useState('');
   const [result, setResult] = useState<ImportResponse | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [done, setDone] = useState<{ ids: string[]; day: string } | null>(null);
+  const viewButton = useRef<HTMLButtonElement>(null);
 
   const close = () => {
     controller.current?.abort();
@@ -71,8 +81,13 @@ export function ImportSheet({
     setPasteText('');
     setResult(null);
     setChecked(new Set());
+    setDone(null);
     return () => controller.current?.abort();
   }, [open, conference.slug]);
+
+  useEffect(() => {
+    if (done) viewButton.current?.focus();
+  }, [done]);
 
   if (!open) return null;
 
@@ -226,7 +241,32 @@ export function ImportSheet({
           </div>
         )}
 
-        {result && (
+        {done && (
+          <>
+            <div class="sheet-body imp-body imp-done" role="status">
+              <CircleCheck size={44} class="imp-done-icon" aria-hidden="true" />
+              <p class="imp-done-title">Marked {plural(done.ids.length, 'talk', 'talks')} as Interested</p>
+              <p class="imp-done-body">They are in My schedule on this device, by day and time.</p>
+            </div>
+            <footer class="sheet-footer">
+              <button
+                type="button"
+                class="btn btn-text"
+                onClick={() => {
+                  onUndo(done.ids);
+                  setDone(null);
+                }}
+              >
+                Undo
+              </button>
+              <button type="button" class="btn btn-primary" ref={viewButton} onClick={() => onViewSchedule(done.day)}>
+                View my schedule
+              </button>
+            </footer>
+          </>
+        )}
+
+        {result && !done && (
           <>
             <div class="sheet-body imp-body">
               <p class="imp-summary" role="status">
@@ -288,7 +328,14 @@ export function ImportSheet({
                 type="button"
                 class="btn btn-primary"
                 disabled={!toMark.length}
-                onClick={() => onMark(toMark.map((m) => m.talk))}
+                onClick={() => {
+                  const talks = toMark.map((m) => m.talk);
+                  const ids = onMark(talks);
+                  if (!ids.length) return;
+                  // The earliest imported talk's day, in the conference's zone.
+                  const first = talks.filter((t) => ids.includes(t.talk_id)).reduce((a, b) => (Date.parse(b.start) < Date.parse(a.start) ? b : a));
+                  setDone({ ids, day: localDay(first.start, tz) });
+                }}
               >
                 {toMark.length ? `Mark ${plural(toMark.length, 'talk', 'talks')} as Interested` : 'Nothing to mark'}
               </button>

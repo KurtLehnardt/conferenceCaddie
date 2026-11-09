@@ -95,14 +95,14 @@ export function TalkCard({
   interested: boolean;
   onToggleInterested: (talk: Talk) => void;
   evidence?: string | null;
-  headingLevel?: 2 | 3;
+  headingLevel?: 2 | 3 | 4;
   /** Optional content under the actions, such as the ranking drawer on search results. */
   extra?: ComponentChildren;
 }) {
   const tags = talkTags(talk);
   // Talk circles need the server, so offline they give way to a calm note on marked talks.
   const online = useOnline();
-  const Heading = headingLevel === 2 ? 'h2' : 'h3';
+  const Heading = headingLevel === 2 ? 'h2' : headingLevel === 4 ? 'h4' : 'h3';
   // A co-located event or showcase is not a talk: it has its own card, with no interest toggle,
   // no talk circle and no related talks, and a link to its official page.
   if (talk.kind === 'ambient') {

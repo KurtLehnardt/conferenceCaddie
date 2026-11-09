@@ -246,3 +246,27 @@
     animation: none;
   }
 }
+
+.imp-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.imp-done-icon {
+  color: var(--accent);
+}
+
+.imp-done-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.imp-done-body {
+  max-width: 320px;
+  color: var(--text-2);
+  font-size: 15px;
+}

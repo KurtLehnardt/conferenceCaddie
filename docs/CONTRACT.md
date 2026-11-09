@@ -203,7 +203,8 @@ Every search, aggregation and lookup the server runs filters on one conference. 
 ```
 
 - `conference` is required and must be a `searchable` conference; otherwise 400 and no search runs.
-- `query` is at most 200 characters. An empty query is browse mode, sorted by `start`.
+- `query` is at most 200 characters. An empty query is browse mode, sorted by `start`, then `talk_id`.
+- `size` is an integer from 1 to 50 (default 10). `from` is optional, an integer from 0 to 1000 (default 0), and is accepted only in browse mode: with a non-empty query (after time phrases leave it) a `from` above 0 gets 400. It pages through the browse sort, so the app's Schedule view can list a day of more than 50 talks; `total` and `facets` are the same on every page.
 - `filters.level` must be empty for a conference without a level group. `filters.tags` holds at most 50 `{ group, value }` pairs, each a known `tag_keys` value; pairs in one group are ORed and groups are ANDed. Known values come from one aggregation per conference, cached for 10 minutes.
 - `filters.happening_now` is an optional boolean. When true, only talks in progress or starting within the next 60 minutes remain, judged by Elasticsearch against its own clock. Every response carries `happening_now: { available }`, true when the conference has a talk today in its own time zone; the app disables the chip when it is false (see `DECISIONS.md`, "Happening now").
 - `filters.include_events` is an optional boolean, default false. When true, items of kind `ambient` (co-located events and showcases) are searched along with talks; breaks and housekeeping never are. Every result carries `kind`, `"talk"` or `"ambient"`, and the app draws an ambient result as an event card with no interest toggle, no talk circle and no related talks. Talks for you, people matches and circles read only kind `talk`, whatever this filter says.
