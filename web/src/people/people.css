@@ -203,12 +203,21 @@
 
 .pp-sample {
   flex: none;
-  padding: 2px 8px;
-  border: 1px solid var(--border-strong);
+  padding: 2px 10px;
+  border: 1px solid var(--accent-ink);
   border-radius: 999px;
-  color: var(--text-2);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.pp-sample-note {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
 }
 
 .pp-person-about {
@@ -541,6 +550,8 @@
 /* ---------- Topic picker ---------- */
 
 .pp-picker {
+  /* The picker scrolls the page itself when the pinned row changes height, so the browser must not also do it. */
+  overflow-anchor: none;
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -609,6 +620,11 @@
 
 .pp-chip:disabled {
   opacity: 0.45;
+}
+
+.pp-chip.is-on .pp-chip-count {
+  color: var(--on-accent);
+  opacity: 0.85;
 }
 
 .pp-chip-count {

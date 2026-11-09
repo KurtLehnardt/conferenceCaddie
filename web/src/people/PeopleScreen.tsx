@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { MessagesSquare, UserRound, Users, X } from 'lucide-preact';
 import { fetchMatches, isAbort, PeopleApiError } from './api';
 import { ForYouRow } from './ForYou';
-import { PersonCard } from './PersonCard';
+import { PersonCard, SampleNote } from './PersonCard';
 import { getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
 import { changeVisibility, getSaveCount } from './sync';
 import { TalkPeopleControls } from './TalkPeopleControls';
@@ -173,6 +173,7 @@ function PeopleToMeet({ conference, interested }: { conference: ConferenceLike; 
   }
   return (
     <div class="pp-list">
+      <SampleNote people={results} />
       {results.map((p) => (
         <PersonCard key={p.ref} person={p} />
       ))}

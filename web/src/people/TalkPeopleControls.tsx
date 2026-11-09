@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { ChevronDown, ChevronUp, ExternalLink, Users } from 'lucide-preact';
 import { fetchCircleMembers, isAbort, PeopleApiError } from './api';
-import { PersonCard } from './PersonCard';
+import { PersonCard, SampleNote } from './PersonCard';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
 import { getSaveCount, shareForTalks, unshareTalks } from './sync';
 import type { CircleMembers, ConferenceLike, InterestedProp, TalkLike } from './types';
@@ -78,6 +78,7 @@ export function CircleView({ conference, talkId }: { conference: ConferenceLike;
         <p class="pp-hint">No one else has shared yet. Check back later.</p>
       ) : (
         <div class="pp-list">
+          <SampleNote people={data.members} />
           {data.members.map((m) => (
             <PersonCard key={m.ref} person={m} />
           ))}

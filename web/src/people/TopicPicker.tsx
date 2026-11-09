@@ -1,13 +1,21 @@
 // Topic picker for one chip set. Not a modal: selected chips are pinned on top,
 // then type-ahead results, "Suggested for you", and the most common topics with
 // "Show more". One tap adds a topic and one tap removes it.
-import { useEffect, useRef, useState } from 'preact/hooks';
+//
+// Chips never move under the finger. A chip that is tapped stays where it is in
+// its list and only changes its look, so no other chip reflows. The pinned row
+// grows or shrinks above the lists, and the page scrolls by the same amount so
+// the lists stay still on screen. A chip removed from the pinned row stays there
+// as an unselected ghost until taps have paused for a moment, so the chips beside
+// it do not slide.
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Check, Plus, Search, X } from 'lucide-preact';
 import { fetchTopics, isAbort, suggestTopics } from './api';
 import type { TopicHit, TopicRef } from './types';
 
 const MAX_TOPICS = 30;
 const FIRST = 12;
+const GHOST_MS = 1200;
 
 const topCache = new Map<string, Promise<TopicHit[]>>();
 
@@ -32,7 +40,8 @@ function Chip({
   disabled?: boolean;
   onToggle: () => void;
 }) {
-  const count = !on && typeof topic.talk_count === 'number' ? topic.talk_count : null;
+  // The count stays when a chip is on, so the chip keeps its width and its neighbours keep their places.
+  const count = typeof topic.talk_count === 'number' ? topic.talk_count : null;
   // An explicit name, so assistive technology reads "eBPF, 7 talks" and the pressed state,
   // whatever the icon and count spans render as.
   const name = count === null ? topic.label : `${topic.label}, ${count} ${count === 1 ? 'talk' : 'talks'}`;
@@ -80,6 +89,14 @@ export function TopicPicker({
   const [hits, setHits] = useState<TopicHit[] | null>(null);
   const [suggested, setSuggested] = useState<TopicHit[]>([]);
   const searchCtl = useRef<AbortController | null>(null);
+  // The pinned row in display order, including ghosts: topics removed a moment ago.
+  const pinnedRef = useRef<TopicRef[]>([]);
+  const [ghosts, setGhosts] = useState<string[]>([]);
+  const ghostTimer = useRef(0);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const anchorTop = useRef<number | null>(null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   useEffect(() => {
     let live = true;
@@ -136,15 +153,57 @@ export function TopicPicker({
   const chosen = new Set(selected.map((t) => t.topic_id));
   const full = selected.length >= MAX_TOPICS;
 
-  const toggle = (t: TopicRef) => {
-    if (chosen.has(t.topic_id)) onChange(selected.filter((s) => s.topic_id !== t.topic_id));
-    else if (!full) onChange([...selected, { topic_id: t.topic_id, label: t.label }]);
+  // Runs a change that moves the pinned row, and remembers where the search box was so
+  // the layout effect below can scroll the page by the difference.
+  const anchored = (change: () => void) => {
+    anchorTop.current = searchRef.current ? searchRef.current.getBoundingClientRect().top : null;
+    change();
   };
 
-  const notChosen = (list: TopicHit[]) => list.filter((t) => !chosen.has(t.topic_id));
-  const popular = top ? notChosen(top) : [];
+  const pruneLater = () => {
+    window.clearTimeout(ghostTimer.current);
+    ghostTimer.current = window.setTimeout(() => anchored(() => setGhosts([])), GHOST_MS);
+  };
+
+  useEffect(() => () => window.clearTimeout(ghostTimer.current), []);
+
+  const toggle = (t: TopicRef) => {
+    if (chosen.has(t.topic_id)) {
+      anchored(() => {
+        onChange(selected.filter((s) => s.topic_id !== t.topic_id));
+        setGhosts((g) => (g.includes(t.topic_id) ? g : [...g, t.topic_id]));
+      });
+    } else if (!full) {
+      anchored(() => {
+        onChange([...selected, { topic_id: t.topic_id, label: t.label }]);
+        setGhosts((g) => g.filter((id) => id !== t.topic_id));
+      });
+    }
+    // Every tap restarts the pause, so the pinned row only settles once the user has stopped tapping.
+    if (ghosts.length || chosen.has(t.topic_id)) pruneLater();
+  };
+
+  // Display order for the pinned row: what was there stays in place, new topics go on the end.
+  const keep = new Set([...chosen, ...ghosts]);
+  const order = pinnedRef.current.filter((t) => keep.has(t.topic_id));
+  for (const t of selected) if (!order.some((o) => o.topic_id === t.topic_id)) order.push(t);
+  pinnedRef.current = order;
+
+  // Keeps the lists still on screen when the pinned row changes height.
+  useLayoutEffect(() => {
+    const before = anchorTop.current;
+    anchorTop.current = null;
+    const el = searchRef.current;
+    if (before === null || !el) return;
+    const delta = el.getBoundingClientRect().top - before;
+    // Content that is below the viewport cannot be seen moving, so it is left alone.
+    if (delta !== 0 && before < window.innerHeight) window.scrollBy({ top: delta, left: 0, behavior: 'instant' });
+  });
+
+  // Chosen topics stay in these lists, shown as on, so nothing below the pinned row reflows on a tap.
+  const popular = top ?? [];
   const shownPopular = showAll ? popular : popular.slice(0, FIRST);
-  const sugg = notChosen(suggested).slice(0, 12);
+  const sugg = suggested.slice(0, 12);
   const headingId = `pp-tp-${title.replace(/\W+/g, '-').toLowerCase()}`;
 
   return (
@@ -159,15 +218,15 @@ export function TopicPicker({
       </div>
       {hint && <p class="pp-hint">{hint}</p>}
 
-      {selected.length > 0 && (
+      {order.length > 0 && (
         <div class="pp-chips" role="group" aria-label="Chosen topics">
-          {selected.map((t) => (
-            <Chip key={t.topic_id} topic={t} on onToggle={() => toggle(t)} />
+          {order.map((t) => (
+            <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} onToggle={() => toggle(t)} />
           ))}
         </div>
       )}
 
-      <div class="pp-field pp-topic-search">
+      <div class="pp-field pp-topic-search" ref={searchRef}>
         <Search size={18} aria-hidden="true" class="pp-field-icon" />
         <input
           type="search"
@@ -200,7 +259,7 @@ export function TopicPicker({
           <h4 class="pp-subhead">Suggested for you</h4>
           <div class="pp-chips" role="group" aria-label="Suggested topics">
             {sugg.map((t) => (
-              <Chip key={t.topic_id} topic={t} on={false} disabled={full} onToggle={() => toggle(t)} />
+              <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} />
             ))}
           </div>
         </>
@@ -213,7 +272,7 @@ export function TopicPicker({
           {!top && !topError && <p class="pp-hint">Loading topics…</p>}
           <div class="pp-chips" role="group" aria-label="Common topics">
             {shownPopular.map((t) => (
-              <Chip key={t.topic_id} topic={t} on={false} disabled={full} onToggle={() => toggle(t)} />
+              <Chip key={t.topic_id} topic={t} on={chosen.has(t.topic_id)} disabled={full} onToggle={() => toggle(t)} />
             ))}
           </div>
           {popular.length > FIRST && (

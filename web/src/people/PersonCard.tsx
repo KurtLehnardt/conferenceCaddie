@@ -15,6 +15,12 @@ function Topics({ label, topics }: { label: string; topics: TopicRef[] }) {
   );
 }
 
+// A line to show under a list of people when any of them is a sample profile.
+export function SampleNote({ people }: { people: PersonResult[] }) {
+  if (!people.some((p) => p.sample)) return null;
+  return <p class="pp-sample-note">Profiles marked Sample are demo profiles, not real attendees.</p>;
+}
+
 export function PersonCard({ person }: { person: PersonResult }) {
   const reasons = (person.reasons ?? []).filter((r) => r && r !== person.opener);
   const contact = person.contact;
@@ -25,7 +31,8 @@ export function PersonCard({ person }: { person: PersonResult }) {
         <h3 class="pp-person-name">{person.display_name}</h3>
         {person.sample && (
           <span class="pp-sample" title="A sample profile, not a real person">
-            Sample
+            <span aria-hidden="true">Sample</span>
+            <span class="sr-only">Sample profile, not a real person</span>
           </span>
         )}
       </header>
