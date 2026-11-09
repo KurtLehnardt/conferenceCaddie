@@ -22,7 +22,17 @@ The app began as an entry in the Elasticsearch "Find the Right Talk" track at a 
 - **Search**: hybrid lexical and semantic search over one conference's talks, with filters for day, time, track and the conference's own tag groups.
 - **Interested**: a plain list of the talks you marked, in time order, kept on your device. From here you can share your profile for all of them at once, stop sharing for all, or let sharing follow the list as you mark and unmark talks.
 
+- **Offline**: after one online visit, the app shell and the conference's schedule are kept on the phone. Without a connection, Search runs a keyword search over that saved schedule, labelled "Offline: keyword search only", and Interested and the profile still work. People, For you and talk circles say they need a connection.
+
 There is no sign-in. A profile is written to Elasticsearch only when you turn on a visibility choice; a random device secret, stored only as a hash on the server, protects every edit. Profiles expire after the conference's last day, and "Delete my profile" removes them at once. The sample profiles you may see are labelled "Sample" and are not real people.
+
+## Demo
+
+The three-minute demo script is [docs/demo/SCRIPT.md](docs/demo/SCRIPT.md). It covers the preparation, the two labelled demo profiles and how to re-seed them, every tap in order, and a rehearsal run against the live service. Screenshots from that run are in [docs/demo/shots/](docs/demo/shots/).
+
+Scan this QR code to open KubeCon + CloudNativeCon North America 2026 in the app (it links to `/e/kubecon-cloudnativecon-north-america-2026`):
+
+<img src="docs/demo/qr-kubecon.png" alt="QR code that opens Conference Caddie for KubeCon + CloudNativeCon North America 2026" width="240">
 
 ## How it works
 
