@@ -244,6 +244,40 @@ await check('d: no break, housekeeping or ambient item appears', async () => {
   report(leaked.length === 0, 'd: no break, housekeeping or ambient item appears', leaked.length ? leaked.slice(0, 3).join('; ') : `${requests.length} requests, ${nonTalk.size} non-talk items checked`);
 });
 
+// e. The events and showcases toggle: off by default, and when on it adds only kind "ambient" items,
+// never a break or a housekeeping item. The expectation comes from the committed data.
+await check('e1: include_events adds co-located events and showcases, and nothing else', async () => {
+  const docs = readNdjson(PRIMARY);
+  const ambient = new Map(docs.filter((d) => d.kind === 'ambient').map((d) => [d.talk_id, d]));
+  const other = new Map(docs.filter((d) => d.kind === 'break' || d.kind === 'housekeeping').map((d) => [d.talk_id, d]));
+  const track = [...ambient.values()].find((d) => d.track === 'Solutions Showcase')?.track ?? [...ambient.values()][0]?.track;
+  if (!track) throw new Error('no ambient item in the committed data');
+  const off = await search({ query: '', size: 50, filters: { track: [track] } });
+  const on = await search({ query: '', size: 50, filters: { track: [track], include_events: true } });
+  if (off.status !== 200 || on.status !== 200) throw new Error(`status ${off.status} and ${on.status}`);
+  const problems = [];
+  if ((off.json.results ?? []).some((r) => ambient.has(r.talk_id))) problems.push('an event appeared with the toggle off');
+  const shown = (on.json.results ?? []).filter((r) => ambient.has(r.talk_id));
+  if (!shown.length) problems.push('no event appeared with the toggle on');
+  if (shown.some((r) => r.kind !== 'ambient')) problems.push('an event is not marked kind ambient');
+  if ((on.json.results ?? []).some((r) => other.has(r.talk_id))) problems.push('a break or housekeeping item appeared');
+  if ((off.json.results ?? []).some((r) => r.kind !== 'talk')) problems.push('a talk is not marked kind talk');
+  const text = await search({ query: 'solutions showcase and co-located events', size: 50, filters: { include_events: true } });
+  if (text.status !== 200) throw new Error(`status ${text.status}`);
+  if ((text.json.results ?? []).some((r) => other.has(r.talk_id))) problems.push('a break or housekeeping item matched a text query');
+  report(problems.length === 0, 'e1: include_events adds co-located events and showcases, and nothing else', problems.length ? problems.join('; ') : `${shown.length} events in "${track}", ${off.json.total} results off and ${on.json.total} on`);
+});
+
+await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
+  const bad = await search({ query: 'kubernetes', filters: { include_events: 'yes' } });
+  const ambient = new Set(readNdjson(PRIMARY).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
+  const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['kubernetes', 'ebpf'], interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
+  if (recs.status !== 200) throw new Error(`recommendations status ${recs.status}`);
+  const list = recs.json.results ?? recs.json.talks ?? [];
+  const leaked = list.filter((r) => ambient.has(r.talk_id ?? r.talk?.talk_id));
+  report(bad.status === 400 && leaked.length === 0 && list.length > 0, 'e2: include_events must be a boolean, and For you never holds an event', `status ${bad.status}, ${list.length} suggested talks, ${leaked.length} events among them`);
+});
+
 await check('f: an unknown filter value returns 400', async () => {
   const { status } = await search({ query: 'kubernetes', filters: { track: ['No Such Track'] } });
   report(status === 400, 'f: an unknown filter value returns 400', `status ${status}`);

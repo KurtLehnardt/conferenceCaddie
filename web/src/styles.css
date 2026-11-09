@@ -782,6 +782,25 @@ a.conf-row .conf-check {
   box-shadow: var(--shadow-sm);
 }
 
+.card-event {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: var(--accent-tint);
+  box-shadow: none;
+}
+
+.event-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .card-title {
   padding-top: 2px;
   font-size: 17px;

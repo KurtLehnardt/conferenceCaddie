@@ -22,7 +22,7 @@
 //   matches (multi_match with minimum_should_match LEXICAL_MIN_MATCH) and the SEMANTIC_K nearest
 //   neighbours among the documents that pass B; in browse mode, every document. M does not depend
 //   on any facet selection.
-// - Let B be the base filters: kind is "talk", the start_after and start_before window,
+// - Let B be the base filters: kind is "talk" (or "talk" or "ambient" when include_events is on), the start_after and start_before window,
 //   hide_sponsor, the happening_now window (end after now and start before now plus 60 minutes,
 //   both evaluated by Elasticsearch), the clauses of the time phrases found in the query (see phrases.mjs), and the
 //   conference term. Every query this module sends, including the
@@ -75,7 +75,7 @@ const EVIDENCE_MAX = 300;
 // U+001F joins a tag's group and value in tag_keys. It cannot occur in a category name.
 const TAG_SEP = '\u001f';
 
-const SOURCE_FIELDS = ['talk_id', 'conference', 'title', 'speakers', 'room', 'start', 'end', 'track', 'level', 'tags', 'topics', 'speaker_profiles', 'slides_url', 'url'];
+const SOURCE_FIELDS = ['talk_id', 'conference', 'title', 'speakers', 'room', 'start', 'end', 'track', 'level', 'tags', 'topics', 'speaker_profiles', 'slides_url', 'url', 'kind'];
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
 
 export class BadRequest extends Error {}
@@ -143,7 +143,8 @@ const knownCache = new Map(); // slug -> { at, promise }
 async function fetchKnown(slug) {
   const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_search`, {
     size: 0,
-    query: { bool: { filter: [{ term: { conference: slug } }, { term: { kind: 'talk' } }] } },
+    // Events and showcases (kind "ambient") count too, so their tracks can be selected when the toggle is on.
+    query: { bool: { filter: [{ term: { conference: slug } }, { terms: { kind: ['talk', 'ambient'] } }] } },
     aggs: {
       day: { terms: { field: 'day', size: 100 } },
       track: { terms: { field: 'track', size: 500 } },
@@ -174,7 +175,7 @@ function knownValues(slug) {
 // the requested conference.
 
 const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'debug', 'ignore_phrases']);
-const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor', 'happening_now']);
+const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor', 'happening_now', 'include_events']);
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const TALK_ID_RE = /^([a-z0-9][a-z0-9-]{0,119}):[A-Za-z0-9_-]{1,64}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -271,6 +272,7 @@ export async function validate(body) {
   }
   if (f.hide_sponsor !== undefined && typeof f.hide_sponsor !== 'boolean') throw new BadRequest('filters.hide_sponsor must be a boolean');
   if (f.happening_now !== undefined && typeof f.happening_now !== 'boolean') throw new BadRequest('filters.happening_now must be a boolean');
+  if (f.include_events !== undefined && typeof f.include_events !== 'boolean') throw new BadRequest('filters.include_events must be a boolean');
   if (f.day !== undefined && f.day !== null && typeof f.day !== 'string') throw new BadRequest('filters.day must be null or a known day');
   const startAfter = parseTime(f.start_after, 'start_after');
   const startBefore = parseTime(f.start_before, 'start_before');
@@ -312,6 +314,7 @@ export async function validate(body) {
       hasSlides: f.has_slides ?? null,
       hideSponsor: f.hide_sponsor ?? false,
       happeningNow: f.happening_now ?? false,
+      includeEvents: f.include_events ?? false,
       phraseClauses: time.clauses,
     },
   };
@@ -342,7 +345,10 @@ function runningTodaySearch(conference, timeZone) {
 }
 
 function baseClauses(conference, filters) {
-  const clauses = [{ term: { conference } }, { term: { kind: 'talk' } }];
+  // Breaks and housekeeping never match. Co-located events and showcases (kind "ambient") match
+  // only when the person turned the toggle on.
+  const kindClause = filters.includeEvents ? { terms: { kind: ['talk', 'ambient'] } } : { term: { kind: 'talk' } };
+  const clauses = [{ term: { conference } }, kindClause];
   const minutes = {};
   if (filters.startAfter !== null) minutes.gte = filters.startAfter;
   if (filters.startBefore !== null) minutes.lt = filters.startBefore;
@@ -525,6 +531,7 @@ export function toResult(hit, labels = new Map()) {
   return {
     talk_id: String(s.talk_id ?? hit._id),
     conference: s.conference,
+    kind: s.kind === 'ambient' ? 'ambient' : 'talk',
     title: s.title ?? '',
     speakers: asArray(s.speakers),
     room: s.room ?? null,
@@ -634,7 +641,8 @@ export async function search(params) {
       rank_window: RANK_WINDOW,
       semantic_k: SEMANTIC_K,
       filters: {
-        kind: 'talk',
+        kind: filters.includeEvents ? 'talk and ambient' : 'talk',
+        include_events: filters.includeEvents,
         day: filters.day,
         start_after: hhmm(filters.startAfter),
         start_before: hhmm(filters.startBefore),

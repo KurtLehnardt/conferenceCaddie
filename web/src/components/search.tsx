@@ -28,7 +28,8 @@ export function activeFilterCount(f: SearchFilters): number {
     f.tags.length +
     (f.has_slides !== null ? 1 : 0) +
     (f.hide_sponsor ? 1 : 0) +
-    (f.happening_now ? 1 : 0)
+    (f.happening_now ? 1 : 0) +
+    (f.include_events ? 1 : 0)
   );
 }
 
@@ -340,6 +341,11 @@ export function ChipRow({
         active={filters.hide_sponsor}
         onOpen={() => onChange({ ...filters, hide_sponsor: !filters.hide_sponsor })}
       />
+      <Chip
+        label="Events and showcases"
+        active={filters.include_events}
+        onOpen={() => onChange({ ...filters, include_events: !filters.include_events })}
+      />
       {count > 0 && (
         <button type="button" class="chip-clear-all" onClick={() => onChange(EMPTY_FILTERS)}>
           Clear all
@@ -554,6 +560,20 @@ export function FilterSheet({
               />
             </label>
           </fieldset>
+
+          <fieldset class="sheet-section" data-section="events">
+            <legend>Events and showcases</legend>
+            <label class="option option-switch">
+              <span class="option-label">Include co-located events and showcases</span>
+              <input
+                type="checkbox"
+                role="switch"
+                class="switch"
+                checked={filters.include_events}
+                onChange={() => onChange({ ...filters, include_events: !filters.include_events })}
+              />
+            </label>
+          </fieldset>
         </div>
 
         <footer class="sheet-footer">
@@ -561,7 +581,9 @@ export function FilterSheet({
             Clear all
           </button>
           <button type="button" class="btn btn-primary" onClick={onClose}>
-            {total === null ? 'Show talks' : `Show ${total} ${total === 1 ? 'talk' : 'talks'}`}
+            {total === null
+              ? filters.include_events ? 'Show results' : 'Show talks'
+              : `Show ${total} ${filters.include_events ? (total === 1 ? 'result' : 'results') : total === 1 ? 'talk' : 'talks'}`}
           </button>
         </footer>
       </div>
@@ -586,7 +608,7 @@ function SkeletonCard() {
 /** Plain lines for the filters a debug search reports it applied. */
 function filterLines(info: RankingInfo, conference: Conference): string[] {
   const f = info.filters;
-  const lines = [`${conference.name} only`, 'Talks only, without breaks or housekeeping'];
+  const lines = [`${conference.name} only`, f.include_events ? 'Talks, events and showcases, without breaks or housekeeping' : 'Talks only, without breaks or housekeeping'];
   if (f.day) lines.push(`Day: ${formatDay(f.day)}`);
   if (f.start_before === '12:00' && !f.start_after) lines.push('Morning: starts before 12:00');
   else if (f.start_after === '12:00' && !f.start_before) lines.push('Afternoon: starts at 12:00 or later');
@@ -723,6 +745,7 @@ export function Results({
   error,
   interestedIds,
   filtersActive,
+  includeEvents,
   onRetry,
   onToggle,
   onClearFilters,
@@ -735,6 +758,8 @@ export function Results({
   error: string | null;
   interestedIds: Set<string>;
   filtersActive: boolean;
+  /** Whether the events and showcases toggle is on, so the count says results rather than talks. */
+  includeEvents: boolean;
   onRetry: () => void;
   onToggle: (t: Talk) => void;
   onClearFilters: () => void;
@@ -778,7 +803,9 @@ export function Results({
   }
 
   const n = data.total;
-  const countLabel = browse ? `All talks · ${n}` : `${n} ${n === 1 ? 'talk' : 'talks'}`;
+  const countLabel = includeEvents
+    ? `${browse ? 'Everything · ' : ''}${n} ${n === 1 ? 'result' : 'results'}`
+    : browse ? `All talks · ${n}` : `${n} ${n === 1 ? 'talk' : 'talks'}`;
 
   return (
     <div aria-busy={loading}>

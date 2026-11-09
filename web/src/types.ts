@@ -50,6 +50,8 @@ export interface SearchFilters {
   hide_sponsor: boolean;
   /** Talks in progress or starting within 60 minutes, judged by Elasticsearch against its clock. */
   happening_now: boolean;
+  /** Adds co-located events and showcases to the results; off by default. */
+  include_events: boolean;
 }
 
 export interface SearchRequest {
@@ -89,6 +91,8 @@ export interface Talk {
   speaker_profiles?: SpeakerProfile[];
   slides_url: string | null;
   url: string;
+  /** "ambient" marks a co-located event or showcase; absent or "talk" is a talk. */
+  kind?: string;
 }
 
 /** Where a result stood in each of the two rankings Elasticsearch fused; null is outside the window. */
@@ -119,6 +123,7 @@ export interface RankingInfo {
     has_slides: boolean | null;
     hide_sponsor: boolean;
     happening_now?: boolean;
+    include_events?: boolean;
     time_phrases?: string[];
   };
 }
@@ -174,4 +179,5 @@ export const EMPTY_FILTERS: SearchFilters = {
   has_slides: null,
   hide_sponsor: false,
   happening_now: false,
+  include_events: false,
 };

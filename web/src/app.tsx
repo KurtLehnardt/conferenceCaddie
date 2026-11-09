@@ -479,6 +479,7 @@ export function App() {
                     error={error}
                     interestedIds={interestedIds}
                     filtersActive={activeFilterCount(filters) > 0}
+                    includeEvents={filters.include_events}
                     onRetry={() => runSearch()}
                     onToggle={toggleInterested}
                     onClearFilters={() => setFilters(EMPTY_FILTERS)}
