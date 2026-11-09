@@ -204,9 +204,10 @@ for (const [i, { query, title }] of QUERIES.entries()) {
   });
 }
 
-// c. saved_talk_ids is still accepted but no longer filters anything. Ties in semantic ranking
-// can reorder equal scores between two identical requests, so text queries compare totals and
-// the browse listing, which is sorted by time, compares the exact order.
+// c. saved_talk_ids is still accepted but no longer filters anything. Text queries compare totals
+// and the browse listing, which is sorted by time, compares the exact order. (Identical requests
+// return the same order because the server pins every search for a conference to one shard copy;
+// the For you check r8 asserts that.)
 await check('c: saved_talk_ids no longer filters results', async () => {
   if (!firstTopResult) throw new Error('query 1 returned no results');
   const saved = firstTopResult;
@@ -294,9 +295,8 @@ await check('f2: a search without a conference, or for an unknown one, returns 4
 // The ranking drawer: "debug": true adds each result's keyword and semantic rank from
 // Elasticsearch, and a normal search carries none of it. The reciprocal rank fusion score the
 // reported ranks imply must never rise down the list, which shows the ranks are the ones fused.
-// The plain and debug result lists are not compared: the primary and replica shard copies hold
-// different numbers of deleted documents, so keyword scores, and sometimes the order, can differ
-// between two identical requests.
+// The plain and debug result lists are not compared here. The server sends both to the same shard
+// copy, so they come back in the same order, but this check only needs the ranks to be coherent.
 await check('k1: the ranking drawer reports the keyword and semantic ranks that were fused', async () => {
   const body = { query: 'kubernetes security', size: 15, filters: { hide_sponsor: true } };
   const plain = await search(body);
@@ -1078,6 +1078,29 @@ try {
     if (top.length && withPassage.length < Math.min(3, top.length)) problems.push(`only ${withPassage.length} of the top ${top.length} have a relevant passage`);
     if (results.some((x) => (x.why?.learn_topics ?? []).length > 0)) problems.push('a topic was named although no topic was sent');
     report(problems.length === 0, 'r7: the learn and problems text alone returns talks with a relevant passage', problems.length ? problems.join('; ') : `${results.length} talks, first "${results[0].title}"`);
+  });
+
+  // The primary and replica copies of the talks shard hold different numbers of deleted
+  // documents, so they break ties between equal scores differently. The server pins every search
+  // for a conference to one copy (a preference), so the same request must always give the same
+  // order. Many talks share a topic, so the tie is real for a single learn topic.
+  await check('r8: the same For you request made five times returns the same talk order', async () => {
+    const topic = labelOf.has('ai') ? 'ai' : [...labelOf.keys()][0];
+    if (!topic) {
+      skip('r8: the same For you request made five times returns the same talk order', 'the conference has no topics');
+      return;
+    }
+    const orders = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await ask([topic], [], { size: 10 });
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      orders.push((r.json.results ?? []).map((x) => x.talk_id));
+    }
+    const distinct = new Set(orders.map((o) => o.join(',')));
+    const problems = [];
+    if (!orders[0].length) problems.push('no results');
+    if (distinct.size !== 1) problems.push(`${distinct.size} different orders in 5 identical requests`);
+    report(problems.length === 0, 'r8: the same For you request made five times returns the same talk order', problems.length ? problems.join('; ') : `5 requests, one order of ${orders[0].length} talks for "${topic}"`);
   });
 } catch (err) {
   report(false, 'people checks', err.message);

@@ -51,12 +51,15 @@
 // - Each result then carries ranking: { rank, keyword_rank, semantic_rank }, and the response
 //   carries ranking: { rank_window, semantic_k, filters }, where filters echoes the validated
 //   filters that every query of the request applied.
-// - A debug request sets one msearch preference on all its searches, so every one of them reads
-//   the same shard copies.
+// - Every request, with or without debug, sets the conference's preference (see preference.mjs)
+//   on all its searches, so every one of them reads the same shard copy. Two identical requests
+//   then return the same order, and the child rankings use the same term statistics as the fused
+//   ranking they explain.
 
 import { searchableConference } from './conferences.mjs';
 import { parseTimePhrases } from './phrases.mjs';
 import { suggestChips } from './facets.mjs';
+import { conferencePreference, withPreference } from './preference.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
@@ -123,7 +126,7 @@ export async function esRequest(path, body, options = {}) {
   }
 }
 
-// header is the msearch header line sent with every search, for example a shared preference.
+// header is the msearch header line sent with every search; the callers pass the conference's preference.
 async function msearch(searches, header = {}) {
   const head = JSON.stringify(header);
   const body = searches.flatMap((s) => [head, JSON.stringify(s)]).join('\n') + '\n';
@@ -142,7 +145,7 @@ async function msearch(searches, header = {}) {
 const knownCache = new Map(); // slug -> { at, promise }
 
 async function fetchKnown(slug) {
-  const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_search`, {
+  const json = await esRequest(withPreference(`/${encodeURIComponent(ES_INDEX)}/_search`, conferencePreference(slug)), {
     size: 0,
     // Events and showcases (kind "ambient") count too, so their tracks can be selected when the toggle is on.
     query: { bool: { filter: [{ term: { conference: slug } }, { terms: { kind: ['talk', 'ambient'] } }] } },
@@ -486,7 +489,7 @@ export async function topicLabels(conference, topicIds) {
   if (!ids.length) return new Map();
   let json;
   try {
-    json = await esRequest(`/${encodeURIComponent(ES_TOPICS_INDEX)}/_search?ignore_unavailable=true`, {
+    json = await esRequest(withPreference(`/${encodeURIComponent(ES_TOPICS_INDEX)}/_search?ignore_unavailable=true`, conferencePreference(conference)), {
       size: ids.length,
       _source: ['topic_id', 'label'],
       query: { bool: { filter: [{ term: { conference } }, { terms: { topic_id: ids } }] } },
@@ -611,10 +614,10 @@ export async function search(params) {
     for (const q of childQueries(query, base)) searches.push(childSearch(q, [...base, ...selectionClauses(groups, null)]));
   }
 
-  // A debug request sends every search to the same shard copies, so the child rankings use the
-  // same term statistics as the fused ranking they explain.
+  // Every search of the request, and every later request for this conference, reads the same shard
+  // copy, so ties are broken the same way each time.
   const [all, suggestions] = await Promise.all([
-    msearch(searches, debug ? { preference: 'caddie-ranking-drawer' } : {}),
+    msearch(searches, { preference: conferencePreference(conference) }),
     // Names in the search text, offered as chips; empty for browse mode and on any failure.
     query ? suggestChips(conference, query, filters) : [],
   ]);

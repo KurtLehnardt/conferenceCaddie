@@ -18,6 +18,7 @@
 // - A failure, or a missing facets index, gives no suggestions; the search itself is never affected.
 
 import { esRequest, UpstreamError } from './search.mjs';
+import { conferencePreference, withPreference } from './preference.mjs';
 
 const ES_FACETS_INDEX = process.env.ES_FACETS_INDEX || 'caddie-facets';
 const MAX_WORDS = 6;
@@ -74,7 +75,7 @@ export async function suggestChips(conference, text, filters) {
   }
   let json;
   try {
-    json = await esRequest(`/${encodeURIComponent(ES_FACETS_INDEX)}/_search?ignore_unavailable=true`, {
+    json = await esRequest(withPreference(`/${encodeURIComponent(ES_FACETS_INDEX)}/_search?ignore_unavailable=true`, conferencePreference(conference)), {
       size: 20,
       _source: ['kind', 'label', 'value', 'group', 'talks'],
       query: { bool: { filter: [{ term: { conference } }], should, minimum_should_match: 1 } },

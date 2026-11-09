@@ -28,6 +28,7 @@
 //      caddie-people) for the circle counts.
 
 import { take, clientIp } from './ratelimit.mjs';
+import { conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_API_KEY = process.env.ES_API_KEY || '';
@@ -200,8 +201,12 @@ export async function esRequest(path, body, key = ES_API_KEY) {
   }
 }
 
-export const searchTalks = (body) => esRequest(`/${encodeURIComponent(TALKS_INDEX)}/_search`, body);
-export const searchTopics = (body) => esRequest(`/${encodeURIComponent(TOPICS_INDEX)}/_search`, body);
+// Both take the conference slug, whose preference keeps every search for it on one shard copy, so
+// ties between equal scores break the same way on every request and every instance.
+export const searchTalks = (body, event) =>
+  esRequest(withPreference(`/${encodeURIComponent(TALKS_INDEX)}/_search`, conferencePreference(event)), body);
+export const searchTopics = (body, event) =>
+  esRequest(withPreference(`/${encodeURIComponent(TOPICS_INDEX)}/_search`, conferencePreference(event)), body);
 
 // ---------------------------------------------------------------------------------------------
 // Validation.
@@ -327,7 +332,7 @@ function passageFor(hit) {
 async function circleCounts(event, talkIds) {
   if (!ES_PEOPLE_API_KEY || !talkIds.length) return {};
   try {
-    const json = await esRequest(`/${encodeURIComponent(PEOPLE_INDEX)}/_search`, {
+    const json = await esRequest(withPreference(`/${encodeURIComponent(PEOPLE_INDEX)}/_search`, peoplePreference(event)), {
       size: 0,
       query: {
         bool: {
@@ -350,12 +355,12 @@ async function topicLabels(event, topicIds) {
     size: Math.min(topicIds.length, 200),
     _source: ['topic_id', 'label'],
     query: { bool: { filter: [{ term: { conference: event } }, { terms: { topic_id: topicIds } }] } },
-  });
+  }, event);
   return new Map((json.hits?.hits ?? []).map((h) => [h._source.topic_id, h._source.label]));
 }
 
 async function recommend(p) {
-  const json = await searchTalks(buildSearch(p));
+  const json = await searchTalks(buildSearch(p), p.event);
   const hits = json.hits?.hits ?? [];
   // The reasons are built only from the topics of this request, never from anything remembered or
   // from the talk's other topics, so a topic the user has removed can never be named.

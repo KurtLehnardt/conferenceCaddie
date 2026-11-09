@@ -34,7 +34,7 @@ async function related({ event, talkId }) {
     size: 1,
     _source: ['title', 'abstract'],
     query: { bool: { filter: [{ term: { conference: event } }, { term: { kind: 'talk' } }, { term: { talk_id: talkId } }] } },
-  });
+  }, event);
   const source = own.hits?.hits?.[0]?._source;
   if (!source) return null;
   const text = `${source.title ?? ''}. ${source.abstract ?? ''}`.replace(/\s+/g, ' ').trim().slice(0, MODEL_TEXT_MAX);
@@ -55,7 +55,7 @@ async function related({ event, talkId }) {
         query_vector_builder: { text_embedding: { model_text: text } },
       },
     },
-  });
+  }, event);
   return (json.hits?.hits ?? []).slice(0, RELATED_MAX).map((hit) => {
     const s = hit._source ?? {};
     return {

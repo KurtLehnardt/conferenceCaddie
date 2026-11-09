@@ -26,6 +26,7 @@
 //   hit for each talk. The server never scores or re-ranks anything itself.
 
 import { esRequest, topicLabels, toResult, UpstreamError } from './search.mjs';
+import { conferencePreference } from './preference.mjs';
 import { searchableConference } from './conferences.mjs';
 import { sendJson, sameOrigin, isPlainObject, validEvent, BadRequest } from './recommend.mjs';
 import { take, clientIp } from './ratelimit.mjs';
@@ -662,7 +663,10 @@ function candidateSearch(conference, c) {
 
 async function matchCandidates(conference, candidates) {
   if (!candidates.length) return [];
-  const body = candidates.map((c) => `{}\n${JSON.stringify(candidateSearch(conference, c))}\n`).join('');
+  // Every search names the conference's preference, so a title that ties between two talks always
+  // resolves to the same one.
+  const header = JSON.stringify({ preference: conferencePreference(conference) });
+  const body = candidates.map((c) => `${header}\n${JSON.stringify(candidateSearch(conference, c))}\n`).join('');
   const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_msearch`, body, { contentType: 'application/x-ndjson', timeoutMs: MSEARCH_TIMEOUT_MS });
   const responses = json.responses ?? [];
   if (responses.length !== candidates.length) throw new UpstreamError('msearch returned the wrong number of responses');

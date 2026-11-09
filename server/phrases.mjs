@@ -24,6 +24,7 @@
 //   applied: false so the client can drop it from its list once the text no longer holds it.
 
 import { esRequest } from './search.mjs';
+import { conferencePreference, withPreference } from './preference.mjs';
 
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
 const SHAPE_TTL_MS = 10 * 60 * 1000;
@@ -46,7 +47,7 @@ const NEEDS_SHAPE = /lunch|monday|tuesday|wednesday|thursday|friday|saturday|sun
 const shapeCache = new Map(); // slug -> { at, promise }
 
 async function fetchShape(slug) {
-  const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_search`, {
+  const json = await esRequest(withPreference(`/${encodeURIComponent(ES_INDEX)}/_search`, conferencePreference(slug)), {
     size: 0,
     query: { term: { conference: slug } },
     aggs: {

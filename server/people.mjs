@@ -25,6 +25,7 @@
 import crypto from 'node:crypto';
 import { take, clientIp } from './ratelimit.mjs';
 import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
+import { CONFERENCES_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
@@ -138,7 +139,7 @@ setInterval(purgeExpired, PURGE_INTERVAL_MS).unref();
 let conferencesCache = null; // { at, promise }
 
 async function fetchConferences() {
-  const { json } = await readOnly('POST', `${idx(CONFERENCES_INDEX)}/_search`, {
+  const { json } = await readOnly('POST', withPreference(`${idx(CONFERENCES_INDEX)}/_search`, CONFERENCES_PREFERENCE), {
     size: 500,
     _source: ['slug', 'status', 'end_date', 'time_zone'],
     query: { match_all: {} },
@@ -192,7 +193,7 @@ async function conferenceFor(slug) {
 const topicsCache = new Map(); // slug -> { at, promise }
 
 async function fetchTopics(slug) {
-  const { json } = await readOnly('POST', `${idx(TOPICS_INDEX)}/_search`, {
+  const { json } = await readOnly('POST', withPreference(`${idx(TOPICS_INDEX)}/_search`, conferencePreference(slug)), {
     size: 1000,
     _source: ['topic_id', 'label'],
     query: { term: { conference: slug } },
@@ -218,7 +219,7 @@ function topicLabels(slug) {
 // Talks of one conference by id, kind "talk" only. Returns a Map talk_id -> _source.
 async function talksById(slug, ids, fields) {
   if (!ids.length) return new Map();
-  const { json } = await readOnly('POST', `${idx(TALKS_INDEX)}/_search`, {
+  const { json } = await readOnly('POST', withPreference(`${idx(TALKS_INDEX)}/_search`, conferencePreference(slug)), {
     size: ids.length,
     _source: ['talk_id', ...fields],
     query: { bool: { filter: [{ term: { conference: slug } }, { term: { kind: 'talk' } }, { terms: { talk_id: ids } }] } },
@@ -535,7 +536,7 @@ function toPerson(hit, me, labels, talkTitles, circleTalkId) {
 }
 
 async function circleCounts(slug, ids) {
-  const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_search`, {
+  const { json } = await people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(slug)), {
     size: 0,
     query: {
       bool: {
@@ -688,7 +689,7 @@ async function matches(req, res) {
   const mine = new Set(me.shared_talk_ids ?? []);
   const talkIds = interested.filter((id) => mine.has(id));
   const [{ json }, labels] = await Promise.all([
-    people('POST', `${idx(PEOPLE_INDEX)}/_search`, query),
+    people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(conf.slug)), query),
     topicLabels(conf.slug),
   ]);
   const hits = json.hits?.hits ?? [];
@@ -727,7 +728,7 @@ async function members(req, res) {
   const query = peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], MEMBERS_SIZE, { includeEveryone: true });
   const [talks, { json }, labels] = await Promise.all([
     talksById(conf.slug, [talkId], ['title', 'start', 'end', 'url', 'speaker_profiles']),
-    people('POST', `${idx(PEOPLE_INDEX)}/_search`, query),
+    people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(conf.slug)), query),
     topicLabels(conf.slug),
   ]);
   const talk = talks.get(talkId);
