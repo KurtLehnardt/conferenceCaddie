@@ -1,0 +1,310 @@
+{
+  "note": "Sample attendee profiles for demos and tests. None of these is a real person. Topics are topic labels and are resolved against the conference's topics index at seed time; a label that does not resolve is skipped with a warning. Each entry in share is an index into shared_talks, whose titles are resolved against the conference's talks at seed time. The seed script can replace shared_talks with --talk.",
+  "shared_talks": [
+    "From Bytes to Traces: A Deep Dive into OpenTelemetry eBPF Instrumentation Internals",
+    "Platform Engineering after the AI Hype: Why IDPs Must Become Intent-Driven",
+    "Your Peers Are Struggling With LLM Inference on Kubernetes Too. Here's What the Data Says."
+  ],
+  "profiles": [
+    {
+      "display_name": "Sample · Priya, SRE",
+      "about": "Site reliability engineer at a payments company, running about forty Kubernetes clusters.",
+      "interests": "Cutting alert noise and getting useful traces out of legacy services without code changes.",
+      "expertise": "Running Prometheus and OpenTelemetry collectors at scale, on-call design and incident reviews.",
+      "learn": ["eBPF", "Tracing", "AI"],
+      "speak": ["Observability", "OpenTelemetry", "Kubernetes"],
+      "open_to_meet": true,
+      "share": [0]
+    },
+    {
+      "display_name": "Sample · Marcus, platform lead",
+      "about": "Leads a platform team of six building an internal developer platform on Backstage and Crossplane.",
+      "interests": "How other teams measure platform adoption and keep golden paths from going stale.",
+      "expertise": "Self-service infrastructure with Crossplane, Backstage templates and GitOps with Argo CD.",
+      "learn": ["AI", "Policy", "Cost"],
+      "speak": ["Platform Engineering", "GitOps", "Crossplane"],
+      "open_to_meet": true,
+      "share": [1]
+    },
+    {
+      "display_name": "Sample · Aiko, kernel engineer",
+      "about": "Works on networking and the Linux kernel; contributes to Cilium in her spare time.",
+      "interests": "Using eBPF for runtime security and for profiling GPU workloads.",
+      "expertise": "eBPF programs, XDP, Cilium datapath internals and kernel networking performance.",
+      "learn": ["Security", "GPU", "Observability"],
+      "speak": ["eBPF", "Cilium", "Networking"],
+      "open_to_meet": true,
+      "share": [0]
+    },
+    {
+      "display_name": "Sample · Daniel, ML platform",
+      "about": "Builds the serving platform for a team of forty data scientists.",
+      "interests": "Cheaper LLM inference on Kubernetes, GPU sharing and request routing with llm-d.",
+      "expertise": "Kubeflow pipelines, model serving with KServe and GPU node pools on managed Kubernetes.",
+      "learn": ["Inference", "GPU", "Scheduling", "llm-d"],
+      "speak": ["Kubeflow", "Kubernetes", "AI"],
+      "open_to_meet": true,
+      "share": [2]
+    },
+    {
+      "display_name": "Sample · Sofia, security engineer",
+      "about": "Product security for a SaaS company that moved to Kubernetes two years ago.",
+      "interests": "Policy as code that developers do not hate, and workload identity across clouds.",
+      "expertise": "Threat modelling for Kubernetes, admission control with Kyverno and supply chain signing.",
+      "learn": ["Identity", "eBPF", "Platform Engineering"],
+      "speak": ["Security", "Kyverno", "Policy"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Tom, student",
+      "about": "Final-year computer science student; first KubeCon.",
+      "interests": "Getting started in open source and finding a first contribution in a CNCF project.",
+      "expertise": "",
+      "learn": ["Kubernetes", "Open Source", "Community", "Observability"],
+      "speak": [],
+      "open_to_meet": true,
+      "share": [0, 2]
+    },
+    {
+      "display_name": "Sample · Grace, maintainer",
+      "about": "Maintainer of a CNCF sandbox project and mentor in the LFX program.",
+      "interests": "Growing a contributor community and making releases less painful.",
+      "expertise": "Onboarding new contributors, governance for small projects and Go code review.",
+      "learn": ["Security", "AI"],
+      "speak": ["Open Source", "Community", "Kubernetes"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Ravi, network engineer",
+      "about": "Runs the service mesh for a retail company with heavy seasonal traffic.",
+      "interests": "Whether ambient mode is ready for production and how Gateway API changes ingress.",
+      "expertise": "Istio and Envoy in production, multi-cluster traffic management and mTLS rollouts.",
+      "learn": ["eBPF", "Cilium", "Gateway API"],
+      "speak": ["Service Mesh", "Istio", "Envoy", "Multi-Cluster"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Lena, FinOps",
+      "about": "Owns cloud cost reporting for an engineering organisation of 300 people.",
+      "interests": "Right-sizing workloads automatically and showing teams what their clusters cost.",
+      "expertise": "Cost allocation with OpenCost, chargeback models and autoscaling policy.",
+      "learn": ["Autoscaling", "Karpenter", "Platform Engineering"],
+      "speak": ["Cost", "Kubernetes"],
+      "open_to_meet": true,
+      "share": [1]
+    },
+    {
+      "display_name": "Sample · Omar, agent builder",
+      "about": "Builds AI agents that operate internal tooling for a logistics company.",
+      "interests": "Sandboxing agents, giving them safe access to clusters and tracing what they do.",
+      "expertise": "Agent frameworks, tool calling against internal APIs and evaluation harnesses for agents.",
+      "learn": ["Security", "Observability", "Sandboxing"],
+      "speak": ["Agents", "Agentic", "AI"],
+      "open_to_meet": true,
+      "share": [2]
+    },
+    {
+      "display_name": "Sample · Hannah, developer advocate",
+      "about": "Developer advocate who writes tutorials about observability.",
+      "interests": "Stories from end users about OpenTelemetry adoption that I can turn into guides.",
+      "expertise": "Teaching OpenTelemetry instrumentation and the collector to new users.",
+      "learn": ["eBPF", "Platform Engineering"],
+      "speak": ["OpenTelemetry", "Observability", "Community"],
+      "open_to_meet": true,
+      "share": [0]
+    },
+    {
+      "display_name": "Sample · Jonas, storage",
+      "about": "Storage engineer moving databases onto Kubernetes.",
+      "interests": "Running stateful workloads safely and backups that actually restore.",
+      "expertise": "CSI drivers, Rook and Ceph, and operators for PostgreSQL.",
+      "learn": ["Operators", "Data", "Multi-Cluster"],
+      "speak": ["Storage", "Kubernetes"],
+      "open_to_meet": false,
+      "share": [1]
+    },
+    {
+      "display_name": "Sample · Mei, scheduler hacker",
+      "about": "Works on batch and HPC scheduling for a research lab.",
+      "interests": "Dynamic resource allocation for accelerators and fair sharing between teams.",
+      "expertise": "Kueue, Volcano and gang scheduling for training jobs.",
+      "learn": ["DRA", "Inference", "AI"],
+      "speak": ["Scheduling", "GPU", "Batch"],
+      "open_to_meet": true,
+      "share": [2]
+    },
+    {
+      "display_name": "Sample · Chris, GitOps",
+      "about": "Release engineer who moved 200 services to GitOps last year.",
+      "interests": "Progressive delivery and managing many clusters from one place.",
+      "expertise": "Flux and Argo CD at scale, Helm chart hygiene and promotion between environments.",
+      "learn": ["Multi-Cluster", "Policy", "Security"],
+      "speak": ["GitOps", "Flux", "Helm"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Fatima, architect",
+      "about": "Enterprise architect at a bank planning its next five years on Kubernetes.",
+      "interests": "Multi-tenancy, regulated workloads and how peers run platforms under audit.",
+      "expertise": "Compliance for container platforms and reference architectures for regulated industries.",
+      "learn": ["Platform Engineering", "Multi-Tenancy", "Identity"],
+      "speak": ["Security", "Policy"],
+      "open_to_meet": true,
+      "share": [1]
+    },
+    {
+      "display_name": "Sample · Kenji, GPU operator",
+      "about": "Runs a shared GPU cluster for several product teams.",
+      "interests": "Better GPU utilisation and observability for accelerators.",
+      "expertise": "NVIDIA GPU operator, MIG partitioning and DCGM metrics.",
+      "learn": ["eBPF", "Scheduling", "Cost"],
+      "speak": ["GPU", "Inference", "Kubernetes"],
+      "open_to_meet": true,
+      "share": [2]
+    },
+    {
+      "display_name": "Sample · Laura, engineering manager",
+      "about": "Manages the developer experience team at a media company.",
+      "interests": "Measuring developer productivity without surveillance, and platform team topologies.",
+      "expertise": "Building platform teams, roadmaps for internal platforms and developer surveys.",
+      "learn": ["AI", "Observability"],
+      "speak": ["Platform Engineering", "Community"],
+      "open_to_meet": true,
+      "share": [1]
+    },
+    {
+      "display_name": "Sample · Ben, Wasm tinkerer",
+      "about": "Backend developer experimenting with WebAssembly on Kubernetes.",
+      "interests": "Where Wasm fits next to containers and how to run it at the edge.",
+      "expertise": "Rust services and small Wasm components.",
+      "learn": ["WebAssembly", "Edge", "Kubernetes"],
+      "speak": ["Rust"],
+      "open_to_meet": false,
+      "share": [0]
+    },
+    {
+      "display_name": "Sample · Nadia, identity",
+      "about": "Works on workload identity and secrets management.",
+      "interests": "Replacing long-lived credentials everywhere, including for AI agents.",
+      "expertise": "SPIFFE and SPIRE, short-lived credentials and secret rotation.",
+      "learn": ["Agents", "Service Mesh"],
+      "speak": ["Identity", "Security", "SPIFFE"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Pedro, autoscaling",
+      "about": "Performance engineer focused on autoscaling and cluster efficiency.",
+      "interests": "Scaling LLM inference servers on queue depth instead of CPU.",
+      "expertise": "KEDA, Karpenter and the horizontal pod autoscaler with custom metrics.",
+      "learn": ["Inference", "LLM", "GPU"],
+      "speak": ["Autoscaling", "KEDA", "Karpenter"],
+      "open_to_meet": true,
+      "share": [2]
+    },
+    {
+      "display_name": "Sample · Elif, observability",
+      "about": "Observability lead at a gaming company with spiky traffic.",
+      "interests": "Profiling as the fourth signal and cheaper long-term metrics storage.",
+      "expertise": "Large Prometheus and Thanos setups, SLOs and tail-based sampling.",
+      "learn": ["eBPF", "Cost", "AI"],
+      "speak": ["Observability", "Metrics", "OpenTelemetry"],
+      "open_to_meet": true,
+      "share": [0]
+    },
+    {
+      "display_name": "Sample · Sam, startup CTO",
+      "about": "CTO of a twelve-person startup building developer tools.",
+      "interests": "Which AI infrastructure patterns are worth adopting early and which are hype.",
+      "expertise": "Shipping fast on managed Kubernetes with a tiny team.",
+      "learn": ["AI", "Inference", "Platform Engineering", "Agents"],
+      "speak": ["Kubernetes"],
+      "open_to_meet": true,
+      "share": [1, 2]
+    },
+    {
+      "display_name": "Sample · Ines, policy",
+      "about": "Policy engineer in a central platform team.",
+      "interests": "Testing policies before they block a deploy, and policy for AI workloads.",
+      "expertise": "Kyverno and OPA policies, exceptions workflows and policy reporting.",
+      "learn": ["AI", "GitOps"],
+      "speak": ["Policy", "Kyverno", "Security"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Victor, telco",
+      "about": "Cloud native engineer at a telecom operator running network functions on Kubernetes.",
+      "interests": "Running LLM inference close to the network edge and multi-cluster networking.",
+      "expertise": "Telco workloads on Kubernetes, Multus and high-performance networking.",
+      "learn": ["Inference", "LLM", "Edge"],
+      "speak": ["Networking", "Multi-Cluster", "Kubernetes"],
+      "open_to_meet": true,
+      "share": [2]
+    },
+    {
+      "display_name": "Sample · Julia, data engineer",
+      "about": "Data engineer running Spark and Airflow on Kubernetes.",
+      "interests": "Moving batch data pipelines to Kubernetes without losing the scheduling features we rely on.",
+      "expertise": "Spark on Kubernetes, Airflow operators and data pipeline reliability.",
+      "learn": ["Scheduling", "Batch", "Kueue"],
+      "speak": ["Data", "Kubernetes"],
+      "open_to_meet": false,
+      "share": [1]
+    },
+    {
+      "display_name": "Sample · Arjun, contributor",
+      "about": "Kubernetes contributor in SIG Node.",
+      "interests": "Dynamic resource allocation and how vendors are adopting it.",
+      "expertise": "Kubelet internals, container runtimes and the DRA API.",
+      "learn": ["GPU", "AI", "Inference"],
+      "speak": ["Kubernetes", "DRA", "Open Source"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Claire, sustainability",
+      "about": "Researcher measuring the energy use of cloud native workloads.",
+      "interests": "Carbon-aware scheduling and energy metrics for GPUs.",
+      "expertise": "Kepler energy metrics and benchmarking power draw of clusters.",
+      "learn": ["Scheduling", "GPU", "Autoscaling"],
+      "speak": ["Observability", "Metrics"],
+      "open_to_meet": true,
+      "share": [0]
+    },
+    {
+      "display_name": "Sample · Leo, consultant",
+      "about": "Independent consultant helping companies adopt platform engineering.",
+      "interests": "Real stories of internal developer platforms that failed and why.",
+      "expertise": "Platform maturity assessments, Backstage rollouts and team coaching.",
+      "learn": ["AI", "Agents", "Cost"],
+      "speak": ["Platform Engineering", "Backstage", "GitOps"],
+      "open_to_meet": true,
+      "share": [1]
+    },
+    {
+      "display_name": "Sample · Yara, chaos engineer",
+      "about": "Reliability engineer running game days at an airline.",
+      "interests": "Fault injection for AI services and testing failover between regions.",
+      "expertise": "Chaos Mesh and Litmus experiments, game days and failure mode analysis.",
+      "learn": ["AI", "Multi-Cluster", "Service Mesh"],
+      "speak": ["Chaos", "Kubernetes", "Observability"],
+      "open_to_meet": true,
+      "share": []
+    },
+    {
+      "display_name": "Sample · Noah, first-time speaker",
+      "about": "Backend engineer giving a lightning talk about eBPF tooling for developers.",
+      "interests": "Feedback on making eBPF approachable for application developers.",
+      "expertise": "Inspektor Gadget and debugging Kubernetes networking with eBPF.",
+      "learn": ["Community", "Observability", "Security"],
+      "speak": ["eBPF", "Networking"],
+      "open_to_meet": true,
+      "share": [0]
+    }
+  ]
+}
