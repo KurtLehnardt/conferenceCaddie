@@ -1,6 +1,12 @@
-// One person in People to meet or in a talk circle: the opener, the other
-// reasons, their topics and, when present, "How to reach me".
-import { ExternalLink, MessageCircle } from 'lucide-preact';
+// One person in People to meet, a search result or a talk circle: the opener, the passage that
+// matched, the other reasons, their topics and, when present, "How to reach me". Every card has
+// Block in its overflow menu and "Ask to talk shop".
+import { useEffect, useState } from 'preact/hooks';
+import { ExternalLink, MapPin, MessageCircle } from 'lucide-preact';
+import { OverflowMenu } from '../components/common';
+import { AskSheet, plainText } from './AskSheet';
+import { blockWithConfirm, outgoingTo, rememberPerson, requestTo } from './connect';
+import { usePeopleStore } from './storage';
 import type { PersonResult, TopicRef } from './types';
 import { Marked } from './util';
 
@@ -21,10 +27,21 @@ export function SampleNote({ people }: { people: PersonResult[] }) {
   return <p class="pp-sample-note">Profiles marked Sample are demo profiles, not real attendees.</p>;
 }
 
-export function PersonCard({ person }: { person: PersonResult }) {
-  const reasons = (person.reasons ?? []).filter((r) => r && r !== person.opener);
+export function PersonCard({ person, slug }: { person: PersonResult; slug: string }) {
+  usePeopleStore();
+  const [asking, setAsking] = useState(false);
+  useEffect(() => rememberPerson(person), [person.ref]);
+
+  const evidence = person.evidence ? plainText(person.evidence) : '';
+  // The evidence block already shows the matched passage, so a reason that repeats it is left out.
+  const repeats = (r: string) => !!evidence && plainText(r).includes(evidence);
+  const opener = person.opener && !repeats(person.opener) ? person.opener : '';
+  const reasons = (person.reasons ?? []).filter((r) => r && r !== person.opener && !repeats(r));
   const contact = person.contact;
   const hasContact = !!(contact && (contact.linkedin_url || contact.contact_note));
+  const asked = requestTo(slug, person.ref);
+  const open = asked && asked !== 'requested' ? outgoingTo(slug, person.ref) : null;
+
   return (
     <article class="pp-person">
       <header class="pp-person-head">
@@ -35,13 +52,30 @@ export function PersonCard({ person }: { person: PersonResult }) {
             <span class="sr-only">Sample profile, not a real person</span>
           </span>
         )}
+        <span class="pp-person-menu">
+          <OverflowMenu
+            label={`Options for ${person.display_name}`}
+            items={[{ label: 'Block', destructive: true, onSelect: () => blockWithConfirm(slug, person) }]}
+          />
+        </span>
       </header>
+      {person.around && (
+        <p class="pp-around">
+          <MapPin size={16} aria-hidden="true" />
+          {person.zone ? `Around · ${person.zone}` : 'Around now'}
+        </p>
+      )}
       {person.about && <p class="pp-person-about">{person.about}</p>}
-      {person.opener && (
+      {person.evidence && (
+        <blockquote class="pp-evidence">
+          <Marked text={person.evidence} />
+        </blockquote>
+      )}
+      {opener && (
         <p class="pp-opener">
           <MessageCircle size={18} aria-hidden="true" />
           <span>
-            <Marked text={person.opener} />
+            <Marked text={opener} />
           </span>
         </p>
       )}
@@ -68,6 +102,23 @@ export function PersonCard({ person }: { person: PersonResult }) {
           {contact!.contact_note && <p class="pp-contact-note">{contact!.contact_note}</p>}
         </div>
       )}
+      <div class="pp-actions pp-person-actions">
+        {asked === 'requested' ? (
+          <span class="pp-hint pp-asked" role="status">
+            No reply yet
+          </span>
+        ) : open ? (
+          <a class="btn btn-tonal btn-small" href={`#/meet/${encodeURIComponent(open.meet_id)}`}>
+            Open meet-up
+          </a>
+        ) : (
+          <button type="button" class="btn btn-tonal btn-small" onClick={() => setAsking(true)}>
+            <MessageCircle size={16} aria-hidden="true" />
+            Ask to talk shop
+          </button>
+        )}
+      </div>
+      {asking && <AskSheet slug={slug} person={person} onClose={() => setAsking(false)} />}
     </article>
   );
 }

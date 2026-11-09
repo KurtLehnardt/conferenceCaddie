@@ -19,6 +19,9 @@ import { TopicPicker } from './TopicPicker';
 import type { ConferenceLike, InterestedProp, Profile, TopicRef } from './types';
 import { interestedIds } from './util';
 
+/** Under both free-text fields: specific words are what the people search matches on. */
+export const SPECIFIC_HINT = 'The more specific, the better the matches.';
+
 function TextField({
   id,
   label,
@@ -178,11 +181,12 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
         />
         <TextField
           id="pp-interests"
-          label="Anything else? (optional)"
+          label="What I'm trying to figure out next"
           value={profile.interests}
           max={500}
           multiline
-          placeholder="For example: running Postgres on Kubernetes"
+          placeholder="For example: getting Postgres failover under a minute without a managed service"
+          hint={SPECIFIC_HINT}
           onInput={(v) => update({ interests: v })}
         />
       </section>
@@ -198,11 +202,12 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
         />
         <TextField
           id="pp-expertise"
-          label="Anything else? (optional)"
+          label="Things I've built, run or broken"
           value={profile.expertise}
           max={500}
           multiline
-          placeholder="For example: migrating a large team to GitOps"
+          placeholder="For example: ran Postgres operators on bare metal for 3 years"
+          hint={SPECIFIC_HINT}
           onInput={(v) => update({ expertise: v })}
         />
       </section>

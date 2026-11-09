@@ -1,10 +1,20 @@
+import type { ComponentChildren } from 'preact';
 import { ExternalLink } from 'lucide-preact';
 import type { ThemePref } from '../lib/storage';
 import { Segmented } from './common';
 
 declare const __APP_VERSION__: string;
 
-export function SettingsScreen({ theme, onTheme }: { theme: ThemePref; onTheme: (t: ThemePref) => void }) {
+export function SettingsScreen({
+  theme,
+  onTheme,
+  people,
+}: {
+  theme: ThemePref;
+  onTheme: (t: ThemePref) => void;
+  /** The people sections (blocked people, people I met) for the current conference. */
+  people?: ComponentChildren;
+}) {
   return (
     <div class="settings">
       <section class="settings-group" aria-labelledby="set-appearance">
@@ -29,6 +39,8 @@ export function SettingsScreen({ theme, onTheme }: { theme: ThemePref; onTheme: 
           </div>
         </div>
       </section>
+
+      {people}
 
       <section class="settings-group" aria-labelledby="set-about">
         <h2 class="settings-heading" id="set-about">

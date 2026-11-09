@@ -3,14 +3,16 @@ import type { Conference } from '../types';
 // Routes are /e/{slug} with a hash tab on top, for example /e/some-event-2026#/search.
 // The server serves index.html for unknown HTML paths, so no router library is needed.
 
-export type Tab = 'people' | 'for-you' | 'search' | 'interested' | 'profile' | 'settings';
+export type Tab = 'people' | 'for-you' | 'search' | 'interested' | 'profile' | 'settings' | 'inbox' | 'meet' | 'here';
 
-const TABS: Tab[] = ['people', 'for-you', 'search', 'interested', 'profile', 'settings'];
+const TABS: Tab[] = ['people', 'for-you', 'search', 'interested', 'profile', 'settings', 'inbox', 'meet', 'here'];
 const SLUG = /^[a-z0-9][a-z0-9-]{0,119}$/;
 
 export interface Route {
   slug: string | null;
   tab: Tab;
+  /** The rest of the hash for `#/meet/{id}` and `#/here/{zone}`, raw (still encoded). */
+  param: string | null;
 }
 
 export function readRoute(): Route {
@@ -24,8 +26,25 @@ export function readRoute(): Route {
       slug = '';
     }
   }
-  const h = location.hash.replace(/^#\/?/, '') as Tab;
-  return { slug, tab: TABS.includes(h) ? h : 'people' };
+  const h = location.hash.replace(/^#\/?/, '');
+  const slash = h.indexOf('/');
+  const head = (slash >= 0 ? h.slice(0, slash) : h) as Tab;
+  const rest = slash >= 0 ? h.slice(slash + 1) : '';
+  if (!TABS.includes(head)) return { slug, tab: 'people', param: null };
+  // Only the meet and here routes take a parameter, and they need one.
+  if (head === 'meet' || head === 'here') {
+    return rest ? { slug, tab: head, param: rest.slice(0, 200) } : { slug, tab: 'people', param: null };
+  }
+  return { slug, tab: head, param: null };
+}
+
+/** A route parameter as written in the hash, decoded; the raw value when it is not valid encoding. */
+export function decodeParam(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 export function conferencePath(slug: string, tab: Tab): string {

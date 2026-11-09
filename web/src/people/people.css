@@ -698,3 +698,252 @@
 .pp-shared-row .pp-hint {
   margin: 0;
 }
+
+/* ---------- Find & connect ---------- */
+
+.pp-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.pp-search .search-field {
+  min-width: 0;
+}
+
+.pp-search .search-field input {
+  color: var(--text);
+}
+
+.pp-search .chip {
+  height: 44px;
+}
+
+.pp-around {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pp-around svg {
+  flex: none;
+}
+
+.pp-evidence {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  background: var(--fill);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.pp-evidence mark,
+.pp-opener mark,
+.pp-reasons mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--mark-bg);
+  color: var(--mark-text);
+}
+
+.pp-person-head .pp-person-menu {
+  margin-left: auto;
+  margin-right: -10px;
+}
+
+.pp-person-head .pp-person-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.pp-person-actions {
+  margin-top: 2px;
+}
+
+.pp-person-actions .btn {
+  text-decoration: none;
+}
+
+.pp-asked {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  font-weight: 600;
+}
+
+.pp-more-sentinel {
+  min-height: 24px;
+}
+
+/* Presence */
+
+.pp-presence {
+  gap: 8px;
+}
+
+.pp-presence .pp-switch-row {
+  min-height: 44px;
+}
+
+.pp-presence-on,
+.pp-presence-setup {
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pp-select {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.pp-select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: transparent;
+}
+
+/* Ask sheet */
+
+.pp-ask-body {
+  display: grid;
+  gap: 14px;
+  padding-bottom: calc(16px + var(--safe-bottom));
+}
+
+.pp-ask-sent {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-tint);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pp-ask-body > .btn {
+  justify-self: start;
+}
+
+/* Inbox */
+
+.pp-inbox-card .pp-person-name {
+  font-size: 16px;
+}
+
+.pp-outgoing {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pp-outgoing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 4px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.pp-outgoing-name {
+  font-weight: 600;
+}
+
+/* Meet screen */
+
+.pp-meet .pp-card {
+  gap: 10px;
+}
+
+.pp-self-start {
+  justify-self: start;
+}
+
+.pp-spot-them {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.pp-caveat {
+  font-weight: 600;
+}
+
+.pp-found {
+  gap: 14px;
+}
+
+/* Topic chip action */
+
+.pp-chip-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 4px 6px 10px;
+  border-radius: 10px;
+  background: var(--accent-tint);
+}
+
+.pp-chip-action .pp-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-hold-hint {
+  margin-top: -6px;
+  font-size: 13px;
+}
+
+/* Settings: people I met */
+
+.pp-met-row {
+  gap: 4px;
+}
+
+.pp-met-text {
+  display: grid;
+  gap: 2px;
+}
+
+.pp-met-name {
+  font-weight: 600;
+}
+
+.pp-met-row .btn {
+  justify-self: start;
+  margin-left: -12px;
+}
+
+.appbar-inbox {
+  position: relative;
+}
+
+.appbar-inbox .nav-badge {
+  top: 4px;
+  left: 24px;
+}

@@ -1,7 +1,8 @@
 // Calls to the people, circles, recommendations and topics endpoints of CONTRACT3.
-// The X-Caddie-Device header goes only to /api/people/* and /api/circles/members.
+// The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence
+// and /api/meet/*. This is the only place that reads the device secret.
 import { getDevice } from './storage';
-import type { CircleMembers, PersonResult, Recommendation, TopicHit } from './types';
+import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Recommendation, TopicHit } from './types';
 
 export class PeopleApiError extends Error {
   constructor(
@@ -14,9 +15,13 @@ export class PeopleApiError extends Error {
   }
 }
 
-function friendly(status: number): string {
+/** The server's own wording for a text field that the filter held back. */
+export const FILTERED_MESSAGE = 'That was held back by the filter. Edit it and try again.';
+
+function friendly(status: number, code: string | null = null, message: string | null = null): string {
+  if (code === 'filtered') return message ?? FILTERED_MESSAGE;
   if (status === 0) return 'You appear to be offline. Check your connection and try again.';
-  if (status === 429) return 'Too many requests. Wait a minute and try again.';
+  if (status === 429) return message ?? 'Too many requests. Wait a minute and try again.';
   if (status === 403) return 'This device is not allowed to do that.';
   if (status >= 500) return 'This is unavailable right now. Please try again.';
   return 'That could not be saved. Check your details and try again.';
@@ -40,14 +45,16 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
   if (!res.ok) {
     let code: string | null = null;
     let count: number | null = null;
+    let message: string | null = null;
     try {
       const body = await res.json();
       code = typeof body?.error === 'string' ? body.error : null;
       count = typeof body?.count === 'number' ? body.count : null;
+      message = typeof body?.message === 'string' ? body.message.slice(0, 200) : null;
     } catch {
       // The body is not JSON; the status is enough.
     }
-    throw new PeopleApiError(friendly(res.status), res.status, code, count);
+    throw new PeopleApiError(friendly(res.status, code, message), res.status, code, count);
   }
   return (await res.json()) as T;
 }
@@ -86,11 +93,87 @@ export function deleteProfile(slug: string) {
   });
 }
 
-export function fetchMatches(slug: string, interestedIds: string[], signal?: AbortSignal) {
-  return call<{ results: PersonResult[] }>(
-    '/api/people/matches',
-    post({ event: slug, interested_talk_ids: interestedIds.slice(0, 100) }, signal, true),
+export interface MatchQuery {
+  /** Free text, up to 300 characters. Left out when empty, so the server uses the profile. */
+  query?: string;
+  when?: 'anyone' | 'around_now';
+  from?: number;
+  size?: number;
+}
+
+export const MATCH_PAGE = 20;
+
+export function fetchMatches(slug: string, interestedIds: string[], signal?: AbortSignal, q: MatchQuery = {}) {
+  const body: Record<string, unknown> = { event: slug, interested_talk_ids: interestedIds.slice(0, 100) };
+  const text = q.query?.trim().slice(0, 300);
+  if (text) body.query = text;
+  if (q.when) body.when = q.when;
+  if (q.from) body.from = q.from;
+  if (q.size) body.size = Math.min(q.size, MATCH_PAGE);
+  return call<{ results: PersonResult[] }>('/api/people/matches', post(body, signal, true));
+}
+
+/* ---------- Find & connect: block, presence, meet ---------- */
+
+export function blockPerson(slug: string, ref: string) {
+  return call<{ ok: boolean }>('/api/people/block', post({ event: slug, ref }, undefined, true));
+}
+
+export function unblockPerson(slug: string, ref: string) {
+  return call<{ ok: boolean }>('/api/people/block', {
+    method: 'DELETE',
+    body: JSON.stringify({ event: slug, ref }),
+    device: true,
+  });
+}
+
+export function fetchBlocks(slug: string, signal?: AbortSignal) {
+  return call<{ refs: string[] }>(`/api/people/blocks?event=${encodeURIComponent(slug)}`, { signal, device: true });
+}
+
+export function putPresence(slug: string, zone: string, spot: string) {
+  return call<{ ok: boolean; presence_until: string }>('/api/presence', {
+    method: 'PUT',
+    body: JSON.stringify({ event: slug, zone, spot: spot.trim().slice(0, 60) }),
+    device: true,
+  });
+}
+
+export function deletePresence(slug: string) {
+  return call<{ ok: boolean }>(`/api/presence?event=${encodeURIComponent(slug)}`, { method: 'DELETE', device: true });
+}
+
+export function requestMeet(slug: string, ref: string, topicId: string | null, note: string) {
+  return call<{ meet_id: string; state: MeetState }>(
+    '/api/meet',
+    post({ event: slug, ref, topic_id: topicId, note: note.trim().slice(0, 140) }, undefined, true),
   );
+}
+
+export function fetchInbox(slug: string, signal?: AbortSignal) {
+  return call<Inbox>(`/api/meet/inbox?event=${encodeURIComponent(slug)}`, { signal, device: true });
+}
+
+export type MeetAction = 'accept' | 'decline' | 'found' | 'cancel';
+
+export function meetAction(meetId: string, action: MeetAction) {
+  return call<{ ok: boolean; state: MeetState }>(`/api/meet/${encodeURIComponent(meetId)}/${action}`, {
+    method: 'POST',
+    body: '{}',
+    device: true,
+  });
+}
+
+export function putMeetDetails(meetId: string, details: { spot_me?: string; rendezvous?: string }) {
+  return call<{ ok: boolean }>(`/api/meet/${encodeURIComponent(meetId)}/details`, {
+    method: 'PUT',
+    body: JSON.stringify(details),
+    device: true,
+  });
+}
+
+export function fetchMeet(meetId: string, signal?: AbortSignal) {
+  return call<MeetDetail>(`/api/meet/${encodeURIComponent(meetId)}`, { signal, device: true });
 }
 
 export function fetchCircleCounts(slug: string, talkIds: string[]) {

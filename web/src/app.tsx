@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { ArrowLeft, CalendarX, CircleExclamationPoint, CircleUserRound, ExternalLink, X } from 'lucide-preact';
+import { ArrowLeft, CalendarX, CircleExclamationPoint, CircleUserRound, ExternalLink, Inbox, X } from 'lucide-preact';
 import type { Conference, InterestedTalk, SearchFilters, SearchResponse, Talk } from './types';
 import { EMPTY_FILTERS } from './types';
 import { ApiError, getConferences, isAbort, search } from './api';
@@ -13,7 +13,7 @@ import {
   toInterested,
   type ThemePref,
 } from './lib/storage';
-import { defaultConference, goToConference, readRoute, replaceConference, type Route } from './lib/route';
+import { decodeParam, defaultConference, goToConference, readRoute, replaceConference, type Route } from './lib/route';
 import { useFocusTrap } from './lib/focus';
 import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, type ToastData } from './components/common';
 import { ChipRow, FilterSheet, Results, SearchField, activeFilterCount, type SheetSection } from './components/search';
@@ -21,7 +21,21 @@ import { InterestedScreen } from './components/interested';
 import { SettingsScreen } from './components/settings';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
-import { ForYouScreen, PeopleScreen, ProfileScreen, onInterestedChanged, type TalkLike } from './people/index';
+import {
+  BlockedPeople,
+  ForYouScreen,
+  InboxScreen,
+  MeetScreen,
+  PeopleIMet,
+  PeopleScreen,
+  ProfileScreen,
+  onInterestedChanged,
+  registerPeopleUi,
+  useInboxCount,
+  useInboxWatch,
+  usePresenceWatch,
+  type TalkLike,
+} from './people/index';
 import { saveForOffline, useOnline } from './offline/status';
 import { NeedsConnection, OfflineBadge, OfflineSearch } from './offline/OfflineSearch';
 
@@ -91,10 +105,15 @@ export function App() {
   const [sheet, setSheet] = useState<{ open: boolean; section?: SheetSection }>({ open: false });
   const online = useOnline();
 
-  const { slug, tab } = route;
+  const { slug, tab, param } = route;
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
   const searchable = conference?.status === 'searchable' ? conference : null;
   const talks = interested.slug === slug ? interested.talks : [];
+
+  // Find & connect: presence timers and the inbox poll run on every tab while the app is open.
+  usePresenceWatch(searchable?.slug ?? null);
+  useInboxWatch(searchable?.slug ?? null);
+  const inboxCount = useInboxCount(searchable?.slug ?? null);
 
   const controller = useRef<AbortController | null>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -105,6 +124,12 @@ export function App() {
   const showToast = useCallback((message: string, action?: ToastData['action']) => {
     setToast({ id: Date.now(), message, action });
   }, []);
+
+  // The people screens use the shell's one Toast and ConfirmDialog.
+  useEffect(() => {
+    registerPeopleUi({ toast: showToast, confirm: (d) => setConfirm(d) });
+    return () => registerPeopleUi(null);
+  }, [showToast]);
 
   const loadList = useCallback(async () => {
     try {
@@ -314,14 +339,24 @@ export function App() {
     });
   };
 
+  // Screens that belong to one conference and one moment go back to People on a switch.
+  const perConference = tab === 'settings' || tab === 'inbox' || tab === 'meet' || tab === 'here';
   const pickConference = (next: string) => {
     setSwitcherOpen(false);
-    if (next !== slug) goToConference(next, tab === 'settings' ? 'people' : tab);
+    if (next !== slug) goToConference(next, perConference ? 'people' : tab);
+  };
+
+  // #/here/{zone} is the People tab with presence turned on; once handled, the hash becomes #/people.
+  const hereHandled = () => {
+    if (readRoute().tab !== 'here') return;
+    history.replaceState(null, '', `${location.pathname}#/people`);
+    window.dispatchEvent(new Event('caddie:route'));
   };
 
   const interestedIds = new Set(talks.map((t) => t.talk_id));
   const base = slug ? `/e/${encodeURIComponent(slug)}` : '';
-  const isTabScreen = tab !== 'profile' && tab !== 'settings';
+  const isTabScreen = tab !== 'profile' && tab !== 'settings' && tab !== 'inbox' && tab !== 'meet';
+  const navTab = tab === 'here' || tab === 'inbox' || tab === 'meet' ? 'people' : tab;
 
   const leading = !isTabScreen ? (
     <a class="icon-btn appbar-back" href={tab === 'settings' ? '#/profile' : '#/people'} aria-label="Back">
@@ -339,6 +374,10 @@ export function App() {
     />
   ) : tab === 'profile' ? (
     'Profile'
+  ) : tab === 'inbox' ? (
+    'Requests'
+  ) : tab === 'meet' ? (
+    'Meet up'
   ) : (
     'Settings'
   );
@@ -351,6 +390,16 @@ export function App() {
           label="Interested options"
           items={[{ label: 'Clear list', destructive: true, disabled: !talks.length, onSelect: clearInterested }]}
         />
+      )}
+      {isTabScreen && (tab === 'people' || tab === 'here') && searchable && (
+        <a class="icon-btn appbar-inbox" href="#/inbox" aria-label={inboxCount ? `Requests, ${inboxCount} new` : 'Requests'}>
+          <Inbox size={24} aria-hidden="true" />
+          {inboxCount > 0 && (
+            <span class="badge nav-badge" aria-hidden="true">
+              {inboxCount > 99 ? '99+' : inboxCount}
+            </span>
+          )}
+        </a>
       )}
       {isTabScreen && (
         <a class="icon-btn" href="#/profile" aria-label="Your profile">
@@ -408,24 +457,39 @@ export function App() {
 
   return (
     <div class="shell">
-      <NavBar tab={tab} base={base} interestedCount={talks.length} />
+      <NavBar tab={navTab} base={base} interestedCount={talks.length} peopleCount={inboxCount} />
       <div class="content">
         <AppBar leading={leading} title={title} actions={actions} />
         <main class="main" id="main">
           {tab === 'settings' ? (
-            <SettingsScreen theme={theme} onTheme={setTheme} />
+            <SettingsScreen
+              theme={theme}
+              onTheme={setTheme}
+              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /></> : null}
+            />
           ) : !searchable ? (
             blocker()
           ) : (
             <>
-              {!online && (tab === 'people' || tab === 'for-you') && (
+              {!online && (tab === 'people' || tab === 'here' || tab === 'for-you' || tab === 'inbox' || tab === 'meet') && (
                 <NeedsConnection
-                  title={tab === 'people' ? 'People to meet needs a connection' : 'Suggestions need a connection'}
+                  title={tab === 'for-you' ? 'Suggestions need a connection' : 'People to meet needs a connection'}
                   body="They will load when you're back online. Search, your Interested list and your profile still work on this phone."
                 />
               )}
-              {online && tab === 'people' && (
-                <PeopleScreen key={searchable.slug} conference={searchable} interested={talks} onOpenTalk={onOpenTalk} />
+              {online && (tab === 'people' || tab === 'here') && (
+                <PeopleScreen
+                  key={searchable.slug}
+                  conference={searchable}
+                  interested={talks}
+                  onOpenTalk={onOpenTalk}
+                  hereZone={tab === 'here' ? param : null}
+                  onHereHandled={hereHandled}
+                />
+              )}
+              {online && tab === 'inbox' && <InboxScreen key={searchable.slug} conference={searchable} />}
+              {online && tab === 'meet' && param && (
+                <MeetScreen key={`${searchable.slug}:${param}`} conference={searchable} meetId={decodeParam(param)} interested={talks} />
               )}
               {online && tab === 'for-you' && (
                 <ForYouScreen key={searchable.slug} conference={searchable} interested={talks} onToggleInterested={toggleInterested} />

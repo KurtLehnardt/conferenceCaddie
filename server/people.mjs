@@ -8,19 +8,30 @@
 //   ES_INDEX              talks, default caddie-talks.
 //   ES_TOPICS_INDEX       default caddie-topics.
 //   ES_CONFERENCES_INDEX  default caddie-conferences.
+//   ES_PEOPLE_BLOCKS_INDEX default caddie-people-blocks (who blocked whom).
+//   ES_PEOPLE_MEETS_INDEX default caddie-people-meets (ask to talk shop).
 //   REF_SALT              optional salt for the opaque result reference.
 //
 // Rules this module keeps:
 // - Elasticsearch does all matching, ranking and filtering. People are ranked by one rrf
 //   retriever; this module only builds queries and reshapes hits in the order returned. The
 //   reasons shown with a result are built from the topic lists and titles of that result, which
-//   explains a rank but never changes it.
+//   explains a rank but never changes it. The one result a search drops afterwards is a person
+//   whose only link to the requester is a topic the whole conference shares (see matches).
 // - A people document exists only while its owner is visible conference-wide or shares for at
-//   least one talk. Every people query filters on event_id and on visible_until > now.
-// - secret_hash, text_hash and profile_id are never returned. Request bodies, headers, profile
-//   fields and secrets are never logged; the only log lines here name an Elasticsearch status.
+//   least one talk. Every people query filters on event_id and on visible_until > now, and
+//   leaves out anyone the requester has blocked or who has blocked the requester.
+// - secret_hash, text_hash and profile_id are never returned; results carry ref instead, which
+//   is also stored on the document so a block or a meet request can name a person by it.
+//   Request bodies, headers, profile fields and secrets are never logged; the only log lines here
+//   name an Elasticsearch status.
 // - Writes whose about, interests and expertise are unchanged use a Bulk API partial update that
-//   omits those fields, so toggling visibility or sharing never re-runs the embedding model.
+//   omits those fields, so toggling visibility, sharing or presence never re-runs the model.
+// - Presence (zone, spot, since, until) lives on the people document and is returned to another
+//   person only while both are around. Blocks and meets are deleted with the profile.
+//
+// The block, presence and meet routes themselves are in connect.mjs, which uses the transport,
+// plumbing and lookups exported here.
 
 import crypto from 'node:crypto';
 import { take, clientIp } from './ratelimit.mjs';
@@ -29,7 +40,9 @@ import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
 const READ_KEY = process.env.ES_API_KEY || '';
-const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
+export const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
+export const BLOCKS_INDEX = process.env.ES_PEOPLE_BLOCKS_INDEX || 'caddie-people-blocks';
+export const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
 const TALKS_INDEX = process.env.ES_INDEX || 'caddie-talks';
 const TOPICS_INDEX = process.env.ES_TOPICS_INDEX || 'caddie-topics';
 const CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conferences';
@@ -38,14 +51,23 @@ const ES_TIMEOUT_MS = 10_000;
 const MAX_BODY = 8192;
 const CONFERENCES_TTL_MS = 60_000;
 const TOPICS_TTL_MS = 10 * 60_000;
+const ZONES_TTL_MS = 10 * 60_000;
 const MATCHES_SIZE = 20;
+const MATCHES_FROM_MAX = 1000;
 const MEMBERS_SIZE = 50;
 const RANK_WINDOW = 100;
 const KNN_K = 100;
 const KNN_CANDIDATES = 500;
 const PASSAGE_MAX = 200;
+const EVIDENCE_FALLBACK = 160;
+const QUERY_MAX = 300;
+const COMMON_TOPICS = 10;
+const BLOCKS_MAX = 1000;
 
-const LIMITS = {
+// Zones a person can say they are in, besides the conference's room names.
+export const FIXED_ZONES = ['Expo hall', 'Registration', 'Food and coffee', 'Hallway', 'Outside'];
+
+export const LIMITS = {
   writeDevice: 20,
   writeIp: 60,
   readDevice: 30,
@@ -57,8 +79,9 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const TALK_ID_RE = /^[a-z0-9][a-z0-9-]{0,119}:[A-Za-z0-9_-]{1,64}$/;
 const TOPIC_ID_RE = /^[a-z0-9][a-z0-9-]{0,99}$/;
 const LINKEDIN_RE = /^https:\/\/(www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]{3,100}\/?$/;
+export const REF_RE = /^[0-9a-f]{16}$/;
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(status, body, headers = {}) {
     super(body?.error ?? 'error');
     this.status = status;
@@ -66,10 +89,10 @@ class HttpError extends Error {
     this.headers = headers;
   }
 }
-class UpstreamError extends Error {}
+export class UpstreamError extends Error {}
 
-const bad = (message) => new HttpError(400, { error: message });
-const forbidden = () => new HttpError(403, { error: 'forbidden' });
+export const bad = (message) => new HttpError(400, { error: message });
+export const forbidden = () => new HttpError(403, { error: 'forbidden' });
 
 // ---------------------------------------------------------------------------------------------
 // Elasticsearch transport. Error bodies from Elasticsearch are never passed on or logged.
@@ -100,22 +123,28 @@ async function es(key, method, path, body, { ndjson = false, okStatuses = [] } =
   }
 }
 
-const people = (method, path, body, opts) => es(PEOPLE_KEY, method, path, body, opts);
+export const people = (method, path, body, opts) => es(PEOPLE_KEY, method, path, body, opts);
 const readOnly = (method, path, body, opts) => es(READ_KEY, method, path, body, opts);
-const idx = (name) => `/${encodeURIComponent(name)}`;
-const docId = (eventId, profileId) => `${eventId}:${profileId}`;
+export const idx = (name) => `/${encodeURIComponent(name)}`;
+export const docId = (eventId, profileId) => `${eventId}:${profileId}`;
 
 // Profiles are stored only until their conference ends. Queries already hide a document once its
 // visible_until has passed; this deletes it as well. It runs when the server starts, which covers
 // every cold start, and then once an hour while an instance stays up. A document without
-// visible_until is never live, so it is deleted too.
+// visible_until is never live, so it is deleted too. The same pass clears presence that has
+// expired (a Bulk partial update of the four presence fields, so nothing is re-embedded) and
+// deletes meets whose expires_at has passed. The purge CLI runs the same three steps.
 const PURGE_INTERVAL_MS = 60 * 60_000;
-const EXPIRED_PEOPLE_QUERY = {
+const PURGE_PRESENCE_PAGE = 500;
+export const EXPIRED_PEOPLE_QUERY = {
   bool: {
     should: [{ range: { visible_until: { lt: 'now' } } }, { bool: { must_not: { exists: { field: 'visible_until' } } } }],
     minimum_should_match: 1,
   },
 };
+export const EXPIRED_PRESENCE_QUERY = { range: { presence_until: { lt: 'now' } } };
+export const EXPIRED_MEETS_QUERY = { range: { expires_at: { lt: 'now' } } };
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null };
 
 async function purgeExpired() {
   if (!PEOPLE_KEY) return;
@@ -126,6 +155,29 @@ async function purgeExpired() {
     if (json.deleted) console.log(`Deleted ${json.deleted} expired people profiles.`);
   } catch (err) {
     console.error(`Deleting expired people profiles failed: ${err.message}`);
+  }
+  try {
+    const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_search`, {
+      size: PURGE_PRESENCE_PAGE,
+      _source: false,
+      query: EXPIRED_PRESENCE_QUERY,
+    });
+    const ids = (json.hits?.hits ?? []).map((h) => h._id);
+    if (ids.length) {
+      const body = ids.map((id) => `${JSON.stringify({ update: { _id: id } })}\n${JSON.stringify({ doc: PRESENCE_OFF })}\n`).join('');
+      await people('POST', `${idx(PEOPLE_INDEX)}/_bulk`, body, { ndjson: true });
+      console.log(`Cleared ${ids.length} expired presence entries.`);
+    }
+  } catch (err) {
+    console.error(`Clearing expired presence failed: ${err.message}`);
+  }
+  try {
+    const { json } = await people('POST', `${idx(MEETS_INDEX)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
+      query: EXPIRED_MEETS_QUERY,
+    });
+    if (json.deleted) console.log(`Deleted ${json.deleted} expired meets.`);
+  } catch (err) {
+    console.error(`Deleting expired meets failed: ${err.message}`);
   }
 }
 
@@ -170,40 +222,63 @@ function zoneOffsetMs(utcMs, timeZone) {
   return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')) - utcMs;
 }
 
-// 23:59:59 on the conference's last day in its own time zone, as an ISO instant. A conference
-// without a time zone uses UTC-12, the last place on earth where that day ends.
-export function visibleUntil(endDate, timeZone) {
-  const [y, m, d] = String(endDate).split('-').map(Number);
-  const wall = Date.UTC(y, m - 1, d, 23, 59, 59);
-  if (!timeZone) return new Date(wall + 12 * 3600_000).toISOString();
+// The instant at which a wall clock reading (given as a UTC timestamp of the same digits) occurs
+// in a time zone. A conference without a time zone uses UTC-12, the last place on earth where
+// that day ends.
+function wallToInstant(wall, timeZone) {
+  if (!timeZone) return wall + 12 * 3600_000;
   let t = wall - zoneOffsetMs(wall, timeZone);
-  t = wall - zoneOffsetMs(t, timeZone);
-  return new Date(t).toISOString();
+  return wall - zoneOffsetMs(t, timeZone);
 }
 
-// Returns { slug, visibleUntil } for a searchable conference, or throws 400.
-async function conferenceFor(slug) {
+// 23:59:59 on the conference's last day in its own time zone, as an ISO instant.
+export function visibleUntil(endDate, timeZone) {
+  const [y, m, d] = String(endDate).split('-').map(Number);
+  return new Date(wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone)).toISOString();
+}
+
+// The start (00:00:00) and end (23:59:59) of the current conference day, in milliseconds. Meet
+// requests wait until the end of the day, and "Not now" replies are counted per day.
+export function dayBounds(nowMs, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timeZone || 'Etc/GMT+12', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(nowMs));
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+  const [y, m, d] = [get('year'), get('month'), get('day')];
+  return { start: wallToInstant(Date.UTC(y, m - 1, d, 0, 0, 0), timeZone), end: wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone) };
+}
+
+// Returns { slug, visibleUntil, timeZone } for a searchable conference, or throws 400.
+export async function conferenceFor(slug) {
   if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw bad('event must be a conference slug');
   const conf = (await conferences()).get(slug);
   if (!conf || conf.status !== 'searchable' || !conf.end_date) throw bad('conference is not available');
-  return { slug, visibleUntil: visibleUntil(conf.end_date, conf.time_zone) };
+  return { slug, visibleUntil: visibleUntil(conf.end_date, conf.time_zone), timeZone: conf.time_zone || null };
 }
 
 const topicsCache = new Map(); // slug -> { at, promise }
 
+// Every topic of a conference: labels by id, and the ids of the ten topics on the most talks,
+// which match so many people that an overlap on one of them alone says little.
 async function fetchTopics(slug) {
   const { json } = await readOnly('POST', `${idx(TOPICS_INDEX)}/_search`, {
     size: 1000,
-    _source: ['topic_id', 'label'],
+    _source: ['topic_id', 'label', 'talk_count'],
     query: { term: { conference: slug } },
+    sort: [{ talk_count: 'desc' }, { topic_id: 'asc' }],
   });
-  const map = new Map();
-  for (const h of json.hits?.hits ?? []) if (h._source?.topic_id) map.set(h._source.topic_id, h._source.label ?? h._source.topic_id);
-  return map;
+  const labels = new Map();
+  const common = new Set();
+  for (const h of json.hits?.hits ?? []) {
+    const s = h._source ?? {};
+    if (!s.topic_id) continue;
+    labels.set(s.topic_id, s.label ?? s.topic_id);
+    if (common.size < COMMON_TOPICS) common.add(s.topic_id);
+  }
+  return { labels, common };
 }
 
-// topic_id -> label for one conference, cached for ten minutes.
-function topicLabels(slug) {
+// { labels: Map topic_id -> label, common: Set of topic ids } for one conference, cached for
+// ten minutes.
+export function topicsOf(slug) {
   const now = Date.now();
   const hit = topicsCache.get(slug);
   if (hit && now - hit.at <= TOPICS_TTL_MS) return hit.promise;
@@ -211,6 +286,34 @@ function topicLabels(slug) {
   topicsCache.set(slug, { at: now, promise });
   promise.catch(() => {
     if (topicsCache.get(slug)?.promise === promise) topicsCache.delete(slug);
+  });
+  return promise;
+}
+
+export const topicLabels = (slug) => topicsOf(slug).then((t) => t.labels);
+
+const zonesCache = new Map(); // slug -> { at, promise }
+
+// The conference's room names, from its talks, plus the fixed zones.
+async function fetchZones(slug) {
+  const { json } = await readOnly('POST', `${idx(TALKS_INDEX)}/_search`, {
+    size: 0,
+    query: { bool: { filter: [{ term: { conference: slug } }, { term: { kind: 'talk' } }] } },
+    aggs: { rooms: { terms: { field: 'room', size: 200 } } },
+  });
+  const rooms = (json.aggregations?.rooms?.buckets ?? []).map((b) => String(b.key).trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  return new Set([...FIXED_ZONES, ...rooms]);
+}
+
+// The Set of zones a person at this conference can be in, cached for ten minutes.
+export function zonesFor(slug) {
+  const now = Date.now();
+  const hit = zonesCache.get(slug);
+  if (hit && now - hit.at <= ZONES_TTL_MS) return hit.promise;
+  const promise = fetchZones(slug);
+  zonesCache.set(slug, { at: now, promise });
+  promise.catch(() => {
+    if (zonesCache.get(slug)?.promise === promise) zonesCache.delete(slug);
   });
   return promise;
 }
@@ -231,7 +334,7 @@ async function talksById(slug, ids, fields) {
 // ---------------------------------------------------------------------------------------------
 // Request plumbing.
 
-function sendJson(res, status, obj, headers = {}) {
+export function sendJson(res, status, obj, headers = {}) {
   const body = JSON.stringify(obj);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -242,13 +345,13 @@ function sendJson(res, status, obj, headers = {}) {
   res.end(body);
 }
 
-function limit(key, perMinute) {
-  const r = take(key, perMinute);
+export function limit(key, perWindow, windowMs) {
+  const r = take(key, perWindow, windowMs);
   if (!r.ok) throw new HttpError(429, { error: 'Too many requests' }, { 'Retry-After': String(r.retryAfterSec) });
 }
 
 // A browser always sends Origin on these methods; it must name this host. curl sends none.
-function checkOrigin(req) {
+export function checkOrigin(req) {
   const origin = req.headers.origin;
   if (origin === undefined) return;
   let ok = false;
@@ -298,9 +401,9 @@ function readBody(req) {
   });
 }
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+export const isPlainObject = (v) = v !== null && typeof v === 'object' && !Array.isArray(v);
 
-async function jsonBody(req, allowedKeys) {
+export async function jsonBody(req, allowedKeys) {
   const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   if (type !== 'application/json') throw new HttpError(415, { error: 'Content-Type must be application/json' });
   const raw = await readBody(req);
@@ -315,7 +418,7 @@ async function jsonBody(req, allowedKeys) {
   return body;
 }
 
-function requireDevice(req) {
+export function requireDevice(req) {
   const device = parseDevice(req);
   if (!device) throw forbidden();
   return device;
@@ -324,7 +427,7 @@ function requireDevice(req) {
 // ---------------------------------------------------------------------------------------------
 // Validation.
 
-function text(value, name, max, { required = false } = {}) {
+export function text(value, name, max, { required = false } = {}) {
   if (value === undefined || value === null) {
     if (required) throw bad(`${name} is required`);
     return '';
@@ -393,10 +496,13 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // ---------------------------------------------------------------------------------------------
 // People documents (people key).
 
-const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise'];
+const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_since', 'presence_until'];
+const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', ...PRESENCE_FIELDS];
+// What one participant of a meet, or a blocked person, may learn about the other.
+const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', ...PRESENCE_FIELDS];
 
 // Returns { found, source, seqNo, primaryTerm } for the caller's own document.
-async function ownDoc(eventId, profileId) {
+export async function ownDoc(eventId, profileId) {
   const { status, json } = await people(
     'GET',
     `${idx(PEOPLE_INDEX)}/_doc/${encodeURIComponent(docId(eventId, profileId))}?_source_includes=${OWN_FIELDS.join(',')}`,
@@ -407,10 +513,12 @@ async function ownDoc(eventId, profileId) {
   return { found: true, source: json._source ?? {}, seqNo: json._seq_no, primaryTerm: json._primary_term };
 }
 
-const isLive = (source) => typeof source.visible_until === 'string' && Date.parse(source.visible_until) > Date.now();
+export const isLive = (source) => typeof source.visible_until === 'string' && Date.parse(source.visible_until) > Date.now();
+// True while the person has said they are around and that has not run out.
+export const isAround = (source) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > Date.now();
 
-// One bulk action with refresh=wait_for. Returns the item status.
-async function bulkOne(action, doc) {
+// One bulk action on the people index with refresh=wait_for. Returns the item status.
+export async function bulkOne(action, doc) {
   const body = `${JSON.stringify(action)}\n${JSON.stringify(doc)}\n`;
   const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
   const item = json.items?.[0] ?? {};
@@ -422,85 +530,220 @@ async function deleteDoc(id) {
   await people('DELETE', `${idx(PEOPLE_INDEX)}/_doc/${encodeURIComponent(id)}?refresh=wait_for`, undefined, { okStatuses: [404] });
 }
 
+// Other people's documents by profile id, as a Map profile_id -> source limited to OTHER_FIELDS.
+// Missing documents are left out.
+export async function peopleByIds(eventId, profileIds) {
+  const ids = [...new Set(profileIds)].filter((id) => typeof id === 'string' && id);
+  if (!ids.length) return new Map();
+  const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_mget`, {
+    ids: ids.map((id) => docId(eventId, id)),
+    _source: OTHER_FIELDS,
+  });
+  const map = new Map();
+  for (const d of json.docs ?? []) if (d.found && d._source?.profile_id) map.set(d._source.profile_id, d._source);
+  return map;
+}
+
+// The live document a result's ref points at, or null. Only a document the requester could have
+// seen qualifies: visible conference-wide, or sharing a talk the requester also shares for.
+export async function personByRef(me, ref) {
+  const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_search`, {
+    size: 1,
+    _source: OTHER_FIELDS,
+    query: { bool: { filter: [{ term: { event_id: me.event_id } }, { term: { ref } }, { range: { visible_until: { gt: 'now' } } }] } },
+  });
+  const s = json.hits?.hits?.[0]?._source;
+  if (!s?.profile_id || s.profile_id === me.profile_id) return null;
+  const mine = new Set(me.shared_talk_ids ?? []);
+  if (s.open_to_meet !== true && !(s.shared_talk_ids ?? []).some((id) => mine.has(id))) return null;
+  return s;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Blocks. A block is one document per direction; every people query leaves out both directions.
+
+export const blockId = (eventId, blockerId, blockedId) => `${eventId}:${blockerId}:${blockedId}`;
+
+// The profile ids this person has blocked or been blocked by, at one conference.
+export async function blockedIds(eventId, profileId) {
+  const { json } = await people('POST', `${idx(BLOCKS_INDEX)}/_search?ignore_unavailable=true`, {
+    size: BLOCKS_MAX,
+    _source: ['blocker_id', 'blocked_id'],
+    query: {
+      bool: {
+        filter: [{ term: { event_id: eventId } }],
+        should: [{ term: { blocker_id: profileId } }, { term: { blocked_id: profileId } }],
+        minimum_should_match: 1,
+      },
+    },
+  });
+  const ids = new Set();
+  for (const h of json.hits?.hits ?? []) {
+    const s = h._source ?? {};
+    ids.add(s.blocker_id === profileId ? s.blocked_id : s.blocker_id);
+  }
+  ids.delete(undefined);
+  return ids;
+}
+
+// True when either person has blocked the other.
+export async function blockedBetween(eventId, a, b) {
+  const { json } = await people('POST', `${idx(BLOCKS_INDEX)}/_mget`, {
+    ids: [blockId(eventId, a, b), blockId(eventId, b, a)],
+    _source: false,
+  }, { okStatuses: [404] });
+  return (json.docs ?? []).some((d) => d.found);
+}
+
+// The filter clause that hides blocked pairs from a people query.
+const notBlocked = (eventId, ids) => (ids.size ? [{ ids: { values: [...ids].map((id) => docId(eventId, id)) } }] : []);
+
+// Everything that connects a person to others at one conference: their blocks in both directions
+// and every meet they take part in. Runs when the profile is deleted. refresh=true, so the next
+// request already sees them gone.
+export async function deleteConnections(eventId, profileId) {
+  await people('POST', `${idx(BLOCKS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
+    query: {
+      bool: {
+        filter: [{ term: { event_id: eventId } }],
+        should: [{ term: { blocker_id: profileId } }, { term: { blocked_id: profileId } }],
+        minimum_should_match: 1,
+      },
+    },
+  });
+  await people('POST', `${idx(MEETS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
+    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } },
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Ranking people relative to the requester: one rrf retriever over
 //   1. my learn_topics against their speak_topics,
 //   2. my speak_topics against their learn_topics,
-//   3. my interests against their expertise (semantic),
-//   4. my expertise against their interests (semantic),
-// skipping any whose input is empty. Circles add a fifth retriever that matches every member, so
-// a member with nothing in common is still listed, below everyone who shares something.
+//   3. the query, or my interests when there is none, against their expertise (semantic),
+//   4. in a search, the same text against their about (semantic),
+//   5. my expertise against their interests (semantic),
+//   6. in a search, the query as a lexical match on their expertise and about,
+// skipping any whose input is empty. Circles add a retriever that matches every member, so a
+// member with nothing in common is still listed, below everyone who shares something. Every
+// retriever is named so that the explanation of a hit says which ones it came from.
 
-function peopleQuery(me, filters, size, { includeEveryone = false } = {}) {
+const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
+const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until'];
+
+// Returns { body, legs } where legs names each retriever in order ('topics', 'text' or
+// 'everyone'), or null when there is nothing to rank by.
+function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false }) {
   const filter = {
     bool: {
       filter: [{ term: { event_id: me.event_id } }, { range: { visible_until: { gt: 'now' } } }, ...filters],
-      must_not: [{ ids: { values: [docId(me.event_id, me.profile_id)] } }],
+      must_not: [{ ids: { values: [docId(me.event_id, me.profile_id)] } }, ...notBlocked(me.event_id, blocked)],
     },
   };
+  const legs = [];
+  const retrievers = [];
+  const highlight = {};
+  const add = (kind, standard) => {
+    legs.push(kind);
+    retrievers.push({ standard: { ...standard, _name: `${kind}-${legs.length}` } });
+  };
   const knn = (field, modelText) => ({
-    standard: {
-      query: {
-        knn: {
-          field,
-          k: KNN_K,
-          num_candidates: KNN_CANDIDATES,
-          filter,
-          query_vector_builder: { text_embedding: { model_text: modelText } },
-        },
+    query: {
+      knn: {
+        field,
+        k: KNN_K,
+        num_candidates: KNN_CANDIDATES,
+        filter,
+        query_vector_builder: { text_embedding: { model_text: modelText } },
       },
     },
   });
   const topics = (theirField, mine) => ({
-    standard: { query: { bool: { should: mine.map((t) => ({ term: { [theirField]: t } })), minimum_should_match: 1 } } },
+    query: { bool: { should: mine.map((t) => ({ term: { [theirField]: t } })), minimum_should_match: 1 } },
   });
 
-  const retrievers = [];
-  const highlight = {};
-  if (me.learn_topics?.length) retrievers.push(topics('speak_topics', me.learn_topics));
-  if (me.speak_topics?.length) retrievers.push(topics('learn_topics', me.speak_topics));
-  if (me.interests) {
-    retrievers.push(knn('expertise_semantic', me.interests));
+  const text = query || me.interests || '';
+  if (me.learn_topics?.length) add('topics', topics('speak_topics', me.learn_topics));
+  if (me.speak_topics?.length) add('topics', topics('learn_topics', me.speak_topics));
+  if (text) {
+    add('text', knn('expertise_semantic', text));
     highlight.expertise_semantic = { number_of_fragments: 1 };
   }
+  if (query) {
+    add('text', knn('about_semantic', query));
+    highlight.about_semantic = { number_of_fragments: 1 };
+  }
   if (me.expertise) {
-    retrievers.push(knn('interests_semantic', me.expertise));
+    add('text', knn('interests_semantic', me.expertise));
     highlight.interests_semantic = { number_of_fragments: 1 };
   }
-  if (includeEveryone) {
-    retrievers.push({ standard: { query: { match_all: {} }, sort: [{ updated_at: 'desc' }] } });
+  if (query) {
+    add('text', { query: { multi_match: { query, fields: ['expertise', 'about'], minimum_should_match: '2<60%' } } });
+    highlight.expertise = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
+    highlight.about = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
   }
+  if (includeEveryone) add('everyone', { query: { match_all: {} }, sort: [{ updated_at: 'desc' }] });
   if (!retrievers.length) return null;
 
   const body = {
     size,
-    _source: ['profile_id', 'display_name', 'about', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note'],
+    from,
+    _source: RESULT_FIELDS,
     retriever: retrievers.length === 1
       ? { standard: { ...retrievers[0].standard, filter } }
-      : { rrf: { retrievers, filter, rank_window_size: RANK_WINDOW } },
+      : { rrf: { retrievers, filter, rank_window_size: Math.max(RANK_WINDOW, from + size) } },
   };
-  if (Object.keys(highlight).length) body.highlight = { fields: highlight };
-  return body;
+  if (explain) body.explain = true;
+  if (Object.keys(highlight).length) body.highlight = { ...HIGHLIGHT_BASE, fields: highlight };
+  return { body, legs };
+}
+
+// The retrievers a hit was found by, as indexes into legs, read from the rrf explanation: one
+// detail per retriever, whose value is the hit's rank there and 0 when it was not found. Returns
+// null when the response carries no explanation, so the caller keeps the hit.
+function matchedLegs(hit, legs) {
+  if (legs.length === 1) return [0];
+  const details = hit._explanation?.details;
+  if (!Array.isArray(details) || details.length !== legs.length) return null;
+  return details.map((d, i) => (d && d.value > 0 && !/not found/.test(d.description ?? '') ? i : -1)).filter((i) => i >= 0);
 }
 
 const listFormat = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
+const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const unescapeHtml = (s) => s.replace(/<\/?mark>/g, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
-function passageFrom(hit) {
-  const hl = hit.highlight ?? {};
-  const raw = hl.expertise_semantic?.[0] ?? hl.interests_semantic?.[0];
-  if (!raw) return null;
-  let t = raw.replace(/\s+/g, ' ').trim().replace(/[.!?;:,\s]+$/, '');
-  if (!t) return null;
-  if (t.length > PASSAGE_MAX) {
-    const cut = t.slice(0, PASSAGE_MAX);
+function cutText(raw, max) {
+  let t = String(raw).replace(/\s+/g, ' ').trim().replace(/[.!?;:,\s]+$/, '');
+  if (t.length > max) {
+    const cut = t.slice(0, max);
     const space = cut.lastIndexOf(' ');
-    t = `${space > PASSAGE_MAX * 0.6 ? cut.slice(0, space) : cut}…`;
+    t = `${space > max * 0.6 ? cut.slice(0, space) : cut}…`;
   }
   return t;
 }
 
+function passageFrom(hit) {
+  const hl = hit.highlight ?? {};
+  const raw = hl.expertise_semantic?.[0] ?? hl.interests_semantic?.[0];
+  return raw ? cutText(raw, PASSAGE_MAX) || null : null;
+}
+
+// The passage that matched, with <mark> tags as the only markup: a lexical fragment of expertise
+// or about when the query matched words there, else the best semantic chunk of expertise or
+// about, else the start of their expertise (or about). Null for a profile with no text at all.
+function evidenceFor(hit) {
+  const hl = hit.highlight ?? {};
+  const s = hit._source ?? {};
+  const lexical = [hl.expertise?.[0], hl.about?.[0]].find((f) => typeof f === 'string' && f.includes('<mark>'));
+  if (lexical) return lexical.replace(/\s+/g, ' ').trim();
+  const chunk = hl.expertise_semantic?.[0] ?? hl.about_semantic?.[0];
+  if (chunk && cutText(chunk, PASSAGE_MAX)) return escapeHtml(cutText(chunk, PASSAGE_MAX));
+  const plain = cutText(s.expertise || s.about || '', EVIDENCE_FALLBACK);
+  return plain ? escapeHtml(plain) : null;
+}
+
 // The reason templates of the product brief, filled from this result's own fields.
-function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId) {
+function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evidence = null, zone = null } = {}) {
   const reasons = [];
   const named = (ids) => ids.filter((id) => labels.has(id)).map((id) => labels.get(id));
   const theirSpeak = new Set(them.speak_topics ?? []);
@@ -508,19 +751,26 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId) {
   const theirShared = new Set(them.shared_talk_ids ?? []);
   const canSpeak = named((me.learn_topics ?? []).filter((t) => theirSpeak.has(t)));
   const wantLearn = named((me.speak_topics ?? []).filter((t) => theirLearn.has(t)));
+  if (evidence) reasons.push(`They've worked on ${cutText(unescapeHtml(evidence), PASSAGE_MAX)}.`);
   if (canSpeak.length) reasons.push(`They can speak to ${listFormat.format(canSpeak.slice(0, 4))}, which you want to learn about.`);
   if (wantLearn.length) reasons.push(`They want to learn about ${listFormat.format(wantLearn.slice(0, 4))}, which you can speak to.`);
   const both = [...talkTitles.keys()].filter((id) => id !== circleTalkId && theirShared.has(id));
   if (both.length) reasons.push(`You are both interested in ${listFormat.format(both.slice(0, 2).map((id) => talkTitles.get(id)))}.`);
-  if (passage) reasons.push(`Ask them about ${passage}.`);
+  if (passage && !evidence) reasons.push(`Ask them about ${passage}.`);
   if (circleTalkId && talkTitles.has(circleTalkId)) reasons.push(`You are both interested in ${talkTitles.get(circleTalkId)}.`);
+  if (zone) reasons.push(`They're in ${zone} right now.`);
   return reasons;
 }
 
-function toPerson(hit, me, labels, talkTitles, circleTalkId) {
+// Shapes one hit for the requester. In a text search (query given) the evidence leads the
+// reasons; zone is included only while both the requester and this person are around.
+function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false } = {}) {
   const s = hit._source ?? {};
   const topicsOf = (ids) => (ids ?? []).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) }));
-  const reasons = reasonsFor(me, s, labels, talkTitles, passageFrom(hit), circleTalkId);
+  const evidence = evidenceFor(hit);
+  const around = isAround(s);
+  const zone = around && isAround(me) && s.presence_zone ? s.presence_zone : null;
+  const reasons = reasonsFor(me, s, labels, talkTitles, passageFrom(hit), circleTalkId, { evidence: search ? evidence : null, zone });
   return {
     ref: refFor(me.event_id, s.profile_id ?? hit._id),
     display_name: s.display_name ?? '',
@@ -531,6 +781,9 @@ function toPerson(hit, me, labels, talkTitles, circleTalkId) {
     reasons,
     opener: reasons[0] ?? null,
     contact: { linkedin_url: s.linkedin_url ?? null, contact_note: s.contact_note ?? null },
+    evidence,
+    around,
+    zone,
   };
 }
 
@@ -551,7 +804,7 @@ async function circleCounts(slug, ids) {
 
 // The requester's stored profile, authenticated by the device secret. Throws 403 on a wrong
 // secret; returns null when there is no live document.
-async function authenticated(device, slug) {
+export async function authenticated(device, slug) {
   const own = await ownDoc(slug, device.profileId);
   if (!own.found) return null;
   if (!secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
@@ -578,9 +831,12 @@ async function putProfile(req, res) {
   const own = await ownDoc(conf.slug, device.profileId);
   if (own.found && !secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
 
-  // Both visibility choices off: the document must not exist.
+  // Both visibility choices off: the document must not exist, nor anything that connected it.
   if (!body.open_to_meet && !shared.length) {
-    if (own.found) await deleteDoc(id);
+    if (own.found) {
+      await deleteDoc(id);
+      await deleteConnections(conf.slug, device.profileId);
+    }
     sendJson(res, 200, { ok: true, open_to_meet: false, shared_talk_ids: [] });
     return;
   }
@@ -592,6 +848,7 @@ async function putProfile(req, res) {
 
   const hash = textHash(profile);
   const common = {
+    ref: refFor(conf.slug, device.profileId),
     display_name: profile.display_name,
     learn_topics: profile.learn_topics,
     speak_topics: profile.speak_topics,
@@ -602,6 +859,10 @@ async function putProfile(req, res) {
     linkedin_url: profile.linkedin_url,
     contact_note: profile.contact_note,
   };
+  // Presence needs conference-wide visibility, so turning that off clears it. Otherwise a full
+  // reindex carries the stored presence over and a partial update leaves it alone.
+  const presence = own.found ? Object.fromEntries(PRESENCE_FIELDS.map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
+  if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
 
   let status;
   if (!own.found) {
@@ -638,6 +899,7 @@ async function putProfile(req, res) {
           sample: false,
           secret_hash: own.source.secret_hash,
           text_hash: hash,
+          ...presence,
           ...common,
         },
       );
@@ -660,11 +922,37 @@ async function deleteProfile(req, res, url) {
   if (own.found) {
     if (!secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
     await deleteDoc(docId(slug, device.profileId));
+    await deleteConnections(slug, device.profileId);
   }
   sendJson(res, 200, { ok: true });
 }
 
-const MATCHES_KEYS = new Set(['event', 'interested_talk_ids']);
+const MATCHES_KEYS = new Set(['event', 'interested_talk_ids', 'query', 'when', 'from', 'size']);
+
+// Runs a people search. Should the cluster refuse the explanation, the search runs again without
+// it and every hit is kept.
+async function searchPeople(body) {
+  try {
+    return (await people('POST', `${idx(PEOPLE_INDEX)}/_search`, body)).json;
+  } catch (err) {
+    if (!body.explain || !(err instanceof UpstreamError) || err.message !== 'status 400') throw err;
+    const { explain, ...rest } = body;
+    return (await people('POST', `${idx(PEOPLE_INDEX)}/_search`, rest)).json;
+  }
+}
+
+// The specificity rule: a hit is dropped when it was found only by the topic retrievers and every
+// topic it shares with the requester is one of the conference's ten most common. A hit found by a
+// text retriever, or one whose explanation is missing, is kept.
+function specific(hit, legs, me, common) {
+  const matched = matchedLegs(hit, legs);
+  if (!matched || matched.some((i) => legs[i] !== 'topics')) return true;
+  const s = hit._source ?? {};
+  const theirSpeak = new Set(s.speak_topics ?? []);
+  const theirLearn = new Set(s.learn_topics ?? []);
+  const overlap = [...(me.learn_topics ?? []).filter((t) => theirSpeak.has(t)), ...(me.speak_topics ?? []).filter((t) => theirLearn.has(t))];
+  return overlap.some((t) => !common.has(t));
+}
 
 async function matches(req, res) {
   const ip = clientIp(req);
@@ -674,28 +962,41 @@ async function matches(req, res) {
 
   const body = await jsonBody(req, MATCHES_KEYS);
   const interested = idList(body.interested_talk_ids, 'interested_talk_ids', 100, TALK_ID_RE);
+  const query = text(body.query, 'query', QUERY_MAX);
+  const when = body.when === undefined || body.when === null ? 'anyone' : body.when;
+  if (when !== 'anyone' && when !== 'around_now') throw bad("when must be 'anyone' or 'around_now'");
+  const from = body.from === undefined || body.from === null ? 0 : body.from;
+  if (!Number.isInteger(from) || from < 0 || from > MATCHES_FROM_MAX) throw bad(`from must be an integer from 0 to ${MATCHES_FROM_MAX}`);
+  const size = body.size === undefined || body.size === null ? MATCHES_SIZE : body.size;
+  if (!Number.isInteger(size) || size < 1 || size > MATCHES_SIZE) throw bad(`size must be an integer from 1 to ${MATCHES_SIZE}`);
   const conf = await conferenceFor(body.event);
   const me = await authenticated(device, conf.slug);
   if (!me || me.open_to_meet !== true) throw new HttpError(403, { error: 'visibility_required' });
 
-  const query = peopleQuery(me, [{ term: { open_to_meet: true } }], MATCHES_SIZE);
-  if (!query) {
-    sendJson(res, 200, { results: [] });
+  const filters = [{ term: { open_to_meet: true } }];
+  if (when === 'around_now') filters.push({ range: { presence_until: { gt: 'now' } } });
+  const blocked = await blockedIds(conf.slug, me.profile_id);
+  const q = peopleQuery(me, filters, { size, from, query, blocked, explain: true });
+  if (!q) {
+    sendJson(res, 200, { results: [], from, size, has_more: false });
     return;
   }
   // Only talks the requester marked and also shared for are named in a reason, so a match never
   // reveals a talk circle the requester has not joined.
   const mine = new Set(me.shared_talk_ids ?? []);
   const talkIds = interested.filter((id) => mine.has(id));
-  const [{ json }, labels] = await Promise.all([
-    people('POST', `${idx(PEOPLE_INDEX)}/_search`, query),
-    topicLabels(conf.slug),
-  ]);
-  const hits = json.hits?.hits ?? [];
+  const [json, topics] = await Promise.all([searchPeople(q.body), topicsOf(conf.slug)]);
+  const all = json.hits?.hits ?? [];
+  const hits = all.filter((h) => specific(h, q.legs, me, topics.common));
   const usedTalks = talkIds.filter((id) => hits.some((h) => (h._source?.shared_talk_ids ?? []).includes(id)));
   const talks = await talksById(conf.slug, usedTalks, ['title']);
   const titles = new Map([...talks].map(([id, s]) => [id, s.title ?? '']));
-  sendJson(res, 200, { results: hits.map((h) => toPerson(h, me, labels, titles, null)) });
+  sendJson(res, 200, {
+    results: hits.map((h) => toPerson(h, me, topics.labels, titles, null, { search: Boolean(query) })),
+    from,
+    size,
+    has_more: all.length === size,
+  });
 }
 
 const COUNTS_KEYS = new Set(['event', 'talk_ids']);
@@ -724,10 +1025,11 @@ async function members(req, res) {
   const count = (await circleCounts(conf.slug, [talkId]))[talkId] ?? 0;
   if (!me || !(me.shared_talk_ids ?? []).includes(talkId)) throw new HttpError(403, { error: 'share_required', count });
 
-  const query = peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], MEMBERS_SIZE, { includeEveryone: true });
+  const blocked = await blockedIds(conf.slug, me.profile_id);
+  const q = peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked });
   const [talks, { json }, labels] = await Promise.all([
     talksById(conf.slug, [talkId], ['title', 'start', 'end', 'url', 'speaker_profiles']),
-    people('POST', `${idx(PEOPLE_INDEX)}/_search`, query),
+    people('POST', `${idx(PEOPLE_INDEX)}/_search`, q.body),
     topicLabels(conf.slug),
   ]);
   const talk = talks.get(talkId);
@@ -750,19 +1052,14 @@ const ROUTES = {
   '/api/circles/members': { POST: members },
 };
 
-// Handles /api/people/* and /api/circles/*. Resolves to true when the request was handled.
-export async function handlePeopleApi(req, res, url) {
-  const path = url.pathname;
-  if (!path.startsWith('/api/people/') && !path.startsWith('/api/circles/')) return false;
-  const route = ROUTES[path];
-  if (!route) {
-    sendJson(res, 404, { error: 'Not found' });
-    return true;
-  }
+// Runs the handler of one route table entry for the request's method, with the shared error
+// handling: 405 for a method the route lacks, the status and body of an HttpError, and a fixed
+// 502 for anything else. connect.mjs uses it for the block, presence and meet routes.
+export async function dispatch(route, req, res, url) {
   const handler = route[req.method];
   if (!handler) {
     sendJson(res, 405, { error: 'Method not allowed' }, { Allow: Object.keys(route).join(', ') });
-    return true;
+    return;
   }
   try {
     checkOrigin(req);
@@ -780,5 +1077,13 @@ export async function handlePeopleApi(req, res, url) {
       sendJson(res, 502, { error: 'People are temporarily unavailable' });
     }
   }
+}
+
+// Handles the profile, matches and circle routes. Resolves to true when the request was handled;
+// the other /api/people/* paths (block, blocks) belong to connect.mjs.
+export async function handlePeopleApi(req, res, url) {
+  const route = ROUTES[url.pathname];
+  if (!route) return false;
+  await dispatch(route, req, res, url);
   return true;
 }
