@@ -77,6 +77,7 @@ export interface MetPerson {
   met_at: string;
 }
 
+/** Asks are now-only: accept moves a meet straight to `active`. `accepted` is a legacy value the server no longer sends. */
 export type MeetState = 'requested' | 'accepted' | 'declined' | 'active' | 'found' | 'cancelled' | 'expired';
 
 export interface InboxIncoming {
@@ -85,6 +86,11 @@ export interface InboxIncoming {
   topic_label: string | null;
   note: string;
   created_at: string;
+  /** When the ask runs out: 15 minutes after it was made. */
+  expires_at?: string | null;
+  /** True when both were around in the same zone when the ask was made; `other.zone` is then set. */
+  same_zone?: boolean;
+  other?: { zone?: string | null };
   state: MeetState;
 }
 
@@ -102,6 +108,7 @@ export interface Inbox {
 export interface MeetDetail {
   state: MeetState;
   active_until: string | null;
+  same_zone?: boolean;
   other: { display_name: string; zone: string | null; spot: string | null; spot_me: string | null; about?: string | null };
   rendezvous: string | null;
   mine: { spot_me: string | null };

@@ -225,10 +225,13 @@ interface MockMeet {
   rendezvous: string | null;
   spot_me: Record<string, string>;
   state: MeetState;
+  /** Both were around in the same zone when the ask was made; recomputed on accept. */
+  same_zone: boolean;
   created_at: string;
   /** For the seeded incoming request: it appears in the inbox only after this time. */
   visible_at: string;
   active_since: string | null;
+  /** Asks run out 15 minutes after they were made; an active meet 20 minutes after it started. */
   expires_at: string | null;
 }
 
@@ -242,9 +245,13 @@ interface Connect {
 const CONNECT_KEY = 'caddie.mock.connect';
 const PRESENCE_MS = 60 * 60_000;
 const ACTIVE_MS = 20 * 60_000;
+const REQUEST_MS = 15 * 60_000;
 const SEED_DELAY_MS = 5_000;
 const AUTO_ACCEPT_MS = 10_000;
+const WAVE_ACCEPT_MS = 5_000;
 const FILTERED = { error: 'filtered', message: 'That was held back by the filter. Edit it and try again.' };
+const PRESENCE_REQUIRED = { error: 'presence_required', message: "Turn on 'Around and up for a conversation' first." };
+const NOT_AROUND = { error: 'not_around', message: "They're not around right now." };
 
 function readConnect(): Connect {
   try {
@@ -293,7 +300,20 @@ function otherOf(m: MockMeet, me: string): MockPerson | undefined {
 
 const OVER: MeetState[] = ['declined', 'found', 'cancelled', 'expired'];
 
-/** What the sample people "do" between polls: accept after a while, go active when both are around. */
+/** Accept means now: the meet goes straight to active for 20 minutes. */
+function activate(m: MockMeet, myZone: string | null, otherZone: string | null, now: number) {
+  m.state = 'active';
+  m.active_since = new Date(now).toISOString();
+  m.expires_at = new Date(now + ACTIVE_MS).toISOString();
+  m.same_zone = !!myZone && myZone === otherZone;
+  if (!m.rendezvous) m.rendezvous = m.same_zone ? myZone : (otherZone ?? myZone);
+}
+
+/**
+ * What the sample people "do" between polls: a sample person who is around accepts a while after
+ * being asked (sooner for a same-zone wave), which makes the meet active at once; asks run out
+ * after 15 minutes; an active meet ends when it runs out or my presence does.
+ */
 function advanceMeets(c: Connect, slug: string, id: string) {
   const me = `dev:${id}`;
   const now = Date.now();
@@ -301,14 +321,10 @@ function advanceMeets(c: Connect, slug: string, id: string) {
   for (const m of c.meets) {
     if (m.event_id !== slug || (m.requester !== me && m.recipient !== me)) continue;
     const other = otherOf(m, me);
-    if (m.state === 'requested' && m.requester === me && other?.presence_zone && now - Date.parse(m.created_at) > AUTO_ACCEPT_MS) {
-      m.state = 'accepted';
-    }
-    if (m.state === 'accepted' && mine && other?.presence_zone) {
-      m.state = 'active';
-      m.active_since = new Date(now).toISOString();
-      m.expires_at = new Date(now + ACTIVE_MS).toISOString();
-      if (!m.rendezvous) m.rendezvous = other.presence_zone;
+    if (m.state === 'requested' && m.expires_at && Date.parse(m.expires_at) <= now) m.state = 'expired';
+    const delay = m.same_zone ? WAVE_ACCEPT_MS : AUTO_ACCEPT_MS;
+    if (m.state === 'requested' && m.requester === me && mine && other?.presence_zone && now - Date.parse(m.created_at) > delay) {
+      activate(m, mine.zone, other.presence_zone, now);
     }
     if (m.state === 'active' && (!mine || (m.expires_at && Date.parse(m.expires_at) <= now))) m.state = 'expired';
   }
@@ -502,10 +518,11 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
         rendezvous: null,
         spot_me: { [`ref:${requester.ref}`]: 'Orange lanyard, standing by the demo screen' },
         state: 'requested',
+        same_zone: requester.presence_zone === zone,
         created_at: new Date(now).toISOString(),
         visible_at: new Date(now + SEED_DELAY_MS).toISOString(),
         active_since: null,
-        expires_at: null,
+        expires_at: new Date(now + SEED_DELAY_MS + REQUEST_MS).toISOString(),
       });
     }
     writeConnect(c);
@@ -529,6 +546,10 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     if (!target) throw new HttpError(404, { error: 'not found' });
     const c = readConnect();
     if (blockedEitherWay(c, conf.slug, id, ref)) throw new HttpError(403, { error: 'blocked' });
+    // Asks are now-only: both must be around.
+    const mine = myPresence(c, conf.slug, id);
+    if (!mine) throw new HttpError(403, PRESENCE_REQUIRED);
+    if (!target.presence_zone) throw new HttpError(409, NOT_AROUND);
     const note = String(body.note ?? '').slice(0, 140);
     if (filtered(note)) throw new HttpError(400, FILTERED);
     const meKey = `dev:${id}`;
@@ -542,8 +563,9 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
         !OVER.includes(m.state) &&
         ((m.requester === meKey && m.recipient === them) || (m.requester === them && m.recipient === meKey)),
     );
-    if (open) throw new HttpError(409, { error: 'already_open' });
-    const now = new Date().toISOString();
+    if (open) throw new HttpError(409, { error: 'meet_open', meet_id: open.meet_id });
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     const meet: MockMeet = {
       meet_id: randomId(),
       event_id: conf.slug,
@@ -554,14 +576,15 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       rendezvous: null,
       spot_me: { [them]: 'Blue jacket, laptop with a sticker wall' },
       state: 'requested',
+      same_zone: mine.zone === target.presence_zone,
       created_at: now,
       visible_at: now,
       active_since: null,
-      expires_at: null,
+      expires_at: new Date(nowMs + REQUEST_MS).toISOString(),
     };
     c.meets.push(meet);
     writeConnect(c);
-    return { meet_id: meet.meet_id, state: meet.state };
+    return { meet_id: meet.meet_id, state: meet.state, same_zone: meet.same_zone, expires_at: meet.expires_at };
   }
 
   if (path === '/api/meet/inbox' && method === 'GET') {
@@ -584,6 +607,9 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
             topic_label: m.topic_id ? topicRefs(conf.slug, [m.topic_id])[0].label : null,
             note: m.note,
             created_at: m.created_at,
+            expires_at: m.expires_at,
+            same_zone: m.same_zone,
+            other: { zone: m.same_zone ? (from.presence_zone ?? null) : null },
             state: m.state,
           },
         ];
@@ -608,16 +634,17 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const action = meetMatch[2];
     const other = otherOf(m, me);
     if (!action && method === 'GET') {
-      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'gone' });
+      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'over', state: m.state });
       writeConnect(c);
       const active = m.state === 'active';
       const otherKey = m.requester === me ? m.recipient : m.requester;
       return {
         state: m.state,
+        same_zone: m.same_zone,
         active_until: active ? m.expires_at : null,
         other: {
           display_name: other?.display_name ?? 'Someone',
-          zone: active ? (other?.presence_zone ?? null) : null,
+          zone: active || m.same_zone ? (other?.presence_zone ?? null) : null,
           spot: active ? (other?.presence_spot ?? null) : null,
           spot_me: active ? (m.spot_me[otherKey] ?? null) : null,
         },
@@ -626,7 +653,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       };
     }
     if (action === 'details' && method === 'PUT') {
-      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'gone' });
+      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'over', state: m.state });
       if (body.spot_me !== undefined) {
         if (filtered(body.spot_me)) throw new HttpError(400, FILTERED);
         m.spot_me[me] = String(body.spot_me).slice(0, 60);
@@ -636,11 +663,22 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       return { ok: true };
     }
     if (action && method === 'POST') {
-      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'gone' });
+      if (OVER.includes(m.state)) throw new HttpError(410, { error: 'over', state: m.state });
       if (action === 'accept' || action === 'decline') {
         if (m.recipient !== me || m.state !== 'requested') throw new HttpError(409, { error: 'state' });
-        m.state = action === 'accept' ? 'accepted' : 'declined';
-        advanceMeets(c, m.event_id, id);
+        if (action === 'accept') {
+          // Accept means now: I must be around, and so must the asker.
+          const mine = myPresence(c, m.event_id, id);
+          if (!mine) throw new HttpError(403, PRESENCE_REQUIRED);
+          if (!other?.presence_zone) {
+            m.state = 'expired';
+            writeConnect(c);
+            throw new HttpError(410, { error: 'over', state: 'expired' });
+          }
+          activate(m, mine.zone, other.presence_zone, Date.now());
+        } else {
+          m.state = 'declined';
+        }
       } else if (action === 'found') {
         m.state = 'found';
       } else {

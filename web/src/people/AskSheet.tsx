@@ -35,10 +35,15 @@ export function prefill(person: PersonResult): { note: string; topicId: string |
   return { note: `${lead}what you're working on`, topicId: null };
 }
 
-function problem(err: unknown): string {
+/** Whether a 409 means an ask is already open (as opposed to the person not being around). */
+export const isMeetOpen = (err: unknown) => err instanceof PeopleApiError && err.status === 409 && err.code !== 'not_around';
+
+export function problem(err: unknown): string {
   if (err instanceof PeopleApiError) {
     if (err.code === 'filtered') return err.message;
     if (err.status === 403 && err.code === 'blocked') return "You can't send a request to this person.";
+    // Asks are now-only: these two carry the server's own wording.
+    if (err.code === 'not_around' || err.code === 'presence_required') return err.message;
     if (err.status === 409) return 'You already have an open request with them.';
     if (err.status === 429) return err.message;
     return err.message;
@@ -68,7 +73,7 @@ export function AskSheet({ slug, person, onClose }: { slug: string; person: Pers
       noteSentRequest(slug, person.ref, res.meet_id);
       setSent(true);
     } catch (err) {
-      if (err instanceof PeopleApiError && err.status === 409) noteSentRequest(slug, person.ref, `pending:${person.ref}`);
+      if (isMeetOpen(err)) noteSentRequest(slug, person.ref, `pending:${person.ref}`);
       setError(problem(err));
     }
     setBusy(false);
@@ -97,7 +102,7 @@ export function AskSheet({ slug, person, onClose }: { slug: string; person: Pers
           ) : (
             <>
               <p class="pp-hint">
-                To {person.display_name}. They see your name, your profile and this note.
+                To {person.display_name}. They see your name, your profile and this note, and have 15 minutes to answer.
               </p>
               <div class="pp-text">
                 <label class="pp-label" for="pp-ask-note">

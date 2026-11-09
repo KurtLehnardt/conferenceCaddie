@@ -1,10 +1,12 @@
 // Settings sections for Find & connect: the people this device has blocked (refreshed from the
-// server when Settings opens) and the device-only "People I met" list.
+// server when Settings opens), the device-only "People I met" list and the device-only
+// "People I'm watching" list.
 import { useEffect, useState } from 'preact/hooks';
 import { fetchBlocks, isAbort } from './api';
 import { unblock } from './connect';
 import { getBlocks, getMet, mergeBlocks, removeMet, usePeopleStore } from './storage';
 import type { ConferenceLike } from './types';
+import { getWatches, removeWatch } from './watch';
 
 export function BlockedPeople({ conference }: { conference: ConferenceLike }) {
   usePeopleStore();
@@ -88,6 +90,32 @@ export function PeopleIMet({ conference }: { conference: ConferenceLike }) {
           </div>
         ))}
         <p class="settings-row settings-text">Saved on this phone only.</p>
+      </div>
+    </section>
+  );
+}
+
+/** Matches who were not around when found; the app says when they are, so you can ask then. */
+export function PeopleIWatch({ conference }: { conference: ConferenceLike }) {
+  usePeopleStore();
+  const slug = conference.slug;
+  const watches = getWatches(slug);
+  if (!watches.length) return null;
+  return (
+    <section class="settings-group" aria-labelledby="set-watch">
+      <h2 class="settings-heading" id="set-watch">
+        People I'm watching
+      </h2>
+      <div class="settings-card">
+        {watches.map((w) => (
+          <div key={w.ref} class="settings-row">
+            <span>{w.display_name || 'Someone'}</span>
+            <button type="button" class="btn btn-text btn-small" onClick={() => removeWatch(slug, w.ref)}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <p class="settings-row settings-text">You'll be told here when they're around. Saved on this phone only.</p>
       </div>
     </section>
   );

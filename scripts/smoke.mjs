@@ -647,6 +647,18 @@ try {
     report(filtered(spot) && filtered(leetSpot) && filtered(url) && linkedin.status === 200, 'q4: a listed word is rejected', `word ${spot.status}, leet ${leetSpot.status}, url ${url.status}, linkedin.com ${linkedin.status}`);
   });
 
+  await check('q4b: an ask needs both people around', async () => {
+    if (!refF) throw new Error('F has no ref');
+    const nobody = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
+    const on = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: A, label: 'A-presence' });
+    if (on.status !== 200) throw new Error(`A presence gave ${on.status}`);
+    const themNot = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
+    const problems = [];
+    if (nobody.status !== 403 || nobody.json.error !== 'presence_required' || nobody.json.message !== "Turn on 'Around and up for a conversation' first.") problems.push(`asking while not around gave ${nobody.status} ${JSON.stringify(nobody.json)}`);
+    if (themNot.status !== 409 || themNot.json.error !== 'not_around' || themNot.json.message !== "They're not around right now.") problems.push(`asking someone not around gave ${themNot.status} ${JSON.stringify(themNot.json)}`);
+    report(problems.length === 0, 'q4b: an ask needs both people around', problems.length ? problems.join('; ') : '403 presence_required, then 409 not_around');
+  });
+
   await check('q5: results carry no zone unless both are around', async () => {
     const a = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: spotMarker }, { device: A, label: 'A-presence' });
     if (a.status !== 200) throw new Error(`A presence gave ${a.status}`);
@@ -702,15 +714,19 @@ try {
     const problems = [];
     if (noted.status !== 400 || noted.json.error !== 'filtered') problems.push(`a listed word in a note gave ${noted.status}`);
     if (r.json.state !== 'requested') problems.push(`state after request ${r.json.state}`);
-    if (again.status !== 409) problems.push(`a second open request gave ${again.status}`);
-    if (!(inbox.json.incoming ?? []).some((m) => m.meet_id === meetId && m.from?.display_name === testName('A') && m.topic_label === 'eBPF')) problems.push('F\'s inbox lacks the request');
+    const ttl = Date.parse(r.json.expires_at) - Date.parse(r.json.created_at);
+    if (!(ttl > 14 * 60_000 && ttl <= 15 * 60_000)) problems.push(`the ask runs out after ${Math.round(ttl / 60_000)} min, not 15`);
+    if (r.json.same_zone !== false) problems.push(`same_zone ${r.json.same_zone} across two zones`);
+    if (again.status !== 409 || again.json.error !== 'meet_open') problems.push(`a second open request gave ${again.status} ${again.json.error}`);
+    if (!(inbox.json.incoming ?? []).some((m) => m.meet_id === meetId && m.from?.display_name === testName('A') && m.topic_label === 'eBPF' && typeof m.expires_at === 'string')) problems.push('F\'s inbox lacks the request');
     if (third.status !== 403 || nobody.status !== 403 || thirdAccept.status !== 403) problems.push(`third devices got ${third.status}/${nobody.status}/${thirdAccept.status}`);
-    if (accept.status !== 200 || accept.json.state !== 'active') problems.push(`accept gave ${accept.status} ${accept.json.state}`);
+    const activeFor = accept.json.active_until ? Date.parse(accept.json.active_until) - Date.now() : 0;
+    if (accept.status !== 200 || accept.json.state !== 'active' || !accept.json.active_since || !(activeFor > 19 * 60_000 && activeFor <= 20 * 60_000)) problems.push(`accept gave ${accept.status} ${accept.json.state}, active for ${Math.round(activeFor / 60_000)} min`);
     if (details.status !== 200) problems.push(`details gave ${details.status}`);
     if (seen.status !== 200 || seen.json.other?.zone !== ZONE_F || seen.json.other?.spot_me !== `${spotMarker}-me` || seen.json.rendezvous !== ZONE_A) problems.push(`A sees ${JSON.stringify(seen.json.other ?? {})}`);
     if (found.status !== 200 || found.json.state !== 'found') problems.push(`found gave ${found.status}`);
     if (after.status !== 410 || after.json.state !== 'found') problems.push(`after found: ${after.status}`);
-    report(problems.length === 0, 'q6: a third device gets 403 from a meet, and 410 after found', problems.length ? problems.join('; ') : 'requested, active with zone and spot-me, found, then 410');
+    report(problems.length === 0, 'q6: a third device gets 403 from a meet, and 410 after found', problems.length ? problems.join('; ') : '15-min ask, accept -> active at once with zone and spot-me, found, then 410');
   });
 
   await check('q7: presence expires', async () => {
@@ -757,6 +773,9 @@ try {
   });
 
   await check('q9: delete removes everything', async () => {
+    // q7 aged A's presence away; an ask needs A around again.
+    const back = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: A, label: 'A-presence' });
+    if (back.status !== 200) throw new Error(`A presence gave ${back.status}`);
     const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
     const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refA }, { device: F, label: 'F-block' });
     if (r.status !== 200 || blk.status !== 200) throw new Error(`setup gave ${r.status}/${blk.status}`);

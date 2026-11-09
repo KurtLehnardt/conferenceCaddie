@@ -781,6 +781,22 @@
   font-weight: 600;
 }
 
+/* Now-only asks: the watch toggle, the inbox expiry hint and the same-zone lead. */
+.pp-watching {
+  font-weight: 600;
+}
+
+.pp-expires {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  margin-left: auto;
+}
+
+.pp-same-zone {
+  font-weight: 600;
+}
+
 .pp-more-sentinel {
   min-height: 24px;
 }

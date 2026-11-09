@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, MapPin, MessageCircle } from 'lucide-preact';
 import { fetchMeet, isAbort, meetAction, PeopleApiError, putMeetDetails } from './api';
 import { personForMeet, refreshInbox } from './connect';
-import { ACCEPTED_COPY } from './InboxScreen';
 import { useZones } from './presence';
 import { ZoneSelect } from './PresenceControls';
 import { addMet, getPresence, usePeopleStore } from './storage';
@@ -246,7 +245,90 @@ export function MeetScreen({
   const name = d.other.display_name;
   const active = d.state === 'active';
   const minutes = d.active_until ? Math.max(0, Math.ceil((Date.parse(d.active_until) - Date.now()) / 60_000)) : null;
-  const meAround = getPresence(slug).on;
+  // Same zone: they are already next to each other, so how to spot each other comes first and
+  // the meeting point is optional.
+  const sameZone = d.same_zone === true;
+  const sharedZone = sameZone ? (d.other.zone ?? d.rendezvous ?? getPresence(slug).zone) : null;
+
+  const rendezvousCard = (
+    <section class="pp-card" aria-labelledby="pp-rv-h">
+      <h2 id="pp-rv-h" class="pp-card-title">
+        {d.rendezvous ? `Meet at ${d.rendezvous}` : sameZone ? 'Meeting point (optional)' : 'No meeting point yet'}
+      </h2>
+      {!pickingSpot ? (
+        <button type="button" class="btn btn-tonal btn-small pp-self-start" disabled={busy} onClick={() => setPickingSpot(true)}>
+          {d.rendezvous ? 'Change meeting point' : 'Set a meeting point'}
+        </button>
+      ) : (
+        <>
+          <ZoneSelect id="pp-rv-zone" label="Meeting point" zones={zones} value={rendezvous || d.other.zone || zones[0] || ''} onChange={setRendezvous} />
+          <div class="pp-actions">
+            <button type="button" class="btn btn-primary btn-small" disabled={busy} onClick={() => setMeetingPoint(rendezvous || d.other.zone || zones[0])}>
+              Set
+            </button>
+            <button type="button" class="btn btn-text btn-small" onClick={() => setPickingSpot(false)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+
+  const themCard = (
+    <section class="pp-card" aria-labelledby="pp-them-h">
+      <h2 id="pp-them-h" class="pp-card-title">
+        {name}
+      </h2>
+      {d.other.zone ? (
+        <p class="pp-around">
+          <MapPin size={16} aria-hidden="true" />
+          {d.other.zone}
+          {d.other.spot && ` · ${d.other.spot}`}
+        </p>
+      ) : (
+        <p class="pp-hint">{active ? "They haven't said where they are." : `${name} isn't around right now.`}</p>
+      )}
+      <p class="pp-subhead">How to spot them</p>
+      <p class={d.other.spot_me ? 'pp-spot-them' : 'pp-hint'}>{d.other.spot_me ?? "They haven't said how to spot them yet."}</p>
+      {active && minutes !== null && <p class="pp-hint">About {minutes} min left.</p>}
+    </section>
+  );
+
+  const meCard = (
+    <section class="pp-card" aria-labelledby="pp-me-h">
+      <h2 id="pp-me-h" class="pp-card-title">
+        How to spot me
+      </h2>
+      {sameZone && !spotMe && <p class="pp-hint">Add a line so {name} can find you.</p>}
+      <div class="pp-text">
+        <label class="pp-label" for="pp-spot-me">
+          One line they'll see only until you meet
+        </label>
+        <input
+          id="pp-spot-me"
+          type="text"
+          autocomplete="off"
+          maxLength={SPOT_ME_MAX}
+          value={spotMe}
+          placeholder="For example: green hoodie, grey backpack"
+          aria-invalid={spotError ? true : undefined}
+          aria-describedby="pp-spot-me-hint"
+          onInput={(e) => {
+            setSpotMe((e.target as HTMLInputElement).value);
+            setSpotSaved(false);
+            if (spotError) setSpotError(null);
+          }}
+        />
+        <p id="pp-spot-me-hint" class={spotError ? 'pp-error' : 'pp-hint'}>
+          {spotError ?? (spotSaved ? 'Saved' : `${spotMe.length} of ${SPOT_ME_MAX}`)}
+        </p>
+      </div>
+      <button type="button" class="btn btn-tonal btn-small pp-self-start" disabled={busy || spotSaved} onClick={saveSpotMe}>
+        Save
+      </button>
+    </section>
+  );
 
   return (
     <div class="pp-screen pp-meet">
@@ -255,89 +337,25 @@ export function MeetScreen({
           Waiting for {name}. <span class="pp-hint">No reply yet.</span>
         </p>
       )}
-      {d.state === 'accepted' && (
-        <div class="pp-notice" role="status">
-          <p>{ACCEPTED_COPY}</p>
-          {!meAround && (
-            <a class="pp-inline-link" href="#/people">
-              Turn on "I'm around" on the People tab
-            </a>
-          )}
-        </div>
+      {sameZone && sharedZone && active && (
+        <p class="pp-lede pp-same-zone" role="status">
+          You're both in {sharedZone}.
+        </p>
       )}
 
-      <section class="pp-card" aria-labelledby="pp-rv-h">
-        <h2 id="pp-rv-h" class="pp-card-title">
-          {d.rendezvous ? `Meet at ${d.rendezvous}` : 'No meeting point yet'}
-        </h2>
-        {!pickingSpot ? (
-          <button type="button" class="btn btn-tonal btn-small pp-self-start" disabled={busy} onClick={() => setPickingSpot(true)}>
-            {d.rendezvous ? 'Change meeting point' : 'Set a meeting point'}
-          </button>
-        ) : (
-          <>
-            <ZoneSelect id="pp-rv-zone" label="Meeting point" zones={zones} value={rendezvous || d.other.zone || zones[0] || ''} onChange={setRendezvous} />
-            <div class="pp-actions">
-              <button type="button" class="btn btn-primary btn-small" disabled={busy} onClick={() => setMeetingPoint(rendezvous || d.other.zone || zones[0])}>
-                Set
-              </button>
-              <button type="button" class="btn btn-text btn-small" onClick={() => setPickingSpot(false)}>
-                Cancel
-              </button>
-            </div>
-          </>
-        )}
-      </section>
-
-      <section class="pp-card" aria-labelledby="pp-them-h">
-        <h2 id="pp-them-h" class="pp-card-title">
-          {name}
-        </h2>
-        {d.other.zone ? (
-          <p class="pp-around">
-            <MapPin size={16} aria-hidden="true" />
-            {d.other.zone}
-            {d.other.spot && ` · ${d.other.spot}`}
-          </p>
-        ) : (
-          <p class="pp-hint">{active ? "They haven't said where they are." : `${name} isn't around right now.`}</p>
-        )}
-        <p class="pp-subhead">How to spot them</p>
-        <p class={d.other.spot_me ? 'pp-spot-them' : 'pp-hint'}>{d.other.spot_me ?? "They haven't said how to spot them yet."}</p>
-        {active && minutes !== null && <p class="pp-hint">About {minutes} min left.</p>}
-      </section>
-
-      <section class="pp-card" aria-labelledby="pp-me-h">
-        <h2 id="pp-me-h" class="pp-card-title">
-          How to spot me
-        </h2>
-        <div class="pp-text">
-          <label class="pp-label" for="pp-spot-me">
-            One line they'll see only until you meet
-          </label>
-          <input
-            id="pp-spot-me"
-            type="text"
-            autocomplete="off"
-            maxLength={SPOT_ME_MAX}
-            value={spotMe}
-            placeholder="For example: green hoodie, grey backpack"
-            aria-invalid={spotError ? true : undefined}
-            aria-describedby="pp-spot-me-hint"
-            onInput={(e) => {
-              setSpotMe((e.target as HTMLInputElement).value);
-              setSpotSaved(false);
-              if (spotError) setSpotError(null);
-            }}
-          />
-          <p id="pp-spot-me-hint" class={spotError ? 'pp-error' : 'pp-hint'}>
-            {spotError ?? (spotSaved ? 'Saved' : `${spotMe.length} of ${SPOT_ME_MAX}`)}
-          </p>
-        </div>
-        <button type="button" class="btn btn-tonal btn-small pp-self-start" disabled={busy || spotSaved} onClick={saveSpotMe}>
-          Save
-        </button>
-      </section>
+      {sameZone ? (
+        <>
+          {themCard}
+          {meCard}
+          {rendezvousCard}
+        </>
+      ) : (
+        <>
+          {rendezvousCard}
+          {themCard}
+          {meCard}
+        </>
+      )}
 
       <p class="pp-lede pp-caveat">{MEET_CAVEAT}</p>
       <div class="pp-actions">

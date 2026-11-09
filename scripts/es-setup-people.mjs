@@ -128,6 +128,7 @@ const meetsProperties = {
   rendezvous: hidden,
   spot_me: { type: 'object', enabled: false },
   state: { type: 'keyword' },
+  same_zone: { type: 'boolean' },
   created_at: { type: 'date' },
   active_since: { type: 'date' },
   expires_at: { type: 'date' },
@@ -181,5 +182,9 @@ await pointAlias(alias, index);
 // The blocks and meets indices.
 await ensureIndex(sibling('blocks'), blocksProperties);
 await pointAlias(siblingAlias('blocks'), sibling('blocks'));
-await ensureIndex(sibling('meets'), meetsProperties);
+if (!(await ensureIndex(sibling('meets'), meetsProperties))) {
+  // Additive: same_zone came after the index existed.
+  const put = await es('PUT', `/${sibling('meets')}/_mapping`, { properties: { same_zone: meetsProperties.same_zone } });
+  if (put.status !== 200) fail(`Adding same_zone to ${sibling('meets')}`, put);
+}
 await pointAlias(siblingAlias('meets'), sibling('meets'));

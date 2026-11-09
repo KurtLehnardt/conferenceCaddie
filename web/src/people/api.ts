@@ -20,6 +20,9 @@ export const FILTERED_MESSAGE = 'That was held back by the filter. Edit it and t
 
 function friendly(status: number, code: string | null = null, message: string | null = null): string {
   if (code === 'filtered') return message ?? FILTERED_MESSAGE;
+  // Now-only asks: the server's own wording is the one to show.
+  if (code === 'not_around') return message ?? "They're not around right now.";
+  if (code === 'presence_required') return message ?? "Turn on 'Around and up for a conversation' first.";
   if (status === 0) return 'You appear to be offline. Check your connection and try again.';
   if (status === 429) return message ?? 'Too many requests. Wait a minute and try again.';
   if (status === 403) return 'This device is not allowed to do that.';
