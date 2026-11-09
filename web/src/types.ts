@@ -46,6 +46,9 @@ export interface SearchFilters {
   track: string[];
   level: string[];
   tags: TagRef[];
+  /** Speaker and room names chosen from a suggested chip; each list holds alternatives. */
+  speaker: string[];
+  room: string[];
   has_slides: boolean | null;
   hide_sponsor: boolean;
   /** Talks in progress or starting within 60 minutes, judged by Elasticsearch against its clock. */
@@ -64,6 +67,17 @@ export interface SearchRequest {
   debug?: boolean;
   /** Keys of time phrases the person removed; the server then stops filtering by them. */
   ignore_phrases?: string[];
+}
+
+/** A track, room, speaker or tag name found in the search text. It is only offered; tapping it applies the matching filter. */
+export interface ChipSuggestion {
+  kind: 'track' | 'room' | 'speaker' | 'tag';
+  label: string;
+  /** What the matching filter takes: the track, full room or speaker name, or the tag value. */
+  value: string;
+  /** The Sessionize group, for a tag. */
+  group?: string;
+  talks: number;
 }
 
 /** A time phrase the server found in the search text, such as "after lunch" or "Tuesday". */
@@ -120,6 +134,8 @@ export interface RankingInfo {
     track: string[];
     level: string[];
     tags: TagRef[];
+    speaker?: string[];
+    room?: string[];
     has_slides: boolean | null;
     hide_sponsor: boolean;
     happening_now?: boolean;
@@ -157,6 +173,8 @@ export interface SearchResponse {
   /** The text the search ran on, after time phrases left it. */
   search_text?: string;
   time_phrases?: TimePhrase[];
+  /** Names found in the search text, offered as chips ("Did you mean track: Security?"). */
+  suggestions?: ChipSuggestion[];
   /** Whether the conference has talks today in its own time zone, so the Happening now chip can be used. */
   happening_now?: { available: boolean };
   results: SearchResult[];
@@ -176,6 +194,8 @@ export const EMPTY_FILTERS: SearchFilters = {
   track: [],
   level: [],
   tags: [],
+  speaker: [],
+  room: [],
   has_slides: null,
   hide_sponsor: false,
   happening_now: false,

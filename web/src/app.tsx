@@ -16,7 +16,7 @@ import {
 import { defaultConference, goToConference, readRoute, replaceConference, type Route } from './lib/route';
 import { useFocusTrap } from './lib/focus';
 import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, type ToastData } from './components/common';
-import { ChipRow, FilterSheet, Results, SearchField, activeFilterCount, type SheetSection } from './components/search';
+import { ChipRow, FilterSheet, Results, SearchField, SuggestionRow, activeFilterCount, type SheetSection } from './components/search';
 import { InterestedScreen } from './components/interested';
 import { ImportSheet } from './components/import';
 import { SettingsScreen } from './components/settings';
@@ -513,6 +513,7 @@ export function App() {
                       setSheet({ open: true, section });
                     }}
                   />
+                  <SuggestionRow suggestions={data?.suggestions ?? []} filters={filters} onChange={setFilters} />
                   <Results
                     conference={searchable}
                     data={data}

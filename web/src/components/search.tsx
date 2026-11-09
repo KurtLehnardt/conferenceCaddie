@@ -9,7 +9,7 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-preact';
-import type { Conference, Facets, FacetBucket, RankingInfo, SearchFilters, SearchResponse, Talk, TagRef, TimePhrase } from '../types';
+import type { ChipSuggestion, Conference, Facets, FacetBucket, RankingInfo, SearchFilters, SearchResponse, Talk, TagRef, TimePhrase } from '../types';
 import { EMPTY_FILTERS } from '../types';
 import { formatDateRange, formatDay, zoneOf } from '../lib/time';
 import { useFocusTrap } from '../lib/focus';
@@ -26,6 +26,8 @@ export function activeFilterCount(f: SearchFilters): number {
     f.track.length +
     f.level.length +
     f.tags.length +
+    f.speaker.length +
+    f.room.length +
     (f.has_slides !== null ? 1 : 0) +
     (f.hide_sponsor ? 1 : 0) +
     (f.happening_now ? 1 : 0) +
@@ -195,6 +197,46 @@ function Chip({
   );
 }
 
+/** The last two parts of a room such as "Salt Palace | Level 1 | Hall DE". */
+function roomLabel(room: string): string {
+  return room.split('|').map((p) => p.trim()).filter(Boolean).slice(-2).join(' · ');
+}
+
+const SUGGESTION_KIND: Record<ChipSuggestion['kind'], string> = { track: 'Track', room: 'Room', speaker: 'Speaker', tag: 'Tag' };
+
+/** Names found in the search text. They only suggest; nothing is applied until the person taps one. */
+export function SuggestionRow({
+  suggestions,
+  filters,
+  onChange,
+}: {
+  suggestions: ChipSuggestion[];
+  filters: SearchFilters;
+  onChange: (f: SearchFilters) => void;
+}) {
+  if (!suggestions.length) return null;
+  const apply = (s: ChipSuggestion): SearchFilters => {
+    if (s.kind === 'track') return { ...filters, track: [...filters.track, s.value] };
+    if (s.kind === 'room') return { ...filters, room: [...filters.room, s.value] };
+    if (s.kind === 'speaker') return { ...filters, speaker: [...filters.speaker, s.value] };
+    return { ...filters, tags: [...filters.tags, { group: s.group ?? '', value: s.value }] };
+  };
+  return (
+    <div class="chip-row suggest-row" role="group" aria-label="Did you mean">
+      <span class="suggest-lead">Did you mean</span>
+      {suggestions.map((s) => (
+        <span class="chip" key={`${s.kind}:${s.group ?? ''}:${s.value}`}>
+          <button type="button" class="chip-main" onClick={() => onChange(apply(s))}>
+            <span>
+              {SUGGESTION_KIND[s.kind]}: {s.label}
+            </span>
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function ChipRow({
   conference,
   filters,
@@ -329,6 +371,26 @@ export function ChipRow({
           />
         );
       })}
+      {filters.speaker.map((name) => (
+        <Chip
+          key={`speaker:${name}`}
+          label={`Speaker: ${name}`}
+          active
+          onOpen={() => onChange({ ...filters, speaker: filters.speaker.filter((n) => n !== name) })}
+          onClear={() => onChange({ ...filters, speaker: filters.speaker.filter((n) => n !== name) })}
+          clearLabel={`Clear speaker ${name}`}
+        />
+      ))}
+      {filters.room.map((name) => (
+        <Chip
+          key={`room:${name}`}
+          label={`Room: ${roomLabel(name)}`}
+          active
+          onOpen={() => onChange({ ...filters, room: filters.room.filter((n) => n !== name) })}
+          onClear={() => onChange({ ...filters, room: filters.room.filter((n) => n !== name) })}
+          clearLabel={`Clear room ${roomLabel(name)}`}
+        />
+      ))}
       {showSlides(filters, facets) && (
         <Chip
           label={filters.has_slides === false ? 'No slides' : 'Has slides'}
@@ -622,6 +684,8 @@ function filterLines(info: RankingInfo, conference: Conference): string[] {
   for (const t of f.tags) groups.set(t.group, [...(groups.get(t.group) ?? []), t.value]);
   for (const [group, values] of groups) lines.push(`${group}: ${values.join(', ')}`);
   if (f.time_phrases?.length) lines.push(`From your words: ${f.time_phrases.join(', ')}`);
+  if (f.speaker?.length) lines.push(`Speaker: ${f.speaker.join(', ')}`);
+  if (f.room?.length) lines.push(`Room: ${f.room.map(roomLabel).join(', ')}`);
   if (f.has_slides !== null) lines.push(f.has_slides ? 'Has slides' : 'No slides');
   if (f.hide_sponsor) lines.push('Sponsor talks hidden');
   if (f.happening_now) lines.push('Happening now: in progress or starting within 60 minutes');

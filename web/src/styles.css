@@ -668,6 +668,16 @@ a.conf-row .conf-check {
   display: none;
 }
 
+.suggest-row {
+  padding-top: 0;
+}
+
+.suggest-lead {
+  flex: none;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
 .chip {
   display: inline-flex;
   flex: none;

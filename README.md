@@ -52,6 +52,7 @@ npm run ingest -- --list                 # upcoming Linux Foundation events and 
 npm run ingest -- --event <slug>         # ingest one event and build its topics
 npm run ingest -- --all-upcoming         # every upcoming event whose schedule is on Sessionize
 npm run topics -- --event <slug>         # rebuild one event's topic list, for example after editing its fix-up file
+node scripts/build-facets.mjs [<slug> ...]  # rebuild the track, room, speaker and tag names used for suggested chips; run it after ingesting
 ```
 
 Re-running is safe: unchanged talks are not re-embedded. Events on other platforms, or with no published schedule, appear in the switcher as "Schedule not available here yet". Per-conference topic fix-ups (rename, merge, remove) live in `data/topics/{slug}.json`; the shared stoplist is `config/topic-stoplist.txt`.

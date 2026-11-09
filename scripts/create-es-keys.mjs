@@ -8,8 +8,8 @@
 //
 // An API key cannot mint a derived key that carries privileges, so each key is minted by a
 // native user that holds exactly the key's privileges:
-//   caddie-readonly-svc: read and view_index_metadata on caddie-talks*, caddie-conferences*
-//                        and caddie-topics*, plus the one cluster action
+//   caddie-readonly-svc: read and view_index_metadata on caddie-talks*, caddie-conferences*,
+//                        caddie-topics* and caddie-facets*, plus the one cluster action
 //                        cluster:admin/ingest/pipeline/simulate, which "Import my schedule" needs
 //                        to run the attachment processor (Apache Tika) in a simulated pipeline
 //                        that indexes nothing. Stored in the secret caddie-es-readonly.
@@ -51,7 +51,7 @@ const KEYS = [
     role: 'caddie_readonly',
     secret: 'caddie-es-readonly',
     cluster: ['cluster:admin/ingest/pipeline/simulate'],
-    indices: [{ names: ['caddie-talks*', 'caddie-conferences*', 'caddie-topics*'], privileges: ['read', 'view_index_metadata'] }],
+    indices: [{ names: ['caddie-talks*', 'caddie-conferences*', 'caddie-topics*', 'caddie-facets*'], privileges: ['read', 'view_index_metadata'] }],
   },
   {
     user: 'caddie-people-svc',
@@ -158,6 +158,10 @@ async function verify(readKey, peopleKey) {
   const confs = await es('POST', '/caddie-conferences/_search', { size: 1 }, R);
   check(confs.status === 200, 'read key: search caddie-conferences');
   // These requests match no document, so even an over-privileged key could not change data.
+  const facets = await es('POST', '/caddie-facets/_search', { size: 1 }, R);
+  check(facets.status === 200, 'read key: search caddie-facets');
+  const readWriteFacets = await es('POST', '/caddie-facets/_delete_by_query', nothing, R);
+  check(readWriteFacets.status === 403, 'read key: cannot write caddie-facets');
   const readWriteTalks = await es('POST', '/caddie-talks/_delete_by_query', nothing, R);
   check(readWriteTalks.status === 403, 'read key: cannot write caddie-talks');
   const readWritePeople = await es('POST', '/caddie-people/_delete_by_query', nothing, R);
@@ -191,6 +195,8 @@ async function verify(readKey, peopleKey) {
   check(del.status === 200, 'people key: can delete its test document');
   const peopleReadTalks = await es('POST', '/caddie-talks/_search', { size: 0 }, P);
   check(peopleReadTalks.status === 403, 'people key: cannot read caddie-talks');
+  const peopleReadFacets = await es('POST', '/caddie-facets/_search', { size: 0 }, P);
+  check(peopleReadFacets.status === 403, 'people key: cannot read caddie-facets');
   const peopleWriteTalks = await es('POST', '/caddie-talks/_delete_by_query', nothing, P);
   check(peopleWriteTalks.status === 403, 'people key: cannot write caddie-talks');
   const peopleSim = await es('POST', '/_ingest/pipeline/_simulate', extract, P);

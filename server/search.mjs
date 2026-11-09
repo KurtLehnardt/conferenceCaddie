@@ -56,6 +56,7 @@
 
 import { searchableConference } from './conferences.mjs';
 import { parseTimePhrases } from './phrases.mjs';
+import { suggestChips } from './facets.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
@@ -175,7 +176,7 @@ function knownValues(slug) {
 // the requested conference.
 
 const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size', 'debug', 'ignore_phrases']);
-const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor', 'happening_now', 'include_events']);
+const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'speaker', 'room', 'hide_sponsor', 'happening_now', 'include_events']);
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const TALK_ID_RE = /^([a-z0-9][a-z0-9-]{0,119}):[A-Za-z0-9_-]{1,64}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -194,6 +195,16 @@ function parseValueList(value, name, known) {
   if (!Array.isArray(value) || value.length > 50) throw new BadRequest(`filters.${name} must be an array of known values`);
   for (const v of value) {
     if (typeof v !== 'string' || !known.has(v)) throw new BadRequest(`filters.${name} contains an unknown value`);
+  }
+  return [...new Set(value)];
+}
+
+// Speaker and room filters take free names, so they are checked for shape only: at most ten strings.
+// They are matched in Elasticsearch, so a name that matches nothing simply returns no talks.
+function parseNameList(value, name) {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 10 || !value.every((v) => typeof v === 'string' && v.length > 0 && v.length <= 300)) {
+    throw new BadRequest(`filters.${name} must be an array of at most 10 names`);
   }
   return [...new Set(value)];
 }
@@ -311,6 +322,8 @@ export async function validate(body) {
       track: parseValueList(f.track, 'track', known.track),
       level: levelGroup ? parseValueList(f.level, 'level', known.level) : [],
       tags: tagSelection(tagPairs, known.tagKeys),
+      speaker: parseNameList(f.speaker, 'speaker'),
+      room: parseNameList(f.room, 'room'),
       hasSlides: f.has_slides ?? null,
       hideSponsor: f.hide_sponsor ?? false,
       happeningNow: f.happening_now ?? false,
@@ -353,6 +366,10 @@ function baseClauses(conference, filters) {
   if (filters.startAfter !== null) minutes.gte = filters.startAfter;
   if (filters.startBefore !== null) minutes.lt = filters.startBefore;
   if (Object.keys(minutes).length) clauses.push({ range: { start_minutes: minutes } });
+  // Speaker and room selections come from value-matching chips. They narrow every query and facet
+  // alike, and several names of one kind are alternatives.
+  if (filters.speaker.length) clauses.push({ bool: { should: filters.speaker.map((name) => ({ match_phrase: { speakers: name } })), minimum_should_match: 1 } });
+  if (filters.room.length) clauses.push({ terms: { room: filters.room } });
   if (filters.hideSponsor) clauses.push({ bool: { must_not: [{ term: { sponsor: true } }] } });
   // Happening now: in progress, or starting within the next 60 minutes. Elasticsearch compares
   // the absolute start and end instants with its own current time, so no clock or zone is used here.
@@ -596,7 +613,11 @@ export async function search(params) {
 
   // A debug request sends every search to the same shard copies, so the child rankings use the
   // same term statistics as the fused ranking they explain.
-  const all = await msearch(searches, debug ? { preference: 'caddie-ranking-drawer' } : {});
+  const [all, suggestions] = await Promise.all([
+    msearch(searches, debug ? { preference: 'caddie-ranking-drawer' } : {}),
+    // Names in the search text, offered as chips; empty for browse mode and on any failure.
+    query ? suggestChips(conference, query, filters) : [],
+  ]);
   const [main, ...rest] = all.slice(0, 1 + groups.length);
   const today = all[1 + groups.length];
   const aggsFor = (name) => {
@@ -622,6 +643,8 @@ export async function search(params) {
     // The text the retrievers saw, after time phrases left it, and the phrases found in it.
     search_text: query,
     time_phrases: params.timePhrases.map((p) => ({ key: p.key, label: p.label, days: p.days, applied: p.applied })),
+    // Track, room, speaker and tag names found in the text. Only suggestions: nothing is applied.
+    suggestions,
     // Whether the Happening now chip can be used: the conference has talks today in its own zone.
     happening_now: { available: (today?.hits?.total?.value ?? 0) > 0 },
     results: hits.map((h) => toResult(h, labels)),
@@ -652,6 +675,8 @@ export async function search(params) {
           const [group, value] = key.split(TAG_SEP);
           return { group, value };
         }),
+        speaker: filters.speaker,
+        room: filters.room,
         has_slides: filters.hasSlides,
         hide_sponsor: filters.hideSponsor,
         happening_now: filters.happeningNow,

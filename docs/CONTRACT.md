@@ -259,7 +259,7 @@ Returns `{"ok": true}` without calling Elasticsearch.
 
 ## Keys
 
-- **Read-only key** (Secret Manager `caddie-es-readonly`, env `ES_API_KEY`): `read` and `view_index_metadata` on `caddie-talks*`, `caddie-conferences*` and `caddie-topics*`, plus the single cluster action `cluster:admin/ingest/pipeline/simulate` for the schedule import's text extraction.
+- **Read-only key** (Secret Manager `caddie-es-readonly`, env `ES_API_KEY`): `read` and `view_index_metadata` on `caddie-talks*`, `caddie-conferences*`, `caddie-topics*` and `caddie-facets*`, plus the single cluster action `cluster:admin/ingest/pipeline/simulate` for the schedule import's text extraction.
 - **People key** (Secret Manager `caddie-es-people`, env `ES_PEOPLE_API_KEY`): `read`, `write` and `view_index_metadata` on `caddie-people*` only. The server uses it only for people, circles and the circle counts in recommendations.
 - The admin key is used only by the operator's CLI commands and is never deployed.
 

@@ -397,6 +397,39 @@ await check('m2: "after lunch day 2" uses that day\'s lunch break and an empty r
   report(ok, 'm2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', `${r.json.total} talks, ${wrong.length} outside the window, lunch ends at minute ${lunchEnd}`);
 });
 
+// Value matching: track, room, speaker and tag names found in the search text come back as
+// suggested chips. They are only suggestions, so the results never change because of them, and
+// they come from the requested conference's own names.
+await check('v1: a track name in the search text is suggested as a chip, never applied, and applying it filters', async () => {
+  const track = 'Platform Engineering';
+  const r = await search({ query: `${track.toLowerCase()} talks`, size: 50 });
+  if (r.status !== 200) throw new Error(`status ${r.status}`);
+  const chip = (r.json.suggestions ?? []).find((s) => s.kind === 'track' && s.value === track);
+  const applied = await search({ query: `${track.toLowerCase()} talks`, size: 50, filters: { track: [track] } });
+  const wrong = (applied.json.results ?? []).filter((t) => t.track !== track);
+  const after = (applied.json.suggestions ?? []).some((s) => s.kind === 'track' && s.value === track);
+  const other = await search({ query: 'pytorch ecosystem', size: 5 });
+  const leaked = (other.json.suggestions ?? []).some((s) => s.value === 'PyTorch Ecosystem');
+  const ok = Boolean(chip) && (r.json.results ?? []).some((t) => t.track !== track) && applied.status === 200 && (applied.json.results ?? []).length > 0
+    && wrong.length === 0 && !after && !leaked;
+  report(ok, 'v1: a track name in the search text is suggested as a chip, never applied, and applying it filters', `${(r.json.suggestions ?? []).length} chips, ${r.json.total} talks before, ${applied.json.total} once applied, ${wrong.length} outside the track`);
+});
+
+await check('v2: a speaker name and a room are suggested as chips and filter the results', async () => {
+  const sample = (await search({ query: '', size: 50 })).json.results?.find((t) => t.speakers?.length && t.room);
+  if (!sample) throw new Error('no talk with a speaker and a room');
+  const name = sample.speakers[0];
+  const r = await search({ query: name, size: 50 });
+  const chip = (r.json.suggestions ?? []).find((s) => s.kind === 'speaker' && s.value === name);
+  const bySpeaker = await search({ query: '', size: 50, filters: { speaker: [name] } });
+  const byRoom = await search({ query: '', size: 50, filters: { room: [sample.room] } });
+  const roomChip = (await search({ query: sample.room.split('|').pop().trim(), size: 5 })).json.suggestions?.find((s) => s.kind === 'room' && s.value === sample.room);
+  const bad = await search({ query: '', filters: { speaker: 'x' } });
+  const ok = Boolean(chip) && bySpeaker.status === 200 && bySpeaker.json.results.length > 0 && bySpeaker.json.results.every((t) => t.speakers.includes(name))
+    && byRoom.status === 200 && byRoom.json.results.length > 0 && byRoom.json.results.every((t) => t.room === sample.room) && Boolean(roomChip) && bad.status === 400;
+  report(ok, 'v2: a speaker name and a room are suggested as chips and filter the results', `speaker chip ${Boolean(chip)}, room chip ${Boolean(roomChip)}, ${bySpeaker.json.total} talks by the speaker, ${byRoom.json.total} in the room`);
+});
+
 // ---------------------------------------------------------------------------------------------
 // The smaller events: own talks only, own categories, own time zone.
 
