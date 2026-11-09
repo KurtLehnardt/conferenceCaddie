@@ -8,13 +8,11 @@ make it easier to find the right person and give the two of you something to
 talk about. When a choice comes up, pick the option that leads to more good
 conversations.
 
-Pitch for judges: "Find the right talk, and the right people around it." The
-hackathon track is Elasticsearch's "Find the Right Talk"; people-matching is
-a search problem, and the app treats it as one.
+A mobile-first web app for attendees of any Linux Foundation conference whose schedule is on Sessionize. It answers two questions, in this order: **who here should I talk to?** and then **which talks give us something to talk about?** It is not a scheduling tool; each talk links to the conference's official schedule with "Add to my schedule on the official site".
 
-A mobile-first web app for attendees of Linux Foundation conferences whose schedules are on Sessionize. It answers two questions, in this order: **who here should I talk to?** and then **which talks give us something to talk about?** It is not a scheduling tool; each talk links to the conference's official schedule with "Add to my schedule on the official site".
+Live: https://conference-caddie-265846417372.us-west1.run.app. The switcher at the top of the app lists every conference ingested so far, and links out to the official schedule for events that are not available here yet. Each conference has its own URL, `/e/{slug}`, for a QR code.
 
-Live: https://conference-caddie-265846417372.us-west1.run.app (KubeCon + CloudNativeCon North America 2026 runs 9 to 12 November in Salt Lake City; 8 November is the Maintainer Summit).
+The app began as an entry in the Elasticsearch "Find the Right Talk" track at a hackathon during KubeCon + CloudNativeCon North America 2026. The pitch: "Find the right talk, and the right people around it." People-matching is a search problem, and the app treats it as one.
 
 ## What it does
 
@@ -22,15 +20,29 @@ Live: https://conference-caddie-265846417372.us-west1.run.app (KubeCon + CloudNa
 - **Talk circles**: mark a talk "I'm interested", and separately choose to share your profile with others interested in that talk. Everyone sees how many people want to talk about it; only people who shared can see who else did.
 - **For you**: talk suggestions from your topics and free text, with the matching topics and passage shown.
 - **Search**: hybrid lexical and semantic search over one conference's talks, with filters for day, time, track and the conference's own tag groups.
-- **Interested**: a plain list of the talks you marked, in time order, kept on your device.
+- **Interested**: a plain list of the talks you marked, in time order, kept on your device. From here you can share your profile for all of them at once, stop sharing for all, or let sharing follow the list as you mark and unmark talks.
 
 There is no sign-in. A profile is written to Elasticsearch only when you turn on a visibility choice; a random device secret, stored only as a hash on the server, protects every edit. Profiles expire after the conference's last day, and "Delete my profile" removes them at once. The sample profiles you may see are labelled "Sample" and are not real people.
 
 ## How it works
 
 - Conference schedules are committed snapshots of public Sessionize feeds. Nothing is fetched at runtime.
+- Conferences are discovered from the Linux Foundation events list (`events.linuxfoundation.org`), which names each event's schedule page; the page carries the Sessionize feed to read. Only the operator runs ingestion, from the CLI.
 - Elasticsearch is the only data store and does all matching, ranking and filtering: lexical plus `semantic_text` retrievers fused with reciprocal rank fusion for search, people and suggestions. No generative model is used.
 - Each conference's topic list is built from its talk titles at ingestion, with an Elasticsearch analyzer and aggregation.
 - One Node.js service on Cloud Run serves the app and the API. It runs as the dedicated `caddie-runtime` service account, which can read only the two secrets below and has no project-level roles. It holds two scoped keys from Secret Manager: a read-only key for talks, conferences and topics, and a people key that can only read and write the people index.
+
+## Adding a conference
+
+With `ELASTISEARCH_API_KEY` set to an admin-capable key:
+
+```sh
+npm run ingest -- --list                 # upcoming Linux Foundation events and their platform
+npm run ingest -- --event <slug>         # ingest one event and build its topics
+npm run ingest -- --all-upcoming         # every upcoming event whose schedule is on Sessionize
+npm run topics -- --event <slug>         # rebuild one event's topic list, for example after editing its fix-up file
+```
+
+Re-running is safe: unchanged talks are not re-embedded. Events on other platforms, or with no published schedule, appear in the switcher as "Schedule not available here yet". Per-conference topic fix-ups (rename, merge, remove) live in `data/topics/{slug}.json`; the shared stoplist is `config/topic-stoplist.txt`.
 
 For the API and index shapes, see [docs/CONTRACT.md](docs/CONTRACT.md). Design choices are recorded in [DECISIONS.md](DECISIONS.md).

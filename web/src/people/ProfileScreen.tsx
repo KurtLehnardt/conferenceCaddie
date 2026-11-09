@@ -14,7 +14,7 @@ import {
   topicsFor,
   usePeopleStore,
 } from './storage';
-import { changeVisibility, getSyncStatus, LINKEDIN_RE, scheduleProfileSync } from './sync';
+import { changeVisibility, getSyncStatus, LINKEDIN_RE, scheduleProfileSync, unshareAll } from './sync';
 import { TopicPicker } from './TopicPicker';
 import type { ConferenceLike, InterestedProp, Profile, TopicRef } from './types';
 import { interestedIds } from './util';
@@ -244,10 +244,20 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
         </label>
         <p class="pp-notice-text">{VISIBILITY_NOTICE}</p>
         {vis.shared_talk_ids.length > 0 && (
-          <p class="pp-hint">
-            You also share your profile for {vis.shared_talk_ids.length}{' '}
-            {vis.shared_talk_ids.length === 1 ? 'talk' : 'talks'}. Turn that off on each talk.
-          </p>
+          <div class="pp-actions pp-shared-row">
+            <p class="pp-hint">
+              You also share your profile for {vis.shared_talk_ids.length}{' '}
+              {vis.shared_talk_ids.length === 1 ? 'talk' : 'talks'}.
+            </p>
+            <button
+              type="button"
+              class="btn btn-text btn-small"
+              disabled={visBusy}
+              onClick={() => void unshareAll(slug).then((err) => err && setVisMessage(err))}
+            >
+              Stop sharing for all talks
+            </button>
+          </div>
         )}
         {visMessage && <p class="pp-error">{visMessage}</p>}
       </section>

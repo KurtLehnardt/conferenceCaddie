@@ -3,6 +3,10 @@ import { useEffect, useState } from 'preact/hooks';
 import { fetchCircleCounts } from './api';
 import type { ConferenceLike, InterestedProp, TalkLike } from './types';
 
+/** Shown once before the first per-talk share, and before "Share for all". */
+export const SHARE_NOTICE =
+  'Sharing stores your profile on our server until the conference ends. Only people who also shared for this talk can see it, including How to reach me. Everyone else sees only the count. It does not make you visible conference-wide. Turn it off at any time to remove it.';
+
 const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
 function decode(s: string): string {

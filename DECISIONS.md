@@ -119,6 +119,7 @@ Run it with `BASE_URL=http://localhost:8080 npm run smoke`. Set `SMOKE_SKIP_BUND
 - Profiles expire at 23:59:59 on the conference's last day in its own time zone, and every people query filters on that.
 - The 30 seeded sample profiles for KubeCon are labelled "Sample · ..." with the contact note "Sample profile, not a real person". Several share for the same three talks. Sample topics that are not topics of the conference are skipped with a warning.
 - Rate limits: people writes 20 per minute per device and 60 per IP; matches and circle members 30 per device and 90 per IP, because many attendees share a conference NAT; counts, recommendations and topics 60 per IP.
+- Share for all (2026-11-09). Toggling sharing talk by talk was tedious, so the Interested screen has "Share for all" and "Stop sharing for all", plus a device-only preference "Share automatically for talks I mark, and stop when I unmark" (`share_new`). The preference is off by default, shows the sharing notice the first time, and catches up on the talks already marked when turned on. It is a device setting, not a server field: the server still receives one explicit `shared_talk_ids` list, and nothing is shared the user did not mark. The profile's visibility card also gets "Stop sharing for all talks". The 50-talk server limit is kept; "Share for all" shares the first 50 and says so.
 
 ## Talks for you
 

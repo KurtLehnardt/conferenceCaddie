@@ -21,7 +21,7 @@ import { InterestedScreen } from './components/interested';
 import { SettingsScreen } from './components/settings';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
-import { ForYouScreen, PeopleScreen, ProfileScreen, type TalkLike } from './people/index';
+import { ForYouScreen, PeopleScreen, ProfileScreen, onInterestedChanged, type TalkLike } from './people/index';
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 20;
@@ -215,12 +215,14 @@ export function App() {
     if (index >= 0) {
       const removed = current[index];
       setInterested(s, current.filter((x) => x.talk_id !== id));
+      void onInterestedChanged(s, id, false);
       showToast('Removed from Interested', {
         label: 'Undo',
         onClick: () => {
           const now = latest.current.talks.filter((x) => x.talk_id !== removed.talk_id);
           now.splice(Math.min(index, now.length), 0, removed);
           setInterested(s, now);
+          void onInterestedChanged(s, removed.talk_id, true);
         },
       });
       return;
@@ -228,9 +230,13 @@ export function App() {
     if (typeof t === 'string' || t.conference !== s) return;
     const added = toInterested(t);
     setInterested(s, [...current, added]);
+    void onInterestedChanged(s, added.talk_id, true);
     showToast('Added to Interested', {
       label: 'Undo',
-      onClick: () => setInterested(s, latest.current.talks.filter((x) => x.talk_id !== added.talk_id)),
+      onClick: () => {
+        setInterested(s, latest.current.talks.filter((x) => x.talk_id !== added.talk_id));
+        void onInterestedChanged(s, added.talk_id, false);
+      },
     });
   };
 

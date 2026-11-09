@@ -7,7 +7,7 @@ import { PersonCard } from './PersonCard';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
 import { changeVisibility, getSaveCount } from './sync';
 import type { CircleMembers, ConferenceLike, InterestedProp, TalkLike } from './types';
-import { interestedIds, invalidateCount, peopleCountLabel, useCircleCount } from './util';
+import { interestedIds, invalidateCount, peopleCountLabel, SHARE_NOTICE, useCircleCount } from './util';
 
 export function CircleView({ conference, talkId }: { conference: ConferenceLike; talkId: string }) {
   const [data, setData] = useState<CircleMembers | null>(null);
@@ -86,9 +86,6 @@ export function CircleView({ conference, talkId }: { conference: ConferenceLike;
     </div>
   );
 }
-
-const SHARE_NOTICE =
-  'Sharing stores your profile on our server until the conference ends. Only people who also shared for this talk can see it, including How to reach me. Everyone else sees only the count. It does not make you visible conference-wide. Turn it off at any time to remove it.';
 
 export function TalkPeopleControls({
   conference,

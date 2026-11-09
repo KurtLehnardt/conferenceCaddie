@@ -6,5 +6,7 @@ export { PeopleScreen, EndedTalkBanner } from './PeopleScreen';
 export { ForYouScreen } from './ForYou';
 export { ProfileScreen } from './ProfileScreen';
 export { TalkPeopleControls } from './TalkPeopleControls';
+export { ShareAllControls } from './ShareAllControls';
+export { onInterestedChanged } from './sync';
 export { importProfile } from './import';
 export type { ConferenceLike, InterestedProp, TalkLike } from './types';
