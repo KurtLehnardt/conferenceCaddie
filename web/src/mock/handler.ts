@@ -14,6 +14,7 @@ import {
   type MockPerson,
   type MockTalk,
 } from './fixtures';
+import { mockImportGithub } from './github';
 
 type Json = Record<string, unknown>;
 
@@ -237,6 +238,8 @@ interface Connect {
   presence: Record<string, { zone: string; spot: string; since: string; until: string }>;
   meets: MockMeet[];
   seeded: string[];
+  /** Reports sent from this browser, as `{slug}:{kind}:{id}`; a second one of the same target hides it. */
+  reports: string[];
 }
 
 const CONNECT_KEY = 'caddie.mock.connect';
@@ -245,14 +248,34 @@ const ACTIVE_MS = 20 * 60_000;
 const SEED_DELAY_MS = 5_000;
 const AUTO_ACCEPT_MS = 10_000;
 const FILTERED = { error: 'filtered', message: 'That was held back by the filter. Edit it and try again.' };
+// Reports: the real server hides a target at two distinct reporters. This browser is the only
+// reporter here, so its second report of the same target stands in for the second person, and
+// once it has sent two reports in all the mock pretends two people reported this browser's own
+// profile, so PUT /api/people/profile answers hidden_for_owner: true and the banner can be seen.
+const HIDE_AT = 2;
+const REPORT_REASONS = ['harassment', 'hate', 'sexual', 'spam', 'other'];
 
 function readConnect(): Connect {
   try {
     const c = JSON.parse(sessionStorage.getItem(CONNECT_KEY) ?? '{}');
-    return { blocks: c.blocks ?? {}, presence: c.presence ?? {}, meets: c.meets ?? [], seeded: c.seeded ?? [] };
+    return { blocks: c.blocks ?? {}, presence: c.presence ?? {}, meets: c.meets ?? [], seeded: c.seeded ?? [], reports: c.reports ?? [] };
   } catch {
-    return { blocks: {}, presence: {}, meets: [], seeded: [] };
+    return { blocks: {}, presence: {}, meets: [], seeded: [], reports: [] };
   }
+}
+
+function reportCount(c: Connect, key: string): number {
+  return c.reports.filter((r) => r === key).length;
+}
+
+/** A sample person hidden after reports: two reports of their profile from this browser. */
+function hiddenPerson(c: Connect, slug: string, ref: string): boolean {
+  return reportCount(c, `${slug}:profile:${ref}`) >= HIDE_AT;
+}
+
+/** This browser's own profile counts as hidden once it has sent two reports (see above). */
+function hiddenForOwner(c: Connect): boolean {
+  return c.reports.length >= HIDE_AT;
 }
 
 function writeConnect(c: Connect) {
@@ -405,7 +428,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     if (!open && !shared.length) delete store[key];
     else store[key] = { profile: (body.profile as Json) ?? {}, open_to_meet: open, shared_talk_ids: shared };
     writeStore(store);
-    return { ok: true, open_to_meet: open, shared_talk_ids: shared };
+    return { ok: true, open_to_meet: open, shared_talk_ids: shared, hidden_for_owner: hiddenForOwner(readConnect()) };
   }
   if (path === '/api/people/profile' && method === 'DELETE') {
     const id = device(headers);
@@ -433,6 +456,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
         p.event_id === conf.slug &&
         p.open_to_meet &&
         !blockedEitherWay(c, conf.slug, id, p.ref) &&
+        !hiddenPerson(c, conf.slug, p.ref) &&
         (body.when !== 'around_now' || !!p.presence_zone) &&
         (!terms.length || terms.some((w) => `${p.expertise} ${p.about}`.toLowerCase().includes(w))),
     );
@@ -528,6 +552,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const target = personByRef(conf.slug, ref);
     if (!target) throw new HttpError(404, { error: 'not found' });
     const c = readConnect();
+    if (hiddenPerson(c, conf.slug, ref)) throw new HttpError(404, { error: 'not_found' });
     if (blockedEitherWay(c, conf.slug, id, ref)) throw new HttpError(403, { error: 'blocked' });
     const note = String(body.note ?? '').slice(0, 140);
     if (filtered(note)) throw new HttpError(400, FILTERED);
@@ -616,6 +641,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
         state: m.state,
         active_until: active ? m.expires_at : null,
         other: {
+          ref: other?.ref ?? null,
           display_name: other?.display_name ?? 'Someone',
           zone: active ? (other?.presence_zone ?? null) : null,
           spot: active ? (other?.presence_spot ?? null) : null,
@@ -656,7 +682,8 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const conf = conferenceOf(body.event);
     const talkId = String(body.talk_id);
     const me = readStore()[`${conf.slug}:${id}`];
-    const members = MOCK_PEOPLE.filter((p) => p.event_id === conf.slug && p.shared_talk_ids.includes(talkId));
+    const c = readConnect();
+    const members = MOCK_PEOPLE.filter((p) => p.event_id === conf.slug && p.shared_talk_ids.includes(talkId) && !hiddenPerson(c, conf.slug, p.ref));
     const count = members.length + (me?.shared_talk_ids.includes(talkId) ? 1 : 0);
     if (!me?.shared_talk_ids.includes(talkId)) throw new HttpError(403, { error: 'share_required', count });
     const t = MOCK_TALKS.find((x) => x.talk_id === talkId);
@@ -667,6 +694,32 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
       members: members.map((p) => personResult(p, me, [talkId])),
     };
   }
+
+  if (path === '/api/people/report' && method === 'POST') {
+    const id = device(headers);
+    const conf = conferenceOf(body.event);
+    if (!readStore()[`${conf.slug}:${id}`]) throw new HttpError(403, { error: 'profile_required' });
+    const ref = String(body.ref ?? '');
+    const context = (body.context ?? {}) as Json;
+    const kind = String(context.kind ?? '');
+    const target = String(context.id ?? '');
+    if (!['profile', 'meet', 'spot'].includes(kind)) throw new HttpError(400, { error: 'context.kind' });
+    if (!REPORT_REASONS.includes(String(body.reason))) throw new HttpError(400, { error: 'reason' });
+    if (kind !== 'meet' && target !== ref) throw new HttpError(400, { error: 'context.id' });
+    const c = readConnect();
+    if (kind === 'meet') {
+      const m = c.meets.find((x) => x.meet_id === target && x.event_id === conf.slug);
+      if (!m || (m.requester !== `dev:${id}` && m.recipient !== `dev:${id}`)) throw new HttpError(404, { error: 'not_found' });
+    } else if (!personByRef(conf.slug, ref)) {
+      throw new HttpError(404, { error: 'not_found' });
+    }
+    const key = `${conf.slug}:${kind}:${target}`;
+    c.reports.push(key);
+    writeConnect(c);
+    return { ok: true, hidden: reportCount(c, key) >= HIDE_AT };
+  }
+
+  if (path === '/api/import/github' && method === 'POST') return mockImportGithub(String(body.handle ?? ''), (s, b) => new HttpError(s, b));
 
   throw new HttpError(404, { error: 'not found' });
 }

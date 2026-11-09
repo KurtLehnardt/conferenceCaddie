@@ -2,7 +2,7 @@
 // The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence
 // and /api/meet/*. This is the only place that reads the device secret.
 import { getDevice } from './storage';
-import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Recommendation, TopicHit } from './types';
+import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Recommendation, ReportKind, ReportReason, TopicHit } from './types';
 
 export class PeopleApiError extends Error {
   constructor(
@@ -79,7 +79,7 @@ export interface ProfileBody {
 }
 
 export function putProfile(body: ProfileBody) {
-  return call<{ ok: boolean; open_to_meet: boolean; shared_talk_ids: string[] }>('/api/people/profile', {
+  return call<{ ok: boolean; open_to_meet: boolean; shared_talk_ids: string[]; hidden_for_owner?: boolean }>('/api/people/profile', {
     method: 'PUT',
     body: JSON.stringify(body),
     device: true,
@@ -125,6 +125,14 @@ export function unblockPerson(slug: string, ref: string) {
     body: JSON.stringify({ event: slug, ref }),
     device: true,
   });
+}
+
+/**
+ * Reports a person (kind profile or spot, id is their ref) or a meet (kind meet, id is the
+ * meet_id; ref names the other participant). The reporter never learns who else reported.
+ */
+export function reportPerson(slug: string, ref: string, kind: ReportKind, id: string, reason: ReportReason) {
+  return call<{ ok: boolean; hidden: boolean }>('/api/people/report', post({ event: slug, ref, context: { kind, id }, reason }, undefined, true));
 }
 
 export function fetchBlocks(slug: string, signal?: AbortSignal) {

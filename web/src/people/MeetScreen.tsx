@@ -1,12 +1,15 @@
 // The meet screen (#/meet/{id}): the rendezvous, their zone and spot, how to spot them, my own
-// how-to-spot-me line, then "We found each other" / "Cancel". Polls every 10 s while open.
+// how-to-spot-me line, then "We found each other" / "Cancel". Polls every 10 s while open. The
+// other person's card has Report in its overflow menu (the meet-up) and on their spot line.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, MapPin, MessageCircle } from 'lucide-preact';
+import { OverflowMenu } from '../components/common';
 import { fetchMeet, isAbort, meetAction, PeopleApiError, putMeetDetails } from './api';
 import { personForMeet, refreshInbox } from './connect';
 import { ACCEPTED_COPY } from './InboxScreen';
 import { useZones } from './presence';
 import { ZoneSelect } from './PresenceControls';
+import { ReportSheet, type ReportTarget } from './ReportSheet';
 import { addMet, getPresence, usePeopleStore } from './storage';
 import type { ConferenceLike, InterestedProp, MeetDetail } from './types';
 import { confirm, toast } from './ui';
@@ -53,6 +56,7 @@ export function MeetScreen({
   const [pickingSpot, setPickingSpot] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [reporting, setReporting] = useState<ReportTarget | null>(null);
   const seededSpot = useRef(false);
   const stop = useRef(false);
 
@@ -247,6 +251,11 @@ export function MeetScreen({
   const active = d.state === 'active';
   const minutes = d.active_until ? Math.max(0, Math.ceil((Date.parse(d.active_until) - Date.now()) / 60_000)) : null;
   const meAround = getPresence(slug).on;
+  // Reports name the other person by their ref, which the server sends with the meet.
+  const otherRef = d.other.ref ?? null;
+  const report = (kind: 'meet' | 'spot') => {
+    if (otherRef) setReporting({ ref: otherRef, display_name: name, kind, id: kind === 'meet' ? meetId : otherRef });
+  };
 
   return (
     <div class="pp-screen pp-meet">
@@ -290,14 +299,26 @@ export function MeetScreen({
       </section>
 
       <section class="pp-card" aria-labelledby="pp-them-h">
-        <h2 id="pp-them-h" class="pp-card-title">
-          {name}
-        </h2>
+        <header class="pp-person-head">
+          <h2 id="pp-them-h" class="pp-card-title">
+            {name}
+          </h2>
+          {otherRef && (
+            <span class="pp-person-menu">
+              <OverflowMenu label={`Options for ${name}`} items={[{ label: 'Report', onSelect: () => report('meet') }]} />
+            </span>
+          )}
+        </header>
         {d.other.zone ? (
           <p class="pp-around">
             <MapPin size={16} aria-hidden="true" />
             {d.other.zone}
             {d.other.spot && ` · ${d.other.spot}`}
+            {d.other.spot && otherRef && (
+              <button type="button" class="btn btn-text btn-small pp-spot-report" onClick={() => report('spot')}>
+                Report
+              </button>
+            )}
           </p>
         ) : (
           <p class="pp-hint">{active ? "They haven't said where they are." : `${name} isn't around right now.`}</p>
@@ -348,6 +369,7 @@ export function MeetScreen({
           Cancel
         </button>
       </div>
+      {reporting && <ReportSheet slug={slug} target={reporting} onClose={() => setReporting(null)} />}
     </div>
   );
 }

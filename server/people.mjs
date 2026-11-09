@@ -403,7 +403,7 @@ function readBody(req) {
   });
 }
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+export const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 export async function jsonBody(req, allowedKeys) {
   const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -499,9 +499,9 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // People documents (people key).
 
 const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_since', 'presence_until'];
-const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', ...PRESENCE_FIELDS];
+const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
-const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', ...PRESENCE_FIELDS];
+const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
 
 // Returns { found, source, seqNo, primaryTerm } for the caller's own document.
 export async function ownDoc(eventId, profileId) {
@@ -558,10 +558,13 @@ export async function docByRef(eventId, ref) {
 }
 
 // The person a result's ref points at, or null. Only someone the requester could have seen
-// qualifies: visible conference-wide, or sharing a talk the requester also shares for.
+// qualifies: visible conference-wide, or sharing a talk the requester also shares for, and not
+// hidden after reports. docByRef stays unfiltered: a hidden person must stay blockable and
+// reportable.
 export async function personByRef(me, ref) {
   const s = await docByRef(me.event_id, ref);
   if (!s || s.profile_id === me.profile_id) return null;
+  if (s.hidden === true) return null;
   const mine = new Set(me.shared_talk_ids ?? []);
   if (s.open_to_meet !== true && !(s.shared_talk_ids ?? []).some((id) => mine.has(id))) return null;
   return s;
@@ -645,7 +648,7 @@ function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, que
   const filter = {
     bool: {
       filter: [{ term: { event_id: me.event_id } }, { range: { visible_until: { gt: 'now' } } }, ...filters],
-      must_not: [{ ids: { values: [docId(me.event_id, me.profile_id)] } }, ...notBlocked(me.event_id, blocked)],
+      must_not: [{ ids: { values: [docId(me.event_id, me.profile_id)] } }, { term: { hidden: true } }, ...notBlocked(me.event_id, blocked)],
     },
   };
   const legs = [];
@@ -810,6 +813,7 @@ async function circleCounts(slug, ids) {
     query: {
       bool: {
         filter: [{ term: { event_id: slug } }, { range: { visible_until: { gt: 'now' } } }, { terms: { shared_talk_ids: ids } }],
+        must_not: [{ term: { hidden: true } }],
       },
     },
     aggs: { talks: { terms: { field: 'shared_talk_ids', include: ids, size: ids.length } } },
@@ -880,6 +884,8 @@ async function putProfile(req, res) {
   // reindex carries the stored presence over and a partial update leaves it alone.
   const presence = own.found ? Object.fromEntries(PRESENCE_FIELDS.map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
   if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
+  // The report flags live on the document too; a full reindex would otherwise unhide silently.
+  const flags = own.found ? { hidden: own.source.hidden === true, spot_hidden: own.source.spot_hidden === true } : {};
 
   let status;
   if (!own.found) {
@@ -917,6 +923,7 @@ async function putProfile(req, res) {
           secret_hash: own.source.secret_hash,
           text_hash: hash,
           ...presence,
+          ...flags,
           ...common,
         },
       );
@@ -924,7 +931,7 @@ async function putProfile(req, res) {
     if (status === 409) throw new HttpError(409, { error: 'The profile changed at the same time; try again' });
   }
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, { ok: true, open_to_meet: body.open_to_meet, shared_talk_ids: shared });
+  sendJson(res, 200, { ok: true, open_to_meet: body.open_to_meet, shared_talk_ids: shared, hidden_for_owner: own.found && own.source.hidden === true });
 }
 
 async function deleteProfile(req, res, url) {

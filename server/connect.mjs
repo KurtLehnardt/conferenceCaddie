@@ -200,6 +200,8 @@ async function participantMeet(device, id) {
   const s = meet.source;
   const me = await authenticated(device, s.event_id);
   if (!me || !(s.participants ?? []).includes(me.profile_id)) throw forbidden();
+  // A meet hidden after reports exists only for the reported participant.
+  if (s.hidden === true && s.hidden_owner_id !== me.profile_id) throw notFound();
   const otherId = s.participants.find((p) => p !== me.profile_id);
   const [other, labels] = await Promise.all([peopleByIds(s.event_id, [otherId]).then((m) => m.get(otherId) ?? null), topicLabels(s.event_id)]);
   return { meet, me, other, labels };
@@ -294,10 +296,12 @@ async function putPresence(req, res) {
   if (untilMs <= now) throw bad('conference has ended');
   // Turning it on again while it is on extends it; since keeps the first time.
   const since = isAround(me) && typeof me.presence_since === 'string' ? me.presence_since : iso(now);
-  const presence = { presence_zone: zone, presence_spot: spot, presence_since: since, presence_until: iso(untilMs) };
+  // A spot line hidden after reports stays off until the operator unhides it.
+  const storedSpot = me.spot_hidden === true ? null : spot;
+  const presence = { presence_zone: zone, presence_spot: storedSpot, presence_since: since, presence_until: iso(untilMs) };
   const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: presence });
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, { ok: true, zone, spot, presence_since: since, presence_until: presence.presence_until });
+  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, presence_since: since, presence_until: presence.presence_until });
 }
 
 async function deletePresence(req, res, url) {
@@ -328,6 +332,8 @@ async function requestMeet(req, res) {
   const note = line(body.note, 'note', NOTE_MAX) ?? '';
   const conf = await conferenceFor(body.event);
   const me = await requireProfile(device, conf.slug);
+  // A profile hidden after reports must not surface in anyone's inbox.
+  if (me.hidden === true) throw new HttpError(403, { error: 'hidden' });
   limit(`meet-request:dev:${me.profile_id}`, MEET_REQUESTS_PER_HOUR, HOUR_MS);
 
   const them = await personByRef(me, ref);
@@ -410,7 +416,10 @@ async function inbox(req, res, url) {
   for (const s of meets) {
     const otherId = s.participants.find((p) => p !== me.profile_id);
     const other = others.get(otherId);
-    if (!other || hidden.has(otherId)) continue;
+    // A meet hidden after reports reaches only the reported participant; a hidden profile is
+    // treated like a missing document.
+    if (s.hidden === true && s.hidden_owner_id !== me.profile_id) continue;
+    if (!other || other.hidden === true || hidden.has(otherId)) continue;
     const view = meetView(s, me, other, labels);
     if (s.requester_id === me.profile_id) outgoing.push({ ...view, to: { ref: view.other.ref, display_name: other.display_name ?? '' } });
     else incoming.push({ ...view, from: { ref: view.other.ref, display_name: other.display_name ?? '', about: other.about ?? '' } });

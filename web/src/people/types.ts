@@ -102,7 +102,7 @@ export interface Inbox {
 export interface MeetDetail {
   state: MeetState;
   active_until: string | null;
-  other: { display_name: string; zone: string | null; spot: string | null; spot_me: string | null; about?: string | null };
+  other: { ref?: string | null; display_name: string; zone: string | null; spot: string | null; spot_me: string | null; about?: string | null };
   rendezvous: string | null;
   mine: { spot_me: string | null };
 }
@@ -156,7 +156,13 @@ export interface Visibility {
    * it and unmarking stops. Off by default; the user turns it on from the Interested screen.
    */
   share_new: boolean;
+  /** True when the server last said this profile is hidden after reports (its owner still sees it). */
+  hidden_for_owner: boolean;
 }
+
+/** Report: what a report is about and why. */
+export type ReportKind = 'profile' | 'meet' | 'spot';
+export type ReportReason = 'harassment' | 'hate' | 'sexual' | 'spam' | 'other';
 
 export interface Device {
   profile_id: string;

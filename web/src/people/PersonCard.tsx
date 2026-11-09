@@ -1,11 +1,12 @@
 // One person in People to meet, a search result or a talk circle: the opener, the passage that
 // matched, the other reasons, their topics and, when present, "How to reach me". Every card has
-// Block in its overflow menu and "Ask to talk shop".
+// Report and Block in its overflow menu and "Ask to talk shop".
 import { useEffect, useState } from 'preact/hooks';
 import { ExternalLink, MapPin, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
 import { AskSheet, plainText } from './AskSheet';
 import { blockWithConfirm, outgoingTo, rememberPerson, requestTo } from './connect';
+import { ReportSheet } from './ReportSheet';
 import { usePeopleStore } from './storage';
 import type { PersonResult, TopicRef } from './types';
 import { Marked } from './util';
@@ -30,6 +31,7 @@ export function SampleNote({ people }: { people: PersonResult[] }) {
 export function PersonCard({ person, slug }: { person: PersonResult; slug: string }) {
   usePeopleStore();
   const [asking, setAsking] = useState(false);
+  const [reporting, setReporting] = useState(false);
   useEffect(() => rememberPerson(person), [person.ref]);
 
   const evidence = person.evidence ? plainText(person.evidence) : '';
@@ -55,7 +57,10 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
         <span class="pp-person-menu">
           <OverflowMenu
             label={`Options for ${person.display_name}`}
-            items={[{ label: 'Block', destructive: true, onSelect: () => blockWithConfirm(slug, person) }]}
+            items={[
+              { label: 'Report', onSelect: () => setReporting(true) },
+              { label: 'Block', destructive: true, onSelect: () => blockWithConfirm(slug, person) },
+            ]}
           />
         </span>
       </header>
@@ -119,6 +124,13 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
         )}
       </div>
       {asking && <AskSheet slug={slug} person={person} onClose={() => setAsking(false)} />}
+      {reporting && (
+        <ReportSheet
+          slug={slug}
+          target={{ ref: person.ref, display_name: person.display_name, kind: 'profile', id: person.ref }}
+          onClose={() => setReporting(false)}
+        />
+      )}
     </article>
   );
 }

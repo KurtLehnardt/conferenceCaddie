@@ -842,6 +842,33 @@
   justify-self: start;
 }
 
+/* Report sheet: the reasons as the filter sheet's radio options, then one confirming step. */
+
+.pp-report-body {
+  display: grid;
+  gap: 12px;
+  padding-bottom: calc(16px + var(--safe-bottom));
+}
+
+.pp-report-reasons {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.pp-person-head .pp-card-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.pp-around .pp-spot-report {
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 8px;
+  font-weight: 600;
+}
+
 /* Inbox */
 
 .pp-inbox-card .pp-person-name {

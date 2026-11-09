@@ -14,8 +14,9 @@
 // - Two distinct reporters hide the target. A profile gets hidden: true, a meet gets hidden: true
 //   and hidden_owner_id (the reported participant, who alone keeps seeing it), a spot gets its
 //   presence_spot cleared and spot_hidden: true. The hide is a Bulk partial update
-//   (or an _update on the meet), so it never re-runs the embedding model. Who reads which flag is
-//   in docs/REPORT_INTEGRATION_NOTES.md; the operator CLI is scripts/moderation.mjs.
+//   (or an _update on the meet), so it never re-runs the embedding model. people.mjs and
+//   connect.mjs read the flags (see "Reports and moderation" in docs/CONTRACT.md); the operator
+//   CLI is scripts/moderation.mjs.
 // - 20 reports per device per hour, on top of the shared per-address write limit.
 // - The response is { ok, hidden }. The reporter never learns who else reported, and no
 //   profile_id, reporter_id or report _id leaves the server. Nothing from the body is logged.

@@ -149,6 +149,7 @@ const EMPTY_VIS: Visibility = {
   share_notice_seen: false,
   banner_seen: [],
   share_new: false,
+  hidden_for_owner: false,
 };
 
 export function getVisibility(slug: string): Visibility {
@@ -163,6 +164,7 @@ export function getVisibility(slug: string): Visibility {
       share_notice_seen: raw.share_notice_seen === true,
       banner_seen: ids(raw.banner_seen).slice(-200),
       share_new: raw.share_new === true,
+      hidden_for_owner: raw.hidden_for_owner === true,
     };
     visMem.set(slug, v);
   }
