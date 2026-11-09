@@ -27,6 +27,9 @@ export function InterestedScreen({
         <button type="button" class="btn btn-tonal" onClick={onBrowse}>
           Find talks
         </button>
+        <p class="state-hint">
+          You can import your schedule in <a href="#/settings">Settings</a>
+        </p>
       </div>
     );
   }

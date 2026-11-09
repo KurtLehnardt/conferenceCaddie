@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { ArrowLeft, CalendarX, CircleExclamationPoint, CircleUserRound, ExternalLink, Inbox, X } from 'lucide-preact';
-import type { Conference, InterestedTalk, SearchFilters, SearchResponse, Talk } from './types';
+import { ArrowLeft, CalendarX, ChevronLeft, CircleExclamationPoint, ExternalLink, Inbox, Settings, X } from 'lucide-preact';
+import type { Conference, InterestedTalk, SearchFilters, SearchResponse, SearchResult, Talk } from './types';
 import { EMPTY_FILTERS } from './types';
 import { ApiError, getConferences, isAbort, search } from './api';
 import {
@@ -13,12 +13,14 @@ import {
   toInterested,
   type ThemePref,
 } from './lib/storage';
-import { decodeParam, defaultConference, goToConference, readRoute, replaceConference, type Route } from './lib/route';
+import { decodeParam, defaultConference, goToConference, readRoute, replaceConference, type Route, type Tab } from './lib/route';
 import { useFocusTrap } from './lib/focus';
 import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, type ToastData } from './components/common';
-import { ChipRow, FilterSheet, Results, SearchField, activeFilterCount, type SheetSection } from './components/search';
+import { ChipRow, FilterSheet, Results, SearchField, SuggestionRow, activeFilterCount, type SheetSection } from './components/search';
 import { InterestedScreen } from './components/interested';
+import { ImportSheet } from './components/import';
 import { SettingsScreen } from './components/settings';
+import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
 import {
@@ -42,6 +44,10 @@ import { NeedsConnection, OfflineBadge, OfflineSearch } from './offline/OfflineS
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 20;
+
+// The screens reached from the tab bar. Settings, Profile, Requests and a meet sit on top of them
+// and get a Back button instead.
+const isTab = (t: Tab) => t !== 'profile' && t !== 'settings' && t !== 'inbox' && t !== 'meet';
 
 function errorMessage(err: unknown): string {
   return err instanceof ApiError ? err.message : 'Search is unavailable right now. Please try again.';
@@ -95,10 +101,13 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmData | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [openTalk, setOpenTalk] = useState<Talk | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   // Search state lives here so it survives tab switches; it resets per conference.
   const [input, setInput] = useState('');
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
+  // Time phrases ("tuesday", "after lunch") whose chip the person removed.
+  const [ignored, setIgnored] = useState<string[]>([]);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [lastQuery, setLastQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -107,6 +116,13 @@ export function App() {
   const online = useOnline();
 
   const { slug, tab, param } = route;
+  // The screen before this one, so Back from Settings, Profile, Requests or a meet can pop history
+  // instead of pushing. #/here/{zone} is not remembered, because it turns presence on.
+  const routeRef = useRef(route);
+  const prevRoute = useRef<Route | null>(null);
+  const lastTabScreen = useRef<Route | null>(null);
+  routeRef.current = route;
+  if (isTab(route.tab) && route.tab !== 'here') lastTabScreen.current = route;
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
   const searchable = conference?.status === 'searchable' ? conference : null;
   const talks = interested.slug === slug ? interested.talks : [];
@@ -118,9 +134,11 @@ export function App() {
 
   const controller = useRef<AbortController | null>(null);
   const timer = useRef<number | undefined>(undefined);
-  const latest = useRef({ input, filters, slug: searchable?.slug ?? null, talks, data });
-  latest.current = { input, filters, slug: searchable?.slug ?? null, talks, data };
+  const latest = useRef({ input, filters, ignored, slug: searchable?.slug ?? null, talks, data });
+  latest.current = { input, filters, ignored, slug: searchable?.slug ?? null, talks, data };
   const searchedKey = useRef('');
+  // The request behind the results on screen, so the ranking drawer can ask for the same search.
+  const dataParams = useRef<{ s: string; q: string; f: SearchFilters; ig: string[] } | null>(null);
 
   const showToast = useCallback((message: string, action?: ToastData['action']) => {
     setToast({ id: Date.now(), message, action });
@@ -149,6 +167,8 @@ export function App() {
     const onRoute = () => {
       setSwitcherOpen(false);
       setOpenTalk(null);
+      setImportOpen(false);
+      prevRoute.current = routeRef.current;
       setRoute(readRoute());
     };
     window.addEventListener('popstate', onRoute);
@@ -178,11 +198,14 @@ export function App() {
     searchedKey.current = '';
     // Filters name the old conference's values, so they must not reach the next search.
     latest.current.filters = EMPTY_FILTERS;
+    latest.current.ignored = [];
     setFilters(EMPTY_FILTERS);
+    setIgnored([]);
     setData(null);
     setError(null);
     setLoading(false);
     setOpenTalk(null);
+    setImportOpen(false);
     setSheet({ open: false });
   }, [slug]);
 
@@ -219,17 +242,27 @@ export function App() {
   const runSearch = useCallback(async () => {
     window.clearTimeout(timer.current);
     controller.current?.abort();
-    const { input: q, filters: f, slug: s } = latest.current;
+    const { input: q, filters: f, ignored: ig, slug: s } = latest.current;
     if (!s) return;
     const ctrl = new AbortController();
     controller.current = ctrl;
-    searchedKey.current = `${s}|${JSON.stringify(f)}`;
+    searchedKey.current = `${s}|${JSON.stringify(f)}|${ig.join(',')}`;
     setLoading(true);
     try {
-      const res = await search(s, q, f, PAGE_SIZE, ctrl.signal);
+      const res = await search(s, q, f, PAGE_SIZE, ctrl.signal, false, ig);
       if (ctrl.signal.aborted || latest.current.slug !== s) return;
+      dataParams.current = { s, q, f, ig };
       setData(res);
-      setLastQuery(q.trim());
+      // The text the search really ran on: time phrases have left it.
+      setLastQuery((res.search_text ?? q).trim());
+      // A removed phrase that is no longer in the text is forgotten, so typing it again filters
+      // again. Dropping it changes nothing about this search, so no new search is needed.
+      const kept = ig.filter((k) => res.time_phrases?.some((p) => p.key === k));
+      if (kept.length !== ig.length && latest.current.ignored === ig) {
+        latest.current.ignored = kept;
+        searchedKey.current = `${s}|${JSON.stringify(f)}|${kept.join(',')}`;
+        setIgnored(kept);
+      }
       setError(null);
     } catch (err) {
       if (isAbort(err)) return;
@@ -250,8 +283,8 @@ export function App() {
       searchedKey.current = '';
       return;
     }
-    if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}`) runSearch();
-  }, [tab, searchable?.slug, filters, online]);
+    if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}|${ignored.join(',')}`) runSearch();
+  }, [tab, searchable?.slug, filters, ignored, online]);
 
   const onInput = (v: string) => {
     setInput(v);
@@ -298,6 +331,7 @@ export function App() {
     const added = toInterested(t);
     setInterested(s, [...current, added]);
     followShare(s, [added.talk_id], true);
+    offerInstallOnce();
     showToast('Added to Interested', {
       label: 'Undo',
       onClick: () => {
@@ -313,6 +347,32 @@ export function App() {
     const found =
       latest.current.talks.find((x) => x.talk_id === t) ?? latest.current.data?.results.find((x) => x.talk_id === t);
     if (found) setOpenTalk(found);
+  };
+
+  // Imported talks are added to the device list only. Sharing changes only when the user turned on
+  // "share automatically" themselves, through the same rule as a single mark.
+  const markImported = (found: SearchResult[]) => {
+    const s = latest.current.slug;
+    if (!s) return;
+    const current = latest.current.talks;
+    const have = new Set(current.map((x) => x.talk_id));
+    const added = found.filter((t) => t.conference === s && !have.has(t.talk_id)).map(toInterested);
+    setImportOpen(false);
+    if (!added.length) return;
+    const ids = added.map((t) => t.talk_id);
+    setInterested(s, [...current, ...added]);
+    followShare(s, ids, true);
+    offerInstallOnce();
+    // The imported talks live on Interested, so show them there.
+    location.hash = '#/interested';
+    showToast(`Marked ${added.length} ${added.length === 1 ? 'talk' : 'talks'} as Interested`, {
+      label: 'Undo',
+      onClick: () => {
+        const remove = new Set(ids);
+        setInterested(s, latest.current.talks.filter((x) => !remove.has(x.talk_id)));
+        followShare(s, ids, false);
+      },
+    });
   };
 
   const clearInterested = () => {
@@ -341,7 +401,7 @@ export function App() {
   };
 
   // Screens that belong to one conference and one moment go back to People on a switch.
-  const perConference = tab === 'settings' || tab === 'inbox' || tab === 'meet' || tab === 'here';
+  const perConference = tab === 'inbox' || tab === 'meet' || tab === 'here';
   const pickConference = (next: string) => {
     setSwitcherOpen(false);
     if (next !== slug) goToConference(next, perConference ? 'people' : tab);
@@ -356,12 +416,35 @@ export function App() {
 
   const interestedIds = new Set(talks.map((t) => t.talk_id));
   const base = slug ? `/e/${encodeURIComponent(slug)}` : '';
-  const isTabScreen = tab !== 'profile' && tab !== 'settings' && tab !== 'inbox' && tab !== 'meet';
+  const isTabScreen = isTab(tab);
   const navTab = tab === 'here' || tab === 'inbox' || tab === 'meet' ? 'people' : tab;
 
+  // Back pops history when the previous screen is the one Back leads to, so the browser's Back
+  // button and this one agree. Otherwise it links there, for a deep link or a reload.
+  const prev = prevRoute.current;
+  const backTo =
+    tab === 'profile'
+      ? { href: '#/settings', pops: prev?.slug === slug && prev?.tab === 'settings' }
+      : { href: `#/${lastTabScreen.current?.slug === slug ? lastTabScreen.current.tab : 'people'}`, pops: prev?.slug === slug && isTab(prev.tab) && prev.tab !== 'here' };
   const leading = !isTabScreen ? (
-    <a class="icon-btn appbar-back" href={tab === 'settings' ? '#/profile' : '#/people'} aria-label="Back">
-      <ArrowLeft size={22} aria-hidden="true" />
+    <a
+      class={tab === 'profile' ? 'appbar-back-labeled' : 'icon-btn appbar-back'}
+      href={backTo.href}
+      aria-label={tab === 'profile' ? 'Back to Settings' : 'Back'}
+      onClick={(e) => {
+        if (!backTo.pops || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        history.back();
+      }}
+    >
+      {tab === 'profile' ? (
+        <>
+          <ChevronLeft size={24} aria-hidden="true" />
+          <span>Settings</span>
+        </>
+      ) : (
+        <ArrowLeft size={22} aria-hidden="true" />
+      )}
     </a>
   ) : null;
 
@@ -403,8 +486,8 @@ export function App() {
         </a>
       )}
       {isTabScreen && (
-        <a class="icon-btn" href="#/profile" aria-label="Your profile">
-          <CircleUserRound size={24} aria-hidden="true" />
+        <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">
+          <Settings size={24} aria-hidden="true" />
         </a>
       )}
     </>
@@ -466,6 +549,12 @@ export function App() {
             <SettingsScreen
               theme={theme}
               onTheme={setTheme}
+              canImport={!!searchable && online}
+              importNote={!searchable ? 'Open a conference first' : !online ? 'Needs a connection' : null}
+              onImport={() => {
+                setToast(null);
+                setImportOpen(true);
+              }}
               people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /></> : null}
             />
           ) : !searchable ? (
@@ -509,12 +598,16 @@ export function App() {
                     conference={searchable}
                     filters={filters}
                     facets={data?.facets ?? null}
+                    nowAvailable={data?.happening_now?.available ?? null}
+                    phrases={(data?.time_phrases ?? []).filter((p) => p.applied)}
+                    onRemovePhrase={(key) => setIgnored([...ignored, key])}
                     onChange={setFilters}
                     onOpenSheet={(section) => {
                       setToast(null);
                       setSheet({ open: true, section });
                     }}
                   />
+                  <SuggestionRow suggestions={data?.suggestions ?? []} filters={filters} onChange={setFilters} />
                   <Results
                     conference={searchable}
                     data={data}
@@ -523,9 +616,15 @@ export function App() {
                     error={error}
                     interestedIds={interestedIds}
                     filtersActive={activeFilterCount(filters) > 0}
+                    includeEvents={filters.include_events}
                     onRetry={() => runSearch()}
                     onToggle={toggleInterested}
                     onClearFilters={() => setFilters(EMPTY_FILTERS)}
+                    onExplain={() => {
+                      const p = dataParams.current;
+                      if (!p) return Promise.reject(new Error('no search'));
+                      return search(p.s, p.q, p.f, PAGE_SIZE, new AbortController().signal, true, p.ig);
+                    }}
                   />
                 </>
               )}
@@ -562,6 +661,19 @@ export function App() {
           onClose={() => setOpenTalk(null)}
         />
       )}
+      {searchable && (
+        <ImportSheet
+          open={importOpen && online}
+          conference={searchable}
+          interestedIds={interestedIds}
+          onClose={() => setImportOpen(false)}
+          onMark={markImported}
+          onSwitchConference={() => {
+            setImportOpen(false);
+            setSwitcherOpen(true);
+          }}
+        />
+      )}
       <SwitcherSheet
         open={switcherOpen}
         conferences={conferences}
@@ -572,6 +684,7 @@ export function App() {
       />
       <ConfirmDialog data={confirm} onClose={() => setConfirm(null)} />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
+      <InstallCard />
     </div>
   );
 }

@@ -47,7 +47,7 @@ async function listTopics(url) {
       ? ['_score', { talk_count: 'desc' }, { label_exact: 'asc' }]
       : [{ rank: 'asc' }, { label_exact: 'asc' }],
   };
-  const json = await searchTopics(body);
+  const json = await searchTopics(body, event);
   return { topics: (json.hits?.hits ?? []).map(toTopic) };
 }
 
@@ -70,7 +70,7 @@ async function suggestTopics({ event, talkIds, text }) {
       size: 0,
       query: { bool: { filter: [{ term: { conference: event } }, { term: { kind: 'talk' } }, { terms: { talk_id: talkIds } }] } },
       aggs: { topics: { terms: { field: 'topics', size: SUGGEST_FROM_TALKS } } },
-    });
+    }, event);
     for (const b of agg.aggregations?.topics?.buckets ?? []) {
       should.push({ constant_score: { filter: { term: { topic_id: b.key } }, boost: TALK_TOPIC_BOOST + b.doc_count } });
     }
@@ -82,7 +82,7 @@ async function suggestTopics({ event, talkIds, text }) {
     _source: ['topic_id', 'label', 'talk_count'],
     query: { bool: { filter: [{ term: { conference: event } }], should, minimum_should_match: 1 } },
     sort: ['_score', { talk_count: 'desc' }, { label_exact: 'asc' }],
-  });
+  }, event);
   return { topics: (json.hits?.hits ?? []).map(toTopic) };
 }
 

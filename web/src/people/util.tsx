@@ -35,6 +35,19 @@ export function Marked({ text }: { text: string }) {
   return <>{out}</>;
 }
 
+/** Counts how many times this tab has become visible again, so a screen can fetch fresh results then. */
+export function useVisibleTick(): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const onChange = () => {
+      if (document.visibilityState === 'visible') setN((x) => x + 1);
+    };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+  return n;
+}
+
 /** The talk ids of the Interested list, whatever form the shell passes. */
 export function interestedIds(interested: InterestedProp): string[] {
   if (!Array.isArray(interested)) return [];

@@ -38,6 +38,7 @@
 import crypto from 'node:crypto';
 import { take, clientIp } from './ratelimit.mjs';
 import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
+import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
@@ -159,7 +160,7 @@ async function purgeExpired() {
     console.error(`Deleting expired people profiles failed: ${err.message}`);
   }
   try {
-    const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_search`, {
+    const { json } = await people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, PEOPLE_PURGE_PREFERENCE), {
       size: PURGE_PRESENCE_PAGE,
       _source: false,
       query: EXPIRED_PRESENCE_QUERY,
@@ -192,7 +193,7 @@ setInterval(purgeExpired, PURGE_INTERVAL_MS).unref();
 let conferencesCache = null; // { at, promise }
 
 async function fetchConferences() {
-  const { json } = await readOnly('POST', `${idx(CONFERENCES_INDEX)}/_search`, {
+  const { json } = await readOnly('POST', withPreference(`${idx(CONFERENCES_INDEX)}/_search`, CONFERENCES_PREFERENCE), {
     size: 500,
     _source: ['slug', 'status', 'end_date', 'time_zone'],
     query: { match_all: {} },
@@ -261,7 +262,7 @@ const topicsCache = new Map(); // slug -> { at, promise }
 // Every topic of a conference: labels by id, and the ids of the ten topics on the most talks,
 // which match so many people that an overlap on one of them alone says little.
 async function fetchTopics(slug) {
-  const { json } = await readOnly('POST', `${idx(TOPICS_INDEX)}/_search`, {
+  const { json } = await readOnly('POST', withPreference(`${idx(TOPICS_INDEX)}/_search`, conferencePreference(slug)), {
     size: 1000,
     _source: ['topic_id', 'label', 'talk_count'],
     query: { term: { conference: slug } },
@@ -298,7 +299,7 @@ const zonesCache = new Map(); // slug -> { at, promise }
 
 // The conference's room names, from its talks, plus the fixed zones.
 async function fetchZones(slug) {
-  const { json } = await readOnly('POST', `${idx(TALKS_INDEX)}/_search`, {
+  const { json } = await readOnly('POST', withPreference(`${idx(TALKS_INDEX)}/_search`, conferencePreference(slug)), {
     size: 0,
     query: { bool: { filter: [{ term: { conference: slug } }, { term: { kind: 'talk' } }] } },
     aggs: { rooms: { terms: { field: 'room', size: 200 } } },
@@ -323,7 +324,7 @@ export function zonesFor(slug) {
 // Talks of one conference by id, kind "talk" only. Returns a Map talk_id -> _source.
 async function talksById(slug, ids, fields) {
   if (!ids.length) return new Map();
-  const { json } = await readOnly('POST', `${idx(TALKS_INDEX)}/_search`, {
+  const { json } = await readOnly('POST', withPreference(`${idx(TALKS_INDEX)}/_search`, conferencePreference(slug)), {
     size: ids.length,
     _source: ['talk_id', ...fields],
     query: { bool: { filter: [{ term: { conference: slug } }, { term: { kind: 'talk' } }, { terms: { talk_id: ids } }] } },
@@ -537,9 +538,9 @@ async function deleteDoc(id) {
 export async function peopleByIds(eventId, profileIds) {
   const ids = [...new Set(profileIds)].filter((id) => typeof id === 'string' && id);
   if (!ids.length) return new Map();
+  // The _mget body takes _source per document only; a top-level _source is refused with a 400.
   const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_mget`, {
-    ids: ids.map((id) => docId(eventId, id)),
-    _source: OTHER_FIELDS,
+    docs: ids.map((id) => ({ _id: docId(eventId, id), _source: OTHER_FIELDS })),
   });
   const map = new Map();
   for (const d of json.docs ?? []) if (d.found && d._source?.profile_id) map.set(d._source.profile_id, d._source);
@@ -548,7 +549,7 @@ export async function peopleByIds(eventId, profileIds) {
 
 // The live document a result's ref points at, limited to OTHER_FIELDS, or null.
 export async function docByRef(eventId, ref) {
-  const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_search`, {
+  const { json } = await people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(eventId)), {
     size: 1,
     _source: OTHER_FIELDS,
     query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { ref } }, { range: { visible_until: { gt: 'now' } } }] } },
@@ -574,7 +575,7 @@ export const blockId = (eventId, blockerId, blockedId) => `${eventId}:${blockerI
 
 // The profile ids this person has blocked or been blocked by, at one conference.
 export async function blockedIds(eventId, profileId) {
-  const { json } = await people('POST', `${idx(BLOCKS_INDEX)}/_search?ignore_unavailable=true`, {
+  const { json } = await people('POST', withPreference(`${idx(BLOCKS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(eventId)), {
     size: BLOCKS_MAX,
     _source: ['blocker_id', 'blocked_id'],
     query: {
@@ -597,8 +598,7 @@ export async function blockedIds(eventId, profileId) {
 // True when either person has blocked the other.
 export async function blockedBetween(eventId, a, b) {
   const { json } = await people('POST', `${idx(BLOCKS_INDEX)}/_mget`, {
-    ids: [blockId(eventId, a, b), blockId(eventId, b, a)],
-    _source: false,
+    docs: [blockId(eventId, a, b), blockId(eventId, b, a)].map((id) => ({ _id: id, _source: false })),
   }, { okStatuses: [404] });
   return (json.docs ?? []).some((d) => d.found);
 }
@@ -805,7 +805,7 @@ function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, b
 }
 
 async function circleCounts(slug, ids) {
-  const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_search`, {
+  const { json } = await people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(slug)), {
     size: 0,
     query: {
       bool: {
@@ -948,13 +948,14 @@ const MATCHES_KEYS = new Set(['event', 'interested_talk_ids', 'query', 'when', '
 
 // Runs a people search. Should the cluster refuse the explanation, the search runs again without
 // it and every hit is kept.
-async function searchPeople(body) {
+async function searchPeople(slug, body) {
+  const path = withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(slug));
   try {
-    return (await people('POST', `${idx(PEOPLE_INDEX)}/_search`, body)).json;
+    return (await people('POST', path, body)).json;
   } catch (err) {
     if (!body.explain || !(err instanceof UpstreamError) || err.message !== 'status 400') throw err;
     const { explain, ...rest } = body;
-    return (await people('POST', `${idx(PEOPLE_INDEX)}/_search`, rest)).json;
+    return (await people('POST', path, rest)).json;
   }
 }
 
@@ -1005,7 +1006,7 @@ async function matches(req, res) {
   // reveals a talk circle the requester has not joined.
   const mine = new Set(me.shared_talk_ids ?? []);
   const talkIds = interested.filter((id) => mine.has(id));
-  const [json, topics] = await Promise.all([searchPeople(q.body), topicsOf(conf.slug)]);
+  const [json, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
   const all = json.hits?.hits ?? [];
   // Broad matches are dropped from a text search and from the "anyone" view. The "around now"
   // view keeps those who are in the requester's own zone right now, after every specific match
@@ -1055,7 +1056,7 @@ async function members(req, res) {
   const q = peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked });
   const [talks, { json }, labels] = await Promise.all([
     talksById(conf.slug, [talkId], ['title', 'start', 'end', 'url', 'speaker_profiles']),
-    people('POST', `${idx(PEOPLE_INDEX)}/_search`, q.body),
+    people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(conf.slug)), q.body),
     topicLabels(conf.slug),
   ]);
   const talk = talks.get(talkId);

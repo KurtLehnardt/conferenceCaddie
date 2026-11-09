@@ -16,4 +16,5 @@ export { importProfile } from './import';
 export { registerPeopleUi } from './ui';
 export { usePresenceWatch } from './presence';
 export { useInboxWatch, useInboxCount } from './connect';
+export { useProfileName } from './storage';
 export type { ConferenceLike, InterestedProp, TalkLike } from './types';

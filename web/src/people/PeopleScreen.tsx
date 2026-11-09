@@ -8,10 +8,10 @@ import { ForYouRow } from './ForYou';
 import { PersonCard, SampleNote } from './PersonCard';
 import { PresenceControls } from './PresenceControls';
 import { getPresence, getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
-import { changeVisibility, getSaveCount } from './sync';
+import { changeVisibility, getSaveCount, getSyncStatus } from './sync';
 import { TalkPeopleControls } from './TalkPeopleControls';
 import type { ConferenceLike, InterestedProp, PersonResult, TalkLike } from './types';
-import { hasEnded, interestedIds, interestedTalks } from './util';
+import { hasEnded, interestedIds, interestedTalks, useVisibleTick } from './util';
 
 export const VISIBILITY_NOTICE =
   'Turning this on stores your profile on our server until the conference ends: your name, about, topics, free text and How to reach me. Other attendees who are also visible at this conference can see it and may be matched with you. People who are not visible see nothing. Turn it off at any time to remove it from the server, or delete your profile.';
@@ -126,7 +126,7 @@ function CreateProfilePrompt() {
       <div>
         <p class="pp-prompt-title">Find people worth meeting</p>
         <p class="pp-prompt-body">
-          Make a short profile: what you've built and what you're trying to figure out next. It stays on this phone
+          Make a short profile: what you've built and what you're trying to learn or figure out next. It stays on this phone
           until you choose to be visible.
         </p>
         <a class="btn btn-primary btn-small pp-prompt-btn" href="#/profile">
@@ -191,7 +191,7 @@ function PeopleSearchBar({
   );
 }
 
-type Page = { results: PersonResult[]; done: boolean };
+type Page = { key: string; results: PersonResult[]; done: boolean };
 
 /**
  * People to meet, or the results of a text search. Pages of 20 are appended as the list is
@@ -209,10 +209,14 @@ function PeopleList({
   around: boolean;
 }) {
   usePeopleStore();
+  const visibleTick = useVisibleTick();
   const slug = conference.slug;
   const profile = getProfile();
   const vis = getVisibility(slug);
   const saves = getSaveCount();
+  // Matches come from the copy of the profile on the server, so while an edit is still being
+  // written they would describe the old profile; the fetch waits for the write to finish.
+  const saving = getSyncStatus().state === 'saving';
   const ids = useRef<string[]>([]);
   ids.current = interestedIds(interested);
   const idsKey = ids.current.join(',');
@@ -223,7 +227,7 @@ function PeopleList({
   const searching = !!query.trim() || around;
   // Zones come back only while I am around, so the list is fetched again when that changes.
   const meAround = getPresence(slug).on;
-  const key = `${slug}|${query.trim()}|${around}|${meAround}`;
+  const key = `${slug}|${saves}|${idsKey}|${query.trim()}|${around}|${meAround}`;
   const current = useRef(key);
   current.current = key;
 
@@ -236,15 +240,14 @@ function PeopleList({
     });
 
   useEffect(() => {
-    if (!vis.open_to_meet) return;
+    if (!vis.open_to_meet || saving) return;
     const ctl = new AbortController();
     setError(null);
-    setPage(null);
     load(0, ctl.signal)
       .then((r) => {
         if (ctl.signal.aborted) return;
         const results = r.results ?? [];
-        setPage({ results, done: results.length < MATCH_PAGE });
+        setPage({ key, results, done: results.length < MATCH_PAGE });
       })
       .catch((err) => {
         if (isAbort(err)) return;
@@ -256,13 +259,14 @@ function PeopleList({
         setError(err instanceof PeopleApiError ? err.message : 'People are unavailable right now.');
       });
     return () => ctl.abort();
-  }, [slug, vis.open_to_meet, saves, idsKey, key]);
+  }, [key, vis.open_to_meet, saving, visibleTick]);
 
   // Appends the next page when the end of the list comes into view. The effect depends on the
-  // page only: the "more" flag is for display, so setting it must not abort the fetch.
+  // page only: the "more" flag is for display, so setting it must not abort the fetch. A page
+  // that belongs to an earlier search or profile is never extended.
   useEffect(() => {
     const el = sentinel.current;
-    if (!el || !page || page.done || typeof IntersectionObserver === 'undefined') return;
+    if (!el || !page || page.done || page.key !== current.current || typeof IntersectionObserver === 'undefined') return;
     const ctl = new AbortController();
     const io = new IntersectionObserver((entries) => {
       if (!entries.some((e) => e.isIntersecting)) return;
@@ -274,7 +278,7 @@ function PeopleList({
           if (ctl.signal.aborted || current.current !== startKey) return;
           const next = r.results ?? [];
           const seen = new Set(page.results.map((p) => p.ref));
-          setPage({ results: [...page.results, ...next.filter((p) => !seen.has(p.ref))], done: next.length < MATCH_PAGE });
+          setPage({ key: page.key, results: [...page.results, ...next.filter((p) => !seen.has(p.ref))], done: next.length < MATCH_PAGE });
         })
         .catch((err) => {
           if (!isAbort(err)) setPage({ ...page, done: true });
@@ -286,13 +290,16 @@ function PeopleList({
       io.disconnect();
       ctl.abort();
     };
-  }, [page]);
+  }, [page, key]);
 
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;
   if (error) return <p class="pp-error pp-pad">{error}</p>;
-  if (!page) return <p class="pp-hint pp-pad">Finding people…</p>;
-  const results = withoutBlocked(slug, page.results);
+  // The earlier list stays, dimmed, until the one for the current profile and search arrives.
+  const shown = page && page.key.startsWith(`${slug}|`) ? page : null;
+  if (!shown) return <p class="pp-hint pp-pad">Finding people…</p>;
+  const refreshing = saving || shown.key !== key;
+  const results = withoutBlocked(slug, shown.results);
   if (!results.length) {
     return (
       <p class="pp-hint pp-pad">
@@ -301,16 +308,19 @@ function PeopleList({
     );
   }
   return (
-    <div class="pp-list">
-      <SampleNote people={results} />
-      {results.map((p) => (
-        <PersonCard key={p.ref} person={p} slug={slug} />
-      ))}
-      {!page.done && (
-        <div ref={sentinel} class="pp-more-sentinel" aria-hidden={!more}>
-          {more && <p class="pp-hint">Finding more people…</p>}
-        </div>
-      )}
+    <div class="pp-progress-host">
+      <div class={`pp-progress pp-progress-top${refreshing ? ' is-active' : ''}`} aria-hidden="true" />
+      <div class={`pp-list${refreshing ? ' is-refreshing' : ''}`} aria-busy={refreshing}>
+        <SampleNote people={results} />
+        {results.map((p) => (
+          <PersonCard key={p.ref} person={p} slug={slug} />
+        ))}
+        {!shown.done && !refreshing && (
+          <div ref={sentinel} class="pp-more-sentinel" aria-hidden={!more}>
+            {more && <p class="pp-hint">Finding more people…</p>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

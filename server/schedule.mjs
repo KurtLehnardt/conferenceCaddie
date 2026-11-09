@@ -13,6 +13,7 @@
 
 import zlib from 'node:zlib';
 import { esRequest, topicLabels, UpstreamError } from './search.mjs';
+import { conferencePreference, withPreference } from './preference.mjs';
 import { searchableConference } from './conferences.mjs';
 import { take, clientIp } from './ratelimit.mjs';
 
@@ -49,7 +50,7 @@ function trimAbstract(text) {
 const asArray = (v) => (Array.isArray(v) ? v : []);
 
 async function exportSchedule(slug) {
-  const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_search`, {
+  const json = await esRequest(withPreference(`/${encodeURIComponent(ES_INDEX)}/_search`, conferencePreference(slug)), {
     size: MAX_TALKS,
     track_total_hits: false,
     _source: SOURCE_FIELDS,

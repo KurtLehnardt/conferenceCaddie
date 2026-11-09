@@ -6,6 +6,7 @@
 // next request tries again, and until one succeeds the last successful list keeps being used.
 
 import { esRequest, UpstreamError } from './search.mjs';
+import { CONFERENCES_PREFERENCE, withPreference } from './preference.mjs';
 
 const ES_CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conferences';
 const TTL_MS = 60 * 1000;
@@ -14,7 +15,7 @@ let cache = null; // { at, docs } from the last successful read
 let pending = null; // the read in flight, shared by concurrent callers
 
 async function fetchConferences() {
-  const json = await esRequest(`/${encodeURIComponent(ES_CONFERENCES_INDEX)}/_search`, {
+  const json = await esRequest(withPreference(`/${encodeURIComponent(ES_CONFERENCES_INDEX)}/_search`, CONFERENCES_PREFERENCE), {
     size: 500,
     sort: ['start_date', 'name'],
     query: { match_all: {} },

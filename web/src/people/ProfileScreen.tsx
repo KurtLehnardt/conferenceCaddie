@@ -1,7 +1,7 @@
 // The profile editor. The profile lives on this device and reaches the server only
 // while the user is visible conference-wide or shares for a talk.
 import { useState } from 'preact/hooks';
-import { ChevronRight, Settings, Trash2 } from 'lucide-preact';
+import { Trash2 } from 'lucide-preact';
 import { deleteProfile, PeopleApiError } from './api';
 import { VISIBILITY_NOTICE } from './PeopleScreen';
 import {
@@ -181,11 +181,11 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
         />
         <TextField
           id="pp-interests"
-          label="What I'm trying to figure out next"
+          label="What I'm trying to learn or figure out next"
           value={profile.interests}
           max={500}
           multiline
-          placeholder="For example: getting Postgres failover under a minute without a managed service"
+          placeholder="For example: getting Postgres failover under a minute, or why our GPU inference costs so much"
           hint={SPECIFIC_HINT}
           onInput={(v) => update({ interests: v })}
         />
@@ -304,12 +304,6 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
         )}
         {deleteMessage && <p class="pp-hint" role="status">{deleteMessage}</p>}
       </section>
-
-      <a class="pp-card pp-settings-row" href="#/settings">
-        <Settings size={20} aria-hidden="true" />
-        <span>Settings</span>
-        <ChevronRight size={18} aria-hidden="true" class="pp-chevron" />
-      </a>
     </div>
   );
 }

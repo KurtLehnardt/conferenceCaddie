@@ -135,11 +135,10 @@ export function topicsFor(p: Profile | null, slug: string): { learn: TopicRef[];
   return p?.topics[slug] ?? { learn: [], speak: [] };
 }
 
-/** True when the profile has anything that talk suggestions can use. */
+/** True when the profile has anything that talk suggestions can use: what the user wants to learn. */
 export function hasProfileInput(p: Profile | null, slug: string): boolean {
   if (!p) return false;
-  const t = topicsFor(p, slug);
-  return t.learn.length + t.speak.length > 0 || !!p.interests.trim() || !!p.expertise.trim();
+  return topicsFor(p, slug).learn.length > 0 || !!p.interests.trim();
 }
 
 const EMPTY_VIS: Visibility = {
@@ -338,6 +337,30 @@ export function clearAllPeopleData(): void {
   notify();
 }
 
+// Another tab or window of this site shares localStorage but not these in-memory copies. When it
+// writes, the copies are dropped and read again, so this tab never keeps working from an older
+// profile, and the screens that depend on it fetch again.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    const key = e.key;
+    // A null key means the other tab cleared all storage.
+    if (key === null) {
+      profileMem = undefined;
+      deviceMem = undefined;
+      visMem.clear();
+    } else if (key === PROFILE_KEY) {
+      profileMem = undefined;
+    } else if (key === DEVICE_KEY) {
+      deviceMem = undefined;
+    } else if (key.startsWith(VIS_PREFIX)) {
+      visMem.delete(key.slice(VIS_PREFIX.length));
+    } else {
+      return;
+    }
+    notify();
+  });
+}
+
 /** Re-renders the calling component whenever people state changes. */
 export function usePeopleStore(): number {
   const [, setV] = useState(version);
@@ -349,4 +372,10 @@ export function usePeopleStore(): number {
     };
   }, []);
   return version;
+}
+
+/** The display name on this device's profile, empty when there is none. Re-renders on change. */
+export function useProfileName(): string {
+  usePeopleStore();
+  return (getProfile()?.display_name ?? '').trim();
 }
