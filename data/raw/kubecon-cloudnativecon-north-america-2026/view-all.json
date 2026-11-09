@@ -12,7 +12,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/d/edit?mid=17D29-f7uLLhY9xe5G6HcK0yByoRPMOs&ll=40.76530435558402%2C-111.89561170388541&z=20"
+        }
+      ],
       "roomId": 87690,
       "liveUrl": null,
       "recordingUrl": null,
@@ -32,7 +37,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 142883,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2025/10/Echo_logo.svg"
+        }
+      ],
       "roomId": 87691,
       "liveUrl": null,
       "recordingUrl": null,
@@ -50,7 +60,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        515265
+        515265,
+        523939
       ],
       "questionAnswers": [
         {
@@ -75,12 +86,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://lablab.ai/ai-hackathons/vultr-hackathon"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://maps.app.goo.gl/nit2L3acKd2Zu6sYA"
         }
       ],
       "roomId": 88756,
@@ -102,7 +118,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/d/edit?mid=17D29-f7uLLhY9xe5G6HcK0yByoRPMOs&ll=40.76530435558402%2C-111.89561170388541&z=20"
+        }
+      ],
       "roomId": 87690,
       "liveUrl": null,
       "recordingUrl": null,
@@ -122,7 +143,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 142883,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2025/10/Echo_logo.svg"
+        }
+      ],
       "roomId": 87691,
       "liveUrl": null,
       "recordingUrl": null,
@@ -140,12 +166,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://aksday.eventbuilder.com/events/11f1a23cb8e8d480867f03f16c7d89b2"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/place/Salt+Lake+City+Marriott+City+Center/@40.764351,-111.8911377,17z/data=!4m9!3m8!1s0x8752f50e3f7cfce1:0x91c02647cb40f017!5m2!4m1!1i2!8m2!3d40.764347!4d-111.8885574!16s%2Fg%2F1thw_y37?entry=tts&g_ep=EgoyMDI2MDkyMi4wIPu8ASoASAFQAw%3D%3D&skid=642daeed-2fb8-4e58-a672-959743edc2ee"
         }
       ],
       "roomId": 88756,
@@ -165,7 +196,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [],
       "roomId": 88756,
@@ -185,12 +217,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://aws-experience.com/amer/smb/e/2f291/building-scaling-and-running-secure-agents-on-kubernetes"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://maps.app.goo.gl/4wuq7knu3K2wWpgd7"
         }
       ],
       "roomId": 88756,
@@ -210,12 +247,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://events.nvidia.com/dsx-os-inference-workshop"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://maps.app.goo.gl/6CunVUULrjYJT6kdA"
         }
       ],
       "roomId": 88756,
@@ -482,12 +524,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://s.apple.com/dr0i6H2GM7"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/place/Utah+Museum+of+Contemporary+Art/@40.7683501,-111.8973103,16z/data=!3m1!4b1!4m6!3m5!1s0x8752f50640f09e71:0xb9773cedf80c8d30!8m2!3d40.7683461!4d-111.8947354!16s%2Fg%2F11b8_pfyp2?entry=ttu&g_ep=EgoyMDI2MDkxNi4wIKXMDSoASAFQAw%3D%3D"
         }
       ],
       "roomId": 88756,
@@ -532,7 +579,8 @@
         "5a9c00c9-dd42-42a9-a158-6f6bd061f75b"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497642
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -554,7 +602,8 @@
         "78831837-4352-41f7-a21b-37f790fd2a53"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497666
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -576,7 +625,8 @@
         "0c91a5d6-9eaa-4014-935d-54b8d1f55318"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497689
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -598,7 +648,8 @@
         "c010000c-da8a-4d09-bd27-9e68448fdf87"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497626
       ],
       "questionAnswers": [
         {
@@ -625,7 +676,8 @@
         "19c2b066-1b77-47d8-a23a-f0e6cce08f15"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497682
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -647,7 +699,8 @@
         "2a7e602d-219f-4687-90cd-d42e9c84a794"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497650
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -667,7 +720,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
@@ -694,7 +748,8 @@
         "f2594a9d-b2f4-4bb2-8ba7-0299072bcf98"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497641
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -716,7 +771,8 @@
         "6dc92ce0-8df2-4c2e-b5ff-7303ca379c47"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497680
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -758,7 +814,8 @@
         "9c570892-e491-4941-a1f0-2579eac23421"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497612
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -780,7 +837,8 @@
         "9287a29e-8acb-48cc-afa9-f5598856bede"
       ],
       "categoryItems": [
-        496288
+        496288,
+        517207
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -802,7 +860,8 @@
         "cfecaf54-cb37-4e13-8db8-84beddb65cae"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497658
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -824,7 +883,8 @@
         "95825526-249c-4052-aba0-4d1567e4ee9c"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497681
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -846,7 +906,8 @@
         "5e0d0f6f-c105-47b2-938a-3005a3e7b4bc"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497664
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -890,7 +951,8 @@
         "c60c7f97-46e2-4be2-9b06-b3a6bdf680b0"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497651
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -912,7 +974,8 @@
         "4109df3f-74da-460b-87c0-170d82b18896"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497678
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -934,7 +997,8 @@
         "4a56aa9e-b98a-489b-9180-e5d25096fb32"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497609
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -954,7 +1018,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
@@ -979,12 +1044,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://events.cockroachlabs.com/cockroachlabs-kubecon-workshop"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://maps.app.goo.gl/HDkTYVTG5RKeNBia7"
         }
       ],
       "roomId": 88756,
@@ -1006,7 +1076,8 @@
         "2d2c2796-6410-48df-a3c2-a287559c7efe"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497645
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1028,7 +1099,8 @@
         "f80824a1-0e13-4d3b-8690-ed2bf62e1497"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497611
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1050,7 +1122,8 @@
         "bbf16dd9-0741-4a11-abdd-2ed308489674"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497661
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1069,11 +1142,11 @@
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
-        "8663a1e0-4d5d-45d4-9c15-6a6cd27369ff",
-        "0f2bd339-765f-41cf-86b4-7b845eb07052"
+        "8663a1e0-4d5d-45d4-9c15-6a6cd27369ff"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497656
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1093,12 +1166,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://aws-experience.com/amer/smb/e/72cc7/accelerate-platform-engineering-on-kubernetes"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://maps.app.goo.gl/sz8WWFMjkix9He2p6"
         }
       ],
       "roomId": 88756,
@@ -1118,7 +1196,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [],
       "roomId": 88756,
@@ -1140,7 +1219,8 @@
         "36d13c4b-b343-4549-a2a4-30219082b5e9"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497608
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1162,7 +1242,8 @@
         "4d13badd-bf49-4b71-bd4d-34e6e4aa250d"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497644
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1277,7 +1358,8 @@
         "06e1a8e9-55a6-468a-8a87-10163e974367"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497613
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1297,7 +1379,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [],
       "roomId": 88756,
@@ -1319,7 +1402,8 @@
         "89c743d5-ed67-4302-a433-a32db634c7cb"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497607
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1341,7 +1425,8 @@
         "9ddbf847-686f-4f4d-96c4-2e9f285b830f"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497646
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1363,7 +1448,8 @@
         "86bdd5de-9106-465e-823a-931302133a32"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497684
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1385,7 +1471,8 @@
         "0a1cdc66-fd11-42cf-a1f2-91466b04efc9"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497610
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1407,7 +1494,8 @@
         "6c45a782-eb54-4742-b4cf-08838a75d909"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497686
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1429,7 +1517,8 @@
         "bbf16dd9-0741-4a11-abdd-2ed308489674"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497637
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1451,7 +1540,8 @@
         "6dc92ce0-8df2-4c2e-b5ff-7303ca379c47"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497680
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1514,7 +1604,8 @@
         "b19f139d-f7c5-4465-86b1-6a0593c1886f"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497652
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1536,7 +1627,8 @@
         "965a24ef-e849-46c0-8ff9-4f7a835e47f9"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497614
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1559,7 +1651,7 @@
       ],
       "categoryItems": [
         496288,
-        523121
+        497674
       ],
       "questionAnswers": [
         {
@@ -1586,7 +1678,8 @@
         "8767b3ed-3c56-49d4-a6a8-41fc9e58d189"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497665
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1608,7 +1701,8 @@
         "61be6307-ab86-4017-96f1-efb900700600"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497691
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1630,7 +1724,8 @@
         "952e712f-442f-4662-885f-c4168b63175f"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497660
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1652,7 +1747,8 @@
         "963da551-aa03-444f-b2da-200af86e3f08"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497625
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1674,7 +1770,8 @@
         "75af455a-623a-4f36-8b6d-c3f4ae4dae6d"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497618
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1696,7 +1793,8 @@
         "2e626d3a-9a10-4df1-a225-b450e0fdbbbe"
       ],
       "categoryItems": [
-        496288
+        496288,
+        497617
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1716,12 +1814,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://sonraisecurity.com/kubecon-agentcore-workshop/"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://maps.app.goo.gl/fkMC4eTiTrHwW2TY6"
         }
       ],
       "roomId": 88756,
@@ -1743,7 +1846,8 @@
         "4c68d4f9-2037-4d99-94ec-dcf2489d6dd2"
       ],
       "categoryItems": [
-        496288
+        496288,
+        498157
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1765,7 +1869,8 @@
         "5c8e1c3d-5598-4f25-beed-6efb351a9fb8"
       ],
       "categoryItems": [
-        496288
+        496288,
+        524470
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1787,7 +1892,8 @@
         "e40394ff-a987-4d95-9c94-32e5615a42ec"
       ],
       "categoryItems": [
-        496288
+        496288,
+        524469
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1809,7 +1915,8 @@
         "b4b6a3e8-56e4-48bc-86ca-b08bffa62093"
       ],
       "categoryItems": [
-        496288
+        496288,
+        524468
       ],
       "questionAnswers": [],
       "roomId": 82957,
@@ -1873,7 +1980,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/d/edit?mid=17D29-f7uLLhY9xe5G6HcK0yByoRPMOs&ll=40.76530435558402%2C-111.89561170388541&z=20"
+        }
+      ],
       "roomId": 87690,
       "liveUrl": null,
       "recordingUrl": null,
@@ -1893,7 +2005,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 142883,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2025/10/Echo_logo.svg"
+        }
+      ],
       "roomId": 87691,
       "liveUrl": null,
       "recordingUrl": null,
@@ -1920,7 +2037,12 @@
       "categoryItems": [
         496573
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 142725,
+          "answerValue": "Jonathan Bryce, Chris Aniszczyk"
+        }
+      ],
       "roomId": 82947,
       "liveUrl": null,
       "recordingUrl": null,
@@ -1966,9 +2088,15 @@
         "d96c413a-8318-4289-a250-06d98504be45"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/ocpaid~3ps6AxRbzuxqUKMyQaxgUd.pptx~kubecon-na-2026-keynote-v1.pptx"
+        }
+      ],
       "roomId": 82947,
       "liveUrl": null,
       "recordingUrl": null,
@@ -2011,7 +2139,8 @@
         "c84ee9c8-4982-4f94-8056-99b0737adafd"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -2057,7 +2186,8 @@
         "cd0fdc7b-d298-48e8-b70d-c3f8a4c29c6b"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -2203,7 +2333,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -2265,7 +2396,8 @@
         "334213b5-8d7b-48dc-90e0-9a1e8cf5ce7b"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -2308,7 +2440,8 @@
         "7a446444-2be9-4303-a857-9b91f30f5a70"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -2354,7 +2487,8 @@
       "speakers": [],
       "categoryItems": [
         496286,
-        465822
+        465822,
+        522039
       ],
       "questionAnswers": [],
       "roomId": 92016,
@@ -2400,7 +2534,8 @@
         "c6998fa6-18cb-4ee7-a06b-ff4a3942b4b1"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -2422,7 +2557,8 @@
         "12aed3b3-50bc-4b33-bfc0-3c26a470c739"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -2444,7 +2580,8 @@
         "4869fab5-6a1f-4e1a-b8f3-781d08df9ac9"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -2498,8 +2635,7 @@
       "categoryItems": [
         465817,
         465822,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -2558,8 +2694,7 @@
       "categoryItems": [
         465811,
         465822,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -2592,8 +2727,7 @@
       "categoryItems": [
         465810,
         465820,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -2621,8 +2755,7 @@
       ],
       "categoryItems": [
         465809,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -2675,8 +2808,7 @@
       ],
       "categoryItems": [
         465811,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -2751,7 +2883,8 @@
       ],
       "categoryItems": [
         496283,
-        465822
+        465822,
+        496272
       ],
       "questionAnswers": [
         {
@@ -2805,7 +2938,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497616
       ],
       "questionAnswers": [
         {
@@ -2835,7 +2968,8 @@
         "38b54169-9c39-41f5-b0d9-279e3ec15ce5"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497619
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -2858,12 +2992,13 @@
         "387cdc99-3bc1-48d0-bf43-3769d28f4c4a"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497600
       ],
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/ipvabsex~c7MhkBciofycsRdNfNMRG.pdf~kubecon-cloudnativecon-na-2026-wg-ai-gateway-nir-rozenbaum-keith-mattix.pdf"
+          "answerValue": "https://sessionize.com/download/itnavsez~3oi92p1pXpZK4cxAobdcaJ.pdf~kubecon-cloudnativecon-na-2026-wg-ai-gateway-nir-rozenbaum-keith-mattix.pdf"
         }
       ],
       "roomId": 87424,
@@ -2888,7 +3023,8 @@
         "62b7f009-0d80-4495-a913-ac0656f898d4"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497630
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -2911,7 +3047,8 @@
         "666c58a0-8ec6-445f-9ce5-31211bb3022c"
       ],
       "categoryItems": [
-        496284
+        496284,
+        497637
       ],
       "questionAnswers": [],
       "roomId": 87426,
@@ -2938,7 +3075,8 @@
         "07e95a28-ec3f-4040-b333-b3bf027eab47"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498155
       ],
       "questionAnswers": [],
       "roomId": 87427,
@@ -2983,7 +3121,8 @@
         "bae19bc3-e0a2-4f9b-a2f6-dde7c5a8d96c"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3005,7 +3144,8 @@
         "6e160707-beeb-4abc-97de-23d6f2c84056"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -3027,7 +3167,8 @@
         "3c02a7bf-40b4-41b4-8b43-2de3be4b093c"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3049,7 +3190,8 @@
         "d95e7cb7-6808-4b46-a925-76a9f41d9d01"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3071,7 +3213,8 @@
         "689b7ec9-e3e0-47d9-9c6b-4e1efb595a59"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -3093,7 +3236,8 @@
         "0a1cdc66-fd11-42cf-a1f2-91466b04efc9"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3117,8 +3261,7 @@
       "categoryItems": [
         465812,
         465819,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -3278,8 +3421,7 @@
       ],
       "categoryItems": [
         465808,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -3330,8 +3472,7 @@
       ],
       "categoryItems": [
         465814,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -3382,7 +3523,8 @@
         "87add04d-1b5c-4811-ac37-29682f867cfb"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497641
       ],
       "questionAnswers": [
         {
@@ -3410,7 +3552,8 @@
         "4026e2d9-03ba-4f4f-aa81-7a1ab845ac6d"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497603
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -3433,7 +3576,8 @@
         "7bf5a378-3621-426a-82b8-ab84d57235b8"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497655
       ],
       "questionAnswers": [
         {
@@ -3460,7 +3604,8 @@
         "019f136c-483a-43d0-a034-003a2f5a1928"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497683
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -3483,7 +3628,8 @@
         "ecedb2ab-84ce-4ceb-80db-ff4525da43bb"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497686
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -3528,7 +3674,8 @@
         "53edc1e7-45fd-4ed3-bc3b-80bd8aa7450b"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -3550,7 +3697,8 @@
         "eeddac38-9c82-45e0-9f72-f50a5cdd7f6c"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3573,7 +3721,8 @@
         "c6998fa6-18cb-4ee7-a06b-ff4a3942b4b1"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512408
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3615,7 +3764,8 @@
         "737b7cec-776f-4a14-836d-f79d06e4f7da"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -3638,7 +3788,8 @@
         "6ddf7b4d-d365-4fe9-956f-aa66e1681707"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3661,7 +3812,8 @@
         "2c98b6fd-d300-43be-a1c5-4b6fe364164a"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3681,7 +3833,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -3702,7 +3855,8 @@
       "speakers": [],
       "categoryItems": [
         496286,
-        465822
+        465822,
+        522039
       ],
       "questionAnswers": [],
       "roomId": 92016,
@@ -3748,7 +3902,8 @@
         "3f49401d-3b9c-415d-8bd1-363623ac1a86"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3790,7 +3945,8 @@
         "dd281fd4-6647-46c0-98ca-34c09b980023"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -3812,7 +3968,8 @@
         "5cd206b4-58b2-4a12-a3d8-c8415e01d6cb"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3855,7 +4012,8 @@
         "48ef0e57-09fa-42a7-a7ba-9d6a51476402"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3875,7 +4033,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -3897,7 +4056,8 @@
         "b5c98531-e7a6-4927-b02f-ae2f2bf27495"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -3920,7 +4080,8 @@
         "ede2731c-cb3b-4f51-8337-5e34cd62df37"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -3986,7 +4147,8 @@
         "2a52a952-a2cb-4dc9-9f61-9976921dcaf9"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -4008,7 +4170,8 @@
         "6439350b-2e1a-4ee6-a018-f4581fa9b5f0"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -4028,7 +4191,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -4068,7 +4232,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -4114,7 +4279,8 @@
         "30f049bb-aa67-478c-9937-c86e285a890d"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -4137,7 +4303,8 @@
         "6ddf7b4d-d365-4fe9-956f-aa66e1681707"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512406
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -4185,8 +4352,7 @@
       "categoryItems": [
         465815,
         465822,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -4345,8 +4511,7 @@
       ],
       "categoryItems": [
         465815,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -4453,7 +4618,8 @@
       ],
       "categoryItems": [
         496283,
-        465819
+        465819,
+        496281
       ],
       "questionAnswers": [
         {
@@ -4481,7 +4647,8 @@
         "cb67bcae-2254-4a8d-9b20-1d73c0fa6cb1"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497650
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -4504,7 +4671,8 @@
         "647b60d3-22c0-4c4c-9ba5-377a09c0474e"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497649
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -4527,7 +4695,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497614
       ],
       "questionAnswers": [
         {
@@ -4562,7 +4730,8 @@
         "32272b85-b0be-43ab-8267-b6263d4c2b35"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497627
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -4584,7 +4753,8 @@
         "c74b27cd-28e1-453b-8bc7-16857ee29370"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497606
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -4607,7 +4777,8 @@
         "971f4139-c746-4cce-844d-4fc4b87aed28"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498152
       ],
       "questionAnswers": [
         {
@@ -4637,7 +4808,8 @@
         "fc157dc5-5ec0-4e05-927b-5ba7849b0b98"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498153
       ],
       "questionAnswers": [],
       "roomId": 87427,
@@ -4703,7 +4875,8 @@
         "73ae172a-d107-418a-97b0-84611ebdd3a1"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512409
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -4746,7 +4919,8 @@
         "ef864662-0fc8-4ae9-9dd4-f3f1f180815b"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -4768,7 +4942,8 @@
         "4903daf4-d8d3-47e4-9aa3-69f044459836"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512409
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -4791,7 +4966,8 @@
         "8a4206ea-e0d3-4db3-aee4-c6d44dca656a"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -4844,8 +5020,7 @@
       "categoryItems": [
         465815,
         465822,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -5001,8 +5176,7 @@
       ],
       "categoryItems": [
         465815,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -5031,8 +5205,7 @@
       ],
       "categoryItems": [
         465811,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -5110,7 +5283,8 @@
         "a0baef58-0564-4485-b1c7-b3a8b0870f3d"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497634
       ],
       "questionAnswers": [
         {
@@ -5138,7 +5312,8 @@
         "c5dda9cc-988b-4b1f-ab39-bdda54573906"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497638
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -5160,7 +5335,8 @@
         "9e3eddb7-01ec-4cbb-86bc-dd1023c0493a"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497654
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -5183,7 +5359,8 @@
         "7347a935-c32b-43c4-824f-6d33b840454a"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497627
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -5208,7 +5385,8 @@
         "e2a7ebfc-1c65-4a8e-8ff8-4be6f900092a"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497639
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -5231,7 +5409,8 @@
         "fb22b530-005a-44c6-b75f-aa2740ea2066"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512409
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -5253,7 +5432,8 @@
         "69e49c68-eb90-4f68-b1e4-a248193cea50"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -5299,7 +5479,8 @@
         "d15f6f95-f72b-4f32-8206-c04856f67ea0"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512409
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -5341,7 +5522,8 @@
         "5fe6d127-e8f9-463a-8ca8-3109cbaddb2b"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -5384,7 +5566,8 @@
         "53ef16b1-4ebe-4505-b58e-7f4784eb2afd"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512409
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -5606,8 +5789,7 @@
       ],
       "categoryItems": [
         465811,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -5732,7 +5914,8 @@
       ],
       "categoryItems": [
         496283,
-        465822
+        465822,
+        496274
       ],
       "questionAnswers": [],
       "roomId": 82958,
@@ -5754,7 +5937,8 @@
         "c5739def-b09a-460c-8579-eb1c281678ab"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497657
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -5777,7 +5961,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497643
       ],
       "questionAnswers": [
         {
@@ -5806,7 +5990,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497680
       ],
       "questionAnswers": [
         {
@@ -5833,7 +6017,8 @@
         "c685186b-a31e-4d1d-aa44-98d08978ef74"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497682
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -5859,7 +6044,8 @@
         "89c743d5-ed67-4302-a433-a32db634c7cb"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497602
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -5885,7 +6071,8 @@
         "4b1e9f74-b08f-4189-a342-b301eea11d98"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498154
       ],
       "questionAnswers": [],
       "roomId": 87426,
@@ -5909,7 +6096,8 @@
         "00e56873-a8fa-46ad-abba-99a3cd19ceac"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498156
       ],
       "questionAnswers": [],
       "roomId": 87427,
@@ -5931,7 +6119,8 @@
         "e91004ee-1822-4e28-8557-aee8b642e28d"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -5953,7 +6142,8 @@
         "3cb19a79-25ae-45ab-856a-6b1fb555dd01"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -6100,8 +6290,7 @@
       "categoryItems": [
         465809,
         465822,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -6181,8 +6370,7 @@
       ],
       "categoryItems": [
         465809,
-        465820,
-        523121
+        465820
       ],
       "questionAnswers": [
         {
@@ -6262,7 +6450,8 @@
         "49a728c7-9432-4cc5-b2c8-80c1c469e4c0"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497672
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -6285,7 +6474,8 @@
         "888962ab-b886-4ce3-a597-569685d3290b"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497685
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -6311,7 +6501,8 @@
         "91d09448-13dc-49c7-ad49-da9c9b0262b0"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497629
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -6337,7 +6528,8 @@
         "23a84adc-e2cf-4638-bb94-7d38bb374afb"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497640
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -6363,7 +6555,8 @@
         "9c570892-e491-4941-a1f0-2579eac23421"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497669
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -6385,7 +6578,8 @@
         "47649b3f-1ccc-4f85-917d-dc28057d77ec"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -6407,7 +6601,8 @@
         "78e0f99b-437e-4d56-899a-d66d1e3d45f2"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -6447,7 +6642,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -6489,7 +6685,8 @@
         "6fcfb1b9-c129-4068-9dca-c7396e816306"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -6532,7 +6729,8 @@
         "9aa73da9-b842-4ff4-8029-52d59d94db21"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -6554,7 +6752,12 @@
       "categoryItems": [
         496286
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137119,
+          "answerValue": "https://maps.app.goo.gl/W3ZQCF1114jVKLZx7"
+        }
+      ],
       "roomId": 92005,
       "liveUrl": null,
       "recordingUrl": null,
@@ -6594,7 +6797,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/d/edit?mid=17D29-f7uLLhY9xe5G6HcK0yByoRPMOs&ll=40.76530435558402%2C-111.89561170388541&z=20"
+        }
+      ],
       "roomId": 87690,
       "liveUrl": null,
       "recordingUrl": null,
@@ -6614,7 +6822,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 142883,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2025/10/Echo_logo.svg"
+        }
+      ],
       "roomId": 87691,
       "liveUrl": null,
       "recordingUrl": null,
@@ -6749,7 +6962,8 @@
         "a5321460-037e-4a00-8746-56eb0ed1c8b7"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -6794,7 +7008,8 @@
         "334213b5-8d7b-48dc-90e0-9a1e8cf5ce7b"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -6840,7 +7055,8 @@
         "2a93389a-0f66-42ab-ba10-06ff90576253"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -6862,7 +7078,8 @@
         "5a296ab2-dd86-4e18-b8d1-bcf3971d0270"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -6902,7 +7119,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -6986,7 +7204,8 @@
         "30444a7e-a636-4de1-87a9-8e81d5325503"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -7029,7 +7248,8 @@
         "99fe91c0-7a01-4e59-8655-e15b20fd4f0f"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512410
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -7096,7 +7316,8 @@
         "8f98c252-2eab-4c18-93a8-dae88332e0b2"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512410
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -7202,8 +7423,7 @@
       "categoryItems": [
         465809,
         465819,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -7394,7 +7614,8 @@
       ],
       "categoryItems": [
         496283,
-        465822
+        465822,
+        496276
       ],
       "questionAnswers": [],
       "roomId": 82958,
@@ -7416,7 +7637,8 @@
         "95825526-249c-4052-aba0-4d1567e4ee9c"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497681
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -7439,7 +7661,8 @@
         "8ed40349-4d55-4b87-a3fe-8805a8db3668"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497667
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -7463,7 +7686,8 @@
         "ea2c78a7-8b55-424d-9018-827a97484901"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497637
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -7486,7 +7710,8 @@
         "61f7635d-6bd7-4c02-956b-febfdb2d8017"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497626
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -7511,7 +7736,8 @@
         "d7d2be74-bfb9-4098-a545-b2f5ebb8bb70"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -7536,7 +7762,8 @@
         "fc612693-3583-4683-aad6-00b1b129b09b"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498154
       ],
       "questionAnswers": [],
       "roomId": 87426,
@@ -7558,7 +7785,8 @@
         "0e3b87da-5dd4-47ec-b43e-20959bcdc2b3"
       ],
       "categoryItems": [
-        496284
+        496284,
+        497656
       ],
       "questionAnswers": [
         {
@@ -7610,7 +7838,12 @@
       "categoryItems": [
         520089
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 142725,
+          "answerValue": "Peter Frank"
+        }
+      ],
       "roomId": 90682,
       "liveUrl": null,
       "recordingUrl": null,
@@ -7630,7 +7863,8 @@
         "a0940d15-7dcb-45ce-ae83-0c87ebb2d0f2"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -7652,7 +7886,8 @@
         "02480892-d0c7-46f4-b121-f7f602af208e"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512410
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -7675,7 +7910,8 @@
         "40f0054c-4fe6-41b4-808c-4382902934c5"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -7721,7 +7957,8 @@
         "3874b6c6-d39e-4f47-80ad-de08bd502313"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512410
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -7843,8 +8080,7 @@
       ],
       "categoryItems": [
         465816,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -7993,7 +8229,8 @@
         "65d742a7-213e-4b28-bb53-9415501ee054"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497636
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -8015,7 +8252,8 @@
         "014dfa86-fa41-4fae-a033-f7bbf0d75706"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497647
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -8039,7 +8277,8 @@
         "ae40c192-c40c-454e-a4d5-dbd8bfebef26"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497653
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -8065,7 +8304,8 @@
         "36278c20-dc5f-4f48-a2c7-02e737adbc42"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497687
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -8089,7 +8329,8 @@
         "12102cee-d8e3-436d-93e1-0113043fecea"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -8111,7 +8352,8 @@
         "42357fbd-4b43-4232-9c62-c50dbba064f0"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -8157,7 +8399,8 @@
         "6916a77e-5227-4dd0-84c5-db616aba1bfa"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512410
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8179,7 +8422,8 @@
         "6406a0ae-9dda-41ea-82b4-56c15bf8b3e3"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -8242,7 +8486,8 @@
         "0850c229-f1bf-438e-935d-d521dc55848c"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512410
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8264,7 +8509,8 @@
         "38093323-4ff4-401f-b968-4a561be8aaaa"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -8286,7 +8532,8 @@
         "d2462872-1ca2-4a95-a111-2ec722768036"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512411
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8307,7 +8554,8 @@
       "speakers": [],
       "categoryItems": [
         496286,
-        465822
+        465822,
+        522039
       ],
       "questionAnswers": [],
       "roomId": 92016,
@@ -8330,7 +8578,8 @@
         "678e81a3-8572-4818-9c9e-7244485be0d7"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512411
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8395,7 +8644,8 @@
         "951bac91-8060-4862-bdf4-36d172eaa498"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -8415,7 +8665,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -8439,7 +8690,8 @@
         "428c4519-f933-4b96-93ec-5ea7d10baca0"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512411
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8462,7 +8714,8 @@
       ],
       "categoryItems": [
         496285,
-        465820
+        465820,
+        496281
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -8486,7 +8739,8 @@
       ],
       "categoryItems": [
         496285,
-        465820
+        465820,
+        496279
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -8510,6 +8764,7 @@
       "categoryItems": [
         496285,
         465819,
+        496281,
         496398
       ],
       "questionAnswers": [],
@@ -8534,7 +8789,8 @@
       ],
       "categoryItems": [
         496285,
-        465822
+        465822,
+        496278
       ],
       "questionAnswers": [
         {
@@ -8576,7 +8832,7 @@
       "categoryItems": [
         496285,
         465820,
-        523121
+        496271
       ],
       "questionAnswers": [
         {
@@ -8605,7 +8861,8 @@
       ],
       "categoryItems": [
         496285,
-        465822
+        465822,
+        496273
       ],
       "questionAnswers": [
         {
@@ -8634,7 +8891,7 @@
       "categoryItems": [
         496285,
         465822,
-        523121
+        496277
       ],
       "questionAnswers": [
         {
@@ -8663,7 +8920,7 @@
       "categoryItems": [
         496285,
         465822,
-        523121
+        496271
       ],
       "questionAnswers": [
         {
@@ -8692,6 +8949,7 @@
       "categoryItems": [
         496285,
         465819,
+        496275,
         496398
       ],
       "questionAnswers": [],
@@ -8716,7 +8974,8 @@
       ],
       "categoryItems": [
         496285,
-        465819
+        465819,
+        496276
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -8762,7 +9021,8 @@
         "8a701c5e-7f2b-4757-9b7f-c2f01b80b73e"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -8785,7 +9045,8 @@
         "1c94e536-e75f-49eb-8725-2ff8ad6fdac8"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512411
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8825,7 +9086,8 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496290
+        496290,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 87451,
@@ -8891,7 +9153,8 @@
         "5e003435-abf9-4ac6-b57c-3ca2f8462fe3"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -8913,7 +9176,8 @@
         "00407ab5-f8e4-4d04-b154-551208836c96"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512411
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8938,7 +9202,8 @@
         "0bab4841-8e90-4d40-8295-80b7a116918e"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512411
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -8985,8 +9250,7 @@
       "categoryItems": [
         465818,
         465822,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -9125,8 +9389,7 @@
       ],
       "categoryItems": [
         465812,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -9225,7 +9488,8 @@
       ],
       "categoryItems": [
         496283,
-        465820
+        465820,
+        496281
       ],
       "questionAnswers": [
         {
@@ -9253,7 +9517,8 @@
         "0f2bd339-765f-41cf-86b4-7b845eb07052"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497656
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -9278,7 +9543,8 @@
         "3e92ef62-f794-49a4-bdf7-64b6bae228d0"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497604
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -9300,7 +9566,8 @@
         "61e8f997-08dd-47e0-9eea-92e65593ff3f"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497644
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -9326,7 +9593,8 @@
         "74157423-cacf-49fb-a7c8-d2992494c6be"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497608
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -9351,7 +9619,8 @@
         "fbcde9a4-5942-4912-91f8-1919b1ef991c"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -9376,7 +9645,8 @@
         "6c45a782-eb54-4742-b4cf-08838a75d909"
       ],
       "categoryItems": [
-        496284
+        496284,
+        497686
       ],
       "questionAnswers": [],
       "roomId": 87426,
@@ -9399,7 +9669,8 @@
         "042ee031-1829-4859-b908-6873ddd1b930"
       ],
       "categoryItems": [
-        496284
+        496284,
+        497651
       ],
       "questionAnswers": [
         {
@@ -9426,7 +9697,8 @@
         "4b2687e8-5c5b-49e8-924b-44550919b25f"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -9450,7 +9722,7 @@
       "categoryItems": [
         496282,
         465822,
-        523121
+        496272
       ],
       "questionAnswers": [
         {
@@ -9477,7 +9749,8 @@
         "92db3c1b-32c7-4c81-a214-b433604b7e44"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512411
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -9501,7 +9774,7 @@
       "categoryItems": [
         496282,
         465822,
-        523121
+        496277
       ],
       "questionAnswers": [
         {
@@ -9533,7 +9806,8 @@
       ],
       "categoryItems": [
         496282,
-        465822
+        465822,
+        496271
       ],
       "questionAnswers": [
         {
@@ -9561,7 +9835,8 @@
         "78022095-450e-4b1b-a952-ea0840d456fc"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -9584,7 +9859,8 @@
         "ef91ae46-2ffd-4cdc-a933-8339379b9975"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -9608,6 +9884,7 @@
       "categoryItems": [
         496282,
         465820,
+        496279,
         496398
       ],
       "questionAnswers": [],
@@ -9630,7 +9907,8 @@
         "73aad39b-1e8a-45c7-a4f1-9e9f15106d88"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -9653,7 +9931,8 @@
       ],
       "categoryItems": [
         496282,
-        465819
+        465819,
+        496277
       ],
       "questionAnswers": [
         {
@@ -9705,6 +9984,7 @@
       "categoryItems": [
         496282,
         465819,
+        496278,
         496398
       ],
       "questionAnswers": [
@@ -9732,7 +10012,8 @@
         "b0c626fd-5877-491d-a43a-aeef9dd86764"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -9756,7 +10037,7 @@
       "categoryItems": [
         496282,
         465820,
-        523121
+        496276
       ],
       "questionAnswers": [
         {
@@ -9888,8 +10169,7 @@
       "categoryItems": [
         465811,
         465819,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -9918,8 +10198,7 @@
       ],
       "categoryItems": [
         465816,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -9956,8 +10235,7 @@
       ],
       "categoryItems": [
         465812,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -10009,8 +10287,7 @@
       ],
       "categoryItems": [
         465814,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -10041,7 +10318,8 @@
         "a1cb83e1-3802-4fca-86e3-cf8eb7433083"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497663
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -10067,7 +10345,8 @@
         "75d6a5d7-9556-4788-8474-27da874073b9"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497616
       ],
       "questionAnswers": [
         {
@@ -10098,7 +10377,8 @@
         "d4d6fcdf-0eda-4f2c-a28f-59b46cc04f83"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497676
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -10123,7 +10403,8 @@
         "72f56995-f216-4cb3-8643-c25ddfae820e"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497675
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -10145,7 +10426,8 @@
         "40755deb-7ae6-41cb-8e65-9fc56eb06178"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -10167,7 +10449,8 @@
         "8ab8956b-edbc-4729-9d90-380645466f53"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -10190,7 +10473,8 @@
         "c54f0e19-fd8b-429d-89e5-c37725f50145"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -10213,7 +10497,8 @@
       ],
       "categoryItems": [
         496282,
-        465820
+        465820,
+        496280
       ],
       "questionAnswers": [],
       "roomId": 92181,
@@ -10255,7 +10540,8 @@
         "bc71cad0-5209-48fb-87ff-29a7c6700294"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -10277,7 +10563,8 @@
         "f4ec0a2e-5c3c-4072-9988-dd23487e3b1c"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -10338,7 +10625,8 @@
       "speakers": [],
       "categoryItems": [
         496286,
-        465822
+        465822,
+        522039
       ],
       "questionAnswers": [],
       "roomId": 92016,
@@ -10384,7 +10672,8 @@
         "4a56aa9e-b98a-489b-9180-e5d25096fb32"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -10407,7 +10696,8 @@
         "626d89cc-be79-45b2-a9a9-a71944e1ef58"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -10452,7 +10742,8 @@
         "1708bdeb-e8d9-4628-a147-e9878198c900"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -10609,8 +10900,7 @@
       ],
       "categoryItems": [
         465816,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -10639,8 +10929,7 @@
       ],
       "categoryItems": [
         465812,
-        465819,
-        523121
+        465819
       ],
       "questionAnswers": [
         {
@@ -10773,7 +11062,8 @@
       ],
       "categoryItems": [
         496283,
-        465820
+        465820,
+        496271
       ],
       "questionAnswers": [
         {
@@ -10803,7 +11093,8 @@
         "23394802-299a-42d2-9aa2-4eb5afe2894d"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497662
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -10828,7 +11119,8 @@
         "8fbee53c-b53a-40b4-9ba4-03f18a1a0c31"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497648
       ],
       "questionAnswers": [
         {
@@ -10856,7 +11148,8 @@
         "1afdc8f0-ebbb-4f55-be52-64bf0815b421"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497611
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -10879,7 +11172,8 @@
         "13b40d9b-27d7-42f1-a074-21e7e84a442f"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497605
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -10901,7 +11195,8 @@
         "3203c5ff-b7d5-4d0b-8858-f5b2f66f2eb0"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -10925,7 +11220,7 @@
       ],
       "categoryItems": [
         496284,
-        523121
+        497658
       ],
       "questionAnswers": [
         {
@@ -10962,7 +11257,8 @@
         "0d4b243e-8856-4515-bb31-a31340af5594"
       ],
       "categoryItems": [
-        496284
+        496284,
+        497631
       ],
       "questionAnswers": [
         {
@@ -10989,7 +11285,8 @@
         "759511ae-6d16-4847-b4b3-ada7e852d0c0"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -11011,7 +11308,8 @@
         "3bd9b2d6-3b9c-4703-887d-13cf4cd0c4db"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -11034,7 +11332,8 @@
         "9235a799-bc39-4014-9d4b-7f47c6b1aac5"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512407
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -11057,7 +11356,8 @@
         "a40d9368-bd3c-4ba3-9498-fa0e449b655f"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -11150,8 +11450,7 @@
       "categoryItems": [
         465811,
         465819,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -11288,8 +11587,7 @@
       ],
       "categoryItems": [
         465811,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -11318,8 +11616,7 @@
       ],
       "categoryItems": [
         465809,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -11371,8 +11668,7 @@
       ],
       "categoryItems": [
         465815,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -11400,7 +11696,8 @@
         "a484a5b3-a82f-4b03-88a7-8d9b90ff1a63"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497673
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -11423,7 +11720,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497690
       ],
       "questionAnswers": [
         {
@@ -11452,7 +11749,8 @@
         "9f9859a4-b16d-45b2-99b3-1f525fafa93b"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497688
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -11475,7 +11773,8 @@
         "a168a969-381b-406a-99d2-528df6120e6c"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497614
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -11500,7 +11799,8 @@
         "428c4519-f933-4b96-93ec-5ea7d10baca0"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -11520,12 +11820,17 @@
       "isPlenumSession": false,
       "speakers": [],
       "categoryItems": [
-        496291
+        496291,
+        523939
       ],
       "questionAnswers": [
         {
           "questionId": 137006,
           "answerValue": "https://tinyurl.com/yayeujd2"
+        },
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/place/Edison+House/@40.7617551,-111.8989095,17z/data=!3m1!4b1!4m6!3m5!1s0x8752f5a91f112ad5:0xb9bcf1b4eec7f6d2!8m2!3d40.7617511!4d-111.8963346!16s%2Fg%2F11fsy9332x?entry=ttu&g_ep=EgoyMDI2MDkxNi4wIKXMDSoASAFQAw%3D%3D"
         }
       ],
       "roomId": 88756,
@@ -11547,7 +11852,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137119,
+          "answerValue": "https://www.google.com/maps/d/edit?mid=17D29-f7uLLhY9xe5G6HcK0yByoRPMOs&ll=40.76530435558402%2C-111.89561170388541&z=20"
+        }
+      ],
       "roomId": 87690,
       "liveUrl": null,
       "recordingUrl": null,
@@ -11567,7 +11877,12 @@
       "categoryItems": [
         496289
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 142883,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2025/10/Echo_logo.svg"
+        }
+      ],
       "roomId": 87691,
       "liveUrl": null,
       "recordingUrl": null,
@@ -11680,7 +11995,8 @@
         "53ef16b1-4ebe-4505-b58e-7f4784eb2afd"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -11749,7 +12065,8 @@
         "07ffb6e6-efe1-4534-8d89-78e14ef7a993"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -11771,7 +12088,8 @@
         "a133541c-0532-4d6d-9557-7bed12e2c061"
       ],
       "categoryItems": [
-        496573
+        496573,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 82947,
@@ -11895,7 +12213,8 @@
         "66b8b7ce-6c66-4d2b-890f-e27473496ffc"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -11917,7 +12236,8 @@
         "1557b5aa-c1d4-4c1e-9d5b-10759c03c2c0"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512412
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -11983,7 +12303,8 @@
         "f74cb267-db05-4256-9e66-af16e9d6f72a"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512412
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -12283,7 +12604,8 @@
       ],
       "categoryItems": [
         496283,
-        465819
+        465819,
+        496277
       ],
       "questionAnswers": [],
       "roomId": 82958,
@@ -12308,7 +12630,8 @@
         "2798da8e-69ec-47f6-b1d5-82aca87e21a2"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497670
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -12332,7 +12655,8 @@
         "01231b65-4735-4232-ab53-156c3b1863a9"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497622
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -12355,7 +12679,8 @@
         "a9878dc4-382b-4226-9d93-99e2d3fa1319"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497633
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -12377,7 +12702,8 @@
         "6f431609-bb06-4055-9523-4fddf3c5d7c2"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497621
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -12400,7 +12726,8 @@
         "39a3a8d4-22e9-46b7-9e40-be48cc3d3765"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -12425,7 +12752,8 @@
         "36721d8c-fb91-4d80-a552-2bd9e4b8c937"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498157
       ],
       "questionAnswers": [],
       "roomId": 87426,
@@ -12451,7 +12779,8 @@
         "1e1dd2a2-43bb-4328-b1ae-8a2222bf9820"
       ],
       "categoryItems": [
-        496284
+        496284,
+        498151
       ],
       "questionAnswers": [],
       "roomId": 87427,
@@ -12497,7 +12826,8 @@
         "a98eab49-defb-4ec8-b0cc-3186906771db"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -12520,7 +12850,8 @@
         "e8254827-5256-4b56-a199-59dcfde4afb8"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512412
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -12543,7 +12874,8 @@
         "1ac8da27-b869-495b-904c-869088036631"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -12566,7 +12898,8 @@
         "afa54877-abea-4627-bafc-daac76383df2"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512412
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -12850,7 +13183,8 @@
         "4b038343-3c0b-45b1-b736-e9cc36c53b55"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497670
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -12874,7 +13208,8 @@
         "eef550d7-a48e-4e36-80a9-538df895a4cf"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497632
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -12898,7 +13233,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497620
       ],
       "questionAnswers": [
         {
@@ -12926,7 +13261,8 @@
         "d9444121-9c07-45e2-975f-33ba292c2f37"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497615
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -12949,7 +13285,8 @@
         "39a3a8d4-22e9-46b7-9e40-be48cc3d3765"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -12992,7 +13329,8 @@
         "3867b585-0fb1-4e3f-b128-b66b7f3831d8"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512412
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -13015,7 +13353,8 @@
         "b9944baa-32fc-4c44-819a-e52ed40e7898"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512412
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -13100,7 +13439,8 @@
         "1557b5aa-c1d4-4c1e-9d5b-10759c03c2c0"
       ],
       "categoryItems": [
-        512413
+        512413,
+        512412
       ],
       "questionAnswers": [],
       "roomId": 90363,
@@ -13121,7 +13461,8 @@
       "speakers": [],
       "categoryItems": [
         496286,
-        465822
+        465822,
+        522039
       ],
       "questionAnswers": [],
       "roomId": 92016,
@@ -13143,7 +13484,8 @@
         "4f9cbc15-eb3b-4cfa-bec3-219ae3eb1a06"
       ],
       "categoryItems": [
-        518734
+        518734,
+        514809
       ],
       "questionAnswers": [],
       "roomId": 91537,
@@ -13213,8 +13555,7 @@
       "categoryItems": [
         465809,
         465819,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -13368,8 +13709,7 @@
       ],
       "categoryItems": [
         465818,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -13477,7 +13817,8 @@
       ],
       "categoryItems": [
         496283,
-        465820
+        465820,
+        496281
       ],
       "questionAnswers": [],
       "roomId": 82958,
@@ -13500,7 +13841,8 @@
         "f71cb76d-cd7c-42ce-8290-ecd1cd6e1f13"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497631
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -13548,7 +13890,8 @@
         "d747b259-a290-4c64-90d5-322ab25d206e"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497628
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -13571,7 +13914,8 @@
         "58a3448c-6d8c-4ad0-a858-15ab3802871d"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497668
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -13593,7 +13937,8 @@
         "f6fa7f9c-47b3-42a0-a262-009210536d9d"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -13617,7 +13962,8 @@
         "952017f3-d0a9-4fd3-bfb7-f449e3e77123"
       ],
       "categoryItems": [
-        496284
+        496284,
+        497638
       ],
       "questionAnswers": [],
       "roomId": 87426,
@@ -13691,8 +14037,7 @@
       "categoryItems": [
         465809,
         465822,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -13752,8 +14097,7 @@
       "categoryItems": [
         465809,
         465820,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -13920,8 +14264,7 @@
       ],
       "categoryItems": [
         465809,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -13949,8 +14292,7 @@
       ],
       "categoryItems": [
         465810,
-        465822,
-        523121
+        465822
       ],
       "questionAnswers": [
         {
@@ -13977,7 +14319,8 @@
         "6e7affd2-8380-4fe1-9f99-7c0a997cdfd4"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497601
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -14000,7 +14343,8 @@
         "0d773817-fe8a-4532-986a-9ad5864109f7"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497646
       ],
       "questionAnswers": [
         {
@@ -14027,7 +14371,8 @@
         "d6d6112d-6a30-47d6-a0de-b219c9c8c2d8"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497677
       ],
       "questionAnswers": [],
       "roomId": 87423,
@@ -14050,7 +14395,8 @@
         "6a085980-af6b-4b84-8543-87c461843349"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497679
       ],
       "questionAnswers": [],
       "roomId": 87424,
@@ -14073,7 +14419,8 @@
         "8890bf82-0e38-4dfe-bf20-820920efb9b8"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -14148,8 +14495,7 @@
       "categoryItems": [
         465818,
         465819,
-        496398,
-        523121
+        496398
       ],
       "questionAnswers": [
         {
@@ -14228,8 +14574,7 @@
       ],
       "categoryItems": [
         465809,
-        465820,
-        523121
+        465820
       ],
       "questionAnswers": [
         {
@@ -14306,7 +14651,12 @@
         465815,
         465822
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/ifzasden~scsyyRDvE7xdQ6PH2ErRc2.pdf~fast_and_furious_otel_drift.pdf"
+        }
+      ],
       "roomId": 82955,
       "liveUrl": null,
       "recordingUrl": null,
@@ -14398,7 +14748,8 @@
         "f68cd1aa-96f8-40d2-8c21-a6615103f1ed"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497671
       ],
       "questionAnswers": [],
       "roomId": 87421,
@@ -14421,7 +14772,8 @@
         "1a5bb2e0-15cb-4053-b797-442cebcc3d09"
       ],
       "categoryItems": [
-        496153
+        496153,
+        497665
       ],
       "questionAnswers": [],
       "roomId": 87422,
@@ -14444,7 +14796,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497614
       ],
       "questionAnswers": [
         {
@@ -14472,7 +14824,7 @@
       ],
       "categoryItems": [
         496153,
-        523121
+        497623
       ],
       "questionAnswers": [
         {
@@ -14500,7 +14852,8 @@
         "8890bf82-0e38-4dfe-bf20-820920efb9b8"
       ],
       "categoryItems": [
-        496286
+        496286,
+        515763
       ],
       "questionAnswers": [],
       "roomId": 87425,
@@ -14616,6 +14969,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principal Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2024/01/Syntasso-Trasparent-1.svg"
         }
       ]
     },
@@ -14673,6 +15030,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Cloud Developer Advocate"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/09/Google_cloud_cloud_vertical_0120.svg"
         }
       ]
     },
@@ -15765,6 +16126,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Director of Product, AI and OpenShell"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/07/nvidia-logo-horz.svg"
         }
       ]
     },
@@ -15817,6 +16182,10 @@
         {
           "questionId": 128830,
           "answerValue": "Observability Engineering Leader at Apple, OpenTelemetry Governance Committee Member"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/apple-NEW2-01.svg"
         }
       ]
     },
@@ -16054,6 +16423,10 @@
         {
           "questionId": 128830,
           "answerValue": "Distinguished Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -16079,6 +16452,10 @@
         {
           "questionId": 128830,
           "answerValue": "VP of Architecture"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/HAProxy-logo-cmyk-horizontal.svg"
         }
       ]
     },
@@ -16245,6 +16622,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principal Software Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -16443,6 +16824,10 @@
         {
           "questionId": 128830,
           "answerValue": "AI Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/apple-NEW2-01.svg"
         }
       ]
     },
@@ -16991,6 +17376,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -17545,6 +17934,10 @@
         {
           "questionId": 128830,
           "answerValue": "Product Manager"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -17866,6 +18259,10 @@
         {
           "questionId": 128830,
           "answerValue": "Crossplane Steering Committee, Founder & CEO Upbound"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/upbound_logo.svg"
         }
       ]
     },
@@ -18281,6 +18678,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Director, Professional Services"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2024/02/Logo_dark-_CMYK_heroku.svg"
         }
       ]
     },
@@ -18327,6 +18728,10 @@
         {
           "questionId": 128830,
           "answerValue": "Staff Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2022/04/1DU_logo_rgb_for-white-bg_horizontal.svg"
         }
       ]
     },
@@ -19051,6 +19456,10 @@
         {
           "questionId": 128830,
           "answerValue": "CTO, Cloud and Infrastructure"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2022/02/linux-foundation-vert-color.svg"
         }
       ]
     },
@@ -20286,6 +20695,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Staff DevSecOps Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2024/09/LockheedMartin.svg"
         }
       ]
     },
@@ -21145,6 +21558,10 @@
         {
           "questionId": 128830,
           "answerValue": "CTO Cloud Native"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/Nutanix-Logo-Charcoal-Gray-Digital.svg"
         }
       ]
     },
@@ -21345,6 +21762,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -21407,6 +21828,10 @@
         {
           "questionId": 128830,
           "answerValue": "Sr. Director Engineering, VCF Division"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/06/Broadcom_VMware_by_Broadcom_Black_RGB.svg"
         }
       ]
     },
@@ -21570,6 +21995,10 @@
         {
           "questionId": 128830,
           "answerValue": "Lead Open Source Advocate"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Community Manager"
         }
       ]
     },
@@ -21643,6 +22072,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer "
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/google-logo-web.svg"
         }
       ]
     },
@@ -21971,6 +22404,10 @@
         {
           "questionId": 128830,
           "answerValue": "SRE"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -22182,6 +22619,10 @@
         {
           "questionId": 128830,
           "answerValue": "Distinguished Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -22225,6 +22666,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Architect "
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/Logo-Dark-on-Transparent-Background.svg"
         }
       ]
     },
@@ -22262,6 +22707,10 @@
         {
           "questionId": 128830,
           "answerValue": "Developer Advocate"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/07/nvidia-logo-horz.svg"
         }
       ]
     },
@@ -22490,6 +22939,10 @@
         {
           "questionId": 128830,
           "answerValue": "Envoy AI Gateway Maintainer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -23172,6 +23625,10 @@
         {
           "questionId": 128830,
           "answerValue": "Head of Developer Relations"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/10/Company-Logo-StepFun.svg"
         }
       ]
     },
@@ -23280,6 +23737,10 @@
         {
           "questionId": 128830,
           "answerValue": "Technical Lead"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -23372,6 +23833,10 @@
         {
           "questionId": 128830,
           "answerValue": "CTO"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Technical Lead"
         }
       ]
     },
@@ -23898,6 +24363,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/09/HARK_Logo.jpg"
         }
       ]
     },
@@ -24311,6 +24780,10 @@
         {
           "questionId": 128830,
           "answerValue": "Chief Architect "
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -24414,6 +24887,10 @@
         {
           "questionId": 128830,
           "answerValue": "Chief Operating Officer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "TSC Member"
         }
       ]
     },
@@ -24729,6 +25206,10 @@
         {
           "questionId": 128830,
           "answerValue": "CEO"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/Logo-Dark-on-Transparent-Background.svg"
         }
       ]
     },
@@ -25033,6 +25514,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/google-logo-web.svg"
         }
       ]
     },
@@ -25245,6 +25730,10 @@
         {
           "questionId": 128830,
           "answerValue": "Engineering Director, Kubernetes & GKE"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/google-logo-web.svg"
         }
       ]
     },
@@ -25564,6 +26053,10 @@
         {
           "questionId": 128830,
           "answerValue": "Flatcar Container Linux Maintainer | Software Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -25680,7 +26173,6 @@
         }
       ],
       "sessions": [
-        1289889,
         1289696
       ],
       "fullName": "Jared Watts",
@@ -26006,6 +26498,10 @@
         {
           "questionId": 128830,
           "answerValue": "OCI VP of Container Services"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/03/Oracle_rgb_web.svg"
         }
       ]
     },
@@ -26088,6 +26584,10 @@
         {
           "questionId": 128830,
           "answerValue": "Head of Projects"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/cncf-color.svg"
         }
       ]
     },
@@ -26369,6 +26869,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Distinguished Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/10/RedHat-new.svg"
         }
       ]
     },
@@ -26476,6 +26980,10 @@
         {
           "questionId": 128830,
           "answerValue": "Vice President "
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/08/cvs-health-logo.svg"
         }
       ]
     },
@@ -26530,6 +27038,10 @@
         {
           "questionId": 128830,
           "answerValue": "Co-founder and CEO"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -26773,6 +27285,10 @@
         {
           "questionId": 128830,
           "answerValue": "Architect"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -26850,6 +27366,10 @@
         {
           "questionId": 128830,
           "answerValue": "Lead Developer Advocate"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/10/Company-Logo-JuiceFS.svg"
         }
       ]
     },
@@ -27011,6 +27531,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Applied Scientist"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -27139,6 +27663,10 @@
         {
           "questionId": 128830,
           "answerValue": "Executive Director, Cloud and Infrastructure"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2022/02/linux-foundation-vert-color.svg"
         }
       ]
     },
@@ -27311,6 +27839,10 @@
         {
           "questionId": 128829,
           "answerValue": "Cloud Native Computing Foundation"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/cncf-color.svg"
         }
       ]
     },
@@ -27352,6 +27884,10 @@
         {
           "questionId": 128830,
           "answerValue": "Technical Program Management Director"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2022/02/linux-foundation-vert-color.svg"
         }
       ]
     },
@@ -27393,6 +27929,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principal PM Lead, Azure Kubernetes Service"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/08/microsoft-horizontal-color.svg"
         }
       ]
     },
@@ -27774,6 +28314,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principal Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2022/07/Adyen-green-RGB.svg"
         }
       ]
     },
@@ -28057,6 +28601,10 @@
         {
           "questionId": 128830,
           "answerValue": "Infrastructure Lead"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/09/HARK_Logo.jpg"
         }
       ]
     },
@@ -28316,6 +28864,10 @@
         {
           "questionId": 128830,
           "answerValue": "Co-Chair CNCF TAG Infrastructure, Maintainer, Open Source Architect"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -28636,6 +29188,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/apple-NEW2-01.svg"
         }
       ]
     },
@@ -28826,6 +29382,10 @@
         {
           "questionId": 128830,
           "answerValue": "Chief Product Officer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/Logo-Dark-on-Transparent-Background.svg"
         }
       ]
     },
@@ -28892,6 +29452,10 @@
         {
           "questionId": 128830,
           "answerValue": "CMO"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/07/Vultr_new_logo__on-white-1.ai_.svg"
         }
       ]
     },
@@ -29684,6 +30248,10 @@
         {
           "questionId": 128830,
           "answerValue": "Head of Open Source "
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/Logo-Dark-on-Transparent-Background.svg"
         }
       ]
     },
@@ -29963,6 +30531,10 @@
         {
           "questionId": 128830,
           "answerValue": "Staff Infrastructure Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/09/LiveKit-Logo-New-500x281-1.png"
         }
       ]
     },
@@ -30114,6 +30686,10 @@
         {
           "questionId": 128830,
           "answerValue": "Member of Technical Staff"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/03/Anthropic-wordmark-Slate.svg"
         }
       ]
     },
@@ -30139,6 +30715,10 @@
         {
           "questionId": 128830,
           "answerValue": "Member of Technical Staff"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/03/Anthropic-wordmark-Slate.svg"
         }
       ]
     },
@@ -30384,6 +30964,10 @@
         {
           "questionId": 128830,
           "answerValue": "Sr. Open Source Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/09/AWS_logo_RGB_1c_Gray850.svg"
         }
       ]
     },
@@ -30769,6 +31353,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/03/nvidia-logo-vert.svg"
         }
       ]
     },
@@ -31168,7 +31756,12 @@
       ],
       "fullName": "Matt Lord",
       "categoryItems": [],
-      "questionAnswers": []
+      "questionAnswers": [
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
+        }
+      ]
     },
     {
       "id": "2798da8e-69ec-47f6-b1d5-82aca87e21a2",
@@ -31549,6 +32142,10 @@
         {
           "questionId": 128830,
           "answerValue": "Distinguished Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/08/cvs-health-logo.svg"
         }
       ]
     },
@@ -32338,6 +32935,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Manager of Product"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/AWS_logo_RGB_1c_Gray850-4.svg"
         }
       ]
     },
@@ -32461,6 +33062,10 @@
         {
           "questionId": 128830,
           "answerValue": "Mitch Davis"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -33172,6 +33777,10 @@
         {
           "questionId": 128830,
           "answerValue": "Staff Software Engineer | CNCF Ambassador"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -33704,6 +34313,10 @@
         {
           "questionId": 128830,
           "answerValue": "Technology Advocate"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -33974,16 +34587,6 @@
           "linkType": "Company_Website"
         },
         {
-          "title": "Portfolio",
-          "url": "https://pmady.github.io/",
-          "linkType": "Other"
-        },
-        {
-          "title": "Github",
-          "url": "https://github.com/pmady",
-          "linkType": "Other"
-        },
-        {
           "title": "BlueSky",
           "url": "https://bsky.app/profile/pavanmadduri.bsky.social",
           "linkType": "Other"
@@ -33991,6 +34594,16 @@
         {
           "title": "Credly",
           "url": "https://www.credly.com/users/pavanmadduri",
+          "linkType": "Other"
+        },
+        {
+          "title": "Portfolio",
+          "url": "https://pmady.github.io/",
+          "linkType": "Other"
+        },
+        {
+          "title": "Github",
+          "url": "https://github.com/pmady",
           "linkType": "Other"
         },
         {
@@ -34344,6 +34957,10 @@
         {
           "questionId": 128830,
           "answerValue": "Platform Architect"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/09/The_Access_Group_logo.jpg"
         }
       ]
     },
@@ -34385,6 +35002,10 @@
         {
           "questionId": 128830,
           "answerValue": "Production Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2024/02/Meta_lockup_positive-primary_RGB.svg"
         }
       ]
     },
@@ -34513,6 +35134,10 @@
         {
           "questionId": 128830,
           "answerValue": "Developer Relations Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -34791,6 +35416,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -35229,6 +35858,10 @@
         {
           "questionId": 128830,
           "answerValue": "Staff Research Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/google-logo-web.svg"
         }
       ]
     },
@@ -35703,6 +36336,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principal Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2023/05/CoreWeave_Logo_Digital.svg"
         }
       ]
     },
@@ -35775,6 +36412,10 @@
         {
           "questionId": 128830,
           "answerValue": "Co-founder"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2024/08/Anyscale_logo_black_blue.svg"
         }
       ]
     },
@@ -36044,6 +36685,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/07/nvidia-logo-horz.svg"
         }
       ]
     },
@@ -36442,6 +37087,10 @@
         {
           "questionId": 128830,
           "answerValue": "VP & Distinguished Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -37250,6 +37899,10 @@
         {
           "questionId": 128830,
           "answerValue": "Production Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2024/02/Meta_lockup_positive-primary_RGB.svg"
         }
       ]
     },
@@ -37307,6 +37960,10 @@
         {
           "questionId": 128830,
           "answerValue": "Vice President, Software Engineering"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/salesforce-spn-1.svg"
         }
       ]
     },
@@ -37441,6 +38098,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principal Software Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -38434,6 +39095,10 @@
         {
           "questionId": 128830,
           "answerValue": "Open Source Contributor"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Contributor"
         }
       ]
     },
@@ -38475,6 +39140,10 @@
         {
           "questionId": 128830,
           "answerValue": "Software Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/google-logo-web.svg"
         }
       ]
     },
@@ -38605,6 +39274,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principle Software Engineer"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -38769,6 +39442,10 @@
         {
           "questionId": 128830,
           "answerValue": "Advisor, DevRel"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -38932,6 +39609,10 @@
         {
           "questionId": 128830,
           "answerValue": "Terry Howe"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -39040,6 +39721,10 @@
         {
           "questionId": 128830,
           "answerValue": "Distinguished Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/google-logo-web.svg"
         }
       ]
     },
@@ -39717,6 +40402,10 @@
         {
           "questionId": 128830,
           "answerValue": "Principal Open Source Specialist SA"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/AWS_logo_RGB_1c_Gray850-4.svg"
         }
       ]
     },
@@ -40046,6 +40735,10 @@
         {
           "questionId": 128830,
           "answerValue": "Staff Engineer"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/apple-NEW2-01.svg"
         }
       ]
     },
@@ -40215,6 +40908,10 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Director, Engineering"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2020/01/uber-horizontal-color-trimmed.svg"
         }
       ]
     },
@@ -40370,6 +41067,10 @@
         {
           "questionId": 128830,
           "answerValue": "Vice President of Product Management"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2026/07/nvidia-logo-horz.svg"
         }
       ]
     },
@@ -40743,6 +41444,10 @@
         {
           "questionId": 128830,
           "answerValue": "Field CTO"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -41013,6 +41718,10 @@
         {
           "questionId": 128830,
           "answerValue": "Developer Advocate"
+        },
+        {
+          "questionId": 138119,
+          "answerValue": "Maintainer"
         }
       ]
     },
@@ -41173,6 +41882,10 @@
         {
           "questionId": 128830,
           "answerValue": "CEO"
+        },
+        {
+          "questionId": 140808,
+          "answerValue": "https://events.linuxfoundation.org/wp-content/uploads/2023/05/LOGO_ScaleOps_vertical_2026_White3.svg"
         }
       ]
     },
@@ -42030,6 +42743,36 @@
       "question": "Website",
       "questionType": "Web_address",
       "sort": 58
+    },
+    {
+      "id": 137119,
+      "question": "Location Map",
+      "questionType": "Web_address",
+      "sort": 76
+    },
+    {
+      "id": 138119,
+      "question": "Company Override",
+      "questionType": "Short_Text",
+      "sort": 86
+    },
+    {
+      "id": 140808,
+      "question": "Company URL",
+      "questionType": "Web_address",
+      "sort": 87
+    },
+    {
+      "id": 142725,
+      "question": "Speaker Name Display",
+      "questionType": "Short_Text",
+      "sort": 78
+    },
+    {
+      "id": 142883,
+      "question": "Event Logo",
+      "questionType": "Web_address",
+      "sort": 79
     }
   ],
   "categories": [
@@ -42215,6 +42958,647 @@
       "type": "session"
     },
     {
+      "id": 136945,
+      "title": "SubTopic",
+      "items": [
+        {
+          "id": 496281,
+          "name": "AI Inference + Agentic",
+          "sort": 1
+        },
+        {
+          "id": 496271,
+          "name": "Application Development + Delivery",
+          "sort": 2
+        },
+        {
+          "id": 496272,
+          "name": "Cloud Native Experience",
+          "sort": 3
+        },
+        {
+          "id": 496280,
+          "name": "Cloud Native Novice",
+          "sort": 4
+        },
+        {
+          "id": 496273,
+          "name": "Connectivity",
+          "sort": 5
+        },
+        {
+          "id": 496274,
+          "name": "Data Processing + Storage",
+          "sort": 6
+        },
+        {
+          "id": 496275,
+          "name": "Emerging + Advanced",
+          "sort": 7
+        },
+        {
+          "id": 496276,
+          "name": "Observability",
+          "sort": 8
+        },
+        {
+          "id": 496277,
+          "name": "Operations + Performance",
+          "sort": 9
+        },
+        {
+          "id": 496278,
+          "name": "Platform Engineering",
+          "sort": 10
+        },
+        {
+          "id": 496279,
+          "name": "Security",
+          "sort": 11
+        },
+        {
+          "id": 512406,
+          "name": "EnvoyCon",
+          "sort": 12
+        },
+        {
+          "id": 512407,
+          "name": "Istio Day",
+          "sort": 13
+        },
+        {
+          "id": 512408,
+          "name": "Cloud Native University",
+          "sort": 14
+        },
+        {
+          "id": 512409,
+          "name": "KyvernoCon",
+          "sort": 15
+        },
+        {
+          "id": 512410,
+          "name": "KubeVirt Summit",
+          "sort": 16
+        },
+        {
+          "id": 512411,
+          "name": "Kubeflow Summit",
+          "sort": 17
+        },
+        {
+          "id": 512412,
+          "name": "llm-d",
+          "sort": 18
+        },
+        {
+          "id": 515763,
+          "name": "BoF",
+          "sort": 19
+        },
+        {
+          "id": 522039,
+          "name": "Network Nook",
+          "sort": 20
+        },
+        {
+          "id": 523939,
+          "name": "Separate Registration Required",
+          "sort": 21
+        }
+      ],
+      "sort": 72,
+      "type": "session"
+    },
+    {
+      "id": 136946,
+      "title": "CNCF Projects",
+      "items": [
+        {
+          "id": 497600,
+          "name": "AI Gateway",
+          "sort": 1
+        },
+        {
+          "id": 497671,
+          "name": "API Machinery",
+          "sort": 2
+        },
+        {
+          "id": 497672,
+          "name": "Apps",
+          "sort": 3
+        },
+        {
+          "id": 497673,
+          "name": "Architecture",
+          "sort": 4
+        },
+        {
+          "id": 497674,
+          "name": "Atlantis",
+          "sort": 5
+        },
+        {
+          "id": 497629,
+          "name": "Auth",
+          "sort": 6
+        },
+        {
+          "id": 497630,
+          "name": "Autoscaling",
+          "sort": 7
+        },
+        {
+          "id": 497631,
+          "name": "Backstage",
+          "sort": 8
+        },
+        {
+          "id": 497632,
+          "name": "Batch",
+          "sort": 9
+        },
+        {
+          "id": 497650,
+          "name": "Buildpacks",
+          "sort": 10
+        },
+        {
+          "id": 497651,
+          "name": "Cadence Workflow",
+          "sort": 11
+        },
+        {
+          "id": 497652,
+          "name": "Cedar",
+          "sort": 12
+        },
+        {
+          "id": 497653,
+          "name": "Cilium",
+          "sort": 13
+        },
+        {
+          "id": 497675,
+          "name": "CLI",
+          "sort": 14
+        },
+        {
+          "id": 497676,
+          "name": "Cloud Provider",
+          "sort": 15
+        },
+        {
+          "id": 497677,
+          "name": "Cluster Lifecycle",
+          "sort": 16
+        },
+        {
+          "id": 497678,
+          "name": "CoHDI",
+          "sort": 17
+        },
+        {
+          "id": 497633,
+          "name": "Containerd",
+          "sort": 18
+        },
+        {
+          "id": 497634,
+          "name": "Contributor Experience",
+          "sort": 19
+        },
+        {
+          "id": 497635,
+          "name": "Copacetic",
+          "sort": 20
+        },
+        {
+          "id": 497636,
+          "name": "CoreDNS",
+          "sort": 21
+        },
+        {
+          "id": 497654,
+          "name": "Cortex",
+          "sort": 22
+        },
+        {
+          "id": 497655,
+          "name": "cri-o",
+          "sort": 23
+        },
+        {
+          "id": 497656,
+          "name": "Crossplane",
+          "sort": 24
+        },
+        {
+          "id": 497657,
+          "name": "Dapr",
+          "sort": 25
+        },
+        {
+          "id": 497601,
+          "name": "Data Protection",
+          "sort": 26
+        },
+        {
+          "id": 497602,
+          "name": "Developer Experience",
+          "sort": 27
+        },
+        {
+          "id": 497603,
+          "name": "Device Management",
+          "sort": 28
+        },
+        {
+          "id": 497604,
+          "name": "Docs",
+          "sort": 29
+        },
+        {
+          "id": 497605,
+          "name": "Dragonfly",
+          "sort": 30
+        },
+        {
+          "id": 497606,
+          "name": "Emissary-ingress",
+          "sort": 31
+        },
+        {
+          "id": 497607,
+          "name": "Envoy",
+          "sort": 32
+        },
+        {
+          "id": 497608,
+          "name": "etcd",
+          "sort": 33
+        },
+        {
+          "id": 497679,
+          "name": "Falco",
+          "sort": 34
+        },
+        {
+          "id": 497680,
+          "name": "Flatcar Container Linux",
+          "sort": 35
+        },
+        {
+          "id": 497681,
+          "name": "Fluentd",
+          "sort": 36
+        },
+        {
+          "id": 497682,
+          "name": "Flux",
+          "sort": 37
+        },
+        {
+          "id": 497637,
+          "name": "Harbor",
+          "sort": 38
+        },
+        {
+          "id": 497638,
+          "name": "Helm",
+          "sort": 39
+        },
+        {
+          "id": 497639,
+          "name": "in-toto",
+          "sort": 40
+        },
+        {
+          "id": 497640,
+          "name": "Infrastructure",
+          "sort": 41
+        },
+        {
+          "id": 497658,
+          "name": "Inspektor Gadget",
+          "sort": 42
+        },
+        {
+          "id": 497659,
+          "name": "Jaeger",
+          "sort": 43
+        },
+        {
+          "id": 497660,
+          "name": "k0s",
+          "sort": 44
+        },
+        {
+          "id": 497661,
+          "name": "K3s",
+          "sort": 45
+        },
+        {
+          "id": 497609,
+          "name": "k8gb",
+          "sort": 46
+        },
+        {
+          "id": 497610,
+          "name": "Kairos",
+          "sort": 47
+        },
+        {
+          "id": 497611,
+          "name": "Karmada",
+          "sort": 48
+        },
+        {
+          "id": 497612,
+          "name": "Kepler",
+          "sort": 49
+        },
+        {
+          "id": 497683,
+          "name": "Keycloak",
+          "sort": 50
+        },
+        {
+          "id": 497684,
+          "name": "KitOps",
+          "sort": 51
+        },
+        {
+          "id": 497641,
+          "name": "KServe",
+          "sort": 52
+        },
+        {
+          "id": 497642,
+          "name": "kube-burner",
+          "sort": 53
+        },
+        {
+          "id": 497662,
+          "name": "KubeEdge",
+          "sort": 54
+        },
+        {
+          "id": 497663,
+          "name": "Kubeflow",
+          "sort": 55
+        },
+        {
+          "id": 497685,
+          "name": "KubeVirt",
+          "sort": 56
+        },
+        {
+          "id": 497686,
+          "name": "Kyverno",
+          "sort": 57
+        },
+        {
+          "id": 497643,
+          "name": "Lima",
+          "sort": 58
+        },
+        {
+          "id": 497644,
+          "name": "Linkerd",
+          "sort": 59
+        },
+        {
+          "id": 497664,
+          "name": "Litmus",
+          "sort": 60
+        },
+        {
+          "id": 497665,
+          "name": "Longhorn",
+          "sort": 61
+        },
+        {
+          "id": 497613,
+          "name": "Meshery",
+          "sort": 62
+        },
+        {
+          "id": 497614,
+          "name": "Metal3.io",
+          "sort": 63
+        },
+        {
+          "id": 497615,
+          "name": "Multicluster",
+          "sort": 64
+        },
+        {
+          "id": 497616,
+          "name": "Network",
+          "sort": 65
+        },
+        {
+          "id": 497687,
+          "name": "Node",
+          "sort": 66
+        },
+        {
+          "id": 497688,
+          "name": "Node Lifecycle",
+          "sort": 67
+        },
+        {
+          "id": 497645,
+          "name": "Open Cluster Management",
+          "sort": 68
+        },
+        {
+          "id": 497646,
+          "name": "Open Policy Agent (OPA)",
+          "sort": 69
+        },
+        {
+          "id": 497666,
+          "name": "OpenChoreo",
+          "sort": 70
+        },
+        {
+          "id": 497667,
+          "name": "OpenCost",
+          "sort": 71
+        },
+        {
+          "id": 497689,
+          "name": "OpenEverest",
+          "sort": 72
+        },
+        {
+          "id": 497668,
+          "name": "OpenFeature",
+          "sort": 73
+        },
+        {
+          "id": 497647,
+          "name": "OpenFGA",
+          "sort": 74
+        },
+        {
+          "id": 497690,
+          "name": "OpenKruise",
+          "sort": 75
+        },
+        {
+          "id": 497669,
+          "name": "Operational Resilience",
+          "sort": 76
+        },
+        {
+          "id": 497648,
+          "name": "Operator Framework",
+          "sort": 77
+        },
+        {
+          "id": 497691,
+          "name": "ORAS",
+          "sort": 78
+        },
+        {
+          "id": 497617,
+          "name": "OSCAL Compass",
+          "sort": 79
+        },
+        {
+          "id": 497618,
+          "name": "OVN-Kubernetes",
+          "sort": 80
+        },
+        {
+          "id": 497619,
+          "name": "Release",
+          "sort": 81
+        },
+        {
+          "id": 497620,
+          "name": "Rook",
+          "sort": 82
+        },
+        {
+          "id": 497670,
+          "name": "Scheduling",
+          "sort": 83
+        },
+        {
+          "id": 497649,
+          "name": "Security",
+          "sort": 84
+        },
+        {
+          "id": 497621,
+          "name": "SPIFFE",
+          "sort": 85
+        },
+        {
+          "id": 497622,
+          "name": "Storage",
+          "sort": 86
+        },
+        {
+          "id": 497623,
+          "name": "Strimzi",
+          "sort": 87
+        },
+        {
+          "id": 497624,
+          "name": "Tekton",
+          "sort": 88
+        },
+        {
+          "id": 497625,
+          "name": "Velero",
+          "sort": 89
+        },
+        {
+          "id": 497626,
+          "name": "Vitess",
+          "sort": 90
+        },
+        {
+          "id": 497627,
+          "name": "Volcano",
+          "sort": 91
+        },
+        {
+          "id": 497628,
+          "name": "Workloads Foundation",
+          "sort": 92
+        },
+        {
+          "id": 498151,
+          "name": "Argo",
+          "sort": 93
+        },
+        {
+          "id": 498153,
+          "name": "Istio",
+          "sort": 94
+        },
+        {
+          "id": 498152,
+          "name": "Podman Container Tools",
+          "sort": 95
+        },
+        {
+          "id": 498154,
+          "name": "Kubernetes",
+          "sort": 96
+        },
+        {
+          "id": 498155,
+          "name": "OpenTelemetry",
+          "sort": 97
+        },
+        {
+          "id": 498156,
+          "name": "HAMi",
+          "sort": 98
+        },
+        {
+          "id": 498157,
+          "name": "Kagent",
+          "sort": 99
+        },
+        {
+          "id": 511067,
+          "name": "KubeStellar",
+          "sort": 100
+        },
+        {
+          "id": 517207,
+          "name": "Hive Commons",
+          "sort": 101
+        },
+        {
+          "id": 524470,
+          "name": "Kgateway",
+          "sort": 102
+        },
+        {
+          "id": 524469,
+          "name": "KAI Scheduler",
+          "sort": 103
+        },
+        {
+          "id": 524468,
+          "name": "kpt",
+          "sort": 104
+        }
+      ],
+      "sort": 73,
+      "type": "session"
+    },
+    {
       "id": 136947,
       "title": "End User Programming",
       "items": [
@@ -42241,16 +43625,16 @@
       "type": "session"
     },
     {
-      "id": 144375,
-      "title": "Presentation Slides",
+      "id": 142047,
+      "title": "Is Sponsored Keynote",
       "items": [
         {
-          "id": 523121,
-          "name": "Slides Attached",
+          "id": 514809,
+          "name": "Sponsored",
           "sort": 1
         }
       ],
-      "sort": 80,
+      "sort": 77,
       "type": "session"
     }
   ],

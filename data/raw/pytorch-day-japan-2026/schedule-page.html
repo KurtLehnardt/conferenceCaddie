@@ -1,0 +1,1208 @@
+<!DOCTYPE html>
+<html class="no-js no-focus-outline" lang="en-US">
+	<head>
+	<meta charset="UTF-8" /><script type="text/javascript">(window.NREUM||(NREUM={})).init={ajax:{deny_list:["bam.nr-data.net"]},feature_flags:["rum_v2"]};(window.NREUM||(NREUM={})).loader_config={licenseKey:"d2bda02ccf",applicationID:"337321012",browserID:"337322768"};;/*! For license information please see nr-loader-rum-1.324.1.min.js.LICENSE.txt */
+(()=>{var e={8122(e,t,r){"use strict";r.d(t,{a:()=>i});var n=r(944);function i(e,t){try{if(!e||"object"!=typeof e)return(0,n.R)(3);if(!t||"object"!=typeof t)return(0,n.R)(4);const r=Object.create(Object.getPrototypeOf(t),Object.getOwnPropertyDescriptors(t)),a=0===Object.keys(r).length?e:r;for(let s in a)if(void 0!==e[s])try{if(null===e[s]){r[s]=null;continue}Array.isArray(e[s])&&Array.isArray(t[s])?r[s]=Array.from(new Set([...e[s],...t[s]])):e[s]instanceof Map||e[s]instanceof Set||e[s]instanceof Date||e[s]instanceof RegExp?r[s]=e[s]:"object"==typeof e[s]&&null!==t[s]&&"object"==typeof t[s]?r[s]=i(e[s],t[s]):r[s]=e[s]}catch(e){r[s]||(0,n.R)(1,e)}return r}catch(e){(0,n.R)(2,e)}}},2555(e,t,r){"use strict";r.d(t,{f:()=>s});var n=r(384),i=r(8122);const a={beacon:n.NT.beacon,errorBeacon:n.NT.errorBeacon,licenseKey:void 0,applicationID:void 0,sa:void 0,queueTime:void 0,applicationTime:void 0,ttGuid:void 0,user:void 0,account:void 0,product:void 0,extra:void 0,jsAttributes:{},userAttributes:void 0,atts:void 0,transactionName:void 0,tNamePlain:void 0};function s(e){try{return!!e.licenseKey&&!!e.errorBeacon&&!!e.applicationID}catch(e){return!1}}r.d(t,["D",0,e=>(0,i.a)(e,a)])},7699(e,t,r){"use strict";var n=r(860);const i=1e6,a={[n.K7.logging]:!0,[n.K7.genericEvents]:!0,[n.K7.jserrors]:!0,[n.K7.ajax]:!0};r.d(t,["It",0,i,"KC",0,a,"qh",0,"SESSION_ERROR","zd",0,5e5])},9324(e,t,r){"use strict";r.d(t,["xv",0,"1.324.1"])},981(e,t,r){"use strict";r.d(t,["R",0,{AJAX:"AjaxRequest",PA:"PageAction",UA:"UserAction",BP:"BrowserPerformance",WS:"WebSocket",SPV:"SecurityPolicyViolation",JSE:"JavaScriptError",LOG:"Log",PVE:"PageView",PVT:"PageViewTiming",SR:"SessionReplay",ST:"SessionTrace",BI:"BrowserInteraction"}])},6154(e,t,r){"use strict";var n=r(1863);const i="undefined"!=typeof window&&!!window.document,a="undefined"!=typeof WorkerGlobalScope&&("undefined"!=typeof self&&self instanceof WorkerGlobalScope&&self.navigator instanceof WorkerNavigator||"undefined"!=typeof globalThis&&globalThis instanceof WorkerGlobalScope&&globalThis.navigator instanceof WorkerNavigator),s=i?window:"undefined"!=typeof WorkerGlobalScope&&("undefined"!=typeof self&&self instanceof WorkerGlobalScope&&self||"undefined"!=typeof globalThis&&globalThis instanceof WorkerGlobalScope&&globalThis),o=Boolean("hidden"===s?.document?.visibilityState),c=""+s?.location,u=/iPad|iPhone|iPod/.test(s.navigator?.userAgent),d=u&&"undefined"==typeof SharedWorker,l=((()=>{const e=s.navigator?.userAgent?.match(/Firefox[/\s](\d+\.\d+)/);Array.isArray(e)&&e.length>=2&&e[1]})(),Date.now()-(0,n.t)());r.d(t,["OF",0,u,"RI",0,i,"WN",0,l,"bv",0,a,"gm",0,s,"m",0,c,"mw",0,o,"sb",0,d,"zk",0,()=>{const e=s?.performance?.getEntriesByType?.("navigation")?.[0];if(e&&e.responseStart>0&&e.responseStart<s.performance.now())return e}])},3241(e,t,r){"use strict";r.d(t,{W:()=>i});var n=r(6154);function i(e={}){try{n.gm.dispatchEvent(new CustomEvent("newrelic",{detail:e}))}catch(e){}}},1687(e,t,r){"use strict";r.d(t,{Ak:()=>o,Ze:()=>u,x3:()=>c});var n=r(3241),i=r(3606),a=r(860),s=r(2646);function o(e,t){if(!e)return;const r={staged:!1,priority:a.P3[t]||0};e.runtime.drainRegistry.get(t)||e.runtime.drainRegistry.set(t,r)}function c(e,t){if(!e)return;const r=e.runtime.drainRegistry;r&&(r.get(t)&&r.delete(t),l(e,t,!1),r.size&&d(e))}function u(e,t="feature",r=!1){if(e){if(!e.runtime.drainRegistry.get(t)||r)return l(e,t);e.runtime.drainRegistry.get(t).staged=!0,d(e)}}function d(e){if(!e)return;const t=Array.from(e.runtime.drainRegistry);t.every(([e,t])=>t.staged)&&(t.sort((e,t)=>e[1].priority-t[1].priority),t.forEach(([t])=>{e.runtime.drainRegistry.delete(t),l(e,t)}))}function l(e,t,r=!0){if(!e)return;const a=e.ee,o=i.i.handlers;if(a&&!a.aborted&&a.backlog&&o){if((0,n.W)({type:"lifecycle",name:"drain",feature:t}),r){const e=a.backlog[t],r=o[t];if(r){for(let t=0;e&&t<e.length;++t)f(e[t],r);Object.entries(r).forEach(([e,t])=>{Object.values(t||{}).forEach(t=>{t[0]?.on&&t[0].context()instanceof s.y&&!t[0].listeners(e).includes(t[1])&&t[0].on(e,t[1])})})}}a.isolatedBacklog||delete o[t],a.backlog[t]=null,a.emit("drain-"+t,[])}}function f(e,t){var r=e[1];Object.values(t[r]||{}).forEach(t=>{var r=e[0];if(t[0]===r){var n=t[1],i=e[3],a=e[2];n.apply(i,a)}})}},7836(e,t,r){"use strict";var n=r(384),i=r(8990),a=r(2646),s=r(5607);const o="nr@context:".concat(s.W),c=function e(t,r){var n={},s={},d={},l=!1;try{l=16===r.length&&u.initializedAgents?.[r]?.runtime.isolatedBacklog}catch(e){}var f={on:p,addEventListener:p,removeEventListener:function(e,t){var r=n[e];if(!r)return;for(var i=0;i<r.length;i++)r[i]===t&&r.splice(i,1)},emit:function(e,r,n,i,a){!1!==a&&(a=!0);if(c.aborted&&!i)return;t&&a&&t.emit(e,r,n);var o=g(n);m(e).forEach(e=>{e.apply(o,r)});var u=v()[s[e]];u&&u.push([f,e,r,o]);return o},get:h,listeners:m,context:g,buffer:function(e,t){const r=v();if(t=t||"feature",f.aborted)return;Object.entries(e||{}).forEach(([e,n])=>{s[n]=t,t in r||(r[t]=[])})},abort:function(){f._aborted=!0,Object.keys(f.backlog).forEach(e=>{delete f.backlog[e]})},isBuffering:function(e){return!!v()[s[e]]},debugId:r,backlog:l?{}:t&&"object"==typeof t.backlog?t.backlog:{},isolatedBacklog:l};return Object.defineProperty(f,"aborted",{get:()=>{let e=f._aborted||!1;return e||(t&&(e=t.aborted),e)}}),f;function g(e){return e&&e instanceof a.y?e:e?(0,i.I)(e,o,()=>new a.y(o)):new a.y(o)}function p(e,t){n[e]=m(e).concat(t)}function m(e){return n[e]||[]}function h(t){return d[t]=d[t]||e(f,t)}function v(){return f.backlog}}(void 0,"globalEE"),u=(0,n.Zm)();u.ee||(u.ee=c),r.d(t,["P",0,o,"ee",0,c])},2646(e,t,r){"use strict";r.d(t,{y:()=>n});class n{constructor(e){this.contextId=e}}},9908(e,t,r){"use strict";r.d(t,{d:()=>n,p:()=>i});var n=r(7836).ee.get("handle");function i(e,t,r,i,a){a?(a.buffer([e],i),a.emit(e,t,r)):(n.buffer([e],i),n.emit(e,t,r))}},3606(e,t,r){"use strict";r.d(t,{i:()=>a});var n=r(9908);a.on=s;var i=a.handlers={};function a(e,t,r,a){s(a||n.d,i,e,t,r)}function s(e,t,r,i,a){a||(a="feature"),e||(e=n.d);var s=t[a]=t[a]||{};(s[r]=s[r]||[]).push([e,i])}},3878(e,t,r){"use strict";function n(e,t){return{capture:e,passive:!1,signal:t}}function i(e,t,r=!1,i){window.addEventListener(e,t,n(r,i))}function a(e,t,r=!1,i){document.addEventListener(e,t,n(r,i))}r.d(t,{DD:()=>a,jT:()=>n,sp:()=>i})},5607(e,t,r){"use strict";const n=(0,r(9566).bz)();r.d(t,["W",0,n])},9566(e,t,r){"use strict";r.d(t,{LA:()=>s,bz:()=>a});var n=r(6154);function i(e,t){return e?15&e[t]:16*Math.random()|0}function a(){const e=n.gm?.crypto||n.gm?.msCrypto;let t,r=0;return e&&e.getRandomValues&&(t=e.getRandomValues(new Uint8Array(30))),"xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".split("").map(e=>"x"===e?i(t,r++).toString(16):"y"===e?(3&i()|8).toString(16):e).join("")}function s(e){const t=n.gm?.crypto||n.gm?.msCrypto;let r,a=0;t&&t.getRandomValues&&(r=t.getRandomValues(new Uint8Array(e)));const s=[];for(var o=0;o<e;o++)s.push(i(r,a++).toString(16));return s.join("")}},2614(e,t,r){"use strict";r.d(t,["BB",0,18e5,"Wt",0,"NRBA_SESSION::","iL",0,{SAME_TAB:"same-tab",CROSS_TAB:"cross-tab"},"tS",0,{STARTED:"session-started",PAUSE:"session-pause",RESET:"session-reset",RESUME:"session-resume",UPDATE:"session-update"},"wk",0,144e5])},1863(e,t,r){"use strict";function n(){return Math.floor(performance.now())}r.d(t,{t:()=>n})},944(e,t,r){"use strict";r.d(t,{R:()=>i});var n=r(3241);function i(e,t){"function"==typeof console.debug&&(console.debug("New Relic Warning: https://github.com/newrelic/newrelic-browser-agent/blob/main/docs/warning-codes.md#".concat(e),t),(0,n.W)({drained:null,type:"data",name:"warn",feature:"warn",data:{code:e,secondary:t}}))}},8990(e,t,r){"use strict";r.d(t,{I:()=>i});var n=Object.prototype.hasOwnProperty;function i(e,t,r){if(n.call(e,t))return e[t];var i=r();if(Object.defineProperty&&Object.keys)try{return Object.defineProperty(e,t,{value:i,writable:!0,enumerable:!1}),i}catch(e){}return e[t]=i,i}},6389(e,t,r){"use strict";function n(e,t=500,r={}){const n=r?.leading||!1;let i;return(...r)=>{n&&void 0===i&&(e.apply(this,r),i=setTimeout(()=>{i=clearTimeout(i)},t)),n||(clearTimeout(i),i=setTimeout(()=>{e.apply(this,r)},t))}}function i(e){let t=!1;return(...r)=>{t||(t=!0,e.apply(this,r))}}r.d(t,{J:()=>i,s:()=>n})},1910(e,t,r){"use strict";r.d(t,{i:()=>a});var n=r(944);const i=new Map;function a(...e){return e.every(e=>{if(i.has(e))return i.get(e);const t="function"==typeof e?e.toString():"",r=t.includes("[native code]"),a=t.includes("nrWrapper");return r||a||(0,n.R)(64,e?.name||t),i.set(e,r),r})}},5289(e,t,r){"use strict";r.d(t,{GG:()=>s,Qr:()=>c,sB:()=>o});var n=r(3878),i=r(6389);function a(){return"undefined"==typeof document||"complete"===document.readyState}function s(e,t){if(a())return e();const r=(0,i.J)(e),s=setInterval(()=>{a()&&(clearInterval(s),r())},500);(0,n.sp)("load",r,t)}function o(e){if(a())return e();(0,n.DD)("DOMContentLoaded",e)}function c(e){if(a())return e();(0,n.sp)("popstate",e)}},384(e,t,r){"use strict";r.d(t,{Zm:()=>c,bQ:()=>d,dV:()=>u,pV:()=>l});var n=r(6154),i=r(1863),a=r(944),s=r(1910);const o={beacon:"bam.nr-data.net",errorBeacon:"bam.nr-data.net"};function c(){return n.gm.NREUM||(n.gm.NREUM={}),void 0===n.gm.newrelic&&(n.gm.newrelic=n.gm.NREUM),n.gm.NREUM}function u(){let e=c();return e.o||(e.o={ST:n.gm.setTimeout,SI:n.gm.setImmediate||n.gm.setInterval,CT:n.gm.clearTimeout,XHR:n.gm.XMLHttpRequest,REQ:n.gm.Request,EV:n.gm.Event,PR:n.gm.Promise,MO:n.gm.MutationObserver,FETCH:n.gm.fetch,WS:n.gm.WebSocket},(0,s.i)(...Object.values(e.o))),e}function d(e,t){let r=c();r.initializedAgents??={},t.initializedAt={ms:(0,i.t)(),date:new Date},r.initializedAgents[e]=t,2===Object.keys(r.initializedAgents).length&&(0,a.R)(69)}function l(){return function(){let e=c();const t=e.info||{};e.info={beacon:o.beacon,errorBeacon:o.errorBeacon,...t}}(),function(){let e=c();const t=e.init||{};e.init={...t}}(),u(),function(){let e=c();const t=e.loader_config||{};e.loader_config={...t}}(),c()}r.d(t,["NT",0,o])},2843(e,t,r){"use strict";r.d(t,{G:()=>a,u:()=>i});var n=r(3878);function i(e,t=!1,r,i){(0,n.DD)("visibilitychange",function(){if(t)return void("hidden"===document.visibilityState&&e());e(document.visibilityState)},r,i)}function a(e,t,r){(0,n.sp)("pagehide",e,t,r)}},9300(e,t,r){"use strict";r(860).K7.ajax;r.d(t,["mo",0,{NONE:"none",FAILURES:"failures",ALL:"all"}])},3969(e,t,r){"use strict";const n=r(860).K7.metrics;r.d(t,["TZ",0,n,"XG",0,"storeEventMetrics","xV",0,"storeSupportabilityMetrics"])},6630(e,t,r){"use strict";const n=r(860).K7.pageViewEvent;r.d(t,["T",0,n])},782(e,t,r){"use strict";const n=r(860).K7.pageViewTiming;r.d(t,["T",0,n])},4234(e,t,r){"use strict";r.d(t,{W:()=>i});var n=r(1687);class i{constructor(e,t){this.agentRef=e,this.ee=e?.ee,this.featureName=t,this.blocked=!1}deregisterDrain(){(0,n.x3)(this.agentRef,this.featureName)}}},7767(e,t,r){"use strict";var n=r(6154);r.d(t,["V",0,e=>n.RI&&!0===e?.privacy.cookies_enabled])},8362(e,t,r){"use strict";r.d(t,{d:()=>a});var n=r(9566),i=r(1741);class a extends i.W{agentIdentifier=(0,n.LA)(16)}},1741(e,t,r){"use strict";r.d(t,{W:()=>a});var n=r(944),i=r(4261);class a{#e(e,...t){if(this[e]!==a.prototype[e])return this[e](...t);(0,n.R)(35,e)}addPageAction(e,t){return this.#e(i.hG,e,t)}register(e){return this.#e(i.eY,e)}recordCustomEvent(e,t){return this.#e(i.fF,e,t)}setPageViewName(e,t){return this.#e(i.Fw,e,t)}setCustomAttribute(e,t,r){return this.#e(i.cD,e,t,r)}noticeError(e,t){return this.#e(i.o5,e,t)}setUserId(e,t=!1){return this.#e(i.Dl,e,t)}setApplicationVersion(e){return this.#e(i.nb,e)}setErrorHandler(e){return this.#e(i.bt,e)}addRelease(e,t){return this.#e(i.k6,e,t)}log(e,t){return this.#e("log",e,t)}start(){return this.#e("start")}finished(e){return this.#e(i.BL,e)}recordReplay(){return this.#e(i.CH)}pauseReplay(){return this.#e(i.Tb)}addToTrace(e){return this.#e(i.U2,e)}setCurrentRouteName(e){return this.#e(i.PA,e)}interaction(e){return this.#e(i.dT,e)}wrapLogger(e,t,r){return this.#e(i.Wb,e,t,r)}measure(e,t){return this.#e(i.V1,e,t)}consent(e){return this.#e(i.Pv,e)}}},4261(e,t,r){"use strict";r.d(t,["BL",0,"finished","CH",0,"recordReplay","Dl",0,"setUserId","Fw",0,"setPageViewName","PA",0,"setCurrentRouteName","Pv",0,"consent","Tb",0,"pauseReplay","U2",0,"addToTrace","V1",0,"measure","Wb",0,"wrapLogger","bt",0,"setErrorHandler","cD",0,"setCustomAttribute","dT",0,"interaction","eY",0,"register","fF",0,"recordCustomEvent","hG",0,"addPageAction","k6",0,"addRelease","nb",0,"setApplicationVersion","o5",0,"noticeError"])},1738(e,t,r){"use strict";r.d(t,{U:()=>l,Y:()=>d});var n=r(3241),i=r(9908),a=r(1863),s=r(944),o=r(3969),c=r(8362),u=r(860);function d(e,t,r,a){const d=a||r;!d||d[e]&&d[e]!==c.d.prototype[e]||(d[e]=function(){(0,i.p)(o.xV,["API/"+e+"/called"],void 0,u.K7.metrics,r.ee),(0,n.W)({drained:!!r.runtime?.activatedFeatures,type:"data",name:"api",feature:"api-"+e,data:{}});try{return t.apply(this,arguments)}catch(e){(0,s.R)(23,e)}})}function l(e,t,r,n,s){const o=e.info;null===r?delete o.jsAttributes[t]:o.jsAttributes[t]=r,(s||null===r)&&(0,i.p)("api-"+n,[(0,a.t)(),t,r],void 0,"session",e.ee)}},8374(e,t,r){r.nc=(()=>{try{return document?.currentScript?.nonce}catch(e){}return""})()},860(e,t,r){"use strict";const n="events",i="jserrors",a="browser/blobs",s="browser/logs",o={ajax:"ajax",genericEvents:"generic_events",jserrors:i,logging:"logging",metrics:"metrics",pageAction:"page_action",pageViewEvent:"page_view_event",pageViewTiming:"page_view_timing",sessionReplay:"session_replay",sessionTrace:"session_trace",softNav:"soft_navigations"},c={[o.pageViewEvent]:1,[o.pageViewTiming]:2,[o.metrics]:3,[o.jserrors]:4,[o.softNav]:5,[o.ajax]:6,[o.sessionTrace]:7,[o.sessionReplay]:8,[o.logging]:9,[o.genericEvents]:10},u={[o.pageViewEvent]:"rum",[o.pageViewTiming]:n,[o.ajax]:n,[o.softNav]:n,[o.metrics]:i,[o.jserrors]:i,[o.sessionTrace]:a,[o.sessionReplay]:a,[o.logging]:s,[o.genericEvents]:"ins"};r.d(t,["$J",0,u,"K7",0,o,"P3",0,c,"XX",0,i,"Yy",0,s,"df",0,a,"hg",0,"connect"])}};const t={};function r(n){const i=t[n];if(void 0!==i)return i.exports;const a=t[n]={exports:{}};return e[n](a,a.exports,r),a.exports}r.m=e,r.d=(e,t)=>{if(Array.isArray(t))for(var n=0;n<t.length;){var i=t[n++],a=t[n++];r.o(e,i)?0===a&&n++:0===a?Object.defineProperty(e,i,{enumerable:!0,value:t[n++]}):Object.defineProperty(e,i,{enumerable:!0,get:a})}else for(var i in t)r.o(t,i)&&!r.o(e,i)&&Object.defineProperty(e,i,{enumerable:!0,get:t[i]})},r.f={},r.e=e=>Promise.all(Object.keys(r.f).reduce((t,n)=>(r.f[n](e,t),t),[])),r.u=e=>"nr-rum-1.324.1.min.js",r.o=(e,t)=>Object.prototype.hasOwnProperty.call(e,t),(()=>{const e={},t="NRBA-1.324.1.PROD:";r.l=(n,i,a,s)=>{if(e[n])return void e[n].push(i);let o,c;if(void 0!==a){const e=document.getElementsByTagName("script");for(var u=0;u<e.length;u++){const r=e[u];if(r.getAttribute("src")==n||r.getAttribute("data-webpack")==t+a){o=r;break}}}if(!o){c=!0;var d={296:"sha512-zuv39xzZ8AH/HwpVrtkixvcBuOFo2ydcFzMtXjx+3Iwr5g++inX+6YDH7J/8fOCAtBetz8aDyaYCRkGy2nnG/w=="};o=document.createElement("script"),o.charset="utf-8",r.nc&&o.setAttribute("nonce",r.nc),o.setAttribute("data-webpack",t+a),o.src=n,0!==o.src.indexOf(window.location.origin+"/")&&(o.crossOrigin="anonymous"),d[s]&&(o.integrity=d[s])}e[n]=[i];const l=(t,r)=>{o.onerror=o.onload=null,clearTimeout(f);const i=e[n];if(delete e[n],o.parentNode?.removeChild(o),i?.forEach(e=>e(r)),t)return t(r)},f=setTimeout(l.bind(null,void 0,{type:"timeout",target:o}),12e4);o.onerror=l.bind(null,o.onerror),o.onload=l.bind(null,o.onload),c&&document.head.appendChild(o)}})(),r.r=e=>{Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:"Module"}),Object.defineProperty(e,"__esModule",{value:!0})},r.p="https://js-agent.newrelic.com/",(()=>{const e={374:0,840:0};r.f.j=(t,n)=>{let i=r.o(e,t)?e[t]:void 0;if(0!==i)if(i)n.push(i[2]);else{const a=new Promise((r,n)=>i=e[t]=[r,n]);n.push(i[2]=a);const s=r.p+r.u(t),o=new Error,c=n=>{if(r.o(e,t)&&(i=e[t],0!==i&&(e[t]=void 0),i)){const e=n&&("load"===n.type?"missing":n.type),r=n&&n.target&&n.target.src;o.message="Loading chunk "+t+" failed: ("+e+": "+r+")",o.name="ChunkLoadError",o.type=e,o.request=r,i[1](o)}};r.l(s,c,"chunk-"+t,t)}};const t=(t,n)=>{let[i,a,s]=n;var o,c,u=0;if(i.some(t=>0!==e[t])){for(o in a)r.o(a,o)&&(r.m[o]=a[o]);if(s)s(r)}for(t&&t(n);u<i.length;u++)c=i[u],r.o(e,c)&&e[c]&&e[c][0](),e[c]=0},n=self["webpackChunk:NRBA-1.324.1.PROD"]=self["webpackChunk:NRBA-1.324.1.PROD"]||[];n.forEach(t.bind(null,0)),n.push=t.bind(null,n.push.bind(n))})(),(()=>{"use strict";r(8374);var e=r(8362),t=r(860);const n=Object.values(t.K7);var i=r(384),a=r(1741);var s=r(2555),o=r(981);t.K7.genericEvents,o.R.PA,o.R.UA,o.R.BP;const c={RESOURCES:"experimental.resources",REGISTER:"register"};var u=r(9300);const d=e=>{if(!e||"string"!=typeof e)return!1;try{document.createDocumentFragment().querySelector(e)}catch{return!1}return!0};var l=r(2614),f=r(944),g=r(8122);const p="[data-nr-mask]",m=e=>(0,g.a)(e,(()=>{const e={feature_flags:[],experimental:{register:!1,resources:!1,iframe_bridge:!1,iframe_domains:[]},mask_selector:"*",block_selector:"[data-nr-block]",mask_input_options:{color:!1,date:!1,"datetime-local":!1,email:!1,month:!1,number:!1,range:!1,search:!1,tel:!1,text:!1,time:!1,url:!1,week:!1,textarea:!1,select:!1,password:!0}};return{ajax:{deny_list:void 0,block_internal:!0,enabled:!0,autoStart:!0,capture_payloads:u.mo.NONE},api:{register:{get enabled(){return e.feature_flags.includes(c.REGISTER)||e.experimental.register},set enabled(t){e.experimental.register=t},duplicate_data_to_container:!1,get allow_iframe_bridge(){return e.feature_flags.includes(c.IFRAME_BRIDGE)||e.experimental.iframe_bridge},set allow_iframe_bridge(t){e.experimental.iframe_bridge=t},get iframe_domains(){return e.experimental.iframe_domains},set iframe_domains(t){Array.isArray(t)?e.experimental.iframe_domains=t:(0,f.R)(1,t)}}},browser_consent_mode:{enabled:!1},distributed_tracing:{enabled:void 0,exclude_newrelic_header:void 0,cors_use_newrelic_header:void 0,cors_use_tracecontext_headers:void 0,allowed_origins:void 0},get feature_flags(){return e.feature_flags},set feature_flags(t){e.feature_flags=t},generic_events:{enabled:!0,autoStart:!0},harvest:{interval:30},jserrors:{enabled:!0,autoStart:!0},logging:{enabled:!0,autoStart:!0},metrics:{enabled:!0,autoStart:!0},obfuscate:void 0,page_action:{enabled:!0},page_view_event:{enabled:!0,autoStart:!0},page_view_timing:{enabled:!0,autoStart:!0},performance:{capture_marks:!1,capture_measures:!1,capture_detail:!0,resources:{get enabled(){return e.feature_flags.includes(c.RESOURCES)||e.experimental.resources},set enabled(t){e.experimental.resources=t},asset_types:[],first_party_domains:[],ignore_newrelic:!0}},privacy:{cookies_enabled:!0},proxy:{assets:void 0,beacon:void 0},session:{expiresMs:l.wk,inactiveMs:l.BB},session_replay:{autoStart:!0,enabled:!1,preload:!1,collect_fonts:!1,inline_images:!1,fix_stylesheets:!0,mask_all_inputs:!0,get mask_text_selector(){return e.mask_selector},set mask_text_selector(t){d(t)?e.mask_selector="".concat(t,",").concat(p):""===t||null===t?e.mask_selector=p:(0,f.R)(5,t)},get block_class(){return"nr-block"},get ignore_class(){return"nr-ignore"},get mask_text_class(){return"nr-mask"},get block_selector(){return e.block_selector},set block_selector(t){d(t)?e.block_selector+=",".concat(t):""!==t&&(0,f.R)(6,t)},get mask_input_options(){return e.mask_input_options},set mask_input_options(t){t&&"object"==typeof t?e.mask_input_options={...t,password:!0}:(0,f.R)(7,t)}},session_trace:{enabled:!0,autoStart:!0},soft_navigations:{enabled:!0,autoStart:!0},ssl:void 0,user_actions:{enabled:!0,elementAttributes:["id","className","tagName","type"]},web_sockets:{enabled:!1}}})());var h=r(6154),v=r(9324);let b=0;const y={buildEnv:"PROD",distMethod:"CDN",version:v.xv,originTime:h.WN},_={consented:!1},w={activatedFeatures:void 0,appMetadata:{},configured:!1,get consented(){return this.session?.state?.consent||_.consented},set consented(e){_.consented=e},customTransaction:void 0,denyList:[],disabled:!1,drainRegistry:new Map,connector:void 0,harvester:void 0,v2Target:void 0,isolatedBacklog:!1,isRecording:!1,loaderType:void 0,maxBytes:3e4,obfuscator:void 0,onerror:void 0,ptid:void 0,releaseIds:{},session:void 0,timeKeeper:void 0,registeredEntities:[],jsAttributesMetadata:{bytes:0},get harvestCount(){return++b},listeningForIframeMessages:!1},R="BA";var A=r(7836),x=r(3241);const E={accountID:void 0,trustKey:void 0,agentID:void 0,licenseKey:void 0,applicationID:void 0,xpid:void 0};var S=r(9908);const k="newrelic-iframe-";function T(e,t={},n,o){let{init:c,info:u,loader_config:d,runtime:l={},exposed:f=!0}=t;if(!u){const e=(0,i.pV)();c=e.init,u=e.info,d=e.loader_config}var p;e.init=m(c||{}),e.loader_config=(p=d||{},(0,g.a)(p,E)),u.jsAttributes??={},h.bv&&(u.jsAttributes.isWorker=!0),e.info=(0,s.D)(u);const v=e.init;e.runtime??=(e=>{const t=(0,g.a)(e,w),r=Object.keys(y).reduce((e,t)=>(e[t]={value:y[t],writable:!1,configurable:!0,enumerable:!0},e),{});return Object.defineProperties(t,r)})(l),e.runtime.v2Target??={type:R,instance:e.agentIdentifier,get id(){return e.runtime.appMetadata?.agents?.[0]?.entityGuid},get attributes(){return{"entity.guid":this.id,appId:e.info.applicationID}}},v.proxy.assets&&(e=>{const t=e.startsWith("http");e+="/",r.p=t?e:"https://"+e})(v.proxy.assets),e.runtime.configured||(Object.defineProperty(e,"beacons",{get:()=>[e.info.beacon,e.info.errorBeacon,e.init.proxy.assets,e.init.proxy.beacon].filter(Boolean)}),Object.defineProperty(e.runtime,"denyList",{get:()=>[...e.init.ajax.deny_list||[],...e.init.ajax.block_internal?e.beacons:[]]}),e.runtime.ptid=e.agentIdentifier,function(e){const t=(0,i.pV)();Object.getOwnPropertyNames(a.W.prototype).forEach(r=>{const n=a.W.prototype[r];if("function"!=typeof n||"constructor"===n)return;let i=t[r];e[r]&&!1!==e.exposed&&"micro-agent"!==e.runtime?.loaderType&&(t[r]=(...t)=>{const n=e[r](...t);return i?i(...t):n})})}(e),e.runtime.loaderType=n,e.ee=A.ee.get(e.agentIdentifier),e.exposed=f,(0,x.W)({drained:!!e.runtime.activatedFeatures,type:"lifecycle",name:"initialize",feature:void 0,data:e.config}),e.init.api.register.allow_iframe_bridge&&h.gm.addEventListener("message",t=>{"string"==typeof t.data?.type&&t.data.type.startsWith(k)&&(0,S.p)("iframe-message",[t],void 0,"IFRAME",e.ee)}),e.runtime.configured=!0)}var j=r(1863),P=r(4261),N=r(1738);var O=r(1687),M=r(4234),I=r(5289),D=r(7767);function V(e){return!!(0,i.dV)().o.MO&&(0,D.V)(e)&&!0===e?.session_trace.enabled}var W=r(6389),B=r(7699);const C=new WeakSet,K=new WeakMap;class U extends M.W{constructor(e,t){super(e,t),this.abortHandler=void 0,this.featAggregate=void 0,this.loadedSuccessfully=void 0,this.onAggregateImported=new Promise(e=>{this.loadedSuccessfully=e}),this.deferred=Promise.resolve(),!1===e.init[this.featureName].autoStart?this.deferred=new Promise((t,r)=>{this.ee.on("manual-start-all",(0,W.J)(()=>{(0,O.Ak)(e,this.featureName),t()}))}):(0,O.Ak)(e,t)}importAggregator(e,t,n={}){if(this.featAggregate)return;const i=async()=>{if(await this.deferred,this.#t(e),!(0,s.f)(e.info))return(0,f.R)(43),e.ee.abort(),void this.loadedSuccessfully(!1);try{await async function(e,t,n){if(K.has(e))return K.get(e);const i=(async()=>{if((0,D.V)(e.init))try{const{setupAgentSession:t}=await r.e(296).then(r.bind(r,1768));t(e)}catch(e){(0,f.R)(20,e),t.emit("internal-error",[e]),(0,S.p)(B.qh,[e],void 0,n,t)}if(e.init.api.register.allow_iframe_bridge)try{const{setupIframeMFEMessageListener:t}=await Promise.resolve().then(function(){const e=new Error("Cannot find module '../../loaders/configure/iframe-message-handler'");throw e.code="MODULE_NOT_FOUND",e});t(e)}catch(e){(0,f.R)(23,e)}const[{Connector:i},{Harvester:a}]=await Promise.all([r.e(296).then(r.bind(r,6589)),r.e(296).then(r.bind(r,5237))]);e.runtime.connector=new i(e),e.runtime.harvester=new a(e);const s=Object.values(e.features).filter(t=>e.runtime.drainRegistry.has(t.featureName));Promise.all(s.map(e=>e.onAggregateImported)).then(()=>e.runtime.harvester.startTimer())})();K.set(e,i),await i}(e,this.ee,this.featureName)}catch(e){return(0,f.R)(79,e),this.ee.abort(),void this.loadedSuccessfully(!1)}try{if(!this.#r(this.featureName,e.runtime.session,e.init))return this.abortHandler?.(),(0,O.Ze)(this.agentRef,this.featureName),void this.loadedSuccessfully(!1);const{Aggregate:r}=await t();this.featAggregate=new r(e,n),e.runtime.harvester.initializedAggregates.push(this.featAggregate),this.loadedSuccessfully(!0)}catch(e){(0,f.R)(34,e),this.abortHandler?.(),(0,O.Ze)(this.agentRef,this.featureName,!0),this.loadedSuccessfully(!1)}};h.RI?(0,I.GG)(()=>i(),!0):i()}#r(e,r,n){if(this.blocked)return!1;switch(e){case t.K7.sessionReplay:return V(n)&&!!r;case t.K7.sessionTrace:return!!r;default:return!0}}#t(e){if(!C.has(e)&&(C.add(e),!(0,s.f)(e.info))){const t=(0,i.pV)();let r={...t.info?.jsAttributes};try{r={...r,...e.info?.jsAttributes}}catch(e){}T(e,{...t,info:{...t.info,jsAttributes:r},runtime:e.runtime},e.runtime.loaderType)}}}var L=r(6630);class F extends U{static featureName=L.T;constructor(e){var t;super(e,L.T),this.setupInspectionEvents(),t=e,(0,N.Y)(P.Fw,function(e,r){"string"==typeof e&&("/"!==e.charAt(0)&&(e="/"+e),t.runtime.customTransaction=(r||"http://custom.transaction")+e,(0,S.p)("api-"+P.Fw,[(0,j.t)()],void 0,void 0,t.ee))},t),this.importAggregator(e,()=>e.init.feature_flags.includes("rum_v2")?r.e(296).then(r.bind(r,908)):r.e(296).then(r.bind(r,7927)))}setupInspectionEvents(){const e=(e,t)=>{e&&(0,x.W)({timeStamp:e.timeStamp,loaded:"complete"===e.target.readyState,type:"window",name:t,data:e.target.location+""})};(0,I.sB)(t=>{e(t,"DOMContentLoaded")}),(0,I.GG)(t=>{e(t,"load")}),(0,I.Qr)(t=>{e(t,"navigate")}),this.ee.on(l.tS.UPDATE,(e,t)=>{(0,x.W)({type:"lifecycle",name:"session",data:t})})}}class G extends e.d{constructor(e){var t;(super(),h.gm)?(this.features={},(0,i.bQ)(this.agentIdentifier,this),this.desiredFeatures=new Set(e.features||[]),this.desiredFeatures.add(F),T(this,e,e.loaderType||"agent"),t=this,(0,N.Y)(P.cD,function(e,r,n=!1){if("string"==typeof e){if(["string","number","boolean"].includes(typeof r)||null===r)return(0,N.U)(t,e,r,P.cD,n);(0,f.R)(40,typeof r)}else(0,f.R)(39,typeof e)},t),function(e){(0,N.Y)(P.Dl,function(t,r=!1){if("string"!=typeof t&&null!==t)return void(0,f.R)(41,typeof t);const n=e.info.jsAttributes["enduser.id"];r&&null!=n&&n!==t?(0,S.p)("api-setUserIdAndResetSession",[t],void 0,"session",e.ee):(0,N.U)(e,"enduser.id",t,P.Dl,!0)},e)}(this),function(e){(0,N.Y)(P.nb,function(t){if("string"==typeof t||null===t)return(0,N.U)(e,"application.version",t,P.nb,!1);(0,f.R)(42,typeof t)},e)}(this),function(e){(0,N.Y)("start",function(){e.ee.emit("manual-start-all")},e)}(this),function(e){(0,N.Y)(P.Pv,function(t=!0){if("boolean"==typeof t){if((0,S.p)("api-"+P.Pv,[t],void 0,"session",e.ee),e.runtime.consented=t,t){const t=e.features.page_view_event;t.onAggregateImported.then(e=>{const r=t.featAggregate;e&&!r.sentRum&&r.sendRum?.()})}}else(0,f.R)(65,typeof t)},e)}(this),this.run()):(0,f.R)(21)}get config(){return{info:this.info,init:this.init,loader_config:this.loader_config,runtime:this.runtime}}get api(){return this}run(){try{const e=function(e){const t={};return n.forEach(r=>{t[r]=!!e[r]?.enabled}),t}(this.init),r=[...this.desiredFeatures],i=this.init.feature_flags.includes("rum_v2");r.sort((e,r)=>t.P3[e.featureName]-t.P3[r.featureName]),r.forEach(r=>{if(!e[r.featureName]&&(i||r.featureName!==t.K7.pageViewEvent))return;const n=function(e){switch(e){case t.K7.ajax:return[t.K7.jserrors];case t.K7.sessionTrace:return[t.K7.ajax,t.K7.pageViewEvent];case t.K7.sessionReplay:return[t.K7.sessionTrace];case t.K7.pageViewTiming:return[t.K7.pageViewEvent];default:return[]}}(r.featureName).filter(e=>!(e in this.features));n.length>0&&(0,f.R)(36,{targetFeature:r.featureName,missingDependencies:n}),this.features[r.featureName]=new r(this)})}catch(e){(0,f.R)(22,e);for(const e in this.features)this.features[e].abortHandler?.();const t=(0,i.Zm)();delete t.initializedAgents[this.agentIdentifier]?.features,delete this.sharedAggregator;return t.ee.get(this.agentIdentifier).abort(),!1}}}var H=r(2843),z=r(782);class Y extends U{static featureName=z.T;constructor(e){super(e,z.T),h.RI&&((0,H.u)(()=>(0,S.p)("docHidden",[(0,j.t)()],void 0,z.T,this.ee),!0),(0,H.G)(()=>(0,S.p)("winPagehide",[(0,j.t)()],void 0,z.T,this.ee)),this.importAggregator(e,()=>r.e(296).then(r.bind(r,9981))))}}var Z=r(3969);class q extends U{static featureName=Z.TZ;constructor(e){super(e,Z.TZ),this.importAggregator(e,()=>r.e(296).then(r.bind(r,9623)))}}new G({features:[F,Y,q],loaderType:"lite"})})()})();</script>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+	<title>Schedule | PyTorch Day Japan</title>
+
+<!-- The SEO Framework by Sybre Waaijer -->
+<link rel="canonical" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/">
+<meta name="description" content="December 10 | Tokyo, Japan Sessions will be recorded and available on the PyTorch Conference YouTube channel within two weeks. Times shown in JST (UTC +9).">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="LF Events">
+<meta property="og:title" content="Schedule | PyTorch Day Japan">
+<meta property="og:description" content="December 10 | Tokyo, Japan Sessions will be recorded and available on the PyTorch Conference YouTube channel within two weeks. Times shown in JST (UTC +9). Seating is first come, first served.">
+<meta property="og:url" content="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/">
+<meta property="og:image" content="https://events.linuxfoundation.org/wp-content/uploads/2026/08/pytorch-day-jp-26-Social-Snackable.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="PyTorch Day Japan 2026. 2026 December 10 | Tokyo, Japan. #PyTorchDayJapan. Co-hosted by IBM, Mitsubishi Electric, PyTorch and Hugging Face.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@linuxfoundation">
+<meta name="twitter:title" content="Schedule | PyTorch Day Japan">
+<meta name="twitter:description" content="December 10 | Tokyo, Japan Sessions will be recorded and available on the PyTorch Conference YouTube channel within two weeks. Times shown in JST (UTC +9). Seating is first come, first served.">
+<meta name="twitter:image" content="https://events.linuxfoundation.org/wp-content/uploads/2026/08/pytorch-day-jp-26-Social-Snackable.png">
+<meta name="twitter:image:alt" content="PyTorch Day Japan 2026. 2026 December 10 | Tokyo, Japan. #PyTorchDayJapan. Co-hosted by IBM, Mitsubishi Electric, PyTorch and Hugging Face.">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://events.linuxfoundation.org/#/schema/WebSite","url":"https://events.linuxfoundation.org/","name":"LF Events","inLanguage":"en-US","potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://events.linuxfoundation.org/search/{search_term_string}/"},"query-input":"required name=search_term_string"},"publisher":{"@type":"Organization","@id":"https://events.linuxfoundation.org/#/schema/Organization","name":"LF Events","url":"https://events.linuxfoundation.org/","sameAs":["https://www.facebook.com/TheLinuxFoundation/","https://twitter.com/linuxfoundation","https://www.instagram.com/linux_foundation","https://www.youtube.com/user/TheLinuxFoundation","https://www.linkedin.com/company/the-linux-foundation/"]}},{"@type":"WebPage","@id":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/","name":"Schedule | PyTorch Day Japan","description":"December 10 | Tokyo, Japan Sessions will be recorded and available on the PyTorch Conference YouTube channel within two weeks. Times shown in JST (UTC +9).","inLanguage":"en-US","isPartOf":{"@id":"https://events.linuxfoundation.org/#/schema/WebSite"},"breadcrumb":{"@type":"BreadcrumbList","@id":"https://events.linuxfoundation.org/#/schema/BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"item":"https://events.linuxfoundation.org/","name":"LF Events"},{"@type":"ListItem","position":2,"item":"https://events.linuxfoundation.org/pytorch-day-japan/","name":"Schedule | PyTorch Day Japan"},{"@type":"ListItem","position":3,"item":"https://events.linuxfoundation.org/pytorch-day-japan/program/","name":"Schedule | PyTorch Day Japan"},{"@type":"ListItem","position":4,"name":"Schedule | PyTorch Day Japan"}]},"potentialAction":{"@type":"ReadAction","target":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/"}}]}</script>
+<!-- / The SEO Framework by Sybre Waaijer | 8.30ms meta | 0.37ms boot -->
+
+<link crossorigin href='//events.linuxfoundation.org' rel='preconnect' />
+<link crossorigin href='//js.hs-scripts.com' rel='preconnect' />
+<link crossorigin href='//transcend-cdn.com' rel='preconnect' />
+<link crossorigin href='//lfx-segment.platform.linuxfoundation.org' rel='preconnect' />
+<link crossorigin href='//js.hscollectedforms.net' rel='preconnect' />
+<link crossorigin href='//js.hs-banner.com' rel='preconnect' />
+<link crossorigin href='//js.hs-analytics.net' rel='preconnect' />
+<link crossorigin href='//js.hsforms.net' rel='preconnect' />
+<link crossorigin href='//www.googletagmanager.com' rel='preconnect' />
+<link crossorigin href='//js-agent.newrelic.com' rel='preconnect' />
+<style id="wp-img-auto-sizes-contain-inline-css">
+img:is([sizes=auto i],[sizes^="auto," i]){contain-intrinsic-size:3000px 1500px}
+/*# sourceURL=wp-img-auto-sizes-contain-inline-css */
+</style>
+<style id="wp-block-library-inline-css">
+:root{--wp-block-synced-color:#7a00df;--wp-block-synced-color--rgb:122,0,223;--wp-bound-block-color:var(--wp-block-synced-color);--wp-editor-canvas-background:#ddd;--wp-admin-theme-color:#007cba;--wp-admin-theme-color--rgb:0,124,186;--wp-admin-theme-color-darker-10:#006ba1;--wp-admin-theme-color-darker-10--rgb:0,107,160.5;--wp-admin-theme-color-darker-20:#005a87;--wp-admin-theme-color-darker-20--rgb:0,90,135;--wp-admin-border-width-focus:2px}@media (min-resolution:192dpi){:root{--wp-admin-border-width-focus:1.5px}}.wp-element-button{cursor:pointer}:root .has-very-light-gray-background-color{background-color:#eee}:root .has-very-dark-gray-background-color{background-color:#313131}:root .has-very-light-gray-color{color:#eee}:root .has-very-dark-gray-color{color:#313131}:root .has-vivid-green-cyan-to-vivid-cyan-blue-gradient-background{background:linear-gradient(135deg,#00d084,#0693e3)}:root .has-purple-crush-gradient-background{background:linear-gradient(135deg,#34e2e4,#4721fb 50%,#ab1dfe)}:root .has-hazy-dawn-gradient-background{background:linear-gradient(135deg,#faaca8,#dad0ec)}:root .has-subdued-olive-gradient-background{background:linear-gradient(135deg,#fafae1,#67a671)}:root .has-atomic-cream-gradient-background{background:linear-gradient(135deg,#fdd79a,#004a59)}:root .has-nightshade-gradient-background{background:linear-gradient(135deg,#330968,#31cdcf)}:root .has-midnight-gradient-background{background:linear-gradient(135deg,#020381,#2874fc)}:root{--wp--preset--font-size--normal:16px;--wp--preset--font-size--huge:42px}.has-regular-font-size{font-size:1em}.has-larger-font-size{font-size:2.625em}.has-normal-font-size{font-size:var(--wp--preset--font-size--normal)}.has-huge-font-size{font-size:var(--wp--preset--font-size--huge)}:root .has-text-align-center{text-align:center}:root .has-text-align-left{text-align:left}:root .has-text-align-right{text-align:right}.has-fit-text{white-space:nowrap!important}#end-resizable-editor-section{display:none}.aligncenter{clear:both}.items-justified-left{justify-content:flex-start}.items-justified-center{justify-content:center}.items-justified-right{justify-content:flex-end}.items-justified-space-between{justify-content:space-between}.screen-reader-text{word-wrap:normal!important;border:0;clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute;width:1px;word-break:normal!important}.screen-reader-text:focus{background-color:#ddd;clip-path:none;color:#444;display:block;font-size:1em;height:auto;left:5px;line-height:normal;padding:15px 23px 14px;text-decoration:none;top:5px;width:auto;z-index:100000}html :where(.has-border-color){border-style:solid}html :where([style^=border-color],[style*=";border-color"],[style*="; border-color"]){border-style:solid}html :where([style^=border-top-color],[style*=";border-top-color"],[style*="; border-top-color"]){border-top-style:solid}html :where([style^=border-right-color],[style*=";border-right-color"],[style*="; border-right-color"]){border-right-style:solid}html :where([style^=border-bottom-color],[style*=";border-bottom-color"],[style*="; border-bottom-color"]){border-bottom-style:solid}html :where([style^=border-left-color],[style*=";border-left-color"],[style*="; border-left-color"]){border-left-style:solid}html :where([style^=border-width],[style*=";border-width"],[style*="; border-width"]){border-style:solid}html :where([style^=border-top-width],[style*=";border-top-width"],[style*="; border-top-width"]){border-top-style:solid}html :where([style^=border-right-width],[style*=";border-right-width"],[style*="; border-right-width"]){border-right-style:solid}html :where([style^=border-bottom-width],[style*=";border-bottom-width"],[style*="; border-bottom-width"]){border-bottom-style:solid}html :where([style^=border-left-width],[style*=";border-left-width"],[style*="; border-left-width"]){border-left-style:solid}html :where(img[class*=wp-image-]){height:auto;max-width:100%}:where(figure){margin:0 0 1em}html :where(.is-position-sticky){--wp-admin--admin-bar--position-offset:var(--wp-admin--admin-bar--height,0px)}@media screen and (max-width:600px){html :where(.is-position-sticky){--wp-admin--admin-bar--position-offset:0px}}
+
+/*# sourceURL=/wp-includes/css/dist/block-library/common.min.css */
+</style>
+<style id="wp-block-paragraph-inline-css">
+.is-small-text{font-size:.875em}.is-regular-text{font-size:1em}.is-large-text{font-size:2.25em}.is-larger-text{font-size:3em}.has-drop-cap:not(:focus):first-letter{float:left;font-size:8.4em;font-style:normal;font-weight:100;line-height:.68;margin:.05em .1em 0 0;text-transform:uppercase}body.rtl .has-drop-cap:not(:focus):first-letter{float:none;margin-left:.1em}p.has-drop-cap.has-background{overflow:hidden}:root :where(p.has-background){padding:1.25em 2.375em}:where(p.has-text-color:not(.has-link-color)) a{color:inherit}p.has-text-align-left[style*="writing-mode:vertical-lr"],p.has-text-align-right[style*="writing-mode:vertical-rl"]{rotate:180deg}
+/*# sourceURL=https://events.linuxfoundation.org/wp/wp-includes/blocks/paragraph/style.min.css */
+</style>
+<style id="wp-block-group-inline-css">
+.wp-block-group{box-sizing:border-box}:where(.wp-block-group.wp-block-group-is-layout-constrained){position:relative}
+/*# sourceURL=https://events.linuxfoundation.org/wp/wp-includes/blocks/group/style.min.css */
+</style>
+<style id="wp-block-spacer-inline-css">
+.wp-block-spacer{clear:both}
+/*# sourceURL=https://events.linuxfoundation.org/wp/wp-includes/blocks/spacer/style.min.css */
+</style>
+
+<style id="classic-theme-styles-inline-css">
+/*! This file is auto-generated */
+.wp-block-button__link{color:#fff;background-color:#32373c;border-radius:9999px;box-shadow:none;text-decoration:none;padding:calc(.667em + 2px) calc(1.333em + 2px);font-size:1.125em}.wp-block-file__button{background:#32373c;color:#fff;text-decoration:none}
+/*# sourceURL=/wp-includes/css/classic-themes.min.css */
+</style>
+
+<link rel='stylesheet' id='custom-sessionize-schedule-style-css' href='https://events.linuxfoundation.org/wp-content/plugins/sessionize-blocks/blocks/sessionize-schedule/build/style-index.css?ver=1794198676' media='all' />
+
+<style id="event-gradient-inline-style-inline-css">
+.is-style-event-gradient { background: linear-gradient(90deg, #e73584 0%, #ee3b25 100%);}
+
+:root {
+--event-color-1: #e73584;
+--event-color-2: #ee3b25;
+}
+/*# sourceURL=event-gradient-inline-style-inline-css */
+</style>
+<style id="global-styles-inline-css">
+:root{--wp--preset--aspect-ratio--square: 1;--wp--preset--aspect-ratio--4-3: 4/3;--wp--preset--aspect-ratio--3-4: 3/4;--wp--preset--aspect-ratio--3-2: 3/2;--wp--preset--aspect-ratio--2-3: 2/3;--wp--preset--aspect-ratio--16-9: 16/9;--wp--preset--aspect-ratio--9-16: 9/16;--wp--preset--color--black: #212326;--wp--preset--color--cyan-bluish-gray: #abb8c3;--wp--preset--color--white: #fefefe;--wp--preset--color--pale-pink: #f78da7;--wp--preset--color--vivid-red: #cf2e2e;--wp--preset--color--luminous-vivid-orange: #ff6900;--wp--preset--color--luminous-vivid-amber: #fcb900;--wp--preset--color--light-green-cyan: #7bdcb5;--wp--preset--color--vivid-green-cyan: #00d084;--wp--preset--color--pale-cyan-blue: #8ed1fc;--wp--preset--color--vivid-cyan-blue: #0693e3;--wp--preset--color--vivid-purple: #9b51e0;--wp--preset--color--charcoal: #393c41;--wp--preset--color--dark-gray: #5d626a;--wp--preset--color--light-gray: #d3d5d9;--wp--preset--color--off-white: #ecedee;--wp--preset--color--dark-fuschia: #6e1042;--wp--preset--color--dark-violet: #411E4F;--wp--preset--color--dark-indigo: #1A267D;--wp--preset--color--dark-blue: #17405c;--wp--preset--color--dark-aqua: #0e5953;--wp--preset--color--dark-green: #0b5329;--wp--preset--color--light-fuschia: #AD1457;--wp--preset--color--light-violet: #6C3483;--wp--preset--color--light-indigo: #4653B0;--wp--preset--color--light-blue: #2874A6;--wp--preset--color--light-aqua: #148f85;--wp--preset--color--light-green: #117a3d;--wp--preset--color--dark-chartreuse: #3d5e0f;--wp--preset--color--dark-yellow: #878700;--wp--preset--color--dark-gold: #8c7000;--wp--preset--color--dark-orange: #784e12;--wp--preset--color--dark-umber: #6E2C00;--wp--preset--color--dark-red: #641E16;--wp--preset--color--light-chartreuse: #699b23;--wp--preset--color--light-yellow: #b0b000;--wp--preset--color--light-gold: #c29b00;--wp--preset--color--light-orange: #c2770e;--wp--preset--color--light-umber: #b8510d;--wp--preset--color--light-red: #922B21;--wp--preset--color--lf-primary-400: #0099cc;--wp--preset--color--lf-primary-700: #003366;--wp--preset--color--lf-grey-700: #333333;--wp--preset--color--lf-grey-400: #7a7a7a;--wp--preset--color--lf-blue: #0077cc;--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple: linear-gradient(135deg,rgb(6,147,227) 0%,rgb(155,81,224) 100%);--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan: linear-gradient(135deg,rgb(122,220,180) 0%,rgb(0,208,130) 100%);--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange: linear-gradient(135deg,rgb(252,185,0) 0%,rgb(255,105,0) 100%);--wp--preset--gradient--luminous-vivid-orange-to-vivid-red: linear-gradient(135deg,rgb(255,105,0) 0%,rgb(207,46,46) 100%);--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray: linear-gradient(135deg,rgb(238,238,238) 0%,rgb(169,184,195) 100%);--wp--preset--gradient--cool-to-warm-spectrum: linear-gradient(135deg,rgb(74,234,220) 0%,rgb(151,120,209) 20%,rgb(207,42,186) 40%,rgb(238,44,130) 60%,rgb(251,105,98) 80%,rgb(254,248,76) 100%);--wp--preset--gradient--blush-light-purple: linear-gradient(135deg,rgb(255,206,236) 0%,rgb(152,150,240) 100%);--wp--preset--gradient--blush-bordeaux: linear-gradient(135deg,rgb(254,205,165) 0%,rgb(254,45,45) 50%,rgb(107,0,62) 100%);--wp--preset--gradient--luminous-dusk: linear-gradient(135deg,rgb(255,203,112) 0%,rgb(199,81,192) 50%,rgb(65,88,208) 100%);--wp--preset--gradient--pale-ocean: linear-gradient(135deg,rgb(255,245,203) 0%,rgb(182,227,212) 50%,rgb(51,167,181) 100%);--wp--preset--gradient--electric-grass: linear-gradient(135deg,rgb(202,248,128) 0%,rgb(113,206,126) 100%);--wp--preset--gradient--midnight: linear-gradient(135deg,rgb(2,3,129) 0%,rgb(40,116,252) 100%);--wp--preset--font-size--small: 13px;--wp--preset--font-size--medium: 20px;--wp--preset--font-size--large: 36px;--wp--preset--font-size--x-large: 42px;--wp--preset--spacing--20: 0.44rem;--wp--preset--spacing--30: 0.67rem;--wp--preset--spacing--40: 1rem;--wp--preset--spacing--50: 1.5rem;--wp--preset--spacing--60: 2.25rem;--wp--preset--spacing--70: 3.38rem;--wp--preset--spacing--80: 5.06rem;--wp--preset--shadow--natural: 6px 6px 9px rgba(0, 0, 0, 0.2);--wp--preset--shadow--deep: 12px 12px 50px rgba(0, 0, 0, 0.4);--wp--preset--shadow--sharp: 6px 6px 0px rgba(0, 0, 0, 0.2);--wp--preset--shadow--outlined: 6px 6px 0px -3px rgb(255, 255, 255), 6px 6px rgb(0, 0, 0);--wp--preset--shadow--crisp: 6px 6px 0px rgb(0, 0, 0);}.wp-block-button{--wp--preset--dimension--25: 25%;--wp--preset--dimension--50: 50%;--wp--preset--dimension--75: 75%;--wp--preset--dimension--100: 100%;}:where(body) { margin: 0; }:where(.is-layout-flex){gap: 0.5em;}:where(.is-layout-grid){gap: 0.5em;}body .is-layout-flex{display: flex;}.is-layout-flex{flex-wrap: wrap;align-items: center;}.is-layout-flex > :is(*, div){margin: 0;}body .is-layout-grid{display: grid;}.is-layout-grid > :is(*, div){margin: 0;}body{padding-top: 0px;padding-right: 0px;padding-bottom: 0px;padding-left: 0px;}:root :where(.wp-element-button, .wp-block-button__link){background-color: #32373c;border-width: 0;color: #fff;font-family: inherit;font-size: inherit;font-style: inherit;font-weight: inherit;letter-spacing: inherit;line-height: inherit;padding-top: calc(0.667em + 2px);padding-right: calc(1.333em + 2px);padding-bottom: calc(0.667em + 2px);padding-left: calc(1.333em + 2px);text-decoration: none;text-transform: inherit;}.has-black-color{color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-color{color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-color{color: var(--wp--preset--color--white) !important;}.has-pale-pink-color{color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-color{color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-color{color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-color{color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-color{color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-color{color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-color{color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-color{color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-color{color: var(--wp--preset--color--vivid-purple) !important;}.has-charcoal-color{color: var(--wp--preset--color--charcoal) !important;}.has-dark-gray-color{color: var(--wp--preset--color--dark-gray) !important;}.has-light-gray-color{color: var(--wp--preset--color--light-gray) !important;}.has-off-white-color{color: var(--wp--preset--color--off-white) !important;}.has-dark-fuschia-color{color: var(--wp--preset--color--dark-fuschia) !important;}.has-dark-violet-color{color: var(--wp--preset--color--dark-violet) !important;}.has-dark-indigo-color{color: var(--wp--preset--color--dark-indigo) !important;}.has-dark-blue-color{color: var(--wp--preset--color--dark-blue) !important;}.has-dark-aqua-color{color: var(--wp--preset--color--dark-aqua) !important;}.has-dark-green-color{color: var(--wp--preset--color--dark-green) !important;}.has-light-fuschia-color{color: var(--wp--preset--color--light-fuschia) !important;}.has-light-violet-color{color: var(--wp--preset--color--light-violet) !important;}.has-light-indigo-color{color: var(--wp--preset--color--light-indigo) !important;}.has-light-blue-color{color: var(--wp--preset--color--light-blue) !important;}.has-light-aqua-color{color: var(--wp--preset--color--light-aqua) !important;}.has-light-green-color{color: var(--wp--preset--color--light-green) !important;}.has-dark-chartreuse-color{color: var(--wp--preset--color--dark-chartreuse) !important;}.has-dark-yellow-color{color: var(--wp--preset--color--dark-yellow) !important;}.has-dark-gold-color{color: var(--wp--preset--color--dark-gold) !important;}.has-dark-orange-color{color: var(--wp--preset--color--dark-orange) !important;}.has-dark-umber-color{color: var(--wp--preset--color--dark-umber) !important;}.has-dark-red-color{color: var(--wp--preset--color--dark-red) !important;}.has-light-chartreuse-color{color: var(--wp--preset--color--light-chartreuse) !important;}.has-light-yellow-color{color: var(--wp--preset--color--light-yellow) !important;}.has-light-gold-color{color: var(--wp--preset--color--light-gold) !important;}.has-light-orange-color{color: var(--wp--preset--color--light-orange) !important;}.has-light-umber-color{color: var(--wp--preset--color--light-umber) !important;}.has-light-red-color{color: var(--wp--preset--color--light-red) !important;}.has-lf-primary-400-color{color: var(--wp--preset--color--lf-primary-400) !important;}.has-lf-primary-700-color{color: var(--wp--preset--color--lf-primary-700) !important;}.has-lf-grey-700-color{color: var(--wp--preset--color--lf-grey-700) !important;}.has-lf-grey-400-color{color: var(--wp--preset--color--lf-grey-400) !important;}.has-lf-blue-color{color: var(--wp--preset--color--lf-blue) !important;}.has-black-background-color{background-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-background-color{background-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-background-color{background-color: var(--wp--preset--color--white) !important;}.has-pale-pink-background-color{background-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-background-color{background-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-background-color{background-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-background-color{background-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-background-color{background-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-background-color{background-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-background-color{background-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-background-color{background-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-background-color{background-color: var(--wp--preset--color--vivid-purple) !important;}.has-charcoal-background-color{background-color: var(--wp--preset--color--charcoal) !important;}.has-dark-gray-background-color{background-color: var(--wp--preset--color--dark-gray) !important;}.has-light-gray-background-color{background-color: var(--wp--preset--color--light-gray) !important;}.has-off-white-background-color{background-color: var(--wp--preset--color--off-white) !important;}.has-dark-fuschia-background-color{background-color: var(--wp--preset--color--dark-fuschia) !important;}.has-dark-violet-background-color{background-color: var(--wp--preset--color--dark-violet) !important;}.has-dark-indigo-background-color{background-color: var(--wp--preset--color--dark-indigo) !important;}.has-dark-blue-background-color{background-color: var(--wp--preset--color--dark-blue) !important;}.has-dark-aqua-background-color{background-color: var(--wp--preset--color--dark-aqua) !important;}.has-dark-green-background-color{background-color: var(--wp--preset--color--dark-green) !important;}.has-light-fuschia-background-color{background-color: var(--wp--preset--color--light-fuschia) !important;}.has-light-violet-background-color{background-color: var(--wp--preset--color--light-violet) !important;}.has-light-indigo-background-color{background-color: var(--wp--preset--color--light-indigo) !important;}.has-light-blue-background-color{background-color: var(--wp--preset--color--light-blue) !important;}.has-light-aqua-background-color{background-color: var(--wp--preset--color--light-aqua) !important;}.has-light-green-background-color{background-color: var(--wp--preset--color--light-green) !important;}.has-dark-chartreuse-background-color{background-color: var(--wp--preset--color--dark-chartreuse) !important;}.has-dark-yellow-background-color{background-color: var(--wp--preset--color--dark-yellow) !important;}.has-dark-gold-background-color{background-color: var(--wp--preset--color--dark-gold) !important;}.has-dark-orange-background-color{background-color: var(--wp--preset--color--dark-orange) !important;}.has-dark-umber-background-color{background-color: var(--wp--preset--color--dark-umber) !important;}.has-dark-red-background-color{background-color: var(--wp--preset--color--dark-red) !important;}.has-light-chartreuse-background-color{background-color: var(--wp--preset--color--light-chartreuse) !important;}.has-light-yellow-background-color{background-color: var(--wp--preset--color--light-yellow) !important;}.has-light-gold-background-color{background-color: var(--wp--preset--color--light-gold) !important;}.has-light-orange-background-color{background-color: var(--wp--preset--color--light-orange) !important;}.has-light-umber-background-color{background-color: var(--wp--preset--color--light-umber) !important;}.has-light-red-background-color{background-color: var(--wp--preset--color--light-red) !important;}.has-lf-primary-400-background-color{background-color: var(--wp--preset--color--lf-primary-400) !important;}.has-lf-primary-700-background-color{background-color: var(--wp--preset--color--lf-primary-700) !important;}.has-lf-grey-700-background-color{background-color: var(--wp--preset--color--lf-grey-700) !important;}.has-lf-grey-400-background-color{background-color: var(--wp--preset--color--lf-grey-400) !important;}.has-lf-blue-background-color{background-color: var(--wp--preset--color--lf-blue) !important;}.has-black-border-color{border-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-border-color{border-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-border-color{border-color: var(--wp--preset--color--white) !important;}.has-pale-pink-border-color{border-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-border-color{border-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-border-color{border-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-border-color{border-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-border-color{border-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-border-color{border-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-border-color{border-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-border-color{border-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-border-color{border-color: var(--wp--preset--color--vivid-purple) !important;}.has-charcoal-border-color{border-color: var(--wp--preset--color--charcoal) !important;}.has-dark-gray-border-color{border-color: var(--wp--preset--color--dark-gray) !important;}.has-light-gray-border-color{border-color: var(--wp--preset--color--light-gray) !important;}.has-off-white-border-color{border-color: var(--wp--preset--color--off-white) !important;}.has-dark-fuschia-border-color{border-color: var(--wp--preset--color--dark-fuschia) !important;}.has-dark-violet-border-color{border-color: var(--wp--preset--color--dark-violet) !important;}.has-dark-indigo-border-color{border-color: var(--wp--preset--color--dark-indigo) !important;}.has-dark-blue-border-color{border-color: var(--wp--preset--color--dark-blue) !important;}.has-dark-aqua-border-color{border-color: var(--wp--preset--color--dark-aqua) !important;}.has-dark-green-border-color{border-color: var(--wp--preset--color--dark-green) !important;}.has-light-fuschia-border-color{border-color: var(--wp--preset--color--light-fuschia) !important;}.has-light-violet-border-color{border-color: var(--wp--preset--color--light-violet) !important;}.has-light-indigo-border-color{border-color: var(--wp--preset--color--light-indigo) !important;}.has-light-blue-border-color{border-color: var(--wp--preset--color--light-blue) !important;}.has-light-aqua-border-color{border-color: var(--wp--preset--color--light-aqua) !important;}.has-light-green-border-color{border-color: var(--wp--preset--color--light-green) !important;}.has-dark-chartreuse-border-color{border-color: var(--wp--preset--color--dark-chartreuse) !important;}.has-dark-yellow-border-color{border-color: var(--wp--preset--color--dark-yellow) !important;}.has-dark-gold-border-color{border-color: var(--wp--preset--color--dark-gold) !important;}.has-dark-orange-border-color{border-color: var(--wp--preset--color--dark-orange) !important;}.has-dark-umber-border-color{border-color: var(--wp--preset--color--dark-umber) !important;}.has-dark-red-border-color{border-color: var(--wp--preset--color--dark-red) !important;}.has-light-chartreuse-border-color{border-color: var(--wp--preset--color--light-chartreuse) !important;}.has-light-yellow-border-color{border-color: var(--wp--preset--color--light-yellow) !important;}.has-light-gold-border-color{border-color: var(--wp--preset--color--light-gold) !important;}.has-light-orange-border-color{border-color: var(--wp--preset--color--light-orange) !important;}.has-light-umber-border-color{border-color: var(--wp--preset--color--light-umber) !important;}.has-light-red-border-color{border-color: var(--wp--preset--color--light-red) !important;}.has-lf-primary-400-border-color{border-color: var(--wp--preset--color--lf-primary-400) !important;}.has-lf-primary-700-border-color{border-color: var(--wp--preset--color--lf-primary-700) !important;}.has-lf-grey-700-border-color{border-color: var(--wp--preset--color--lf-grey-700) !important;}.has-lf-grey-400-border-color{border-color: var(--wp--preset--color--lf-grey-400) !important;}.has-lf-blue-border-color{border-color: var(--wp--preset--color--lf-blue) !important;}.has-vivid-cyan-blue-to-vivid-purple-gradient-background{background: var(--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple) !important;}.has-light-green-cyan-to-vivid-green-cyan-gradient-background{background: var(--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan) !important;}.has-luminous-vivid-amber-to-luminous-vivid-orange-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange) !important;}.has-luminous-vivid-orange-to-vivid-red-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-orange-to-vivid-red) !important;}.has-very-light-gray-to-cyan-bluish-gray-gradient-background{background: var(--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray) !important;}.has-cool-to-warm-spectrum-gradient-background{background: var(--wp--preset--gradient--cool-to-warm-spectrum) !important;}.has-blush-light-purple-gradient-background{background: var(--wp--preset--gradient--blush-light-purple) !important;}.has-blush-bordeaux-gradient-background{background: var(--wp--preset--gradient--blush-bordeaux) !important;}.has-luminous-dusk-gradient-background{background: var(--wp--preset--gradient--luminous-dusk) !important;}.has-pale-ocean-gradient-background{background: var(--wp--preset--gradient--pale-ocean) !important;}.has-electric-grass-gradient-background{background: var(--wp--preset--gradient--electric-grass) !important;}.has-midnight-gradient-background{background: var(--wp--preset--gradient--midnight) !important;}.has-small-font-size{font-size: var(--wp--preset--font-size--small) !important;}.has-medium-font-size{font-size: var(--wp--preset--font-size--medium) !important;}.has-large-font-size{font-size: var(--wp--preset--font-size--large) !important;}.has-x-large-font-size{font-size: var(--wp--preset--font-size--x-large) !important;}
+/*# sourceURL=global-styles-inline-css */
+</style>
+
+<link rel='stylesheet' id='main-stylesheet-css' href='https://events.linuxfoundation.org/wp-content/themes/lfevents/dist/css/app.min.css?ver=1794198676' media='all' />
+<link rel='stylesheet' id='photonic-slider-css' href='https://events.linuxfoundation.org/wp-content/plugins/photonic/include/ext/splide/splide.min.css?ver=1794198676' media='all' />
+<link rel='stylesheet' id='photonic-lightbox-css' href='https://events.linuxfoundation.org/wp-content/plugins/photonic/include/ext/photoswipe/photoswipe.min.css?ver=1794198676' media='all' />
+<link rel='stylesheet' id='photonic-css' href='https://events.linuxfoundation.org/wp-content/plugins/photonic/include/css/front-end/core/photonic.min.css?ver=1794198676' media='all' />
+<style id="photonic-inline-css">
+/* Retrieved from saved CSS */
+.photonic-panel { background:  rgb(17,17,17)  !important;
+ }
+.photonic-random-layout .photonic-thumb { padding: 2px}
+.photonic-masonry-layout .photonic-thumb, .photonic-masonry-horizontal-layout .photonic-thumb { padding: 2px}
+.photonic-mosaic-layout .photonic-thumb { padding: 2px}
+
+/*# sourceURL=photonic-inline-css */
+</style>
+<script id="sessionize-dompurify-js" defer src="https://events.linuxfoundation.org/wp-content/plugins/sessionize-blocks/blocks/sessionize-schedule/assets/purify.min.js?ver=1794198676"></script>
+<script id="jquery-js" defer src="https://events.linuxfoundation.org/wp-content/themes/lfevents/src/js/libraries/jquery-3.7.1.min.js?ver=1794198676"></script>
+<script data-cfasync="false" src="https://transcend-cdn.com/cm/f484e2d0-ad2e-43a9-9d64-d07f6fa20966/airgap.js" onload="window.dataLayer.push({'event': 'transcend_consent_ready'})" onerror="console.error('Transcend airgap.js failed to load')"></script>
+<script id="lfx-segment-js" src="https://lfx-segment.platform.linuxfoundation.org/latest/lfx-segment-analytics.min.js"></script>
+<script id="lfx-segment-js-after">
+if(window.LfxAnalytics&&window.LfxAnalytics.LfxSegmentsAnalytics){var analytics=window.LfxAnalytics.LfxSegmentsAnalytics.getInstance();analytics.init().then(function(){}).catch(function(error){console.error('Failed to initialize analytics:',error)});}else{console.warn('LfxAnalytics not found');}
+//# sourceURL=lfx-segment-js-after
+</script>
+<link rel="https://api.w.org/" href="https://events.linuxfoundation.org/wp-json/" /><link rel="alternate" title="JSON" type="application/json" href="https://events.linuxfoundation.org/wp-json/wp/v2/pages/318254" />			<!-- DO NOT COPY THIS SNIPPET! Start of Page Analytics Tracking for HubSpot WordPress plugin v11.3.75-->
+			<script class="hsq-set-content-id" data-content-id="standard-page">
+				var _hsq = _hsq || [];
+				_hsq.push(["setContentType", "standard-page"]);
+			</script>
+			<!-- DO NOT COPY THIS SNIPPET! End of Page Analytics Tracking for HubSpot WordPress plugin -->
+			<link rel="alternate" type="text/markdown" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule.md" title="Schedule as Markdown">
+	<meta name='referrer' content='strict-origin-when-cross-origin' />
+		<link rel="icon" type="image/png" sizes="32x32" href="https://events.linuxfoundation.org/wp-content/uploads/2024/03/Favicon.png">
+	<script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "Event",
+    "name": "PyTorch Day Japan",
+    "url": "https://events.linuxfoundation.org/pytorch-day-japan/",
+    "startDate": "2026-12-10",
+    "endDate": "2026-12-10",
+    "eventAttendanceMode": "https://schema.org/OfflineEventAttendanceMode",
+    "eventStatus": "https://schema.org/EventScheduled",
+    "location": [
+        {
+            "@type": "Place",
+            "name": "Tokyo",
+            "address": {
+                "@type": "PostalAddress",
+                "addressLocality": "Tokyo",
+                "addressCountry": "Japan"
+            }
+        }
+    ],
+    "organizer": {
+        "@type": "Organization",
+        "name": "The Linux Foundation"
+    },
+    "image": [
+        "https://events.linuxfoundation.org/wp-content/uploads/2026/08/pytorch-day-jp-26-Social-Snackable.png"
+    ],
+    "description": "PyTorch Day Japan 2026, hosted by the PyTorch Foundation, Hugging Face, IBM, and Mitsubishi Electric, is a pivotal event for community-driven learning, networking, and open source AI innovation."
+}</script>	<!-- Google Tag Manager -->
+	<script data-type="lazy" data-src="data:text/javascript;base64,KGZ1bmN0aW9uKHcsZCxzLGwsaSl7d1tsXT13W2xdfHxbXTt3W2xdLnB1c2goeydndG0uc3RhcnQnOgoJbmV3IERhdGUoKS5nZXRUaW1lKCksZXZlbnQ6J2d0bS5qcyd9KTt2YXIgZj1kLmdldEVsZW1lbnRzQnlUYWdOYW1lKHMpWzBdLAoJaj1kLmNyZWF0ZUVsZW1lbnQocyksZGw9bCE9J2RhdGFMYXllcic/JyZsPScrbDonJztqLmFzeW5jPXRydWU7ai5zcmM9CgknaHR0cHM6Ly93d3cuZ29vZ2xldGFnbWFuYWdlci5jb20vZ3RtLmpzP2lkPScraStkbDtmLnBhcmVudE5vZGUuaW5zZXJ0QmVmb3JlKGosZik7Cgl9KSh3aW5kb3csZG9jdW1lbnQsJ3NjcmlwdCcsJ2RhdGFMYXllcicsJ0dUTS1USzdEOTknKTs="></script>
+	<!-- End Google Tag Manager -->
+	<meta name="google-site-verification" content="-gukSsqWFlePhF0bBHUrwFbg7eaR4N09IFCKY9QmtYc" />	</head>
+
+	<body class="wp-singular page-template-default page page-id-318254 page-child parent-pageid-318250 wp-theme-lfevents lfeventsci">
+				<a class="skip-link" href="#main">Skip to content</a>
+		<!-- Google Tag Manager (noscript) -->
+	<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TK7D99"
+	height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+	<!-- End Google Tag Manager (noscript) -->
+		<div class="site-container add-overflow">
+
+<div data-sticky-container class="use-cncf-font">
+	<header class="event-header sticky" data-sticky data-sticky-on="large" data-options="marginTop:0;"
+		style="background: linear-gradient(90deg, #e73584 0%, #ee3b25 100%);color: black;">
+
+		
+		<div class="pre-nav">
+			<a class="event-home-link" href="https://events.linuxfoundation.org/pytorch-day-japan/"><img loading="lazy" src="https://events.linuxfoundation.org/wp-content/uploads/2026/08/PYTORCH-DAY-JP-26-black.svg" alt="PyTorch Day Japan"></a>			<button class="menu-toggler button alignright" type="button"
+				aria-label="Toggle Menu" data-toggle="event-menu">
+				<span
+					class="hamburger-icon is-black"></span>
+			</button>
+		</div>
+
+		<nav id="event-menu" class="event-menu show-for-large" data-toggler="show-for-large">
+			<ul
+				class="event-menu-list is-black">
+				<li class="page_item event-home-link" id="popout-header-link"><a
+						href="https://events.linuxfoundation.org/pytorch-day-japan/"
+						style="background-color:#e73584;"><img loading="lazy" src="https://events.linuxfoundation.org/wp-content/uploads/2026/08/PYTORCH-DAY-JP-26-black.svg" alt="PyTorch Day Japan"></a>
+				</li>
+				<li class="page_item page-item-318287"><a href="https://events.linuxfoundation.org/pytorch-day-japan/register/">Register</a></li>
+<li class="page_item page-item-318271 page_item_has_children"><a href="#">Attend</a>
+<ul class='children' style='background: #e73584;'>
+	<li class="page_item page-item-318272"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/faq/">FAQ</a></li>
+	<li class="page_item page-item-318279"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/venue-travel/">Venue &#038; Travel</a></li>
+	<li class="page_item page-item-318277"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/health-and-safety/">Health &#038; Safety</a></li>
+	<li class="page_item page-item-318278"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/about-tokyo/">About Tokyo</a></li>
+	<li class="page_item page-item-318276"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/visa-request/">Visa Letter Request</a></li>
+	<li class="page_item page-item-318280"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/inclusion-accessibility/">Inclusion &amp; Accessibility</a></li>
+	<li class="page_item page-item-318281"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/code-of-conduct/">Code of Conduct</a></li>
+</ul>
+</li>
+<li class="page_item page-item-318250 page_item_has_children current_page_ancestor current_page_parent"><a href="#">Program</a>
+<ul class='children' style='background: #e73584;'>
+	<li class="page_item page-item-318254 current_page_item is-active"><a href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/" aria-current="page">Schedule</a></li>
+	<li class="page_item page-item-318256"><a href="https://events.linuxfoundation.org/pytorch-day-japan/program/program-committee/">Program Committee</a></li>
+</ul>
+</li>
+<li class="page_item page-item-318288"><a href="https://events.linuxfoundation.org/pytorch-day-japan/contact-us/">Contact Us</a></li>
+<li class="page_item page_item_has_children other-events"><a href="#">View All Events</a><ul class="children" style="background: #e73584;"><li><a href="https://events.linuxfoundation.org/"><div class="other-logo-wrapper">
+		<img width="109" height="36" alt="The Linux Foundation logo" src="https://events.linuxfoundation.org/wp-content/themes/lfevents/src/images/lf-logo-black.svg"><span class="other-seperator black">Events</span></div><span class="other-text">All Upcoming Events</span></a></li><li><a href="https://events.linuxfoundation.org/mcp-dev-summit-nairobi/"><img src="https://events.linuxfoundation.org/wp-content/uploads/2026/03/mcp_devsummit__nairobi_black.svg" alt="MCP Dev Summit Nairobi"></a></li><li><a href="https://www.lfopensource.cn/pytorch-day-china/"><img src="https://events.linuxfoundation.org/wp-content/uploads/2025/03/pytdays25_china_logo_black.svg" alt="PyTorch Day China"></a></li><li><a href="https://events.linuxfoundation.org/about/calendar/archive/?_sft_lfevent-category=ai-events"><span class="subtext">Past AI Events</span></a></li></ul></li>			</ul>
+		</nav>
+
+	</header>
+</div>
+	
+<div class="main-container" id="main">
+	<div class="main-grid">
+		<main class="main-content-full-width">
+
+			
+						<header class="event-subpage-header background-image-wrapper"
+				style="color: black;">
+				<div class="overlay"
+					style="background: linear-gradient(90deg, #ee3b25 0%, #e73584 100%); color: black;opacity: 0;">
+				</div>
+				<figure class="figure-container">
+					<img width="1920" height="600" src="https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-1920x600.jpg" class="" alt="A crowd of attendees smiling and laughing." loading="eager" decoding="async" fetchpriority="high" srcset="https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-1920x600.jpg 1920w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-300x94.jpg 300w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-1024x320.jpg 1024w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-768x240.jpg 768w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-1536x480.jpg 1536w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-2048x640.jpg 2048w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-640x200.jpg 640w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-1200x375.jpg 1200w, https://events.linuxfoundation.org/wp-content/uploads/2024/07/53801523871_78165f4a8a_o-600x188.jpg 600w" sizes="(max-width: 1920px) 100vw, 1920px" />				</figure>
+
+				<h1 class="content-wrapper"
+					style="background-color: black;">
+					<span
+						style="color:white; background-color: black; -webkit-text-fill-color: transparent; background: -webkit-gradient(linear,left top,right bottom,from(#ee3b25),to(#e73584)); background: -o-gradient(linear,left top,right bottom,from(#ee3b25),to(#e73584)); -webkit-background-clip: text;">
+						Schedule					</span>
+				</h1>
+			</header>
+					
+<article id="post-318254" class="post-318254 page type-page status-publish has-post-thumbnail hentry">
+	<div class="entry-content">
+		
+<div style="height:20px" aria-hidden="true" class="wp-block-spacer"></div>
+
+
+
+<div class="wp-block-group"><div class="wp-block-group__inner-container is-layout-constrained wp-block-group-is-layout-constrained">
+<p class="has-large-font-size wp-block-paragraph"><strong>December 10 | Tokyo, Japan</strong></p>
+
+
+
+<p class="wp-block-paragraph">Sessions will be recorded and available on the <a href="https://www.youtube.com/@PyTorch/playlists" target="_blank" rel="noreferrer noopener">PyTorch Conference YouTube channel</a> within two weeks.</p>
+
+
+
+<p class="wp-block-paragraph">Times shown in JST (UTC +9). Seating is first come, first served. <strong>IMPORTANT NOTE:&nbsp;</strong>Timing of sessions and room locations are&nbsp;<strong>subject to change.</strong></p>
+
+
+
+<p class="wp-block-paragraph">Plan your sessions and build your personal agenda. <br><a href="https://events.linuxfoundation.org/sessionize-app-experience/" target="_blank" rel="noreferrer noopener">Learn how to use the event app and sync favorites across devices.</a></p>
+
+
+
+<p class="wp-block-paragraph">The Sessionize app allows you to build your schedule but is not a substitute for your event registration. You must be registered for PyTorch Day Japan 2026 to participate in the sessions.&nbsp;If you have not registered but would like to join us, please go to the <a href="https://events.linuxfoundation.org/pytorch-day-japan/register/" target="_blank" rel="noopener">event registration page</a> to purchase a registration.</p>
+</div></div>
+
+
+
+<div style="height:20px" aria-hidden="true" class="wp-block-spacer"></div>
+
+
+
+<div class="wp-block-lf-buttons-with-expiry alignleft">
+<div class="wp-block-lf-button-with-expiry"><a class="wp-block-button__link has-text-color has-white-color has-background button-large" href="https://pytorch-day-japan-2026.sessionize.com/" style="background-color:#db1e3d;border-radius:5px" target="_blank" rel="noopener">Plan your schedule →</a></div>
+</div>
+
+
+
+<div style="height:34px" aria-hidden="true" class="wp-block-spacer"></div>
+
+
+
+<div 
+	class="sched-wrapper sched" 
+	data-sched-config="{&quot;sessionizeAllDataUrl&quot;:&quot;https:\/\/sessionize.com\/api\/v2\/15c7gkws\/view\/All&quot;,&quot;sessionizeGridDataUrl&quot;:&quot;https:\/\/sessionize.com\/api\/v2\/15c7gkws\/view\/GridSmart&quot;,&quot;sessionizeApiCode&quot;:&quot;15c7gkws&quot;,&quot;sessionizePublicSlug&quot;:&quot;pytorch-day-japan-2026&quot;,&quot;primaryFilterTitle&quot;:&quot;Topic&quot;,&quot;timeFormat&quot;:&quot;12h&quot;,&quot;dateFormat&quot;:&quot;mdy&quot;,&quot;defaultShowAllDays&quot;:true,&quot;hideTopControls&quot;:false,&quot;hideSessionTimes&quot;:false,&quot;enableGridView&quot;:true,&quot;enablePersonalAgenda&quot;:false,&quot;speakerTitleQuestionId&quot;:&quot;Speaker Title&quot;,&quot;speakerCompanyQuestionId&quot;:&quot;Company&quot;,&quot;speakerCompanyOverrideQuestionId&quot;:&quot;Speaker Company Override&quot;,&quot;cardSpeakerOverrideQuestionId&quot;:null,&quot;presentationSlidesQuestionId&quot;:&quot;Presentation Slides&quot;,&quot;customLinkField1QuestionId&quot;:&quot;GitHub Repository&quot;,&quot;customLinkField2QuestionId&quot;:&quot;Project Demo&quot;,&quot;customLinkField3QuestionId&quot;:&quot;Event Website&quot;,&quot;customLinkField4QuestionId&quot;:null,&quot;customLinkField5QuestionId&quot;:null,&quot;includeSpeakerTitleForPrimaryValues&quot;:[&quot;Keynote Session&quot;],&quot;companyRollupNames&quot;:[],&quot;hideAllChipsForPrimaryValues&quot;:[&quot;Registration&quot;,&quot;Keynote Sessions&quot;,&quot;Breaks+Meals+Special Events&quot;],&quot;hideSessionChipsForCategories&quot;:[],&quot;hiddenFilterCategories&quot;:[&quot;Submission Type&quot;],&quot;primaryColorOverrides&quot;:{&quot;Registration&quot;:&quot;#a6d926&quot;,&quot;Breaks+Meals+Special Events&quot;:&quot;#d307e7&quot;,&quot;Sovereign AI&quot;:&quot;#26b5d9&quot;,&quot;Physical AI\/Edge AI&quot;:&quot;#8b26d9&quot;,&quot;PyTorch Ecosystem&quot;:&quot;#d97126&quot;,&quot;Keynote Sessions&quot;:&quot;#2656d9&quot;}}"
+	data-sched-ssr="1">
+	<link rel="preconnect" href="https://cache.sessionize.com" crossorigin="anonymous">
+
+	<div class="sched__controls" data-role="controls">
+		<div class="sched__control">
+			<div class="sched__toprow">
+				<div class="sched__label">Filter by</div>
+				<div class="sched__viewbar" data-role="viewbar" hidden>
+					<div class="sched__viewtoggle" data-role="viewtoggle"></div>
+				</div>
+			</div>
+
+			<div class="sched__filtercats" data-role="filtercats"></div>
+			<div class="sched__divider" aria-hidden="true"></div>
+
+			<div class="sched__searchrow">
+				<input id="sched-search" class="sched__search" type="search" placeholder="Search sessions, speakers, companies…" autocomplete="off" data-role="search" />
+				<button type="button" class="sched__clear" data-role="clear" hidden>Clear</button>
+				<button type="button" class="sched__clearall" data-role="clearall" hidden>Clear all filters</button>
+			</div>
+
+			<div class="sched__chips" data-role="chips"></div>
+		</div>
+	</div>
+
+	<div class="sched__daysrow" data-role="daysrow">
+		<div class="sched__days" data-role="days"></div>
+		<div class="sched__actions" data-role="actions" hidden>
+			<div class="sched__actionslabel">View options</div>
+			<div class="sched__actionsbuttons">
+				<button type="button" class="sched__prevbtn" data-role="prevbtn" hidden></button>
+				<button type="button" class="sched__prevbtn sched__agendabtn" data-role="agendabtn" hidden></button>
+			</div>
+		</div>
+	</div>
+
+	<div class="sched__status" data-role="status"></div>
+	<div class="sched__timeline" data-role="timeline" >
+					<div class="day-divider">
+				<div class="day-divider__title">Thursday December 10</div>
+			</div>
+
+							<section class="slot">
+											<div class="slot__time">
+							<strong>9:00 AM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361491" data-session-id="1361491">
+									<div class="sess has-primary" style="--primary-bg:hsl(77 70% 95%);--primary-border:hsl(77 70% 50%);--tag-bg:hsl(77 70% 95%);--tag-border:hsl(77 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Registration &amp; Badge Pick-Up</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																						</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T09:00:00">
+											9:00 AM										</time>
+										&ndash;
+										<time datetime="2026-12-10T18:00:00">
+											6:00 PM										</time>
+									</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>10:00 AM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361523" data-session-id="1361523">
+									<div class="sess has-primary" style="--primary-bg:hsl(224 70% 95%);--primary-border:hsl(224 70% 50%);--tag-bg:hsl(224 70% 95%);--tag-border:hsl(224 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Keynote Sessions to be Announced</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																						</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T10:00:00">
+											10:00 AM										</time>
+										&ndash;
+										<time datetime="2026-12-10T11:10:00">
+											11:10 AM										</time>
+									</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>11:10 AM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361488" data-session-id="1361488">
+									<div class="sess has-primary" style="--primary-bg:hsl(171 70% 95%);--primary-border:hsl(171 70% 50%);--tag-bg:hsl(171 70% 95%);--tag-border:hsl(171 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Coffee Break</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																						</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Breaks + Meals + Special Events</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T11:10:00">
+											11:10 AM										</time>
+										&ndash;
+										<time datetime="2026-12-10T11:30:00">
+											11:30 AM										</time>
+									</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>11:30 AM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343025" data-session-id="1343025">
+									<div class="sess has-primary" style="--primary-bg:hsl(274 70% 95%);--primary-border:hsl(274 70% 50%);--tag-bg:hsl(274 70% 95%);--tag-border:hsl(274 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Beyond GPUs: A Practical Playbook for Bringing ExecuTorch to a New Edge Accelerator</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Michiaki Tatsubori, Tatsuhiro Chiba</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Physical AI/Edge AI</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T11:30:00">
+											11:30 AM										</time>
+										&ndash;
+										<time datetime="2026-12-10T11:50:00">
+											11:50 AM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>Edge and on-prem AI inference increasingly runs on silicon that isn&#039;t a GPU. This talk tells the story of bringing ExecuTorch — PyTorch&#039;s on-device inference runtime — to IBM&#039;s AIU, a purpose-built accelerator for enterprise inference, entirely through ExecuTorch&#039;s public backend-delegate extension points: a custom partitioner, an AOT-only compilation path with well-defined CPU-fallback boundaries, a mixed-dtype tensor bridge, and static bucketing for dynamic shapes.</p><p>We&#039;ll walk through the concrete design decisions and dead ends behind a working, device-verified delegate running real language models (Granite) end-to-end on the AIU, then generalize them into a practical checklist for anyone extending ExecuTorch to a new, independent accelerator. Attendees will leave with a concrete map of ExecuTorch&#039;s backend extension surface — what&#039;s genuinely reusable, what&#039;s hardware-specific, and where the sharp edges are — whether their target is a novel edge chip, an emerging vendor&#039;s silicon, or an in-house accelerator.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>12:10 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1342950" data-session-id="1342950">
+									<div class="sess has-primary" style="--primary-bg:hsl(25 70% 95%);--primary-border:hsl(25 70% 50%);--tag-bg:hsl(25 70% 95%);--tag-border:hsl(25 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Five Bits on Metal: Adding Q5_K Quantization to ExecuTorch&#039;s MLX Backend</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Suvrakamal Das, Anika Tibrewala</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">PyTorch Ecosystem</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T12:10:00">
+											12:10 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T12:30:00">
+											12:30 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>Run a GGUF model on a Mac and most of the work happens in a few hundred lines of Metal you&#039;ve never read. This talk opens up one of them.</p><p>Q5_K is among the most-used quantization formats in the GGUF ecosystem, and until recently ExecuTorch&#039;s MLX backend couldn&#039;t execute it. I&#039;ll walk through the upstream contribution that added it.</p><p>We&#039;ll cover what&#039;s actually inside a Q5<em>K super-block, an affine d/dmin block, 6-bit packed sub-block scales, and a separate array holding each weight&#039;s 5th bit, and why that layout forces real kernel design rather than a copy of Q4</em>K. Then the two kernels every decoder needs: a mat-vec for decode, a tiled simdgroup mat-mat for prefill, and dynamic-M dispatch between them. With benchmarks: Q4<em>K vs Q5</em>K vs Q6_K tokens/sec and memory on Apple silicon.</p><p>You&#039;ll leave knowing how block quantization really works on-device, and how to get your own kernel merged into a PyTorch runtime.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>12:30 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343099" data-session-id="1343099">
+									<div class="sess has-primary" style="--primary-bg:hsl(192 70% 95%);--primary-border:hsl(192 70% 50%);--tag-bg:hsl(192 70% 95%);--tag-border:hsl(192 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">OneComp: One-Command LLM Quantization</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Akihiro Yoshida</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Sovereign AI</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T12:30:00">
+											12:30 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T12:40:00">
+											12:40 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>Deploying large language models (LLMs) on limited hardware is challenging. Models may exceed available memory, and selecting quantization methods and bit widths requires specialist expertise. OneComp is an open-source Python library for resource-adaptive post-training quantization. With a single command, it detects available GPU memory, assigns layer-wise bit widths using AutoBit, performs quantization and error correction, evaluates the result, and saves the compressed model. OneComp incorporates Fujitsu’s latest model compression technologies, including Quantization Error Propagation (QEP) and JointQ. This talk will introduce how these techniques help preserve model quality at low precision and explain OneComp’s approach to making LLM compression more accessible.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>12:40 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343042" data-session-id="1343042">
+									<div class="sess has-primary" style="--primary-bg:hsl(25 70% 95%);--primary-border:hsl(25 70% 50%);--tag-bg:hsl(25 70% 95%);--tag-border:hsl(25 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">From Learners to Contributors: Growing the PyTorch Ecosystem through PyTorchKR</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Junghwan Park, Jiho Kim</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">PyTorch Ecosystem</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T12:40:00">
+											12:40 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T13:00:00">
+											1:00 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>How can a local PyTorch community turn learners into open-source contributors?</p><p>This talk shares lessons from eight years of PyTorch Korea, focusing on tutorials-kr, a community-maintained Korean translation of the official PyTorch tutorials. We explain how translated learning resources, university lectures, and open-source mentoring create entry points for developers, researchers, and students to contribute.</p><p>Our mentoring efforts supported 26 first-time contributors and 51 merged PRs to tutorials-kr, which has welcomed more than 160 contributors overall. We use this experience to discuss lowering the barrier to a first contribution, supporting contributors through review, and connecting learning activities with open-source participation. We also share how the vLLM Korea Meetup broadened knowledge exchange across the PyTorch ecosystem.</p><p>Attendees will leave with practical lessons for organizing contribution opportunities, connecting education with project maintenance, and measuring community reach and contribution outcomes separately.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>1:00 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361432" data-session-id="1361432">
+									<div class="sess has-primary" style="--primary-bg:hsl(171 70% 95%);--primary-border:hsl(171 70% 50%);--tag-bg:hsl(171 70% 95%);--tag-border:hsl(171 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Attendee Lunch</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																						</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Breaks + Meals + Special Events</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T13:00:00">
+											1:00 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T14:15:00">
+											2:15 PM										</time>
+									</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>2:15 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1341807" data-session-id="1341807">
+									<div class="sess has-primary" style="--primary-bg:hsl(274 70% 95%);--primary-border:hsl(274 70% 50%);--tag-bg:hsl(274 70% 95%);--tag-border:hsl(274 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Training Robot Policies from Object Storage: LeRobot&#039;s Native LanceDB Backend</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Daisuke Kobayashi</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Physical AI/Edge AI</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T14:15:00">
+											2:15 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T14:35:00">
+											2:35 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>LeRobot is Hugging Face&#039;s PyTorch library for real-world robotics, and its dataset format gave the community a shared standard. But robot learning data is multimodal and growing fast: long multi-camera videos, states, actions and language instructions in every episode. Training from object storage with global shuffling, and finding the right episodes first, still means copying data or stitching systems together.</p><p>LanceDB and the LeRobot team upstreamed LanceDB as the first non-LeRobot storage backend. Users keep the familiar LeRobotDataset API and read Lance datasets in place from the Hub, HF buckets or S3.</p><p>This session covers:<br>&#8211; How episodes, frames and videos are laid out as tables for random access<br>&#8211; Feeding PyTorch: map-style datasets, global shuffle from object storage, and pitfalls with parallel workers<br>&#8211; Using the same table to search, curate and train, with vector and full-text search<br>&#8211; What it took to move from an external plugin into LeRobot core</p><p>You&#039;ll leave with steps to try in your own LeRobot setup, and a clear view of when this design helps and its current limits.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>2:35 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343167" data-session-id="1343167">
+									<div class="sess has-primary" style="--primary-bg:hsl(274 70% 95%);--primary-border:hsl(274 70% 50%);--tag-bg:hsl(274 70% 95%);--tag-border:hsl(274 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">From PyTorch to Physical Action: Building Real-Time VLA Inference on Edge Devices</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Parichay Das</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Physical AI/Edge AI</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T14:35:00">
+											2:35 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T14:45:00">
+											2:45 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>Vision-Language-Action (VLA) models enable AI systems to perceive their environment, understand instructions, and perform physical actions; however, deploying VLA models on edge devices requires more than just getting inference running. Real-world systems have to satisfy strict requirements concerning latency, memory, power, thermal behavior, reliability, and security.</p><p>The talk describes a complete process for moving from a PyTorch VLA model to real-time on-device inference using torch.export and ExecuTorch on ARM-based edge devices. The deployment pipeline includes model optimization, quantization, hardware acceleration, and runtime execution.<br>Systematic examines the entire perception-to-action process, measuring end-to-end latency, memory usage, power consumption, sustained performance, thermal behavior, and task success. The presentation examines how various optimization techniques and hardware acceleration affect real-time performance.</p><p>The aim is to develop a practical method for determining when a PyTorch VLA model is ready for real-time Physical AI, moving beyond the simple criterion of &quot;it runs&quot; to &quot;it responds, performs, and acts reliably on the edge.&quot;</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>2:45 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1318087" data-session-id="1318087">
+									<div class="sess has-primary" style="--primary-bg:hsl(274 70% 95%);--primary-border:hsl(274 70% 50%);--tag-bg:hsl(274 70% 95%);--tag-border:hsl(274 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Kernels Without Borders: Unifying the Kernel Ecosystem</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Aritra Roy Gosthipaty, Sayak Paul</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Physical AI/Edge AI</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T14:45:00">
+											2:45 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T15:05:00">
+											3:05 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>High-performance PyTorch applications increasingly depend on specialized kernels, but writing a fast kernel is only part of the problem. Projects also need to build across hardware and software configurations, distribute kernels, manage compatibility, version them safely, and integrate them into their own stacks.</p><p>In this talk, Sayak Paul and Aritra Roy Gosthipaty will introduce Hugging Face Kernels and show how the Kernel Hub provides a common layer for building, versioning, distributing, and consuming optimized kernels across the PyTorch ecosystem.</p><p>We will show how this abstraction lets projects share optimized implementations without maintaining their own packaging and distribution infrastructure, from declaring kernel dependencies to selecting compatible builds and locking versions for reproducible deployments.</p><p>We will also discuss how Kernel Hub is evolving beyond PyTorch, with support for interfaces such as TVM-FFI, and examine adoption in projects such as SGLang to show how shared kernel infrastructure can reduce integration overhead.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>3:05 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1342758" data-session-id="1342758">
+									<div class="sess has-primary" style="--primary-bg:hsl(25 70% 95%);--primary-border:hsl(25 70% 50%);--tag-bg:hsl(25 70% 95%);--tag-border:hsl(25 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Adapting vLLM and SGLang to Diverse AI Accelerators with FlagOS</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Yunbo Wang</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">PyTorch Ecosystem</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T15:05:00">
+											3:05 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T15:25:00">
+											3:25 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>Adapting inference frameworks to different AI accelerators requires coordinated work across operators, compilers, runtimes, and communication. This talk uses vLLM and SGLang to show how FlagOS organizes that adaptation while preserving familiar serving interfaces.</p><p>We connect engine plugins to FlagGems operators and explain the roles of FlagTree&#039;s supported compiler paths and optional FlagCX communication. A concrete RMSNorm example shows how two engine interfaces reach shared computation while retaining framework-specific handling. Device-independent installation and vendor fallback illustrate additional hardware integration requirements.</p><p>We then examine validation across eager and graph modes, text and image requests, and cold-start behavior, using public vLLM plugin tests and documented SGLang deployment cases.</p><p>Attendees will learn how to structure multi-accelerator adaptation, decide what can be reused across frameworks and chips, and verify correctness and performance. The session is grounded in open-source code, upstream changes, and deployment evidence.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>3:20 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1331879" data-session-id="1331879">
+									<div class="sess has-primary" style="--primary-bg:hsl(25 70% 95%);--primary-border:hsl(25 70% 50%);--tag-bg:hsl(25 70% 95%);--tag-border:hsl(25 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Accelerating PyTorch on Apple silicon</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Irakli Salia, Nikita Shulga</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">PyTorch Ecosystem</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T15:20:00">
+											3:20 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T15:40:00">
+											3:40 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>At the start of 2026, running models on PyTorch&#039;s MPS backend would mean working around unsupported operations, performance bottlenecks and memory growth even for small models. Since then, MPS has become much more mature platform to run the regular models on locally.</p><p>This talk goes through the progress on the backend such as, fused attention for prefill/decode workloads, Flex Attention, native Metal kernels for linear algebra operations, convolutions, porting MPS Graph to Metal kernels and memory allocator changes which fixes unexpected memory growth. I&#039;ll connect these changes to real model workloads from Hugging Face across language, image and video models, showing how improvements across the backend add up to better user experience.</p><p>We&#039;ll look at where MPS stands today, where are it&#039;s limitations compared to MLX and what are the upcoming changes we can expect for the backend in the near future.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>3:45 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361490" data-session-id="1361490">
+									<div class="sess has-primary" style="--primary-bg:hsl(171 70% 95%);--primary-border:hsl(171 70% 50%);--tag-bg:hsl(171 70% 95%);--tag-border:hsl(171 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Coffee Break</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																						</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Breaks + Meals + Special Events</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T15:45:00">
+											3:45 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T16:15:00">
+											4:15 PM										</time>
+									</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>4:15 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343050" data-session-id="1343050">
+									<div class="sess has-primary" style="--primary-bg:hsl(25 70% 95%);--primary-border:hsl(25 70% 50%);--tag-bg:hsl(25 70% 95%);--tag-border:hsl(25 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Rethinking Model Loading: safetensors, Portability, and IBM Spyre</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Takeshi Yoshimura</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">PyTorch Ecosystem</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T16:15:00">
+											4:15 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T16:35:00">
+											4:35 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>safetensors is widely used to distribute model checkpoints, especially through Hugging Face. fastsafetensors is a high-performance loader that reduces loading overhead through optimized file access and device transfers. The speaker is a maintainer of fastsafetensors, which is integrated with PyTorch systems including vLLM and SGLang.</p><p>Portable checkpoints do not always match the tensor formats accelerators need. Loading may require data-type and memory-layout conversions in addition to I/O and transfers, and these conversions can remain a bottleneck even after I/O is optimized.</p><p>Using IBM Spyre as a case study, this talk presents extensions to fastsafetensors. Converted weights are written directly into output files in parallel across shards, reducing intermediate copies. Later loads reuse cached weights when the source weights, conversion settings, and environment remain compatible.</p><p>We discuss cache validation, creation cost, storage overhead, and the boundary between generic file handling and device-specific conversion. Attendees will learn how to preserve portable model distribution while efficiently preparing tensors for accelerator execution.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>4:35 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361901" data-session-id="1361901">
+									<div class="sess has-primary" style="--primary-bg:hsl(192 70% 95%);--primary-border:hsl(192 70% 50%);--tag-bg:hsl(192 70% 95%);--tag-border:hsl(192 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Where Do RL Environments Come From? Turning Real Data into Tasks, Rewards and Training</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Sergio Paniego Blanco, Adithya S Kolavi</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Sovereign AI</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T16:35:00">
+											4:35 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T16:55:00">
+											4:55 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>Frontier labs post-train models across thousands of RL environments. At their core, these environments expose two things: tasks for models to solve and verifiers that determine whether they succeed. The challenge is scaling both: generating diverse, high-quality tasks from real-world data and building robust verifiers that provide reliable rewards. Yet very little of this work is being done openly at scale.<br>We walk through four key decisions in building RL environments: choosing domains with real, verifiable data; turning that data into tasks with controlled difficulty; designing robust rewards that resist hacking; and packaging everything with OpenEnv and Harbor for scalable training and evaluation.<br>We then explore how these environments integrate with TRL for GRPO training, including agents running behind a proxy, and share practical examples across coding, games, multilingual OCR and speech, design, biology, and more, highlighting how the environments were built and what training showed.<br>All environments and recipes are open in FineEnvs: <a href="https://huggingface.co/FineEnvs" target="_blank" rel="noopener noreferrer">https://huggingface.co/FineEnvs</a></p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>5:15 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1325509" data-session-id="1325509">
+									<div class="sess has-primary" style="--primary-bg:hsl(274 70% 95%);--primary-border:hsl(274 70% 50%);--tag-bg:hsl(274 70% 95%);--tag-border:hsl(274 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">When the KV Cache Cannot Roll Back: Prefix Reuse on Android</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Alpha Romer Coma, Arjhine Ty</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Physical AI/Edge AI</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T17:15:00">
+											5:15 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T17:35:00">
+											5:35 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>An agent prompt on a phone can open with about 2,050 tokens of harness, 1,700 of them tool definitions. On a Dimensity 9500s, a 1,036-token prefix takes 9.3 s to prefill on LFM2.5-1.2B and 45 s on SmolLM3-3B; faster decode does nothing to that wait. We solved it with prefix reuse, built twice because our open source app ships two runtimes with different cache constraints.</p><p>ExecuTorch&#039;s Android API exposes prefill and full reset, but no partial rollback. We prefill the shared head at model load, then feed only the unmatched suffix while the prompt is an exact extension. On Qwen3-1.7B, a second turn reused 1,192 tokens and fed 20 new ones, cutting prefill to 215 ms, 27 times faster than the first turn. On our llama.cpp path, LFM2.5&#039;s recurrent state cannot rewind without per-token snapshots, so we snapshot the warmed 12 MB state and restore it; that 1,018-token prefix falls from 9,326 ms to 235 ms.</p><p>Correctness depends on byte identity. The date is pinned per conversation, history replays the engine&#039;s own bytes, changing reasoning mode invalidates the prefix, and truncated replies are never reused. We show cache rules, failures and regression tests; measurements and logs are public.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>5:55 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343082" data-session-id="1343082">
+									<div class="sess has-primary" style="--primary-bg:hsl(25 70% 95%);--primary-border:hsl(25 70% 50%);--tag-bg:hsl(25 70% 95%);--tag-border:hsl(25 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">DeepSpeed at the Frontier: Community-Driven Optimizations for State-of-the-Art Training Performance</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																								<span class="sess__speakers">Masahiro Tanaka</span>
+																									</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">PyTorch Ecosystem</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T17:55:00">
+											5:55 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T18:15:00">
+											6:15 PM										</time>
+									</div>
+																			<div class="sess__seodesc">
+											<p>DeepSpeed is a pioneering distributed training framework built on top of PyTorch, combining performance and scalability with ease of use. It has over 43,000 GitHub stars and one million+ monthly PyPI downloads. DeepSpeed now delivers performance competitive with other state-of-the-art frameworks on frontier models, with just a configuration change. This talk presents the key recent optimizations and benchmark results.<br>Best known for ZeRO, DeepSpeed has since added expert, sequence, and tensor parallelism (AutoEP, AutoSP, AutoTP) that compose with ZeRO and work with a wide range of models, including many Hugging Face models. Much of this progress has come from contributions by researchers and engineers across many organizations. AutoEP, for instance, brings optimized kernels and communication to large-scale MoE training, while DeepCompile optimizes communication scheduling and memory offloading at the compiler level using torch.compile. This success reflects DeepSpeed&#039;s open development, which draws a wide variety of contributions, including experimental and research-oriented features.</p>										</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+							<section class="slot">
+											<div class="slot__time">
+							<strong>6:15 PM</strong>
+						</div>
+					
+					<div class="slot__stack">
+																				<div class="sess-wrap">
+																<a class="sess-link" href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361487" data-session-id="1361487">
+									<div class="sess has-primary" style="--primary-bg:hsl(171 70% 95%);--primary-border:hsl(171 70% 50%);--tag-bg:hsl(171 70% 95%);--tag-border:hsl(171 70% 50%);">
+										<div class="sess__row">
+											<div class="sess__main">
+												<div class="sess__title">Attendee Reception</div>
+												<div class="sess__meta">
+																											<span class="sess__room">2F Hall</span>
+																																						</div>
+																									<div class="sess__tags">
+																													<span class="tag tag--primary">Breaks + Meals + Special Events</span>
+																																																							</div>
+																							</div>
+																					</div>
+									</div>
+								</a>
+
+																<div class="sess__seo" hidden>
+									<div class="sess__seotime">
+										<time datetime="2026-12-10T18:15:00">
+											6:15 PM										</time>
+										&ndash;
+										<time datetime="2026-12-10T19:15:00">
+											7:15 PM										</time>
+									</div>
+																										</div>
+							</div>
+											</div>
+				</section>
+						</div>
+	<div class="sched__gridwrap" data-role="gridwrap" hidden></div>
+	<div class="sched__speakerwall" data-role="speakerwall" hidden></div>
+
+			<script type="application/ld+json">{"@context":"https://schema.org","@type":"Event","name":"Schedule","startDate":"2026-12-10T09:00:00","endDate":"2026-12-10T19:15:00","subEvent":[{"@type":"Event","name":"Registration \u0026 Badge Pick-Up","startDate":"2026-12-10T09:00:00","endDate":"2026-12-10T18:00:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361491","location":{"@type":"Place","name":"2F Hall"}},{"@type":"Event","name":"Keynote Sessions to be Announced","startDate":"2026-12-10T10:00:00","endDate":"2026-12-10T11:10:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361523","location":{"@type":"Place","name":"2F Hall"}},{"@type":"Event","name":"Coffee Break","startDate":"2026-12-10T11:10:00","endDate":"2026-12-10T11:30:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361488","location":{"@type":"Place","name":"2F Hall"}},{"@type":"Event","name":"Beyond GPUs: A Practical Playbook for Bringing ExecuTorch to a New Edge Accelerator","startDate":"2026-12-10T11:30:00","endDate":"2026-12-10T11:50:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343025","description":"Edge and on-prem AI inference increasingly runs on silicon that isn't a GPU. This talk tells the story of bringing ExecuTorch — PyTorch's on-device inference runtime — to IBM's AIU, a purpose-built accelerator for enterprise inference, entirely through ExecuTorch's public backend-delegate extension points: a custom partitioner, an AOT-only compilation path with well-defined CPU-fallback…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Michiaki Tatsubori"},{"@type":"Person","name":"Tatsuhiro Chiba"}]},{"@type":"Event","name":"Five Bits on Metal: Adding Q5_K Quantization to ExecuTorch's MLX Backend","startDate":"2026-12-10T12:10:00","endDate":"2026-12-10T12:30:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1342950","description":"Run a GGUF model on a Mac and most of the work happens in a few hundred lines of Metal you've never read. This talk opens up one of them. Q5_K is among the most-used quantization formats in the GGUF ecosystem, and until recently ExecuTorch's MLX backend couldn't execute it. I'll walk through the upstream contribution that added it. We'll cover what's actually inside a Q5K super-block, an affine…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Suvrakamal Das"},{"@type":"Person","name":"Anika Tibrewala"}]},{"@type":"Event","name":"OneComp: One-Command LLM Quantization","startDate":"2026-12-10T12:30:00","endDate":"2026-12-10T12:40:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343099","description":"Deploying large language models (LLMs) on limited hardware is challenging. Models may exceed available memory, and selecting quantization methods and bit widths requires specialist expertise. OneComp is an open-source Python library for resource-adaptive post-training quantization. With a single command, it detects available GPU memory, assigns layer-wise bit widths using AutoBit, performs…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Akihiro Yoshida"}]},{"@type":"Event","name":"From Learners to Contributors: Growing the PyTorch Ecosystem through PyTorchKR","startDate":"2026-12-10T12:40:00","endDate":"2026-12-10T13:00:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343042","description":"How can a local PyTorch community turn learners into open-source contributors? This talk shares lessons from eight years of PyTorch Korea, focusing on tutorials-kr, a community-maintained Korean translation of the official PyTorch tutorials. We explain how translated learning resources, university lectures, and open-source mentoring create entry points for developers, researchers, and students to…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Junghwan Park"},{"@type":"Person","name":"Jiho Kim"}]},{"@type":"Event","name":"Attendee Lunch","startDate":"2026-12-10T13:00:00","endDate":"2026-12-10T14:15:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361432","location":{"@type":"Place","name":"2F Hall"}},{"@type":"Event","name":"Training Robot Policies from Object Storage: LeRobot's Native LanceDB Backend","startDate":"2026-12-10T14:15:00","endDate":"2026-12-10T14:35:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1341807","description":"LeRobot is Hugging Face's PyTorch library for real-world robotics, and its dataset format gave the community a shared standard. But robot learning data is multimodal and growing fast: long multi-camera videos, states, actions and language instructions in every episode. Training from object storage with global shuffling, and finding the right episodes first, still means copying data or stitching…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Daisuke Kobayashi"}]},{"@type":"Event","name":"From PyTorch to Physical Action: Building Real-Time VLA Inference on Edge Devices","startDate":"2026-12-10T14:35:00","endDate":"2026-12-10T14:45:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343167","description":"Vision-Language-Action (VLA) models enable AI systems to perceive their environment, understand instructions, and perform physical actions; however, deploying VLA models on edge devices requires more than just getting inference running. Real-world systems have to satisfy strict requirements concerning latency, memory, power, thermal behavior, reliability, and security. The talk describes a…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Parichay Das"}]},{"@type":"Event","name":"Kernels Without Borders: Unifying the Kernel Ecosystem","startDate":"2026-12-10T14:45:00","endDate":"2026-12-10T15:05:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1318087","description":"High-performance PyTorch applications increasingly depend on specialized kernels, but writing a fast kernel is only part of the problem. Projects also need to build across hardware and software configurations, distribute kernels, manage compatibility, version them safely, and integrate them into their own stacks. In this talk, Sayak Paul and Aritra Roy Gosthipaty will introduce Hugging Face…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Aritra Roy Gosthipaty"},{"@type":"Person","name":"Sayak Paul"}]},{"@type":"Event","name":"Adapting vLLM and SGLang to Diverse AI Accelerators with FlagOS","startDate":"2026-12-10T15:05:00","endDate":"2026-12-10T15:25:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1342758","description":"Adapting inference frameworks to different AI accelerators requires coordinated work across operators, compilers, runtimes, and communication. This talk uses vLLM and SGLang to show how FlagOS organizes that adaptation while preserving familiar serving interfaces. We connect engine plugins to FlagGems operators and explain the roles of FlagTree's supported compiler paths and optional FlagCX…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Yunbo Wang"}]},{"@type":"Event","name":"Accelerating PyTorch on Apple silicon","startDate":"2026-12-10T15:20:00","endDate":"2026-12-10T15:40:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1331879","description":"At the start of 2026, running models on PyTorch's MPS backend would mean working around unsupported operations, performance bottlenecks and memory growth even for small models. Since then, MPS has become much more mature platform to run the regular models on locally. This talk goes through the progress on the backend such as, fused attention for prefill/decode workloads, Flex Attention, native…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Irakli Salia"},{"@type":"Person","name":"Nikita Shulga"}]},{"@type":"Event","name":"Coffee Break","startDate":"2026-12-10T15:45:00","endDate":"2026-12-10T16:15:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361490","location":{"@type":"Place","name":"2F Hall"}},{"@type":"Event","name":"Rethinking Model Loading: safetensors, Portability, and IBM Spyre","startDate":"2026-12-10T16:15:00","endDate":"2026-12-10T16:35:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343050","description":"safetensors is widely used to distribute model checkpoints, especially through Hugging Face. fastsafetensors is a high-performance loader that reduces loading overhead through optimized file access and device transfers. The speaker is a maintainer of fastsafetensors, which is integrated with PyTorch systems including vLLM and SGLang. Portable checkpoints do not always match the tensor formats…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Takeshi Yoshimura"}]},{"@type":"Event","name":"Where Do RL Environments Come From? Turning Real Data into Tasks, Rewards and Training","startDate":"2026-12-10T16:35:00","endDate":"2026-12-10T16:55:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361901","description":"Frontier labs post-train models across thousands of RL environments. At their core, these environments expose two things: tasks for models to solve and verifiers that determine whether they succeed. The challenge is scaling both: generating diverse, high-quality tasks from real-world data and building robust verifiers that provide reliable rewards. Yet very little of this work is being done…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Sergio Paniego Blanco"},{"@type":"Person","name":"Adithya S Kolavi"}]},{"@type":"Event","name":"When the KV Cache Cannot Roll Back: Prefix Reuse on Android","startDate":"2026-12-10T17:15:00","endDate":"2026-12-10T17:35:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1325509","description":"An agent prompt on a phone can open with about 2,050 tokens of harness, 1,700 of them tool definitions. On a Dimensity 9500s, a 1,036-token prefix takes 9.3 s to prefill on LFM2.5-1.2B and 45 s on SmolLM3-3B; faster decode does nothing to that wait. We solved it with prefix reuse, built twice because our open source app ships two runtimes with different cache constraints. ExecuTorch's Android API…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Alpha Romer Coma"},{"@type":"Person","name":"Arjhine Ty"}]},{"@type":"Event","name":"DeepSpeed at the Frontier: Community-Driven Optimizations for State-of-the-Art Training Performance","startDate":"2026-12-10T17:55:00","endDate":"2026-12-10T18:15:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1343082","description":"DeepSpeed is a pioneering distributed training framework built on top of PyTorch, combining performance and scalability with ease of use. It has over 43,000 GitHub stars and one million+ monthly PyPI downloads. DeepSpeed now delivers performance competitive with other state-of-the-art frameworks on frontier models, with just a configuration change. This talk presents the key recent optimizations…","location":{"@type":"Place","name":"2F Hall"},"performer":[{"@type":"Person","name":"Masahiro Tanaka"}]},{"@type":"Event","name":"Attendee Reception","startDate":"2026-12-10T18:15:00","endDate":"2026-12-10T19:15:00","url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/?id=1361487","location":{"@type":"Place","name":"2F Hall"}}],"url":"https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/"}</script><script type="application/json" class="sched-data">{"all":{"sessions":[{"id":"1361491","title":"Registration \u0026 Badge Pick-Up","description":"","startsAt":"2026-12-10T09:00:00","endsAt":"2026-12-10T18:00:00","isServiceSession":false,"isPlenumSession":false,"speakers":[],"categoryItems":[519566],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false},{"id":"1361523","title":"Keynote Sessions to be Announced","description":"","startsAt":"2026-12-10T10:00:00","endsAt":"2026-12-10T11:10:00","isServiceSession":false,"isPlenumSession":false,"speakers":[],"categoryItems":[519580],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false},{"id":"1361488","title":"Coffee Break","description":"","startsAt":"2026-12-10T11:10:00","endsAt":"2026-12-10T11:30:00","isServiceSession":false,"isPlenumSession":false,"speakers":[],"categoryItems":[519565],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false},{"id":"1343025","title":"Beyond GPUs: A Practical Playbook for Bringing ExecuTorch to a New Edge Accelerator","description":"\u003Cp\u003EEdge and on-prem AI inference increasingly runs on silicon that isn\u0026#039;t a GPU. This talk tells the story of bringing ExecuTorch \u2014 PyTorch\u0026#039;s on-device inference runtime \u2014 to IBM\u0026#039;s AIU, a purpose-built accelerator for enterprise inference, entirely through ExecuTorch\u0026#039;s public backend-delegate extension points: a custom partitioner, an AOT-only compilation path with well-defined CPU-fallback boundaries, a mixed-dtype tensor bridge, and static bucketing for dynamic shapes.\u003C/p\u003E\u003Cp\u003EWe\u0026#039;ll walk through the concrete design decisions and dead ends behind a working, device-verified delegate running real language models (Granite) end-to-end on the AIU, then generalize them into a practical checklist for anyone extending ExecuTorch to a new, independent accelerator. Attendees will leave with a concrete map of ExecuTorch\u0026#039;s backend extension surface \u2014 what\u0026#039;s genuinely reusable, what\u0026#039;s hardware-specific, and where the sharp edges are \u2014 whether their target is a novel edge chip, an emerging vendor\u0026#039;s silicon, or an in-house accelerator.\u003C/p\u003E","startsAt":"2026-12-10T11:30:00","endsAt":"2026-12-10T11:50:00","isServiceSession":false,"isPlenumSession":false,"speakers":["d2f0452a-2f46-41c2-b83b-d47cf1a5ba36","0a454633-5fec-45fb-a412-15ba01cc4124"],"categoryItems":[504302],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1342950","title":"Five Bits on Metal: Adding Q5_K Quantization to ExecuTorch\u0027s MLX Backend","description":"\u003Cp\u003ERun a GGUF model on a Mac and most of the work happens in a few hundred lines of Metal you\u0026#039;ve never read. This talk opens up one of them.\u003C/p\u003E\u003Cp\u003EQ5_K is among the most-used quantization formats in the GGUF ecosystem, and until recently ExecuTorch\u0026#039;s MLX backend couldn\u0026#039;t execute it. I\u0026#039;ll walk through the upstream contribution that added it.\u003C/p\u003E\u003Cp\u003EWe\u0026#039;ll cover what\u0026#039;s actually inside a Q5\u003Cem\u003EK super-block, an affine d/dmin block, 6-bit packed sub-block scales, and a separate array holding each weight\u0026#039;s 5th bit, and why that layout forces real kernel design rather than a copy of Q4\u003C/em\u003EK. Then the two kernels every decoder needs: a mat-vec for decode, a tiled simdgroup mat-mat for prefill, and dynamic-M dispatch between them. With benchmarks: Q4\u003Cem\u003EK vs Q5\u003C/em\u003EK vs Q6_K tokens/sec and memory on Apple silicon.\u003C/p\u003E\u003Cp\u003EYou\u0026#039;ll leave knowing how block quantization really works on-device, and how to get your own kernel merged into a PyTorch runtime.\u003C/p\u003E","startsAt":"2026-12-10T12:10:00","endsAt":"2026-12-10T12:30:00","isServiceSession":false,"isPlenumSession":false,"speakers":["ceb969d0-839e-4cda-b59e-dd5c714e0b79","5c0e7a6b-a0d3-40aa-a1a9-aa669d70d434"],"categoryItems":[509273],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false},{"id":"1343099","title":"OneComp: One-Command LLM Quantization","description":"\u003Cp\u003EDeploying large language models (LLMs) on limited hardware is challenging. Models may exceed available memory, and selecting quantization methods and bit widths requires specialist expertise. OneComp is an open-source Python library for resource-adaptive post-training quantization. With a single command, it detects available GPU memory, assigns layer-wise bit widths using AutoBit, performs quantization and error correction, evaluates the result, and saves the compressed model. OneComp incorporates Fujitsu\u2019s latest model compression technologies, including Quantization Error Propagation (QEP) and JointQ. This talk will introduce how these techniques help preserve model quality at low precision and explain OneComp\u2019s approach to making LLM compression more accessible.\u003C/p\u003E","startsAt":"2026-12-10T12:30:00","endsAt":"2026-12-10T12:40:00","isServiceSession":false,"isPlenumSession":false,"speakers":["118f89fd-13fd-4225-a884-c7b7b688233a"],"categoryItems":[504301],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false},{"id":"1343042","title":"From Learners to Contributors: Growing the PyTorch Ecosystem through PyTorchKR","description":"\u003Cp\u003EHow can a local PyTorch community turn learners into open-source contributors?\u003C/p\u003E\u003Cp\u003EThis talk shares lessons from eight years of PyTorch Korea, focusing on tutorials-kr, a community-maintained Korean translation of the official PyTorch tutorials. We explain how translated learning resources, university lectures, and open-source mentoring create entry points for developers, researchers, and students to contribute.\u003C/p\u003E\u003Cp\u003EOur mentoring efforts supported 26 first-time contributors and 51 merged PRs to tutorials-kr, which has welcomed more than 160 contributors overall. We use this experience to discuss lowering the barrier to a first contribution, supporting contributors through review, and connecting learning activities with open-source participation. We also share how the vLLM Korea Meetup broadened knowledge exchange across the PyTorch ecosystem.\u003C/p\u003E\u003Cp\u003EAttendees will leave with practical lessons for organizing contribution opportunities, connecting education with project maintenance, and measuring community reach and contribution outcomes separately.\u003C/p\u003E","startsAt":"2026-12-10T12:40:00","endsAt":"2026-12-10T13:00:00","isServiceSession":false,"isPlenumSession":false,"speakers":["f9bbab45-3489-4949-a142-b59b504f19ae","5fcfc4a1-e0d5-4113-ba1b-ac0eaba3a7bb"],"categoryItems":[509273],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1361432","title":"Attendee Lunch","description":"","startsAt":"2026-12-10T13:00:00","endsAt":"2026-12-10T14:15:00","isServiceSession":false,"isPlenumSession":false,"speakers":[],"categoryItems":[519565],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1341807","title":"Training Robot Policies from Object Storage: LeRobot\u0027s Native LanceDB Backend","description":"\u003Cp\u003ELeRobot is Hugging Face\u0026#039;s PyTorch library for real-world robotics, and its dataset format gave the community a shared standard. But robot learning data is multimodal and growing fast: long multi-camera videos, states, actions and language instructions in every episode. Training from object storage with global shuffling, and finding the right episodes first, still means copying data or stitching systems together.\u003C/p\u003E\u003Cp\u003ELanceDB and the LeRobot team upstreamed LanceDB as the first non-LeRobot storage backend. Users keep the familiar LeRobotDataset API and read Lance datasets in place from the Hub, HF buckets or S3.\u003C/p\u003E\u003Cp\u003EThis session covers:\u003Cbr\u003E- How episodes, frames and videos are laid out as tables for random access\u003Cbr\u003E- Feeding PyTorch: map-style datasets, global shuffle from object storage, and pitfalls with parallel workers\u003Cbr\u003E- Using the same table to search, curate and train, with vector and full-text search\u003Cbr\u003E- What it took to move from an external plugin into LeRobot core\u003C/p\u003E\u003Cp\u003EYou\u0026#039;ll leave with steps to try in your own LeRobot setup, and a clear view of when this design helps and its current limits.\u003C/p\u003E","startsAt":"2026-12-10T14:15:00","endsAt":"2026-12-10T14:35:00","isServiceSession":false,"isPlenumSession":false,"speakers":["9114f766-b127-4e17-9ec8-8a91145faded"],"categoryItems":[504302],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1343167","title":"From PyTorch to Physical Action: Building Real-Time VLA Inference on Edge Devices","description":"\u003Cp\u003EVision-Language-Action (VLA) models enable AI systems to perceive their environment, understand instructions, and perform physical actions; however, deploying VLA models on edge devices requires more than just getting inference running. Real-world systems have to satisfy strict requirements concerning latency, memory, power, thermal behavior, reliability, and security.\u003C/p\u003E\u003Cp\u003EThe talk describes a complete process for moving from a PyTorch VLA model to real-time on-device inference using torch.export and ExecuTorch on ARM-based edge devices. The deployment pipeline includes model optimization, quantization, hardware acceleration, and runtime execution.\u003Cbr\u003ESystematic examines the entire perception-to-action process, measuring end-to-end latency, memory usage, power consumption, sustained performance, thermal behavior, and task success. The presentation examines how various optimization techniques and hardware acceleration affect real-time performance.\u003C/p\u003E\u003Cp\u003EThe aim is to develop a practical method for determining when a PyTorch VLA model is ready for real-time Physical AI, moving beyond the simple criterion of \u0026quot;it runs\u0026quot; to \u0026quot;it responds, performs, and acts reliably on the edge.\u0026quot;\u003C/p\u003E","startsAt":"2026-12-10T14:35:00","endsAt":"2026-12-10T14:45:00","isServiceSession":false,"isPlenumSession":false,"speakers":["56be4dff-6c99-4b27-8276-ed710005fff4"],"categoryItems":[504302],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1318087","title":"Kernels Without Borders: Unifying the Kernel Ecosystem","description":"\u003Cp\u003EHigh-performance PyTorch applications increasingly depend on specialized kernels, but writing a fast kernel is only part of the problem. Projects also need to build across hardware and software configurations, distribute kernels, manage compatibility, version them safely, and integrate them into their own stacks.\u003C/p\u003E\u003Cp\u003EIn this talk, Sayak Paul and Aritra Roy Gosthipaty will introduce Hugging Face Kernels and show how the Kernel Hub provides a common layer for building, versioning, distributing, and consuming optimized kernels across the PyTorch ecosystem.\u003C/p\u003E\u003Cp\u003EWe will show how this abstraction lets projects share optimized implementations without maintaining their own packaging and distribution infrastructure, from declaring kernel dependencies to selecting compatible builds and locking versions for reproducible deployments.\u003C/p\u003E\u003Cp\u003EWe will also discuss how Kernel Hub is evolving beyond PyTorch, with support for interfaces such as TVM-FFI, and examine adoption in projects such as SGLang to show how shared kernel infrastructure can reduce integration overhead.\u003C/p\u003E","startsAt":"2026-12-10T14:45:00","endsAt":"2026-12-10T15:05:00","isServiceSession":false,"isPlenumSession":false,"speakers":["6fe12f66-25c9-4b02-b071-6aa347be8d46","43829f01-f979-48a4-9e05-eb794b92d64f"],"categoryItems":[504302],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1342758","title":"Adapting vLLM and SGLang to Diverse AI Accelerators with FlagOS","description":"\u003Cp\u003EAdapting inference frameworks to different AI accelerators requires coordinated work across operators, compilers, runtimes, and communication. This talk uses vLLM and SGLang to show how FlagOS organizes that adaptation while preserving familiar serving interfaces.\u003C/p\u003E\u003Cp\u003EWe connect engine plugins to FlagGems operators and explain the roles of FlagTree\u0026#039;s supported compiler paths and optional FlagCX communication. A concrete RMSNorm example shows how two engine interfaces reach shared computation while retaining framework-specific handling. Device-independent installation and vendor fallback illustrate additional hardware integration requirements.\u003C/p\u003E\u003Cp\u003EWe then examine validation across eager and graph modes, text and image requests, and cold-start behavior, using public vLLM plugin tests and documented SGLang deployment cases.\u003C/p\u003E\u003Cp\u003EAttendees will learn how to structure multi-accelerator adaptation, decide what can be reused across frameworks and chips, and verify correctness and performance. The session is grounded in open-source code, upstream changes, and deployment evidence.\u003C/p\u003E","startsAt":"2026-12-10T15:05:00","endsAt":"2026-12-10T15:25:00","isServiceSession":false,"isPlenumSession":false,"speakers":["8473124e-ba04-45a0-9d97-502baa1b8b96"],"categoryItems":[509273],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1331879","title":"Accelerating PyTorch on Apple silicon","description":"\u003Cp\u003EAt the start of 2026, running models on PyTorch\u0026#039;s MPS backend would mean working around unsupported operations, performance bottlenecks and memory growth even for small models. Since then, MPS has become much more mature platform to run the regular models on locally.\u003C/p\u003E\u003Cp\u003EThis talk goes through the progress on the backend such as, fused attention for prefill/decode workloads, Flex Attention, native Metal kernels for linear algebra operations, convolutions, porting MPS Graph to Metal kernels and memory allocator changes which fixes unexpected memory growth. I\u0026#039;ll connect these changes to real model workloads from Hugging Face across language, image and video models, showing how improvements across the backend add up to better user experience.\u003C/p\u003E\u003Cp\u003EWe\u0026#039;ll look at where MPS stands today, where are it\u0026#039;s limitations compared to MLX and what are the upcoming changes we can expect for the backend in the near future.\u003C/p\u003E","startsAt":"2026-12-10T15:20:00","endsAt":"2026-12-10T15:40:00","isServiceSession":false,"isPlenumSession":false,"speakers":["dfbe966e-f6cd-4150-914c-f4dabc26c22d","b357fc92-c327-4570-a459-0c24d7f710fd"],"categoryItems":[509273],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1361490","title":"Coffee Break","description":"","startsAt":"2026-12-10T15:45:00","endsAt":"2026-12-10T16:15:00","isServiceSession":false,"isPlenumSession":false,"speakers":[],"categoryItems":[519565],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false},{"id":"1343050","title":"Rethinking Model Loading: safetensors, Portability, and IBM Spyre","description":"\u003Cp\u003Esafetensors is widely used to distribute model checkpoints, especially through Hugging Face. fastsafetensors is a high-performance loader that reduces loading overhead through optimized file access and device transfers. The speaker is a maintainer of fastsafetensors, which is integrated with PyTorch systems including vLLM and SGLang.\u003C/p\u003E\u003Cp\u003EPortable checkpoints do not always match the tensor formats accelerators need. Loading may require data-type and memory-layout conversions in addition to I/O and transfers, and these conversions can remain a bottleneck even after I/O is optimized.\u003C/p\u003E\u003Cp\u003EUsing IBM Spyre as a case study, this talk presents extensions to fastsafetensors. Converted weights are written directly into output files in parallel across shards, reducing intermediate copies. Later loads reuse cached weights when the source weights, conversion settings, and environment remain compatible.\u003C/p\u003E\u003Cp\u003EWe discuss cache validation, creation cost, storage overhead, and the boundary between generic file handling and device-specific conversion. Attendees will learn how to preserve portable model distribution while efficiently preparing tensors for accelerator execution.\u003C/p\u003E","startsAt":"2026-12-10T16:15:00","endsAt":"2026-12-10T16:35:00","isServiceSession":false,"isPlenumSession":false,"speakers":["092d4cd8-736a-48a9-bded-6a754e15239b"],"categoryItems":[509273],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1361901","title":"Where Do RL Environments Come From? Turning Real Data into Tasks, Rewards and Training","description":"\u003Cp\u003EFrontier labs post-train models across thousands of RL environments. At their core, these environments expose two things: tasks for models to solve and verifiers that determine whether they succeed. The challenge is scaling both: generating diverse, high-quality tasks from real-world data and building robust verifiers that provide reliable rewards. Yet very little of this work is being done openly at scale.\u003Cbr\u003EWe walk through four key decisions in building RL environments: choosing domains with real, verifiable data; turning that data into tasks with controlled difficulty; designing robust rewards that resist hacking; and packaging everything with OpenEnv and Harbor for scalable training and evaluation.\u003Cbr\u003EWe then explore how these environments integrate with TRL for GRPO training, including agents running behind a proxy, and share practical examples across coding, games, multilingual OCR and speech, design, biology, and more, highlighting how the environments were built and what training showed.\u003Cbr\u003EAll environments and recipes are open in FineEnvs: \u003Ca href=\u0022https://huggingface.co/FineEnvs\u0022 target=\u0022_blank\u0022 rel=\u0022noopener noreferrer\u0022\u003Ehttps://huggingface.co/FineEnvs\u003C/a\u003E\u003C/p\u003E","startsAt":"2026-12-10T16:35:00","endsAt":"2026-12-10T16:55:00","isServiceSession":false,"isPlenumSession":false,"speakers":["61d7a90f-9744-4ad8-bb0d-34e5961881e6","245793f5-74a9-4abd-a3e3-c011fc394297"],"categoryItems":[504301],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false},{"id":"1325509","title":"When the KV Cache Cannot Roll Back: Prefix Reuse on Android","description":"\u003Cp\u003EAn agent prompt on a phone can open with about 2,050 tokens of harness, 1,700 of them tool definitions. On a Dimensity 9500s, a 1,036-token prefix takes 9.3 s to prefill on LFM2.5-1.2B and 45 s on SmolLM3-3B; faster decode does nothing to that wait. We solved it with prefix reuse, built twice because our open source app ships two runtimes with different cache constraints.\u003C/p\u003E\u003Cp\u003EExecuTorch\u0026#039;s Android API exposes prefill and full reset, but no partial rollback. We prefill the shared head at model load, then feed only the unmatched suffix while the prompt is an exact extension. On Qwen3-1.7B, a second turn reused 1,192 tokens and fed 20 new ones, cutting prefill to 215 ms, 27 times faster than the first turn. On our llama.cpp path, LFM2.5\u0026#039;s recurrent state cannot rewind without per-token snapshots, so we snapshot the warmed 12 MB state and restore it; that 1,018-token prefix falls from 9,326 ms to 235 ms.\u003C/p\u003E\u003Cp\u003ECorrectness depends on byte identity. The date is pinned per conversation, history replays the engine\u0026#039;s own bytes, changing reasoning mode invalidates the prefix, and truncated replies are never reused. We show cache rules, failures and regression tests; measurements and logs are public.\u003C/p\u003E","startsAt":"2026-12-10T17:15:00","endsAt":"2026-12-10T17:35:00","isServiceSession":false,"isPlenumSession":false,"speakers":["eb1c0730-ac16-4794-9f15-edb9ac0e612c","eccc54f0-91d7-4694-8b66-f3e68449423c"],"categoryItems":[504302],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1343082","title":"DeepSpeed at the Frontier: Community-Driven Optimizations for State-of-the-Art Training Performance","description":"\u003Cp\u003EDeepSpeed is a pioneering distributed training framework built on top of PyTorch, combining performance and scalability with ease of use. It has over 43,000 GitHub stars and one million+ monthly PyPI downloads. DeepSpeed now delivers performance competitive with other state-of-the-art frameworks on frontier models, with just a configuration change. This talk presents the key recent optimizations and benchmark results.\u003Cbr\u003EBest known for ZeRO, DeepSpeed has since added expert, sequence, and tensor parallelism (AutoEP, AutoSP, AutoTP) that compose with ZeRO and work with a wide range of models, including many Hugging Face models. Much of this progress has come from contributions by researchers and engineers across many organizations. AutoEP, for instance, brings optimized kernels and communication to large-scale MoE training, while DeepCompile optimizes communication scheduling and memory offloading at the compiler level using torch.compile. This success reflects DeepSpeed\u0026#039;s open development, which draws a wide variety of contributions, including experimental and research-oriented features.\u003C/p\u003E","startsAt":"2026-12-10T17:55:00","endsAt":"2026-12-10T18:15:00","isServiceSession":false,"isPlenumSession":false,"speakers":["c9095c0b-90d0-42bd-8756-b466acb78617"],"categoryItems":[509273],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":true},{"id":"1361487","title":"Attendee Reception","description":"","startsAt":"2026-12-10T18:15:00","endsAt":"2026-12-10T19:15:00","isServiceSession":false,"isPlenumSession":false,"speakers":[],"categoryItems":[519565],"questionAnswers":[],"roomId":89038,"liveUrl":null,"recordingUrl":null,"status":"Accepted","isInformed":true,"isConfirmed":false}],"speakers":[{"id":"245793f5-74a9-4abd-a3e3-c011fc394297","firstName":"Adithya S","lastName":"Kolavi","bio":"Adithya S Kolavi works on post-training and reinforcement learning at HuggingFace, where he builds open RL environments and training recipes and contributes to OpenEnv. He was previously at Apple and Microsoft Research, and founded CognitiveLab a open source first research lab which received a grant from Meta for building foundation multilingual ,multimodal models. He wrote the ultimate guide to RL environments, read by over 30,000 people, and has 13k+ stars across his open source repositories.","tagLine":"Post-Training \u0026 RL, Hugging Face","profilePicture":"https://cdn.sessionize.com/image/1dfc-400o400o1-7n9C663Rf7pSbrBUScXEQN.jpg","isTopSpeaker":false,"links":[],"sessions":[1361901],"fullName":"Adithya S Kolavi","categoryItems":[],"questionAnswers":[]},{"id":"118f89fd-13fd-4225-a884-c7b7b688233a","firstName":"Akihiro","lastName":"Yoshida","bio":"Akihiro Yoshida is a Senior Researcher at Fujitsu and a Visiting Assistant Professor at the Institute of Science Tokyo. His research focuses on efficient and reliable LLMs, including mixed-precision quantization and model controllability. He is a core maintainer of OneComp, an open-source framework for automated, resource-adaptive LLM compression. He received his Ph.D. in Functional Mathematics from Kyushu University in 2025, specializing in mathematical optimization and machine learning.","tagLine":"Senior Researcher, Artificial Intelligence Laboratory, Fujitsu Ltd","profilePicture":"https://cdn.sessionize.com/image/3b14-400o400o1-h5b11FqoVXr6xbAGfEeeiw.png","isTopSpeaker":false,"links":[],"sessions":[1343099],"fullName":"Akihiro Yoshida","categoryItems":[],"questionAnswers":[]},{"id":"eb1c0730-ac16-4794-9f15-edb9ac0e612c","firstName":"Alpha Romer","lastName":"Coma","bio":"Alpha Romer Coma is a PyTorch Foundation Ambassador and Senior Data Engineer at ViableView, in the Philippines. He develops OpenWeights, an Apache-2.0 Android app that runs open-weight LLMs entirely on device, where he added ExecuTorch beside llama.cpp for eight model families and measured both runtimes on five SoCs.\r\n\r\nAt PyTorch Conference Europe 2026 in Paris he presented on when to move PyTorch development to AI accelerators, benchmarking H100, TPU v6e and Trainium1.","tagLine":"ML Researcher \u0026 PyTorch Foundation Ambassador","profilePicture":"https://cdn.sessionize.com/image/a447-400o400o1-QfuRDzM6UGJoeW7n8MAPAf.jpg","isTopSpeaker":false,"links":[],"sessions":[1325509],"fullName":"Alpha Romer Coma","categoryItems":[],"questionAnswers":[]},{"id":"5c0e7a6b-a0d3-40aa-a1a9-aa669d70d434","firstName":"Anika","lastName":"Tibrewala","bio":"Hello there! About myself, I\u2019m currently working as a Software Engineer at Visa, and I absolutely love communities and hackathons. Love coding and all things tech, interacting with tech enthusiasts, organising various community events, workshops and more!","tagLine":"SWE@Visa","profilePicture":"https://cdn.sessionize.com/image/b195-400o400o1-uWwQYpo3LAXJGAmhb3Gcn.jpeg","isTopSpeaker":false,"links":[],"sessions":[1342950],"fullName":"Anika Tibrewala","categoryItems":[],"questionAnswers":[]},{"id":"6fe12f66-25c9-4b02-b071-6aa347be8d46","firstName":"Aritra","lastName":"Roy Gosthipaty","bio":"Aritra Roy Gosthipaty is a Machine Learning Engineer at Hugging Face. With extensive experience in artificial intelligence, he specializes in developing and advancing vision-language models, contributing to cutting-edge innovations in multimodal systems. Aritra delivers authoritative insights into emerging technologies, equipping audiences with a deeper understanding of machine learning applications.\r\n\r\n","tagLine":"Machine Learning Engineer at Hugging Face","profilePicture":"https://cdn.sessionize.com/image/c944-400o400o1-ppY8m6vW7DnLivwxB7zHWT.jpg","isTopSpeaker":false,"links":[],"sessions":[1318087],"fullName":"Aritra Roy Gosthipaty","categoryItems":[],"questionAnswers":[]},{"id":"eccc54f0-91d7-4694-8b66-f3e68449423c","firstName":"Arjhine","lastName":"Ty","bio":"Arjhine A. Ty is a Machine Learning Engineer, AI Strategist at Moovsoon, and co-founder of Experimental Machines.\r\n\r\nHe develops OpenGrad, an open research program on post-training, evaluation, and inference for small open-weight models.\r\n\r\nHis work also explores provenance-first research retrieval, reproducible ML experimentation, quantization, distributed training, and PyTorch-based systems across accelerator and edge hardware.","tagLine":"ML Research Engineer","profilePicture":"https://cdn.sessionize.com/image/b4bd-400o400o1-prTTRpeujfY3uQqJc31L9X.jpg","isTopSpeaker":false,"links":[],"sessions":[1325509],"fullName":"Arjhine Ty","categoryItems":[],"questionAnswers":[]},{"id":"9114f766-b127-4e17-9ec8-8a91145faded","firstName":"Daisuke","lastName":"Kobayashi","bio":"Daisuke Kobayashi is a Support Engineer at LanceDB, which builds the Multimodal Lakehouse for AI. Before joining LanceDB, he spent many years at Cloudera and Redpanda troubleshooting distributed processing and storage systems for enterprise customers.","tagLine":"LanceDB, Support Engineer","profilePicture":"https://cdn.sessionize.com/image/637d-400o400o1-ss8njPfT9tjvQoBh5zX9Gk.png","isTopSpeaker":false,"links":[],"sessions":[1341807],"fullName":"Daisuke Kobayashi","categoryItems":[],"questionAnswers":[]},{"id":"dfbe966e-f6cd-4150-914c-f4dabc26c22d","firstName":"Irakli","lastName":"Salia","bio":"Irakli Salia is a Machine Learning Engineer at Hugging Face, working on model performance and GPU kernels. He won the PyTorch Contributor Award for 2025 and contributes actively to PyTorch, focused on making its MPS backend competitive so that fast local inference is available to everyone on an Apple-silicon Mac.","tagLine":"HuggingFace - Machine Learning Engineer","profilePicture":"https://cdn.sessionize.com/image/8a51-400o400o1-nxzGbxmmWWbCNGpymAx2rQ.jpg","isTopSpeaker":false,"links":[],"sessions":[1331879],"fullName":"Irakli Salia","categoryItems":[],"questionAnswers":[]},{"id":"5fcfc4a1-e0d5-4113-ba1b-ac0eaba3a7bb","firstName":"Jiho","lastName":"Kim","bio":"Jiho Kim is a PyTorch Ambassador and an organizer of PyTorchKR. She maintains tutorials-kr, the Korean translation of the official PyTorch tutorials, and mentors first-time open-source contributors. She speaks at international meetups, universities, and community events, sharing the latest PyTorch releases, AI research trends, and real-world applications. By day, she builds production AI systems for robotics startups in Korea using PyTorch.","tagLine":"PyTorch Foundation Ambassador \u00b7 Organizer, PyTorch Korea User Group","profilePicture":"https://cdn.sessionize.com/image/db95-400o400o1-4v7ympRdwLKzVD92duxJxX.jpg","isTopSpeaker":false,"links":[],"sessions":[1343042],"fullName":"Jiho Kim","categoryItems":[],"questionAnswers":[]},{"id":"f9bbab45-3489-4949-a142-b59b504f19ae","firstName":"Junghwan","lastName":"Park","bio":"- AI/Data engineer at telecommunication company in Korea\r\n- Lead maintainer at PyTorch Korea User Group\r\n- PyTorch Ambassador since 2025/09 ~\r\n- AAIF Ambassador since 2026/07 ~\r\n- Interested in open-source, community and time-series forecasting","tagLine":"Lead Maintainer @ PyTorchKR | PyTorch \u0026 AAIF Ambassador","profilePicture":"https://cdn.sessionize.com/image/6dc1-400o400o1-3MeRtQbhSQoxJcBow1ix4s.png","isTopSpeaker":false,"links":[],"sessions":[1343042],"fullName":"Junghwan Park","categoryItems":[],"questionAnswers":[]},{"id":"c9095c0b-90d0-42bd-8756-b466acb78617","firstName":"Masahiro","lastName":"Tanaka","bio":"Masahiro Tanaka is a member of the DeepSpeed Technical Steering Committee. His work focuses on distributed training, automatic parallelization, and high-performance AI systems. He has led or contributed to DeepSpeed-Ulysses, DeepCompile, and large-scale LLM training projects including Phi and MAI-DS-R1, where the training infrastructure operated across thousands of GPUs.","tagLine":"DeepSpeed","profilePicture":"https://cdn.sessionize.com/image/5133-400o400o1-LSqGr6syxXzDqhTW852fvm.png","isTopSpeaker":false,"links":[],"sessions":[1343082],"fullName":"Masahiro Tanaka","categoryItems":[],"questionAnswers":[]},{"id":"d2f0452a-2f46-41c2-b83b-d47cf1a5ba36","firstName":"Michiaki","lastName":"Tatsubori","bio":"Mich Tatsubori, PhD., is a Senior Technical Staff Member at IBM Research, specializing in AI hardware and ML system software. He leads efforts to bring PyTorch-based inference stacks to IBM\u0027s purpose-built accelerators, including the ExecuTorch backend delegate described in this talk. His work bridges compiler infrastructure, runtime design, and silicon bring-up across IBM Research and product teams.","tagLine":"ExecuTorch for IBM AIU","profilePicture":"https://cdn.sessionize.com/image/d6a5-400o400o1-VVYduC1cxWR1URf1V85vCY.jpg","isTopSpeaker":false,"links":[],"sessions":[1343025],"fullName":"Michiaki Tatsubori","categoryItems":[],"questionAnswers":[]},{"id":"b357fc92-c327-4570-a459-0c24d7f710fd","firstName":"Nikita","lastName":"Shulga","bio":"Nikita has been working on the PyTorch for the last 6 years, touching range of topics from maintaining continuous integration and deployment systems to enabling PyTorch on emerging hardware platforms.","tagLine":"PyTorch Maintainer","profilePicture":"https://cdn.sessionize.com/image/b35e-400o400o1-aCFUAgRwM5vSja6J3uWWHS.jpg","isTopSpeaker":false,"links":[],"sessions":[1331879],"fullName":"Nikita Shulga","categoryItems":[],"questionAnswers":[]},{"id":"56be4dff-6c99-4b27-8276-ed710005fff4","firstName":"Parichay","lastName":"Das","bio":"Parichay is a technology leader with 15 years of experience in AI, Generative AI, Solution Architecture, Strategy, Data Analytics, and Cloud. A gold medalist and Master\u2019s graduate, he advises global enterprises on AI transformation. He is a Distinguished ARM Ambassador, industry speaker, panelist, mentor, and judge, with 1,000+ mentees. He has also been a speaker at PyTorch Conference North America 2025 and 2026.","tagLine":"Principal Architect \u2013 AI Solutions at LTM Limited | Distinguished Arm Ambassador","profilePicture":"https://cdn.sessionize.com/image/01ee-400o400o1-366nLMYWnZx9KXfSHwHJHv.jpg","isTopSpeaker":false,"links":[],"sessions":[1343167],"fullName":"Parichay Das","categoryItems":[],"questionAnswers":[]},{"id":"43829f01-f979-48a4-9e05-eb794b92d64f","firstName":"Sayak","lastName":"Paul","bio":"Sayak works on image and video generation at Hugging Face. His day to day includes contributing to the Diffusers library, training, and babysitting models, and making and breaking CIs. ","tagLine":"Research Engineer at Hugging Face","profilePicture":"https://cdn.sessionize.com/image/02a8-400o400o1-Ru7UdQVghnLNv6YWtLXTBj.jpg","isTopSpeaker":false,"links":[],"sessions":[1318087],"fullName":"Sayak Paul","categoryItems":[],"questionAnswers":[]},{"id":"61d7a90f-9744-4ad8-bb0d-34e5961881e6","firstName":"Sergio","lastName":"Paniego Blanco","bio":"Sergio Paniego is a Machine Learning Engineer at Hugging Face, where he does advocacy for post-training, around TRL and OpenEnv, turning what frontier labs do into recipes other people can actually run. He holds a PhD in artificial intelligence and has spent years contributing to open source, as a developer and as a mentor.","tagLine":"Hugging Face - Machine Learning Engineer","profilePicture":"https://cdn.sessionize.com/image/68af-400o400o1-RRNN68UU8NVDPFmAzzQ3Kz.jpg","isTopSpeaker":false,"links":[],"sessions":[1361901],"fullName":"Sergio Paniego Blanco","categoryItems":[],"questionAnswers":[]},{"id":"ceb969d0-839e-4cda-b59e-dd5c714e0b79","firstName":"Suvrakamal","lastName":"Das","bio":"Suvrakamal is an ML Engineer at Mattoboard. He works on AI for interior design. He is passionate about applying machine learning and data engineering to bring real design workflows to life.\r\nHe has given talks and published papers across AI, and recently presented a poster/papers at PyCon US 2026, Pytorch 2025.\r\n","tagLine":"Machine Learning Engineer","profilePicture":"https://cdn.sessionize.com/image/0b4d-400o400o1-MzpDarNdpaz1UyBd9jUKXK.jpg","isTopSpeaker":false,"links":[],"sessions":[1342950],"fullName":"Suvrakamal Das","categoryItems":[],"questionAnswers":[]},{"id":"092d4cd8-736a-48a9-bded-6a754e15239b","firstName":"Takeshi","lastName":"Yoshimura","bio":"Takeshi Yoshimura is a Research Scientist at IBM Research, where he specializes in cloud infrastructure software. His expertise spans operating systems, parallel distributed systems, containers, and high-performance storage software. His research has been published in IEEE Cloud, IEEE MASCOTS, BigData, and USENIX HotStorage.\r\nhttps://research.ibm.com/people/takeshi-yoshimura","tagLine":"IBM Research - Tokyo","profilePicture":"https://cdn.sessionize.com/image/d5b5-400o400o1-Usc7D6e86mLsqNsXrsmCEX.jpg","isTopSpeaker":false,"links":[],"sessions":[1343050],"fullName":"Takeshi Yoshimura","categoryItems":[],"questionAnswers":[]},{"id":"0a454633-5fec-45fb-a412-15ba01cc4124","firstName":"Tatsuhiro","lastName":"Chiba","bio":"Tatsuhiro Chiba is a STSM and Manager at IBM Research, specialized in performance optimization and acceleration of large scale AI and HPC workloads on Hybrid Cloud. He is leading a project to enhance OpenShift performance and sustainability for AI and HPC by exploiting various cloud infrastructure capabilities such as high-performance network, object storage, AI accelerators, and so on. He has presented his research papers at many conferences such as IEEE CLOUD, MASCOTS and USENIX HotStorage. ","tagLine":"IBM Research","profilePicture":"https://cdn.sessionize.com/image/13fe-400o400o1-QeTwnskU1yjaUpnLmRouuX.jpg","isTopSpeaker":false,"links":[],"sessions":[1343025],"fullName":"Tatsuhiro Chiba","categoryItems":[],"questionAnswers":[]},{"id":"8473124e-ba04-45a0-9d97-502baa1b8b96","firstName":"Yunbo","lastName":"Wang","bio":"Yunbo Wang is Product Lead for the FlagOS community and Deputy Secretary-General of CCF\u0027s Open Source Development Technical Committee. Previously: Chief Open Source Evangelist and AI Product Director at ByteDance; Tencent Open Source Alliance member; open-source technology lead at DiDi; Alibaba Cloud architect and Apsara 5K core developer; senior technical expert at Baidu. Wang focuses on AI, cloud-native technologies, and open-source community governance.","tagLine":"Product Lead, FlagOS Community | BAAI","profilePicture":"https://cdn.sessionize.com/image/db06-400o400o1-MSqKTvA9gpaYXYfSXLrM97.jpg","isTopSpeaker":false,"links":[],"sessions":[1342758],"fullName":"Yunbo Wang","categoryItems":[],"questionAnswers":[]}],"rooms":[{"id":89038,"name":"2F Hall","sort":0},{"id":89039,"name":"Room B","sort":1},{"id":89040,"name":"Room C","sort":2}],"categories":[{"id":139161,"title":"Topic","items":[{"id":504301,"name":"Sovereign AI","sort":1},{"id":504302,"name":"Physical AI/Edge AI","sort":2},{"id":509273,"name":"PyTorch Ecosystem","sort":3},{"id":519565,"name":"Breaks + Meals + Special Events","sort":4},{"id":519566,"name":"Registration","sort":5},{"id":519580,"name":"Keynote Sessions","sort":6}],"sort":1,"type":"session"}],"questions":[{"id":143484,"question":"Presentation File (PDF)","questionType":"File_upload","sort":45}]},"grid":[{"date":"2026-12-10T00:00:00","rooms":[{"id":89038,"name":"2F Hall","sessions":[{"id":"1361491"},{"id":"1361523"},{"id":"1361488"},{"id":"1343025"},{"id":"1342950"},{"id":"1343099"},{"id":"1343042"},{"id":"1361432"},{"id":"1341807"},{"id":"1343167"},{"id":"1318087"},{"id":"1342758"},{"id":"1331879"},{"id":"1361490"},{"id":"1343050"},{"id":"1361901"},{"id":"1325509"},{"id":"1343082"},{"id":"1361487"}]}],"timeSlots":[{"slotStart":"09:00:00","rooms":[{"id":89038,"session":{"id":"1361491"}}]},{"slotStart":"10:00:00","rooms":[{"id":89038,"session":{"id":"1361523"}}]},{"slotStart":"11:10:00","rooms":[{"id":89038,"session":{"id":"1361488"}}]},{"slotStart":"11:30:00","rooms":[{"id":89038,"session":{"id":"1343025"}}]},{"slotStart":"12:10:00","rooms":[{"id":89038,"session":{"id":"1342950"}}]},{"slotStart":"12:30:00","rooms":[{"id":89038,"session":{"id":"1343099"}}]},{"slotStart":"12:40:00","rooms":[{"id":89038,"session":{"id":"1343042"}}]},{"slotStart":"13:00:00","rooms":[{"id":89038,"session":{"id":"1361432"}}]},{"slotStart":"14:15:00","rooms":[{"id":89038,"session":{"id":"1341807"}}]},{"slotStart":"14:35:00","rooms":[{"id":89038,"session":{"id":"1343167"}}]},{"slotStart":"14:45:00","rooms":[{"id":89038,"session":{"id":"1318087"}}]},{"slotStart":"15:05:00","rooms":[{"id":89038,"session":{"id":"1342758"}}]},{"slotStart":"15:20:00","rooms":[{"id":89038,"session":{"id":"1331879"}}]},{"slotStart":"15:45:00","rooms":[{"id":89038,"session":{"id":"1361490"}}]},{"slotStart":"16:15:00","rooms":[{"id":89038,"session":{"id":"1343050"}}]},{"slotStart":"16:35:00","rooms":[{"id":89038,"session":{"id":"1361901"}}]},{"slotStart":"17:15:00","rooms":[{"id":89038,"session":{"id":"1325509"}}]},{"slotStart":"17:55:00","rooms":[{"id":89038,"session":{"id":"1343082"}}]},{"slotStart":"18:15:00","rooms":[{"id":89038,"session":{"id":"1361487"}}]}]}]}</script>	
+	<div class="sched-modal" data-role="modal" aria-hidden="true">
+		<div class="sched-modal__overlay" data-sched-close></div>
+		<div class="sched-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="schedModalTitle" tabindex="-1" data-role="modalDialog">
+			<div class="sched-modal__stickyhead">
+				<div class="sched-modal__headerlink" data-role="modalHeaderLink">
+					<div class="sched-modal__titlerow">
+						<h2 class="sched-modal__title" id="schedModalTitle" data-role="modalTitle"></h2>
+					</div>
+					<div class="sched-modal__meta">
+						<div class="sched-modal__metaitem sched-modal__metaitem--when" data-role="modalWhen"></div>
+						<div class="sched-modal__metaitem sched-modal__metaitem--room" data-role="modalRoom"></div>
+					</div>
+				</div>
+				<button class="sched-modal__favorite" type="button" aria-label="Save to agenda" data-role="modalFavorite"></button>
+				<button class="sched-modal__close" type="button" aria-label="Close" data-sched-close>×</button>
+			</div>
+
+			<div class="sched-modal__body" data-role="modalBody">
+				<div class="sched-modal__chips" data-role="modalChips"></div>
+				<div class="sched-modal__resources" data-role="modalResources" hidden>
+					<div class="sched-modal__resourceslabel">Resources</div>
+					<div class="sched-modal__resourcesactions" data-role="modalResourcesActions"></div>
+				</div>
+				<div class="sched-modal__media" data-role="modalMedia" hidden></div>
+				<div class="sched-modal__descrow">
+					<div class="sched-modal__desc" data-role="modalDesc"></div>
+					<div class="sched-modal__logo" data-role="modalLogo" hidden></div>
+				</div>
+				<div class="sched-modal__speakerswrap" data-role="modalSpeakersWrap" hidden>
+					<div class="sched-modal__speakerslabel">Speakers</div>
+					<div class="sched-modal__speakers" data-role="modalSpeakers"></div>
+				</div>
+			</div>
+
+			<button class="sched-modal__nav sched-modal__nav--prev" type="button" aria-label="Previous session" data-role="modalPrev">‹</button>
+			<button class="sched-modal__nav sched-modal__nav--next" type="button" aria-label="Next session" data-role="modalNext">›</button>
+			<div class="sched-modal__scrollfade" data-role="modalFade" hidden></div>
+		</div>
+	</div>
+
+	<div class="sched-modal sched-speaker-modal" data-role="speakerModal" aria-hidden="true">
+		<div class="sched-modal__overlay" data-speaker-close></div>
+		<div class="sched-modal__dialog sched-speaker-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="schedSpeakerModalTitle" tabindex="-1" data-role="speakerModalDialog">
+			<div class="sched-modal__stickyhead">
+				<button class="sched-modal__close" type="button" aria-label="Close" data-speaker-close>×</button>
+			</div>
+			<div class="sched-modal__body" data-role="speakerModalBody">
+				<div class="sched-speaker-modal__top">
+					<div class="sched-speaker-modal__avatar" data-role="speakerModalAvatar"></div>
+					<div class="sched-speaker-modal__meta">
+						<h2 class="sched-modal__title" id="schedSpeakerModalTitle" data-role="speakerModalTitle"></h2>
+						<div class="sched-speaker-modal__sub" data-role="speakerModalSub"></div>
+						<div class="sched-speaker-modal__links" data-role="speakerModalLinks" hidden></div>
+					</div>
+				</div>
+				<div class="sched-modal__desc" data-role="speakerModalBio"></div>
+				<div class="sched-modal__speakerswrap" data-role="speakerModalSessionsWrap" hidden>
+					<div class="sched-modal__speakerslabel">Conference Sessions</div>
+					<div class="sched-speaker-modal__sessions" data-role="speakerModalSessions"></div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<button type="button" class="sched__totop" data-role="totop" hidden>Back to Top</button>
+	<div class="sched__debug" data-role="debug" hidden></div>
+</div>
+
+
+<div style="height:34px" aria-hidden="true" class="wp-block-spacer"></div>
+
+
+
+<p class="wp-block-paragraph"></p>
+		</div>
+</article>
+		</main>
+	</div>
+</div>
+
+<section class="event-footer xlarge-padding-y"
+	style="background: linear-gradient(90deg, #ee3b25 0%, #e73584 100%); color: black;">
+
+	
+	<div
+		class="event-footer-newsletter black">
+		<p
+			class="event-footer-newsletter__title">Join our mailing list to hear all the latest about events, news and more</p>
+		
+						<script>
+							window.hsFormsOnReady = window.hsFormsOnReady || [];
+							window.hsFormsOnReady.push(()=>{
+								hbspt.forms.create({
+									portalId: 8112310,
+									formId: "471d67cd-6f77-4867-af77-38a9d439d433",
+									target: "#hbspt-form-1794255106000-0047501750",
+									region: "na1",
+									
+							})});
+						</script>
+						<div class="hbspt-form" id="hbspt-form-1794255106000-0047501750"></div>		<p class="event-footer-newsletter__privacy">
+	By submitting this form, I consent to receive marketing emails from the LF and its projects regarding their events, training, research, developments, and related announcements. I understand that I can unsubscribe at any time using the links in the footers of the emails I receive. <a target="_blank" href="https://www.linuxfoundation.org/privacy/">Privacy Policy</a>.	</p>
+	</div>
+
+		<div class="event-footer-alignment">
+
+		<div class="event-footer-logo-social">
+
+			<div class="event-footer-logo-social__logo">
+				<a href="https://events.linuxfoundation.org/pytorch-day-japan/"><img loading="lazy" src="https://events.linuxfoundation.org/wp-content/uploads/2026/08/PYTORCH-DAY-JP-26-black.svg" alt="PyTorch Day Japan"></a>			</div>
+
+			
+			<div
+				class="event-footer-logo-social__wrapper black">
+				<ul class="event-footer-logo-social__icons black"><li><a rel="noopener" title="X" target="_blank" href="https://twitter.com/pytorch"><svg xmlns="http://www.w3.org/2000/svg" viewbox="-24.52 -24.52 1248.04 1275.04"><path d="M714.163 519.284 1160.89 0h-105.86L667.137 450.887 357.328 0H0l468.492 681.821L0 1226.37h105.866l409.625-476.152 327.181 476.152H1200L714.137 519.284zM569.165 687.828l-47.468-67.894-377.686-540.24h162.604l304.797 435.991 47.468 67.894 396.2 566.721H892.476L569.165 687.854z"/></svg>
+</a></li><li><a rel="noopener" title="Linkedin" target="_blank" href="https://www.linkedin.com/company/pytorch"><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 448 512"><path d="M416 32H31.9C14.3 32 0 46.5 0 64.3v383.4C0 465.5 14.3 480 31.9 480H416c17.6 0 32-14.5 32-32.3V64.3c0-17.8-14.4-32.3-32-32.3M135.4 416H69V202.2h66.5V416zm-33.2-243c-21.3 0-38.5-17.3-38.5-38.5S80.9 96 102.2 96c21.2 0 38.5 17.3 38.5 38.5 0 21.3-17.2 38.5-38.5 38.5m282.1 243h-66.4V312c0-24.8-.5-56.7-34.5-56.7-34.6 0-39.9 27-39.9 54.9V416h-66.4V202.2h63.7v29.2h.9c8.9-16.8 30.6-34.5 62.9-34.5 67.2 0 79.7 44.3 79.7 101.9z"/></svg>
+</a></li><li><a rel="noopener" title="YouTube" target="_blank" href="https://www.youtube.com/pytorch"><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 576 512"><path d="M549.655 124.083c-6.281-23.65-24.787-42.276-48.284-48.597C458.781 64 288 64 288 64S117.22 64 74.629 75.486c-23.497 6.322-42.003 24.947-48.284 48.597-11.412 42.867-11.412 132.305-11.412 132.305s0 89.438 11.412 132.305c6.281 23.65 24.787 41.5 48.284 47.821C117.22 448 288 448 288 448s170.78 0 213.371-11.486c23.497-6.321 42.003-24.171 48.284-47.821 11.412-42.867 11.412-132.305 11.412-132.305s0-89.438-11.412-132.305m-317.51 213.508V175.185l142.739 81.205z"/></svg>
+</a></li><li><a rel="noopener" title="Facebook" target="_blank" href="https://www.facebook.com/pytorch"><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 512 512"><path d="M504 256C504 119 393 8 256 8S8 119 8 256c0 123.78 90.69 226.38 209.25 245V327.69h-63V256h63v-54.64c0-62.15 37-96.48 93.67-96.48 27.14 0 55.52 4.84 55.52 4.84v61h-31.28c-30.8 0-40.41 19.12-40.41 38.73V256h68.78l-11 71.69h-57.78V501C413.31 482.38 504 379.78 504 256"/></svg>
+</a></li></ul>				<div class="event-footer-logo-social__hashtag">
+					<p>#PyTorchDayJapan</p>
+				</div>
+							</div>
+		</div>
+		
+				<ul
+			class="event-footer-menu black">
+			<li class="page_item page-item-318287"><a href="https://events.linuxfoundation.org/pytorch-day-japan/register/">Register</a></li>
+	<li class="page_item page-item-318272"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/faq/">FAQ</a></li>
+	<li class="page_item page-item-318279"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/venue-travel/">Venue &#038; Travel</a></li>
+	<li class="page_item page-item-318277"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/health-and-safety/">Health &#038; Safety</a></li>
+	<li class="page_item page-item-318278"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/about-tokyo/">About Tokyo</a></li>
+	<li class="page_item page-item-318276"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/visa-request/">Visa Letter Request</a></li>
+	<li class="page_item page-item-318280"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/inclusion-accessibility/">Inclusion &amp; Accessibility</a></li>
+	<li class="page_item page-item-318281"><a href="https://events.linuxfoundation.org/pytorch-day-japan/attend/code-of-conduct/">Code of Conduct</a></li>
+
+</li>
+	<li class="page_item page-item-318254 current_page_item is-active"><a href="https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/" aria-current="page">Schedule</a></li>
+	<li class="page_item page-item-318256"><a href="https://events.linuxfoundation.org/pytorch-day-japan/program/program-committee/">Program Committee</a></li>
+
+</li>
+<li class="page_item page-item-318288"><a href="https://events.linuxfoundation.org/pytorch-day-japan/contact-us/">Contact Us</a></li>
+		</ul>
+				</div>
+</section>
+<footer
+	class="event-footer--legal">
+
+
+	<section class="lf-copyright container wrap">
+
+				<p>Copyright © 2026 The Linux Foundation®. All rights reserved. The
+			Linux Foundation has registered trademarks and uses trademarks. For
+			a list of trademarks of The Linux Foundation, please see our <a target="_blank" rel="noopener"
+				href="https://www.linuxfoundation.org/legal/trademark-usage">Trademark Usage</a> page. Linux is a
+			registered trademark of Linus Torvalds. <a target="_blank" rel="noopener"
+				href="https://www.linuxfoundation.org/legal/terms">Terms of Use</a> |
+			<a target="_blank" rel="noopener"  href="https://www.linuxfoundation.org/legal/privacy-policy">Privacy
+				Policy</a> | <a target="_blank" rel="noopener"
+				href="https://www.linuxfoundation.org/legal/bylaws">Bylaws</a> | <a target="_blank" rel="noopener"
+				href="https://www.linuxfoundation.org/legal/antitrust-policy">Antitrust
+				Policy</a> | <a target="_blank" rel="noopener"
+				href="https://www.linuxfoundation.org/legal/good-standing-policy">Good
+				Standing Policy</a> | <a class="cookie-settings-link" href="#">Cookie Settings</a>.</p>
+			</section>
+
+	</footer>
+</div> <!-- end .site-container -->
+<script type="speculationrules">
+{"prefetch":[{"source":"document","where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":["/wp/wp-*.php","/wp/wp-admin/*","/wp-content/uploads/*","/wp-content/*","/wp-content/plugins/*","/wp-content/themes/lfevents/*","/*\\?(.+)"]}},{"not":{"selector_matches":"a[rel~=\"nofollow\"]"}},{"not":{"selector_matches":".no-prefetch, .no-prefetch a"}}]},"eagerness":"conservative"}]}
+</script>
+<script type="text/javascript" id="flying-scripts">const loadScriptsTimer=setTimeout(loadScripts,10*1000);const userInteractionEvents=['click', 'mousemove', 'keydown', 'touchstart', 'touchmove', 'wheel'];userInteractionEvents.forEach(function(event){window.addEventListener(event,triggerScriptLoader,{passive:!0})});function triggerScriptLoader(){loadScripts();clearTimeout(loadScriptsTimer);userInteractionEvents.forEach(function(event){window.removeEventListener(event,triggerScriptLoader,{passive:!0})})}
+function loadScripts(){document.querySelectorAll("script[data-type='lazy']").forEach(function(elem){elem.setAttribute("src",elem.getAttribute("data-src"))})}</script>
+    <script id="flying-pages-js-before">
+window.FPConfig= {
+	delay: 15,
+	ignoreKeywords: ["\/wp-admin","\/wp-login.php","\/cart","add-to-cart","logout","#","?",".png",".jpeg",".jpg",".gif",".svg"],
+	maxRPS: 3,
+    hoverDelay: 50
+};
+//# sourceURL=flying-pages-js-before
+</script>
+<script id="flying-pages-js" defer src="https://events.linuxfoundation.org/wp-content/plugins/flying-pages/flying-pages.min.js?ver=1794198676"></script>
+<script id="leadin-script-loader-js-js-extra">
+var leadin_wordpress = {"userRole":"visitor","pageType":"page","leadinPluginVersion":"11.3.75"};
+//# sourceURL=leadin-script-loader-js-js-extra
+</script>
+<script async defer id='hs-script-loader' data-type="lazy" data-src="https://js.hs-scripts.com/8112310.js?integration=WordPress&#038;ver=1794198676"></script>
+<script id="foundation-js" defer src="https://events.linuxfoundation.org/wp-content/themes/lfevents/dist/js/app.js?ver=1794198676"></script>
+<script data-wp-strategy="defer" defer id="custom-sessionize-schedule-view-script-js" src =https://events.linuxfoundation.org/wp-content/plugins/sessionize-blocks/blocks/sessionize-schedule/build/view.js?ver=1794198676></script>
+<script id="leadin-forms-v2-js" defer data-type="lazy" data-src="https://js.hsforms.net/forms/embed/v2.js?ver=1794198676"></script>
+<script type="text/javascript">window.NREUM||(NREUM={});NREUM.info={"beacon":"bam.nr-data.net","licenseKey":"d2bda02ccf","applicationID":"337321012","transactionName":"YARbZUBQV0BXV0FfCVlOeFJGWFZdGUdcWAFCDVhD","queueTime":0,"applicationTime":466,"atts":"TENYEwhKRE4=","errorBeacon":"bam.nr-data.net","agent":""}</script></body>
+
+</html>

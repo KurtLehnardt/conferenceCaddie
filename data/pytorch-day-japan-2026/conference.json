@@ -1,0 +1,42 @@
+{
+  "slug": "pytorch-day-japan-2026",
+  "name": "PyTorch Day Japan",
+  "status": "searchable",
+  "status_reason": null,
+  "source": "sessionize",
+  "start_date": "2026-12-10",
+  "end_date": "2026-12-10",
+  "time_zone": "Asia/Tokyo",
+  "time_zone_windows": null,
+  "location": {
+    "city": "Tokyo",
+    "region": "",
+    "country": "Japan",
+    "virtual": false
+  },
+  "sessionize_api_code": "15c7gkws",
+  "sessionize_public_slug": "pytorch-day-japan-2026",
+  "sessionize_site_published": false,
+  "lf_event_id": 318240,
+  "lf_url": "https://events.linuxfoundation.org/pytorch-day-japan/",
+  "official_schedule_url": "https://events.linuxfoundation.org/pytorch-day-japan/program/schedule/",
+  "parent_slug": null,
+  "category_mapping": {
+    "track_group": "Topic",
+    "level_group": null,
+    "tag_groups": [],
+    "hidden_groups": [],
+    "slides_question": null
+  },
+  "counts": {
+    "sessions": 19,
+    "talk": 13,
+    "ambient": 1,
+    "break": 5,
+    "housekeeping": 0,
+    "with_slides": 0,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T20:11:46.259Z"
+}

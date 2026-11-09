@@ -1,0 +1,42 @@
+{
+  "slug": "mcp-dev-summit-nairobi-2026",
+  "name": "MCP Dev Summit Nairobi",
+  "status": "searchable",
+  "status_reason": null,
+  "source": "sessionize",
+  "start_date": "2026-11-19",
+  "end_date": "2026-11-20",
+  "time_zone": "Africa/Nairobi",
+  "time_zone_windows": "E. Africa Standard Time",
+  "location": {
+    "city": "Nairobi",
+    "region": "",
+    "country": "Kenya",
+    "virtual": false
+  },
+  "sessionize_api_code": "v9t5e38o",
+  "sessionize_public_slug": "mcp-dev-summit-nairobi-2026",
+  "sessionize_site_published": true,
+  "lf_event_id": 301496,
+  "lf_url": "https://events.linuxfoundation.org/mcp-dev-summit-nairobi/",
+  "official_schedule_url": "https://events.linuxfoundation.org/mcp-dev-summit-nairobi/program/schedule/",
+  "parent_slug": null,
+  "category_mapping": {
+    "track_group": "Topic",
+    "level_group": "Audience Level",
+    "tag_groups": [],
+    "hidden_groups": [],
+    "slides_question": "Presentation Slides"
+  },
+  "counts": {
+    "sessions": 60,
+    "talk": 46,
+    "ambient": 2,
+    "break": 10,
+    "housekeeping": 2,
+    "with_slides": 1,
+    "sponsor": 0
+  },
+  "ingested_at": null,
+  "raw_fetched_at": "2026-11-09T20:11:38.554Z"
+}
