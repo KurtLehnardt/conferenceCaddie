@@ -1,6 +1,7 @@
 // Conference Caddie HTTP server: serves the built web app and the search API from one origin.
 //
 // Env: PORT (default 8080), ES_URL, ES_API_KEY, ES_INDEX (default caddie-talks),
+//      ES_CONFERENCES_INDEX (default caddie-conferences), ES_TOPICS_INDEX (default caddie-topics),
 //      STATIC_DIR (default web/dist).
 //
 // The log has one line per request with the method, path, status and duration. It never
@@ -10,6 +11,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { validate, search, BadRequest, UpstreamError } from './search.mjs';
+import { publicConferences } from './conferences.mjs';
 
 const PORT = Number(process.env.PORT) || 8080;
 const STATIC_DIR = path.resolve(process.env.STATIC_DIR || 'web/dist');
@@ -132,6 +134,20 @@ async function handleSearch(req, res) {
   }
 }
 
+async function handleConferences(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    sendJson(res, 405, { error: 'Use GET' }, { Allow: 'GET, HEAD' });
+    return;
+  }
+  try {
+    const conferences = await publicConferences();
+    sendJson(res, 200, { conferences }, { 'Cache-Control': 'public, max-age=60' });
+  } catch (err) {
+    console.error(`Elasticsearch request failed: ${err instanceof UpstreamError ? err.message : 'error'}`);
+    sendJson(res, 502, { error: 'Conferences are temporarily unavailable' });
+  }
+}
+
 function sendFile(req, res, filePath, cacheControl) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
@@ -219,6 +235,12 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/search') {
     handleSearch(req, res).catch(() => {
       if (!res.headersSent) sendJson(res, 502, { error: 'Search is temporarily unavailable' });
+    });
+    return;
+  }
+  if (pathname === '/api/conferences') {
+    handleConferences(req, res).catch(() => {
+      if (!res.headersSent) sendJson(res, 502, { error: 'Conferences are temporarily unavailable' });
     });
     return;
   }

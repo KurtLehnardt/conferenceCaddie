@@ -23,10 +23,14 @@
 //   neighbours among the documents that pass B; in browse mode, every document. M does not depend
 //   on any facet selection.
 // - Let B be the base filters: kind is "talk", the start_after and start_before window,
-//   hide_sponsor, and the must_not clauses for saved-talk overlaps.
-// - Let S(g) be the selection in facet group g (day, track, level, has_slides).
-// - total = |M ∩ B ∩ S(day) ∩ S(track) ∩ S(level) ∩ S(has_slides)|, which is the set the results
-//   are drawn from.
+//   hide_sponsor, and the conference term. Every query this module sends, including the
+//   known-values aggregation, carries the conference term, so no talk of another conference can
+//   appear in results or counts.
+// - Let S(g) be the selection in facet group g: day, track, level, has_slides, and one group per
+//   tag group (a tag group's selected values are ORed; different groups are ANDed).
+// - total = |M ∩ B ∩ S(every group)|, which is the set the results are drawn from.
+// - saved_talk_ids is validated but never filters: the app no longer excludes or flags talks that
+//   overlap the talks a user marked.
 // - The facet counts for group g are a terms aggregation over M ∩ B ∩ S(every group except g).
 //   For a group with no selection that is exactly the total set, and the counts come from the
 //   main query's aggregations. For a group with a selection, one extra size-0 query (same
@@ -34,9 +38,11 @@
 // - A selected value that has no matching documents is still listed, with count 0, so the UI
 //   can show it as selected.
 
+import { searchableConference } from './conferences.mjs';
+
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
-const ES_API_KEY = process.env.ES_API_KEY || '';
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
+const ES_TOPICS_INDEX = process.env.ES_TOPICS_INDEX || 'caddie-topics';
 const ES_TIMEOUT_MS = 8000;
 
 const LEXICAL_FIELDS = ['title^2', 'abstract', 'speakers', 'speaker_taglines'];
@@ -49,43 +55,59 @@ const SEMANTIC_K = 50;
 const SEMANTIC_CANDIDATES = 200;
 const KNOWN_TTL_MS = 10 * 60 * 1000;
 const EVIDENCE_MAX = 300;
+// U+001F joins a tag's group and value in tag_keys. It cannot occur in a category name.
+const TAG_SEP = '\u001f';
 
-const SOURCE_FIELDS = ['talk_id', 'title', 'speakers', 'room', 'start', 'end', 'track', 'level', 'flags', 'slides_url', 'url'];
+const SOURCE_FIELDS = ['talk_id', 'conference', 'title', 'speakers', 'room', 'start', 'end', 'track', 'level', 'tags', 'topics', 'speaker_profiles', 'slides_url', 'url'];
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
 
 export class BadRequest extends Error {}
-export class UpstreamError extends Error {}
+export class UpstreamError extends Error {
+  constructor(message, status = null) {
+    super(message);
+    this.status = status;
+  }
+}
 
 // ---------------------------------------------------------------------------------------------
 // Elasticsearch transport. Error bodies from Elasticsearch are never passed on; only the status
 // code is kept, for the server log.
+//
+// esRequest(path, body, options) sends one request and returns the parsed JSON response.
+// - body: an object (sent as JSON), a string (sent as is) or undefined (no body).
+// - options.apiKey: the encoded API key; defaults to process.env.ES_API_KEY.
+// - options.method: defaults to POST when there is a body and GET otherwise.
+// - options.contentType: defaults to application/json.
+// It throws UpstreamError, whose status is the HTTP status when Elasticsearch answered.
 
-async function es(path, body, contentType = 'application/json') {
+export async function esRequest(path, body, options = {}) {
+  const apiKey = options.apiKey ?? process.env.ES_API_KEY ?? '';
+  const method = options.method ?? (body === undefined ? 'GET' : 'POST');
   let res;
   try {
     res = await fetch(ES_URL + path, {
-      method: 'POST',
-      headers: { Authorization: `ApiKey ${ES_API_KEY}`, 'Content-Type': contentType },
-      body,
-      signal: AbortSignal.timeout(ES_TIMEOUT_MS),
+      method,
+      headers: { Authorization: `ApiKey ${apiKey}`, 'Content-Type': options.contentType ?? 'application/json' },
+      body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+      signal: AbortSignal.timeout(options.timeoutMs ?? ES_TIMEOUT_MS),
     });
   } catch (err) {
     throw new UpstreamError(err?.name === 'TimeoutError' ? 'timeout' : 'network error');
   }
   if (!res.ok) {
     await res.body?.cancel();
-    throw new UpstreamError(`status ${res.status}`);
+    throw new UpstreamError(`status ${res.status}`, res.status);
   }
   try {
     return await res.json();
   } catch {
-    throw new UpstreamError('invalid response');
+    throw new UpstreamError('invalid response', res.status);
   }
 }
 
 async function msearch(searches) {
   const body = searches.flatMap((s) => ['{}', JSON.stringify(s)]).join('\n') + '\n';
-  const json = await es(`/${encodeURIComponent(ES_INDEX)}/_msearch`, body, 'application/x-ndjson');
+  const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_msearch`, body, { contentType: 'application/x-ndjson' });
   const responses = json.responses ?? [];
   if (responses.length !== searches.length || responses.some((r) => r.error)) {
     throw new UpstreamError('msearch item failed');
@@ -94,42 +116,48 @@ async function msearch(searches) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Known filter values, from a terms aggregation over talks, cached for ten minutes.
+// Known filter values per conference, from one terms aggregation over that conference's talks,
+// cached for ten minutes.
 
-let knownCache = null; // { at, promise }
+const knownCache = new Map(); // slug -> { at, promise }
 
-async function fetchKnown() {
-  const json = await es(`/${encodeURIComponent(ES_INDEX)}/_search`, JSON.stringify({
+async function fetchKnown(slug) {
+  const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_search`, {
     size: 0,
-    query: { term: { kind: 'talk' } },
+    query: { bool: { filter: [{ term: { conference: slug } }, { term: { kind: 'talk' } }] } },
     aggs: {
       day: { terms: { field: 'day', size: 100 } },
       track: { terms: { field: 'track', size: 500 } },
       level: { terms: { field: 'level', size: 100 } },
+      tag_keys: { terms: { field: 'tag_keys', size: 2000 } },
     },
-  }));
+  });
   const keys = (name) => new Set((json.aggregations?.[name]?.buckets ?? []).map((b) => b.key));
-  return { day: keys('day'), track: keys('track'), level: keys('level') };
+  return { day: keys('day'), track: keys('track'), level: keys('level'), tagKeys: keys('tag_keys') };
 }
 
-function knownValues() {
+function knownValues(slug) {
   const now = Date.now();
-  if (!knownCache || now - knownCache.at > KNOWN_TTL_MS) {
-    const promise = fetchKnown();
-    knownCache = { at: now, promise };
+  let entry = knownCache.get(slug);
+  if (!entry || now - entry.at > KNOWN_TTL_MS) {
+    const promise = fetchKnown(slug);
+    entry = { at: now, promise };
+    knownCache.set(slug, entry);
     promise.catch(() => {
-      if (knownCache?.promise === promise) knownCache = null;
+      if (knownCache.get(slug)?.promise === promise) knownCache.delete(slug);
     });
   }
-  return knownCache.promise;
+  return entry.promise;
 }
 
 // ---------------------------------------------------------------------------------------------
-// Validation. Only the documented keys are accepted, and filter values must be known values.
+// Validation. Only the documented keys are accepted, and filter values must be known values of
+// the requested conference.
 
-const TOP_KEYS = new Set(['query', 'filters', 'saved_talk_ids', 'size']);
-const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'has_slides', 'hide_sponsor']);
-const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const TOP_KEYS = new Set(['conference', 'query', 'filters', 'saved_talk_ids', 'size']);
+const FILTER_KEYS = new Set(['day', 'start_after', 'start_before', 'track', 'level', 'tags', 'has_slides', 'hide_sponsor']);
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
+const TALK_ID_RE = /^([a-z0-9][a-z0-9-]{0,119}):[A-Za-z0-9_-]{1,64}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -150,9 +178,39 @@ function parseValueList(value, name, known) {
   return [...new Set(value)];
 }
 
+// Checks the shape of filters.tags; the values are checked against known values later.
+function parseTagShape(value) {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 50) throw new BadRequest('filters.tags must be an array of at most 50 {group, value} objects');
+  for (const t of value) {
+    if (!isPlainObject(t) || Object.keys(t).length !== 2 || typeof t.group !== 'string' || typeof t.value !== 'string'
+      || t.group.length > 200 || t.value.length > 200 || t.group.includes(TAG_SEP) || t.value.includes(TAG_SEP)) {
+      throw new BadRequest('filters.tags must be an array of at most 50 {group, value} objects');
+    }
+  }
+  return value;
+}
+
+// Returns a Map of group name -> selected tag_keys values, in the order groups were first named.
+function tagSelection(pairs, known) {
+  const byGroup = new Map();
+  for (const { group, value } of pairs) {
+    const key = group + TAG_SEP + value;
+    if (!known.has(key)) throw new BadRequest('filters.tags contains an unknown value');
+    if (!byGroup.has(group)) byGroup.set(group, []);
+    const keys = byGroup.get(group);
+    if (!keys.includes(key)) keys.push(key);
+  }
+  return byGroup;
+}
+
 export async function validate(body) {
   if (!isPlainObject(body)) throw new BadRequest('Body must be a JSON object');
   for (const k of Object.keys(body)) if (!TOP_KEYS.has(k)) throw new BadRequest(`Unknown key: ${k.slice(0, 40)}`);
+
+  if (typeof body.conference !== 'string') throw new BadRequest('conference must be a string');
+  const slug = body.conference;
+  if (!SLUG_RE.test(slug)) throw new BadRequest('conference is not available');
 
   if (typeof body.query !== 'string') throw new BadRequest('query must be a string');
   const query = body.query.trim();
@@ -164,13 +222,13 @@ export async function validate(body) {
     size = body.size;
   }
 
-  let savedIds = [];
+  // saved_talk_ids is still accepted, so older clients keep working, but it never filters.
   if (body.saved_talk_ids !== undefined) {
     const ids = body.saved_talk_ids;
-    if (!Array.isArray(ids) || ids.length > 100 || !ids.every((id) => typeof id === 'string' && ID_RE.test(id))) {
-      throw new BadRequest('saved_talk_ids must be at most 100 ids');
+    if (!Array.isArray(ids) || ids.length > 100
+      || !ids.every((id) => typeof id === 'string' && TALK_ID_RE.exec(id)?.[1] === slug)) {
+      throw new BadRequest('saved_talk_ids must be at most 100 talk ids of this conference');
     }
-    savedIds = [...new Set(ids)];
   }
 
   const f = body.filters ?? {};
@@ -184,21 +242,35 @@ export async function validate(body) {
   if (f.day !== undefined && f.day !== null && typeof f.day !== 'string') throw new BadRequest('filters.day must be null or a known day');
   const startAfter = parseTime(f.start_after, 'start_after');
   const startBefore = parseTime(f.start_before, 'start_before');
+  const tagPairs = parseTagShape(f.tags);
 
-  const needsKnown = (f.day ?? null) !== null || (f.track?.length ?? 0) > 0 || (f.level?.length ?? 0) > 0;
-  const known = needsKnown ? await knownValues() : { day: new Set(), track: new Set(), level: new Set() };
+  const conference = await searchableConference(slug);
+  if (!conference) throw new BadRequest('conference is not available');
+  const levelGroup = conference.category_mapping?.level_group ?? null;
+  const tagGroups = Array.isArray(conference.category_mapping?.tag_groups) ? conference.category_mapping.tag_groups : [];
+
+  // An empty level list is accepted for every conference, so a client can always send the full
+  // filters object; any selected level needs a level group.
+  const levelGiven = f.level !== undefined && f.level !== null && !(Array.isArray(f.level) && f.level.length === 0);
+  if (levelGiven && !levelGroup) throw new BadRequest('filters.level is not available for this conference');
+
+  const needsKnown = (f.day ?? null) !== null || (f.track?.length ?? 0) > 0 || levelGiven || tagPairs.length > 0;
+  const known = needsKnown ? await knownValues(slug) : { day: new Set(), track: new Set(), level: new Set(), tagKeys: new Set() };
   if (f.day !== undefined && f.day !== null && !known.day.has(f.day)) throw new BadRequest('filters.day is not a known day');
 
   return {
+    conference: slug,
+    hasLevel: Boolean(levelGroup),
+    tagGroups,
     query,
     size,
-    savedIds,
     filters: {
       day: f.day ?? null,
       startAfter,
       startBefore,
       track: parseValueList(f.track, 'track', known.track),
-      level: parseValueList(f.level, 'level', known.level),
+      level: levelGroup ? parseValueList(f.level, 'level', known.level) : [],
+      tags: tagSelection(tagPairs, known.tagKeys),
       hasSlides: f.has_slides ?? null,
       hideSponsor: f.hide_sponsor ?? false,
     },
@@ -208,58 +280,36 @@ export async function validate(body) {
 // ---------------------------------------------------------------------------------------------
 // Query building.
 
-async function savedConflictClauses(savedIds) {
-  if (!savedIds.length) return [];
-  const json = await es(`/${encodeURIComponent(ES_INDEX)}/_search`, JSON.stringify({
-    size: savedIds.length,
-    _source: ['start', 'end'],
-    query: { bool: { filter: [{ term: { kind: 'talk' } }, { terms: { talk_id: savedIds } }] } },
-  }));
-  return (json.hits?.hits ?? [])
-    .map((h) => h._source)
-    .filter((s) => s?.start && s?.end)
-    .map((s) => ({
-      bool: {
-        filter: [
-          { term: { kind: 'talk' } },
-          { range: { start: { lt: s.end } } },
-          { range: { end: { gt: s.start } } },
-        ],
-      },
-    }));
-}
-
-function baseClauses(filters, conflicts) {
-  const clauses = [{ term: { kind: 'talk' } }];
+function baseClauses(conference, filters) {
+  const clauses = [{ term: { conference } }, { term: { kind: 'talk' } }];
   const minutes = {};
   if (filters.startAfter !== null) minutes.gte = filters.startAfter;
   if (filters.startBefore !== null) minutes.lt = filters.startBefore;
   if (Object.keys(minutes).length) clauses.push({ range: { start_minutes: minutes } });
   if (filters.hideSponsor) clauses.push({ bool: { must_not: [{ term: { sponsor: true } }] } });
-  if (conflicts.length) clauses.push({ bool: { must_not: conflicts } });
   return clauses;
 }
 
-// The facet groups and the filter clause each one's selection adds.
-const GROUPS = {
-  day: (f) => (f.day !== null ? { term: { day: f.day } } : null),
-  track: (f) => (f.track.length ? { terms: { track: f.track } } : null),
-  level: (f) => (f.level.length ? { terms: { level: f.level } } : null),
-  has_slides: (f) => (f.hasSlides !== null ? { term: { has_slides: f.hasSlides } } : null),
-};
-
-function selectionClauses(filters, except) {
-  return Object.entries(GROUPS)
-    .filter(([name]) => name !== except)
-    .map(([, clause]) => clause(filters))
-    .filter(Boolean);
+// The facet groups that have a selection, each with the filter clause its selection adds and the
+// aggregation its facet uses. Every tag group is its own facet group, named "tag:" + group.
+function selectedGroups(filters) {
+  const groups = [];
+  if (filters.day !== null) groups.push({ name: 'day', clause: { term: { day: filters.day } }, agg: 'day' });
+  if (filters.track.length) groups.push({ name: 'track', clause: { terms: { track: filters.track } }, agg: 'track' });
+  if (filters.level.length) groups.push({ name: 'level', clause: { terms: { level: filters.level } }, agg: 'level' });
+  if (filters.hasSlides !== null) groups.push({ name: 'has_slides', clause: { term: { has_slides: filters.hasSlides } }, agg: 'has_slides' });
+  for (const [group, keys] of filters.tags) groups.push({ name: `tag:${group}`, clause: { terms: { tag_keys: keys } }, agg: 'tag_keys' });
+  return groups;
 }
+
+const selectionClauses = (groups, except) => groups.filter((g) => g.name !== except).map((g) => g.clause);
 
 const AGGS = {
   day: { terms: { field: 'day', size: 100 } },
   track: { terms: { field: 'track', size: 500 } },
   level: { terms: { field: 'level', size: 100 } },
   has_slides: { terms: { field: 'has_slides', size: 2 } },
+  tag_keys: { terms: { field: 'tag_keys', size: 2000 } },
 };
 
 // knnFilter holds only the base filters, so the nearest-neighbour set does not depend on the
@@ -293,13 +343,13 @@ function matchBody(query, filter, knnFilter) {
   return query ? { retriever: retrieverFor(query, filter, knnFilter) } : { query: { bool: { filter } } };
 }
 
-function mainSearch(query, filter, knnFilter, size) {
+function mainSearch(query, filter, knnFilter, size, aggs) {
   const body = {
     ...matchBody(query, filter, knnFilter),
     size,
     track_total_hits: true,
     _source: SOURCE_FIELDS,
-    aggs: AGGS,
+    aggs,
   };
   if (query) {
     body.highlight = {
@@ -323,8 +373,36 @@ function mainSearch(query, filter, knnFilter, size) {
   return body;
 }
 
-function facetSearch(query, filter, knnFilter, group) {
-  return { ...matchBody(query, filter, knnFilter), size: 0, track_total_hits: false, aggs: { [group]: AGGS[group] } };
+function facetSearch(query, filter, knnFilter, agg) {
+  return { ...matchBody(query, filter, knnFilter), size: 0, track_total_hits: false, aggs: { [agg]: AGGS[agg] } };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Topic labels. One search on the topics index resolves every topic id in a page of results.
+// A missing topics index or alias gives an empty map, so results then carry topics: [].
+
+export async function topicLabels(conference, topicIds) {
+  const ids = [...new Set(topicIds.filter((id) => typeof id === 'string' && id))].slice(0, 1000);
+  if (!ids.length) return new Map();
+  let json;
+  try {
+    json = await esRequest(`/${encodeURIComponent(ES_TOPICS_INDEX)}/_search?ignore_unavailable=true`, {
+      size: ids.length,
+      _source: ['topic_id', 'label'],
+      query: { bool: { filter: [{ term: { conference } }, { terms: { topic_id: ids } }] } },
+    });
+  } catch (err) {
+    if (err instanceof UpstreamError && err.status === 404) return new Map();
+    // Labels are decoration on a search that already succeeded, so a failure leaves them out.
+    console.error(`Topic label lookup failed: ${err instanceof UpstreamError ? err.message : 'error'}`);
+    return new Map();
+  }
+  const labels = new Map();
+  for (const h of json.hits?.hits ?? []) {
+    const s = h._source ?? {};
+    if (typeof s.topic_id === 'string' && typeof s.label === 'string' && s.label) labels.set(s.topic_id, s.label);
+  }
+  return labels;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -361,18 +439,27 @@ function evidenceFor(hit) {
   return escapeHtml(hit._source?.title ?? '');
 }
 
-function toResult(hit) {
+const asArray = (v) => (Array.isArray(v) ? v : []);
+
+// Shapes one talk hit. labels maps topic_id to label; topics without a label are left out, so
+// no raw id reaches the UI.
+export function toResult(hit, labels = new Map()) {
   const s = hit._source ?? {};
   return {
     talk_id: String(s.talk_id ?? hit._id),
+    conference: s.conference,
     title: s.title ?? '',
-    speakers: s.speakers ?? [],
+    speakers: asArray(s.speakers),
     room: s.room ?? null,
     start: s.start,
     end: s.end,
     track: s.track,
-    level: s.level,
-    flags: s.flags ?? [],
+    level: s.level ?? null,
+    tags: asArray(s.tags)
+      .filter((t) => t && typeof t.group === 'string' && typeof t.value === 'string')
+      .map((t) => ({ group: t.group, value: t.value })),
+    topics: asArray(s.topics).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) })),
+    speaker_profiles: asArray(s.speaker_profiles),
     slides_url: s.slides_url ?? null,
     url: s.url,
     evidence: evidenceFor(hit),
@@ -391,33 +478,52 @@ function facetList(group, buckets, filters) {
   return list;
 }
 
+// One tag group's values from tag_keys buckets (already sorted by count descending), plus any
+// selected value that has no matching documents, listed with count 0.
+function tagValues(group, buckets, filters) {
+  const prefix = group + TAG_SEP;
+  const values = buckets.filter((b) => b.key.startsWith(prefix)).map((b) => ({ value: b.key.slice(prefix.length), count: b.doc_count }));
+  for (const key of filters.tags.get(group) ?? []) {
+    const value = key.slice(prefix.length);
+    if (!values.some((x) => x.value === value)) values.push({ value, count: 0 });
+  }
+  return values;
+}
+
 // ---------------------------------------------------------------------------------------------
 
 export async function search(params) {
-  const { query, size, savedIds, filters } = params;
-  const conflicts = await savedConflictClauses(savedIds);
-  const base = baseClauses(filters, conflicts);
+  const { conference, hasLevel, tagGroups, query, size, filters } = params;
+  const base = baseClauses(conference, filters);
+  const groups = selectedGroups(filters);
 
-  const searches = [mainSearch(query, [...base, ...selectionClauses(filters, null)], base, size)];
-  const extra = [];
-  for (const [group, clause] of Object.entries(GROUPS)) {
-    if (clause(filters)) {
-      extra.push(group);
-      searches.push(facetSearch(query, [...base, ...selectionClauses(filters, group)], base, group));
-    }
-  }
+  const mainAggs = { day: AGGS.day, track: AGGS.track, has_slides: AGGS.has_slides, tag_keys: AGGS.tag_keys };
+  if (hasLevel) mainAggs.level = AGGS.level;
+  const searches = [mainSearch(query, [...base, ...selectionClauses(groups, null)], base, size, mainAggs)];
+  for (const g of groups) searches.push(facetSearch(query, [...base, ...selectionClauses(groups, g.name)], base, g.agg));
 
   const [main, ...rest] = await msearch(searches);
+  const aggsFor = (name) => {
+    const i = groups.findIndex((g) => g.name === name);
+    return i === -1 ? main.aggregations : rest[i].aggregations;
+  };
+
   const facets = {};
-  for (const group of Object.keys(GROUPS)) {
-    const i = extra.indexOf(group);
-    const aggs = i === -1 ? main.aggregations : rest[i].aggregations;
-    facets[group] = facetList(group, aggs?.[group]?.buckets ?? [], filters);
+  for (const group of ['day', 'track', ...(hasLevel ? ['level'] : []), 'has_slides']) {
+    facets[group] = facetList(group, aggsFor(group)?.[group]?.buckets ?? [], filters);
   }
+  facets.tags = tagGroups.map((group) => ({
+    group,
+    values: tagValues(group, aggsFor(`tag:${group}`)?.tag_keys?.buckets ?? [], filters),
+  }));
+
+  const hits = main.hits?.hits ?? [];
+  const labels = await topicLabels(conference, hits.flatMap((h) => asArray(h._source?.topics)));
 
   return {
     total: main.hits?.total?.value ?? 0,
-    results: (main.hits?.hits ?? []).map(toResult),
+    conference,
+    results: hits.map((h) => toResult(h, labels)),
     facets,
   };
 }
