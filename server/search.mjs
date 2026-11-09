@@ -7,8 +7,11 @@
 // Query design
 // - Text query: an rrf retriever over a lexical multi_match and a knn query on the
 //   semantic_text field "semantic". The knn query uses a fixed k (SEMANTIC_K) and carries the
-//   same filters as the rrf retriever, so the filters are applied before the nearest-neighbour
-//   search. A plain "semantic" query on a dense semantic_text field sizes its neighbour set
+//   base filters B (defined below) as its own filter, so they are applied before the
+//   nearest-neighbour search. The facet selections are not part of the knn filter; the rrf
+//   retriever's filter applies them afterwards. That keeps the neighbour set independent of the
+//   selections, so the count a facet value shows is exactly the total a user gets after
+//   selecting it. A plain "semantic" query on a dense semantic_text field sizes its neighbour set
 //   from the request "size", which would make "total" change with "size"; the fixed k avoids
 //   that. The query embedding is built by Elasticsearch from the semantic_text field's own
 //   inference endpoint.
@@ -17,7 +20,8 @@
 // Facet and total definition
 // - Let M be the documents the main query matches: for a text query, the union of the lexical
 //   matches (multi_match with minimum_should_match LEXICAL_MIN_MATCH) and the SEMANTIC_K nearest
-//   neighbours; in browse mode, every document.
+//   neighbours among the documents that pass B; in browse mode, every document. M does not depend
+//   on any facet selection.
 // - Let B be the base filters: kind is "talk", the start_after and start_before window,
 //   hide_sponsor, and the must_not clauses for saved-talk overlaps.
 // - Let S(g) be the selection in facet group g (day, track, level, has_slides).
@@ -258,7 +262,9 @@ const AGGS = {
   has_slides: { terms: { field: 'has_slides', size: 2 } },
 };
 
-function retrieverFor(query, filter) {
+// knnFilter holds only the base filters, so the nearest-neighbour set does not depend on the
+// facet selections; the selections are applied to it afterwards through the rrf filter.
+function retrieverFor(query, filter, knnFilter) {
   return {
     rrf: {
       retrievers: [
@@ -270,7 +276,7 @@ function retrieverFor(query, filter) {
                 field: 'semantic',
                 k: SEMANTIC_K,
                 num_candidates: SEMANTIC_CANDIDATES,
-                filter,
+                filter: knnFilter,
                 query_vector_builder: { text_embedding: { model_text: query } },
               },
             },
@@ -283,13 +289,13 @@ function retrieverFor(query, filter) {
   };
 }
 
-function matchBody(query, filter) {
-  return query ? { retriever: retrieverFor(query, filter) } : { query: { bool: { filter } } };
+function matchBody(query, filter, knnFilter) {
+  return query ? { retriever: retrieverFor(query, filter, knnFilter) } : { query: { bool: { filter } } };
 }
 
-function mainSearch(query, filter, size) {
+function mainSearch(query, filter, knnFilter, size) {
   const body = {
-    ...matchBody(query, filter),
+    ...matchBody(query, filter, knnFilter),
     size,
     track_total_hits: true,
     _source: SOURCE_FIELDS,
@@ -317,8 +323,8 @@ function mainSearch(query, filter, size) {
   return body;
 }
 
-function facetSearch(query, filter, group) {
-  return { ...matchBody(query, filter), size: 0, track_total_hits: false, aggs: { [group]: AGGS[group] } };
+function facetSearch(query, filter, knnFilter, group) {
+  return { ...matchBody(query, filter, knnFilter), size: 0, track_total_hits: false, aggs: { [group]: AGGS[group] } };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -392,12 +398,12 @@ export async function search(params) {
   const conflicts = await savedConflictClauses(savedIds);
   const base = baseClauses(filters, conflicts);
 
-  const searches = [mainSearch(query, [...base, ...selectionClauses(filters, null)], size)];
+  const searches = [mainSearch(query, [...base, ...selectionClauses(filters, null)], base, size)];
   const extra = [];
   for (const [group, clause] of Object.entries(GROUPS)) {
     if (clause(filters)) {
       extra.push(group);
-      searches.push(facetSearch(query, [...base, ...selectionClauses(filters, group)], group));
+      searches.push(facetSearch(query, [...base, ...selectionClauses(filters, group)], base, group));
     }
   }
 
