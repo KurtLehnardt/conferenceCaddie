@@ -56,7 +56,7 @@ function lines(op, index) {
 // never used, because it re-runs inference on semantic_text fields even when they are omitted.
 // Returns { ok: { index, update, delete }, failures: [{ id, action, status, reason }], limit: string|null }.
 // When limit is set, the run hit what looks like the embedding limit and stopped early.
-export async function runBulk(index, ops, onProgress = () => {}) {
+export async function runBulk(index, ops) {
   const ok = { index: 0, update: 0, delete: 0 };
   const failures = [];
   for (let start = 0; start < ops.length; start += BATCH) {
@@ -89,7 +89,6 @@ export async function runBulk(index, ops, onProgress = () => {}) {
       pending = retry;
       if (pending.length) await sleep(1000 * 2 ** attempt);
     }
-    onProgress(Math.min(start + BATCH, ops.length), ops.length);
   }
   return { ok, failures, limit: null };
 }

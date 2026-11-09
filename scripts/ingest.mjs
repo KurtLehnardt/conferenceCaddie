@@ -243,7 +243,7 @@ async function processEvent(ev) {
 
   const now = new Date().toISOString();
   for (const op of plan.ops) if (op.doc) op.doc.ingested_at = now;
-  const result = await runBulk(opts.index, plan.ops, (done, total) => process.stdout.write(`  bulk ${done}/${total}\r`));
+  const result = await runBulk(opts.index, plan.ops);
   await es('POST', `/${encodeURIComponent(opts.index)}/_refresh`);
   conf.ingested_at = now;
   for (const f of result.failures.slice(0, 10)) lines.push(`  failed ${f.action} ${f.id} (${f.status}) ${f.reason}`);
