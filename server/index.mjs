@@ -16,6 +16,7 @@ import { validate, search, BadRequest, UpstreamError } from './search.mjs';
 import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleConnectApi } from './connect.mjs';
+import { handleReportApi } from './report.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
 import { handleSchedule } from './schedule.mjs';
@@ -284,6 +285,7 @@ async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
   if (await handleConnectApi(req, res, url)) return;
+  if (await handleReportApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
   sendJson(res, 404, { error: 'Not found' });
