@@ -4,7 +4,7 @@
   "title": "Reference embeddings for the talk bundle conventions, v1",
   "description": "contracts/fixtures/embedding/reference.v1.json: documents and queries embedded under the conventions of the talk bundle's model block, so that every embedder (the bundle builder, ONNX Runtime on the phones, Workers AI in a tier 2 Worker) can check it agrees within the tolerance.",
   "type": "object",
-  "required": ["description", "produced_with", "tolerance", "model", "workers_ai_request", "documents", "queries", "similarities", "similarities_q8"],
+  "required": ["description", "produced_with", "tolerance", "model", "workers_ai_request", "documents", "queries", "similarities", "similarities_q8", "similarities_mean_pooling", "similarities_no_query_instruction"],
   "properties": {
     "description": { "type": "string" },
     "produced_with": { "type": "string" },
@@ -52,7 +52,9 @@
       }
     },
     "similarities": { "$ref": "#/$defs/Matrix" },
-    "similarities_q8": { "$ref": "#/$defs/Matrix" }
+    "similarities_q8": { "$ref": "#/$defs/Matrix" },
+    "similarities_mean_pooling": { "description": "The same cosines with mean pooling instead of CLS: a wrong embedder.", "$ref": "#/$defs/Matrix" },
+    "similarities_no_query_instruction": { "description": "The same cosines with queries embedded without the instruction: a wrong embedder.", "$ref": "#/$defs/Matrix" }
   },
   "$defs": {
     "Vector": { "type": "array", "minItems": 384, "maxItems": 384, "items": { "type": "number", "minimum": -1, "maximum": 1 } },

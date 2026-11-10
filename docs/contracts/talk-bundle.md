@@ -41,6 +41,7 @@ A bundle directory is content-addressed: its name is the first 16 hex digits of 
 - Each entry has exactly the fields of a `GET /api/conferences` entry (`slug`, `name`, `start_date`, `end_date`, `time_zone`, `location`, `status`, `official_schedule_url`, `source`, `has_level`, `track_group`, `tag_groups`, `talk_count`) plus `bundle`. The file is therefore a superset of the `GET /api/conferences` response `{ conferences: [...] }`, and one parser reads both.
 - `bundle` is null for an `unavailable` conference, and for a searchable one whose bundle has not been built yet.
 - Entries are sorted by `start_date`, then `name`, as the API sorts them.
+- **Reading the index.** A client checks each conference entry on its own and skips an entry that is malformed, so one bad entry never hides the rest (`readConferenceIndex()`). For a well-formed entry it looks at `bundle_version` first: a version it implements is used after verification; a later version is left alone (the app keeps the bundle it has and says it needs an update for that conference); a malformed bundle entry is ignored. The shape of a bundle entry beyond `bundle_version`, `content_hash`, `path` and `files` belongs to its version, so the schema applies the v1 rules (exactly `bundle.json` and `vectors.i8`, `bge-small-en-v1.5` at 384 dimensions) only to entries with `bundle_version: 1`, and an index can list bundles of several versions while old and new apps coexist. An `index_version` above 1 means the app needs an update.
 
 ## `bundle.json`
 
@@ -90,13 +91,12 @@ The vectors in a bundle are only useful if every query is embedded the same way,
 | `max_tokens` | `512` | The model's limit, counted in its WordPiece tokens including `[CLS]` and `[SEP]`. |
 | `truncation` | `end` | Longer input is cut at the end after tokenisation, keeping the first 512 tokens. |
 | `document_instruction` | `""` | Talk text is embedded with no instruction. |
-| `document_text` | `title + "
-" + abstract` | A talk's input string: its title, one line feed, its abstract (empty when the feed has none), exactly the string `text_hash` covers. |
+| `document_text` | `title + "\n" + abstract` | A talk's input string: its title, one line feed, its abstract (empty when the feed has none), exactly the string `text_hash` covers. |
 | `query_instruction` | `Represent this sentence for searching relevant passages: ` | A search query's input string is this instruction, verbatim from the model card (with its trailing space), followed by the query as the person typed it after time phrases were taken out. |
 
 The talk text is title and abstract only. Today's tier 3 server copies the title and the abstract into its `semantic_text` field as two values, so Elasticsearch embeds them as separate chunks (`DECISIONS.md`, Search: "The title reaches the semantic field as its own chunk"); a bundle has one vector per talk over both, so its ranking is close to tier 3's but not identical. Topics are not added, because they are words of the title already.
 
-`contracts/fixtures/embedding/reference.v1.json` holds reference embeddings under these conventions: the three fixture talks and two queries, each as the exact input string and its fp32 vector, the query-by-talk cosines from fp32 and from the int8-quantised ONNX export, and the Workers AI request body. An embedder conforms when every cosine it computes is within 0.02 of the fp32 value and the best talk for each query is the same. The bundle's int8 rows stay within that tolerance too (the test checks it).
+`contracts/fixtures/embedding/reference.v1.json` holds reference embeddings under these conventions: the three fixture talks and two queries, each as the exact input string and its fp32 vector, the query-by-talk cosines from fp32 and from the int8-quantised ONNX export, and the Workers AI request body. An embedder conforms when every cosine it computes is within 0.02 of the fp32 value and the best talk for each query is the same. The bundle's int8 rows stay within that tolerance too (the test checks it). The fixture also records the cosines that the two likeliest mistakes give, mean pooling and a query embedded without its instruction; each misses the reference by more than the tolerance (by up to 0.079 and 0.049), so the check catches both.
 
 ## Vectors
 
@@ -104,7 +104,7 @@ The talk text is title and abstract only. Today's tier 3 server copies the title
 - **File format.** `vectors.i8` is `count × 384` signed bytes, row-major: component `j` of row `i` is the byte at offset `i × 384 + j`, read as two's-complement int8. One byte per component means there is no byte order to get wrong. The file is exactly `count × 384` bytes.
 - **Quantisation.** Each row is quantised on its own: `scale = 127 / max_j |v_j|`, `q_j = round_half_away_from_zero(v_j × scale)`, clamped to [-127, 127]. The value -128 never appears (a verifier refuses a file that holds it), and an all-zero vector stays all zeros. The scale is not stored, because nothing needs it.
 - **Similarity.** Cosine over the int8 values, computed as `dot(a, b) / (sqrt(dot(a, a)) * sqrt(dot(b, b)))` in IEEE 754 double precision, where each `dot` of two int8 rows is an exact integer sum (it stays below 384 × 127 × 127 = 6,193,536, inside 32 bits) converted to a double, and the similarity is 0 when either vector is all zeros. A float query vector is compared with an int8 row by the same expression; cosine does not depend on either scale, so the query needs no quantisation. Row norms can be computed once at load. Brute force over every row is the intended search: KubeCon is about 215,000 multiply-adds per query.
-- **Model compatibility.** `model.id` in the index entry and in the bundle names the model the vectors came from. An app compares its query vectors only with a bundle whose `model.id` and `dims` match the model it runs; otherwise it uses keyword search alone for that conference. A different model is a different `model.id`, never a silent swap.
+- **Model compatibility.** The model is part of the bundle format: every v1 bundle holds `bge-small-en-v1.5` vectors under the conventions above, and `model.id` and `dims` in the index entry and the bundle say so for verification. A bundle built with another model, other dimensions or other conventions is a new `bundle_version`, never a silent swap, so an app never compares its query vectors with vectors from a model it does not run. An app whose own embedder is unavailable uses keyword search alone for that conference.
 
 ## Related talks
 
