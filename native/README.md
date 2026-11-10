@@ -354,7 +354,8 @@ folder:
 
 `caddie.backend` and `caddie.query` are debug launch options next to the shell's (`caddie.tab`,
 `caddie.theme` and the others under Design system); the backend you pass stays selected, like one
-chosen in Settings.
+chosen in Settings. `caddie.sheet filters` opens the Filters sheet, `caddie.talk <talk id>` opens a
+talk, and `caddie.mark <id>,<id>` marks talks, so screenshots need no taps.
 
 ## Privacy
 

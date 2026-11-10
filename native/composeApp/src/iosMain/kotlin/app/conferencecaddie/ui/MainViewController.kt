@@ -5,6 +5,7 @@ import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.core.IosCore
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
+import app.conferencecaddie.ui.talks.TalkLaunch
 import app.conferencecaddie.ui.theme.HostController
 import kotlin.experimental.ExperimentalNativeApi
 import platform.Foundation.NSBundle
@@ -24,6 +25,7 @@ fun MainViewController(): UIViewController {
     val get: (String) -> String? = { name -> args.indexOf("-$name").takeIf { it >= 0 }?.let { args.getOrNull(it + 1) } }
     val launch = if (isDebugBuild) DebugLaunch.from(get) else DebugLaunch()
     var query: String? = null
+    val talkLaunch = if (isDebugBuild) TalkLaunch.from(get) else TalkLaunch()
     if (isDebugBuild) {
         get("caddie.backend")?.let { url ->
             (BackendUrl.normalise(url, allowLocalHttp = true) as? BackendUrl.Valid)?.let { core.setBackend(it) }
@@ -32,6 +34,6 @@ fun MainViewController(): UIViewController {
     }
     val version = NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: ""
     return ComposeUIViewController {
-        CaddieApp(core = core, isDebugBuild = isDebugBuild, appVersion = version, launch = launch, initialQuery = query)
+        CaddieApp(core = core, isDebugBuild = isDebugBuild, appVersion = version, launch = launch, initialQuery = query, talkLaunch = talkLaunch)
     }.also { HostController.current = it }
 }

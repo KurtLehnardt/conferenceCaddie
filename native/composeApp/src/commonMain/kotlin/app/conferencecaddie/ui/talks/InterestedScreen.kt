@@ -17,6 +17,7 @@ import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.bundle.TalkTime
 import app.conferencecaddie.ui.components.NoteText
+import app.conferencecaddie.ui.components.SectionHeading
 import app.conferencecaddie.ui.InterestedPlaceholder
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
@@ -57,15 +58,15 @@ fun InterestedScreen(
         }
         days.forEach { (day, list) ->
             item("day-$day") {
-                Text(
+                // .day-header: the web writes the day in capitals.
+                SectionHeading(
                     TalkTime.dayLong(day),
-                    style = Caddie.type.sectionHeading,
-                    color = c.text2,
-                    modifier = Modifier.padding(horizontal = Caddie.dimens.gutter).padding(top = 8.dp).semantics { heading() },
+                    Modifier.padding(horizontal = Caddie.dimens.gutter).padding(top = 8.dp).semantics { heading() },
                 )
             }
             items(list, key = { it.talkId }) { talk ->
-                TalkResult(talk, bundle, emptyList(), true, nowMs, onToggleInterested, onOpenTalk, onOpenUrl)
+                // As on the web, My schedule's cards carry no matched passage.
+                TalkResult(talk, bundle, emptyList(), true, nowMs, onToggleInterested, onOpenTalk, onOpenUrl, showEvidence = false)
             }
         }
         item("footnote") {

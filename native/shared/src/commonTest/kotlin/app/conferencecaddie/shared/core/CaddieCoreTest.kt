@@ -136,6 +136,14 @@ class CaddieCoreTest {
     }
 
     @Test
+    fun aBundleBaseWithNothingPublishedYetHasNoConferences() = runTest {
+        val tier1 = Fixtures.text("capabilities/tier1-demo.json").replace("https://kurtlehnardt.github.io/conferenceCaddie/bundles/", bundleBase)
+        val core = launch(FakeHttp(mapOf("$backend/capabilities.json" to FakeHttp.json(200, tier1))))
+        val s = core.until { it.conferences !is ConferencesState.Loading }
+        assertEquals(ConferencesState.NoBundles, s.conferences)
+    }
+
+    @Test
     fun anUnreachableOtherBackendIsShownAsUnreachable() = runTest {
         val core = launch(FakeHttp())
         val s = core.until { it.capabilities !is CapabilitiesState.Loading && it.conferences !is ConferencesState.Loading }

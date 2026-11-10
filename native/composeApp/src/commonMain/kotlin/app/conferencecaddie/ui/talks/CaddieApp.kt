@@ -44,6 +44,7 @@ import app.conferencecaddie.ui.shell.TabContent
 import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.CaddieTheme
 import app.conferencecaddie.ui.theme.ThemePreference
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
@@ -55,7 +56,8 @@ import kotlinx.coroutines.delay
  * backend serves people features (phase 3).
  *
  * [launch] holds the debug builds' launch options (the release hosts pass the defaults);
- * [initialQuery] types a search, which opens the Search tab.
+ * [initialQuery] types a search, which opens the Search tab, and [talkLaunch] opens a sheet or
+ * marks talks, so screenshots can be taken without tapping.
  *
  * TODO(phase 3): route `caddie://connect` links and QR codes from the platforms into
  * `pendingConnect`, which already shows the confirmation that names the base.
@@ -67,6 +69,7 @@ fun CaddieApp(
     appVersion: String,
     launch: DebugLaunch = DebugLaunch(),
     initialQuery: String? = null,
+    talkLaunch: TalkLaunch = TalkLaunch(),
 ) {
     val state by core.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -91,6 +94,13 @@ fun CaddieApp(
         core.refresh()
         onPauseOrDispose { }
     }
+    // The theme choice is kept on this device, as the web keeps it in local storage; a debug
+    // launch option wins for that run.
+    LaunchedEffect(core) {
+        if (launch.theme == null) {
+            core.uiSetting(THEME)?.let { saved -> ThemePreference.entries.firstOrNull { it.name == saved } }?.let { theme = it }
+        }
+    }
     val ready = state.bundle as? BundleState.Ready
     LaunchedEffect(state.selectedSlug, ready?.bundle?.contentHash) {
         search.onConference(state.selectedSlug, ready?.bundle?.contentHash)
@@ -98,6 +108,12 @@ fun CaddieApp(
     }
     LaunchedEffect(initialQuery, ready != null) {
         if (initialQuery != null && ready != null && search.input.isEmpty()) search.onInput(initialQuery)
+    }
+    LaunchedEffect(talkLaunch, ready != null) {
+        if (ready == null) return@LaunchedEffect
+        talkLaunch.mark.forEach { if (it !in state.interested) core.setInterested(it, true) }
+        if (talkLaunch.sheet == "filters") search.sheet = ""
+        talkLaunch.talk?.let { openTalk = it }
     }
 
     val interestedIds = state.interested.toSet()
@@ -126,7 +142,10 @@ fun CaddieApp(
                 }
             },
             onDeclineConnect = onConnectHandled,
-            onThemeChange = { theme = it },
+            onThemeChange = {
+                theme = it
+                core.setUiSetting(THEME, it.name)
+            },
             onClearSavedSchedules = {
                 core.clearCache()
                 cacheBytes = 0
@@ -156,16 +175,36 @@ fun CaddieApp(
 
     val talk = openTalk?.let { ready?.bundle?.talksById?.get(it) }
     if (talk != null && ready != null) {
-        TalkSheet(
-            talk = talk,
-            bundle = ready.bundle,
-            related = ready.search.related(talk.talkId),
-            interested = talk.talkId in interestedIds,
-            nowMs = nowMs,
-            onToggleInterested = toggle,
-            onOpenTalk = { openTalk = it.talkId },
-            onOpenUrl = openUrl,
-            onClose = { openTalk = null },
+        // The sheet sits outside App(), so it takes the same theme itself.
+        CaddieTheme(theme) {
+            TalkSheet(
+                talk = talk,
+                bundle = ready.bundle,
+                related = ready.search.related(talk.talkId),
+                interested = talk.talkId in interestedIds,
+                nowMs = nowMs,
+                onToggleInterested = toggle,
+                onOpenTalk = { openTalk = it.talkId },
+                onOpenUrl = openUrl,
+                onClose = { openTalk = null },
+            )
+        }
+    }
+}
+
+private const val THEME = "theme"
+
+/**
+ * Debug launch options of the talk screens: `caddie.sheet filters` opens the Filters sheet,
+ * `caddie.talk <talk id>` opens a talk, and `caddie.mark <id>,<id>` marks talks. Release hosts
+ * never pass them.
+ */
+data class TalkLaunch(val sheet: String? = null, val talk: String? = null, val mark: List<String> = emptyList()) {
+    companion object {
+        fun from(get: (String) -> String?) = TalkLaunch(
+            sheet = get("caddie.sheet"),
+            talk = get("caddie.talk"),
+            mark = get("caddie.mark")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty(),
         )
     }
 }

@@ -9,6 +9,7 @@ import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
+import app.conferencecaddie.ui.talks.TalkLaunch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -23,6 +24,7 @@ class MainActivity : ComponentActivity() {
         val get: (String) -> String? = { intent?.getStringExtra(it) }
         val launch = if (isDebugBuild) DebugLaunch.from(get) else DebugLaunch()
         var query: String? = null
+        val talkLaunch = if (isDebugBuild && savedInstanceState == null) TalkLaunch.from(get) else TalkLaunch()
         if (isDebugBuild && savedInstanceState == null) {
             get("caddie.backend")?.let { url ->
                 (BackendUrl.normalise(url, allowLocalHttp = true) as? BackendUrl.Valid)?.let { core.setBackend(it) }
@@ -31,7 +33,7 @@ class MainActivity : ComponentActivity() {
         }
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
         setContent {
-            CaddieApp(core = core, isDebugBuild = isDebugBuild, appVersion = version, launch = launch, initialQuery = query)
+            CaddieApp(core = core, isDebugBuild = isDebugBuild, appVersion = version, launch = launch, initialQuery = query, talkLaunch = talkLaunch)
         }
     }
 }

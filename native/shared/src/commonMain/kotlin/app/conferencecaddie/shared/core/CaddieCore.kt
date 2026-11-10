@@ -206,6 +206,13 @@ class CaddieCore(
         }
     }
 
+    /** A setting of the screens (such as the theme), kept on this device for every backend. */
+    suspend fun uiSetting(name: String): String? = database.setting(KEY_UI + name)
+
+    fun setUiSetting(name: String, value: String?) {
+        scope.launch { database.setSetting(KEY_UI + name, value) }
+    }
+
     /** Bytes of stored bundles. */
     suspend fun cacheSizeBytes(): Long = database.run { files.sizeBytes() }
 
@@ -246,6 +253,8 @@ class CaddieCore(
         val conferences = when {
             index != null && index.ok -> ConferencesState.Ready(index.conferences, index.publisher, offline = !result.fresh)
             index != null && index.reason == "update_app" -> ConferencesState.Failed("update_app")
+            // The backend names a bundle base but has published nothing there yet.
+            result.error == "status 404" -> ConferencesState.NoBundles
             else -> ConferencesState.Failed(result.error ?: "invalid")
         }
         val stored = database.setting(KEY_CONFERENCE + backend.base)
@@ -360,6 +369,7 @@ class CaddieCore(
         private const val KEY_CONFERENCE = "conference:"
         private const val KEY_CAPABILITIES = "capabilities:"
         private const val KEY_HAD_DOCUMENT = "had_document:"
+        private const val KEY_UI = "ui:"
 
         /** The conference list is fetched at most this often in the foreground. */
         const val INDEX_REFRESH_MS = 15 * 60 * 1000L

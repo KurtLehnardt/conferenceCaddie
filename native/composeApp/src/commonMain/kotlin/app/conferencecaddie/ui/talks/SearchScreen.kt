@@ -154,6 +154,7 @@ internal fun TalkResult(
     onToggleInterested: (Talk) -> Unit,
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
+    showEvidence: Boolean = true,
 ) {
     val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
     TalkCard(
@@ -163,7 +164,7 @@ internal fun TalkResult(
         speakers = talk.speakers.joinToString(", ").takeIf { it.isNotEmpty() },
         room = talk.room,
         tags = talkTags(talk),
-        evidence = evidenceText(talk)?.let { highlight(it, terms) },
+        evidence = if (showEvidence) evidenceText(talk)?.let { highlight(it, terms) } else null,
         interested = interested,
         onToggleInterested = { onToggleInterested(talk) },
         ended = TalkTime.hasEnded(talk, nowMs),

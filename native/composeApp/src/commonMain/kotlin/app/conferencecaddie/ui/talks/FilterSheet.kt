@@ -2,7 +2,6 @@ package app.conferencecaddie.ui.talks
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -16,6 +15,7 @@ import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieSheet
+import app.conferencecaddie.ui.components.Hairline
 import app.conferencecaddie.ui.components.NoteText
 import app.conferencecaddie.ui.components.OptionRow
 import app.conferencecaddie.ui.components.SectionHeading
@@ -48,8 +48,13 @@ fun FilterSheet(
         modifier = Modifier.testTag("filter-sheet"),
         footer = {
             CaddieButton(Strings.FilterSheet.CLEAR_ALL, { onChange(SearchRequest(ignorePhrases = f.ignorePhrases)) }, variant = ButtonVariant.Text, enabled = count > 0)
-            Spacer(Modifier.weight(1f))
-            CaddieButton(Strings.FilterSheet.show(result?.total, f.includeEvents), onClose, variant = ButtonVariant.Primary)
+            // The web's .sheet-footer .btn-primary takes the rest of the row.
+            CaddieButton(
+                Strings.FilterSheet.show(result?.total, f.includeEvents),
+                onClose,
+                modifier = Modifier.weight(1f),
+                variant = ButtonVariant.Primary,
+            )
         },
     ) {
         Section(Strings.FilterSheet.DAY) {
@@ -113,18 +118,20 @@ fun FilterSheet(
         Section(Strings.FilterSheet.SPONSOR) {
             SwitchRow(Strings.FilterSheet.HIDE_SPONSOR, f.hideSponsor, { onChange(f.copy(hideSponsor = it)) })
         }
-        Section(Strings.FilterSheet.EVENTS) {
+        Section(Strings.FilterSheet.EVENTS, last = true) {
             SwitchRow(Strings.FilterSheet.INCLUDE_EVENTS, f.includeEvents, { onChange(f.copy(includeEvents = it)) })
         }
     }
 }
 
+/** .sheet-section: a legend, its options and a hairline under it (none under the last one). */
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Column(Modifier.padding(top = 12.dp, bottom = 4.dp)) {
+private fun Section(title: String, last: Boolean = false, content: @Composable () -> Unit) {
+    Column(Modifier.padding(vertical = 12.dp)) {
         SectionHeading(title, Modifier.padding(bottom = 4.dp))
         content()
     }
+    if (!last) Hairline()
 }
 
 /** Facet options with zero-count values hidden unless they are selected. */
