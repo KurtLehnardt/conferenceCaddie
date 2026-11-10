@@ -89,7 +89,7 @@ fun TopicChip(
 
 /**
  * .pp-field: a 44 dp pill on the fill colour with the search icon, a clear button once there is
- * text, and the accent outline while focused.
+ * text, and the accent outline while focused. [fieldTag] tags the text field itself, for tests.
  */
 @Composable
 fun PillSearchField(
@@ -99,6 +99,7 @@ fun PillSearchField(
     label: String,
     modifier: Modifier = Modifier,
     maxLength: Int = 60,
+    fieldTag: String? = null,
 ) {
     val c = Caddie.colors
     val interaction = remember { MutableInteractionSource() }
@@ -122,7 +123,7 @@ fun PillSearchField(
                 cursorBrush = SolidColor(c.accent),
                 interactionSource = interaction,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Search),
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = label },
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = label }.then(if (fieldTag != null) Modifier.testTag(fieldTag) else Modifier),
             )
         }
         if (value.isNotEmpty()) {

@@ -53,8 +53,9 @@ fun RankDrawer(
     result: SearchResult,
     filters: SearchRequest,
     conference: Conference,
+    startOpen: Boolean = false,
 ) {
-    var open by rememberSaveable(talkId, result.searchText) { mutableStateOf(false) }
+    var open by rememberSaveable(talkId, result.searchText) { mutableStateOf(startOpen) }
     val c = Caddie.colors
     val turn by animateFloatAsState(if (open) 180f else 0f)
     Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {

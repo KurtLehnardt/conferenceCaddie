@@ -192,7 +192,7 @@ fun CaddieApp(
             },
             search = {
                 BundleGate(state, core) { r ->
-                    SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl)
+                    SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl, openRank = talkLaunch.rank)
                 }
             },
             interested = {
@@ -242,8 +242,9 @@ private const val THEME = "theme"
 /**
  * Debug launch options of the talk screens: `caddie.sheet filters` opens the Filters sheet and
  * `caddie.sheet topics` the topic picker, `caddie.talk <talk id>` opens a talk, `caddie.mark
- * <id>,<id>` marks talks, and `caddie.learn <topic id>,<topic id>` and `caddie.learnText <text>` set
- * what For you suggests from. Release hosts never pass them.
+ * <id>,<id>` marks talks, `caddie.learn <topic id>,<topic id>` and `caddie.learnText <text>` set
+ * what For you suggests from, and `caddie.rank first` (or a talk id) opens that search result's Why
+ * this rank. Release hosts never pass them.
  */
 data class TalkLaunch(
     val sheet: String? = null,
@@ -251,6 +252,7 @@ data class TalkLaunch(
     val mark: List<String> = emptyList(),
     val learn: List<String>? = null,
     val learnText: String? = null,
+    val rank: String? = null,
 ) {
     companion object {
         fun from(get: (String) -> String?) = TalkLaunch(
@@ -259,6 +261,7 @@ data class TalkLaunch(
             mark = list(get("caddie.mark")).orEmpty(),
             learn = list(get("caddie.learn")),
             learnText = get("caddie.learnText"),
+            rank = get("caddie.rank"),
         )
 
         private fun list(value: String?) = value?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }

@@ -56,14 +56,27 @@ fun SearchScreen(
     onToggleInterested: (Talk) -> Unit,
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
+    openRank: String? = null,
 ) {
     val result = model.result
     val conference = bundle.conference
     val listState = rememberLazyListState()
+    // The debug launch option caddie.rank: the result whose Why this rank starts open ("first" for
+    // the first result of a text search).
+    val rankOpen = if (openRank == "first") result?.talks?.firstOrNull()?.talkId?.takeIf { result.searchText.isNotBlank() } else openRank
     // A new result starts at the top, where its suggestions and chips are. Without this, the list
     // keeps its first visible item by key, and a "Did you mean" row that appears above it stays
-    // out of sight.
-    LaunchedEffect(result) { if (result != null) listState.scrollToItem(0) }
+    // out of sight. With caddie.rank, it starts at that result instead.
+    LaunchedEffect(result) {
+        if (result == null) return@LaunchedEffect
+        val at = rankOpen?.let { id -> result.talks.indexOfFirst { it.talkId == id } } ?: -1
+        if (at < 0) {
+            listState.scrollToItem(0)
+        } else {
+            val headers = listOf(result.suggestions.isNotEmpty(), true, !result.happeningNowAvailable, true, result.degraded).count { it }
+            listState.scrollToItem(headers + at, scrollOffset = RANK_SCROLL_PX)
+        }
+    }
     Column(Modifier.fillMaxSize().testTag("search-screen")) {
         SearchField(
             value = model.input,
@@ -142,7 +155,7 @@ fun SearchScreen(
                                 rank = if (browse) {
                                     null
                                 } else {
-                                    { RankDrawer(talk.talkId, result.ranking[talk.talkId], result, model.filters, conference) }
+                                    { RankDrawer(talk.talkId, result.ranking[talk.talkId], result, model.filters, conference, startOpen = talk.talkId == rankOpen) }
                                 },
                             )
                         }
@@ -208,6 +221,9 @@ internal fun TalkResult(
         },
     )
 }
+
+// How far into its card a result opened with caddie.rank is scrolled, so its panel shows.
+private const val RANK_SCROLL_PX = 700
 
 private fun suggestionKind(kind: String) = when (kind) {
     "track" -> Strings.Search.SUGGESTION_TRACK

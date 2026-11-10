@@ -66,7 +66,7 @@ class TalkScreensUiTest {
 
     @Test
     fun searchWithATimePhraseAndAFilterThenMarkATalk() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search)) }
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
         waitFor(tag = "talk-alpha-conf-2099:1")
         waitFor(text = Strings.Search.count(3, browse = true, includeEvents = false))
@@ -114,7 +114,7 @@ class TalkScreensUiTest {
 
     @Test
     fun theSwitcherChangesConference() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search)) }
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
         waitFor(tag = "talk-alpha-conf-2099:1")
         onNodeWithTag("conference-switcher").performClick()
@@ -126,7 +126,7 @@ class TalkScreensUiTest {
 
     @Test
     fun filtersSheetNarrowsAndClears() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search)) }
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
         waitFor(tag = "talk-alpha-conf-2099:1")
         // The Has slides chip narrows to the one talk with slides.

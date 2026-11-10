@@ -67,6 +67,12 @@ android {
         versionCode = caddieVersionCode
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // ONNX Runtime ships a native library of 23 to 39 MB per ABI. 32-bit x86 is left out: no
+        // phone in use runs it, and x86_64 still covers emulators and Chromebooks.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -83,6 +89,12 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // Native libraries are stored compressed and extracted at install. Stored uncompressed (the
+        // default), ONNX Runtime alone would make the APK, which is downloaded from GitHub Releases,
+        // about 95 MB larger; the cost is that space again on the phone once installed.
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 

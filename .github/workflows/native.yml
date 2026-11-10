@@ -67,7 +67,18 @@ jobs:
       - name: Set the version code
         run: echo "CADDIE_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
 
-      # On Linux the iOS targets are skipped, so allTests runs the shared tests as Android host tests.
+      # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
+      # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
+      # only read the cache; on main the first Linux job and the first macOS job write it.
+      - name: Restore the pinned downloads
+        id: pinned
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: caddie-pinned-${{ runner.os }}-${{ hashFiles('native/gradle/pinned-downloads.properties') }}
+
+      # On Linux the iOS targets are skipped, so allTests runs the shared tests on the JVM, the
+      # embedding tests with the real model among them.
       - name: Shared tests and debug APK
         run: ./gradlew :shared:allTests :androidApp:assembleDebug
 
@@ -96,6 +107,13 @@ jobs:
       # resource shrinking on, unsigned), so a change that breaks the release build fails here.
       - name: Unsigned release APK
         run: ./gradlew -Pcaddie.unsignedRelease=true :androidApp:assembleRelease
+
+      - name: Save the pinned downloads
+        if: github.ref == 'refs/heads/main' && steps.pinned.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: ${{ steps.pinned.outputs.cache-primary-key }}
 
       # Only main hands the unsigned APK to the sign job.
       - name: Name the release APK after the commit
@@ -223,6 +241,16 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
+      # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
+      # only read the cache; on main the first Linux job and the first macOS job write it.
+      - name: Restore the pinned downloads
+        id: pinned
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: caddie-pinned-${{ runner.os }}-${{ hashFiles('native/gradle/pinned-downloads.properties') }}
+
       # Builds the test APKs before the emulator starts, so its boot time is not spent on Gradle.
       - name: Build the test APKs
         run: ./gradlew :composeApp:assembleAndroidDeviceTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
@@ -236,6 +264,12 @@ jobs:
           disable-animations: true
           working-directory: native
           script: ./gradlew :composeApp:connectedAndroidDeviceTest :androidApp:connectedDebugAndroidTest
+
+      # EmbeddingDeviceTest measures the shipped model on the emulator; its numbers go to the summary.
+      - name: Report the on-device embedding numbers
+        if: always()
+        run: |
+          grep -rhoE "EMBEDDING-REPORT[^<\"]*" composeApp/build/outputs/androidTest-results/ composeApp/build/test-results/ 2>/dev/null | sort -u >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Keep the test reports
         if: failure()
@@ -277,6 +311,16 @@ jobs:
       - name: Show the Xcode version
         run: xcodebuild -version
 
+      # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
+      # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
+      # only read the cache; on main the first Linux job and the first macOS job write it.
+      - name: Restore the pinned downloads
+        id: pinned
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: caddie-pinned-${{ runner.os }}-${{ hashFiles('native/gradle/pinned-downloads.properties') }}
+
       - name: Shared tests on the iOS simulator
         run: ./gradlew :shared:iosSimulatorArm64Test
 
@@ -299,12 +343,104 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           build
 
+      - name: Save the pinned downloads
+        if: github.ref == 'refs/heads/main' && steps.pinned.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: ${{ steps.pinned.outputs.cache-primary-key }}
+
       - name: Save Kotlin/Native
         if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.konan
           key: ${{ steps.konan.outputs.cache-primary-key }}
+
+  # The talk checks of scripts/smoke.mjs against the on-device search (TalkSmokeTest), the exit
+  # criterion of phase 2 in docs/NATIVE_PLAN.md: bundles are built from the committed data with
+  # scripts/build-bundles.mjs, as the Pages workflow builds them, and searched on the JVM with the
+  # shipped query model. No secrets; pull requests and main.
+  talk-smoke:
+    name: Talk checks against the on-device search
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+
+      # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
+      # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
+      # only read the cache; on main the first Linux job and the first macOS job write it.
+      - name: Restore the pinned downloads
+        id: pinned
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: caddie-pinned-${{ runner.os }}-${{ hashFiles('native/gradle/pinned-downloads.properties') }}
+
+      # The embedding library, with no install script (docs/BUNDLES.md, Why --ignore-scripts).
+      - name: Install the bundle tools
+        working-directory: .
+        run: npm --prefix tools/bundles ci --ignore-scripts
+
+      - name: Read the pinned model revision
+        id: model
+        working-directory: .
+        run: |
+          rev=$(grep -oE "ONNX_REVISION = '[0-9a-f]+'" scripts/lib/embedder.mjs | grep -oE "[0-9a-f]{40}")
+          if [ -z "$rev" ]; then echo "::error::ONNX_REVISION not found in scripts/lib/embedder.mjs"; exit 1; fi
+          echo "revision=$rev" >> "$GITHUB_OUTPUT"
+
+      # The fp32 model the bundle builder embeds talks with (SHA-256 pinned, fails closed).
+      - name: Restore the bundle model
+        id: model-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/model
+          key: bundle-model-${{ steps.model.outputs.revision }}
+
+      # Every vector is computed from the committed data (--reuse-from none), so nothing published
+      # is trusted. The bundle base is only written into capabilities.json, which is not read here.
+      - name: Build the talk bundles
+        working-directory: .
+        env:
+          MODEL_FLAG: ${{ steps.model-cache.outputs.cache-hit == 'true' && '--no-model-download' || '' }}
+        run: |
+          node scripts/build-bundles.mjs --out "$RUNNER_TEMP/site" --base-url https://127.0.0.1:8701/bundles/ \
+            --reuse-from none $MODEL_FLAG --takedown https://github.com/KurtLehnardt/conferenceCaddie/issues \
+            --publisher-name "Conference Caddie"
+
+      - name: Run the talk checks
+        run: ./gradlew :shared:smokeTalks "-Pcaddie.smokeSite=$RUNNER_TEMP/site"
+
+      - name: Report the talk checks
+        if: always()
+        run: |
+          if [ -f shared/build/reports/smoke-talks.txt ]; then
+            { echo '```'; cat shared/build/reports/smoke-talks.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Save the bundle model
+        if: github.ref == 'refs/heads/main' && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
 
   testflight-gate:
     name: Check for TestFlight secrets
@@ -362,6 +498,16 @@ jobs:
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
+
+      # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
+      # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
+      # only read the cache; on main the first Linux job and the first macOS job write it.
+      - name: Restore the pinned downloads
+        id: pinned-release
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: caddie-pinned-${{ runner.os }}-${{ hashFiles('native/gradle/pinned-downloads.properties') }}
 
       # An unsigned archive runs the "Compile Kotlin Framework" build phase, and so
       # `embedAndSignAppleFrameworkForXcode`, with exactly the Xcode settings the signed archive

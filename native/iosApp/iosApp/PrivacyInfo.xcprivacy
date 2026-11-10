@@ -5,8 +5,10 @@
      stat and fstat (Skia's file access and ICU's data file), and mach_absolute_time (Skia's DNG
      codec timing). Phase 2a adds lstat (FileTimestamp, the bundle cache's file system calls), and
      statfs and fstatfs (DiskSpace), which the bundled SQLite calls on the database's file system;
-     E174.1 is the reason that fits a database writing its own files. No user-defaults API is
-     linked. Check again with
+     E174.1 is the reason that fits a database writing its own files. Phase 2b links ONNX Runtime
+     1.30.0 statically, which adds no other required-reason API; its telemetry, which would send
+     usage data to Microsoft, is switched off (ORT_DISABLE_TELEMETRY, see DECISIONS.md). No
+     user-defaults API is linked. Check again with
      `nm -u ComposeApp.framework/ComposeApp` whenever dependencies change, and fill in
      NSPrivacyCollectedDataTypes when the app starts sending profile data to a backend. -->
 <plist version="1.0">

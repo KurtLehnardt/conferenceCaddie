@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -109,9 +110,10 @@ fun TopicPickerSheet(
         Column(Modifier.fillMaxWidth().padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (pinned.isNotEmpty()) {
                 ChipGroup(Strings.Topics.CHOSEN, Modifier.testTag("topic-chosen")) {
+                    // As on the web, a chosen topic shows no count; the lists below do.
                     pinned.forEach { id ->
                         val t = byId[id] ?: return@forEach
-                        TopicChip(t.label, id in chosen, { toggle(id) }, count = t.talkCount)
+                        TopicChip(t.label, id in chosen, { toggle(id) })
                     }
                 }
             }
@@ -120,7 +122,7 @@ fun TopicPickerSheet(
                 onValueChange = { query = it },
                 placeholder = Strings.Topics.FIND,
                 label = Strings.Topics.findLabel(title),
-                modifier = Modifier.testTag("topic-find"),
+                fieldTag = "topic-find",
             )
             if (hits != null) {
                 ChipGroup(Strings.Topics.MATCHING, Modifier.testTag("topic-hits")) {
@@ -144,7 +146,8 @@ fun TopicPickerSheet(
                         onClick = { showAll = !showAll },
                         variant = ButtonVariant.Text,
                         small = true,
-                        modifier = Modifier.padding(start = 0.dp).testTag("topic-more"),
+                        // .pp-more: the text button's label lines up with the chips (margin-left: -8px).
+                        modifier = Modifier.offset(x = (-8).dp).testTag("topic-more"),
                     )
                 }
             }
