@@ -12,7 +12,16 @@ import fs from 'node:fs';
 
 const WORDS_FILE = new URL('../config/moderation-words.json', import.meta.url);
 const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
-const URL_RE = /(?:https?:\/\/|www\.)[^\s]+|\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|co|ai|app|me|ly|gg|xyz|info|us|uk|de|tv|link|to|sh|is|it|nl|fr|es|ca)\b(?:\/[^\s]*)?/gi;
+// A web address is one of three shapes. With a scheme or www., anything counts. A bare domain
+// followed by a '/' path counts for any listed top-level domain. A bare domain alone counts only
+// for a short list of link-only top-level domains, written in lowercase, so script and project
+// names (install.sh, socket.io, k8s.io) and a missed space after a full stop ("jacket.It is me")
+// are not taken for addresses.
+const URL_RES = [
+  /(?:https?:\/\/|www\.)[^\s]+/gi,
+  /\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|co|ai|app|me|ly|gg|xyz|info|us|uk|de|tv|link|to|sh|is|it|nl|fr|es|ca)\/[^\s]*/gi,
+  /\b(?:[A-Za-z0-9-]+\.)+(?:com|net|org|info|xyz|gg|ly|link)\b/g,
+];
 
 export const FILTERED = { error: 'filtered', message: 'That was held back by the filter. Edit it and try again.' };
 
@@ -45,7 +54,7 @@ function hostOf(match) {
 export function isFiltered(line) {
   const padded = ` ${normalize(line)} `;
   if (PHRASES.some((p) => padded.includes(` ${p} `))) return true;
-  for (const m of String(line).match(URL_RE) ?? []) {
+  for (const m of URL_RES.flatMap((re) => String(line).match(re) ?? [])) {
     const host = hostOf(m);
     if (host !== 'linkedin.com' && !host.endsWith('.linkedin.com')) return true;
   }

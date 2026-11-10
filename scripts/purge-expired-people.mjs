@@ -1,11 +1,12 @@
 // Deletes every people profile whose conference has ended, in every conference, clears presence
-// that has run out and deletes meets that have run out.
+// that has run out, deletes meets that have run out (a declined one once its day is over) and
+// scrubs declined meets that have run out.
 //
 // Usage: node scripts/purge-expired-people.mjs
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY); ES_PEOPLE_INDEX (default caddie-people);
 //        ES_PEOPLE_MEETS_INDEX (default caddie-people-meets).
 //
-// The server runs the same three steps when it starts and once an hour. This is the operator's
+// The server runs the same steps when it starts and once an hour. This is the operator's
 // step for after a conference, when no instance may be running. It prints only counts. Blocks are
 // not purged here: they are deleted with the profile that made them.
 
@@ -66,7 +67,29 @@ for (;;) {
 }
 console.log(`Cleared ${cleared} expired presence entries.`);
 
+// A declined meet is the evidence for the daily "Not now" pause, so it is kept until its day is
+// over (two days after ended_at, which covers a 25-hour day). These queries and the script are
+// the same as EXPIRED_MEETS_QUERY, RUN_OUT_DECLINED_QUERY and SCRUB_MEET_SCRIPT in
+// server/people.mjs.
 const meets = await es('POST', `/${encodeURIComponent(MEETS_INDEX)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
-  query: { range: { expires_at: { lt: 'now' } } },
+  query: {
+    bool: {
+      should: [
+        { bool: { filter: [{ range: { expires_at: { lt: 'now' } } }], must_not: [{ term: { state: 'declined' } }] } },
+        { bool: { filter: [{ term: { state: 'declined' } }, { range: { expires_at: { lt: 'now' } } }], must_not: [{ range: { ended_at: { gte: 'now-2d' } } }] } },
+      ],
+      minimum_should_match: 1,
+    },
+  },
 });
 console.log(`Deleted ${meets.deleted ?? 0} expired meets.`);
+
+// A declined meet that has run out keeps no note, meeting point or spot-me line.
+const scrubbed = await es('POST', `/${encodeURIComponent(MEETS_INDEX)}/_update_by_query?conflicts=proceed&ignore_unavailable=true`, {
+  query: { bool: { filter: [{ term: { state: 'declined' } }, { range: { expires_at: { lt: 'now' } } }] } },
+  script: {
+    lang: 'painless',
+    source: "if (ctx._source.note == null && ctx._source.rendezvous == null && (ctx._source.spot_me == null || ctx._source.spot_me.isEmpty())) { ctx.op = 'noop'; } else { ctx._source.note = null; ctx._source.rendezvous = null; ctx._source.spot_me = [:]; }",
+  },
+});
+console.log(`Scrubbed ${scrubbed.updated ?? 0} run-out declined meets.`);

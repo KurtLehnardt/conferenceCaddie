@@ -976,8 +976,10 @@ try {
     const leetSpot = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: `by the ${leet.toUpperCase()} stand` }, { device: A, label: 'A-presence' });
     const url = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: 'see example.com/me' }, { device: A, label: 'A-presence' });
     const linkedin = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: 'see linkedin.com/in/me' }, { device: A, label: 'A-presence' });
+    // Script and project names are not web addresses.
+    const projectNames = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: 'install.sh and socket.io' }, { device: A, label: 'A-presence' });
     const filtered = (r) => r.status === 400 && r.json.error === 'filtered' && r.json.message === 'That was held back by the filter. Edit it and try again.';
-    report(filtered(spot) && filtered(leetSpot) && filtered(url) && linkedin.status === 200, 'q4: a listed word is rejected', `word ${spot.status}, leet ${leetSpot.status}, url ${url.status}, linkedin.com ${linkedin.status}`);
+    report(filtered(spot) && filtered(leetSpot) && filtered(url) && linkedin.status === 200 && projectNames.status === 200, 'q4: a listed word is rejected', `word ${spot.status}, leet ${leetSpot.status}, url ${url.status}, linkedin.com ${linkedin.status}, install.sh and socket.io ${projectNames.status}`);
   });
 
   await check('q4b: an ask needs both people around', async () => {
@@ -1063,6 +1065,35 @@ try {
     if (found.status !== 200 || found.json.state !== 'found') problems.push(`found gave ${found.status}`);
     if (after.status !== 410 || after.json.state !== 'found') problems.push(`after found: ${after.status}`);
     report(problems.length === 0, 'q6: a third device gets 403 from a meet, and 410 after found', problems.length ? problems.join('; ') : '15-min ask, accept -> active at once with zone and spot-me, found, then 410');
+  });
+
+  await check('q6b: a silent "Not now" leaves the asker\'s view, details and cancel unchanged', async () => {
+    // A and K are both around in ZONE_A since q5, so A's ask to K is a same-zone ask.
+    const view = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], when: 'around_now' }, { device: A, label: 'A-matches' });
+    const refK = personIn(view, 'K')?.ref;
+    if (!refK) throw new Error('K has no ref in A\'s around-now view');
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refK, topic_id: null, note: 'Hi there' }, { device: A, label: 'A-meet' });
+    if (r.status !== 200) throw new Error(`request gave ${r.status} ${r.json.error ?? ''}`);
+    const id = r.json.meet_id;
+    const spot = await api('PUT', `/api/meet/${id}/details`, { spot_me: 'blue cap' }, { device: A, label: 'A-meet' });
+    const before = await api('GET', `/api/meet/${id}`, undefined, { device: A, label: 'A-meet' });
+    const decline = await api('POST', `/api/meet/${id}/decline`, {}, { device: K, label: 'K-meet' });
+    const after = await api('GET', `/api/meet/${id}`, undefined, { device: A, label: 'A-meet' });
+    const again = await api('PUT', `/api/meet/${id}/details`, { spot_me: 'blue cap, red bag' }, { device: A, label: 'A-meet' });
+    const inbox = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: A, label: 'A-inbox' });
+    const cancel = await api('POST', `/api/meet/${id}/cancel`, {}, { device: A, label: 'A-meet' });
+    const gone = await api('GET', `/api/meet/${id}`, undefined, { device: A, label: 'A-meet' });
+    const shape = (j) => JSON.stringify({ state: j.state, note: j.note, rendezvous: j.rendezvous, spot_me: j.mine?.spot_me, zone: j.other?.zone, same_zone: j.same_zone, active_until: j.active_until });
+    const problems = [];
+    if (spot.status !== 200) problems.push(`details before the decline gave ${spot.status}`);
+    if (before.status !== 200 || before.json.other?.zone !== ZONE_A || before.json.mine?.spot_me !== 'blue cap') problems.push(`before: ${shape(before.json)}`);
+    if (decline.status !== 200 || decline.json.state !== 'declined') problems.push(`decline gave ${decline.status} ${decline.json.state}`);
+    if (after.status !== 200 || shape(after.json) !== shape(before.json)) problems.push(`after the decline A sees ${shape(after.json)}, before ${shape(before.json)}`);
+    if (again.status !== 200 || again.json.state !== 'requested' || again.json.mine?.spot_me !== 'blue cap, red bag') problems.push(`details after the decline gave ${again.status} ${JSON.stringify(again.json)}`);
+    if (!(inbox.json.outgoing ?? []).some((m) => m.meet_id === id && m.state === 'requested' && m.note === 'Hi there')) problems.push('A\'s inbox lacks the waiting ask');
+    if (cancel.status !== 200 || cancel.json.state !== 'cancelled') problems.push(`cancel gave ${cancel.status} ${cancel.json.state}`);
+    if (gone.status !== 410 || gone.json.state !== 'cancelled') problems.push(`after cancel: ${gone.status} ${gone.json.state}`);
+    report(problems.length === 0, 'q6b: a silent "Not now" leaves the asker\'s view, details and cancel unchanged', problems.length ? problems.join('; ') : 'same view with zone, 200 details, 200 cancelled, then 410 cancelled');
   });
 
   await check('q7: presence expires', async () => {
