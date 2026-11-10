@@ -208,6 +208,11 @@ export interface Visibility {
   shared_talk_ids: string[];
   /** True once the server holds a document for this conference. */
   on_server: boolean;
+  /**
+   * True from the moment a first write for this conference is sent until the server answers it:
+   * if the answer never arrives, the server may hold a document all the same.
+   */
+  maybe_on_server: boolean;
   share_notice_seen: boolean;
   /** Ended talks whose banner the user has already seen or closed. */
   banner_seen: string[];
@@ -218,6 +223,27 @@ export interface Visibility {
   share_new: boolean;
   /** True when the server last said this profile is hidden after reports (its owner still sees it). */
   hidden_for_owner: boolean;
+}
+
+/** How a profile delete failed, as far as the user is concerned. */
+export type DeleteFailure = 'partial' | 'offline' | 'rate' | 'forbidden' | 'bad';
+
+/**
+ * A profile delete the server has not confirmed yet: either for one conference (its server copy
+ * may be partly deleted) or "Delete my profile" as a whole. While one is stored, the device sends
+ * no profile write it covers, and the delete is tried again.
+ */
+export interface DeleteRetry {
+  /** Failed attempts so far; they set how long the next automatic attempt waits. */
+  attempts: number;
+  /** Time in epoch milliseconds before which no automatic attempt is sent; 0 for at once. */
+  next_at: number;
+  /** Attempts in a row that the server refused this device's key (403). */
+  forbidden: number;
+  /** How the last attempt failed, or null before the first failure. */
+  last: DeleteFailure | null;
+  /** Time in epoch milliseconds the delete was first asked for. */
+  since: number;
 }
 
 /** Report: what a report is about and why. */
