@@ -10,7 +10,7 @@ still the Android app people use today. The design and the phases these apps fol
 
 | Path | What it is |
 |---|---|
-| `shared/` | Kotlin Multiplatform library with no UI. It holds the placeholder models (`Conference`, `Talk`), the `Capabilities` document, `ServerUrl` normalisation, and the platform interfaces `Embedder`, `BleRadio`, `Notifier` and `SecureStore`. Its tests in `commonTest` run on the JVM and on the iOS simulator. |
+| `shared/` | Kotlin Multiplatform library with no UI. It holds the placeholder models (`Conference`, `Talk`), the `Capabilities` document, `BackendUrl` (the contract's backend URL rules), and the platform interfaces `Embedder`, `BleRadio`, `Notifier` and `SecureStore`. Its tests in `commonTest` run on the JVM and on the iOS simulator. |
 | `composeApp/` | Compose Multiplatform UI. `App()` draws the bottom bar: For you, Search, Interested, People (shown only when `capabilities.people.enabled` is true) and Settings, which has the Server URL field. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. |
 | `androidApp/` | The Android application: `MainActivity` hosts `App()`. |
 | `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController`, and a build phase runs Gradle to build and embed the framework. |
@@ -45,8 +45,8 @@ Android application must be its own module and Kotlin Multiplatform modules use 
 - JDK 17 or newer. The project is built with JDK 21.
 - The Android SDK with platform 37 (`platforms;android-37.0`) and build-tools 36. Point Gradle at
   it with `ANDROID_HOME` or a `local.properties` file containing `sdk.dir=...`, which git ignores.
-- For iOS: a Mac with Xcode 26 or newer. The first iOS build downloads Kotlin/Native and its dependencies (about 2 GB)
-  into `~/.konan`.
+- For iOS: a Mac with Xcode 26 or newer. The first iOS build downloads Kotlin/Native and its
+  dependencies (about 2 GB) into `~/.konan`.
 
 ## Build and run on Android
 
@@ -59,6 +59,11 @@ From `native/`:
 ```
 
 You can also open `native/` in Android Studio and run the `androidApp` configuration.
+
+Release builds run R8 (code shrinking and resource shrinking). Compose, AndroidX and
+kotlinx.serialization bring their own keep rules; app-specific rules go in
+`androidApp/proguard-rules.pro`. Check a release build on a device after adding anything that uses
+reflection.
 
 The native app uses the same application id as the Capacitor app, `app.conferencecaddie`. A phone
 cannot have both installed at once. Installing a debug build over a release build, or the other way
@@ -85,8 +90,9 @@ id is `app.conferencecaddie`, set in `iosApp/Configuration/Config.xcconfig`.
 
 ### Android
 
-A release build is signed with the project's release key when these four environment variables are
-all set. When any of them is missing, it falls back to the debug key and Gradle prints a warning.
+A local release build is signed with the project's release key when these four environment
+variables are all set. When none is set, it falls back to the debug key and Gradle prints a
+warning. When only some are set, the build stops and names the missing ones.
 
 | Variable | Meaning |
 |---|---|
@@ -95,13 +101,9 @@ all set. When any of them is missing, it falls back to the debug key and Gradle 
 | `ANDROID_KEY_ALIAS` | Key alias (`conference-caddie`) |
 | `ANDROID_KEY_PASSWORD` | Key password |
 
-Keep the keystore and its passwords out of the repository; `.gitignore` here excludes `*.jks`,
-`*.keystore` and `keystore.properties`. Build signed releases with `--no-configuration-cache`, so
-the passwords are not written into Gradle's configuration cache:
-
-```sh
-./gradlew --no-configuration-cache :androidApp:assembleRelease
-```
+Keep the keystore and its passwords out of the repository; both `.gitignore` files exclude `*.jks`,
+`*.keystore`, `*.p8` and `*.p12`. Build signed releases with `--no-configuration-cache`, so the
+passwords are not written into Gradle's configuration cache.
 
 The maintainer's keystore lives outside the repository, and its passwords are in the macOS
 Keychain under the services `conference-caddie-android-keystore` and
@@ -118,70 +120,175 @@ keystore password. A local signed build reads them inside one shell, without pri
 )
 ```
 
-GitHub Actions holds the same key in these repository secrets:
+**In CI, Gradle never sees the key.** The build job runs `assembleRelease` with
+`-Pcaddie.unsignedRelease=true` and keeps the unsigned APK for one day. A separate job signs it.
+That job checks out no code and runs no Gradle or npm; it decodes the keystore into the runner's
+temp directory with `umask 077`, runs `zipalign` and `apksigner` from the runner's Android SDK,
+deletes the keystore, and fails unless the APK's certificate matches the repository variable
+`ANDROID_RELEASE_CERT_SHA256` (the public fingerprint
+`15:02:52:89:3C:0B:24:01:9C:1C:24:68:CD:BB:3A:CA:A7:FC:79:33:68:35:34:54:38:FD:09:47:E0:D5:7C:7B`).
+
+The signing jobs use the GitHub environment `release`, which only `main` may deploy to, and the
+secrets live in that environment, not in the repository:
 
 - `ANDROID_KEYSTORE_BASE64`: the keystore file, base64-encoded.
 - `ANDROID_KEYSTORE_PASSWORD`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
-The Capacitor workflow (`.github/workflows/android-apk.yml`) signs its release APK with the same
-key. Both apps share the application id, so once every release is signed with this one key, the
-native app can later be installed as an update over the Capacitor app.
+The Capacitor workflow (`.github/workflows/android-apk.yml`) signs its release APK the same way,
+with the same key, on a manual run on `main`. Both apps share the application id, so once every
+release is signed with this one key, the native app can later be installed as an update over the
+Capacitor app.
 
 Keep a backup of the keystore somewhere safe. If it is lost, no future build can update the
 installed apps.
 
 ### iOS and TestFlight
 
-The `testflight` job in `.github/workflows/native.yml` archives a Release build, signs it with
-automatic signing, and uploads it to App Store Connect with `xcodebuild -exportArchive`
-(`iosApp/ExportOptions.plist` sets the destination to upload). It runs only on pushes to `main` and
-on manual runs, and only when all of these repository secrets exist:
+The `testflight` job in `.github/workflows/native.yml` runs on pushes to `main` and manual runs on
+`main`, in the `release` environment, and only when all seven secrets below are set there. It:
 
-- `ASC_KEY_ID`: the App Store Connect API key id.
-- `ASC_ISSUER_ID`: the issuer id shown above the API keys list.
-- `ASC_KEY_P8_BASE64`: the downloaded `AuthKey_<id>.p8` file, base64-encoded.
-- `APPLE_TEAM_ID`: the Apple Developer team id.
+1. installs an Apple Distribution certificate into a temporary keychain and an App Store
+   provisioning profile for `app.conferencecaddie`;
+2. archives the Release configuration with manual signing;
+3. writes the App Store Connect API key with `umask 077`, exports and uploads the archive with
+   `xcodebuild -exportArchive` (`iosApp/ExportOptions.plist` sets the destination to upload), and
+   deletes the key;
+4. removes the keychain and the profile, whatever happened.
 
-Before the first upload:
+| Secret (environment `release`) | What it is |
+|---|---|
+| `IOS_DIST_CERT_P12_BASE64` | The Apple Distribution certificate and its private key, exported from Keychain Access as `.p12`, base64-encoded |
+| `IOS_DIST_CERT_PASSWORD` | The password chosen for that `.p12` |
+| `IOS_APPSTORE_PROFILE_BASE64` | An App Store provisioning profile for `app.conferencecaddie`, base64-encoded |
+| `ASC_KEY_ID` | The App Store Connect API key id |
+| `ASC_ISSUER_ID` | The issuer id shown above the API keys list |
+| `ASC_KEY_P8_BASE64` | The downloaded `AuthKey_<id>.p8` file, base64-encoded |
+| `APPLE_TEAM_ID` | The Apple Developer team id |
 
-1. Register the bundle id `app.conferencecaddie` in the Apple Developer account, and create the app
-   in App Store Connect with that bundle id.
-2. Create a team API key in App Store Connect (Users and Access, then Integrations). Automatic
-   signing on a fresh CI machine creates its certificates through the API, which needs the Admin
-   role.
-3. Set the four secrets. The build number is the workflow run number, so each upload is new.
+Before the first upload, register the bundle id `app.conferencecaddie`, create the distribution
+certificate and the App Store profile in the Apple Developer account, create the app in App Store
+Connect, and create a team API key with the App Manager role (Users and Access, then
+Integrations). Upload the secrets with stdin, for example
+`base64 -i dist.p12 | gh secret set IOS_DIST_CERT_P12_BASE64 --env release`.
+
+**This job has not run yet**, because the secrets do not exist. Expect the first run on `main` to
+need attention; the signing settings it passes are `CODE_SIGN_STYLE=Manual`,
+`CODE_SIGN_IDENTITY="Apple Distribution"` and the profile's UUID as
+`PROVISIONING_PROFILE_SPECIFIER`.
+
+`Info.plist` declares `ITSAppUsesNonExemptEncryption` as false, which is true of the skeleton (it
+uses only the system's HTTPS). Review it in Phase 4, when the Bluetooth tokens add HMAC-based token
+derivation, before the first upload that includes it.
+
+## Version numbers
+
+CI builds get Android `versionCode` and iOS `CURRENT_PROJECT_VERSION` of 1000 plus the workflow run
+number, which keeps every native build above the Capacitor app's `versionCode` (1). Local builds
+use 1. Re-running a workflow run reuses its run number: the APK then has the same version code as
+before, and App Store Connect refuses the upload as a duplicate build. To publish a new build,
+start a new run instead of re-running an old one.
 
 ## Pointing the app at a backend
 
-The Server URL field in Settings accepts an address and normalises it: it adds `https://` when no
-scheme is given, lowercases the host and drops trailing slashes. Only `http` and `https` are
-accepted. Both platforms block plain `http` by default (Android's cleartext policy and iOS App
-Transport Security), and the skeleton adds no exception, so use an `https` address. A debug-only
-exception for a server on your own machine (`http://10.0.2.2:<port>` from the Android emulator) can
-come with the networking code.
+The Server URL field in Settings follows the backend URL rules of the capabilities contract
+(`docs/contracts/capabilities.md`, `normaliseBackendUrl()` in `contracts/js/capabilities.mjs`),
+implemented in `shared` as `BackendUrl.normalise()`:
 
-The skeleton does not fetch anything yet. In Phase 1 the app will read
-`GET {server}/api/capabilities` (or `capabilities.json` for the static demo tier) into
-`Capabilities`, and a backend without that document will be treated as the legacy full feature set
-(`Capabilities.Legacy`). Until then, the "Preview people features" switch in Settings swaps between
-the demo and legacy capabilities, to show the People tab appearing and disappearing.
+- Only `https` is accepted, with no user name or password, query or fragment. The host is
+  lowercased, the default port dropped, and the path kept without trailing slashes, because a
+  tier 1 site lives under `/<repo>`.
+- Debug builds also accept plain `http` to `localhost`, `127.0.0.1`, `[::1]` and `10.0.2.2` (the
+  host machine as the Android emulator sees it). The Android debug build allows cleartext to those
+  hosts in `androidApp/src/debug/res/xml/network_security_config.xml`; release builds set
+  `usesCleartextTraffic="false"`. iOS has no exception yet, so App Transport Security still blocks
+  plain `http` there.
+- The result has a `base` (what the app calls, and the key for everything stored per backend, as
+  `SecureStore.scopedKey()` builds it) and an `origin` (shown to the user).
+- The parser is stricter than the reference implementation in a few places, listed in
+  `BackendUrl.kt`: it refuses backslashes, IPv4 shorthand and other inputs that a WHATWG parser
+  quietly repairs.
 
-Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the default backend in builds.
-The skeleton leaves the field empty until the capabilities client exists.
+The skeleton does not fetch anything yet. Until it does, the "Preview people features" switch in
+Settings (debug builds only) swaps between the demo and legacy capabilities, to show the People tab
+appearing and disappearing. Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the
+default backend in builds; the skeleton leaves the field empty until the capabilities client
+exists.
+
+## Privacy
+
+- Android: `allowBackup` is false, and `data_extraction_rules.xml` excludes every domain from
+  cloud backup and device-to-device transfer, because the app will hold per-backend device secrets.
+- iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking, no tracking domains and, for
+  now, no collected data. It declares the required-reason APIs that `nm -u` finds in the Release
+  device framework: `stat` and `fstat` (FileTimestamp, `C617.1`, from Skia and ICU) and
+  `mach_absolute_time` (SystemBootTime, `35F9.1`, from Skia). No disk-space or user-defaults API is
+  linked, so none is declared. Check again when dependencies change:
+
+  ```sh
+  ./gradlew :composeApp:linkReleaseFrameworkIosArm64
+  nm -u composeApp/build/bin/iosArm64/releaseFramework/ComposeApp.framework/ComposeApp | sort -u
+  ```
+
+## Dependency verification
+
+`gradle/verification-metadata.xml` holds the SHA-256 of every dependency and plugin the build
+resolves, and Gradle refuses an artifact whose checksum is missing or different. After changing a
+version in `gradle/libs.versions.toml` (Dependabot's Gradle updates included), regenerate it on a
+Mac, so the iOS artifacts are covered, and review the diff:
+
+```sh
+./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
+  :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
+  :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64
+```
+
+Some artifacts differ by operating system (AAPT2 for Linux and macOS), so the file also lists the
+Linux variants that CI needs; when a Linux CI run fails verification, add the entry it names.
+Sources and Javadoc jars, which IDEs download, are trusted without checksums.
 
 ## Continuous integration
 
 `.github/workflows/native.yml` runs on pull requests and on pushes to `main` that touch `native/` or
-the workflow itself:
+the workflow itself. Every action is pinned to a commit SHA, checkouts keep no credentials, and
+Dependabot (`.github/dependabot.yml`) proposes weekly updates for the actions and the Gradle
+dependencies.
 
 - **Shared tests and Android build** (Ubuntu): `:shared:allTests` and `:androidApp:assembleDebug`,
-  with the debug APK kept as an artifact. On pushes to `main` it also builds the signed release APK
-  and keeps it as an artifact. It skips that step with a notice when the signing secrets are
-  missing.
-- **iOS simulator build** (macOS): the shared tests on the iOS simulator and an unsigned simulator
-  build of the Xcode project.
-- **TestFlight upload** (macOS): described above. It is skipped when its secrets are missing.
+  with the debug APK kept as an artifact. On `main` it also builds the unsigned release APK.
+- **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
+  It is skipped with a notice when the signing secrets are missing.
+- **iOS simulator build** (macOS): the shared tests on the iOS simulator, the Release device
+  framework link, and an unsigned simulator build of the Xcode project.
+- **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
+  skipped when its secrets are missing.
 
-Gradle's caches and Kotlin/Native's `~/.konan` are cached between runs.
+Gradle's caches (the open-source basic provider of `setup-gradle`) and Kotlin/Native's `~/.konan`
+are cached. Pull requests only read the caches; `main` writes them. The `~/.konan` key is the hash
+of the version catalog, with no fallback to older keys, so an old Kotlin/Native is never restored.
+
+The artifacts of this public repository can be downloaded by anyone signed in to GitHub.
+
+## Phase 2: align `Capabilities` with the contract
+
+`Capabilities` still follows the sketch in `docs/NATIVE_PLAN.md`. Before the app fetches real
+documents, bring it in line with `docs/contracts/capabilities.md` and the reference implementation
+in `contracts/js/capabilities.mjs`:
+
+- [ ] Add `min_api_version` and version negotiation (`negotiate()`), with the "This server needs a
+      newer version of the app" outcome.
+- [ ] Map unknown enum values to the conservative ones (`semantic` to `off`, `live` to `poll`,
+      `ble.mode` to `none`, imports to `device`) and an unknown `tier` to the label `unknown`,
+      instead of keeping raw strings or falling back to `demo`.
+- [ ] Apply the dependency rules: no people features unless `enabled` and `reports` are both true;
+      no presence, meets or GPS bands without presence; no Bluetooth without presence.
+- [ ] Add `server-rotate` to `ble.mode`, make `service_uuid` the fixed v1 UUID, and clamp
+      `near_rssi`, `window_s` and `sightings_min_interval_s` to the contract's ranges.
+- [ ] Accept `talks.bundle_base` only as an https URL ending in `/`.
+- [ ] Make `Capabilities.Legacy` equal `legacy-effective.json` (`server-rotate` Bluetooth with a
+      10-second interval, `server_search` true, no bundle base).
+- [ ] Implement discovery (`/api/capabilities`, then `/capabilities.json`, then `/api/health` only
+      after a 404), the per-backend cache, and `caddie://connect` links with the confirmation
+      prompt.
+- [ ] Run the contract fixtures (`contracts/fixtures/capabilities/*.json`) in `commonTest`.
