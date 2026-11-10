@@ -407,6 +407,16 @@ test('reports, blocks and push subscriptions', async () => {
   conforms('DELETE', '/api/people/block', await call('DELETE', '/api/people/block', { device: me, body: { event: EVENT, ref: refs['Third Tester'] } }));
   assert.deepEqual(conforms('GET', '/api/people/blocks', await call('GET', `/api/people/blocks?event=${EVENT}`, { device: me })).refs, []);
 
+  // A block outlives the blocked profile: listed with display_name null, and still liftable by ref.
+  const leaving = newDevice();
+  conforms('PUT', '/api/people/profile', await call('PUT', '/api/people/profile', { device: leaving, body: profileBody('Blocked Then Gone') }));
+  const leavingRef = (await call('POST', '/api/people/matches', { device: other, body: { event: EVENT } })).body.results.find((p) => p.display_name === 'Blocked Then Gone').ref;
+  conforms('POST', '/api/people/block', await call('POST', '/api/people/block', { device: other, body: { event: EVENT, ref: leavingRef } }));
+  conforms('DELETE', '/api/people/profile', await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: leaving }));
+  const orphan = conforms('GET', '/api/people/blocks', await call('GET', `/api/people/blocks?event=${EVENT}`, { device: other }));
+  assert.deepEqual(orphan.blocks.map((b) => [b.ref, b.display_name]), [[leavingRef, null]]);
+  conforms('DELETE', '/api/people/block', await call('DELETE', '/api/people/block', { device: other, body: { event: EVENT, ref: leavingRef } }));
+
   assert.deepEqual(conforms('GET', '/api/push/vapid', await call('GET', '/api/push/vapid')), { publicKey: null });
   const subscription = { endpoint: 'https://push.example.org/send/contracts', keys: { p256dh: crypto.randomBytes(65).toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') }, expirationTime: null };
   conforms('PUT', '/api/push/subscription', await call('PUT', '/api/push/subscription', { device: me, body: { event: EVENT, subscription } }));

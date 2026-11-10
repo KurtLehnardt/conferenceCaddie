@@ -87,8 +87,8 @@
       "errors": [
         { "status": 400, "error": "filtered", "extra": ["message"], "when": "the spot line hit the filter" },
         { "status": 400, "error": "*", "when": "a zone that is not one of the conference's, a malformed location, or the conference has ended" },
-        { "status": 403, "error": "profile_required", "when": "no live profile with open_to_meet: true" },
-        { "status": 409, "error": "*", "when": "a concurrent write to the same profile won; a tier may guard presence writes with a version check. Retry once." }
+        { "status": 403, "error": "profile_required", "when": "no live profile with open_to_meet: true, including one hidden for deletion or deleted during the write" },
+        { "status": 409, "error": "*", "when": "a concurrent write to the same profile won after the server retried once (\"The profile changed at the same time; try again\"). Retry once." }
       ]
     },
     {
@@ -104,7 +104,7 @@
       "errors": [
         { "status": 403, "error": "profile_required" },
         { "status": 403, "error": "presence_required" },
-        { "status": 409, "error": "*", "when": "a concurrent write to the same profile won. Retry once." }
+        { "status": 409, "error": "*", "when": "a concurrent write to the same profile won after the server retried once (\"The profile changed at the same time; try again\"). Retry once." }
       ]
     },
     {

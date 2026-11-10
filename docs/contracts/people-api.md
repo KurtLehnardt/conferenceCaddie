@@ -117,6 +117,9 @@ The freeze follows the code where the two disagree, and these differences are no
 - `DELETE /api/people/profile` checks only that `event` looks like a slug, not that the conference is searchable, so a device can always delete its data.
 - Speaker links in circle members keep the scheme's case as the feed wrote it (`Https://...` occurs in real data); a client must compare schemes case-insensitively.
 - 400 validation errors carry English messages, not codes; only `filtered` is a stable 400 code.
+- Presence writes and the legacy token rotation are guarded writes of the device's own document (PR #15): after one internal retry, a write that lost a race answers 409 "The profile changed at the same time; try again", and one whose profile was hidden for deletion or deleted meanwhile answers 403 `profile_required`. `DELETE /api/presence` only clears and retries conflicts itself.
+- A profile whose delete is unfinished counts as gone everywhere: its device gets 403 `profile_required` on blocks, asks, reports, push and presence until the delete finishes, and it is left out of other people's answers.
+- Blocks belong to the blocker and outlive the blocked profile until the conference ends, so `GET /api/people/blocks` can list a block whose `display_name` is null (the blocked profile is gone or its delete is pending); unblocking by `ref` works either way.
 
 ## Not in People API v1
 
