@@ -24,8 +24,9 @@ package app.conferencecaddie.shared
  */
 sealed interface BackendUrl {
     /**
-     * An accepted backend. [base] is the URL the app calls (`{base}/api/...`) and the key for
-     * everything stored per backend; [origin] is the scheme, host and port, shown to the user.
+     * An accepted backend. [base] is the URL the app calls (`{base}/api/...`), the one a
+     * confirmation prompt names, and the key for everything stored per backend; [origin] is the
+     * scheme, host and port.
      */
     @ConsistentCopyVisibility
     data class Valid internal constructor(val base: String, val origin: String) : BackendUrl

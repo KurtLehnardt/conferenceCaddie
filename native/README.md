@@ -205,7 +205,7 @@ implemented in `shared` as `BackendUrl.normalise()`:
   `usesCleartextTraffic="false"`. iOS has no exception yet, so App Transport Security still blocks
   plain `http` there.
 - The result has a `base` (what the app calls, and the key for everything stored per backend, as
-  `SecureStore.scopedKey()` builds it) and an `origin` (shown to the user).
+  `SecureStore.scopedKey()` builds it) and an `origin` (scheme, host and port).
 - The parser is stricter than the reference implementation in a few places, listed in
   `BackendUrl.kt`: it refuses backslashes, IPv4 shorthand and other inputs that a WHATWG parser
   quietly repairs.
