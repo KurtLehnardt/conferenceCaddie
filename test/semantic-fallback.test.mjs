@@ -17,7 +17,7 @@
 
 import { test, describe, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { fake, EVENT, FUTURE, newDevice, request, profileBody, esError, json } from './lib/fake-es.mjs';
+import { fake, EVENT, FUTURE, newDevice, request, profileBody, esError, json, advanceClock } from './lib/fake-es.mjs';
 
 const { isInferenceFailure, esErrorInfo, SEMANTIC_PAUSE_MS } = await import('../server/semantic.mjs');
 const { handlePeopleApi } = await import('../server/people.mjs');
@@ -27,12 +27,7 @@ const { handleBleApi } = await import('../server/ble.mjs');
 const { nudgeAfterPresence } = await import('../server/nudge.mjs');
 
 // Moves the clock past any semantic pause for the rest of the file.
-let offset = 0;
-const realNow = Date.now.bind(Date);
-mock.method(Date, 'now', () => realNow() + offset);
-const skipPause = () => {
-  offset += SEMANTIC_PAUSE_MS + 1000;
-};
+const skipPause = () => advanceClock(SEMANTIC_PAUSE_MS + 1000);
 
 // Runs fn with console.error silenced; returns its result and the lines it would have logged.
 async function quietly(fn) {

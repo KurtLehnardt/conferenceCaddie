@@ -236,6 +236,15 @@ globalThis.fetch = async (input, init = {}) => {
   throw new Error(`fake-es: unsupported ${method} ${url.pathname}`);
 };
 
+// The clock the server sees. advanceClock moves Date.now forward for the rest of the test file,
+// for example past a semantic pause; the stand-in's 'now' moves with it.
+let clockOffset = 0;
+const realNow = Date.now.bind(Date);
+Date.now = () => realNow() + clockOffset;
+export function advanceClock(ms) {
+  clockOffset += ms;
+}
+
 /** A fresh device credential in the client's format. */
 export function newDevice() {
   return { profileId: crypto.randomBytes(16).toString('base64url'), secret: crypto.randomBytes(32).toString('base64url') };

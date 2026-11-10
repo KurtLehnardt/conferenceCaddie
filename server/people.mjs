@@ -637,13 +637,20 @@ export function proximityBand(me, them) {
   return 'venue';
 }
 
-// One bulk action on the people index with refresh=wait_for. Returns the item status.
-export async function bulkOne(action, doc) {
+// One bulk action on the people index with refresh=wait_for. Returns the item's { status, error }:
+// the item status (500 when the answer has none) and its Elasticsearch error object, if any, which
+// is read for its types only (esErrorInfo) and never logged.
+async function bulkItem(action, doc) {
   const body = `${JSON.stringify(action)}\n${JSON.stringify(doc)}\n`;
   const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
   const item = json.items?.[0] ?? {};
   const result = Object.values(item)[0] ?? {};
-  return result.status ?? 500;
+  return { status: result.status ?? 500, error: result.error };
+}
+
+// One bulk action on the people index with refresh=wait_for. Returns the item status.
+export async function bulkOne(action, doc) {
+  return (await bulkItem(action, doc)).status;
 }
 
 async function deleteDoc(id) {
@@ -1050,27 +1057,39 @@ export async function authenticated(device, slug) {
 // ---------------------------------------------------------------------------------------------
 // Handlers.
 
+// True when a failed bulk item says the text could not be embedded: a 429 (what the inference
+// service's trial limit answers with), or an error whose types or reason name an inference failure
+// (isInferenceFailure). A version conflict (409) or a mapping error (400) is not one.
+function embeddingFailed(item) {
+  if (item.status >= 200 && item.status <= 299) return false;
+  return item.status === 429 || isInferenceFailure(esErrorInfo(item.error));
+}
+
 // Writes a profile document. Indexing about/interests/expertise asks Elasticsearch to embed them
 // (semantic_text copy_to), so while the inference endpoint is unavailable (semantic.mjs) the same
 // document is written without those three fields and with text_hash null, which makes the next
 // save a full reindex that embeds them once the endpoint is back. The person stays visible and
-// can share meanwhile; only their text is missing until then.
+// can share meanwhile; only their text is missing until then. Only an embedding failure
+// (embeddingFailed, or a request that failed with isInferenceFailure) pauses and writes without
+// text; any other failure is returned or thrown as it is.
 async function writeProfileDoc(action, doc) {
   const hasText = 'about' in doc;
   const withoutText = () => {
     const { about, interests, expertise, ...rest } = doc;
     return { ...rest, text_hash: null, text_pending: true };
   };
-  if (hasText && !semanticAvailable()) return { status: await bulkOne(action, withoutText()), degraded: true };
-  let status;
+  if (!hasText) return { status: await bulkOne(action, doc), degraded: false };
+  if (!semanticAvailable()) return { status: await bulkOne(action, withoutText()), degraded: true };
+  let failure;
   try {
-    status = await bulkOne(action, doc);
+    const item = await bulkItem(action, doc);
+    if (!embeddingFailed(item)) return { status: item.status, degraded: false };
+    failure = new UpstreamError(`bulk item status ${item.status}`, { status: item.status, ...esErrorInfo(item.error) });
   } catch (err) {
-    if (!hasText || !(err instanceof UpstreamError)) throw err;
-    status = 500;
+    if (!(err instanceof UpstreamError) || !isInferenceFailure(err)) throw err;
+    failure = err;
   }
-  if (!hasText || status < 500) return { status, degraded: false };
-  pauseSemantic(new UpstreamError(`bulk item status ${status}`));
+  pauseSemantic(failure);
   return { status: await bulkOne(action, withoutText()), degraded: true };
 }
 
