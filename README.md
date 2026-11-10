@@ -77,6 +77,8 @@ What is shared, with whom, for how long: your profile text, to people visible at
 
 - The Android companion (`web/android/`, see `docs/ANDROID.md`) is the same web app in a Capacitor shell plus one Bluetooth plugin; the debug APK is built by the GitHub Actions workflow on `android/**` branches. The web app and the companion share one API, one server and one set of storage keys.
 
+The plan for native Android and iOS apps, with deployment tiers that cost nothing to run, is in [docs/NATIVE_PLAN.md](docs/NATIVE_PLAN.md).
+
 ## Adding a conference
 
 With `ELASTISEARCH_API_KEY` set to an admin-capable key:
@@ -94,3 +96,7 @@ Re-running is safe: unchanged talks are not re-embedded. Events on other platfor
 For the API and index shapes, see [docs/CONTRACT.md](docs/CONTRACT.md). Design choices are recorded in [DECISIONS.md](DECISIONS.md).
 
 The app began as an entry in the Elasticsearch "Find the Right Talk" track at a hackathon during KubeCon + CloudNativeCon North America 2026.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
