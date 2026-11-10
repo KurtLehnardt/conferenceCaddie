@@ -2,12 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/talk-bundle.v1.schema.json",
   "title": "Talk bundle bundle.json, v1",
-  "description": "One conference's talks, topics, facet names, vector layout and related talks. The vectors themselves are in the sibling file vectors.i8. Rules a schema cannot state (sort orders, cross-references, hashes, the related lists matching the vectors) are checked by verifyBundle in contracts/js/bundle.mjs and listed in docs/contracts/talk-bundle.md.",
+  "description": "One conference's talks, topics, facet names, attribution, vector layout and related talks. The vectors themselves are in the sibling file vectors.i8. Rules a schema cannot state (sort orders, cross-references, hashes, the related lists matching the vectors) are checked by verifyBundle in contracts/js/bundle.mjs and listed in docs/contracts/talk-bundle.md.",
   "type": "object",
-  "required": ["bundle_version", "conference", "model", "vectors", "talks", "topics", "facets", "related"],
+  "required": ["bundle_version", "conference", "attribution", "model", "vectors", "talks", "topics", "facets", "related"],
   "properties": {
     "bundle_version": { "const": 1 },
     "conference": { "$ref": "conferences-index.v1.schema.json#/$defs/Conference" },
+    "attribution": {
+      "description": "What the licence of the schedule content needs to travel with it: the licensor, the licence, the source, the changes made and the publisher's takedown contact.",
+      "type": "object",
+      "required": ["licensor", "license", "license_url", "source_url", "changes", "takedown"],
+      "properties": {
+        "licensor": { "type": "string", "minLength": 1 },
+        "license": { "description": "For Linux Foundation schedules: CC BY 3.0.", "type": "string", "minLength": 1 },
+        "license_url": { "type": "string", "format": "uri" },
+        "source_url": { "description": "The conference's official_schedule_url.", "type": ["string", "null"] },
+        "changes": { "type": "string", "minLength": 1 },
+        "takedown": { "description": "Where to ask for content to be removed: an https URL or a mailto: address.", "type": "string", "pattern": "^(https://|mailto:)" }
+      }
+    },
     "model": {
       "type": "object",
       "required": ["id", "onnx", "dims", "pooling", "normalized", "max_tokens", "query_prefix", "passage"],
@@ -78,17 +91,16 @@
     "TalkId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}:[A-Za-z0-9_-]{1,64}$" },
     "NullableString": { "type": ["string", "null"] },
     "Talk": {
-      "description": "One schedule item, as in data/{slug}/talks.ndjson without session_id, conference, tag_keys, content_hash and ingested_at, and with topics.",
+      "description": "One schedule item, as in data/{slug}/talks.ndjson without session_id, conference, tag_keys, content_hash, ingested_at and speaker_profiles (public bundles carry no speaker bios, photos or links), and with topics.",
       "type": "object",
-      "required": ["talk_id", "kind", "title", "abstract", "speakers", "speaker_taglines", "speaker_profiles", "room", "track", "level", "tags", "sponsor", "has_slides", "slides_url", "url", "start", "end", "day", "start_minutes", "end_minutes", "topics", "text_hash"],
+      "required": ["talk_id", "kind", "title", "abstract", "speakers", "speaker_taglines", "room", "track", "level", "tags", "sponsor", "has_slides", "slides_url", "url", "start", "end", "day", "start_minutes", "end_minutes", "topics", "text_hash"],
       "properties": {
         "talk_id": { "$ref": "#/$defs/TalkId" },
         "kind": { "enum": ["talk", "ambient", "break", "housekeeping"] },
         "title": { "type": "string" },
         "abstract": { "type": "string" },
         "speakers": { "type": "array", "items": { "type": "string" } },
-        "speaker_taglines": { "type": "array", "items": { "$ref": "#/$defs/NullableString" } },
-        "speaker_profiles": { "type": "array", "items": { "$ref": "people-api.v1.schema.json#/$defs/SpeakerProfile" } },
+        "speaker_taglines": { "description": "Each speaker's one-line tagline from the feed, normally their title and organisation; null when they gave none.", "type": "array", "items": { "$ref": "#/$defs/NullableString" } },
         "room": { "$ref": "#/$defs/NullableString" },
         "track": { "$ref": "#/$defs/NullableString" },
         "level": { "$ref": "#/$defs/NullableString" },

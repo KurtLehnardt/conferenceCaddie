@@ -1,6 +1,10 @@
 {
   "index_version": 1,
   "generated_at": "2026-11-10T00:00:00Z",
+  "publisher": {
+    "name": "Caddie fixture publisher",
+    "takedown": "https://example.org/caddie-fixture/takedown"
+  },
   "conferences": [
     {
       "slug": "caddie-fixture-2099",
@@ -25,16 +29,16 @@
       "talk_count": 3,
       "bundle": {
         "bundle_version": 1,
-        "content_hash": "a5ec3d7519c37b893ec32cc3f4d2274cd81d0d5758b149269da88b71bf2c593b",
-        "path": "caddie-fixture-2099/a5ec3d7519c37b89/",
+        "content_hash": "f100a4b257260abd26ef9d7a44b450eeffffab3143c6b104711dd75a0dfa3e7a",
+        "path": "caddie-fixture-2099/f100a4b257260abd/",
         "model": "BAAI/bge-small-en-v1.5",
         "dims": 384,
         "talk_count": 3,
         "vector_count": 3,
         "files": {
           "bundle.json": {
-            "bytes": 5674,
-            "sha256": "75380cd14db51b0ca3170c4c35a6958d66a6a95cba0b9d95c4e78f024af961ea"
+            "bytes": 5600,
+            "sha256": "ca52b90ed5a15c94d9535cf53e1f64ba7181411c753fe9fb94b3cf49ce016dcf"
           },
           "vectors.i8": {
             "bytes": 1152,

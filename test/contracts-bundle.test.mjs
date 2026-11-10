@@ -8,7 +8,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  quantizeRow, encodeVectors, decodeVectors, cosine, relatedTalks, contentHash, verifyBundle, sha256hex, textHash,
+  quantizeRow, encodeVectors, decodeVectors, cosine, relatedTalks, contentHash, verifyBundle, sha256hex, textHash, buildBundle,
   normalizeKey, buildFacets, TALK_FIELDS, DIMS, MODEL,
 } from '../contracts/js/bundle.mjs';
 import { canonicalJson } from '../contracts/js/canonical-json.mjs';
@@ -144,6 +144,25 @@ test('verification catches tampering', () => {
   assert.ok(rehash((b) => { b.talks[0].topics = ['nope']; }).some((p) => p.includes('unknown topic')));
   assert.ok(rehash((b) => { b.talks[0].title = 'Changed'; }).some((p) => p.includes('text_hash')));
   assert.ok(rehash((b) => { b.vectors.rows = [B, A, C]; }).some((p) => p.includes('vector rows')));
+  assert.ok(rehash((b) => { b.talks[0].speaker_profiles = [{ name: 'x', tagline: null, links: [{ title: 'X', url: 'https://x.example/' }] }]; }).some((p) => p.includes('speaker profiles')));
+  assert.ok(rehash((b) => { b.attribution.source_url = 'https://elsewhere.example/'; }).some((p) => p.includes('source_url')));
+});
+
+test('a public bundle carries its attribution and only speaker names and taglines', () => {
+  assert.deepEqual(index.publisher, { name: 'Caddie fixture publisher', takedown: 'https://example.org/caddie-fixture/takedown' });
+  assert.deepEqual(bundle.attribution, {
+    changes: 'Reformatted; speaker data trimmed to names and taglines; talk text embedded for search.',
+    license: 'CC BY 3.0',
+    license_url: 'https://creativecommons.org/licenses/by/3.0/',
+    licensor: 'Example Events (fixture data)',
+    source_url: bundle.conference.official_schedule_url,
+    takedown: index.publisher.takedown,
+  });
+  // The inputs have speaker profiles with links; the bundle has none.
+  assert.ok(!files['bundle.json'].toString('utf8').includes('example.org/ada'));
+  for (const t of bundle.talks) assert.equal('speaker_profiles' in t, false, t.talk_id);
+  assert.deepEqual(bundle.talks.find((t) => t.talk_id === C).speaker_taglines, ['Engineer, Example Org', null]);
+  assert.throws(() => buildBundle({ conference: bundle.conference, talks: [], topics: [], vectors: new Map(), attribution: { licensor: 'x' } }), TypeError);
 });
 
 test('a vector file holding -128 is refused', () => {

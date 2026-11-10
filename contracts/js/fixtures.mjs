@@ -32,8 +32,9 @@ export function denseVectors(file) {
 /** The fixture bundle(s) and the conferences.json that indexes them. */
 export function buildFixtureBundles() {
   const conferences = readJson(path.join(INPUTS, 'conferences.json'));
+  const { publisher, ...attribution } = readJson(path.join(INPUTS, 'attribution.json'));
   const bundles = [];
-  const index = { index_version: INDEX_VERSION, generated_at: GENERATED_AT, conferences: [] };
+  const index = { index_version: INDEX_VERSION, generated_at: GENERATED_AT, publisher, conferences: [] };
   for (const conference of conferences) {
     if (conference.status !== 'searchable') {
       index.conferences.push({ ...conference, bundle: null });
@@ -45,6 +46,7 @@ export function buildFixtureBundles() {
       talks: readJson(path.join(dir, 'talks.json')),
       topics: readJson(path.join(dir, 'topics.json')),
       vectors: denseVectors(path.join(dir, 'vectors.json')),
+      attribution: { ...attribution, takedown: publisher.takedown },
     });
     bundles.push(built);
     index.conferences.push({ ...conference, bundle: built.entry });

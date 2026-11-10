@@ -22,20 +22,22 @@ A bundle directory is content-addressed: its name is the first 16 hex digits of 
 {
   "index_version": 1,
   "generated_at": "2026-11-10T00:00:00Z",
+  "publisher": { "name": "Caddie fixture publisher", "takedown": "https://example.org/caddie-fixture/takedown" },
   "conferences": [
     { "slug": "caddie-fixture-2099", "name": "Caddie Fixture Conference", "start_date": "2099-03-02", "...": "...",
       "bundle": {
         "bundle_version": 1,
-        "content_hash": "a5ec3d7519c37b893ec32cc3f4d2274cd81d0d5758b149269da88b71bf2c593b",
-        "path": "caddie-fixture-2099/a5ec3d7519c37b89/",
+        "content_hash": "f100a4b257260abd26ef9d7a44b450eeffffab3143c6b104711dd75a0dfa3e7a",
+        "path": "caddie-fixture-2099/f100a4b257260abd/",
         "model": "BAAI/bge-small-en-v1.5", "dims": 384, "talk_count": 3, "vector_count": 3,
-        "files": { "bundle.json": { "bytes": 5674, "sha256": "75380cd1..." },
+        "files": { "bundle.json": { "bytes": 5600, "sha256": "ca52b90e..." },
                    "vectors.i8":  { "bytes": 1152, "sha256": "e9a59e11..." } } } },
     { "slug": "caddie-unavailable-2099", "status": "unavailable", "...": "...", "bundle": null }
   ]
 }
 ```
 
+- `publisher` names who publishes the bundles and where to ask for content to be taken down (an https URL or a `mailto:` address). The apps show it with the attribution.
 - Each entry has exactly the fields of a `GET /api/conferences` entry (`slug`, `name`, `start_date`, `end_date`, `time_zone`, `location`, `status`, `official_schedule_url`, `source`, `has_level`, `track_group`, `tag_groups`, `talk_count`) plus `bundle`. The file is therefore a superset of the `GET /api/conferences` response `{ conferences: [...] }`, and one parser reads both.
 - `bundle` is null for an `unavailable` conference, and for a searchable one whose bundle has not been built yet.
 - Entries are sorted by `start_date`, then `name`, as the API sorts them.
@@ -48,6 +50,7 @@ The file is canonical JSON (below), so its keys appear in sorted order; they are
 |---|---|
 | `bundle_version` | `1`. |
 | `conference` | The conference's `GET /api/conferences` entry. |
+| `attribution` | `{ licensor, license, license_url, source_url, changes, takedown }` (below). |
 | `model` | `{ id: "BAAI/bge-small-en-v1.5", onnx: "Xenova/bge-small-en-v1.5", dims: 384, pooling: "cls", normalized: true, max_tokens: 512, query_prefix: "Represent this sentence for searching relevant passages: ", passage: "title + \"\\n\" + abstract" }`. |
 | `vectors` | `{ file: "vectors.i8", dtype: "int8", dims: 384, count, quantization: "int8-symmetric-row-maxabs", rows: [talk_id, ...] }`. |
 | `talks` | Every schedule item of every kind, sorted by the instant `start` names, then `talk_id`. |
@@ -55,9 +58,23 @@ The file is canonical JSON (below), so its keys appear in sorted order; they are
 | `facets` | The value-matching names: `{ kind, value, label, group, keys, words, talks }` for each track, room, speaker and tag of the `kind: talk` items, sorted by kind (track, room, speaker, tag), then `value`, then `group`. Same rules as `scripts/build-facets.mjs` and `normalizeKey` in `server/facets.mjs`. |
 | `related` | `{ talk_id: [talk_id, ...] }`: for every `kind: talk` item with a vector, up to 5 other `kind: talk` items, most similar first. |
 
-**A talk** has `talk_id, kind, title, abstract, speakers, speaker_taglines, speaker_profiles, room, track, level, tags, sponsor, has_slides, slides_url, url, start, end, day, start_minutes, end_minutes, topics, text_hash`, with the meanings of `docs/CONTRACT.md` (Talks). `topics` holds `topic_id`s, whose labels are in `topics`. `text_hash` is `sha256(title + "\n" + abstract)` in hex, the same value as in `data/{slug}/talks.ndjson`. Left out on purpose: `session_id` (never exposed), `conference` (it is the part of `talk_id` before the colon), `tag_keys` (derived from `tags`), `content_hash` and `ingested_at`. Breaks and housekeeping items are included because the device needs them: lunch windows for the "before lunch" and "after lunch" time phrases come from the conference's own break items, as in `server/phrases.mjs`.
+**A talk** has `talk_id, kind, title, abstract, speakers, speaker_taglines, room, track, level, tags, sponsor, has_slides, slides_url, url, start, end, day, start_minutes, end_minutes, topics, text_hash`, with the meanings of `docs/CONTRACT.md` (Talks). `topics` holds `topic_id`s, whose labels are in `topics`. `text_hash` is `sha256(title + "\n" + abstract)` in hex, the same value as in `data/{slug}/talks.ndjson`. Left out on purpose: `session_id` (never exposed), `conference` (it is the part of `talk_id` before the colon), `tag_keys` (derived from `tags`), `content_hash`, `ingested_at` and `speaker_profiles`. Speaker data in a public bundle is trimmed to each speaker's name (`speakers`) and one-line tagline (`speaker_taglines`, normally their title and organisation), with no bios, photos or social links (`DECISIONS.md`, Native apps plan and Apache-2.0 license); `verifyBundle()` refuses a bundle whose talks carry `speaker_profiles`. Breaks and housekeeping items are included because the device needs them: lunch windows for the "before lunch" and "after lunch" time phrases come from the conference's own break items, as in `server/phrases.mjs`.
 
 **There are no timestamps in a bundle**, so building the same inputs twice gives the same bytes and the same hash, and an unchanged conference is never republished. `generated_at` lives in `conferences.json`.
+
+## Attribution
+
+Linux Foundation schedule content is licensed CC BY 3.0, so every bundle carries what that licence needs, and the apps show it on the conference's About screen and with any shared or exported talk:
+
+| Field | Content |
+|---|---|
+| `licensor` | Who licenses the content, for Linux Foundation events "The Linux Foundation". |
+| `license`, `license_url` | `CC BY 3.0`, `https://creativecommons.org/licenses/by/3.0/`. |
+| `source_url` | The conference's `official_schedule_url`. |
+| `changes` | What was changed, for example "Reformatted; speaker data trimmed to names and taglines; talk text embedded for search." |
+| `takedown` | The publisher's takedown contact, the same as `publisher.takedown` in `conferences.json`. |
+
+Embedding the text for search is allowed; training a model on it is not (the Linux Foundation's `robots.txt` says `ai-train=no`), and nothing in a bundle is meant for training.
 
 ## Vectors
 
@@ -91,7 +108,7 @@ ASCII, decimal byte lengths, lower-case hex. For v1 the files are `bundle.json` 
 1. Fetch `conferences.json` at app start and at most every 15 minutes while the app is in the foreground, with `If-None-Match` when the host gave an `ETag`.
 2. For each conference the user follows, compare the entry's `content_hash` with the bundle stored on the device. Equal means nothing to do. A `bundle_version` the app does not implement means it keeps the bundle it has and shows that the app needs an update for that conference.
 3. Otherwise download the files under `path`. They are immutable, so any cache may keep them forever.
-4. Verify before use, as `verifyBundle()` does: each file's size and SHA-256 against the entry, the content hash over the listing, the path ending in the hash's first 16 digits, `bundle.json` parsing and being canonical, `vectors.i8` being `count × dims` bytes without -128, the rows being the talk and ambient items in `talks` order, every `topics` reference existing, every `text_hash` matching, and the related lists matching the vectors. The JSON Schema covers the shapes.
+4. Verify before use, as `verifyBundle()` does: each file's size and SHA-256 against the entry, the content hash over the listing, the path ending in the hash's first 16 digits, `bundle.json` parsing and being canonical, `vectors.i8` being `count × dims` bytes without -128, the rows being the talk and ambient items in `talks` order, every `topics` reference existing, every `text_hash` matching, the related lists matching the vectors, the attribution naming the conference's schedule as its source, and no talk carrying speaker profiles. The JSON Schema covers the shapes.
 5. Swap the new bundle in atomically and delete the old one only after the swap. A bundle that fails verification is discarded and the download is retried later; the old bundle stays in use. A device with a verified bundle works offline indefinitely.
 
 ## Fixture

@@ -3,8 +3,8 @@
 // content hashing and verification. Node built-ins only.
 //
 // A bundle is two immutable files under {bundle_base}{slug}/{content_hash[0:16]}/:
-//   bundle.json  canonical JSON (canonical-json.mjs): conference, model, vector layout, talks,
-//                topics, facets and the top related talks of every talk
+//   bundle.json  canonical JSON (canonical-json.mjs): conference, attribution, model, vector
+//                layout, talks, topics, facets and the top related talks of every talk
 //   vectors.i8   count x dims signed bytes, row-major, row i belonging to vectors.rows[i]
 // and one mutable index, {bundle_base}conferences.json, whose entry for the conference names the
 // current content hash and the size and SHA-256 of each file.
@@ -171,11 +171,15 @@ export function buildFacets(talks) {
 }
 
 // The talk fields a bundle carries, in the order the spec lists them. session_id, content_hash,
-// tag_keys (derivable from tags), conference (in the talk_id) and ingested_at are left out.
+// tag_keys (derivable from tags), conference (in the talk_id) and ingested_at are left out, and so
+// is speaker_profiles: public bundles carry speaker names and their one-line "title, organisation"
+// taglines only, never bios, photos or social links.
 export const TALK_FIELDS = Object.freeze([
-  'talk_id', 'kind', 'title', 'abstract', 'speakers', 'speaker_taglines', 'speaker_profiles', 'room', 'track', 'level',
+  'talk_id', 'kind', 'title', 'abstract', 'speakers', 'speaker_taglines', 'room', 'track', 'level',
   'tags', 'sponsor', 'has_slides', 'slides_url', 'url', 'start', 'end', 'day', 'start_minutes', 'end_minutes', 'topics', 'text_hash',
 ]);
+/** What a bundle says about where its content comes from, besides the conference's own source URL. */
+export const ATTRIBUTION_FIELDS = Object.freeze(['licensor', 'license', 'license_url', 'changes', 'takedown']);
 // The public conference fields, exactly those of a GET /api/conferences entry.
 export const CONFERENCE_FIELDS = Object.freeze([
   'slug', 'name', 'start_date', 'end_date', 'time_zone', 'location', 'status', 'official_schedule_url', 'source', 'has_level', 'track_group', 'tag_groups', 'talk_count',
@@ -196,15 +200,27 @@ export function contentHash(files) {
 }
 
 /**
+ * The attribution block of a bundle: the licence and licensor of the schedule content, the
+ * conference's public schedule as the source, the changes made, and the publisher's takedown
+ * contact. CC BY needs all of these to travel with the content.
+ */
+export function attributionFor(conference, attribution) {
+  const a = pick(attribution, ATTRIBUTION_FIELDS);
+  for (const f of ATTRIBUTION_FIELDS) if (typeof a[f] !== 'string' || !a[f]) throw new TypeError(`attribution.${f} is required`);
+  return { ...a, source_url: conference.official_schedule_url };
+}
+
+/**
  * Builds the two files of a bundle and its conferences.json entry.
  *   conference  a public conference entry (CONFERENCE_FIELDS), status searchable
+ *   attribution { licensor, license, license_url, changes, takedown } (attributionFor)
  *   talks       talk documents (data/{slug}/talks.ndjson shape) with topics: [topic_id]
  *   topics      [{ topic_id, label, talk_count, rank, aliases }]
  *   vectors     Map talk_id -> Int8Array(384) or float array (quantised here), for every talk of a
  *               VECTOR_KINDS kind
  * Returns { dir, files: { 'bundle.json': Buffer, 'vectors.i8': Buffer }, entry }.
  */
-export function buildBundle({ conference, talks, topics, vectors }) {
+export function buildBundle({ conference, talks, topics, vectors, attribution }) {
   const sorted = [...talks].sort(byStartThenId).map((t) => ({ ...pick(t, TALK_FIELDS), topics: [...(t.topics ?? [])], text_hash: textHash(t) }));
   const rowsById = new Map();
   for (const t of sorted) {
@@ -218,6 +234,7 @@ export function buildBundle({ conference, talks, topics, vectors }) {
   const bundle = {
     bundle_version: BUNDLE_VERSION,
     conference: pick(conference, CONFERENCE_FIELDS),
+    attribution: attributionFor(conference, attribution),
     model: { ...MODEL },
     vectors: { file: VECTOR_FILE, dtype: 'int8', dims: DIMS, count: rowIds.length, quantization: QUANTIZATION, rows: rowIds },
     talks: sorted,
@@ -278,6 +295,8 @@ export function verifyBundle(entry, files) {
   if ((bundle.talks ?? []).filter((t) => t.kind === 'talk').length !== entry.talk_count) problems.push('talk_count mismatch');
   const sorted = [...(bundle.talks ?? [])].sort(byStartThenId);
   if (sorted.some((t, i) => t !== bundle.talks[i])) problems.push('talks are not sorted by start, then talk_id');
+  if ((bundle.talks ?? []).some((t) => 'speaker_profiles' in t)) problems.push('speaker profiles and their links must not be published');
+  if (bundle.attribution?.source_url !== bundle.conference?.official_schedule_url) problems.push('attribution.source_url must be the conference schedule URL');
   const prefix = `${bundle.conference?.slug}:`;
   for (const t of bundle.talks ?? []) {
     if (!t.talk_id.startsWith(prefix)) problems.push(`${t.talk_id}: not of this conference`);

@@ -4,10 +4,19 @@
   "title": "Conference index (conferences.json), v1",
   "description": "{bundle_base}conferences.json: every conference the backend knows, in the GET /api/conferences entry shape, each with the conference's current talk bundle or null. It is a superset of the GET /api/conferences response, so a client that reads one can read the other. See docs/contracts/talk-bundle.md.",
   "type": "object",
-  "required": ["index_version", "generated_at", "conferences"],
+  "required": ["index_version", "generated_at", "publisher", "conferences"],
   "properties": {
     "index_version": { "description": "Major version of this file.", "type": "integer", "minimum": 1 },
     "generated_at": { "$ref": "#/$defs/Instant" },
+    "publisher": {
+      "description": "Who publishes these bundles and where to ask for content to be taken down.",
+      "type": "object",
+      "required": ["name", "takedown"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "takedown": { "type": "string", "pattern": "^(https://|mailto:)" }
+      }
+    },
     "conferences": { "type": "array", "items": { "$ref": "#/$defs/IndexedConference" } }
   },
   "$defs": {
