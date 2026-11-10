@@ -34,6 +34,7 @@ const OPENSSL_RECORDED = {
   'key-a w=4294967295': 'a6d23aa4824854af0f66bbded156632abd1d80fe7792a27c2e1206d33a5c6f5c',
   'ble_key AAECAwQFBgcICQoLDA0ODw': '05a7bd314db4520b2430496a9b12eff40c87396ebde1a3006edb751ceaf58a7a',
 };
+const OPENSSL_RECORDED_KEY_ID = { AAECAwQFBgcICQoLDA0ODw: 'Eb2uBz7W6S8' };
 
 // ---------------------------------------------------------------------------------------------
 // An independent SHA-256 (FIPS 180-4) and HMAC (RFC 2104), on Uint8Arrays.
@@ -175,6 +176,9 @@ test('key derivation vectors: reference and independent implementations', () => 
     assert.equal(toHex(hmacSha256(master, keyMessage(c.profile_id, nonce))), c.ble_key_hex);
     assert.equal(B.encodeKey(key), c.ble_key_base64url);
     assert.deepEqual(B.decodeKey(c.ble_key_base64url), key);
+    assert.equal(B.keyId(key), c.ble_key_id);
+    assert.equal(toHex(hmacSha256(key, ascii('caddie-ble-key-id-v1'))), c.key_id_hmac_sha256_hex);
+    assert.equal(Buffer.from(c.key_id_hmac_sha256_hex.slice(0, 16), 'hex').toString('base64url'), c.ble_key_id, 'the key id is the first 8 bytes');
     for (const t of c.tokens) {
       assert.equal(B.hmac(key, BigInt(t.w)).toString('hex'), t.hmac_sha256_hex);
       assert.equal(toHex(hmacSha256(key, tokenMessage(t.w))), t.hmac_sha256_hex);
@@ -188,6 +192,7 @@ test('recorded openssl outputs match the fixture', () => {
   const byName = Object.fromEntries(golden.tokens.map((v) => [`${v.key} w=${v.w}`, v.hmac_sha256_hex]));
   for (const c of golden.key_derivation.cases) byName[`ble_key ${c.profile_id}`] = c.ble_key_hex;
   for (const [name, value] of Object.entries(OPENSSL_RECORDED)) assert.equal(byName[name], value, name);
+  for (const [pid, id] of Object.entries(OPENSSL_RECORDED_KEY_ID)) assert.equal(golden.key_derivation.cases.find((c) => c.profile_id === pid).ble_key_id, id);
 });
 
 function opensslAvailable() {
@@ -211,6 +216,7 @@ test('openssl, when installed, reproduces every HMAC in the fixture', { skip: !o
     for (const v of golden.tokens) assert.equal(run(golden.keys[v.key].hex, v.message_hex), v.hmac_sha256_hex, `${v.key} w=${v.w}`);
     for (const c of golden.key_derivation.cases) {
       assert.equal(run(golden.key_derivation.master_secret.hex, c.key_message_hex), c.ble_key_hex, c.profile_id);
+      assert.equal(run(c.ble_key_hex, Buffer.from('caddie-ble-key-id-v1', 'ascii').toString('hex')), c.key_id_hmac_sha256_hex);
       for (const t of c.tokens) assert.equal(run(c.ble_key_hex, B.message(BigInt(t.w)).toString('hex')), t.hmac_sha256_hex);
     }
   } finally {
@@ -257,25 +263,74 @@ test('every derived token fits the unchanged sightings request', () => {
   }
 });
 
-test('resolution cases: w - 1, w and w + 1 resolve, nothing else does', () => {
-  const master = hex(cases.master_secret_hex);
-  for (const c of cases.cases) {
-    const table = B.resolverForPeople(master, cases.people, Number(c.server_unix_seconds), cases.window_s);
-    const got = B.resolveSightings(c.sightings, table, { nearRssi: cases.near_rssi, self: c.reporter ?? null });
-    assert.deepEqual(got.map((r) => ({ profile_id: r.id, rssi: r.rssi })), c.expected, c.name);
+// Runs one case of resolution-cases.v1.json the way the spec describes.
+function runCase(c) {
+  const masters = Object.fromEntries(Object.entries(cases.masters).filter(([id]) => !(c.retired_masters ?? []).includes(id)));
+  const table = B.tokenTable(masters, c.table_people ?? cases.people, Number(c.server_unix_seconds), cases.window_s);
+  const current = new Map(cases.people.map((p) => {
+    const q = { ...p, ...((c.current_overrides ?? []).find((o) => o.profile_id === p.profile_id) ?? {}) };
+    return [p.profile_id, { nonce_tag: B.nonceTag(Buffer.from(q.presence_nonce, 'base64url')), presence_until: Date.parse(q.presence_until), zone: q.zone, cell: q.cell }];
+  }));
+  return B.resolveSightings(c.sightings, table, {
+    nearRssi: cases.near_rssi, requester: cases.requester, current, nowMs: Number(c.server_unix_seconds) * 1000, colocationRequired: c.colocation_required ?? true,
+  }).map((r) => ({ profile_id: r.id, rssi: r.rssi }));
+}
+
+test('resolution cases: windows, the stored session, co-location and retired masters', () => {
+  for (const c of cases.cases) assert.deepEqual(runCase(c), c.expected, c.name);
+  // The first two people are the key-derivation vectors.
+  for (const [i, d] of golden.key_derivation.cases.entries()) {
+    assert.equal(cases.people[i].profile_id, d.profile_id);
+    assert.equal(B.encodeKey(B.sessionKey(cases.masters, cases.people[i])), d.ble_key_base64url);
   }
 });
 
-test('the server table holds three tokens per live key and no key material', () => {
-  const master = hex(cases.master_secret_hex);
-  const table = B.resolverForPeople(master, cases.people, 1794312300);
+test('the token table holds three tokens per session, a nonce tag and no key material', () => {
+  const table = B.tokenTable(cases.masters, cases.people, 1794312300);
   assert.equal(table.size, cases.people.length * 3);
-  for (const [token, id] of table) {
+  const keys = new Set(golden.key_derivation.cases.map((c) => c.ble_key_base64url));
+  for (const [token, entry] of table) {
     assert.match(token, /^[A-Za-z0-9_-]{22}$/);
-    assert.ok(cases.people.some((p) => p.profile_id === id));
+    assert.deepEqual(Object.keys(entry).sort(), ['nonce_tag', 'profile_id']);
+    assert.match(entry.nonce_tag, /^[0-9a-f]{16}$/);
+    assert.ok(!keys.has(token));
   }
-  // At window 0 there is no w - 1.
+  // At window 0 there is no w - 1, and at w = 2^64 - 1 there is no w + 1.
   assert.equal(B.resolverAt([{ id: 'x', key: keyOf('key-a') }], 0).size, 2);
+  const lastWindowStart = (2n ** 64n - 1n) * 600n;
+  assert.equal(B.resolverAt([{ id: 'x', key: keyOf('key-a') }], lastWindowStart).size, 2);
+  assert.equal(B.windowOf(1794312000.9), 2990520n, 'fractional seconds are floored');
+  assert.equal(B.windowOf(599.999), 0n);
+});
+
+test('the per-device caps keep at most 10 new people per window and 30 per hour', () => {
+  const people = Array.from({ length: 40 }, (_, i) => ({ id: `p${String(i).padStart(2, '0')}`, key: Buffer.alloc(32, i + 1) }));
+  const t = 1794312300;
+  const table = new Map([...B.resolverAt(people, t)].map(([token, id]) => [token, { profile_id: id, nonce_tag: 'x' }]));
+  const sightingsFor = (ids) => ids.map((id) => ({ token: B.encodeToken(B.tokenAt(people.find((p) => p.id === id).key, t)), rssi: -50 }));
+  const seen = { window: new Set(), hour: new Set() };
+  const first = B.resolveSightings(sightingsFor(people.slice(0, 15).map((p) => p.id)), table, { seen });
+  assert.equal(first.length, 10);
+  // Someone already resolved keeps resolving; nobody new does in this window.
+  const again = B.resolveSightings(sightingsFor([first[0].id, 'p20']), table, { seen });
+  assert.deepEqual(again.map((r) => r.id), [first[0].id]);
+  const ids = people.map((p) => p.id);
+  for (const w of [1, 2]) {
+    seen.window = new Set();
+    assert.equal(B.resolveSightings(sightingsFor(ids.slice(w * 10, w * 10 + 15)), table, { seen }).length, 10, `window ${w}`);
+  }
+  assert.equal(seen.hour.size, 30);
+  seen.window = new Set();
+  assert.deepEqual(B.resolveSightings(sightingsFor(ids.slice(30)), table, { seen }), [], 'the hour is full');
+  assert.deepEqual(B.resolveSightings(sightingsFor(['p00']), table, { seen }).map((r) => r.id), ['p00'], 'someone already resolved this hour still resolves');
+});
+
+test('co-location: the same zone, or the same ~100 m cell', () => {
+  const cell = { lat: 1.5, lon: 2.5 };
+  assert.equal(B.colocated({ zone: 'Hall A', cell: null }, { zone: 'Hall A', cell: null }), true);
+  assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { ...cell } }), true);
+  assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { lat: 1.5, lon: 2.6 } }), false);
+  assert.equal(B.colocated({ zone: null, cell: null }, { zone: null, cell: null }), false);
 });
 
 test('fresh keys and nonces have the right sizes and differ', () => {

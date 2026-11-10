@@ -27,12 +27,11 @@
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
-import { semanticAvailable } from './semantic.mjs';
 import {
   people, idx, docId, PEOPLE_INDEX, LIMITS,
-  HttpError, UpstreamError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
-  conferenceFor, authenticated, bulkOne, isAround, blockedIds, dispatch, topicsOf,
-  peopleQuery, searchPeople, isBroad, toPerson,
+  HttpError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
+  conferenceFor, authenticated, updateOwnProfile, isAround, blockedIds, dispatch, topicsOf,
+  peopleQuery, rankPeople, isBroad, toPerson,
 } from './people.mjs';
 
 /** The 128-bit service UUID the Android app advertises and scans for. Same value in BleConstants.kt. */
@@ -78,12 +77,14 @@ async function rotate(req, res) {
   limit(`people-write:dev:${device.profileId}`, LIMITS.writeDevice);
   const body = await jsonBody(req, ROTATE_KEYS);
   const conf = await conferenceFor(body.event);
-  const me = await authenticated(device, conf.slug);
-  if (!me || me.open_to_meet !== true) throw profileRequired();
-  if (!isAround(me)) throw new HttpError(403, { error: 'presence_required' });
-  const fields = mintBleToken(Date.now(), Date.parse(me.presence_until));
-  const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: fields });
-  if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
+  // Guarded by the sequence number of the profile read (updateOwnProfile), so a rotation that read
+  // the profile just before a delete hid it cannot put a token back on the hidden document.
+  const { fields } = await updateOwnProfile(device, conf.slug, (me) => {
+    if (!me || me.open_to_meet !== true) throw profileRequired();
+    if (!isAround(me)) throw new HttpError(403, { error: 'presence_required' });
+    const fields = mintBleToken(Date.now(), Date.parse(me.presence_until));
+    return { doc: fields, fields };
+  });
   sendJson(res, 200, { ok: true, ble: bleView(fields) });
 }
 
@@ -154,13 +155,15 @@ async function sightings(req, res) {
     return;
   }
 
-  // The same ranking as POST /api/people/matches, as the requester, restricted to these people.
-  const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: ids.map((id) => docId(conf.slug, id)) } }], { size: ids.length, blocked, explain: true, semantic: semanticAvailable() });
-  if (!q) {
+  // The same ranking as POST /api/people/matches, as the requester, restricted to these people,
+  // with the same keyword fallback when inference fails (rankPeople).
+  const build = (semantic) => peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: ids.map((id) => docId(conf.slug, id)) } }], { size: ids.length, blocked, explain: true, semantic });
+  const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
+  if (!ranked) {
     sendJson(res, 200, { nearby: [] });
     return;
   }
-  const [result, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
+  const { json: result, q } = ranked;
   const hits = (result.hits?.hits ?? []).filter((h) => !isBroad(h, q.legs, me, topics.common));
   const nearby = hits.map((h) => {
     const p = toPerson(h, me, topics.labels, new Map(), null);

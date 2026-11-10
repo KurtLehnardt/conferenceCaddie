@@ -33,6 +33,9 @@ test('numbers', () => {
   no({ exclusiveMinimum: 1 }, 1);
   ok({ multipleOf: 10 }, 40);
   no({ multipleOf: 10 }, 45);
+  ok({ multipleOf: 0.1 }, 0.3);
+  ok({ multipleOf: 0.01 }, 1.15);
+  no({ multipleOf: 0.1 }, 0.35);
 });
 
 test('strings count code points and patterns use the u flag', () => {

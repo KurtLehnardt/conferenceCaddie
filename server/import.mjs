@@ -7,6 +7,11 @@
 // extracted_chars }. talk has the search result shape; matched_text_excerpt is a short piece of
 // the requester's own file and goes back only to them.
 //
+// Bounds: the text is read line by line, never split into one array. Each line, CSV cell and
+// iCalendar property is cut to MAX_LINE (1,000) characters before any regular expression runs;
+// plain text and iCalendar stop after MAX_LINES lines, CSV after MAX_CSV_ROWS rows or
+// MAX_CSV_CELLS cells, and every parser stops once it holds MAX_ENTRIES entries.
+//
 // Privacy: the upload lives in memory for this one request. Nothing is stored, indexed or logged.
 // The request log line holds only the method, path, status and duration, and an error line holds
 // only a status code.
@@ -40,6 +45,16 @@ const INDEXED_CHARS = 200_000; // characters Tika may return
 const MAX_CANDIDATES = 300;
 const MAX_ENTRIES = 3000;
 const MAX_CSV_ROWS = 5000;
+const MAX_CSV_CELLS = 100_000;
+// Characters read from one line, CSV cell or iCalendar property. Everything after is ignored, so
+// every regular expression below runs on bounded input. A schedule title is far shorter.
+const MAX_LINE = 1000;
+// An item of plain text merges at most four lines.
+const MAX_ITEM = 4 * (MAX_LINE + 1);
+// Lines read from plain text or iCalendar. A whole conference's .ics with descriptions has a few
+// tens of thousands; this bounds the time one 5 MB file of short lines can hold the event loop.
+const MAX_LINES = 100_000;
+const TITLE_MAX = 300;
 const EXCERPT_MAX = 160;
 const CONTEXT_MAX = 300;
 const PER_MIN = 10;
@@ -162,24 +177,59 @@ function sniff(bytes) {
 const TITLE_HEADERS = ['title', 'session title', 'talk title', 'session name', 'session', 'talk', 'name', 'event name', 'event title', 'summary', 'subject', 'event'];
 const normHeader = (h) => String(h ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
+// ---------------------------------------------------------------------------------------------
+// Bounded reading. A file may hold 5 MB, so the text is never split into one array: lines are
+// found by index, each is cut to MAX_LINE characters before any regular expression sees it, and
+// the parsers stop as soon as they have MAX_ENTRIES entries.
+
+// The first MAX_LINES lines of text, split at \r\n, \r or \n, each cut to MAX_LINE characters.
+function* lines(text) {
+  const n = text.length;
+  let i = 0;
+  for (let count = 0; count < MAX_LINES; count++) {
+    let j = i;
+    while (j < n) {
+      const c = text.charCodeAt(j);
+      if (c === 10 || c === 13) break;
+      j++;
+    }
+    yield text.slice(i, Math.min(j, i + MAX_LINE));
+    if (j >= n) return;
+    i = j + (text.charCodeAt(j) === 13 && text.charCodeAt(j + 1) === 10 ? 2 : 1);
+  }
+}
+
+// The text up to the first \n (without a \r before it), cut to MAX_LINE characters.
+function firstLine(text) {
+  const nl = text.indexOf('\n');
+  const line = text.slice(0, Math.min(nl === -1 ? text.length : nl, MAX_LINE));
+  return nl !== -1 && nl <= MAX_LINE && line.endsWith('\r') ? line.slice(0, -1) : line;
+}
+
+// Collapses every run of spaces, including the Unicode spaces some exports use, to one space.
+// Splitting on separators assumes this: on long runs of spaces a pattern that starts and ends
+// with \s+ would backtrack.
+const squash = (s) => s.replace(/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// { format } for the text's format, plus the parsed value for JSON, so the file is parsed once.
 function textFormat(text, filename, mime) {
   const t = text.trimStart();
-  if (/^BEGIN:VCALENDAR/i.test(t)) return 'ics';
+  if (/^BEGIN:VCALENDAR/i.test(t)) return { format: 'ics' };
   if (t.startsWith('{') || t.startsWith('[')) {
     try {
-      const v = JSON.parse(t);
-      if (v && typeof v === 'object') return 'json';
+      const value = JSON.parse(t);
+      if (value && typeof value === 'object') return { format: 'json', value };
     } catch {
       /* not JSON */
     }
   }
   const ext = (/\.([a-z0-9]{1,5})$/i.exec(filename)?.[1] ?? '').toLowerCase();
-  if (ext === 'csv' || ext === 'tsv' || /^text\/(csv|tab-separated-values)/i.test(mime)) return 'csv';
+  if (ext === 'csv' || ext === 'tsv' || /^text\/(csv|tab-separated-values)/i.test(mime)) return { format: 'csv' };
   // A first line with a delimiter and a title-like column name reads as a CSV header.
-  const first = t.split(/\r?\n/, 1)[0] ?? '';
+  const first = firstLine(t);
   const delim = csvDelimiter(first);
-  if (delim && parseCsv(first, delim)[0]?.some((h) => TITLE_HEADERS.includes(normHeader(h)))) return 'csv';
-  return 'text';
+  if (delim && parseCsv(first, delim)[0]?.some((h) => TITLE_HEADERS.includes(normHeader(h)))) return { format: 'csv' };
+  return { format: 'text' };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -299,7 +349,13 @@ function dateTimeLine(line, defaultYear) {
 
 const NOISE_LINE = /^(?:add (?:it )?to (?:my |your )?(?:calendar|schedule|sched|google calendar|outlook|ical)|remove from (?:my |your )?(?:calendar|schedule|sched)|view (?:session )?details|more info(?:rmation)?|join (?:the )?waitlist|this session is full|filling up|page \d+(?: of \d+)?|\d+\s*(?:\/|of)\s*\d+|\d+)$/i;
 const URL_LINE = /^(?:https?:\/\/|www\.)\S*$/i;
-const EMAIL_LINE = /^\S+@\S+\.\S+$/;
+// One address and nothing else, with a dot in the domain. Checked without a pattern that can
+// backtrack: [^\s@]+ cannot overlap the "@".
+function emailLine(line) {
+  if (line.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(line)) return false;
+  const dot = line.lastIndexOf('.');
+  return dot > line.indexOf('@') + 1 && dot < line.length - 1;
+}
 const CONTEXT_LABEL = /^(?:speakers?|presenters?|moderators?|panel(?:ists)?|hosts?|instructors?|by)\s*:\s*/i;
 const DROP_LABEL = /^(?:rooms?|location|where|venue|track|type|session type|format|level|experience level|audience|tags?|categor(?:y|ies)|when|time|date|language|capacity|status)\s*:/i;
 const ROOM_WORD = /\b(?:room|rooms|hall|level|floor|building|bldg|salon|ballroom|suite|theater|theatre|stage|booth|lobby|foyer|auditorium|pavilion|terrace|lounge|expo|exhibit|exhibition|mezzanine|wing|online|virtual)\b/i;
@@ -332,17 +388,18 @@ function textEntries(text, conference) {
   const entries = [];
   let date = null;
   let pendingMinutes = null;
-  let block = null; // { lines, context, minutes }
+  let block = null; // { lines, context, contextChars, minutes }
 
   const flush = () => {
     if (!block) return;
     const b = block;
     block = null;
-    if (!b.lines.length) return;
+    if (!b.lines.length || entries.length >= MAX_ENTRIES) return;
     const hint = date && b.minutes !== null ? localToIso(date.y, date.m, date.d, b.minutes, zone) : null;
     // More than four text lines is a list, one item per line, not one wrapped title.
     if (b.lines.length > 4) {
       for (const line of b.lines) {
+        if (entries.length >= MAX_ENTRIES) return;
         const split = splitVariants(line);
         entries.push({ variants: [line, ...split.variants], context: [split.after, ...b.context].join(' '), hint: null });
       }
@@ -357,17 +414,17 @@ function textEntries(text, conference) {
   };
   const start = (minutes) => {
     flush();
-    block = { lines: [], context: [], minutes };
+    block = { lines: [], context: [], contextChars: 0, minutes };
   };
 
-  for (const raw of text.split(/\r\n|\r|\n/)) {
+  for (const raw of lines(text)) {
     if (entries.length >= MAX_ENTRIES) break;
-    const line = raw.replace(/[  -​  　]/g, ' ').replace(/\s+/g, ' ').trim();
+    const line = squash(raw);
     if (!line) {
       flush();
       continue;
     }
-    if (URL_LINE.test(line) || EMAIL_LINE.test(line) || NOISE_LINE.test(line)) continue;
+    if (URL_LINE.test(line) || emailLine(line) || NOISE_LINE.test(line)) continue;
     const dt = dateTimeLine(line, defaultYear);
     if (dt) {
       if (dt.date) date = dt.date;
@@ -377,7 +434,12 @@ function textEntries(text, conference) {
     }
     const ctx = CONTEXT_LABEL.exec(line);
     if (ctx) {
-      if (block) block.context.push(line.slice(ctx[0].length));
+      // Only the first CONTEXT_MAX characters of the speaker text are ever sent.
+      const names = line.slice(ctx[0].length);
+      if (block && names && block.contextChars < CONTEXT_MAX) {
+        block.context.push(names);
+        block.contextChars += names.length + 1;
+      }
       continue;
     }
     if (DROP_LABEL.test(line) || roomLike(line)) continue;
@@ -393,6 +455,9 @@ function textEntries(text, conference) {
       pendingMinutes = null;
     }
     block.lines.push(line);
+    // A list block gives one entry per line, so once it can fill the remaining entries, the
+    // rest of the text cannot add any.
+    if (block.lines.length > 4 && entries.length + block.lines.length >= MAX_ENTRIES) break;
   }
   flush();
   return entries;
@@ -404,11 +469,27 @@ function textEntries(text, conference) {
 
 const icsUnescape = (v) => v.replace(/\\n/gi, ' ').replace(/\\([,;\\])/g, '$1');
 
+// The content lines of an iCalendar file: a line that starts with a space or a tab continues the
+// one before it (RFC 5545 folding). Each is cut to MAX_LINE characters.
+function* icsLines(text) {
+  let cur = null;
+  for (const line of lines(text)) {
+    const c = line.charCodeAt(0);
+    if (cur !== null && (c === 32 || c === 9)) {
+      if (cur.length < MAX_LINE) cur = (cur + line.slice(1)).slice(0, MAX_LINE);
+      continue;
+    }
+    if (cur !== null) yield cur;
+    cur = line;
+  }
+  if (cur !== null) yield cur;
+}
+
 function icsEntries(text, conference) {
   const zone = conference.time_zone || 'UTC';
   const entries = [];
   let ev = null;
-  for (const line of text.replace(/\r\n|\r/g, '\n').replace(/\n[ \t]/g, '').split('\n')) {
+  for (const line of icsLines(text)) {
     if (entries.length >= MAX_ENTRIES) break;
     if (/^BEGIN:VEVENT\s*$/i.test(line)) ev = {};
     else if (/^END:VEVENT\s*$/i.test(line)) {
@@ -421,7 +502,7 @@ function icsEntries(text, conference) {
       const m = /^([A-Za-z-]+)((?:;[^:]*)?):(.*)$/.exec(line);
       if (!m) continue;
       const name = m[1].toUpperCase();
-      if (name === 'SUMMARY') ev.summary = icsUnescape(m[3]).trim();
+      if (name === 'SUMMARY') ev.summary = squash(icsUnescape(m[3]));
       else if (name === 'DESCRIPTION') ev.description = icsUnescape(m[3]).slice(0, CONTEXT_MAX);
       else if (name === 'DTSTART') ev.start = icsStart(m[3].trim(), m[2], zone);
     }
@@ -453,32 +534,42 @@ function csvDelimiter(line) {
   return best;
 }
 
+// Rows of cells. A cell keeps its first MAX_LINE characters, and reading stops after MAX_CSV_ROWS
+// rows or MAX_CSV_CELLS cells.
 function parseCsv(text, delim) {
   const rows = [];
   let row = [];
   let cell = '';
   let quoted = false;
+  let cells = 0;
+  const add = (ch) => {
+    if (cell.length < MAX_LINE) cell += ch;
+  };
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (quoted) {
       if (ch === '"') {
         if (text[i + 1] === '"') {
-          cell += '"';
+          add('"');
           i++;
         } else quoted = false;
-      } else cell += ch;
+      } else add(ch);
     } else if (ch === '"' && cell === '') quoted = true;
     else if (ch === delim) {
       row.push(cell);
       cell = '';
+      if (++cells >= MAX_CSV_CELLS) {
+        rows.push(row);
+        return rows;
+      }
     } else if (ch === '\n' || ch === '\r') {
       if (ch === '\r' && text[i + 1] === '\n') i++;
       row.push(cell);
       rows.push(row);
       row = [];
       cell = '';
-      if (rows.length >= MAX_CSV_ROWS) return rows;
-    } else cell += ch;
+      if (rows.length >= MAX_CSV_ROWS || ++cells >= MAX_CSV_CELLS) return rows;
+    } else add(ch);
   }
   if (cell !== '' || row.length) {
     row.push(cell);
@@ -490,7 +581,7 @@ function parseCsv(text, delim) {
 function csvEntries(text, conference, filename) {
   const zone = conference.time_zone || 'UTC';
   const body = text.replace(/^﻿/, '');
-  const delim = /\.tsv$/i.test(filename) ? '\t' : csvDelimiter(body.split(/\r?\n/, 1)[0] ?? '') ?? ',';
+  const delim = /\.tsv$/i.test(filename) ? '\t' : csvDelimiter(firstLine(body)) ?? ',';
   const rows = parseCsv(body, delim).filter((r) => r.some((c) => c.trim()));
   if (!rows.length) return [];
   const header = rows[0].map(normHeader);
@@ -506,7 +597,7 @@ function csvEntries(text, conference, filename) {
   if (titleCol === -1) {
     // No title column: every cell is a possible title.
     return rows.flat().slice(0, MAX_ENTRIES).map((cell) => {
-      const c = cell.trim();
+      const c = squash(cell);
       const split = splitVariants(c);
       return { variants: [c, ...split.variants], context: split.after, hint: null };
     });
@@ -516,7 +607,7 @@ function csvEntries(text, conference, filename) {
   const dateCol = find(['start date', 'date', 'day']);
   const timeCol = find(['start time', 'time', 'from']);
   return rows.slice(1, MAX_ENTRIES + 1).map((r) => {
-    const title = (r[titleCol] ?? '').trim();
+    const title = squash(r[titleCol] ?? '');
     const split = splitVariants(title);
     let hint = null;
     if (startCol !== -1 && startCol !== timeCol) hint = structuredStart(r[startCol], zone);
@@ -532,6 +623,8 @@ function csvEntries(text, conference, filename) {
 const JSON_TITLE_KEYS = ['title', 'name', 'session', 'session_title', 'sessionTitle', 'talk', 'summary', 'subject'];
 const JSON_START_KEYS = ['startsAt', 'start', 'event_start', 'start_time', 'startTime', 'dtstart', 'starts_at'];
 const SPEAKER_KEYS = new Set(['speakers', 'speaker', 'presenters', 'moderators']);
+const MAX_SPEAKERS = 100; // names read per speaker field; the speaker text is cut to CONTEXT_MAX anyway
+const jsonTitle = (s) => squash(s.slice(0, MAX_LINE)).slice(0, 500);
 
 function jsonEntries(value, conference) {
   const zone = conference.time_zone || 'UTC';
@@ -540,11 +633,17 @@ function jsonEntries(value, conference) {
   const collect = (v, depth) => {
     if (budget-- <= 0 || depth > 8 || !v || typeof v !== 'object') return;
     if (Array.isArray(v)) {
-      for (const x of v) collect(x, depth + 1);
+      for (const x of v) {
+        if (budget <= 0) return;
+        collect(x, depth + 1);
+      }
       return;
     }
     if (typeof v.id === 'string' && typeof v.fullName === 'string') speakerNames.set(v.id, v.fullName);
-    for (const x of Object.values(v)) collect(x, depth + 1);
+    for (const k of Object.keys(v)) {
+      if (budget <= 0) return;
+      collect(v[k], depth + 1);
+    }
   };
   collect(value, 0);
 
@@ -555,20 +654,24 @@ function jsonEntries(value, conference) {
     if (budget-- <= 0 || depth > 8 || entries.length >= MAX_ENTRIES || v === null || typeof v !== 'object') return;
     if (Array.isArray(v)) {
       for (const x of v) {
-        if (typeof x === 'string') entries.push({ variants: [x.trim()], context: '', hint: null, short: true });
+        if (entries.length >= MAX_ENTRIES) return;
+        if (typeof x === 'string') entries.push({ variants: [jsonTitle(x)], context: '', hint: null, short: true });
         else walk(x, depth + 1);
       }
       return;
     }
     const key = JSON_TITLE_KEYS.find((k) => typeof v[k] === 'string' && v[k].trim());
     if (key) {
-      const title = v[key].trim().slice(0, 500);
+      const title = jsonTitle(v[key]);
       const split = splitVariants(title);
-      const speakers = [].concat(...[...SPEAKER_KEYS].map((k) => (Array.isArray(v[k]) ? v[k] : v[k] ? [v[k]] : []))).map(nameOf).join(', ');
+      const speakers = [].concat(...[...SPEAKER_KEYS].map((k) => (Array.isArray(v[k]) ? v[k].slice(0, MAX_SPEAKERS) : v[k] ? [v[k]] : []))).map(nameOf).join(', ');
       const startKey = JSON_START_KEYS.find((k) => typeof v[k] === 'string');
       entries.push({ variants: [title, ...split.variants], context: [split.after, speakers].join(' '), hint: startKey ? structuredStart(v[startKey], zone) : null, short: true });
     }
-    for (const [k, x] of Object.entries(v)) if (!SPEAKER_KEYS.has(k)) walk(x, depth + 1);
+    for (const k of Object.keys(v)) {
+      if (budget <= 0 || entries.length >= MAX_ENTRIES) return;
+      if (!SPEAKER_KEYS.has(k)) walk(v[k], depth + 1);
+    }
   };
   walk(value, 0);
   return entries;
@@ -585,12 +688,15 @@ function jsonEntries(value, conference) {
 const EN_STOP = new Set('a an and are as at be but by for if in into is it no not of on or such that the their then there these they this to was will with'.split(' '));
 const HAS_WORD = /[\p{L}\p{N}]/u;
 
+// Every input is already bounded (a line, cell or value, or an item of at most four lines); the
+// slice only guards that. The trailing-punctuation strip runs after the cut to TITLE_MAX, because
+// on a long run of those characters followed by anything else it backtracks.
 function cleanCandidate(s) {
-  let t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  let t = String(s ?? '').slice(0, MAX_ITEM).replace(/\s+/g, ' ').trim();
   t = t.replace(/^[^\p{L}\p{N}"'“‘(\[]+/u, '');
   const lead = LEAD_TIME_RE.exec(t);
   if (lead) t = stripBadge(t.slice(lead[0].length));
-  return t.replace(/[\s\-–—|•·:,;]+$/u, '').slice(0, 300);
+  return t.slice(0, TITLE_MAX).replace(/[\s\-–—|•·:,;]+$/u, '');
 }
 
 function buildCandidates(entries) {
@@ -693,19 +799,19 @@ function excerpt(text) {
 
 async function runImport({ conference, bytes, text, filename, mime }) {
   let content = text;
-  let format = null;
+  let isDocument = false;
   if (bytes) {
     const sniffed = sniff(bytes);
-    content = sniffed.kind === 'document' ? await extractDocument(bytes) : sniffed.text;
-    if (sniffed.kind === 'document') format = 'text';
+    isDocument = sniffed.kind === 'document';
+    content = isDocument ? await extractDocument(bytes) : sniffed.text;
   }
   content = content.replace(/^﻿/, '');
   if (!content.trim()) throw new ImportError(422, UNREADABLE);
-  format ??= textFormat(content, filename, mime);
+  const { format, value } = isDocument ? { format: 'text' } : textFormat(content, filename, mime);
 
   let entries;
   if (format === 'ics') entries = icsEntries(content, conference);
-  else if (format === 'json') entries = jsonEntries(JSON.parse(content.trim()), conference);
+  else if (format === 'json') entries = jsonEntries(value, conference);
   else if (format === 'csv') entries = csvEntries(content, conference, filename);
   else entries = textEntries(content, conference);
 

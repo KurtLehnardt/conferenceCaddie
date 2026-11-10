@@ -28,7 +28,7 @@
         "bundle_base": {
           "description": "Absolute https URL, ending in '/', under which conferences.json and the content-addressed talk bundles live (docs/contracts/talk-bundle.md). Null when the backend publishes no bundles.",
           "anyOf": [
-            { "type": "string", "format": "uri", "pattern": "^https://[^\\s?#]+/$", "maxLength": 2048 },
+            { "type": "string", "format": "uri", "pattern": "^https://[^/\\s?#@]+(/[^\\s?#]*)?/$", "maxLength": 2048 },
             { "type": "null" }
           ]
         },
@@ -80,10 +80,14 @@
           "const": "e52c391c-b926-4856-9a38-d46c3c10c733"
         },
         "near_rssi": {
-          "description": "The weakest RSSI, in dBm, that counts as right near. The server applies it; clients should not report weaker sightings.",
+          "description": "The weakest RSSI, in dBm, that counts as right near, from -100 to -30. The server applies it; clients should not report weaker sightings. It is a relevance threshold, not a security boundary: the RSSI in a report is whatever the client claims.",
           "type": "integer",
-          "minimum": -127,
-          "maximum": 20
+          "minimum": -100,
+          "maximum": -30
+        },
+        "colocation_required": {
+          "description": "derived-v1: a sighted person resolves only when they share the requester's presence zone or ~100 m cell (docs/contracts/ble-tokens.md, Phase 4 mitigations). Default true; an operator may turn it off for a single-room event.",
+          "type": "boolean"
         },
         "window_s": {
           "description": "Token window length in seconds. 600 in derived-v1.",
@@ -100,7 +104,7 @@
       },
       "if": { "properties": { "mode": { "const": "derived-v1" } }, "required": ["mode"] },
       "then": {
-        "required": ["service_uuid", "near_rssi", "window_s", "sightings_min_interval_s"],
+        "required": ["service_uuid", "near_rssi", "window_s", "sightings_min_interval_s", "colocation_required"],
         "properties": { "window_s": { "const": 600 }, "sightings_min_interval_s": { "maximum": 300 } }
       },
       "else": {

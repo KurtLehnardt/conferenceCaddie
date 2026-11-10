@@ -1,6 +1,6 @@
 {
   "protocol": "caddie-ble-v1",
-  "description": "Golden vectors for Bluetooth derived tokens v1 (docs/contracts/ble-tokens.md). Every key, master secret, profile_id and nonce here is a fixed fake test value. Window indexes are decimal strings because they are unsigned 64-bit integers. Each hmac_sha256_hex and ble_key_hex was computed by contracts/js/ble-token.mjs (node:crypto) and independently by the openssl command in cross_check over a file holding exactly the message bytes; the two agreed for every vector.",
+  "description": "Golden vectors for Bluetooth derived tokens v1 (docs/contracts/ble-tokens.md). Every key, master secret, profile_id and nonce here is a fixed fake test value. Window indexes are decimal strings because they are unsigned 64-bit integers. Each hmac_sha256_hex, ble_key_hex and key_id_hmac_sha256_hex was computed by contracts/js/ble-token.mjs (node:crypto) and independently by the openssl command in cross_check over a file holding exactly the message bytes; the two agreed for every vector.",
   "constants": {
     "token_label": "caddie-ble-v1",
     "token_label_hex": "6361646469652d626c652d7631",
@@ -17,6 +17,8 @@
     "token_bytes": 16,
     "service_uuid": "e52c391c-b926-4856-9a38-d46c3c10c733",
     "token_characteristic_uuid": "944ddf9a-6eea-4583-978f-9da68fc3f562",
+    "key_id_label": "caddie-ble-key-id-v1",
+    "key_id_label_hex": "6361646469652d626c652d6b65792d69642d7631",
     "payload_format_v1": 1
   },
   "cross_check": {
@@ -206,6 +208,7 @@
   ],
   "key_derivation": {
     "master_secret": {
+      "id": "m1",
       "hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
       "base64url": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8"
     },
@@ -217,6 +220,8 @@
         "key_message_hex": "6361646469652d626c652d6b65792d7631001641414543417751464267634943516f4c4441304f4477f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
         "ble_key_hex": "05a7bd314db4520b2430496a9b12eff40c87396ebde1a3006edb751ceaf58a7a",
         "ble_key_base64url": "Bae9MU20UgskMElqmxLv9AyHOW694aMAbtt1HOr1ino",
+        "key_id_hmac_sha256_hex": "11bdae073ed6e92fcc0c100e5089f51ba388eed7986615cb1eae02a93f51c774",
+        "ble_key_id": "Eb2uBz7W6S8",
         "tokens": [
           {
             "w": "0",
@@ -245,6 +250,8 @@
         "key_message_hex": "6361646469652d626c652d6b65792d763100165f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f77000102030405060708090a0b0c0d0e0f",
         "ble_key_hex": "8fd7537dfdbe5f07e50d21a189af8e177b6e99ff407ddae692903b5fef5a02cf",
         "ble_key_base64url": "j9dTff2-XwflDSGhia-OF3tumf9AfdrmkpA7X-9aAs8",
+        "key_id_hmac_sha256_hex": "9d7d19f65efe74d851b50d6a7aaf0b65b2f1e9679706ef24560ed025c76fb286",
+        "ble_key_id": "nX0Z9l7-dNg",
         "tokens": [
           {
             "w": "0",

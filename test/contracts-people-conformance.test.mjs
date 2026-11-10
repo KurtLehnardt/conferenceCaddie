@@ -3,6 +3,14 @@
 // schema definition in producer (closed) mode. This is what "frozen" means: if a handler's
 // response shape drifts from contracts/schema/people-api.v1.schema.json, this test fails.
 //
+// The stand-in is a small document store, not a canned reply per request: it keeps documents per
+// index with sequence numbers, and evaluates the filters the server sends (bool, term, terms,
+// range, ids, exists, match_all, and the filter of a retriever) and terms aggregations. Scoring
+// clauses (knn, multi_match, distance_feature) match everything, so ranking is not under test
+// here, only shapes. All 24 routes run, and every list the schema describes comes back non-empty
+// at least once, so Person, MeetView, the inbox items, circle members and the rest are checked
+// against real handler output.
+//
 // Nothing here reaches the network: fetch is replaced before the server modules are imported and
 // a call to any other host fails the test. The keys, URL and device credentials are dummy values.
 
@@ -31,73 +39,183 @@ Object.assign(process.env, {
   ES_RULES_INDEX: 'caddie-people-rules',
   MOD_CLASSIFIER: 'off',
 });
-delete process.env.VAPID_PUBLIC_KEY;
-delete process.env.VAPID_PRIVATE_KEY;
-delete process.env.BLE_NEAR_RSSI;
+for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI']) delete process.env[k];
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EVENT = 'contracts-conf-2099';
 const TALK = `${EVENT}:5001`;
-const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
-const ndjsonLines = (body) => String(body).split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
-// The stand-in cluster: people documents in a Map, every other index empty, plus the conference,
-// two topics and one talk in Hall A.
-const people = new Map();
+// ---------------------------------------------------------------------------------------------
+// The in-memory store.
+
+const indices = new Map(); // index name -> Map(_id -> { source, seq })
+let seqCounter = 0;
+const store = (index) => {
+  if (!indices.has(index)) indices.set(index, new Map());
+  return indices.get(index);
+};
+const put = (index, id, source) => store(index).set(id, { source: structuredClone(source), seq: ++seqCounter });
+
+// A searchable conference in the shape the ingestion CLI indexes (data/*/conference.json).
+const confDoc = JSON.parse(readFileSync(path.join(ROOT, 'data/pytorch-day-japan-2026/conference.json'), 'utf8'));
+put('caddie-conferences', EVENT, { ...confDoc, slug: EVENT, name: 'Contracts Conference', start_date: '2099-06-01', end_date: '2099-12-31', time_zone: 'UTC', status: 'searchable', status_reason: null });
+put('caddie-topics', `${EVENT}:kubernetes`, { conference: EVENT, topic_id: 'kubernetes', label: 'Kubernetes', label_exact: 'Kubernetes', talk_count: 5, rank: 1, aliases: [] });
+put('caddie-topics', `${EVENT}:ebpf`, { conference: EVENT, topic_id: 'ebpf', label: 'eBPF', label_exact: 'eBPF', talk_count: 3, rank: 2, aliases: [] });
+put('caddie-talks', TALK, {
+  talk_id: TALK, conference: EVENT, kind: 'talk', title: 'eBPF at scale', abstract: 'Load balancing with eBPF.', room: 'Hall A',
+  start: '2099-06-01T10:00:00Z', end: '2099-06-01T10:30:00Z', url: 'https://example.org/t/5001',
+  speaker_profiles: [{ name: 'Speaker Example', tagline: null, links: [{ title: 'Website', url: 'Https://example.org/speaker' }] }],
+});
+
+const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+const asList = (v) => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
+const fieldValues = (doc, field) => {
+  const v = field.split('.').reduce((o, k) => (o == null ? undefined : o[k]), doc);
+  return v === undefined || v === null ? [] : Array.isArray(v) ? v : [v];
+};
+const time = (v) => {
+  if (v === 'now') return Date.now();
+  const m = /^now-(\d+)([dhm])$/.exec(v);
+  if (m) return Date.now() - Number(m[1]) * { d: 86_400_000, h: 3_600_000, m: 60_000 }[m[2]];
+  return typeof v === 'number' ? v : Date.parse(v);
+};
+
+function matches(doc, q) {
+  if (!q || q.match_all) return true;
+  if (q.bool) {
+    const b = q.bool;
+    if (!asList(b.filter).every((c) => matches(doc, c))) return false;
+    if (!asList(b.must).every((c) => matches(doc, c))) return false;
+    if (asList(b.must_not).some((c) => matches(doc, c))) return false;
+    const should = asList(b.should);
+    const min = b.minimum_should_match ?? (b.filter || b.must ? 0 : 1);
+    return !should.length || should.filter((c) => matches(doc, c)).length >= min;
+  }
+  if (q.term) {
+    const [field, raw] = Object.entries(q.term)[0];
+    const want = raw !== null && typeof raw === 'object' ? raw.value : raw;
+    return fieldValues(doc, field).some((v) => v === want);
+  }
+  if (q.terms) {
+    const [field, want] = Object.entries(q.terms)[0];
+    return fieldValues(doc, field).some((v) => want.includes(v));
+  }
+  if (q.ids) return q.ids.values.includes(doc._id);
+  if (q.exists) return fieldValues(doc, q.exists.field).length > 0;
+  if (q.range) {
+    const [field, r] = Object.entries(q.range)[0];
+    return fieldValues(doc, field).some((raw) => {
+      const v = typeof raw === 'number' ? raw : Date.parse(raw);
+      return (r.gt === undefined || v > time(r.gt)) && (r.gte === undefined || v >= time(r.gte))
+        && (r.lt === undefined || v < time(r.lt)) && (r.lte === undefined || v <= time(r.lte));
+    });
+  }
+  // Scoring clauses (knn, multi_match, distance_feature, match) do not filter here.
+  return true;
+}
+
+// The filter a search applies: its query, or the filter of its retriever.
+function searchFilter(body) {
+  if (body.query) return body.query;
+  const r = body.retriever ?? {};
+  const inner = r.rrf ?? r.standard ?? null;
+  if (!inner) return null;
+  return inner.filter ?? inner.query ?? null;
+}
+
+const pickSource = (source, spec) => {
+  if (spec === false) return undefined;
+  if (!Array.isArray(spec)) return structuredClone(source);
+  return Object.fromEntries(spec.filter((f) => f in source).map((f) => [f, structuredClone(source[f])]));
+};
+
+function search(index, body) {
+  const docs = [...store(index)].map(([_id, d]) => ({ _id, ...d.source, __seq: d.seq })).filter((d) => matches(d, searchFilter(body)));
+  for (const s of [...asList(body.sort)].reverse()) {
+    const [field, dir] = typeof s === 'string' ? [s, 'asc'] : Object.entries(s).map(([f, o]) => [f, typeof o === 'string' ? o : o.order])[0];
+    docs.sort((a, b) => {
+      const x = a[field];
+      const y = b[field];
+      const c = x === y ? 0 : x === undefined ? 1 : y === undefined ? -1 : x < y ? -1 : 1;
+      return dir === 'desc' ? -c : c;
+    });
+  }
+  const from = body.from ?? 0;
+  const size = body.size ?? 10;
+  const hits = docs.slice(from, from + size).map(({ _id, __seq, ...source }) => ({ _id, _seq_no: __seq, _primary_term: 1, _source: pickSource(source, body._source) }));
+  const aggregations = {};
+  for (const [name, agg] of Object.entries(body.aggs ?? {})) {
+    if (!agg.terms) continue;
+    const counts = new Map();
+    for (const d of docs) for (const v of new Set(fieldValues(d, agg.terms.field))) {
+      if (agg.terms.include && !agg.terms.include.includes(v)) continue;
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    aggregations[name] = { buckets: [...counts].sort((a, b) => b[1] - a[1]).slice(0, agg.terms.size ?? 10).map(([key, doc_count]) => ({ key, doc_count })) };
+  }
+  return { hits: { total: { value: docs.length }, hits }, aggregations };
+}
+
+function write(index, op, id, source, params) {
+  const s = store(index);
+  const existing = s.get(id);
+  const guard = params.if_seq_no;
+  if (guard !== undefined && guard !== null && (!existing || String(existing.seq) !== String(guard))) return 409;
+  if (op === 'create' && existing) return 409;
+  if (op === 'update') {
+    if (!existing) return 404;
+    put(index, id, { ...existing.source, ...source });
+    return 200;
+  }
+  if (op === 'delete') return s.delete(id) ? 200 : 404;
+  put(index, id, source);
+  return existing ? 200 : 201;
+}
+
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input));
   if (url.host !== ES_HOST) throw new Error(`unexpected request to ${url.host}`);
   const method = init.method ?? 'GET';
-  const [index, op, key] = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-  const body = init.body === undefined ? undefined : String(init.body);
+  const [index, op, id] = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  const params = Object.fromEntries(url.searchParams);
+  const raw = init.body === undefined ? '' : String(init.body);
+  const body = raw && op !== '_bulk' ? JSON.parse(raw) : {};
+  if (op === '_search') return json(search(index, body));
+  if (op === '_count') return json({ count: search(index, { ...body, size: 0 }).hits.total.value });
+  if (op === '_mget') {
+    return json({ docs: body.docs.map((d) => {
+      const doc = store(index).get(d._id);
+      return doc ? { _id: d._id, found: true, _seq_no: doc.seq, _source: pickSource(doc.source, d._source) } : { _id: d._id, found: false };
+    }) });
+  }
+  if (op === '_bulk') {
+    const lines = raw.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const items = [];
+    for (let i = 0; i < lines.length; i++) {
+      const [action, meta] = Object.entries(lines[i])[0];
+      const doc = action === 'delete' ? null : lines[++i];
+      const status = write(index, action, meta._id, action === 'update' ? doc.doc : doc, meta);
+      items.push({ [action]: { _id: meta._id, status } });
+    }
+    return json({ errors: items.some((it) => Object.values(it)[0].status >= 300), items });
+  }
+  if (op === '_doc' && method === 'GET') {
+    const doc = store(index).get(id);
+    return doc ? json({ _id: id, found: true, _seq_no: doc.seq, _primary_term: 1, _source: structuredClone(doc.source) }) : json({ _id: id, found: false }, 404);
+  }
+  if (op === '_doc' && method === 'DELETE') {
+    const status = write(index, 'delete', id, null, params);
+    return json({ result: status === 200 ? 'deleted' : 'not_found' }, status);
+  }
+  if ((op === '_doc' || op === '_create') && (method === 'PUT' || method === 'POST')) {
+    const status = write(index, op === '_create' ? 'create' : 'index', id, body, params);
+    return json({ _id: id, result: status === 201 ? 'created' : 'updated' }, status === 409 ? 409 : status);
+  }
+  if (op === '_update' && method === 'POST') {
+    const status = write(index, 'update', id, body.doc, params);
+    return json({ _id: id }, status);
+  }
   if (op === '_delete_by_query' || op === '_update_by_query') return json({ deleted: 0, updated: 0 });
-  if (index === 'caddie-conferences') return json({ hits: { hits: [{ _source: { slug: EVENT, status: 'searchable', end_date: '2099-12-31', time_zone: 'UTC' } }] } });
-  if (index === 'caddie-topics') {
-    return json({ hits: { hits: [{ _source: { topic_id: 'kubernetes', label: 'Kubernetes', talk_count: 5 } }, { _source: { topic_id: 'ebpf', label: 'eBPF', talk_count: 3 } }] } });
-  }
-  if (index === 'caddie-talks') {
-    const q = JSON.parse(body ?? '{}');
-    if (q.aggs?.rooms) return json({ hits: { hits: [] }, aggregations: { rooms: { buckets: [{ key: 'Hall A', doc_count: 1 }] } } });
-    const wanted = JSON.stringify(q).includes(TALK);
-    return json({ hits: { hits: wanted ? [{ _id: TALK, _source: { talk_id: TALK, title: 'A talk', start: '2099-06-01T10:00:00Z', end: '2099-06-01T10:30:00Z', url: 'https://example.org/t', speaker_profiles: [] } }] : [] } });
-  }
-  if (index === 'caddie-people') {
-    if (op === '_doc' && method === 'GET') {
-      const s = people.get(key);
-      return s ? json({ found: true, _seq_no: 1, _primary_term: 1, _source: structuredClone(s) }) : json({ found: false }, 404);
-    }
-    if (op === '_doc' && method === 'DELETE') return json({ result: people.delete(key) ? 'deleted' : 'not_found' }, 200);
-    if (op === '_bulk') {
-      const lines = ndjsonLines(body);
-      const items = [];
-      for (let i = 0; i < lines.length; i++) {
-        const [action, meta] = Object.entries(lines[i])[0];
-        if (action === 'delete') {
-          items.push({ delete: { status: people.delete(meta._id) ? 200 : 404 } });
-          continue;
-        }
-        const doc = lines[++i];
-        if (action === 'create' && people.has(meta._id)) items.push({ create: { status: 409 } });
-        else if (action === 'update' && !people.has(meta._id)) items.push({ update: { status: 404 } });
-        else {
-          people.set(meta._id, action === 'update' ? { ...people.get(meta._id), ...doc.doc } : doc);
-          items.push({ [action]: { status: action === 'create' ? 201 : 200 } });
-        }
-      }
-      return json({ items });
-    }
-    if (op === '_mget') return json({ docs: [] });
-    if (op === '_search') {
-      const q = JSON.parse(body ?? '{}');
-      if (q.aggs?.talks) {
-        const n = [...people.values()].filter((s) => (s.shared_talk_ids ?? []).includes(TALK)).length;
-        return json({ hits: { hits: [] }, aggregations: { talks: { buckets: n ? [{ key: TALK, doc_count: n }] : [] } } });
-      }
-      return json({ hits: { hits: [] } });
-    }
-  }
-  if (op === '_search') return json({ hits: { hits: [] } });
-  if (op === '_count') return json({ count: 0 });
-  if (op === '_bulk') return json({ items: [] });
   return json({ error: 'not in the stand-in' }, 404);
 };
 
@@ -106,10 +224,10 @@ const { handleConnectApi } = await import('../server/connect.mjs');
 const { handleBleApi } = await import('../server/ble.mjs');
 const { handleReportApi } = await import('../server/report.mjs');
 const { handlePushApi } = await import('../server/push.mjs');
+const { publicConferences } = await import('../server/conferences.mjs');
 const { validator } = await import('../contracts/js/schemas.mjs');
 const { formatErrors } = await import('../contracts/js/validate.mjs');
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const table = JSON.parse(readFileSync(path.join(ROOT, 'contracts/routes/people-api.v1.json'), 'utf8'));
 const HANDLERS = [handlePeopleApi, handleConnectApi, handleBleApi, handleReportApi, handlePushApi];
 
@@ -141,111 +259,207 @@ async function call(method, pathAndQuery, { device, body, headers = {} } = {}) {
   return { status: res.status, headers: res.headers, body: res.text ? JSON.parse(res.text) : null };
 }
 
+// Routes exercised with a 200, by route id.
+const covered = new Set();
+
 // Finds the route a request belongs to and checks the answer against its definition.
-function conforms(method, pathname, r) {
+function conforms(method, pathname, r, expectStatus = 200) {
   const route = table.routes.find((x) => x.method === method && new RegExp(`^${x.path.replace('{meet_id}', '[A-Za-z0-9_-]{22}')}$`).test(pathname));
   assert.ok(route, `${method} ${pathname} is not in the route table`);
+  assert.equal(r.status, expectStatus, `${route.id}: ${JSON.stringify(r.body)}`);
   if (r.status === 200) {
     const result = validator('people-api.v1', route.response)(r.body, { closed: true });
     assert.equal(result.valid, true, `${route.id}\n${formatErrors(result.errors)}\n${JSON.stringify(r.body)}`);
+    covered.add(route.id);
   } else {
     assert.equal(validator('people-api.v1', 'ErrorBody')(r.body, { closed: true }).valid, true, `${route.id} error ${JSON.stringify(r.body)}`);
     const listed = [...table.common_errors, ...route.errors].some((e) => e.status === r.status && (e.error === r.body.error || e.error === '*'));
     assert.ok(listed, `${route.id}: ${r.status} ${r.body.error} is not listed`);
   }
-  return route;
+  return r.body;
 }
 
 const me = newDevice();
 const other = newDevice();
-const profileBody = (over = {}) => ({ event: EVENT, profile: { display_name: 'Conformance Tester', about: 'Testing the contract.', interests: 'eBPF', expertise: 'Kubernetes upgrades', learn_topics: ['ebpf'], speak_topics: ['kubernetes'], linkedin_url: null, contact_note: null }, open_to_meet: true, shared_talk_ids: [TALK], ...over });
+const third = newDevice();
+const profileBody = (name, over = {}) => ({
+  event: EVENT,
+  profile: { display_name: name, about: `${name} tests the contract.`, interests: 'eBPF in production', expertise: 'Built eBPF load balancing for 40 clusters.', learn_topics: ['ebpf'], speak_topics: ['kubernetes'], linkedin_url: null, contact_note: 'Find me at the booth.' },
+  open_to_meet: true,
+  shared_talk_ids: [TALK],
+  ...over,
+});
+const here = { lat: 40.76789, lon: -111.89012, accuracy: 10 };
+const refs = {};
 
-test('profile writes answer the frozen shape', async () => {
-  const created = await call('PUT', '/api/people/profile', { device: me, body: profileBody() });
-  assert.equal(created.status, 200);
-  conforms('PUT', '/api/people/profile', created);
-  const again = await call('PUT', '/api/people/profile', { device: me, body: profileBody({ shared_talk_ids: [] }) });
-  assert.equal(again.status, 200);
-  conforms('PUT', '/api/people/profile', again);
-  const second = await call('PUT', '/api/people/profile', { device: other, body: profileBody() });
-  conforms('PUT', '/api/people/profile', second);
+test('GET /api/conferences entries are exactly the conferences.json Conference shape', async () => {
+  const list = await publicConferences();
+  assert.equal(list.length, 1);
+  const check = validator('conferences-index.v1', 'Conference');
+  for (const c of list) {
+    const r = check(c, { closed: true });
+    assert.equal(r.valid, true, formatErrors(r.errors));
+  }
 });
 
-test('presence with Bluetooth (server-rotate today), rotation and sightings answer the frozen shapes', async () => {
-  const on = await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'Hall A', spot: null, location: { lat: 40.1, lon: -111.9, accuracy: 20 }, until: 'hour', ble: true } });
-  assert.equal(on.status, 200, JSON.stringify(on.body));
-  conforms('PUT', '/api/presence', on);
-  assert.match(on.body.ble.token, /^[A-Za-z0-9_-]{22}$/, 'today the server is in server-rotate mode');
-  assert.equal(on.body.ble_key, undefined, 'ble_key arrives with derived-v1 in Phase 4');
-  const zoneOnly = await call('PUT', '/api/presence', { device: other, body: { event: EVENT, zone: 'Expo hall' } });
-  conforms('PUT', '/api/presence', zoneOnly);
+test('profiles: create, update, matches and circles', async () => {
+  for (const [d, name] of [[me, 'Me Tester'], [other, 'Other Tester'], [third, 'Third Tester']]) {
+    conforms('PUT', '/api/people/profile', await call('PUT', '/api/people/profile', { device: d, body: profileBody(name) }));
+  }
+  conforms('PUT', '/api/people/profile', await call('PUT', '/api/people/profile', { device: me, body: profileBody('Me Tester', { profile: { ...profileBody('x').profile, display_name: 'Me Tester', about: 'Changed text.' } }) }));
 
-  const rotated = await call('POST', '/api/presence/ble/rotate', { device: me, body: { event: EVENT } });
-  assert.equal(rotated.status, 200);
-  conforms('POST', '/api/presence/ble/rotate', rotated);
+  const found = conforms('POST', '/api/people/matches', await call('POST', '/api/people/matches', { device: me, body: { event: EVENT, interested_talk_ids: [TALK], query: null, when: 'anyone', from: 0, size: 20 } }));
+  assert.equal(found.results.length, 2, 'two people to meet');
+  for (const p of found.results) refs[p.display_name] = p.ref;
+  assert.ok(refs['Other Tester'] && refs['Third Tester']);
+  const searched = conforms('POST', '/api/people/matches', await call('POST', '/api/people/matches', { device: me, body: { event: EVENT, query: 'load balancing' } }));
+  assert.ok(searched.results.length > 0);
+  assert.ok(searched.results.every((p) => typeof p.evidence === 'string'));
 
-  const weak = await call('POST', '/api/presence/sightings', { device: me, body: { event: EVENT, sightings: [{ token: 'A'.repeat(22), rssi: -90 }] } });
-  assert.deepEqual(weak.body, { nearby: [] });
-  conforms('POST', '/api/presence/sightings', weak);
-  const notBroadcasting = await call('POST', '/api/presence/sightings', { device: other, body: { event: EVENT, sightings: [] } });
-  assert.equal(notBroadcasting.status, 403);
-  assert.equal(notBroadcasting.body.error, 'ble_required');
-  conforms('POST', '/api/presence/sightings', notBroadcasting);
+  const counts = conforms('POST', '/api/circles/counts', await call('POST', '/api/circles/counts', { body: { event: EVENT, talk_ids: [TALK] } }));
+  assert.equal(counts.counts[TALK], 3);
+  const members = conforms('POST', '/api/circles/members', await call('POST', '/api/circles/members', { device: me, body: { event: EVENT, talk_id: TALK } }));
+  assert.equal(members.members.length, 2);
+  assert.equal(members.speakers.length, 1);
 });
 
-test('reads answer the frozen shapes', async () => {
-  const blocks = await call('GET', `/api/people/blocks?event=${EVENT}`, { device: me });
-  assert.equal(blocks.status, 200);
-  conforms('GET', '/api/people/blocks', blocks);
-  const inbox = await call('GET', `/api/meet/inbox?event=${EVENT}`, { device: me });
-  assert.equal(inbox.status, 200);
-  conforms('GET', '/api/meet/inbox', inbox);
-  const counts = await call('POST', '/api/circles/counts', { body: { event: EVENT, talk_ids: [TALK] } });
-  assert.equal(counts.status, 200);
-  conforms('POST', '/api/circles/counts', counts);
-  assert.equal(counts.body.counts[TALK], 1);
-  const vapid = await call('GET', '/api/push/vapid');
-  assert.deepEqual(vapid.body, { publicKey: null });
-  conforms('GET', '/api/push/vapid', vapid);
-  const members = await call('POST', '/api/circles/members', { device: me, body: { event: EVENT, talk_id: TALK } });
-  assert.equal(members.status, 403);
-  assert.equal(members.body.error, 'share_required');
-  conforms('POST', '/api/circles/members', members);
-  const missingMeet = await call('GET', `/api/meet/${'A'.repeat(22)}`, { device: me });
-  assert.equal(missingMeet.status, 404);
-  conforms('GET', `/api/meet/${'A'.repeat(22)}`, missingMeet);
+test('presence with Bluetooth (server-rotate today), rotation and sightings', async () => {
+  const on = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'Hall A', spot: null, location: here, until: 'hour', ble: true } }));
+  assert.match(on.ble.token, /^[A-Za-z0-9_-]{22}$/, 'today the server is in server-rotate mode');
+  assert.equal(on.ble_key, undefined, 'ble_key arrives with derived-v1 in Phase 4');
+  assert.equal(on.located, true);
+  const theirs = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: other, body: { event: EVENT, zone: 'Hall A', location: here, ble: true } }));
+  conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: third, body: { event: EVENT, zone: 'Expo hall', until: 'day' } }));
+
+  conforms('POST', '/api/presence/ble/rotate', await call('POST', '/api/presence/ble/rotate', { device: me, body: { event: EVENT } }));
+
+  const near = conforms('POST', '/api/presence/sightings', await call('POST', '/api/presence/sightings', { device: me, body: { event: EVENT, sightings: [{ token: theirs.ble.token, rssi: -60 }, { token: 'A'.repeat(22), rssi: -50 }] } }));
+  assert.equal(near.nearby.length, 1, 'the other phone resolves');
+  assert.equal(near.nearby[0].ref, refs['Other Tester']);
+  const weak = conforms('POST', '/api/presence/sightings', await call('POST', '/api/presence/sightings', { device: me, body: { event: EVENT, sightings: [{ token: theirs.ble.token, rssi: -90 }] } }));
+  assert.deepEqual(weak.nearby, []);
+  conforms('POST', '/api/presence/sightings', await call('POST', '/api/presence/sightings', { device: third, body: { event: EVENT, sightings: [] } }), 403);
+
+  const around = conforms('POST', '/api/people/matches', await call('POST', '/api/people/matches', { device: me, body: { event: EVENT, when: 'around_now' } }));
+  assert.ok(around.results.some((p) => p.proximity === 'same_zone' && p.zone === 'Hall A'));
+});
+
+let meetId;
+
+test('an ask, from request to found: inbox, read, details, accept, found', async () => {
+  const asked = conforms('POST', '/api/meet', await call('POST', '/api/meet', { device: me, body: { event: EVENT, ref: refs['Other Tester'], topic_id: 'ebpf', note: "I'm in Hall A too — want to talk shop?" } }));
+  meetId = asked.meet_id;
+  assert.equal(asked.state, 'requested');
+  conforms('POST', '/api/meet', await call('POST', '/api/meet', { device: me, body: { event: EVENT, ref: refs['Other Tester'] } }), 409);
+
+  const mine = conforms('GET', '/api/meet/inbox', await call('GET', `/api/meet/inbox?event=${EVENT}`, { device: me }));
+  assert.equal(mine.outgoing.length, 1);
+  const theirs = conforms('GET', '/api/meet/inbox', await call('GET', `/api/meet/inbox?event=${EVENT}`, { device: other }));
+  assert.equal(theirs.incoming.length, 1);
+  assert.equal(theirs.incoming[0].from.ref, (await call('POST', '/api/people/matches', { device: other, body: { event: EVENT } })).body.results.find((p) => p.display_name === 'Me Tester').ref);
+
+  conforms(`GET`, `/api/meet/${meetId}`, await call('GET', `/api/meet/${meetId}`, { device: me }));
+  conforms('PUT', `/api/meet/${meetId}/details`, await call('PUT', `/api/meet/${meetId}/details`, { device: me, body: { spot_me: 'Red scarf', rendezvous: 'Hall A' } }));
+  conforms('POST', `/api/meet/${meetId}/accept`, await call('POST', `/api/meet/${meetId}/accept`, { device: me }), 403);
+  const accepted = conforms('POST', `/api/meet/${meetId}/accept`, await call('POST', `/api/meet/${meetId}/accept`, { device: other, body: {} }));
+  assert.equal(accepted.state, 'active');
+
+  const read = conforms('GET', `/api/meet/${meetId}`, await call('GET', `/api/meet/${meetId}`, { device: me }));
+  assert.equal(read.state, 'active');
+  assert.equal(read.other.distance_m, 0, 'both sent the same position');
+  assert.equal(typeof read.other.bearing_deg, 'number');
+  assert.equal(read.other.spot_me, null);
+  const theirView = conforms('GET', `/api/meet/${meetId}`, await call('GET', `/api/meet/${meetId}`, { device: other }));
+  assert.equal(theirView.other.spot_me, 'Red scarf');
+
+  const done = conforms('POST', `/api/meet/${meetId}/found`, await call('POST', `/api/meet/${meetId}/found`, { device: me }));
+  assert.equal(done.state, 'found');
+  conforms('GET', `/api/meet/${meetId}`, await call('GET', `/api/meet/${meetId}`, { device: me }), 410);
+});
+
+test('a declined ask and a cancelled ask', async () => {
+  const again = conforms('POST', '/api/meet', await call('POST', '/api/meet', { device: me, body: { event: EVENT, ref: refs['Other Tester'], topic_id: null, note: '' } }));
+  const declined = conforms('POST', `/api/meet/${again.meet_id}/decline`, await call('POST', `/api/meet/${again.meet_id}/decline`, { device: other }));
+  assert.equal(declined.state, 'declined');
+  const waiting = conforms('GET', '/api/meet/inbox', await call('GET', `/api/meet/inbox?event=${EVENT}`, { device: me }));
+  assert.equal(waiting.outgoing[0].state, 'requested', 'a decline is silent');
+  const withdrawn = conforms('POST', `/api/meet/${again.meet_id}/cancel`, await call('POST', `/api/meet/${again.meet_id}/cancel`, { device: me }));
+  assert.equal(withdrawn.state, 'cancelled');
+
+  const third_ = conforms('POST', '/api/meet', await call('POST', '/api/meet', { device: me, body: { event: EVENT, ref: refs['Third Tester'] } }));
+  const cancelled = conforms('POST', `/api/meet/${third_.meet_id}/cancel`, await call('POST', `/api/meet/${third_.meet_id}/cancel`, { device: me }));
+  assert.equal(cancelled.state, 'cancelled');
+  conforms('POST', `/api/meet/${third_.meet_id}/found`, await call('POST', `/api/meet/${third_.meet_id}/found`, { device: me }), 410);
+});
+
+test('reports, blocks and push subscriptions', async () => {
+  const first = conforms('POST', '/api/people/report', await call('POST', '/api/people/report', { device: me, body: { event: EVENT, ref: refs['Third Tester'], context: { kind: 'profile', id: refs['Third Tester'] }, reason: 'spam' } }));
+  assert.equal(first.hidden, false);
+  const second = conforms('POST', '/api/people/report', await call('POST', '/api/people/report', { device: other, body: { event: EVENT, ref: refs['Third Tester'], context: { kind: 'profile', id: refs['Third Tester'] }, reason: 'other' } }));
+  assert.equal(second.hidden, true, 'two reporters hide the profile');
+  const meetReport = conforms('POST', '/api/people/report', await call('POST', '/api/people/report', { device: me, body: { event: EVENT, ref: refs['Other Tester'], context: { kind: 'meet', id: meetId }, reason: 'harassment' } }));
+  assert.equal(meetReport.hidden, false);
+
+  conforms('POST', '/api/people/block', await call('POST', '/api/people/block', { device: me, body: { event: EVENT, ref: refs['Third Tester'] } }));
+  const blocks = conforms('GET', '/api/people/blocks', await call('GET', `/api/people/blocks?event=${EVENT}`, { device: me }));
+  assert.deepEqual(blocks.refs, [refs['Third Tester']]);
+  assert.equal(blocks.blocks[0].display_name, 'Third Tester');
+  conforms('DELETE', '/api/people/block', await call('DELETE', '/api/people/block', { device: me, body: { event: EVENT, ref: refs['Third Tester'] } }));
+  assert.deepEqual(conforms('GET', '/api/people/blocks', await call('GET', `/api/people/blocks?event=${EVENT}`, { device: me })).refs, []);
+
+  // A block outlives the blocked profile: listed with display_name null, and still liftable by ref.
+  const leaving = newDevice();
+  conforms('PUT', '/api/people/profile', await call('PUT', '/api/people/profile', { device: leaving, body: profileBody('Blocked Then Gone') }));
+  const leavingRef = (await call('POST', '/api/people/matches', { device: other, body: { event: EVENT } })).body.results.find((p) => p.display_name === 'Blocked Then Gone').ref;
+  conforms('POST', '/api/people/block', await call('POST', '/api/people/block', { device: other, body: { event: EVENT, ref: leavingRef } }));
+  conforms('DELETE', '/api/people/profile', await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: leaving }));
+  const orphan = conforms('GET', '/api/people/blocks', await call('GET', `/api/people/blocks?event=${EVENT}`, { device: other }));
+  assert.deepEqual(orphan.blocks.map((b) => [b.ref, b.display_name]), [[leavingRef, null]]);
+  conforms('DELETE', '/api/people/block', await call('DELETE', '/api/people/block', { device: other, body: { event: EVENT, ref: leavingRef } }));
+
+  assert.deepEqual(conforms('GET', '/api/push/vapid', await call('GET', '/api/push/vapid')), { publicKey: null });
+  const subscription = { endpoint: 'https://push.example.org/send/contracts', keys: { p256dh: crypto.randomBytes(65).toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') }, expirationTime: null };
+  conforms('PUT', '/api/push/subscription', await call('PUT', '/api/push/subscription', { device: me, body: { event: EVENT, subscription } }));
+  assert.equal(store('caddie-people-push').size, 1);
+  conforms('DELETE', '/api/push/subscription', await call('DELETE', '/api/push/subscription', { device: me, body: { event: EVENT, endpoint: subscription.endpoint } }));
+  assert.equal(store('caddie-people-push').size, 0);
 });
 
 test('error envelopes and status codes are the frozen ones', async () => {
-  const noDevice = await call('PUT', '/api/presence', { body: { event: EVENT, zone: 'Hall A' } });
-  assert.deepEqual([noDevice.status, noDevice.body], [403, { error: 'forbidden' }]);
-  conforms('PUT', '/api/presence', noDevice);
-  const wrongSecret = await call('PUT', '/api/people/profile', { device: { ...me, secret: crypto.randomBytes(32).toString('base64url') }, body: profileBody() });
-  assert.deepEqual([wrongSecret.status, wrongSecret.body], [403, { error: 'forbidden' }]);
-  const unknownKey = await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'Hall A', mood: 'fine' } });
-  assert.equal(unknownKey.status, 400);
-  conforms('PUT', '/api/presence', unknownKey);
-  const badZone = await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'The moon' } });
-  assert.equal(badZone.status, 400);
-  const wrongType = await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'Hall A' }, headers: { 'content-type': 'text/plain' } });
-  assert.equal(wrongType.status, 415);
-  conforms('PUT', '/api/presence', wrongType);
-  const wrongMethod = await call('PATCH', '/api/presence', { device: me });
+  const stranger = newDevice();
+  const noDevice = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { body: { event: EVENT, zone: 'Hall A' } }), 403);
+  assert.deepEqual(noDevice, { error: 'forbidden' });
+  assert.deepEqual(conforms('PUT', '/api/people/profile', await call('PUT', '/api/people/profile', { device: { ...other, secret: crypto.randomBytes(32).toString('base64url') }, body: profileBody('x') }), 403), { error: 'forbidden' });
+  assert.deepEqual(conforms('POST', '/api/people/matches', await call('POST', '/api/people/matches', { device: stranger, body: { event: EVENT } }), 403), { error: 'visibility_required' });
+  assert.deepEqual(conforms('GET', '/api/people/blocks', await call('GET', `/api/people/blocks?event=${EVENT}`, { device: stranger }), 403), { error: 'profile_required' });
+  const share = conforms('POST', '/api/circles/members', await call('POST', '/api/circles/members', { device: stranger, body: { event: EVENT, talk_id: TALK } }), 403);
+  assert.deepEqual(share, { error: 'share_required', count: 2 }, 'the hidden profile no longer counts');
+  conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: stranger, body: { event: EVENT, zone: 'Hall A', mood: 'fine' } }), 400);
+  conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: stranger, body: { event: EVENT, zone: 'Hall A' }, headers: { 'content-type': 'text/plain' } }), 415);
+  const wrongMethod = await call('PATCH', '/api/presence', { device: stranger });
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.headers.Allow, 'PUT, DELETE');
-  const crossOrigin = await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'Hall A' }, headers: { origin: 'https://evil.example' } });
-  assert.deepEqual([crossOrigin.status, crossOrigin.body], [403, { error: 'cross-origin request' }]);
-  const tooBig = await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'Hall A', spot: 'x'.repeat(9000) } });
-  assert.equal(tooBig.status, 413);
+  assert.deepEqual(conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: stranger, body: { event: EVENT, zone: 'Hall A' }, headers: { origin: 'https://evil.example' } }), 403), { error: 'cross-origin request' });
+  conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: stranger, body: { event: EVENT, zone: 'Hall A', spot: 'x'.repeat(9000) } }), 413);
+  conforms('GET', `/api/meet/${'A'.repeat(22)}`, await call('GET', `/api/meet/${'A'.repeat(22)}`, { device: stranger }), 404);
+  conforms('POST', '/api/people/block', await call('POST', '/api/people/block', { device: other, body: { event: EVENT, ref: '0123456789abcdef' } }), 404);
 });
 
-test('ending presence and deleting the profile answer { ok: true }', async () => {
-  const off = await call('DELETE', `/api/presence?event=${EVENT}`, { device: me });
-  assert.deepEqual([off.status, off.body], [200, { ok: true }]);
-  conforms('DELETE', '/api/presence', off);
-  const gone = await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: me });
-  assert.deepEqual([gone.status, gone.body], [200, { ok: true }]);
-  conforms('DELETE', '/api/people/profile', gone);
-  const noProfile = await call('GET', `/api/people/blocks?event=${EVENT}`, { device: me });
-  assert.deepEqual([noProfile.status, noProfile.body], [403, { error: 'profile_required' }]);
+test('ending presence and deleting the profile', async () => {
+  // A device of its own, so the write buckets of the devices above do not run out.
+  const leaver = newDevice();
+  conforms('PUT', '/api/people/profile', await call('PUT', '/api/people/profile', { device: leaver, body: profileBody('Leaving Tester') }));
+  conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: leaver, body: { event: EVENT, zone: 'Hallway', ble: true } }));
+  conforms('DELETE', '/api/presence', await call('DELETE', `/api/presence?event=${EVENT}`, { device: leaver }));
+  conforms('POST', '/api/presence/ble/rotate', await call('POST', '/api/presence/ble/rotate', { device: leaver, body: { event: EVENT } }), 403);
+  conforms('DELETE', '/api/people/profile', await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: leaver }));
+  assert.equal(store('caddie-people').has(`${EVENT}:${leaver.profileId}`), false);
+  assert.deepEqual(conforms('GET', '/api/people/blocks', await call('GET', `/api/people/blocks?event=${EVENT}`, { device: leaver }), 403), { error: 'profile_required' });
+  conforms('DELETE', '/api/people/profile', await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: leaver }));
+});
+
+test('all 24 routes answered 200 at least once and were validated', () => {
+  const all = table.routes.map((r) => r.id);
+  assert.equal(all.length, 24);
+  assert.deepEqual(all.filter((id) => !covered.has(id)), []);
 });

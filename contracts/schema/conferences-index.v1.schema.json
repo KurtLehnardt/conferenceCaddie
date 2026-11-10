@@ -43,7 +43,7 @@
           }
         },
         "status": { "enum": ["searchable", "unavailable"] },
-        "official_schedule_url": { "type": ["string", "null"] },
+        "official_schedule_url": { "description": "An http(s) link or null. Clients open only http(s) links.", "anyOf": [{ "type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://" }, { "type": "null" }] },
         "source": { "type": "string" },
         "has_level": { "type": "boolean" },
         "track_group": { "type": ["string", "null"] },
@@ -63,8 +63,10 @@
         "talk_count": { "description": "Items of kind talk.", "type": "integer", "minimum": 0 },
         "vector_count": { "type": "integer", "minimum": 0 },
         "files": {
+          "description": "Exactly the two files of a v1 bundle; clients download these and nothing else.",
           "type": "object",
           "required": ["bundle.json", "vectors.i8"],
+          "propertyNames": { "enum": ["bundle.json", "vectors.i8"] },
           "additionalProperties": {
             "type": "object",
             "required": ["bytes", "sha256"],

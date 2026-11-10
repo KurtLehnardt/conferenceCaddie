@@ -67,6 +67,12 @@ function validDate(y, m, d) {
 
 export class SchemaError extends Error {}
 
+// value / step is an integer, allowing for binary rounding (0.3 is a multiple of 0.1).
+function isMultiple(value, step) {
+  const q = value / step;
+  return Number.isFinite(q) && Math.abs(q - Math.round(q)) <= 1e-9 * Math.max(1, Math.abs(q));
+}
+
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const typeOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
 const pointerEscape = (s) => String(s).replace(/~/g, '~0').replace(/\//g, '~1');
@@ -187,7 +193,7 @@ export function compile(rootSchema, { schemas = [], closed = false } = {}) {
       if (schema.maximum !== undefined && value > schema.maximum) fail('maximum', `must be <= ${schema.maximum}`);
       if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) fail('exclusiveMinimum', `must be > ${schema.exclusiveMinimum}`);
       if (schema.exclusiveMaximum !== undefined && value >= schema.exclusiveMaximum) fail('exclusiveMaximum', `must be < ${schema.exclusiveMaximum}`);
-      if (schema.multipleOf !== undefined && !Number.isInteger(value / schema.multipleOf)) fail('multipleOf', `must be a multiple of ${schema.multipleOf}`);
+      if (schema.multipleOf !== undefined && !isMultiple(value, schema.multipleOf)) fail('multipleOf', `must be a multiple of ${schema.multipleOf}`);
     }
 
     if (t === 'string') {

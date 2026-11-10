@@ -18,16 +18,24 @@ export const BUNDLE_FILE = 'bundle.json';
 export const VECTOR_FILE = 'vectors.i8';
 export const DIMS = 384;
 export const RELATED_K = 5;
+/** The query instruction of the BGE v1.5 English models, verbatim from the model card. */
+export const QUERY_INSTRUCTION = 'Represent this sentence for searching relevant passages: ';
+// The embedding conventions every producer (CI, transformers.js) and every query-side embedder
+// (ONNX Runtime on the phones, Workers AI @cf/baai/bge-small-en-v1.5 called with pooling: "cls")
+// must follow. docs/contracts/talk-bundle.md, Embedding conventions.
 export const MODEL = Object.freeze({
   id: 'BAAI/bge-small-en-v1.5',
   onnx: 'Xenova/bge-small-en-v1.5',
   dims: DIMS,
   pooling: 'cls',
-  normalized: true,
+  normalize: true,
   max_tokens: 512,
-  query_prefix: 'Represent this sentence for searching relevant passages: ',
-  passage: 'title + "\\n" + abstract',
+  truncation: 'end',
+  document_instruction: '',
+  document_text: 'title + "\\n" + abstract',
+  query_instruction: QUERY_INSTRUCTION,
 });
+export const BUNDLE_FILES = Object.freeze([BUNDLE_FILE, VECTOR_FILE]);
 export const QUANTIZATION = 'int8-symmetric-row-maxabs';
 /** Kinds that carry a vector: what search covers with "include events" on. */
 export const VECTOR_KINDS = Object.freeze(['talk', 'ambient']);
@@ -37,8 +45,10 @@ const FACET_KIND_ORDER = ['track', 'room', 'speaker', 'tag'];
 
 export const sha256hex = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 
-/** The text a talk is embedded from; the same string text_hash covers. */
+/** The text a talk is embedded from, with no instruction; the same string text_hash covers. */
 export const passageText = (talk) => `${talk.title}\n${talk.abstract}`;
+/** The text a search query is embedded from: the BGE query instruction, then the query as typed. */
+export const queryText = (query) => `${QUERY_INSTRUCTION}${query}`;
 export const textHash = (talk) => sha256hex(Buffer.from(passageText(talk), 'utf8'));
 
 // Rounds half away from zero, the same on every platform (Math.round rounds half up).
@@ -102,9 +112,36 @@ export function cosine(a, b) {
 }
 
 /**
+ * Compares cos(a, b1) with cos(a, b2) exactly, for int8 rows: negative when b1 is more similar, 0
+ * on a true tie, positive otherwise. For a fixed a, cos(a, b) orders as dot(a, b) / |b|, and that
+ * orders as sign(d) * d^2 / n with d = dot(a, b) and n = dot(b, b); cross-multiplying gives
+ * sign(d1) * d1^2 * n2 against sign(d2) * d2^2 * n1, all integers. |d| and n are at most
+ * 384 * 127 * 127 = 6,193,536, so d^2 * n can reach about 2.4e20, past 64 bits: use BigInt here,
+ * BigInteger or a 128-bit product (Math.multiplyHigh, multipliedFullWidth) elsewhere. A zero row has
+ * similarity 0. No floating point is involved, so every platform orders related talks the same way,
+ * and the talk_id tie-break applies exactly to true ties.
+ */
+export function compareSimilarity(a, b1, b2) {
+  const n1 = BigInt(dot(b1, b1));
+  const n2 = BigInt(dot(b2, b2));
+  const d1 = n1 === 0n ? 0n : BigInt(dot(a, b1));
+  const d2 = n2 === 0n ? 0n : BigInt(dot(a, b2));
+  const sgn = (d) => (d < 0n ? -1n : d > 0n ? 1n : 0n);
+  // A zero row (or a zero dot product) has similarity 0: compare signs first.
+  const s1 = sgn(d1);
+  const s2 = sgn(d2);
+  if (s1 !== s2) return s1 > s2 ? -1 : 1;
+  if (s1 === 0n) return 0;
+  const l = s1 * d1 * d1 * n2;
+  const r = s2 * d2 * d2 * n1;
+  return l > r ? -1 : l < r ? 1 : 0;
+}
+
+/**
  * The top-k related talks of every talk of a related kind: the other related-kind talks by cosine
- * similarity, highest first, ties broken by talk_id in ascending code-unit order. No threshold, as
- * GET /api/related has none. Returns { talk_id: [talk_id, ...] } for every such talk with a row.
+ * similarity, highest first, compared exactly (compareSimilarity), true ties broken by talk_id in
+ * ascending code-unit order. No threshold. Returns { talk_id: [talk_id, ...] } for every such talk
+ * with a row.
  */
 export function relatedTalks(talks, rowsById, k = RELATED_K) {
   const eligible = talks.filter((t) => RELATED_KINDS.includes(t.kind) && rowsById.has(t.talk_id)).map((t) => t.talk_id);
@@ -113,10 +150,8 @@ export function relatedTalks(talks, rowsById, k = RELATED_K) {
     const row = rowsById.get(id);
     out[id] = eligible
       .filter((other) => other !== id)
-      .map((other) => ({ other, s: cosine(row, rowsById.get(other)) }))
-      .sort((x, y) => y.s - x.s || (x.other < y.other ? -1 : x.other > y.other ? 1 : 0))
-      .slice(0, k)
-      .map((x) => x.other);
+      .sort((x, y) => compareSimilarity(row, rowsById.get(x), rowsById.get(y)) || (x < y ? -1 : x > y ? 1 : 0))
+      .slice(0, k);
   }
   return out;
 }
@@ -200,6 +235,27 @@ export function contentHash(files) {
 }
 
 /**
+ * One talk as a bundle carries it, from a talks.ndjson document plus its topics. speaker_taglines
+ * in a bundle is parallel to speakers (null where a speaker has none); talks.ndjson leaves empty
+ * taglines out, so they are taken from speaker_profiles, which are index-aligned with speakers,
+ * and the profiles themselves are dropped.
+ */
+export function bundleTalk(t) {
+  const speakers = [...(t.speakers ?? [])];
+  let taglines;
+  if (Array.isArray(t.speaker_profiles) && t.speaker_profiles.length === speakers.length) {
+    taglines = t.speaker_profiles.map((p) => (typeof p?.tagline === 'string' && p.tagline ? p.tagline : null));
+  } else if (Array.isArray(t.speaker_taglines) && t.speaker_taglines.length === speakers.length) {
+    taglines = [...t.speaker_taglines];
+  } else if (!speakers.length) {
+    taglines = [];
+  } else {
+    throw new TypeError(`${t.talk_id}: cannot align speaker taglines with speakers`);
+  }
+  return { ...pick(t, TALK_FIELDS), speakers, speaker_taglines: taglines, topics: [...(t.topics ?? [])], text_hash: textHash(t) };
+}
+
+/**
  * The attribution block of a bundle: the licence and licensor of the schedule content, the
  * conference's public schedule as the source, the changes made, and the publisher's takedown
  * contact. CC BY needs all of these to travel with the content.
@@ -221,7 +277,10 @@ export function attributionFor(conference, attribution) {
  * Returns { dir, files: { 'bundle.json': Buffer, 'vectors.i8': Buffer }, entry }.
  */
 export function buildBundle({ conference, talks, topics, vectors, attribution }) {
-  const sorted = [...talks].sort(byStartThenId).map((t) => ({ ...pick(t, TALK_FIELDS), topics: [...(t.topics ?? [])], text_hash: textHash(t) }));
+  for (const f of CONFERENCE_FIELDS) if (!conference || !(f in conference)) throw new TypeError(`conference.${f} is required`);
+  if (conference.status !== 'searchable') throw new TypeError('only a searchable conference has a bundle');
+  if (typeof conference.slug !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(conference.slug)) throw new TypeError('conference.slug is not a slug');
+  const sorted = [...talks].sort(byStartThenId).map(bundleTalk);
   const rowsById = new Map();
   for (const t of sorted) {
     if (!VECTOR_KINDS.includes(t.kind)) continue;
@@ -261,12 +320,20 @@ export function buildBundle({ conference, talks, topics, vectors, attribution })
 /**
  * Checks downloaded files against their conferences.json entry and against the rules a schema
  * cannot express. Returns a list of problems; empty means the bundle may be used. A client runs
- * this before it replaces the bundle it has.
+ * this before it replaces the bundle it has. With { producer: true } (the bundle pipeline in CI,
+ * before publishing) it also recomputes the related lists from the vectors; clients do not, so a
+ * last-digit difference in another platform's floating point can never make a good bundle fail.
  */
-export function verifyBundle(entry, files) {
+export function verifyBundle(entry, files, { producer = false } = {}) {
   const problems = [];
-  for (const [name, meta] of Object.entries(entry.files ?? {})) {
+  if (!entry || typeof entry !== 'object') return ['no index entry'];
+  if (typeof entry.content_hash !== 'string' || !/^[0-9a-f]{64}$/.test(entry.content_hash)) return ['content_hash missing or malformed'];
+  const listed = Object.keys(entry.files ?? {});
+  if (listed.length !== BUNDLE_FILES.length || !BUNDLE_FILES.every((name) => listed.includes(name))) problems.push(`the entry must list exactly ${BUNDLE_FILES.join(' and ')}`);
+  for (const name of BUNDLE_FILES) {
+    const meta = entry.files?.[name];
     const b = files[name];
+    if (!meta) continue;
     if (!b) {
       problems.push(`${name}: missing`);
       continue;
@@ -275,7 +342,7 @@ export function verifyBundle(entry, files) {
     if (sha256hex(b) !== meta.sha256) problems.push(`${name}: sha256 mismatch`);
   }
   if (problems.length) return problems;
-  if (contentHash(files) !== entry.content_hash) problems.push('content_hash mismatch');
+  if (contentHash(Object.fromEntries(BUNDLE_FILES.map((n) => [n, files[n]]))) !== entry.content_hash) problems.push('content_hash mismatch');
   if (!entry.path?.endsWith(`/${entry.content_hash.slice(0, 16)}/`)) problems.push('path does not end in the first 16 hex digits of content_hash');
   let bundle;
   try {
@@ -296,6 +363,7 @@ export function verifyBundle(entry, files) {
   const sorted = [...(bundle.talks ?? [])].sort(byStartThenId);
   if (sorted.some((t, i) => t !== bundle.talks[i])) problems.push('talks are not sorted by start, then talk_id');
   if ((bundle.talks ?? []).some((t) => 'speaker_profiles' in t)) problems.push('speaker profiles and their links must not be published');
+  for (const t of bundle.talks ?? []) if ((t.speakers ?? []).length !== (t.speaker_taglines ?? []).length) problems.push(`${t.talk_id}: speakers and speaker_taglines differ in length`);
   if (bundle.attribution?.source_url !== bundle.conference?.official_schedule_url) problems.push('attribution.source_url must be the conference schedule URL');
   const prefix = `${bundle.conference?.slug}:`;
   for (const t of bundle.talks ?? []) {
@@ -311,7 +379,7 @@ export function verifyBundle(entry, files) {
   const relatedKeys = Object.keys(bundle.related ?? {});
   const relatedExpected = (bundle.talks ?? []).filter((t) => RELATED_KINDS.includes(t.kind) && rowSet.has(t.talk_id)).map((t) => t.talk_id);
   if ([...relatedKeys].sort().join('\n') !== [...relatedExpected].sort().join('\n')) problems.push('related must have one entry per talk with a vector');
-  if (!problems.length && files[VECTOR_FILE]) {
+  if (producer && !problems.length && files[VECTOR_FILE]) {
     // The related lists must be exactly what the vectors give.
     const rows = decodeVectors(files[VECTOR_FILE], v.dims);
     const rowsById = new Map((v.rows ?? []).map((id, i) => [id, rows[i]]));

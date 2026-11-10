@@ -11,6 +11,7 @@
     "MeetId": { "description": "16 random bytes, base64url without padding.", "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
     "BleToken": { "description": "16 bytes, base64url without padding.", "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
     "BleKey": { "description": "32 bytes, base64url without padding (docs/contracts/ble-tokens.md).", "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "BleKeyId": { "description": "base64url of the first 8 bytes of HMAC-SHA256(ble_key, \"caddie-ble-key-id-v1\"), 11 characters (docs/contracts/ble-tokens.md).", "type": "string", "pattern": "^[A-Za-z0-9_-]{11}$" },
     "DeviceHeader": {
       "description": "The X-Caddie-Device header: {profile_id}.{secret}, 16 and 32 random bytes generated on the device, both base64url without padding.",
       "type": "string",
@@ -290,8 +291,10 @@
           "description": "NEW in v1, derived-v1 mode: the 32-byte key of this presence session, returned only in the response to the write with ble: true that minted it and never again. It is valid while presence is live (the latest presence_until the device has seen).",
           "$ref": "#/$defs/BleKey"
         },
+        "ble_key_id": { "description": "NEW in v1, derived-v1 mode, always together with ble_key: the id of that key.", "$ref": "#/$defs/BleKeyId" },
         "held": { "$ref": "#/$defs/Held" }
-      }
+      },
+      "dependentRequired": { "ble_key": ["ble_key_id"], "ble_key_id": ["ble_key"] }
     },
     "BleRotateRequest": {
       "type": "object",
@@ -329,6 +332,7 @@
       "type": "object",
       "required": ["nearby"],
       "properties": {
+        "ble_key_id": { "description": "NEW in v1, derived-v1 mode: the id of the requester's current key. A device whose stored key has another id writes presence with ble: true again.", "$ref": "#/$defs/BleKeyId" },
         "nearby": {
           "type": "array",
           "items": {

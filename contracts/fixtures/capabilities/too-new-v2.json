@@ -2,7 +2,7 @@
   "api_version": 2,
   "min_api_version": 2,
   "tier": "free",
-  "talks": { "bundle_base": "https://owner.github.io/conferenceCaddie/bundles/", "server_search": false },
+  "talks": { "bundle_base": "https://kurtlehnardt.github.io/conferenceCaddie/bundles/", "server_search": false },
   "people": { "enabled": false },
   "ble": { "mode": "none" },
   "push": { "apns": false, "fcm": false, "webpush": false },

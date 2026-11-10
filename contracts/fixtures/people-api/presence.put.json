@@ -59,7 +59,8 @@
           "presence_since": "2026-11-10T17:00:00.000Z",
           "presence_until": "2026-11-11T06:59:59.000Z",
           "located": true,
-          "ble_key": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8"
+          "ble_key": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8",
+          "ble_key_id": "0mzTMJg1DCU"
         }
       }
     },
