@@ -31,6 +31,7 @@ on:
     paths:
       - 'data/**'
       - 'contracts/**'
+      - 'config/**'
       - 'scripts/build-bundles.mjs'
       - 'scripts/carry-forward-bundles.mjs'
       - 'scripts/pages-landing.mjs'
@@ -38,14 +39,16 @@ on:
       - 'tools/bundles/**'
       - '.github/workflows/pages.yml'
   schedule:
-    # Mondays, after the weekly ingest (ingest.yml, 09:17 UTC) has had time to commit new data.
+    # Mondays, after the weekly ingest (ingest.yml, 09:17 UTC) has had time to push new data to the Worker.
+    # The ingest commits nothing, so this run rebuilds the bundles from the data already committed.
     - cron: '47 11 * * 1'
   workflow_dispatch:
 
+# The build job installs about seventy third-party packages and runs the root package's install
+# scripts, so it holds no deploy credential: only the deploy job gets pages: write and the OIDC
+# token, and it runs no repository code.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -60,12 +63,18 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pages: read
     env:
       CADDIE_APP_URL: ${{ vars.CADDIE_APP_URL }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -123,26 +132,42 @@ jobs:
       - name: Write the landing page
         run: node scripts/pages-landing.mjs --out dist-pages --site-url "$SITE_URL"
 
-      # Only the bundle builder's outputs and the landing page may be published: no app code.
+      # Only the bundle builder's outputs and the landing page may be published: no app code. The
+      # github.io origin is shared with other Pages sites of the same account, so a script published
+      # here could read their storage. The check therefore looks below the top level too, rejects
+      # every symlink (the artifact is packed with tar --dereference, which would copy what a link
+      # points at), and allows under bundles/ only the files the bundle builder writes.
       - name: Check the site holds no web app
         run: |
+          links=$(find dist-pages -type l -print)
+          if [ -n "$links" ]; then echo "::error::Symlinks in dist-pages: $links"; exit 1; fi
           unexpected=$(find dist-pages -mindepth 1 -maxdepth 1 \
             ! -name bundles ! -name conferences.json ! -name capabilities.json ! -name index.html ! -name 404.html -print)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected files in dist-pages: $unexpected"; exit 1; fi
-          if grep -l "<script" dist-pages/index.html dist-pages/404.html; then echo "::error::The landing page must hold no script."; exit 1; fi
+          unexpected=$(find dist-pages/bundles -mindepth 1 ! -type d -print | sed 's|^dist-pages/||' \
+            | grep -vE '^bundles/(conferences\.json|build-info\.json|[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
+          if [ -n "$unexpected" ]; then echo "::error::Unexpected files in dist-pages/bundles: $unexpected"; exit 1; fi
+          unexpected=$(find dist-pages/bundles -mindepth 1 -type d -print | sed 's|^dist-pages/||' \
+            | grep -vE '^bundles/[^/]+(/[0-9a-f]{16})?$' || true)
+          if [ -n "$unexpected" ]; then echo "::error::Unexpected directories in dist-pages/bundles: $unexpected"; exit 1; fi
+          if grep -li "<script" dist-pages/index.html dist-pages/404.html; then echo "::error::The landing page must hold no script."; exit 1; fi
 
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: dist-pages
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
