@@ -66,7 +66,8 @@ data class SearchResult(
  * - Text: SQLite FTS5 over title, abstract, speakers, taglines, topics, track and room, with the
  *   Porter stemmer as the server's english analyzer has, and English stop words dropped. Queries of
  *   one or two terms must match every term; longer ones must match 60% of them (the server's
- *   `minimum_should_match: "2<60%"`). Results are ordered by BM25, then by talk id.
+ *   `minimum_should_match: "2<60%"`), all within one field, as the server's best_fields query
+ *   counts them. Results are ordered by BM25, then by talk id.
  * - Empty text (browse mode): every talk, by start, then talk id.
  * - Base filters B: kind (talk, or talk and ambient with [SearchRequest.includeEvents]), the start
  *   window, speakers, rooms, hide sponsor, Happening now (in progress or starting within 60
@@ -150,15 +151,26 @@ class TalkSearch(
         return bundle.talks.any { it.kind == "talk" && it.day == today }
     }
 
+    // The server's multi_match is of type best_fields, which applies minimum_should_match to each
+    // field on its own: a talk matches when one field holds enough of the terms, not when the terms
+    // are spread over several fields. So each term is looked up in each column, and a talk is kept
+    // when its best column reaches the required count. The ranking is BM25 over all columns.
     private suspend fun lexical(text: String): List<String> {
         val terms = terms(text)
         if (terms.isEmpty()) return emptyList()
         val quoted = terms.map { "\"" + it.replace("\"", "\"\"") + "\"" }
-        val (sets, ranked) = database.match(scope, quoted, quoted.joinToString(" OR "))
+        val perColumn = COLUMNS.flatMap { column -> quoted.map { "$column : $it" } }
+        val (sets, ranked) = database.match(scope, perColumn, quoted.joinToString(" OR "))
         val required = if (terms.size <= 2) terms.size else maxOf(1, (terms.size * 3) / 5)
-        val hits = HashMap<String, Int>()
-        for (set in sets) for (id in set) hits[id] = (hits[id] ?: 0) + 1
-        return ranked.filter { (hits[it] ?: 0) >= required }
+        val best = HashMap<String, Int>()
+        for (column in COLUMNS.indices) {
+            val hits = HashMap<String, Int>()
+            for (term in quoted.indices) {
+                for (id in sets[column * quoted.size + term]) hits[id] = (hits[id] ?: 0) + 1
+            }
+            for ((id, n) in hits) if (n > (best[id] ?: 0)) best[id] = n
+        }
+        return ranked.filter { (best[it] ?: 0) >= required }
     }
 
     private fun passesBase(t: Talk, r: SearchRequest, phrases: TimePhrases.Filter, nowMs: Long): Boolean {
@@ -212,6 +224,9 @@ class TalkSearch(
             .take(MAX_TERMS)
 
         private const val MAX_TERMS = 32
+
+        /** The columns of the FTS5 table `talk_fts` (CaddieDatabase.MIGRATIONS), in table order. */
+        private val COLUMNS = listOf("title", "abstract", "speakers", "taglines", "topics", "track", "room")
 
         // The server matches a speaker name as a phrase inside the speakers field.
         private fun speakerMatches(speaker: String, name: String): Boolean {

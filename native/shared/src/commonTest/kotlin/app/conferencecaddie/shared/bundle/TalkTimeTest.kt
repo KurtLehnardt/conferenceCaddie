@@ -37,6 +37,31 @@ class TalkTimeTest {
     }
 
     @Test
+    fun zonesOutsideTheUnitedStatesThatUsEnglishAbbreviates() {
+        // What `new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'short' })` prints.
+        assertEquals("EST", TalkTime.zoneLabel("America/Toronto", "2026-11-10T09:00:00-05:00"))
+        assertEquals("EDT", TalkTime.zoneLabel("America/Toronto", "2026-07-10T09:00:00-04:00"))
+        assertEquals("PST", TalkTime.zoneLabel("America/Vancouver", "2026-01-15T09:00:00-08:00"))
+        assertEquals("PDT", TalkTime.zoneLabel("America/Vancouver", "2026-07-15T09:00:00-07:00"))
+        assertEquals("AST", TalkTime.zoneLabel("America/Halifax", "2026-01-15T09:00:00-04:00"))
+        assertEquals("ADT", TalkTime.zoneLabel("America/Halifax", "2026-07-15T09:00:00-03:00"))
+        assertEquals("MST", TalkTime.zoneLabel("America/Edmonton", "2026-01-15T09:00:00-07:00"))
+        assertEquals("MDT", TalkTime.zoneLabel("America/Edmonton", "2026-07-15T09:00:00-06:00"))
+        assertEquals("CST", TalkTime.zoneLabel("America/Winnipeg", "2026-01-15T09:00:00-06:00"))
+        assertEquals("CDT", TalkTime.zoneLabel("America/Winnipeg", "2026-07-15T09:00:00-05:00"))
+        assertEquals("CST", TalkTime.zoneLabel("America/Mexico_City", "2026-07-15T09:00:00-06:00"), "Mexico keeps standard time all year")
+        assertEquals("AST", TalkTime.zoneLabel("America/Puerto_Rico", "2026-07-15T09:00:00-04:00"))
+        assertEquals("HST", TalkTime.zoneLabel("Pacific/Honolulu", "2026-07-15T09:00:00-10:00"))
+        assertEquals("EST", TalkTime.zoneLabel("US/Eastern", "2026-01-15T09:00:00-05:00"), "aliases are listed too")
+        assertEquals("EDT", TalkTime.zoneLabel("America/Indiana/Indianapolis", "2026-07-15T09:00:00-04:00"))
+        // Newfoundland and Sydney get no abbreviation in US English.
+        assertEquals("GMT-3:30", TalkTime.zoneLabel("America/St_Johns", "2026-01-15T09:00:00-03:30"))
+        assertEquals("GMT-2:30", TalkTime.zoneLabel("America/St_Johns", "2026-07-15T09:00:00-02:30"))
+        assertEquals("GMT+11", TalkTime.zoneLabel("Australia/Sydney", "2026-01-15T09:00:00+11:00"))
+        assertEquals("GMT+5:45", TalkTime.zoneLabel("Asia/Kathmandu", "2026-07-15T09:00:00+05:45"))
+    }
+
+    @Test
     fun aTalksWhen() {
         val bundle = TalkBundle.decode(Fixtures.HASH, Fixtures.files.getValue("bundle.json"))!!
         assertEquals("Mon, Mar 2 · 10:00–10:30 AM GMT+1", TalkTime.`when`(bundle.talksById.getValue(Fixtures.A), "Europe/Amsterdam"))
