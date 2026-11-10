@@ -114,6 +114,15 @@ jobs:
       HAS_RELEASE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
       APK: ${{ needs.apk.outputs.release_apk }}
     steps:
+      # The file name comes from the build job's output. It is used in paths and artifact names,
+      # so it must be the expected name for this commit and nothing else.
+      - name: Check the APK name
+        run: |
+          if [[ ! "$APK" =~ ^conference-caddie-([0-9a-f]{7,40})-release\.apk$ ]] || [[ "$GITHUB_SHA" != "${BASH_REMATCH[1]}"* ]]; then
+            echo "::error title=Unexpected APK name::The build job named the APK '$APK', which is not the release APK of this commit."
+            exit 1
+          fi
+
       - name: Note that release signing is skipped
         if: env.HAS_RELEASE_KEY != 'true'
         run: echo "::notice title=Release APK skipped::The ANDROID_KEYSTORE_* secrets are not set in the release environment, so the release APK was not signed."

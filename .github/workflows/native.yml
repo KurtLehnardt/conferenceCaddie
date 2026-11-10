@@ -2,10 +2,13 @@
 # Android and iOS. Every run tests the shared code and builds both apps without release signing.
 #
 # Signing happens only for main (a push to main, or a manual run on main), in jobs that use the
-# `release` environment, whose secrets are available to main only. The Android signing job never
-# checks out or runs project code: Gradle builds an unsigned APK in the build job, which has no
-# secrets, and the signing job only signs that file with the runner's own Android build tools.
-# Each signed step is skipped with a notice when its secrets are missing.
+# `release` environment, whose secrets are available to main only. Gradle never runs in a job that
+# has a secret. The Android signing job never checks out or runs project code: Gradle builds an
+# unsigned APK in the build job, which has no secrets, and the signing job only signs that file with
+# the runner's own Android build tools. The iOS release is split the same way: one job without
+# secrets builds the Kotlin framework with Gradle, one signs the app with the distribution
+# certificate and runs no Gradle, and one uploads the signed file with the API key and checks out
+# nothing. Each signed step is skipped with a notice when its secrets are missing.
 #
 # Every action is pinned to a full commit SHA; Dependabot (.github/dependabot.yml) proposes updates.
 name: Native apps
@@ -89,12 +92,16 @@ jobs:
           path: ${{ steps.debug_apk.outputs.file }}
           retention-days: 14
 
-      # The release APK is built here without any key (R8 on, unsigned) and handed to the sign job.
+      # The release APK is built on every run, pull requests included, without any key (R8 and
+      # resource shrinking on, unsigned), so a change that breaks the release build fails here.
       - name: Unsigned release APK
+        run: ./gradlew -Pcaddie.unsignedRelease=true :androidApp:assembleRelease
+
+      # Only main hands the unsigned APK to the sign job.
+      - name: Name the release APK after the commit
         id: release_apk
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
-          ./gradlew -Pcaddie.unsignedRelease=true :androidApp:assembleRelease
           out="conference-caddie-native-$(git rev-parse --short HEAD)-release.apk"
           cp androidApp/build/outputs/apk/release/androidApp-release-unsigned.apk "$GITHUB_WORKSPACE/unsigned-$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
@@ -123,6 +130,15 @@ jobs:
       HAS_ANDROID_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
       APK: ${{ needs.android.outputs.release_apk }}
     steps:
+      # The file name comes from the build job's output. It is used in paths and artifact names,
+      # so it must be the expected name for this commit and nothing else.
+      - name: Check the APK name
+        run: |
+          if [[ ! "$APK" =~ ^conference-caddie-native-([0-9a-f]{7,40})-release\.apk$ ]] || [[ "$GITHUB_SHA" != "${BASH_REMATCH[1]}"* ]]; then
+            echo "::error title=Unexpected APK name::The build job named the APK '$APK', which is not the release APK of this commit."
+            exit 1
+          fi
+
       - name: Note that release signing is skipped
         if: env.HAS_ANDROID_SIGNING != 'true'
         run: echo "::notice title=Release APK skipped::The ANDROID_KEYSTORE_* secrets are not set in the release environment, so the release APK was not signed."
@@ -247,19 +263,22 @@ jobs:
             echo "::notice title=TestFlight skipped::Set the seven TestFlight secrets in the release environment (see native/README.md) to upload builds."
           fi
 
-  # Archives a Release build with manual signing (an Apple Distribution certificate and an App Store
-  # provisioning profile, installed into a temporary keychain), then uploads it to App Store Connect
-  # with `xcodebuild -exportArchive`, authenticated by an App Store Connect API key. The build then
-  # appears in TestFlight once Apple has processed it. Not yet run: see native/README.md.
-  testflight:
-    name: TestFlight upload
+  # The TestFlight release is three jobs, so that Gradle never runs in a job with a secret and
+  # no secret is on a runner longer than it is needed:
+  #
+  #   ios-release-build  Gradle and the Kotlin/Native toolchain, no secrets. Builds the Release
+  #                      device framework and the Compose resources and keeps them for one day.
+  #   ios-sign           The distribution certificate and profile, no Gradle. Archives the app
+  #                      with that framework and exports a signed IPA, kept for one day.
+  #   testflight-upload  The App Store Connect API key, no checkout. Uploads the IPA.
+  #
+  # Not yet run: see native/README.md.
+  ios-release-build:
+    name: iOS Release framework
     needs: [ios, testflight-gate]
     if: needs.testflight-gate.outputs.ready == 'true'
     runs-on: macos-26
-    timeout-minutes: 90
-    environment: release
-    env:
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -280,11 +299,91 @@ jobs:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
 
+      # An unsigned archive runs the "Compile Kotlin Framework" build phase, and so
+      # `embedAndSignAppleFrameworkForXcode`, with exactly the Xcode settings the signed archive
+      # has. That task copies the device framework to composeApp/build/xcode-frameworks/ and
+      # the Compose resources into the app's compose-resources folder.
+      - name: Build the Release framework and Compose resources
+        run: >
+          xcodebuild
+          -project iosApp/iosApp.xcodeproj
+          -scheme iosApp
+          -configuration Release
+          -destination 'generic/platform=iOS'
+          -archivePath "$RUNNER_TEMP/unsigned.xcarchive"
+          CODE_SIGNING_ALLOWED=NO
+          archive
+
+      - name: Pack the framework and the resources
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/ios-kotlin"
+          mkdir -p "$out"
+          shopt -s nullglob
+          frameworks=(composeApp/build/xcode-frameworks/Release/iphoneos*/ComposeApp.framework)
+          apps=("$RUNNER_TEMP/unsigned.xcarchive/Products/Applications/"*.app)
+          if [ "${#frameworks[@]}" -ne 1 ] || [ "${#apps[@]}" -ne 1 ]; then
+            echo "::error title=Unexpected build output::Expected one Release device framework and one app in the archive."
+            exit 1
+          fi
+          ditto "${frameworks[0]}" "$out/ComposeApp.framework"
+          if [ -d "${apps[0]}/compose-resources" ]; then
+            ditto "${apps[0]}/compose-resources" "$out/compose-resources"
+          else
+            mkdir "$out/compose-resources"
+          fi
+          xcodebuild -version > "$out/xcode-version.txt"
+          tar -C "$out" -cf "$RUNNER_TEMP/ios-kotlin.tar" .
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-kotlin-release
+          path: ${{ runner.temp }}/ios-kotlin.tar
+          retention-days: 1
+
+      - name: Stop the Gradle daemon
+        if: always()
+        run: ./gradlew --stop
+
+  ios-sign:
+    name: Sign the iOS build
+    needs: [ios-release-build, testflight-gate]
+    if: needs.testflight-gate.outputs.ready == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    environment: release
+    steps:
+      # The checkout is for the Xcode project and the Swift sources. No Java, Gradle or
+      # Kotlin/Native is set up here, and the Gradle wrapper is removed before anything builds.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ios-kotlin-release
+          path: ${{ runner.temp }}/ios-kotlin-download
+
+      # The framework must come from the same Xcode as this job uses.
+      - name: Unpack the framework and remove the Gradle wrapper
+        run: |
+          set -euo pipefail
+          rm -f gradlew gradlew.bat
+          mkdir -p "$RUNNER_TEMP/ios-kotlin"
+          tar -xf "$RUNNER_TEMP/ios-kotlin-download/ios-kotlin.tar" -C "$RUNNER_TEMP/ios-kotlin"
+          test -f "$RUNNER_TEMP/ios-kotlin/ComposeApp.framework/ComposeApp"
+          if ! xcodebuild -version | cmp -s - "$RUNNER_TEMP/ios-kotlin/xcode-version.txt"; then
+            echo "::error title=Different Xcode::The framework was built with another Xcode version than this job has. Start a new run."
+            exit 1
+          fi
+
       # The build number is 1000 + the run number. App Store Connect refuses a build number it has
       # seen, so a re-run of the same run fails at upload; start a new run instead.
       - name: Set the build number
         run: echo "CADDIE_BUILD_NUMBER=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
 
+      # The key may be used by /usr/bin/codesign only: -T trusts that one tool, and the partition
+      # list holds only "apple:", the partition codesign needs (see `man security`).
       - name: Install the distribution certificate and profile
         env:
           IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
@@ -302,8 +401,8 @@ jobs:
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/dist.p12" -P "$IOS_DIST_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain" > /dev/null
+          security import "$RUNNER_TEMP/dist.p12" -P "$IOS_DIST_CERT_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple: -s -k "$keychain_password" "$keychain" > /dev/null
           existing=()
           while IFS= read -r line; do existing+=("$(printf '%s' "$line" | tr -d '" ')"); done < <(security list-keychains -d user)
           security list-keychains -d user -s "$keychain" "${existing[@]}"
@@ -317,7 +416,12 @@ jobs:
           rm -f "$RUNNER_TEMP/appstore.mobileprovision"
           echo "PROFILE_UUID=$uuid" >> "$GITHUB_ENV"
 
+      # OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED=YES makes the "Compile Kotlin Framework" build phase
+      # skip Gradle; it copies CADDIE_PREBUILT_COMPOSE_RESOURCES into the app instead, and the app
+      # links the prebuilt framework through FRAMEWORK_SEARCH_PATHS.
       - name: Archive the Release build
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: >
           xcodebuild
           -project iosApp/iosApp.xcodeproj
@@ -325,6 +429,9 @@ jobs:
           -configuration Release
           -destination 'generic/platform=iOS'
           -archivePath "$RUNNER_TEMP/ConferenceCaddie.xcarchive"
+          OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED=YES
+          FRAMEWORK_SEARCH_PATHS="$RUNNER_TEMP/ios-kotlin"
+          CADDIE_PREBUILT_COMPOSE_RESOURCES="$RUNNER_TEMP/ios-kotlin/compose-resources"
           DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
           CODE_SIGN_STYLE=Manual
           CODE_SIGN_IDENTITY="Apple Distribution"
@@ -332,20 +439,13 @@ jobs:
           CURRENT_PROJECT_VERSION="$CADDIE_BUILD_NUMBER"
           archive
 
-      # The API key is written just before the upload and deleted straight after it.
-      - name: Export and upload to App Store Connect
+      # Export only: iosApp/ExportOptions.plist has the destination "export", so nothing is
+      # uploaded from this job and it needs no App Store Connect key.
+      - name: Export the signed IPA
         env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          umask 077
-          key="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
-          trap 'rm -f "$key"' EXIT
-          printf '%s' "$ASC_KEY_P8_BASE64" | base64 --decode > "$key"
-          unset ASC_KEY_P8_BASE64
-
           options="$RUNNER_TEMP/ExportOptions.plist"
           cp iosApp/ExportOptions.plist "$options"
           /usr/libexec/PlistBuddy -c "Set :teamID $APPLE_TEAM_ID" "$options"
@@ -353,11 +453,15 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/ConferenceCaddie.xcarchive" \
             -exportOptionsPlist "$options" \
-            -exportPath "$RUNNER_TEMP/export" \
-            -authenticationKeyPath "$key" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-          echo "Uploaded build $CADDIE_BUILD_NUMBER to App Store Connect." >> "$GITHUB_STEP_SUMMARY"
+            -exportPath "$RUNNER_TEMP/export"
+          shopt -s nullglob
+          ipas=("$RUNNER_TEMP/export/"*.ipa)
+          if [ "${#ipas[@]}" -ne 1 ]; then
+            echo "::error title=No IPA::The export did not produce exactly one IPA."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ipa"
+          mv "${ipas[0]}" "$RUNNER_TEMP/ipa/ConferenceCaddie-$CADDIE_BUILD_NUMBER.ipa"
 
       - name: Remove the keychain and profile
         if: always()
@@ -367,4 +471,63 @@ jobs:
             rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision" \
                   "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
           fi
-          rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/appstore.mobileprovision"
+          rm -f "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/appstore.mobileprovision"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-signed-ipa
+          path: ${{ runner.temp }}/ipa/
+          retention-days: 1
+
+  # Uploads the signed IPA with altool, authenticated by the App Store Connect API key. The build
+  # then appears in TestFlight once Apple has processed it. No checkout: this job runs no project
+  # code, only the runner's Xcode.
+  testflight-upload:
+    name: Upload to TestFlight
+    needs: ios-sign
+    runs-on: macos-26
+    timeout-minutes: 30
+    environment: release
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ios-signed-ipa
+          path: ${{ runner.temp }}/ipa
+
+      # `altool --upload-package <ipa> --api-key --api-issuer` is the upload altool's own help
+      # documents (Xcode 26 and 27); altool reads the key from $API_PRIVATE_KEYS_DIR/AuthKey_<id>.p8.
+      # The key is written just before the upload, readable by this user only, and deleted
+      # straight after it.
+      - name: Upload to App Store Connect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ ! "$ASC_KEY_ID" =~ ^[A-Za-z0-9]+$ ]]; then
+            echo "::error title=Bad ASC_KEY_ID::ASC_KEY_ID must be the key id, letters and digits only."
+            exit 1
+          fi
+          shopt -s nullglob
+          ipas=("$RUNNER_TEMP/ipa/"*.ipa)
+          if [ "${#ipas[@]}" -ne 1 ]; then
+            echo "::error title=No IPA::Expected exactly one IPA from the sign job."
+            exit 1
+          fi
+          keys="$RUNNER_TEMP/private_keys"
+          trap 'rm -rf "$keys"' EXIT
+          mkdir -p "$keys"
+          printf '%s' "$ASC_KEY_P8_BASE64" | base64 --decode > "$keys/AuthKey_$ASC_KEY_ID.p8"
+          unset ASC_KEY_P8_BASE64
+          API_PRIVATE_KEYS_DIR="$keys" xcrun altool --upload-package "${ipas[0]}" \
+            --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID"
+          echo "Uploaded $(basename "${ipas[0]}") to App Store Connect." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the API key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/private_keys"

@@ -121,8 +121,10 @@ keystore password. A local signed build reads them inside one shell, without pri
 ```
 
 **In CI, Gradle never sees the key.** The build job runs `assembleRelease` with
-`-Pcaddie.unsignedRelease=true` and keeps the unsigned APK for one day. A separate job signs it.
-That job checks out no code and runs no Gradle or npm; it decodes the keystore into the runner's
+`-Pcaddie.unsignedRelease=true` on every run, pull requests included, so R8 and resource shrinking
+are checked before `main`. On `main` it keeps the unsigned APK for one day, and a separate job signs
+it. That job checks out no code and runs no Gradle or npm; it refuses an APK whose name is not the
+release APK of the commit being built, decodes the keystore into the runner's
 temp directory with `umask 077`, runs `zipalign` and `apksigner` from the runner's Android SDK,
 deletes the keystore, and fails unless the APK's certificate matches the repository variable
 `ANDROID_RELEASE_CERT_SHA256` (the public fingerprint
@@ -146,26 +148,39 @@ installed apps.
 
 ### iOS and TestFlight
 
-The `testflight` job in `.github/workflows/native.yml` runs on pushes to `main` and manual runs on
-`main`, in the `release` environment, and only when all seven secrets below are set there. It:
+TestFlight builds run on pushes to `main` and manual runs on `main`, and only when all seven
+secrets below are set in the `release` environment. **The jobs are split so signing never runs
+next to Gradle**: Gradle and its plugins never run in a job that holds a secret, and each secret is
+on a runner only in the job that needs it. In `.github/workflows/native.yml`:
 
-1. installs an Apple Distribution certificate into a temporary keychain and an App Store
-   provisioning profile for `app.conferencecaddie`;
-2. archives the Release configuration with manual signing;
-3. writes the App Store Connect API key with `umask 077`, exports and uploads the archive with
-   `xcodebuild -exportArchive` (`iosApp/ExportOptions.plist` sets the destination to upload), and
-   deletes the key;
-4. removes the keychain and the profile, whatever happened.
+1. `ios-release-build` has no secrets. It archives the Release configuration without signing,
+   which runs the "Compile Kotlin Framework" build phase and so Gradle with the archive's own Xcode
+   settings, keeps the Release device framework and the Compose resources for one day, and stops
+   the Gradle daemon.
+2. `ios-sign` (environment `release`) sets up no Java, Gradle or Kotlin/Native and deletes the
+   Gradle wrapper. It installs the Apple Distribution certificate into a temporary keychain, usable
+   by `/usr/bin/codesign` only, and the App Store profile for `app.conferencecaddie`. It archives
+   with manual signing and `OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED=YES`, which makes the build phase
+   skip Gradle and copy the prebuilt Compose resources instead, links the prebuilt framework, and
+   exports a signed IPA (`iosApp/ExportOptions.plist` sets the destination to export, so nothing is
+   uploaded). It removes the keychain and the profile whatever happened and keeps the IPA for one
+   day.
+3. `testflight-upload` (environment `release`) checks out nothing. It writes the App Store Connect
+   API key with `umask 077`, uploads the IPA with `xcrun altool --upload-package`, and deletes the key
+   whatever happened.
 
-| Secret (environment `release`) | What it is |
-|---|---|
-| `IOS_DIST_CERT_P12_BASE64` | The Apple Distribution certificate and its private key, exported from Keychain Access as `.p12`, base64-encoded |
-| `IOS_DIST_CERT_PASSWORD` | The password chosen for that `.p12` |
-| `IOS_APPSTORE_PROFILE_BASE64` | An App Store provisioning profile for `app.conferencecaddie`, base64-encoded |
-| `ASC_KEY_ID` | The App Store Connect API key id |
-| `ASC_ISSUER_ID` | The issuer id shown above the API keys list |
-| `ASC_KEY_P8_BASE64` | The downloaded `AuthKey_<id>.p8` file, base64-encoded |
-| `APPLE_TEAM_ID` | The Apple Developer team id |
+| Secret (environment `release`) | Used by | What it is |
+|---|---|---|
+| `IOS_DIST_CERT_P12_BASE64` | `ios-sign` | The Apple Distribution certificate and its private key, exported from Keychain Access as `.p12`, base64-encoded |
+| `IOS_DIST_CERT_PASSWORD` | `ios-sign` | The password chosen for that `.p12` |
+| `IOS_APPSTORE_PROFILE_BASE64` | `ios-sign` | An App Store provisioning profile for `app.conferencecaddie`, base64-encoded |
+| `APPLE_TEAM_ID` | `ios-sign` | The Apple Developer team id |
+| `ASC_KEY_ID` | `testflight-upload` | The App Store Connect API key id |
+| `ASC_ISSUER_ID` | `testflight-upload` | The issuer id shown above the API keys list |
+| `ASC_KEY_P8_BASE64` | `testflight-upload` | The downloaded `AuthKey_<id>.p8` file, base64-encoded |
+
+The job `testflight-gate` reads whether all seven exist; when one is missing, the three jobs are
+skipped with a notice.
 
 Before the first upload, register the bundle id `app.conferencecaddie`, create the distribution
 certificate and the App Store profile in the Apple Developer account, create the app in App Store
@@ -173,10 +188,32 @@ Connect, and create a team API key with the App Manager role (Users and Access, 
 Integrations). Upload the secrets with stdin, for example
 `base64 -i dist.p12 | gh secret set IOS_DIST_CERT_P12_BASE64 --env release`.
 
-**This job has not run yet**, because the secrets do not exist. Expect the first run on `main` to
-need attention; the signing settings it passes are `CODE_SIGN_STYLE=Manual`,
+**These jobs have not run yet**, because the secrets do not exist. Expect the first run on `main`
+to need attention; the signing settings `ios-sign` passes are `CODE_SIGN_STYLE=Manual`,
 `CODE_SIGN_IDENTITY="Apple Distribution"` and the profile's UUID as
-`PROVISIONING_PROFILE_SPECIFIER`.
+`PROVISIONING_PROFILE_SPECIFIER`. If signing fails with `errSecInternalComponent`, the key's
+partition list (`apple:`) or trusted tools (`/usr/bin/codesign`) are too narrow for the tool the
+log names.
+
+The build path `ios-sign` uses can be tried locally without signing. Archive once the normal way,
+which leaves the framework in `composeApp/build/xcode-frameworks/Release/iphoneos<version>/` and
+the resources in the archived app's `compose-resources` folder:
+
+```sh
+xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -configuration Release \
+  -destination 'generic/platform=iOS' -archivePath /tmp/unsigned.xcarchive \
+  CODE_SIGNING_ALLOWED=NO archive
+```
+
+Then, in a copy of `native/` without `gradlew` or any `build` folder, archive again with those two
+folders; the log says the build phase skipped Gradle:
+
+```sh
+xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -configuration Release \
+  -destination 'generic/platform=iOS' -archivePath /tmp/prebuilt.xcarchive \
+  OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED=YES FRAMEWORK_SEARCH_PATHS=<folder with ComposeApp.framework> \
+  CADDIE_PREBUILT_COMPOSE_RESOURCES=<compose-resources folder> CODE_SIGNING_ALLOWED=NO archive
+```
 
 `Info.plist` declares `ITSAppUsesNonExemptEncryption` as false, which is true of the skeleton (it
 uses only the system's HTTPS). Review it in Phase 4, when the Bluetooth tokens add HMAC-based token
@@ -218,8 +255,10 @@ exists.
 
 ## Privacy
 
-- Android: `allowBackup` is false, and `data_extraction_rules.xml` excludes every domain from
-  cloud backup and device-to-device transfer, because the app will hold per-backend device secrets.
+- Android: `allowBackup` is false, and `data_extraction_rules.xml` excludes every domain, the
+  device-protected `device_*` domains included, from cloud backup and device-to-device transfer,
+  because the app will hold per-backend device secrets. The Capacitor app in `web/android` has the
+  same settings, since its WebView storage holds the people features' device secret.
 - iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking, no tracking domains and, for
   now, no collected data. It declares the required-reason APIs that `nm -u` finds in the Release
   device framework: `stat` and `fstat` (FileTimestamp, `C617.1`, from Skia and ICU) and
