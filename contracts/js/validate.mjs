@@ -67,10 +67,14 @@ function validDate(y, m, d) {
 
 export class SchemaError extends Error {}
 
-// value / step is an integer, allowing for binary rounding (0.3 is a multiple of 0.1).
+// True when value is a whole multiple of step. Integers are checked exactly. For a float, the
+// quotient may be off by binary rounding (0.3 / 0.1 is 2.9999999999999996), so it must lie within
+// a few units in the last place of a whole number, and quotients too large to tell apart are refused.
 function isMultiple(value, step) {
+  if (Number.isInteger(value) && Number.isInteger(step)) return value % step === 0;
   const q = value / step;
-  return Number.isFinite(q) && Math.abs(q - Math.round(q)) <= 1e-9 * Math.max(1, Math.abs(q));
+  if (!Number.isFinite(q) || Math.abs(q) > 2 ** 52) return false;
+  return Math.abs(q - Math.round(q)) <= Math.max(Math.abs(q), 1) * Number.EPSILON * 4;
 }
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
