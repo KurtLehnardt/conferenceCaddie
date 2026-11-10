@@ -9,19 +9,23 @@ import { getBlocks, getMet, mergeBlocks, removeMet, usePeopleStore } from './sto
 import type { ConferenceLike } from './types';
 import { getWatches, removeWatch } from './watch';
 
-/** The same nudge switch as the presence card, mirroring its state. */
+/**
+ * Push: the same "Nudge me even when the app is closed" switch as the presence card, mirroring
+ * its state. The in-app nudge switch is the Nudges section (NudgeBanner.tsx); this one is the
+ * channel that reaches a closed app.
+ */
 export function NudgeSettings({ conference }: { conference: ConferenceLike }) {
   if (!pushAvailable()) return null;
   return (
-    <section class="settings-group" aria-labelledby="set-nudges">
-      <h2 class="settings-heading" id="set-nudges">
-        Nudges
+    <section class="settings-group" aria-labelledby="set-push">
+      <h2 class="settings-heading" id="set-push">
+        Push
       </h2>
       <div class="settings-card">
         <PushSwitch slug={conference.slug} variant="settings" />
         <p class="settings-row settings-text">
-          While you're around, a nudge tells you when someone whose experience matches yours is in your zone. It never
-          says who until you open the app.
+          The same nudge as a notification while the app is closed: when someone whose experience matches yours is in
+          your zone. It never says who until you open the app, and you get at most a few an hour.
         </p>
       </div>
     </section>

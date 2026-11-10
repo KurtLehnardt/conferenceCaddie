@@ -18,12 +18,18 @@ This file pins the decisions that every task builds against. A task may add to i
 | `scripts/es-setup.mjs`, `server/search.mjs`, `server/conferences.mjs` | data model, search and conferences API |
 | `scripts/ingest.mjs`, `scripts/lib/**`, `scripts/build-windows-zones.mjs`, `data/**` (except `data/topics/**` and `data/samples/**`), `DATA_NOTES.md` | discovery and Sessionize importer |
 | `scripts/topics.mjs`, `config/topic-stoplist.txt`, `data/topics/**` | conference topics |
-| `server/people.mjs`, `server/connect.mjs`, `server/moderation.mjs`, `server/device.mjs`, `server/ratelimit.mjs`, `config/moderation-words.json`, `scripts/es-setup-people.mjs`, `scripts/seed-people.mjs`, `scripts/export-people.mjs`, `scripts/backfill-ref.mjs`, `scripts/purge-expired-people.mjs`, `data/samples/**` | people, talk circles, blocks, presence and meets |
+| `server/people.mjs`, `server/connect.mjs`, `server/device.mjs`, `server/ratelimit.mjs`, `scripts/es-setup-people.mjs`, `scripts/seed-people.mjs`, `scripts/export-people.mjs`, `scripts/backfill-ref.mjs`, `scripts/purge-expired-people.mjs`, `data/samples/**` | people, talk circles, blocks, presence and meets |
+| `server/moderation.mjs`, `server/report.mjs`, `config/moderation-words.json`, `scripts/es-setup-reports.mjs`, `scripts/es-setup-rules.mjs`, `scripts/moderation-rules.mjs`, `scripts/moderation.mjs` | the filter (rules, classifier), reports and the operator CLI |
 | `server/push.mjs`, `server/nudge.mjs`, `scripts/es-setup-push.mjs`, `scripts/vapid-keys.mjs`, `web/public/sw.js` (push handlers) | Web Push nudges |
+| `server/ble.mjs`, `web/capacitor.config.ts`, `web/android/**`, `web/src/native.ts`, `docs/ANDROID.md`, `.github/workflows/android-apk.yml` | Android companion and Bluetooth proximity |
+| `server/import-github.mjs` | import from GitHub |
 | `server/recommend.mjs`, `server/topics-api.mjs` | talks for you and the topics API |
-| `web/**` except `web/src/people/**` | frontend shell |
-| `web/src/people/**` | frontend people screens |
-| Root `package.json`, `.gitignore`, `README.md`, `docs/CONTRACT.md`, `DECISIONS.md`, `scripts/smoke.mjs`, `server/index.mjs`, `Dockerfile`, `scripts/deploy.sh` | integrators |
+| `server/schedule.mjs` | offline schedule export |
+| `web/**` except `web/src/people/**`, `web/android/**` and `web/src/native.ts` | frontend shell |
+| `web/src/people/**` | frontend people screens (search, presence, meets, nudges, push, Bluetooth) |
+| Root `package.json`, `.gitignore`, `README.md`, `docs/CONTRACT.md`, `docs/OPERATOR_CHECKLIST.md`, `DECISIONS.md`, `scripts/smoke.mjs`, `scripts/create-es-keys.mjs`, `server/index.mjs`, `Dockerfile`, `scripts/deploy.sh` | integrators |
+
+Env vars the server reads, in one place (each is also described where it is used): `PORT`, `ES_URL`, `ES_API_KEY`, `ES_PEOPLE_API_KEY`, `ES_INDEX`, `ES_CONFERENCES_INDEX`, `ES_TOPICS_INDEX`, `ES_PEOPLE_INDEX`, `ES_PEOPLE_BLOCKS_INDEX`, `ES_PEOPLE_MEETS_INDEX`, `ES_PEOPLE_REPORTS_INDEX`, `ES_PEOPLE_PUSH_INDEX`, `ES_PEOPLE_NUDGES_INDEX`, `ES_RULES_INDEX`, `REF_SALT`, `STATIC_DIR`, `GITHUB_TOKEN` (optional), `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, `BLE_NEAR_RSSI`, `MOD_CLASSIFIER`, `MOD_CATEGORIES`, `MOD_REJECT`, `MOD_HOLD`, `MOD_TIMEOUT_MS` (and, for local stubs only, `MOD_METADATA_URL`, `MOD_CLASSIFIER_URL`, `PUSH_TRANSPORT`, `PUSH_STUB_URL`). Secret Manager holds exactly `caddie-es-readonly` (`ES_API_KEY`), `caddie-es-people` (`ES_PEOPLE_API_KEY`), `caddie-vapid-private` (`VAPID_PRIVATE_KEY`), `caddie-vapid-public` (read by `deploy.sh` into the plain env var `VAPID_PUBLIC_KEY`) and, optionally, `caddie-github-token` (`GITHUB_TOKEN`); `scripts/deploy.sh` mounts each that exists and grants `caddie-runtime` access to those alone. The admin key `ELASTISEARCH_API_KEY` is used only by the operator's CLI and never deployed. `docs/OPERATOR_CHECKLIST.md` has the ordered operator steps.
 
 The repo root has exactly one npm dependency, `web-push` (pinned to an exact version; it signs and encrypts the push nudges, which no Node built-in does), installed in the runtime image with `npm ci --omit=dev` from the root lockfile. Everything else in scripts and the server uses only Node built-ins; the server itself stays on `node:http`. The `web/` app has its own `package.json` and lockfile.
 
@@ -359,8 +365,9 @@ Outcomes: **reject** is 400 `{ error: "filtered", message: "That was held back b
 - **People key** (Secret Manager `caddie-es-people`, env `ES_PEOPLE_API_KEY`): `read`, `write` and `view_index_metadata` on `caddie-people*` only. The server uses it only for people, circles, the circle counts in recommendations and the filter rules index (`caddie-people-rules*`, named so that this key covers it; the server only searches it).
 - **Classifier**: no key. The server calls Google Cloud Natural Language with the runtime service account's own access token from the metadata server (Application Default Credentials). Nothing to mint, store or rotate.
 - The admin key is used only by the operator's CLI commands and is never deployed.
-- **VAPID private key** (Secret Manager `caddie-vapid-private`, env `VAPID_PRIVATE_KEY`): signs push nudges; used only by `server/nudge.mjs` through `web-push`. The public half is in `caddie-vapid-public` and reaches every browser as `VAPID_PUBLIC_KEY`; it is not a secret.
-- **GitHub token** (optional, Secret Manager `caddie-github-token`, env `GITHUB_TOKEN`): read-only public scope, sent as `Authorization: Bearer` to `api.github.com` by `POST /api/import/github` only; raises GitHub's rate limit from 60 to 5000 requests per hour. When it is absent the server calls GitHub unauthenticated.
+- **VAPID private key** (Secret Manager `caddie-vapid-private`, env `VAPID_PRIVATE_KEY`; the public half in `caddie-vapid-public` becomes the plain env var `VAPID_PUBLIC_KEY`): signs push nudges; used only by `server/nudge.mjs` through `web-push`. The public half is in `caddie-vapid-public` and reaches every browser as `VAPID_PUBLIC_KEY`; it is not a secret.
+- **GitHub token** (optional, Secret Manager `caddie-github-token`, env `GITHUB_TOKEN`): read-only public scope, sent as `Authorization: Bearer` to `api.github.com` by `POST /api/import/github` only; raises GitHub's rate limit from 60 to 5000 requests per hour. When it is absent the server calls GitHub unauthenticated; `scripts/deploy.sh` mounts the secret only when it exists.
+- **Bluetooth tokens** (`server/ble.mjs`) are not keys: 16 random bytes on the owner's own people document, resolved only by this server, replaced every ten minutes and cleared with presence. `BLE_NEAR_RSSI` is a plain env var.
 
 ## Frontend brief
 
