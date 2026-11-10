@@ -2,12 +2,16 @@
 // which people it has seen (for the opener and about after a meet), and the block action.
 import { useEffect } from 'preact/hooks';
 import { blockPerson, fetchInbox, isAbort, PeopleApiError, unblockPerson } from './api';
+import { pacedMs } from '../lib/pace';
 import { nudgeTick } from './nudges';
 import { addBlock, getPresence, isBlocked, notify, removeBlock, usePeopleStore } from './storage';
 import type { Inbox, InboxIncoming, InboxOutgoing, MeetState, PersonResult } from './types';
 import { confirm, toast } from './ui';
 
-export const INBOX_POLL_MS = 20_000;
+// The inbox poll at pace 1. The real wait is stretched by the pace the API reports (lib/pace.ts).
+export const INBOX_POLL_MS = 45_000;
+// The in-app nudge check runs on every third inbox tick, about every 2 minutes at pace 1.
+const NUDGE_EVERY_TICKS = 3;
 
 /** States that still wait for something to happen. Asks are now-only, so accept goes straight to active. */
 export const OPEN_STATES: MeetState[] = ['requested', 'active'];
@@ -127,7 +131,7 @@ export function setIncomingState(slug: string, meetId: string, state: MeetState)
 }
 
 /**
- * Polls the inbox every 20 s while the app is visible and presence is on or a request of ours is
+ * Polls the inbox every 45 s (stretched by the pace) while the app is visible and presence is on or a request of ours is
  * open. One fetch runs when the watch starts (and whenever `always` is on, as on the inbox screen),
  * so the device learns about its open requests at all.
  */
@@ -142,14 +146,16 @@ export function useInboxWatch(slug: string | null, always = false): void {
   useEffect(() => {
     if (!slug || !active) return;
     let timer: number | undefined;
+    let ticks = 0;
     const tick = () => {
       if (document.visibilityState !== 'hidden') {
         void refreshInbox(slug);
-        void nudgeTick(slug);
+        if (ticks % NUDGE_EVERY_TICKS === 0) void nudgeTick(slug);
+        ticks += 1;
       }
-      timer = window.setTimeout(tick, INBOX_POLL_MS);
+      timer = window.setTimeout(tick, pacedMs(INBOX_POLL_MS));
     };
-    timer = window.setTimeout(tick, INBOX_POLL_MS);
+    timer = window.setTimeout(tick, pacedMs(INBOX_POLL_MS));
     const onVis = () => {
       if (document.visibilityState !== 'hidden') void refreshInbox(slug);
     };

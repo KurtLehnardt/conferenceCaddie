@@ -6,6 +6,7 @@
 // Mock builds (VITE_MOCK=1 in dev) never reach a push service: the subscription is a stand-in
 // posted to the mock handler, and window.__caddiePushTest shows a notification through the
 // registered worker so the flow can be driven up to the permission step.
+import { appPath, stripBase } from '../lib/apiBase';
 import { deletePushSubscription, fetchVapidKey, PeopleApiError, putPushSubscription } from './api';
 import { getPush, setPush, slugsWithPush } from './storage';
 
@@ -93,7 +94,7 @@ export async function promptInstall(): Promise<'accepted' | 'dismissed' | null> 
  */
 async function worker(): Promise<ServiceWorkerRegistration> {
   if (MOCK && !navigator.serviceWorker.controller) {
-    await navigator.serviceWorker.register('/sw.js?build=mock', { scope: '/' });
+    await navigator.serviceWorker.register(`${appPath('sw.js')}?build=mock`, { scope: appPath('') });
   }
   return navigator.serviceWorker.ready;
 }
@@ -180,7 +181,7 @@ export async function unsubscribePush(slug: string): Promise<void> {
 export async function dropBrowserSubscription(): Promise<void> {
   if (MOCK || !supportsPush()) return;
   try {
-    const reg = await navigator.serviceWorker.getRegistration('/');
+    const reg = await navigator.serviceWorker.getRegistration(appPath(''));
     const sub = await reg?.pushManager.getSubscription();
     await sub?.unsubscribe();
   } catch {
@@ -201,9 +202,10 @@ if (MOCK && typeof window !== 'undefined') {
     const reg = await worker();
     await reg.showNotification('Conference Caddie', {
       body: body ?? "Someone who's worked on eBPF probes in production is in Expo hall right now",
-      icon: '/icons/icon-192.png',
+      icon: appPath('icons/icon-192.png'),
       tag: 'caddie-nudge',
-      data: { url: `${location.pathname}#/people?around=1` },
+      // The same shape as a server payload: a path from the root, which the worker resolves.
+      data: { url: `${stripBase(location.pathname)}#/people?around=1` },
     });
     return (await reg.getNotifications()).length;
   };

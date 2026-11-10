@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowUp, Check, MapPin, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
+import { pacedMeetMs } from '../lib/pace';
 import { fetchMeet, isAbort, meetAction, PeopleApiError, putMeetDetails } from './api';
 import { personForMeet, refreshInbox } from './connect';
 import { useZones } from './presence';
@@ -16,7 +17,8 @@ import { confirm, toast } from './ui';
 import { interestedTalks, Marked } from './util';
 
 export const MEET_CAVEAT = 'Positions indoors are rough. Head to the meeting point and look for them.';
-export const MEET_POLL_MS = 10_000;
+// The open-meet poll at pace 1; stretched by at most 3 when the API asks the app to slow down.
+export const MEET_POLL_MS = 15_000;
 const SPOT_ME_MAX = 60;
 
 /** "About 120 m", from the server's distance (already rounded to 10 m). */
@@ -162,9 +164,9 @@ export function MeetScreen({
     let timer: number | undefined;
     const tick = () => {
       if (document.visibilityState !== 'hidden' && !stop.current) void load(ctl.signal);
-      timer = window.setTimeout(tick, MEET_POLL_MS);
+      timer = window.setTimeout(tick, pacedMeetMs(MEET_POLL_MS));
     };
-    timer = window.setTimeout(tick, MEET_POLL_MS);
+    timer = window.setTimeout(tick, pacedMeetMs(MEET_POLL_MS));
     return () => {
       ctl.abort();
       window.clearTimeout(timer);
