@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer draw the launch screen themselves: the app icon on this background. -->
+<resources>
+    <style name="Theme.Caddie" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/caddie_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/caddie_bg</item>
+    </style>
+</resources>

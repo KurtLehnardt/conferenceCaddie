@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The web app's page colour (the bg variable) for the window behind the Compose UI and the launch screen,
+     so the app opens without a flash of another colour. -->
+<resources>
+    <color name="caddie_bg">#F5F6F8</color>
+</resources>

@@ -159,6 +159,8 @@ fun TimePhraseChip(label: String, singleDay: String?, onRemove: () -> Unit, modi
         onClick = onRemove,
         modifier = modifier,
         kind = ChipKind.Action,
+        // An applied phrase looks like any other active filter: a check, the label and a clear button.
+        leadingIcon = LucideIcon.Check,
         onClear = onRemove,
         clearLabel = Strings.Chips.removePhrase(label),
     )
