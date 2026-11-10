@@ -212,6 +212,8 @@ This needs a separate origin for the app:
 
 `ALLOWED_ORIGINS` should then name only that origin. The choice is the user's, and so is any cost (a domain), so nothing changed in this round. It stays in `docs/FREE_HOSTING.md` (Known gaps) and must be settled before go-live.
 
+**Resolved later on 2026-11-10.** The user chose to serve the app from the Cloudflare Worker, on its own `workers.dev` origin and the same origin as the API. GitHub Pages keeps only the public talk bundles and a landing page with no script, and `ALLOWED_ORIGINS` no longer names the github.io origin (`DECISIONS.md`, "The web app moves to the Cloudflare Worker's origin").
+
 None of the fixes needed `server/`, `web/src/people/sync.ts` or `web/src/people/storage.ts`, so nothing is left for session lenovot440p-6a.
 
 ## Notes from the review

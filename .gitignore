@@ -15,6 +15,7 @@ application_default_credentials.json
 # Dependencies and build output
 node_modules/
 dist/
+dist-worker/
 
 # Local tooling
 .claude/worktrees/

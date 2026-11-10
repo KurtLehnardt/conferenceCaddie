@@ -1,12 +1,12 @@
 {
-  "name": "conference-caddie-api",
+  "name": "conference-caddie-worker",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Conference Caddie API on Cloudflare Workers with SQLite-backed Durable Objects.",
+  "description": "Conference Caddie on Cloudflare Workers: the web app as static assets and the API with SQLite-backed Durable Objects.",
   "scripts": {
-    "dev": "wrangler dev --local --port 8787",
-    "deploy": "wrangler deploy",
+    "dev": "npm --prefix ../web run build:worker && wrangler dev --local --port 8787",
+    "deploy": "bash scripts/deploy.sh",
     "dev-vars": "node scripts/dev-vars.mjs"
   },
   "devDependencies": {

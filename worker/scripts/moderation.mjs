@@ -84,7 +84,7 @@ try {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('protocol');
   base = u.origin + u.pathname.replace(/\/+$/, '');
 } catch {
-  usage('--api <base> (or CADDIE_API_BASE) must be the Worker URL, for example https://conference-caddie-api.<subdomain>.workers.dev.');
+  usage('--api <base> (or CADDIE_API_BASE) must be the Worker URL, for example https://conference-caddie.<subdomain>.workers.dev.');
 }
 
 function readToken() {

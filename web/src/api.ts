@@ -100,7 +100,7 @@ export interface ImportResponse {
 }
 
 /**
- * A file sent as is, pasted text, or (the Pages build, which reads PDF and office files in the
+ * A file sent as is, pasted text, or (the Worker build, which reads PDF and office files in the
  * browser) text extracted from a file with its name and the type text/plain.
  */
 export type ImportPayload = { filename: string; mime: string; content_base64: string } | { text: string } | { filename: string; mime: 'text/plain'; text: string };

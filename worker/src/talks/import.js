@@ -68,7 +68,7 @@ export function validate(body) {
   const hasText = body.text !== undefined;
   if (hasFile === hasText) throw bad('Send either content_base64 or text');
   // With text, filename and mime are hints only (the format of the text: a .csv name or a text/csv
-  // type reads it as CSV). The web app's Pages build extracts a PDF, Word or OpenDocument file in
+  // type reads it as CSV). The web app's Worker build extracts a PDF, Word or OpenDocument file in
   // the browser and sends { filename, mime: 'text/plain', text }, so the pair must be accepted.
   if (body.filename !== undefined && (typeof body.filename !== 'string' || body.filename.length > 255)) throw bad('filename must be a string of at most 255 characters');
   if (body.mime !== undefined && (typeof body.mime !== 'string' || body.mime.length > 127)) throw bad('mime must be a string of at most 127 characters');

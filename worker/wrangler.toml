@@ -1,10 +1,29 @@
-name = "conference-caddie-api"
+# The Worker serves the web app and the API from one origin: https://conference-caddie.<subdomain>.workers.dev.
+name = "conference-caddie"
 main = "src/index.js"
 compatibility_date = "2026-11-01"
 # node:crypto and Buffer for the Bluetooth derived-token reference code (contracts/js/ble-token.mjs).
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 # account_id is not set here; wrangler reads CLOUDFLARE_ACCOUNT_ID from the environment.
+
+# The web app, built in Worker mode (npm --prefix web run build:worker, which writes base "/" and a
+# same-origin API). Static files are served by Cloudflare's asset layer without invoking this
+# Worker, so they cost no Worker request and never touch the pace budget. Paths with no file get
+# index.html (the app routes such as /e/{slug}). Only the paths in run_worker_first reach the
+# Worker's code. The response headers of the static files (the Content-Security-Policy, the other
+# security headers and Cache-Control) come from web/dist-worker/_headers, which the Worker-mode
+# build writes (web/vite.config.ts).
+[assets]
+directory = "../web/dist-worker"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# /index.html is served as it is, not redirected to "/": the service worker precaches /index.html,
+# and a redirected response cannot answer a navigation, which would break the offline fallback.
+html_handling = "none"
+# /__scheduled is the local Cron Trigger test route of `wrangler dev --test-scheduled`; deployed,
+# it answers 404 like any unknown path the Worker sees.
+run_worker_first = ["/api", "/api/*", "/admin", "/admin/*", "/__scheduled"]
 
 [ai]
 binding = "AI"
@@ -30,7 +49,10 @@ new_sqlite_classes = ["ConferenceDO", "DirectoryDO"]
 crons = ["*/10 * * * *"]
 
 [vars]
-ALLOWED_ORIGINS = "https://kurtlehnardt.github.io,http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173,http://127.0.0.1:4173"
+# Extra origins allowed to call the API cross-origin, for local development only (the Vite dev
+# server and preview). The app itself is served by this Worker, so its own origin is always
+# allowed (src/index.js); native apps send no Origin header and get no CORS headers.
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173,http://127.0.0.1:4173"
 EMBED_MODEL = "@cf/baai/bge-small-en-v1.5"
 VAPID_SUBJECT = "https://github.com/KurtLehnardt/conferenceCaddie"
 DAILY_REQUEST_BUDGET = "70000"
