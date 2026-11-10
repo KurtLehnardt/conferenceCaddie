@@ -33,6 +33,7 @@ class TalkTimeTest {
         assertEquals("GMT+5:30", TalkTime.zoneLabel("Asia/Kolkata", "2026-12-01T10:00:00+05:30"))
         assertEquals("GMT", TalkTime.zoneLabel("Europe/London", "2026-12-01T10:00:00Z"))
         assertEquals("GMT+9", TalkTime.zoneLabel("Asia/Tokyo", "2026-12-01T10:00:00+09:00"))
+        assertEquals("UTC", TalkTime.zoneLabel("UTC", "2026-12-01T10:00:00Z"), "Intl names UTC itself")
     }
 
     @Test

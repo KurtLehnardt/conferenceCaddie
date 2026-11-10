@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui.shell
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -17,16 +18,46 @@ object BuildDefaults {
 }
 
 /**
+ * Launch options for debug builds, so screenshots and manual checks can open a given screen without
+ * tapping through the app: `-caddie.tab Search`, `-caddie.open settings|switcher`,
+ * `-caddie.theme light|dark`, `-caddie.connect <base>` and `-caddie.gallery 1` (iOS launch arguments; Android intent
+ * extras of the same names). Release builds ignore them.
+ */
+data class DebugLaunch(
+    val tab: Tab? = null,
+    val open: String? = null,
+    val theme: ThemePreference? = null,
+    val connect: String? = null,
+    /** Shows the component gallery on the Search tab. */
+    val gallery: Boolean = false,
+) {
+    companion object {
+        /** Reads the options from name and value pairs; unknown names and values are ignored. */
+        fun from(get: (String) -> String?): DebugLaunch = DebugLaunch(
+            tab = get("caddie.tab")?.let { name -> Tab.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } },
+            open = get("caddie.open")?.lowercase()?.takeIf { it == "settings" || it == "switcher" },
+            theme = get("caddie.theme")?.let { name -> ThemePreference.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } },
+            connect = get("caddie.connect"),
+            gallery = get("caddie.gallery") == "1",
+        )
+    }
+}
+
+/**
  * The shell on its own, before the app talks to a backend: it remembers the theme and the server
  * typed in Settings for this run and shows no conference. Debug builds list the web app's sample
- * conferences (web/src/mock/fixtures.ts) so the shell's screens can be seen and tested. The talk
- * features replace this with state that comes from the capabilities and bundle clients.
+ * conferences (web/src/mock/fixtures.ts) so the shell's screens can be seen and tested, and honour
+ * [launch]. The talk features replace this with state that comes from the capabilities and bundle
+ * clients.
  */
 @Composable
-fun StandaloneShell(isDebugBuild: Boolean) {
-    var theme by rememberSaveable { mutableStateOf(ThemePreference.System) }
+fun StandaloneShell(isDebugBuild: Boolean, launch: DebugLaunch = DebugLaunch()) {
+    val options = if (isDebugBuild) launch else DebugLaunch()
+    var theme by rememberSaveable { mutableStateOf(options.theme ?: ThemePreference.System) }
     var server by rememberSaveable { mutableStateOf(BuildDefaults.OFFICIAL_SERVER) }
     var conference by rememberSaveable { mutableStateOf(if (isDebugBuild) SampleData.CONFERENCES.first().id else null) }
+    var pending by rememberSaveable { mutableStateOf(options.connect) }
+    var opened by rememberSaveable { mutableStateOf(options.open == null) }
     App(
         state = ShellState(
             capabilities = Capabilities(),
@@ -36,14 +67,38 @@ fun StandaloneShell(isDebugBuild: Boolean) {
             officialServerBase = BuildDefaults.OFFICIAL_SERVER,
             theme = theme,
             appVersion = BuildDefaults.VERSION,
+            pendingConnect = pending,
             isDebugBuild = isDebugBuild,
         ),
         actions = ShellActions(
             onSelectConference = { conference = it },
-            onChangeServer = { server = it },
+            onChangeServer = {
+                server = it
+                pending = null
+            },
+            onDeclineConnect = { pending = null },
             onThemeChange = { theme = it },
         ),
+        content = TabContent(
+            search = if (options.gallery) {
+                { ComponentGallery() }
+            } else {
+                null
+            },
+            appBarActions = { if (!opened) OpenOnLaunch(options.open) { opened = true } },
+        ),
+        initialTab = options.tab,
     )
+}
+
+// Opens Settings or the switcher once, from inside the shell where the navigator lives.
+@Composable
+private fun OpenOnLaunch(open: String?, onDone: () -> Unit) {
+    val nav = LocalShellNavigator.current
+    LaunchedEffect(open) {
+        onDone()
+        if (open == "settings") nav.openSettings() else if (open == "switcher") nav.openSwitcher()
+    }
 }
 
 /** The web app's mock conferences (web/src/mock/fixtures.ts), for debug builds and tests. */

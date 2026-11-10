@@ -84,7 +84,8 @@ kotlin {
             api(libs.kotlinx.coroutines.core)
             api(libs.kotlinx.serialization.json)
             api(libs.kotlinx.datetime)
-            implementation(libs.kotlinx.io.core)
+            // BundleFiles takes a kotlinx-io Path, so the platforms and tests that build one see it.
+            api(libs.kotlinx.io.core)
             implementation(libs.ktor.client.core)
             implementation(libs.androidx.sqlite.bundled)
         }

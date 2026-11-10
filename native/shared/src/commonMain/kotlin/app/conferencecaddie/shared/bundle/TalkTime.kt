@@ -52,6 +52,7 @@ object TalkTime {
      * start carries.
      */
     fun zoneLabel(timeZone: String?, startIso: String): String {
+        if (timeZone == "UTC" || timeZone == "Etc/UTC") return "UTC"
         val offset = offsetMinutes(startIso) ?: return timeZone ?: "UTC"
         US_ZONES[timeZone]?.let { (standard, daylight, standardOffset) ->
             return if (offset == standardOffset || daylight == null) standard else daylight

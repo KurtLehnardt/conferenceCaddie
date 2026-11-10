@@ -31,7 +31,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.icons.LucideIcon
@@ -122,12 +122,14 @@ fun CaddieButton(
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
     ) {
         if (icon != null) LucideImage(icon, null, size = 18.dp, tint = fg)
+        // The web keeps a button on one line; here a long label may wrap instead, so it stays
+        // readable at large system font sizes.
         Text(
             text,
             style = if (small) Caddie.type.buttonSmall else Caddie.type.button,
             color = fg,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(vertical = 6.dp),
         )
     }
 }

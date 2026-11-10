@@ -1,20 +1,25 @@
 # Conference Caddie native apps
 
 This directory holds the native Android and iOS apps: a Kotlin Multiplatform core shared by both
-platforms, with the UI written once in Compose Multiplatform. It is a skeleton. The tabs are
-placeholders, and the app does not yet talk to a backend. The Capacitor app in `web/android` is
-still the Android app people use today. The design and the phases these apps follow are in
-[`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md); this skeleton is spike S5 of Phase 0.
+platforms, with the UI written once in Compose Multiplatform. The UI follows the web app's design
+(see Design system below). Phase 2a gives the apps the talk features of the plan: they read a
+backend's capabilities, download its talk bundles, and search, filter and keep talks on the device,
+offline too (see Talk features below). For you is a placeholder until on-device recommendations
+arrive in phase 2b, and People appears only on backends that serve people features (phase 3). The
+Capacitor app in `web/android` is still the Android app people use today. The design and the phases
+these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `shared/` | Kotlin Multiplatform library with no UI. It holds the placeholder models (`Conference`, `Talk`), the `Capabilities` document, `BackendUrl` (the contract's backend URL rules), and the platform interfaces `Embedder`, `BleRadio`, `Notifier` and `SecureStore`. Its tests in `commonTest` run on the JVM and on the iOS simulator. |
-| `composeApp/` | Compose Multiplatform UI. `App()` draws the bottom bar: For you, Search, Interested, People (shown only when `capabilities.people.enabled` is true) and Settings, which has the Server URL field. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. |
-| `androidApp/` | The Android application: `MainActivity` hosts `App()`. |
+| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), keyword search (`search/`: FTS5, filters, facets, time phrases, suggestions), `core/CaddieCore`, which ties them together for the screens, and the platform interfaces `Embedder`, `BleRadio`, `Notifier` and `SecureStore`. Its tests in `commonTest` run on the JVM and on the iOS simulator. |
+| `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, Search, the Filters sheet, the talk sheet and My schedule). On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
+| `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`. Its instrumented smoke test is in `src/androidTest`. |
 | `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController`, and a build phase runs Gradle to build and embed the framework. |
 | `gradle/libs.versions.toml` | Every dependency version, with the reasons for the choices. |
+| `scripts/generate-app-icons.py` | Makes the app icons and the iOS launch image from the web app's icons. |
+| `licenses/` | Licence texts of third-party material the apps ship (the lucide icons). |
 
 The structure follows the official JetBrains template for Android Gradle Plugin 9, where the
 Android application must be its own module and Kotlin Multiplatform modules use the
@@ -56,7 +61,11 @@ From `native/`:
 ./gradlew :shared:allTests              # shared tests on the JVM (and on the iOS simulator on a Mac)
 ./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-debug.apk
 ./gradlew :androidApp:installDebug      # installs on a connected phone or a running emulator
+./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests on a phone or emulator
+./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented smoke test
 ```
+
+With more than one device connected, pick one with `ANDROID_SERIAL=emulator-5554`.
 
 You can also open `native/` in Android Studio and run the `androidApp` configuration.
 
@@ -68,6 +77,46 @@ reflection.
 The native app uses the same application id as the Capacitor app, `app.conferencecaddie`. A phone
 cannot have both installed at once. Installing a debug build over a release build, or the other way
 round, fails because the two are signed with different keys. Uninstall the other one first.
+
+## Design system
+
+The native apps look like the web app (`web/src`): same colours, type, spacing, icons, components
+and words. Everything lives in `composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/`:
+
+| Package | What it holds |
+|---|---|
+| `theme` | `CaddieTheme`: the web's design tokens from `web/src/styles.css` (`CaddieColors` for light and dark, `CaddieDimens`, `CaddieType`), provided as `Caddie.colors`, `Caddie.dimens` and `Caddie.type` and mapped onto Material 3. Dark mode follows the system unless the Theme setting says Light or Dark, as on the web. |
+| `icons` | `LucideIcon`: every lucide icon the web app uses, generated from the `lucide-preact` package by `composeApp/scripts/generate-lucide-icons.mjs`, drawn by `LucideIcon.vector()` with the web's stroke widths. |
+| `components` | The web's components: `AppBar`, `SwitcherButton`, `NavBar`, `CaddieButton`, `CaddieIconButton`, `CaddieChip` (toggle, dropdown and action chips), `FiltersChip`, `TimePhraseChip`, `SuggestionChip`, `ChipRow`, `SearchField`, `TalkCard`, `InterestedToggle`, `CaddieSheet`, `ConfirmDialog`, `Segmented`, `SwitchRow`, `OptionRow`, the settings rows, `StateView`, `ErrorBanner`, `Toast`, `OfflineBadge`, `NeedsConnection` and `SkeletonCard`. |
+| `strings` | `Strings`: the web's copy word for word, grouped by the web file it comes from. Copy that only the native apps need is marked "native only". |
+| `format` | `Format`: dates and times written as `web/src/lib/time.ts` writes them. |
+| `shell` | `App()`'s parts: `ShellState`, `ShellActions` and `TabContent`, the Settings screen, the conference switcher and the server confirmation. `StandaloneShell` runs the shell without a backend until the talk features replace it. |
+
+`App(state, actions, content)` is the web's shell: the conference switcher in the app bar, the
+Offline badge and the Settings gear on its right, and the tab bar People (only when the backend
+serves people features), For you, Search and Interested. Settings is a screen of its own with Back,
+as on the web. The caller owns the data (`ShellState`), answers `ShellActions`, and supplies each
+tab's screen through `TabContent`; tab content reaches the shell through `LocalShellNavigator`.
+
+Every size of text is in sp, so the system font size setting scales it; controls are at least 44 dp
+tall, icons that carry meaning have content descriptions, headings are marked as headings, and
+controls have keyboard focus rings like the web's.
+
+The web app sets no font of its own: its stack (`system-ui, -apple-system, ..., Roboto, ...`) is San
+Francisco on iPhones and Roboto on Android phones, which is what Compose's default font family
+draws, so no font is bundled. The lucide icons are ISC-licensed (MIT for those that came from
+Feather); `licenses/lucide.txt` holds the text and Settings shows it under Open-source licences.
+
+The app icons and the iOS launch image come from `web/public/icons` through
+`scripts/generate-app-icons.py` (Pillow). Both apps open on the web's page colour, light or dark.
+
+Debug builds take launch options that open a screen directly, for screenshots and manual checks:
+`-caddie.tab Search`, `-caddie.open settings` (or `switcher`), `-caddie.theme dark`,
+`-caddie.connect https://example.org` and `-caddie.gallery 1` (the Search components drawn with the
+web's sample talk). On iOS they are launch arguments
+(`xcrun simctl launch <device> app.conferencecaddie -caddie.tab Search`); on Android they are intent
+extras (`adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.tab Search`). Release
+builds ignore them.
 
 ## Build and run on iOS
 
@@ -247,11 +296,65 @@ implemented in `shared` as `BackendUrl.normalise()`:
   `BackendUrl.kt`: it refuses backslashes, IPv4 shorthand and other inputs that a WHATWG parser
   quietly repairs.
 
-The skeleton does not fetch anything yet. Until it does, the "Preview people features" switch in
-Settings (debug builds only) swaps between the demo and legacy capabilities, to show the People tab
-appearing and disappearing. Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the
-default backend in builds; the skeleton leaves the field empty until the capabilities client
-exists.
+Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the default backend in builds, so
+the Server URL field starts with it. When it cannot be reached and nothing is cached, the app falls
+back to the tier 1 demo on GitHub Pages for talk features. A server typed in Settings, like one from a
+`caddie://connect` link, is switched to only after a confirmation that names its base URL exactly
+and warns when it is not the official server. Registering the `caddie://` link itself is still to
+do. The People tab shows only when the capabilities enable people features; the Compose UI tests
+check that gating.
+
+## Talk features
+
+- **Capabilities.** `CapabilitiesDiscovery` asks `{base}/api/capabilities`, then
+  `{base}/capabilities.json`, and probes `/api/health` for the legacy server only after the exact
+  404 answer and only for a backend that has never served a document. `Capabilities.effective()`
+  applies the contract's consumer rules, and `forThisApp()` filters out what this app does not
+  implement yet (`server-rotate` Bluetooth, client-side people vectors). The last good document and
+  the "has served a document" mark are kept per backend base in the database.
+- **Bundles.** `BundleSync` reads `{bundle_base}conferences.json` entry by entry (with
+  `If-None-Match`), downloads exactly `bundle.json` and `vectors.i8` of the selected conference,
+  verifies them as `verifyBundle()` does, decodes them strictly, stores them under
+  `bundles/{backend key}/{content hash}/` in the app's files, and installs them in SQLite in one
+  transaction; the previous bundle stays in use until the new one passes. The conference list is
+  fetched at start and at most every 15 minutes in the foreground. With no network, the last good
+  list and bundle are used, and the app shows the web's Offline badge. Settings shows the space the
+  saved schedules take and can clear them; the Interested lists stay.
+- **Search.** Keyword search runs on SQLite FTS5 (Porter stemmer) with the server's filters, facet
+  counts, time phrases ("tuesday afternoon", "after lunch day 2"), Happening now and "Did you mean"
+  chips. `DECISIONS.md` (Native apps phase 2a) lists where it differs from the server.
+- **Storage.** One SQLite database through the bundled androidx.sqlite driver, migrated by
+  `user_version` (`CaddieDatabase.MIGRATIONS`; add a migration at the end, never change a shipped
+  one). Android keeps it in the app's database directory; iOS in Application Support, with the
+  bundle directory excluded from backups.
+
+### Trying the talk features against local bundles
+
+Until the Pages workflow publishes the bundles, build them from `main` and serve them from your
+machine (debug builds only):
+
+```sh
+npm --prefix tools/bundles ci --ignore-scripts
+node scripts/build-bundles.mjs --out /tmp/site --only kubecon-cloudnativecon-north-america-2026
+```
+
+Then edit `/tmp/site/capabilities.json` so `talks.bundle_base` points at your server, and serve the
+folder:
+
+- **Android emulator:** serve it over http (`python3 -m http.server 8765 --directory /tmp/site`),
+  set `bundle_base` to `http://127.0.0.1:8765/bundles/`, run `adb reverse tcp:8765 tcp:8765`, and
+  start the app with `adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.backend
+  http://127.0.0.1:8765 -e caddie.query "kubernetes scheduler"`. Debug builds accept a plain http
+  bundle base on the local hosts that `BackendUrl` accepts; release builds never do.
+- **iOS simulator:** App Transport Security blocks plain http, so serve the folder over https with a
+  certificate for `127.0.0.1` from a local test CA, trust the CA in the simulator with
+  `xcrun simctl keychain booted add-root-cert ca.pem`, set `bundle_base` to
+  `https://127.0.0.1:8766/bundles/`, and launch with `xcrun simctl launch booted app.conferencecaddie
+  -caddie.backend https://127.0.0.1:8766 -caddie.query "tuesday afternoon"`.
+
+`caddie.backend` and `caddie.query` are debug launch options next to the shell's (`caddie.tab`,
+`caddie.theme` and the others under Design system); the backend you pass stays selected, like one
+chosen in Settings.
 
 ## Privacy
 
@@ -280,7 +383,8 @@ Mac, so the iOS artifacts are covered, and review the diff:
 ```sh
 ./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
-  :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
+  :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
+  :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
   :composeApp:iosArm64ResolveResourcesFromDependencies \
   :composeApp:iosSimulatorArm64ResolveResourcesFromDependencies
 ```
@@ -303,8 +407,10 @@ dependencies.
   with the debug APK kept as an artifact. On `main` it also builds the unsigned release APK.
 - **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
   It is skipped with a notice when the signing secrets are missing.
-- **iOS simulator build** (macOS): the shared tests on the iOS simulator, the Release device
-  framework link, and an unsigned simulator build of the Xcode project.
+- **UI tests on an Android emulator** (Ubuntu): the Compose UI tests and the instrumented smoke test
+  on an API 34 emulator started by `reactivecircus/android-emulator-runner`. No secrets.
+- **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
+  the Release device framework link, and an unsigned simulator build of the Xcode project.
 - **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
   skipped when its secrets are missing.
 
@@ -316,23 +422,9 @@ The artifacts of this public repository can be downloaded by anyone signed in to
 
 ## Phase 2: align `Capabilities` with the contract
 
-`Capabilities` still follows the sketch in `docs/NATIVE_PLAN.md`. Before the app fetches real
-documents, bring it in line with `docs/contracts/capabilities.md` and the reference implementation
-in `contracts/js/capabilities.mjs`:
-
-- [ ] Add `min_api_version` and version negotiation (`negotiate()`), with the "This server needs a
-      newer version of the app" outcome.
-- [ ] Map unknown enum values to the conservative ones (`semantic` to `off`, `live` to `poll`,
-      `ble.mode` to `none`, imports to `device`) and an unknown `tier` to the label `unknown`,
-      instead of keeping raw strings or falling back to `demo`.
-- [ ] Apply the dependency rules: no people features unless `enabled` and `reports` are both true;
-      no presence, meets or GPS bands without presence; no Bluetooth without presence.
-- [ ] Add `server-rotate` to `ble.mode`, make `service_uuid` the fixed v1 UUID, and clamp
-      `near_rssi`, `window_s` and `sightings_min_interval_s` to the contract's ranges.
-- [ ] Accept `talks.bundle_base` only as an https URL ending in `/`.
-- [ ] Make `Capabilities.Legacy` equal `legacy-effective.json` (`server-rotate` Bluetooth with a
-      10-second interval, `server_search` true, no bundle base).
-- [ ] Implement discovery (`/api/capabilities`, then `/capabilities.json`, then `/api/health` only
-      after a 404), the per-backend cache, and `caddie://connect` links with the confirmation
-      prompt.
-- [ ] Run the contract fixtures (`contracts/fixtures/capabilities/*.json`) in `commonTest`.
+Done in phase 2a: version negotiation with the "update the app" outcome, conservative fallbacks for
+unknown values and an unknown `tier` read as `unknown`, the dependency rules, `server-rotate`, the
+fixed service UUID and clamped numbers, the https `bundle_base` rule, `Capabilities.Legacy` equal to
+`legacy-effective.json`, discovery with the per-backend cache, the connect-link parser and its
+confirmation screen, and the contract fixtures in `commonTest`. Still to do: routing `caddie://connect`
+links and QR codes from the platforms to the confirmation screen.

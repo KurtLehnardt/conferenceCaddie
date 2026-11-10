@@ -35,6 +35,7 @@ import app.conferencecaddie.ui.components.StateAction
 import app.conferencecaddie.ui.components.StateView
 import app.conferencecaddie.ui.components.ToastData
 import app.conferencecaddie.ui.icons.LucideIcon
+import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.shell.ServerStatus
 import app.conferencecaddie.ui.shell.ShellActions
 import app.conferencecaddie.ui.shell.ShellState
@@ -53,16 +54,18 @@ import kotlinx.coroutines.delay
  * placeholder until on-device recommendations arrive (phase 2b), and People appears only when the
  * backend serves people features (phase 3).
  *
- * [pendingConnect] is a backend base from a `caddie://connect` link or QR code waiting for the
- * person's confirmation; the platforms do not pass one yet.
+ * [launch] holds the debug builds' launch options (the release hosts pass the defaults);
+ * [initialQuery] types a search, which opens the Search tab.
+ *
+ * TODO(phase 3): route `caddie://connect` links and QR codes from the platforms into
+ * `pendingConnect`, which already shows the confirmation that names the base.
  */
 @Composable
 fun CaddieApp(
     core: CaddieCore,
     isDebugBuild: Boolean,
     appVersion: String,
-    pendingConnect: String? = null,
-    onConnectHandled: () -> Unit = {},
+    launch: DebugLaunch = DebugLaunch(),
     initialQuery: String? = null,
 ) {
     val state by core.state.collectAsState()
@@ -70,7 +73,9 @@ fun CaddieApp(
     val search = remember(core) { SearchModel(scope) { core.search(it) } }
     val uriHandler = LocalUriHandler.current
     val openUrl: (String) -> Unit = { url -> if (isWebLink(url)) runCatching { uriHandler.openUri(url) } }
-    var theme by remember { mutableStateOf(ThemePreference.System) }
+    var theme by remember { mutableStateOf(launch.theme ?: ThemePreference.System) }
+    var pendingConnect by remember { mutableStateOf(launch.connect) }
+    val onConnectHandled = { pendingConnect = null }
     var openTalk by remember { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<ToastData?>(null) }
     var undo by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
@@ -146,7 +151,7 @@ fun CaddieApp(
                 }
             },
         ),
-        initialTab = if (initialQuery != null) Tab.Search else null,
+        initialTab = launch.tab ?: if (initialQuery != null) Tab.Search else null,
     )
 
     val talk = openTalk?.let { ready?.bundle?.talksById?.get(it) }
