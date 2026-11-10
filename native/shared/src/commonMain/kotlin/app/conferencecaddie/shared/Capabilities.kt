@@ -8,7 +8,7 @@ import kotlinx.serialization.json.Json
  * What a backend can do, read from `GET {backend}/api/capabilities` (tiers 2 and 3) or the static
  * `capabilities.json` (tier 1). Every flag shows or hides whole screens and controls in the apps.
  *
- * This mirrors the illustrative shape in the native plan (section 7.2). It is not yet a frozen
+ * This mirrors the illustrative shape in docs/NATIVE_PLAN.md (section 7.2). It is not yet a frozen
  * contract: field names follow that sketch so the apps and backends can converge on it in Phase 1.
  * Every field has a default, so a document that leaves a section out still parses.
  */

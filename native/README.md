@@ -3,7 +3,8 @@
 This directory holds the native Android and iOS apps: a Kotlin Multiplatform core shared by both
 platforms, with the UI written once in Compose Multiplatform. It is a skeleton. The tabs are
 placeholders, and the app does not yet talk to a backend. The Capacitor app in `web/android` is
-still the Android app people use today.
+still the Android app people use today. The design and the phases these apps follow are in
+[`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md); this skeleton is spike S5 of Phase 0.
 
 ## Layout
 
@@ -156,15 +157,19 @@ Before the first upload:
 
 The Server URL field in Settings accepts an address and normalises it: it adds `https://` when no
 scheme is given, lowercases the host and drops trailing slashes. Only `http` and `https` are
-accepted. In the Android emulator, the host machine is `http://10.0.2.2:<port>`. Android blocks
-cleartext `http` by default, so use `https` for anything but local testing; the skeleton does not
-configure a cleartext exception.
+accepted. Both platforms block plain `http` by default (Android's cleartext policy and iOS App
+Transport Security), and the skeleton adds no exception, so use an `https` address. A debug-only
+exception for a server on your own machine (`http://10.0.2.2:<port>` from the Android emulator) can
+come with the networking code.
 
 The skeleton does not fetch anything yet. In Phase 1 the app will read
 `GET {server}/api/capabilities` (or `capabilities.json` for the static demo tier) into
 `Capabilities`, and a backend without that document will be treated as the legacy full feature set
 (`Capabilities.Legacy`). Until then, the "Preview people features" switch in Settings swaps between
 the demo and legacy capabilities, to show the People tab appearing and disappearing.
+
+Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the default backend in builds.
+The skeleton leaves the field empty until the capabilities client exists.
 
 ## Continuous integration
 

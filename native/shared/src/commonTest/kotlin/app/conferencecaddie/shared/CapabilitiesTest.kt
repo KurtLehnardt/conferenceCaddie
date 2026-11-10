@@ -6,7 +6,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CapabilitiesTest {
-    // The illustrative document from the native plan (section 7.2), with one value per alternative.
+    // The illustrative document from docs/NATIVE_PLAN.md (section 7.2), with one value per alternative.
     private val tier2Document = """
         {
           "api_version": 1,
