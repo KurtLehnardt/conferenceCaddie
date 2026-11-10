@@ -141,7 +141,7 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
       setDeleteMessage('Your profile was deleted from this phone and from our server.');
     } catch (err) {
       setDeleteMessage(
-        `${err instanceof PeopleApiError ? err.message : 'Could not delete right now.'} Nothing was removed. Try again.`,
+        `${err instanceof PeopleApiError ? err.message : 'Could not delete right now.'} Your profile may be partly deleted. Try again to finish.`,
       );
     }
     setDeleting(false);

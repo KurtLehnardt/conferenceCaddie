@@ -93,11 +93,15 @@ async function check(name, fn) {
 const responses = [];
 // Every search result seen, for the evidence check.
 const allResults = [];
-// The talks each test device shares for, per conference, as the server last confirmed them in an
-// answer to a profile write or delete: device -> Map(event -> talk ids). Each recorded response
-// carries its caller's list from when the request was sent, so the leak check can tell a fellow
-// sharer from anyone else whatever order the checks run in.
+// The talks each test device shares for, per conference: device -> Map(event -> talk ids). A
+// profile write the server accepted (200) records the list its request sent, and a delete clears
+// it. Each recorded response carries its caller's list from when the request was sent, so the leak
+// check can tell a fellow sharer from anyone else whatever order the checks run in.
 const sharing = new Map();
+// Accepted profile writes, and those whose answer echoed a different shared_talk_ids from the
+// request's.
+let echoChecked = 0;
+const echoMismatches = [];
 // Requests that answered 5xx or failed on the first attempt and were retried.
 let retried = 0;
 
@@ -148,7 +152,15 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       }
       if (device && event && res.status === 200 && url.pathname === '/api/people/profile') {
         if (!sharing.has(device)) sharing.set(device, new Map());
-        if (method === 'PUT') sharing.get(device).set(event, Array.isArray(json.shared_talk_ids) ? json.shared_talk_ids : []);
+        if (method === 'PUT') {
+          // The request is the source of truth for what the device now shares; the server drops
+          // duplicates, so they are dropped here too before its echo is compared with it.
+          const requested = Array.isArray(body?.shared_talk_ids) ? [...new Set(body.shared_talk_ids)] : [];
+          const echoed = Array.isArray(json.shared_talk_ids) ? json.shared_talk_ids : null;
+          echoChecked++;
+          if (JSON.stringify(echoed) !== JSON.stringify(requested)) echoMismatches.push(label || 'no label');
+          sharing.get(device).set(event, requested);
+        }
         if (method === 'DELETE') sharing.get(device).delete(event);
       }
       responses.push({ path, label, status: res.status, text, json, request: body, sharedTalks });
@@ -1688,8 +1700,8 @@ await check('inst1: the manifest makes the app installable and the page links it
     if (r.text.includes(spotMarker) && !(['A-meet', 'F-meet'].includes(r.label) && r.path.startsWith('/api/meet/')) && !['A-presence', 'F-presence'].includes(r.label)) hits.push(`a spot line in ${r.label} ${r.path}`);
     // C shared only for the circle talk, so C's contact may appear only in that circle's member
     // list, answered to a caller who shared for the talk when it asked: A from p1 on, and B once q10
-    // makes it share too (until p11 deletes it). api() records who shared what from the server's
-    // own answers, so this does not depend on labels or on the order of the checks.
+    // makes it share too (until p11 deletes it). api() records who shared what from the profile
+    // writes the server accepted, so this does not depend on labels or on the order of the checks.
     const circleId = circleTalk?.talk_id;
     const fellowSharer = Boolean(circleId) && r.path === '/api/circles/members' && r.request?.talk_id === circleId && r.sharedTalks.includes(circleId);
     if (r.text.includes(contactMarker('C')) && !fellowSharer) hits.push(`C's contact in ${r.label}`);
@@ -1699,6 +1711,9 @@ await check('inst1: the manifest makes the app installable and the page links it
     if (['N-members', 'anon-members', 'public-counts', 'C-matches', 'recs'].includes(r.label) && /linkedin_url|contact_note/.test(r.text)) hits.push(`contact fields in ${r.label}`);
   }
   const unique = [...new Set(hits)];
+  // l trusts the shared talks each accepted profile write sent; the server must have stored and
+  // echoed exactly that list.
+  report(echoMismatches.length === 0, 'l0: every accepted profile write echoes the shared talks it sent', echoMismatches.length ? `different echo in ${[...new Set(echoMismatches)].slice(0, 4).join(', ')}` : `${echoChecked} writes checked`);
   report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked`);
 }
 
