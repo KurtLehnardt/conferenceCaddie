@@ -56,7 +56,7 @@ fun visibleTabs(capabilities: Capabilities): List<Tab> =
  */
 @Composable
 fun App(
-    initialCapabilities: Capabilities = Capabilities.Demo,
+    initialCapabilities: Capabilities = Capabilities.None,
     initialServerUrl: String = "",
     isDebugBuild: Boolean = false,
 ) {
@@ -166,7 +166,7 @@ private fun SettingsScreen(
                 Switch(
                     checked = capabilities.people.enabled,
                     onCheckedChange = { enabled ->
-                        onCapabilitiesChanged(if (enabled) Capabilities.Legacy else Capabilities.Demo)
+                        onCapabilitiesChanged(if (enabled) Capabilities.Legacy else Capabilities.None)
                     },
                 )
                 Text("Preview people features", style = MaterialTheme.typography.bodyMedium)

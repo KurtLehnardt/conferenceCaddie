@@ -6,6 +6,17 @@
 # compileSdk is 37 because Compose 1.12 and Lifecycle 2.11 refuse to build against anything older.
 # targetSdk stays at 36: compileSdk only decides which APIs the code can see, while targetSdk decides
 # which runtime behaviour changes the app opts in to.
+#
+# Phase 2a (2026-11-10) adds the network, storage and time libraries of the shared core:
+# - Ktor 3.6.1, the newest release, built against kotlinx.coroutines 1.11.0 like the rest of the
+#   app. The OkHttp engine serves Android and the JVM tests; the Darwin engine (NSURLSession) serves
+#   iOS, so App Transport Security applies there.
+# - kotlinx-io 0.9.1 is the version Ktor 3.6.1 itself depends on; the bundle cache uses its file
+#   system API.
+# - androidx.sqlite 2.7.1, the newest stable release. Its bundled driver compiles SQLite with FTS5
+#   for Android, iOS and the JVM, so search behaves the same everywhere.
+# - kotlinx-datetime 0.7.1 is the version Compose already brings in; it supplies time zones for
+#   "today in the conference's time zone".
 [versions]
 agp = "9.3.3"
 android-compileSdk = "37"
@@ -19,6 +30,10 @@ compose-multiplatform = "1.12.2"
 kotlin = "2.4.21"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.12.0"
+kotlinx-datetime = "0.7.1"
+kotlinx-io = "0.9.1"
+ktor = "3.6.1"
+androidx-sqlite = "2.7.1"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
@@ -34,6 +49,15 @@ compose-uiToolingPreview = { module = "org.jetbrains.compose.ui:ui-tooling-previ
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "androidx-sqlite" }
+compose-ui-backhandler = { module = "org.jetbrains.compose.ui:ui-backhandler", version.ref = "compose-multiplatform" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
