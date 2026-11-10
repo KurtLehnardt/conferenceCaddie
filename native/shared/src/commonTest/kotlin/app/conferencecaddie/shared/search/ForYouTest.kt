@@ -29,7 +29,8 @@ class ForYouTest {
             "greener clusters" to FakeEmbedder.vec(0.6f, -0.8f),
         ),
     )
-    private val search = TalkSearch(bundle, scope, database, embedder = { loaded })
+    private var failed = false
+    private val search = TalkSearch(bundle, scope, database, embedder = { loaded }, embedderFailed = { failed })
     private val forYou = ForYou(bundle, search)
     private val morning = IsoTime.epochMillis("2099-03-02T08:00:00Z")!!
 
@@ -81,8 +82,12 @@ class ForYouTest {
     }
 
     @Test
-    fun withoutTheModelTheTextMatchesKeywordsAndSaysSo() = runTest {
+    fun withoutTheModelTheTextMatchesKeywordsAndSaysSoOnceItFailed() = runTest {
         loaded = null
+        val loading = items(ForYou.Request(text = "audit logs"))
+        assertEquals(listOf(A), loading.items.map { it.talk.talkId })
+        assertEquals(false, loading.degraded, "a model still loading is not reported")
+        failed = true
         val r = items(ForYou.Request(text = "audit logs"))
         assertTrue(r.degraded)
         assertEquals(listOf(A), r.items.map { it.talk.talkId })

@@ -13,7 +13,8 @@ import app.conferencecaddie.shared.bundle.TalkBundle
  *   topic is its own constant-score clause on the server), then by start and talk id.
  * - The "learn or figure out next" text: the [SearchResult.SEMANTIC_K] talks nearest to it by
  *   meaning, embedded as a search query. Without the model, a keyword match over title and abstract
- *   stands in, as the server's fallback does, and the result says [Result.Ready.degraded].
+ *   stands in, as the server's fallback does, and once the model has failed for good the result says
+ *   [Result.Ready.degraded].
  * - Native only: the talks nearest by meaning to the centre of the talks the person marked, so a
  *   person who marks talks gets suggestions without picking topics. The server's request carries
  *   the marked talks only to leave them out.
@@ -90,7 +91,9 @@ class ForYou(
                 if (v != null && vectors != null) {
                     search.nearestTalks(v, vectors, SearchResult.SEMANTIC_K, eligible)
                 } else {
-                    degraded = true
+                    // Keywords stand in while the model loads too; only a model that failed for good
+                    // is reported, as search reports it.
+                    degraded = search.semanticUnavailable()
                     search.lexicalTitleAbstract(text).mapNotNull { bundle.talksById[it] }.filter(eligible).take(window)
                 }
             }

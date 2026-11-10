@@ -280,6 +280,12 @@ class TalkSearch(
     }
 
     /**
+     * True once meaning-based matching has failed for good (the model is missing or was refused), as
+     * opposed to not loaded yet: a keyword-only answer reports [SearchResult.degraded] only then.
+     */
+    internal fun semanticUnavailable(): Boolean = embedderFailed()
+
+    /**
      * The keyword matches of [text] over title and abstract only, in BM25 order: the server's keyword
      * stand-in for the For you text when meaning-based matching is unavailable.
      */
