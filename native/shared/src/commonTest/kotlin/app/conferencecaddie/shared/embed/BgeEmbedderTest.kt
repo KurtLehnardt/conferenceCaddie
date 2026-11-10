@@ -7,6 +7,7 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertTrue
 import kotlin.time.TimeSource
 import kotlinx.coroutines.test.runTest
@@ -32,6 +33,16 @@ class BgeEmbedderTest {
             y += b[i].toDouble() * b[i]
         }
         return d / sqrt(x * y)
+    }
+
+    @Test
+    fun aCorruptOrTruncatedModelIsRefused() {
+        val vocab = embeddingText("vocab.txt")
+        val model = embeddingBytes("model_quantized.onnx")
+        assertFails("a truncated model") { BgeEmbedder.create(model.copyOf(model.size / 2), vocab) }
+        assertFails("bytes that are no model") { BgeEmbedder.create(ByteArray(4096) { (it * 31).toByte() }, vocab) }
+        assertFails("an empty model") { BgeEmbedder.create(ByteArray(0), vocab) }
+        assertFails("a vocabulary without the special tokens") { BgeEmbedder.create(model, "hello\nworld\n") }
     }
 
     private fun JsonArray.floats() = FloatArray(size) { this[it].jsonPrimitive.double.toFloat() }

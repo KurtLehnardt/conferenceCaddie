@@ -63,7 +63,7 @@ From `native/`:
 
 ```sh
 ./gradlew :shared:allTests              # shared tests on the JVM (and on the iOS simulator on a Mac)
-./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-debug.apk
+./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-<abi>-debug.apk
 ./gradlew :androidApp:installDebug      # installs on a connected phone or a running emulator
 ./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests and the model measurement on a phone or emulator
 ./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented smoke test
@@ -77,16 +77,21 @@ Kotlin plugin's default simulator; `-Pcaddie.iosTestDevice=<name or UDID>` picks
 
 You can also open `native/` in Android Studio and run the `androidApp` configuration.
 
-The APK holds arm64-v8a, armeabi-v7a and x86_64 native libraries (no 32-bit x86), stored compressed,
-because ONNX Runtime's library is 23 to 39 MB per ABI; with the 34 MB query model the release APK is
-about 66 MB.
+The build makes one APK per ABI, `androidApp-arm64-v8a-*.apk` for phones and `androidApp-x86_64-*.apk`
+for emulators and Chromebooks, because ONNX Runtime's native library is 23 to 39 MB per ABI. With
+the 34 MB query model the arm64-v8a release APK is about 40 MB; it is the one CI signs and the one
+published on GitHub Releases. There is no universal APK and no 32-bit build. `installDebug` and the
+connected tests pick the APK of the device's ABI.
 
 Release builds run R8 (code shrinking and resource shrinking). Compose, AndroidX and
 kotlinx.serialization bring their own keep rules; app-specific rules go in
 `androidApp/proguard-rules.pro`, which keeps ONNX Runtime's Java API for its JNI code. Check a
 release build on a device after adding anything that uses reflection: `scripts/release-smoke.sh`
-installs the release build (signed with the debug key when no release key is set), starts it, and
-opens Settings, and CI runs it on the emulator.
+installs the release build of the device's ABI (signed with the debug key when no release key is
+set), checks the installed package for ONNX Runtime's telemetry provider and the network-state
+permission, starts it, opens Settings, and searches for letters that are in no talk, which only the
+query model can answer, so the model must load and run under R8. The search uses the official server
+and the published bundles, so the device needs a connection. CI runs it on the emulator.
 
 The native app uses the same application id as the Capacitor app, `app.conferencecaddie`. A phone
 cannot have both installed at once. Installing a debug build over a release build, or the other way
@@ -206,8 +211,8 @@ keystore password. A local signed build reads them inside one shell, without pri
 
 **In CI, Gradle never sees the key.** The build job runs `assembleRelease` with
 `-Pcaddie.unsignedRelease=true` on every run, pull requests included, so R8 and resource shrinking
-are checked before `main`. On `main` it keeps the unsigned APK for one day, and a separate job signs
-it. That job checks out no code and runs no Gradle or npm; it refuses an APK whose name is not the
+are checked before `main`. On `main` it keeps the unsigned arm64-v8a APK for one day, named
+`conference-caddie-native-<commit>-release.apk`, and a separate job signs it. That job checks out no code and runs no Gradle or npm; it refuses an APK whose name is not the
 release APK of the commit being built, decodes the keystore into the runner's
 temp directory with `umask 077`, runs `zipalign` and `apksigner` from the runner's Android SDK,
 deletes the keystore, and fails unless the APK's certificate matches the repository variable
@@ -379,9 +384,16 @@ check that gating.
   WordPiece tokenizer in common Kotlin that matches transformers.js. `DECISIONS.md` (Native apps phase
   2b) has the measurements and the reasons.
 - **No telemetry from ONNX Runtime.** ONNX Runtime 1.30 would upload usage events to Microsoft on
-  Android and iOS. The shared code sets `ORT_DISABLE_TELEMETRY` before ONNX Runtime starts and turns
-  telemetry events off; the Android manifest also removes the AAR's telemetry provider and the
-  network-state permission it adds. Keep both when ONNX Runtime is updated.
+  Android and iOS. The apps set `ORT_DISABLE_TELEMETRY` first thing at start, on the main thread
+  (`CaddieApplication.onCreate`, `MainViewController`), and every session turns telemetry events off;
+  the Android manifest also removes the AAR's telemetry provider and the network-state permission it
+  adds. `openEncoder` is the only code that may call ONNX Runtime (`scripts/check-onnxruntime-entry.sh`
+  fails on any other use), the `check<Variant>OnnxRuntimeManifest` task fails a build whose merged
+  manifest has the provider or the permission, and the release smoke test checks the installed
+  package. Keep all of this when ONNX Runtime is updated.
+- **The model loads when it is needed.** The core loads the model on the first text search (or For
+  you with learn text), tries again after a failure once a pause has passed, and closes it when the
+  system asks for memory; the next text search loads it again.
 - **The smoke checks.** `TalkSmokeTest` runs the talk checks of `scripts/smoke.mjs` against the shared
   search, For you and topic lists with the real model, over bundles built from `main`'s data, and
   prints a PASS, FAIL or N/A line per check (the report is also written to
@@ -476,8 +488,10 @@ more artifacts; if it reports a missing checksum, add the task it names to the c
 
 Files that are not Maven artifacts (the query model, its vocabulary and ONNX Runtime's iOS archive)
 are pinned in `gradle/pinned-downloads.properties` by URL, size and SHA-256 instead. When ONNX
-Runtime's version changes in the version catalog, the iOS archive's pin must change with it; the build
-stops when they disagree.
+Runtime's version changes in the version catalog, the iOS archive's pin must change with it, and so
+must `licenses/onnxruntime.txt`; the build and the notices check stop when they disagree. When the
+bundle builder's `ONNX_REVISION` changes, the model and vocabulary pins must name the same revision;
+`:shared:checkEmbeddingRevision` fails until they do.
 
 Some artifacts differ by operating system (AAPT2 for Linux and macOS), so the file also lists the
 Linux variants that CI needs; when a Linux CI run fails verification, add the entry it names.
@@ -485,13 +499,17 @@ Sources and Javadoc jars, which IDEs download, are trusted without checksums.
 
 ## Continuous integration
 
-`.github/workflows/native.yml` runs on pull requests and on pushes to `main` that touch `native/` or
-the workflow itself. Every action is pinned to a commit SHA, checkouts keep no credentials, and
+`.github/workflows/native.yml` runs on pull requests and on pushes to `main` that touch `native/`,
+the contracts, the bundle builder (`scripts/lib/embedder.mjs`, `scripts/build-bundles.mjs`), the
+smoke test (`scripts/smoke.mjs`), `data/`, `tools/bundles/` or the workflow itself. Every action is pinned to a commit SHA, checkouts keep no credentials, and
 Dependabot (`.github/dependabot.yml`) proposes weekly updates for the actions and the Gradle
 dependencies.
 
-- **Shared tests and Android build** (Ubuntu): `:shared:allTests` and `:androidApp:assembleDebug`,
-  with the debug APK kept as an artifact. On `main` it also builds the unsigned release APK.
+- **Shared tests and Android build** (Ubuntu): the ONNX Runtime entry check,
+  `:shared:allTests` (with `checkEmbeddingRevision` and `checkPinnedDownloads`) and
+  `:androidApp:assembleDebug`, with the arm64-v8a debug APK kept as an artifact. It builds the
+  unsigned release APKs on every run and writes their sizes to the job summary; on `main` it hands
+  the arm64-v8a one to the sign job.
 - **Talk checks against the on-device search** (Ubuntu): builds the bundles from the committed data
   with `scripts/build-bundles.mjs` and runs `:shared:smokeTalks`; the table goes to the job summary.
 - **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
@@ -503,7 +521,8 @@ dependencies.
   No secrets. The release APK is signed only after this job passes.
 - **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
   the third-party notices check, the Release device framework link, and an unsigned simulator build
-  of the Xcode project.
+  of the Xcode project. The TestFlight jobs write the Release app's size, installed and zipped, and
+  the signed IPA's size to their job summaries.
 - **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
   skipped when its secrets are missing.
 

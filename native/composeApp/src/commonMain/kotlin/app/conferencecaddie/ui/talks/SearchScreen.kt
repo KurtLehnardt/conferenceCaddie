@@ -169,7 +169,7 @@ fun SearchScreen(
                                 rank = if (browse) {
                                     null
                                 } else {
-                                    { RankDrawer(talk.talkId, result.ranking[talk.talkId], result, model.filters, conference, startOpen = talk.talkId == rankOpen) }
+                                    { RankDrawer(talk.talkId, result.ranking[talk.talkId], result, conference, startOpen = talk.talkId == rankOpen) }
                                 },
                             )
                         }

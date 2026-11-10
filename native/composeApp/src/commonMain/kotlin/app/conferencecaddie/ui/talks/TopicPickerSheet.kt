@@ -15,7 +15,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,7 +47,8 @@ import kotlinx.coroutines.delay
  * As on the web: chosen topics are pinned on top and a removed one stays there, unselected, until
  * taps pause, so no chip moves under the finger; then type-ahead results, "Suggested for you" (from
  * the marked talks and the text), and the common topics with "Show more". At most 30 topics.
- * Every change is saved at once through [onTopics] and [onText].
+ * Every change is saved at once through [onTopics] and [onText]; [selected] is read when the sheet
+ * opens.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -66,31 +66,36 @@ fun TopicPickerSheet(
     var query by rememberSaveable { mutableStateOf("") }
     var showAll by rememberSaveable { mutableStateOf(false) }
     var draft by rememberSaveable { mutableStateOf(text) }
+    // The chosen topics, in order. The sheet keeps its own list and saves the whole of it on every
+    // tap, so a tap never starts from [selected] while the save of the one before is still on its
+    // way, which would drop that one.
+    val current = remember { mutableStateListOf<String>().apply { addAll(selected) } }
     // The pinned row in display order, ghosts (just removed) included.
     val pinned = remember { mutableStateListOf<String>().apply { addAll(selected) } }
     var ghostTick by remember { mutableStateOf(0) }
-    val chosen = selected.toSet()
-    val full = selected.size >= Strings.Topics.MAX
-    val latestChosen by rememberUpdatedState(chosen)
+    val chosen = current.toSet()
+    val full = current.size >= Strings.Topics.MAX
 
     LaunchedEffect(ghostTick) {
         if (ghostTick == 0) return@LaunchedEffect
         delay(GHOST_MS)
-        pinned.retainAll(latestChosen)
+        pinned.retainAll(current)
     }
-    // A topic chosen from a list joins the pinned row at the end.
-    LaunchedEffect(selected) { for (id in selected) if (id !in pinned) pinned += id }
 
     fun toggle(id: String) {
-        if (id in chosen) {
-            onTopics(selected - id)
+        if (id in current) {
+            current.remove(id)
             ghostTick++
-        } else if (!full) {
-            onTopics(selected + id)
+        } else if (current.size < Strings.Topics.MAX) {
+            current += id
+            // A topic chosen from a list joins the pinned row at the end.
             if (id !in pinned) pinned += id
             // Every tap restarts the pause, so the pinned row settles only once taps stop.
-            if (pinned.any { it !in chosen && it != id }) ghostTick++
+            if (pinned.any { it !in current }) ghostTick++
+        } else {
+            return
         }
+        onTopics(current.toList())
     }
 
     val byId = bundle.topicsById
@@ -103,7 +108,7 @@ fun TopicPickerSheet(
         onClose = onClose,
         modifier = Modifier.testTag("topic-sheet"),
         footer = {
-            Text(Strings.Topics.count(selected.size), style = Caddie.type.note, color = c.text2, modifier = Modifier.weight(1f).testTag("topic-count"))
+            Text(Strings.Topics.count(current.size), style = Caddie.type.note, color = c.text2, modifier = Modifier.weight(1f).testTag("topic-count"))
             CaddieButton(Strings.Topics.DONE, onClick = onClose, small = true, modifier = Modifier.testTag("topic-done"))
         },
     ) {

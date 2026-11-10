@@ -201,6 +201,7 @@ object Strings {
         const val PICK_BODY = "Pick topics you want to learn, or write what you're trying to learn or figure out next, to get talk suggestions."
         const val PICK_TOPICS = "Pick topics"
         const val FINDING = "Finding talks…"
+        const val ERROR = "Suggestions are unavailable right now."
         const val NONE = "No upcoming talks match your topics yet. Try adding a few more."
         const val NEEDS_CONNECTION_TITLE = "Suggestions need a connection"
         const val WHY_LABEL = "You want to learn:"
@@ -217,8 +218,8 @@ object Strings {
         /** Native only: the reason for a suggestion found through the marked talks. */
         const val LIKE_LABEL = "Like a talk you marked:"
 
-        /** Native only: meaning-based matching is unavailable on this phone, not paused on a server. */
-        const val DEGRADED_NATIVE = "Meaning-based matching is not available on this phone; these are keyword matches."
+        /** Native only: meaning-based matching is unavailable on this device, not paused on a server. */
+        const val DEGRADED_NATIVE = "Meaning-based matching is not available on this device; these are keyword matches."
     }
 
     /** web/src/people/TopicPicker.tsx and ProfileScreen.tsx (the learn topics and text). */
@@ -261,11 +262,11 @@ object Strings {
         fun keyword(rank: Int?, window: Int) = if (rank != null) "$rank of the top $window" else "Not in the top $window"
         fun meaning(rank: Int?, k: Int) = if (rank != null) "$rank of the $k nearest" else "Not among the $k nearest"
 
-        /** Native only: the ranking runs on the phone, not in Elasticsearch. */
-        const val NOTE_NATIVE = "This phone ranks talks by keywords and by meaning, then fuses the two lists with reciprocal rank fusion. A high place in either list lifts a talk."
+        /** Native only: the ranking runs on the device, not in Elasticsearch. */
+        const val NOTE_NATIVE = "This device ranks talks by keywords and by meaning, then fuses the two lists with reciprocal rank fusion. A high place in either list lifts a talk."
 
         /** Native only: the keyword-only ranking when meaning-based matching is unavailable. */
-        const val NOTE_KEYWORDS_ONLY = "Meaning-based matching is not available on this phone, so talks are ranked by keywords alone."
+        const val NOTE_KEYWORDS_ONLY = "Meaning-based matching is not available on this device, so talks are ranked by keywords alone."
 
         fun conferenceOnly(name: String) = "$name only"
         const val TALKS_ONLY = "Talks only, without breaks or housekeeping"

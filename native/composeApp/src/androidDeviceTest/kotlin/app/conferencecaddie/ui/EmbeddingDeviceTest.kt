@@ -2,6 +2,7 @@ package app.conferencecaddie.ui
 
 import android.os.Build
 import android.util.Log
+import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
 import app.conferencecaddie.ui.talks.EmbeddingModel
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -24,6 +25,8 @@ import kotlinx.serialization.json.jsonPrimitive
 class EmbeddingDeviceTest {
     @Test
     fun theShippedModelMatchesTheReferenceVectors() = runBlocking {
+        // The app does this in CaddieApplication.onCreate; the test process has no such application.
+        OnnxRuntimeTelemetry.disableForProcess()
         val loadStart = System.nanoTime()
         val embedder = EmbeddingModel.load()
         val loadMs = (System.nanoTime() - loadStart) / 1e6

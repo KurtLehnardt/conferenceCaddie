@@ -17,10 +17,7 @@ import kotlinx.cinterop.usePinned
 // ONNX Runtime's C API through the cinterop in src/nativeInterop/cinterop/onnxruntime.def, whose
 // small C functions do the session work.
 
-internal actual fun openEncoder(model: ByteArray, threads: Int): EncoderSession {
-    disableOnnxRuntimeTelemetryByEnvironment()
-    return IosOrtEncoder(model, threads)
-}
+internal actual fun openEncoder(model: ByteArray, threads: Int): EncoderSession = IosOrtEncoder(model, threads)
 
 @OptIn(ExperimentalForeignApi::class)
 private class IosOrtEncoder(model: ByteArray, threads: Int) : EncoderSession {

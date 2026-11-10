@@ -152,9 +152,9 @@ fun CaddieApp(
         if (talkLaunch.sheet == "topics") pickerOpen = true
         talkLaunch.talk?.let { openTalk = it }
     }
-    // For you asks again whenever what it depends on changes, and every minute, as talks end.
+    // For you asks again whenever what it depends on changes, and every minute, as talks end, but
+    // only while it is on screen (the effect lives in its tab); coming back to it catches up.
     val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, state.semantic, nowMs / 60_000)
-    LaunchedEffect(forYouInputs) { if (ready != null) forYou.refresh(state.selectedSlug, forYouInputs) }
 
     // The person is told once when the stored data could not be opened.
     LaunchedEffect(state.storageReset) {
@@ -215,6 +215,7 @@ fun CaddieApp(
         content = TabContent(
             forYou = {
                 BundleGate(state, core) { r ->
+                    LaunchedEffect(forYouInputs) { forYou.refresh(state.selectedSlug, forYouInputs) }
                     ForYouScreen(
                         model = forYou,
                         bundle = r.bundle,

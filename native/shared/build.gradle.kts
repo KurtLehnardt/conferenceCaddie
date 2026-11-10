@@ -4,6 +4,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.time.Duration
 import java.util.Base64
@@ -102,49 +103,140 @@ abstract class PinnedDownload : DefaultTask() {
     fun download() {
         val expected = sha256.get().lowercase()
         val cached = cacheDir.get().asFile.resolve("$expected/${url.get().substringAfterLast('/')}")
-        if (problem(cached) != null) {
-            cached.parentFile.mkdirs()
-            val partial = File(cached.parentFile, cached.name + ".partial")
-            val client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .connectTimeout(Duration.ofSeconds(30))
-                .build()
-            val request = HttpRequest.newBuilder(URI(url.get())).timeout(Duration.ofMinutes(15)).GET().build()
-            val response = client.send(request, HttpResponse.BodyHandlers.ofFile(partial.toPath()))
-            if (response.statusCode() != 200) {
-                partial.delete()
-                throw GradleException("${url.get()} answered HTTP ${response.statusCode()}.")
+        if (problem(cached, bytes.get(), expected) != null) {
+            val dir = Files.createDirectories(cached.parentFile.toPath())
+            // A name of its own for each download, so two builds that fetch the same file at once never
+            // write into one file; the verified file then replaces the cached one in one rename.
+            val partial = Files.createTempFile(dir, cached.name, ".partial")
+            try {
+                val client = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    .connectTimeout(Duration.ofSeconds(30))
+                    .build()
+                val request = HttpRequest.newBuilder(URI(url.get())).timeout(Duration.ofMinutes(15)).GET().build()
+                val response = client.send(
+                    request,
+                    HttpResponse.BodyHandlers.ofFile(partial, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING),
+                )
+                if (response.statusCode() != 200) throw GradleException("${url.get()} answered HTTP ${response.statusCode()}.")
+                // A redirect must stay on https.
+                if (response.uri().scheme != "https") throw GradleException("${url.get()} redirected to a URL that is not https.")
+                install(partial.toFile(), cached, bytes.get(), expected, url.get())
+            } finally {
+                Files.deleteIfExists(partial)
             }
-            // A redirect must stay on https.
-            if (response.uri().scheme != "https") {
-                partial.delete()
-                throw GradleException("${url.get()} redirected to a URL that is not https.")
-            }
-            problem(partial)?.let {
-                partial.delete()
-                throw GradleException("${url.get()} failed verification against its pinned size and SHA-256 ($it) and was deleted.")
-            }
-            Files.move(partial.toPath(), cached.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
         val out = output.get().asFile
         out.parentFile.mkdirs()
         Files.copy(cached.toPath(), out.toPath(), StandardCopyOption.REPLACE_EXISTING)
     }
 
-    private fun problem(file: File): String? {
-        if (!file.isFile) return "missing"
-        if (file.length() != bytes.get()) return "${file.length()} bytes, expected ${bytes.get()}"
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(1 shl 16)
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                digest.update(buffer, 0, n)
+    companion object {
+        /**
+         * Moves [partial] to [cached] if it has the pinned size and SHA-256, and otherwise deletes it and
+         * fails the build. checkPinnedDownloads runs this against files that are and are not the pinned ones.
+         */
+        fun install(partial: File, cached: File, bytes: Long, sha256: String, source: String) {
+            problem(partial, bytes, sha256)?.let {
+                partial.delete()
+                throw GradleException("$source failed verification against its pinned size and SHA-256 ($it) and was deleted.")
+            }
+            Files.move(partial.toPath(), cached.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        }
+
+        /** Why [file] is not the pinned file, or null when it is. */
+        fun problem(file: File, bytes: Long, sha256: String): String? {
+            if (!file.isFile) return "missing"
+            if (file.length() != bytes) return "${file.length()} bytes, expected $bytes"
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    digest.update(buffer, 0, n)
+                }
+            }
+            val actual = digest.digest().joinToString("") { "%02x".format(it) }
+            return if (actual == sha256.lowercase()) null else "SHA-256 $actual"
+        }
+    }
+}
+
+/**
+ * Checks that PinnedDownload refuses a file whose size or SHA-256 is not the pinned one, deletes it and
+ * leaves the cache without it, and installs a file that is the pinned one. It needs no network.
+ */
+abstract class CheckPinnedDownloads : DefaultTask() {
+    @get:Internal
+    abstract val workDir: DirectoryProperty
+
+    @TaskAction
+    fun check() {
+        val dir = workDir.get().asFile
+        dir.deleteRecursively()
+        dir.mkdirs()
+        val content = "the pinned file\n".toByteArray()
+        val sha = MessageDigest.getInstance("SHA-256").digest(content).joinToString("") { "%02x".format(it) }
+        val cached = File(dir, "pinned.bin")
+        fun attempt(bytes: ByteArray, size: Long, digest: String): String? {
+            val partial = File(dir, "pinned.bin.partial").apply { writeBytes(bytes) }
+            val refusal = try {
+                PinnedDownload.install(partial, cached, size, digest, "the test file")
+                null
+            } catch (e: GradleException) {
+                e.message
+            }
+            if (partial.exists()) throw GradleException("PinnedDownload left a download behind.")
+            return refusal
+        }
+        val tampered = content.copyOf().also { it[0] = 'T'.code.toByte() }
+        val wrongSha = attempt(tampered, content.size.toLong(), sha)
+        if (wrongSha == null || "SHA-256" !in wrongSha || cached.exists()) throw GradleException("PinnedDownload accepted a file with another SHA-256.")
+        val wrongSize = attempt(content + 0.toByte(), content.size.toLong(), sha)
+        if (wrongSize == null || "bytes" !in wrongSize || cached.exists()) throw GradleException("PinnedDownload accepted a file of another size.")
+        val wrongPin = attempt(content, content.size.toLong(), sha.replaceRange(0, 1, if (sha[0] == '0') "1" else "0"))
+        if (wrongPin == null || cached.exists()) throw GradleException("PinnedDownload accepted a file against another pinned SHA-256.")
+        if (attempt(content, content.size.toLong(), sha.uppercase()) != null || !cached.readBytes().contentEquals(content)) {
+            throw GradleException("PinnedDownload refused the pinned file.")
+        }
+        dir.deleteRecursively()
+    }
+}
+
+/**
+ * Checks that the apps embed queries with the model revision the bundle builder embeds talks with:
+ * every Hugging Face URL in gradle/pinned-downloads.properties must name ONNX_REVISION of
+ * scripts/lib/embedder.mjs. Talk vectors from one revision and query vectors from another would rank
+ * by meaning badly without any error.
+ */
+abstract class CheckEmbeddingRevision : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val embedderScript: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val pinnedDownloads: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val script = embedderScript.get().asFile.readText()
+        val revision = Regex("""export const ONNX_REVISION = '([0-9a-f]{40})';""").find(script)?.groupValues?.get(1)
+            ?: throw GradleException("scripts/lib/embedder.mjs no longer declares ONNX_REVISION as a 40-character commit.")
+        val urls = pinnedDownloads.get().asFile.readLines()
+            .map { it.trim() }
+            .filter { !it.startsWith("#") && it.substringBefore('=').endsWith(".url") && "huggingface.co/" in it }
+        if (urls.isEmpty()) throw GradleException("gradle/pinned-downloads.properties pins no Hugging Face file.")
+        for (line in urls) {
+            val pinned = Regex("""/resolve/([^/]+)/""").find(line)?.groupValues?.get(1)
+            if (pinned != revision) {
+                throw GradleException(
+                    "${line.substringBefore('=')} pins revision $pinned, but scripts/lib/embedder.mjs embeds talks with $revision. " +
+                        "Pin the same revision, with the size and SHA-256 of its files.",
+                )
             }
         }
-        val actual = digest.digest().joinToString("") { "%02x".format(it) }
-        return if (actual == sha256.get().lowercase()) null else "SHA-256 $actual"
     }
 }
 
@@ -177,7 +269,12 @@ abstract class UnpackOnnxRuntimeApple : DefaultTask() {
             for (entry in zip.entries()) {
                 val name = entry.name
                 val target = when {
-                    name.startsWith("Headers/") && name.endsWith(".h") -> File(out, name)
+                    name.startsWith("Headers/") && name.endsWith(".h") -> File(out, name).also {
+                        // An entry name such as Headers/../../x.h must not write outside the output directory.
+                        if (!it.canonicalFile.toPath().startsWith(out.canonicalFile.toPath())) {
+                            throw GradleException("The ONNX Runtime archive has an entry outside its folder: $name")
+                        }
+                    }
                     name == "LICENSE" -> File(out, "LICENSE")
                     name in slices -> File(out, "${slices.getValue(name)}/fat-onnxruntime")
                     else -> null
@@ -319,8 +416,21 @@ tasks.matching { it.name.startsWith("cinteropOnnxruntime") }.configureEach { dep
 // ONNX Runtime sends usage telemetry unless ORT_DISABLE_TELEMETRY is set before it starts
 // (see disableOnnxRuntimeTelemetryByEnvironment); the JVM cannot set its own environment, so the
 // test processes get it here, and the simulator tests through simctl.
+val checkEmbeddingRevision = tasks.register<CheckEmbeddingRevision>("checkEmbeddingRevision") {
+    group = "verification"
+    description = "Checks that the pinned embedding model is the revision the bundle builder uses."
+    embedderScript.set(rootProject.layout.projectDirectory.file("../scripts/lib/embedder.mjs"))
+    pinnedDownloads.set(rootProject.layout.projectDirectory.file("gradle/pinned-downloads.properties"))
+}
+val checkPinnedDownloads = tasks.register<CheckPinnedDownloads>("checkPinnedDownloads") {
+    group = "verification"
+    description = "Checks that a download whose size or SHA-256 is not the pinned one is refused."
+    workDir.set(layout.buildDirectory.dir("tmp/checkPinnedDownloads"))
+}
+tasks.named("check") { dependsOn(checkEmbeddingRevision, checkPinnedDownloads) }
+
 val jvmTest = tasks.named<Test>("jvmTest") {
-    dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
+    dependsOn(checkEmbeddingRevision, checkPinnedDownloads, downloadEmbeddingModel, downloadEmbeddingVocab)
     environment("ORT_DISABLE_TELEMETRY", "1")
     systemProperty("caddie.embeddingDir", embeddingDir.get().asFile.absolutePath)
     filter { excludeTestsMatching("*.TalkSmokeTest") }

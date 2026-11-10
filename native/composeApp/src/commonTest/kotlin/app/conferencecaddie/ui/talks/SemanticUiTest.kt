@@ -20,12 +20,14 @@ import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Embedder
 import app.conferencecaddie.shared.bundle.BundleFiles
+import app.conferencecaddie.shared.core.BundleState
 import app.conferencecaddie.shared.core.CaddieCore
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.embed.BgeEmbedder
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.strings.Strings
+import app.conferencecaddie.ui.theme.CaddieTheme
 import kotlin.random.Random
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -153,6 +155,30 @@ class SemanticUiTest {
         waitFor(hasTestTag("for-you-alpha-conf-2099:1"))
         waitFor(hasText("Probes and maps.") and hasAnyAncestor(hasTestTag("for-you-alpha-conf-2099:1")), unmerged = true)
         assertEquals("tracing probes", core.state.value.learn.text)
+    }
+
+    @Test
+    fun quickTapsInTheTopicPickerAreAllKept() = runComposeUiTest {
+        waitUntil(timeoutMillis = 20_000) { core.state.value.bundle is BundleState.Ready }
+        val bundle = (core.state.value.bundle as BundleState.Ready).bundle
+        val id = { label: String -> bundle.topicsById.values.single { it.label == label }.topicId }
+        val saved = ArrayList<List<String>>()
+        // [selected] never catches up here, as with a core that has not yet stored the first tap
+        // when the second arrives: each tap must build on the one before, not on [selected].
+        setContent {
+            CaddieTheme {
+                TopicPickerSheet(bundle, selected = emptyList(), text = "", interested = emptyList(), onTopics = { saved += it }, onText = {}, onClose = {})
+            }
+        }
+        waitFor(chip("Kubernetes", 2, "topic-common")).performClick()
+        onNode(chip("eBPF", 1, "topic-common")).performClick()
+        onNode(chip("Scheduling", 1, "topic-common")).performClick()
+        assertEquals(listOf(id("Kubernetes"), id("eBPF"), id("Scheduling")), saved.last())
+        waitFor(hasText(Strings.Topics.count(3)))
+        // Removing one keeps the others.
+        onNode(chip("eBPF", 1, "topic-common")).performClick()
+        assertEquals(listOf(id("Kubernetes"), id("Scheduling")), saved.last())
+        waitFor(hasText(Strings.Topics.count(2)))
     }
 
     @Test

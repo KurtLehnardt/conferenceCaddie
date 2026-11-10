@@ -80,6 +80,8 @@ data class SearchResult(
     val degraded: Boolean = false,
     /** True when the meaning-based list took part (a text search with the model loaded). */
     val semantic: Boolean = false,
+    /** The request this result answers, so a screen explains it with the filters it really had. */
+    val request: SearchRequest = SearchRequest(),
 ) {
     companion object {
         /** How many of each list reciprocal rank fusion reads, as the server's rank_window_size. */
@@ -90,6 +92,11 @@ data class SearchResult(
 
         /** The rank constant of reciprocal rank fusion, Elasticsearch's default. */
         const val RANK_CONSTANT = 60
+
+        init {
+            // Every nearest talk must fit in the rank window, or one could match without a rank.
+            require(SEMANTIC_K <= RANK_WINDOW) { "SEMANTIC_K must not exceed RANK_WINDOW" }
+        }
     }
 }
 
@@ -207,6 +214,7 @@ class TalkSearch(
             ranking = ranking,
             degraded = text.isNotBlank() && !semantic && embedderFailed(),
             semantic = semantic,
+            request = request,
         )
     }
 

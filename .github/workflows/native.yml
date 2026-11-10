@@ -19,6 +19,13 @@ on:
       - 'native/**'
       # The shared tests compile the contract fixtures and follow the contract schemas.
       - 'contracts/**'
+      # The talk checks build bundles from the committed data with the bundle builder and its tools,
+      # and checkEmbeddingRevision reads the model revision from scripts/lib/embedder.mjs.
+      - 'scripts/lib/embedder.mjs'
+      - 'scripts/build-bundles.mjs'
+      - 'scripts/smoke.mjs'
+      - 'data/**'
+      - 'tools/bundles/**'
       - '.github/workflows/native.yml'
   push:
     branches: [main]
@@ -26,6 +33,13 @@ on:
       - 'native/**'
       # The shared tests compile the contract fixtures and follow the contract schemas.
       - 'contracts/**'
+      # The talk checks build bundles from the committed data with the bundle builder and its tools,
+      # and checkEmbeddingRevision reads the model revision from scripts/lib/embedder.mjs.
+      - 'scripts/lib/embedder.mjs'
+      - 'scripts/build-bundles.mjs'
+      - 'scripts/smoke.mjs'
+      - 'data/**'
+      - 'tools/bundles/**'
       - '.github/workflows/native.yml'
   workflow_dispatch:
 
@@ -81,8 +95,13 @@ jobs:
           path: ~/.gradle/caches/caddie-pinned
           key: caddie-pinned-${{ runner.os }}-${{ hashFiles('native/gradle/pinned-downloads.properties') }}
 
+      # openEncoder must stay the only way into ONNX Runtime (shared, embed/BgeEmbedder.kt).
+      - name: Check that only openEncoder uses ONNX Runtime
+        run: bash scripts/check-onnxruntime-entry.sh
+
       # On Linux the iOS targets are skipped, so allTests runs the shared tests on the JVM, the
-      # embedding tests with the real model among them.
+      # embedding tests with the real model among them, and the checks of the pinned downloads.
+      # Every assemble also checks the merged manifest for ONNX Runtime's telemetry provider.
       - name: Shared tests and debug APK
         run: ./gradlew :shared:allTests :androidApp:assembleDebug
 
@@ -98,7 +117,7 @@ jobs:
         id: debug_apk
         run: |
           out="conference-caddie-native-$(git rev-parse --short HEAD)-debug.apk"
-          cp androidApp/build/outputs/apk/debug/androidApp-debug.apk "$GITHUB_WORKSPACE/$out"
+          cp androidApp/build/outputs/apk/debug/androidApp-arm64-v8a-debug.apk "$GITHUB_WORKSPACE/$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -112,6 +131,17 @@ jobs:
       - name: Unsigned release APK
         run: ./gradlew -Pcaddie.unsignedRelease=true :androidApp:assembleRelease
 
+      # One APK per ABI (androidApp/build.gradle.kts): arm64-v8a is the one that is published.
+      - name: Report the release APK sizes
+        run: |
+          {
+            echo "| Release APK (unsigned) | Bytes |"
+            echo "| --- | ---: |"
+            for f in androidApp/build/outputs/apk/release/*.apk; do
+              echo "| $(basename "$f") | $(wc -c < "$f" | tr -d ' ') |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Save the pinned downloads
         if: github.ref == 'refs/heads/main' && steps.pinned.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -119,13 +149,14 @@ jobs:
           path: ~/.gradle/caches/caddie-pinned
           key: ${{ steps.pinned.outputs.cache-primary-key }}
 
-      # Only main hands the unsigned APK to the sign job.
+      # Only main hands the unsigned APK to the sign job: the arm64-v8a APK, the one published on
+      # GitHub Releases. The x86_64 APK is for emulators and is not signed with the release key.
       - name: Name the release APK after the commit
         id: release_apk
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
           out="conference-caddie-native-$(git rev-parse --short HEAD)-release.apk"
-          cp androidApp/build/outputs/apk/release/androidApp-release-unsigned.apk "$GITHUB_WORKSPACE/unsigned-$out"
+          cp androidApp/build/outputs/apk/release/androidApp-arm64-v8a-release-unsigned.apk "$GITHUB_WORKSPACE/unsigned-$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
 
       - name: Keep the unsigned release APK for the sign job
@@ -602,6 +633,28 @@ jobs:
           xcodebuild -version > "$out/xcode-version.txt"
           tar -C "$out" -cf "$RUNNER_TEMP/ios-kotlin.tar" .
 
+      # The size of the Release app before signing: the .app as installed, and zipped as an IPA
+      # packs it. The App Store's per-device sizes need a signed export (ios-sign reports the IPA).
+      - name: Report the app size
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=("$RUNNER_TEMP/unsigned.xcarchive/Products/Applications/"*.app)
+          app="${apps[0]}"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/app-size.zip"
+          {
+            echo "| iOS Release app (unsigned) | Bytes |"
+            echo "| --- | ---: |"
+            echo "| $(basename "$app") installed | $(( $(du -sk "$app" | cut -f1) * 1024 )) |"
+            echo "| zipped, as in an IPA | $(wc -c < "$RUNNER_TEMP/app-size.zip" | tr -d ' ') |"
+            exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
+            echo "| executable (Kotlin, Compose and ONNX Runtime, linked statically) | $(wc -c < "$app/$exe" | tr -d ' ') |"
+            res=0
+            if [ -d "$app/compose-resources" ]; then res=$(( $(du -sk "$app/compose-resources" | cut -f1) * 1024 )); fi
+            echo "| compose-resources (the query model among them) | $res |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$RUNNER_TEMP/app-size.zip"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-kotlin-release
@@ -729,6 +782,7 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/ipa"
           mv "${ipas[0]}" "$RUNNER_TEMP/ipa/ConferenceCaddie-$CADDIE_BUILD_NUMBER.ipa"
+          echo "Signed IPA: $(wc -c < "$RUNNER_TEMP/ipa/ConferenceCaddie-$CADDIE_BUILD_NUMBER.ipa" | tr -d ' ') bytes" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove the keychain and profile
         if: always()

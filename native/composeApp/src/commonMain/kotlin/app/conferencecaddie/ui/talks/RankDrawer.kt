@@ -35,6 +35,7 @@ import app.conferencecaddie.shared.search.Ranking
 import app.conferencecaddie.shared.search.SearchRequest
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.ui.components.LucideImage
+import app.conferencecaddie.ui.components.textIconSize
 import app.conferencecaddie.ui.components.Pill
 import app.conferencecaddie.ui.components.caddieClickable
 import app.conferencecaddie.ui.icons.LucideIcon
@@ -44,15 +45,15 @@ import app.conferencecaddie.ui.theme.Caddie
 /**
  * "Why this rank" under a search result (web RankDrawer in web/src/components/search.tsx): a text
  * button with a chevron that opens a panel with the talk's place in the fused ranking, its place
- * among the keyword matches and among the nearest by meaning, and the filters applied. The web asks
- * the server for the ranks; here the search computed them already, so the panel opens at once.
+ * among the keyword matches and among the nearest by meaning, and the filters applied: those of the
+ * search that produced [result], not filters changed since. The web asks the server for the ranks;
+ * here the search computed them already, so the panel opens at once.
  */
 @Composable
 fun RankDrawer(
     talkId: String,
     ranking: Ranking?,
     result: SearchResult,
-    filters: SearchRequest,
     conference: Conference,
     startOpen: Boolean = false,
 ) {
@@ -72,7 +73,7 @@ fun RankDrawer(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            LucideImage(LucideIcon.ChevronDown, null, Modifier.rotate(turn), size = 18.dp, tint = c.accentInk)
+            LucideImage(LucideIcon.ChevronDown, null, Modifier.rotate(turn), size = textIconSize(18.dp), tint = c.accentInk)
             Text(Strings.Rank.WHY, style = Caddie.type.buttonSmall, color = c.accentInk)
         }
         if (open) {
@@ -93,7 +94,7 @@ fun RankDrawer(
                     if (result.semantic) RankRow(Strings.Rank.MEANING, Strings.Rank.meaning(ranking.semanticRank, SearchResult.SEMANTIC_K))
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(Strings.Rank.FILTERS, style = RankLabel, color = c.text2)
-                        filterLines(filters, result, conference).forEach { line ->
+                        filterLines(result.request, result, conference).forEach { line ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("•", style = Caddie.type.meta, color = c.text)
                                 Text(line, style = Caddie.type.meta, color = c.text)

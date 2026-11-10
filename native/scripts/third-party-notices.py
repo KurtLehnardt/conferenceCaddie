@@ -360,6 +360,28 @@ def licence_text(licence_id):
     return text.strip("\n")
 
 
+def paragraphs(text):
+    """
+    The text as the screen shows it: hard line breaks inside a paragraph (and the indentation after
+    them) joined with a space so it wraps to the screen, blank-line-separated paragraphs kept apart
+    by exactly one blank line, and no empty paragraph. The app then only splits on "\n\n", so no
+    regular expression runs on the phone over the notices' hundreds of kilobytes.
+    """
+    joined = re.sub(r"(?<!\n)\n(?!\n)[ \t]*", " ", text)
+    return "\n\n".join(p.strip() for p in re.split(r"\n{2,}", joined) if p.strip())
+
+
+def check_onnxruntime_notices():
+    """licenses/onnxruntime.txt must be the notices of the ONNX Runtime the version catalog names."""
+    version = catalog_version("onnxruntime")
+    text = (LICENCES / "onnxruntime.txt").read_text(encoding="utf-8")
+    if f"/v{version}/ThirdPartyNotices.txt" not in text or f"ONNX Runtime {version}" not in text:
+        raise NoticeError(
+            f"licenses/onnxruntime.txt is not the notices of ONNX Runtime {version}, the version in gradle/libs.versions.toml.\n"
+            "Download that release's LICENSE and ThirdPartyNotices.txt into it (see its header) when the version changes."
+        )
+
+
 def kotlin_string(text):
     """A Kotlin raw string literal for text, with the characters a raw string cannot hold escaped."""
     escaped = text.replace("$", "${'$'}").replace('"""', "${'\"'}${'\"'}${'\"'}")
@@ -371,6 +393,7 @@ def const_name(licence_id):
 
 
 def generate(android, ios):
+    check_onnxruntime_notices()
     unknown = sorted({g for g, _, _ in android | ios if licence_for(g) is None})
     if unknown:
         lines = [f"  {g}: " + ", ".join(sorted({f"{n}:{v}" for gg, n, v in android | ios if gg == g})) for g in unknown]
@@ -432,13 +455,16 @@ def generate(android, ios):
         "    /** A library as group:name (or a bundled component's name) and the version the apps ship. */",
         "    data class Module(val coordinate: String, val version: String)",
         "",
-        "    /** One licence: its title, the modules under it on each platform, and its full text. */",
+        "    /**",
+        "     * One licence: its title, the modules under it on each platform, and its full text, with its",
+        "     * paragraphs already joined into single lines and separated by one blank line.",
+        "     */",
         "    data class Notice(val id: String, val title: String, val android: List<Module>, val ios: List<Module>, val text: String)",
         "",
     ]
     used = [lid for lid in LICENCES_BY_ID if per_licence[lid]["android"] or per_licence[lid]["ios"]]
     for lid in used:
-        text = licence_text(lid)
+        text = paragraphs(licence_text(lid))
         if len(text.encode("utf-8")) <= MAX_CONSTANT_BYTES:
             out.append(f"    private const val {const_name(lid)} = {kotlin_string(text)}")
         else:

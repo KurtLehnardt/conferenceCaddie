@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.conferencecaddie.ui.icons.LucideIcon
@@ -74,7 +76,7 @@ fun TopicChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        LucideImage(if (on) LucideIcon.Check else LucideIcon.Plus, null, size = 16.dp, tint = iconTint)
+        LucideImage(if (on) LucideIcon.Check else LucideIcon.Plus, null, size = textIconSize(16.dp), tint = iconTint)
         Text(
             label,
             style = Caddie.type.body.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
@@ -114,7 +116,7 @@ fun PillSearchField(
             .then(if (focused) Modifier.border(2.dp, c.accent, Pill) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LucideImage(LucideIcon.Search, null, Modifier.padding(start = 14.dp), size = 18.dp)
+        LucideImage(LucideIcon.Search, null, Modifier.padding(start = 14.dp), size = textIconSize(18.dp))
         Box(Modifier.weight(1f).padding(start = 10.dp, end = 8.dp), contentAlignment = Alignment.CenterStart) {
             if (value.isEmpty()) Text(placeholder, style = Caddie.type.body, color = c.text2, maxLines = 1)
             BasicTextField(
@@ -179,3 +181,11 @@ fun LabelledTextField(
         if (hint != null) Text(hint, style = Caddie.type.meta, color = c.text2)
     }
 }
+
+/**
+ * [size] grown with the system font size, up to twice, for an icon that sits in a line of text. The
+ * web's icons grow with its text when the page is zoomed for larger text; one that stayed small next
+ * to large text would be hard to see and would look out of place.
+ */
+@Composable
+internal fun textIconSize(size: Dp): Dp = size * LocalDensity.current.fontScale.coerceIn(1f, 2f)

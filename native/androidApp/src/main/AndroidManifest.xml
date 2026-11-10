@@ -8,8 +8,9 @@
 
     <!-- ONNX Runtime's AAR adds a telemetry uploader to Microsoft (a content provider that starts
          with the app) and the network-state permission it uses. The app sends nothing but to its
-         backend, so both are removed here, and the shared code also sets ORT_DISABLE_TELEMETRY
-         before ONNX Runtime starts (DECISIONS.md, phase 2b). -->
+         backend, so both are removed here (the checkOnnxRuntimeManifest task fails the build if either
+         comes back), and CaddieApplication sets ORT_DISABLE_TELEMETRY before ONNX Runtime starts
+         (DECISIONS.md, phase 2b). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 
     <!-- No backups and no device-to-device transfer: the app will hold per-backend device secrets
@@ -18,6 +19,7 @@
          device-to-device transfer. Cleartext traffic is off; debug builds add an exception for a
          server on the developer's machine (src/debug). -->
     <application
+        android:name=".CaddieApplication"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"

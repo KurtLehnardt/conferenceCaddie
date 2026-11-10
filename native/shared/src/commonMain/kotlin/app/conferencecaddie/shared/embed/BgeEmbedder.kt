@@ -19,22 +19,46 @@ internal interface EncoderSession {
 
 /**
  * Opens an encoder on the ONNX model in [model] that runs each operator on [threads] threads.
- * Throws when ONNX Runtime refuses the model. Every implementation switches ONNX Runtime's telemetry
- * off first ([disableOnnxRuntimeTelemetryByEnvironment]) and turns its telemetry events off once
- * the environment exists.
+ * Throws when ONNX Runtime refuses the model.
+ *
+ * This is the only way into ONNX Runtime: no other code may call its Java API (`ai.onnxruntime`)
+ * or its C API (`OrtGetApiBase`), so every session gets the settings below, and CI fails on any
+ * other use (native/scripts/check-onnxruntime-entry.sh). Each implementation turns the
+ * environment's telemetry events off and does not let idle intra-op threads spin. The process must
+ * have called [OnnxRuntimeTelemetry.disableForProcess] before, which the apps do at start.
  */
 internal expect fun openEncoder(model: ByteArray, threads: Int): EncoderSession
 
-/**
- * ONNX Runtime 1.30 on Android and Apple platforms sends usage telemetry to Microsoft
- * (mobile.events.data.microsoft.com) and keeps a device id, unless the process environment sets
- * ORT_DISABLE_TELEMETRY before ONNX Runtime initialises (core/platform/posix/telemetry.cc). The app
- * sends nothing anywhere but its backend, so this sets it; it must run before the first ONNX
- * Runtime call. On Android the manifest also removes the AAR's telemetry initializer.
- */
+/** Sets ORT_DISABLE_TELEMETRY in the process environment. */
 internal expect fun disableOnnxRuntimeTelemetryByEnvironment()
 
 internal const val ORT_DISABLE_TELEMETRY = "ORT_DISABLE_TELEMETRY"
+
+/** ONNX Runtime's session option that stops idle intra-op threads from spinning on the CPU. */
+internal const val ALLOW_SPINNING = "session.intra_op.allow_spinning"
+
+/**
+ * ONNX Runtime 1.30 on Android and Apple platforms uploads usage telemetry to Microsoft
+ * (mobile.events.data.microsoft.com) and keeps a device id, unless the process environment holds
+ * ORT_DISABLE_TELEMETRY when ONNX Runtime initialises (core/platform/posix/telemetry.cc; the
+ * onnxruntime-swift-package-manager README for 1.30 says the same). The apps send nothing anywhere
+ * but to their backend and the bundle host, so they call [disableForProcess] once, first thing at
+ * start, on the main thread, before any other thread could read the environment (setenv is not
+ * safe while another thread reads it): Application.onCreate on Android and MainViewController on
+ * iOS. The Android manifest also removes the AAR's telemetry initializer, and the test tasks set
+ * the variable for their processes.
+ */
+object OnnxRuntimeTelemetry {
+    @kotlin.concurrent.Volatile
+    private var disabled = false
+
+    /** Sets ORT_DISABLE_TELEMETRY=1 for this process. Call once at start, on the main thread. */
+    fun disableForProcess() {
+        if (disabled) return
+        disableOnnxRuntimeTelemetryByEnvironment()
+        disabled = true
+    }
+}
 
 /**
  * The query embedder of the talk bundle contract (docs/contracts/talk-bundle.md, Embedding
@@ -46,6 +70,9 @@ internal const val ORT_DISABLE_TELEMETRY = "ORT_DISABLE_TELEMETRY"
  *
  * One text runs at a time: ONNX Runtime's session could run several, but a phone gains nothing
  * from that and the order of results would then depend on scheduling.
+ *
+ * An instance is meant to live as long as the process (the shared core keeps one and closes it only
+ * to give memory back): creating one reads 34 MB and builds an ONNX Runtime session.
  */
 class BgeEmbedder internal constructor(
     private val tokenizer: WordPieceTokenizer,
@@ -66,7 +93,7 @@ class BgeEmbedder internal constructor(
     }
 
     /** Releases the ONNX Runtime session. Later calls to [embed] fail. */
-    suspend fun close() = mutex.withLock {
+    override suspend fun close() = mutex.withLock {
         if (!closed) {
             closed = true
             session.close()

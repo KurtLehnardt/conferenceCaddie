@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared.embed
 
+import ai.onnxruntime.OnnxJavaType
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -8,10 +9,7 @@ import java.nio.LongBuffer
 // Compiled into both androidMain and jvmMain (see shared/build.gradle.kts): ONNX Runtime's Java API
 // is the same in onnxruntime-android and in the JVM package.
 
-internal actual fun openEncoder(model: ByteArray, threads: Int): EncoderSession {
-    disableOnnxRuntimeTelemetryByEnvironment()
-    return OrtJavaEncoder(model, threads)
-}
+internal actual fun openEncoder(model: ByteArray, threads: Int): EncoderSession = OrtJavaEncoder(model, threads)
 
 private class OrtJavaEncoder(model: ByteArray, threads: Int) : EncoderSession {
     private val env = OrtEnvironment.getEnvironment().also { it.setTelemetry(false) }
@@ -19,6 +17,7 @@ private class OrtJavaEncoder(model: ByteArray, threads: Int) : EncoderSession {
         options.setIntraOpNumThreads(threads)
         options.setInterOpNumThreads(1)
         options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        options.addConfigEntry(ALLOW_SPINNING, "0")
         env.createSession(model, options)
     }
     private val inputs = session.inputNames.toList()
@@ -39,6 +38,7 @@ private class OrtJavaEncoder(model: ByteArray, threads: Int) : EncoderSession {
         try {
             session.run(tensors, setOf(output)).use { result ->
                 val tensor = result.get(output).orElseThrow() as OnnxTensor
+                require(tensor.info.type == OnnxJavaType.FLOAT) { "The model's output is not float." }
                 val dims = tensor.info.shape
                 require(dims.size == 3 && dims[0] == 1L && dims[1] == ids.size.toLong()) { "The model's output has an unexpected shape." }
                 val hidden = tensor.floatBuffer

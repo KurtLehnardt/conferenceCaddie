@@ -1,3 +1,5 @@
+import com.android.build.api.artifact.SingleArtifact
+import javax.xml.parsers.DocumentBuilderFactory
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // The Android application. It shares applicationId app.conferencecaddie with the Capacitor app in
@@ -67,11 +69,20 @@ android {
         versionCode = caddieVersionCode
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
 
-        // ONNX Runtime ships a native library of 23 to 39 MB per ABI. 32-bit x86 is left out: no
-        // phone in use runs it, and x86_64 still covers emulators and Chromebooks.
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+    // One APK per ABI, because ONNX Runtime's native library is 23 to 39 MB per ABI and an APK for
+    // all of them would carry every one. arm64-v8a is the APK that is signed and published on GitHub
+    // Releases, for nearly every phone in use; a phone with only a 32-bit system (some low-end
+    // Android Go models) cannot install it. x86_64 is built for emulators (CI's release smoke test)
+    // and Chromebooks. 32-bit ARM and x86 are left out, and so is a universal APK (DECISIONS.md,
+    // phase 2b).
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
         }
     }
 
@@ -126,5 +137,55 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_17
+    }
+}
+
+/**
+ * Fails when the merged manifest of a variant brings back what ONNX Runtime's AAR adds and
+ * src/main/AndroidManifest.xml removes: the telemetry initializer (a content provider that starts
+ * with the app and uploads to Microsoft) and the ACCESS_NETWORK_STATE permission. A new ONNX Runtime
+ * version could rename either, so any provider of ONNX Runtime fails too. Runs with every assemble.
+ */
+abstract class CheckOnnxRuntimeManifest : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val manifest: RegularFileProperty
+
+    @get:OutputFile
+    abstract val report: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val android = "http://schemas.android.com/apk/res/android"
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        }
+        val doc = factory.newDocumentBuilder().parse(manifest.get().asFile)
+        fun names(tag: String) = doc.getElementsByTagName(tag).let { list ->
+            (0 until list.length).map { (list.item(it) as org.w3c.dom.Element).getAttributeNS(android, "name") }
+        }
+        val problems = names("provider").filter { it.startsWith("ai.onnxruntime.") }.map { "the provider $it" } +
+            names("uses-permission").filter { it == "android.permission.ACCESS_NETWORK_STATE" }.map { "the permission $it" }
+        if (problems.isNotEmpty()) {
+            throw GradleException(
+                "The merged manifest has ${problems.joinToString(" and ")}, which ONNX Runtime's AAR adds and the app " +
+                    "must not have. Remove each in src/main/AndroidManifest.xml with tools:node=\"remove\".",
+            )
+        }
+        report.get().asFile.writeText("No ONNX Runtime provider and no ACCESS_NETWORK_STATE in ${manifest.get().asFile.name}.\n")
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val name = variant.name.replaceFirstChar { it.uppercase() }
+        val check = tasks.register<CheckOnnxRuntimeManifest>("check${name}OnnxRuntimeManifest") {
+            group = "verification"
+            description = "Checks that the ${variant.name} manifest has no ONNX Runtime telemetry provider and no ACCESS_NETWORK_STATE."
+            manifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+            report.set(layout.buildDirectory.file("reports/onnxruntime-manifest/${variant.name}.txt"))
+        }
+        tasks.matching { it.name == "assemble$name" || it.name == "check" }.configureEach { dependsOn(check) }
     }
 }

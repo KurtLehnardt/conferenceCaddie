@@ -75,14 +75,16 @@ static CaddieOrt* caddie_ort_open(const void* model, size_t size, int intra_thre
         return NULL;
     }
     o->api = api;
-    // No telemetry: the Kotlin caller sets ORT_DISABLE_TELEMETRY before this first ONNX Runtime
-    // call, which stops it for the process, and the environment's telemetry events are turned off too.
+    // No telemetry: the app sets ORT_DISABLE_TELEMETRY at start (OnnxRuntimeTelemetry), which stops
+    // it for the process, and the environment's telemetry events are turned off too.
     if (caddie_ort_failed(api, api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "caddie", &o->env), err, err_len)
         || caddie_ort_failed(api, api->DisableTelemetryEvents(o->env), err, err_len)
         || caddie_ort_failed(api, api->CreateSessionOptions(&options), err, err_len)
         || caddie_ort_failed(api, api->SetIntraOpNumThreads(options, intra_threads), err, err_len)
         || caddie_ort_failed(api, api->SetInterOpNumThreads(options, 1), err, err_len)
         || caddie_ort_failed(api, api->SetSessionGraphOptimizationLevel(options, ORT_ENABLE_ALL), err, err_len)
+        // Idle intra-op threads sleep instead of spinning on the CPU.
+        || caddie_ort_failed(api, api->AddSessionConfigEntry(options, "session.intra_op.allow_spinning", "0"), err, err_len)
         || caddie_ort_failed(api, api->CreateSessionFromArray(o->env, model, size, options, &o->session), err, err_len)
         || caddie_ort_failed(api, api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &o->memory), err, err_len)
         || caddie_ort_failed(api, api->GetAllocatorWithDefaultOptions(&allocator), err, err_len)
@@ -98,10 +100,14 @@ static CaddieOrt* caddie_ort_open(const void* model, size_t size, int intra_thre
         if (caddie_ort_failed(api, api->SessionGetInputName(o->session, i, allocator, &name), err, err_len)) goto fail;
         kind = strcmp(name, "input_ids") == 0 ? 0 : strcmp(name, "attention_mask") == 0 ? 1 : strcmp(name, "token_type_ids") == 0 ? 2 : -1;
         o->input_names[o->input_count] = strdup(name);
-        o->input_kinds[o->input_count] = kind;
-        o->input_count++;
         allocator->Free(allocator, name);
         name = NULL;
+        if (o->input_names[o->input_count] == NULL) {
+            caddie_ort_message(err, err_len, "out of memory");
+            goto fail;
+        }
+        o->input_kinds[o->input_count] = kind;
+        o->input_count++;
         if (kind < 0) {
             caddie_ort_message(err, err_len, "the model takes an input other than input_ids, attention_mask and token_type_ids");
             goto fail;
@@ -110,6 +116,10 @@ static CaddieOrt* caddie_ort_open(const void* model, size_t size, int intra_thre
     if (caddie_ort_failed(api, api->SessionGetOutputName(o->session, 0, allocator, &name), err, err_len)) goto fail;
     o->output_name = strdup(name);
     allocator->Free(allocator, name);
+    if (o->output_name == NULL) {
+        caddie_ort_message(err, err_len, "out of memory");
+        goto fail;
+    }
     api->ReleaseSessionOptions(options);
     return o;
 fail:
@@ -131,6 +141,7 @@ static int caddie_ort_cls(CaddieOrt* o, const int64_t* ids, const int64_t* mask,
     const char* output_names[1] = { o->output_name };
     size_t rank = 0;
     int64_t shape_out[3] = { 0, 0, 0 };
+    ONNXTensorElementDataType element = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
     float* hidden = NULL;
     int result = -1;
     for (size_t i = 0; i < o->input_count; i++) {
@@ -147,6 +158,11 @@ static int caddie_ort_cls(CaddieOrt* o, const int64_t* ids, const int64_t* mask,
     }
     if (rank != 3) {
         caddie_ort_message(err, err_len, "the model's output is not [batch, tokens, dims]");
+        goto done;
+    }
+    if (caddie_ort_failed(api, api->GetTensorElementType(info, &element), err, err_len)) goto done;
+    if (element != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        caddie_ort_message(err, err_len, "the model's output is not float");
         goto done;
     }
     if (caddie_ort_failed(api, api->GetDimensions(info, shape_out, 3), err, err_len)) goto done;

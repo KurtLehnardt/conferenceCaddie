@@ -41,10 +41,12 @@ import app.conferencecaddie.ui.components.LinkButton
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.ProgressBar
 import app.conferencecaddie.ui.components.caddieClickable
+import app.conferencecaddie.ui.components.textIconSize
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -55,7 +57,9 @@ import kotlinx.coroutines.launch
  * switches. [refresh] asks the shared core again whenever an input changes (the conference, the
  * learn topics and text, the marked talks, whether the model is loaded, the minute), after a short
  * pause as the web waits before asking the server. While a new answer is on its way the earlier list
- * stays and [refreshing] is true, so it can be dimmed, as on the web.
+ * stays and [refreshing] is true, so it can be dimmed, as on the web. If working one out fails, the
+ * earlier list stays too and [error] says so, as the web does when the server fails; the next
+ * refresh tries again.
  */
 class ForYouModel(
     private val scope: CoroutineScope,
@@ -67,6 +71,10 @@ class ForYouModel(
     var refreshing by mutableStateOf(false)
         private set
 
+    /** Why the last refresh has no answer ([Strings.ForYou.ERROR]), or null. */
+    var error by mutableStateOf<String?>(null)
+        private set
+
     private var key: Any? = null
     private var slug: String? = null
     private var job: Job? = null
@@ -74,14 +82,27 @@ class ForYouModel(
     fun refresh(newSlug: String?, inputs: Any) {
         val next = newSlug to inputs
         if (next == key) return
-        if (newSlug != slug) result = null
+        if (newSlug != slug) {
+            result = null
+            error = null
+        }
         slug = newSlug
         key = next
         job?.cancel()
-        refreshing = result != null
+        refreshing = result != null || error != null
         job = scope.launch {
-            delay(if (result == null) 0L else DELAY_MS)
-            result = run()
+            delay(if (result == null && error == null) 0L else DELAY_MS)
+            try {
+                val answer = run()
+                result = answer
+                error = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The same inputs are asked again once anything changes, the minute included.
+                error = Strings.ForYou.ERROR
+                key = null
+            }
             refreshing = false
         }
     }
@@ -124,11 +145,21 @@ fun ForYouScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(Strings.ForYou.LEDE_NATIVE, style = Caddie.type.stateBody, color = Caddie.colors.text2)
                     LearnSummary(bundle, learnTopics, onPickTopics)
-                    ProgressBar(model.refreshing || r == null)
+                    ProgressBar(model.refreshing || (r == null && model.error == null))
+                }
+            }
+            model.error?.let { message ->
+                item("error") {
+                    Text(
+                        message,
+                        style = Caddie.type.meta,
+                        color = Caddie.colors.danger,
+                        modifier = Modifier.padding(vertical = 8.dp).testTag("for-you-error").semantics { liveRegion = LiveRegionMode.Polite },
+                    )
                 }
             }
             when (r) {
-                null -> item("finding") { Hint(Strings.ForYou.FINDING) }
+                null -> if (model.error == null) item("finding") { Hint(Strings.ForYou.FINDING) }
                 is ForYou.Result.Ready -> {
                     if (r.degraded) item("degraded") { Hint(Strings.ForYou.DEGRADED_NATIVE, Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
                     if (r.items.isEmpty()) item("none") { Hint(Strings.ForYou.NONE) }
@@ -181,9 +212,11 @@ fun PickTopicsPrompt(onPickTopics: () -> Unit, modifier: Modifier = Modifier) {
         modifier.fillMaxWidth().background(c.surface, shape).border(1.dp, c.border, shape).padding(16.dp).testTag("for-you-prompt"),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        LucideImage(LucideIcon.Sparkles, null, Modifier.padding(top = 2.dp), size = 22.dp, tint = c.accent)
+        LucideImage(LucideIcon.Sparkles, null, Modifier.padding(top = 2.dp), size = textIconSize(22.dp), tint = c.accent)
         Column(Modifier.weight(1f)) {
-            Text(Strings.ForYou.PICK_TITLE, style = Caddie.type.cardTitle, color = c.text, modifier = Modifier.semantics { heading() })
+            // .pp-prompt-title is 17 px semibold at the page's line height (1.45), which with the
+            // body's 4 px top margin makes the web's gap; cardTitle's tighter 1.3 would close it up.
+            Text(Strings.ForYou.PICK_TITLE, style = Caddie.type.stateTitle, color = c.text, modifier = Modifier.semantics { heading() })
             Text(Strings.ForYou.PICK_BODY_NATIVE, style = Caddie.type.stateBody, color = c.text2, modifier = Modifier.padding(top = 4.dp))
             CaddieButton(Strings.ForYou.PICK_TOPICS, onClick = onPickTopics, small = true, modifier = Modifier.padding(top = 12.dp).testTag("for-you-prompt-pick"))
         }

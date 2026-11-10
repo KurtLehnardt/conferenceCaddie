@@ -36,11 +36,28 @@ object Evidence {
     fun passage(talk: Talk, text: String): String? {
         val abstract = collapse(talk.abstract)
         if (abstract.isEmpty()) return null
-        val terms = TalkSearch.terms(text)
+        val terms = TalkSearch.terms(text).map { stem(it) }.toSet()
         val sentences = sentences(abstract)
-        val best = sentences.maxByOrNull { s -> terms.count { firstMatch(s, listOf(it)) != null } } ?: abstract
-        val chosen = if (terms.none { firstMatch(best, listOf(it)) != null }) sentences.first() else best
-        return cut(chosen, 0, PASSAGE)
+        // Each sentence is normalised and stemmed once, then matched against the set of term stems.
+        var best = sentences.first()
+        var bestCount = 0
+        for (sentence in sentences) {
+            val count = matchedTerms(sentence, terms)
+            if (count > bestCount) {
+                best = sentence
+                bestCount = count
+            }
+        }
+        return cut(best, 0, PASSAGE)
+    }
+
+    // How many of [termStems] a word of [sentence] matches: the same stem, or (for a stem of four
+    // letters or more) a word that starts with it.
+    private fun matchedTerms(sentence: String, termStems: Set<String>): Int {
+        if (termStems.isEmpty()) return 0
+        val words = normalizeKey(sentence).split(' ').filter { it.isNotEmpty() }
+        val stems = words.mapTo(HashSet()) { stem(it) }
+        return termStems.count { t -> t in stems || (t.length >= 4 && words.any { it.startsWith(t) }) }
     }
 
     private val SPACE = Regex("""\s+""")

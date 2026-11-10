@@ -1,0 +1,29 @@
+package app.conferencecaddie
+
+import android.app.Application
+import android.content.ComponentCallbacks2
+import app.conferencecaddie.shared.core.AndroidCore
+import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
+
+class CaddieApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        // ONNX Runtime reads ORT_DISABLE_TELEMETRY when it starts. Setting it here, on the main
+        // thread before any other code of the app runs, means no thread is reading the environment
+        // while it changes, and it is set before the query model can be loaded.
+        OnnxRuntimeTelemetry.disableForProcess()
+    }
+
+    // The query model takes about 60 MB once loaded, and loads again in well under a second from the
+    // APK. It is given back when the app's process goes to the background list, the point at which
+    // Android suggests releasing what is quick to rebuild (from Android 15 on, the only level an app
+    // in the background still receives), and when memory is critical while the app runs. The next
+    // text search loads it again.
+    @Suppress("DEPRECATION") // TRIM_MEMORY_RUNNING_CRITICAL is still sent before Android 15.
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            AndroidCore.existing()?.releaseEmbedder()
+        }
+    }
+}
