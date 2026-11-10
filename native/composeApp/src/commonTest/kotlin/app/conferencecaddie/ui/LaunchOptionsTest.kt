@@ -4,12 +4,14 @@ import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.shell.launchOptions
 import app.conferencecaddie.ui.shell.linkBase
+import app.conferencecaddie.ui.shell.pendingAfterSwitch
 import app.conferencecaddie.ui.theme.ThemePreference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-// The debug launch options: what they accept, and that release builds take none of them.
+// The debug launch options (what they accept, and that release builds take none of them) and the
+// pending link after a server switch.
 class LaunchOptionsTest {
     private fun parse(vararg pairs: Pair<String, String>) = DebugLaunch.from { name -> pairs.toMap()[name] }
 
@@ -29,6 +31,13 @@ class LaunchOptionsTest {
         assertNull(parse("caddie.connect" to "http://localhost:8080").connect)
         assertNull(linkBase("http://10.0.2.2:8080"))
         assertEquals("https://caddie.example.org", linkBase("https://caddie.example.org/"))
+    }
+
+    @Test
+    fun aSwitchClearsOnlyTheLinkItAnswered() {
+        assertNull(pendingAfterSwitch("https://a.example", "https://a.example"))
+        assertEquals("https://b.example", pendingAfterSwitch("https://b.example", "https://a.example"))
+        assertNull(pendingAfterSwitch(null, "https://a.example"))
     }
 
     @Test

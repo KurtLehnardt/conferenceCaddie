@@ -37,7 +37,14 @@ internal actual fun SystemBarsAppearance(preference: ThemePreference, dark: Bool
             window = host.viewIfLoaded?.window
             attempts++
         }
-        window?.overrideUserInterfaceStyle = style
+        if (window != null) {
+            window.overrideUserInterfaceStyle = style
+            // The controller inherits it from the window; clear a fallback set on it before.
+            host.overrideUserInterfaceStyle = UIUserInterfaceStyle.UIUserInterfaceStyleUnspecified
+        } else {
+            // No window within the wait: at least the Compose controller and what it presents follow.
+            host.overrideUserInterfaceStyle = style
+        }
     }
 }
 

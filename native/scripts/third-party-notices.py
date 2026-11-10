@@ -18,7 +18,8 @@ table SHIPPED_FILES below, with their versions read from gradle/pinned-downloads
 version catalog.
 
 Every module group must be in LICENCE_TABLE, so a new dependency with an unknown licence fails the run
-until somebody has read its licence and added it. A different Skiko version fails the run too, until the
+until somebody has read its licence and added it. In the broad groups of ARTIFACT_APPROVAL_GROUPS
+(AndroidX, org.jetbrains, kotlinx) every artifact must also be in APPROVED_ARTIFACTS. A different Skiko version fails the run too, until the
 bundled native components have been looked at again (see SKIKO_VERIFIED).
 
 Usage, from the native/ directory (the iOS report only resolves on macOS, where Kotlin/Native is available):
@@ -59,7 +60,7 @@ LICENCES_BY_ID = {
     "expat": ("Expat (MIT)", "expat.txt"),
     "wuffs": ("Wuffs (MIT or Apache License 2.0)", "wuffs.txt"),
     "dng-sdk": ("Adobe DNG SDK", "dng-sdk.txt"),
-    "slf4j": ("SLF4J (MIT)", "slf4j.txt"),
+    "slf4j": ("SLF4J API (MIT)", "slf4j.txt"),
     "onnxruntime": ("ONNX Runtime (MIT) and the components it includes", "onnxruntime.txt"),
     "bge-small-en-v1.5": ("bge-small-en-v1.5 query model (MIT)", "bge-small-en-v1.5.txt"),
 }
@@ -69,20 +70,172 @@ LICENCES_BY_ID = {
 # Each entry was checked against the POMs (or, for Guava's listenablefuture, which has none, upstream).
 LICENCE_TABLE = [
     ("androidx.*", "apache-2.0"),
+    ("com.google.guava", "apache-2.0"),
     ("com.microsoft.onnxruntime", "onnxruntime"),
     ("com.squareup.okhttp3", "apache-2.0"),
     ("com.squareup.okio", "apache-2.0"),
-    ("com.google.guava", "apache-2.0"),
+    ("io.ktor", "apache-2.0"),
     ("org.jetbrains", "apache-2.0"),
     ("org.jetbrains.androidx.*", "apache-2.0"),
     ("org.jetbrains.compose.*", "apache-2.0"),
     ("org.jetbrains.kotlin", "apache-2.0"),
     ("org.jetbrains.kotlinx", "apache-2.0"),
     ("org.jetbrains.skiko", "apache-2.0"),
-    ("io.ktor", "apache-2.0"),
     ("org.jspecify", "apache-2.0"),
+    # Ktor's logging facade; the POM names no licence, the jar carries the MIT text (licenses/slf4j.txt).
     ("org.slf4j", "slf4j"),
 ]
+
+# Groups that publish, or could publish, artifacts under another licence than the one in LICENCE_TABLE
+# (AndroidX alone has hundreds of artifacts). In these groups each artifact is approved by name, so a new
+# one fails the run until its licence has been read and it has been added to APPROVED_ARTIFACTS.
+ARTIFACT_APPROVAL_GROUPS = ["androidx.*", "org.jetbrains", "org.jetbrains.kotlinx"]
+
+# Artifacts approved by name in ARTIFACT_APPROVAL_GROUPS; every one is under the Apache License 2.0.
+APPROVED_ARTIFACTS = {
+    "androidx.activity:activity",
+    "androidx.activity:activity-compose",
+    "androidx.activity:activity-ktx",
+    "androidx.annotation:annotation",
+    "androidx.annotation:annotation-experimental",
+    "androidx.annotation:annotation-iosarm64",
+    "androidx.annotation:annotation-jvm",
+    "androidx.arch.core:core-common",
+    "androidx.arch.core:core-runtime",
+    "androidx.autofill:autofill",
+    "androidx.collection:collection",
+    "androidx.collection:collection-iosarm64",
+    "androidx.collection:collection-jvm",
+    "androidx.collection:collection-ktx",
+    "androidx.compose.animation:animation",
+    "androidx.compose.animation:animation-android",
+    "androidx.compose.animation:animation-core",
+    "androidx.compose.animation:animation-core-android",
+    "androidx.compose.foundation:foundation",
+    "androidx.compose.foundation:foundation-android",
+    "androidx.compose.foundation:foundation-layout",
+    "androidx.compose.foundation:foundation-layout-android",
+    "androidx.compose.material3:material3",
+    "androidx.compose.material3:material3-android",
+    "androidx.compose.material:material-icons-core",
+    "androidx.compose.material:material-icons-core-android",
+    "androidx.compose.material:material-ripple",
+    "androidx.compose.material:material-ripple-android",
+    "androidx.compose.runtime:runtime",
+    "androidx.compose.runtime:runtime-android",
+    "androidx.compose.runtime:runtime-annotation",
+    "androidx.compose.runtime:runtime-annotation-android",
+    "androidx.compose.runtime:runtime-annotation-iosarm64",
+    "androidx.compose.runtime:runtime-iosarm64",
+    "androidx.compose.runtime:runtime-retain",
+    "androidx.compose.runtime:runtime-retain-android",
+    "androidx.compose.runtime:runtime-retain-iosarm64",
+    "androidx.compose.runtime:runtime-saveable",
+    "androidx.compose.runtime:runtime-saveable-android",
+    "androidx.compose.runtime:runtime-saveable-iosarm64",
+    "androidx.compose.ui:ui",
+    "androidx.compose.ui:ui-android",
+    "androidx.compose.ui:ui-geometry",
+    "androidx.compose.ui:ui-geometry-android",
+    "androidx.compose.ui:ui-graphics",
+    "androidx.compose.ui:ui-graphics-android",
+    "androidx.compose.ui:ui-text",
+    "androidx.compose.ui:ui-text-android",
+    "androidx.compose.ui:ui-tooling-preview",
+    "androidx.compose.ui:ui-tooling-preview-android",
+    "androidx.compose.ui:ui-unit",
+    "androidx.compose.ui:ui-unit-android",
+    "androidx.compose.ui:ui-util",
+    "androidx.compose.ui:ui-util-android",
+    "androidx.concurrent:concurrent-futures",
+    "androidx.core:core",
+    "androidx.core:core-ktx",
+    "androidx.core:core-viewtree",
+    "androidx.customview:customview-poolingcontainer",
+    "androidx.emoji2:emoji2",
+    "androidx.graphics:graphics-path",
+    "androidx.graphics:graphics-shapes",
+    "androidx.graphics:graphics-shapes-android",
+    "androidx.graphics:graphics-shapes-iosarm64",
+    "androidx.interpolator:interpolator",
+    "androidx.lifecycle:lifecycle-common",
+    "androidx.lifecycle:lifecycle-common-iosarm64",
+    "androidx.lifecycle:lifecycle-common-java8",
+    "androidx.lifecycle:lifecycle-common-jvm",
+    "androidx.lifecycle:lifecycle-livedata-core",
+    "androidx.lifecycle:lifecycle-process",
+    "androidx.lifecycle:lifecycle-runtime",
+    "androidx.lifecycle:lifecycle-runtime-android",
+    "androidx.lifecycle:lifecycle-runtime-compose",
+    "androidx.lifecycle:lifecycle-runtime-compose-android",
+    "androidx.lifecycle:lifecycle-runtime-compose-iosarm64",
+    "androidx.lifecycle:lifecycle-runtime-iosarm64",
+    "androidx.lifecycle:lifecycle-runtime-ktx",
+    "androidx.lifecycle:lifecycle-runtime-ktx-android",
+    "androidx.lifecycle:lifecycle-viewmodel",
+    "androidx.lifecycle:lifecycle-viewmodel-android",
+    "androidx.lifecycle:lifecycle-viewmodel-compose",
+    "androidx.lifecycle:lifecycle-viewmodel-compose-android",
+    "androidx.lifecycle:lifecycle-viewmodel-compose-iosarm64",
+    "androidx.lifecycle:lifecycle-viewmodel-iosarm64",
+    "androidx.lifecycle:lifecycle-viewmodel-ktx",
+    "androidx.lifecycle:lifecycle-viewmodel-savedstate",
+    "androidx.lifecycle:lifecycle-viewmodel-savedstate-android",
+    "androidx.lifecycle:lifecycle-viewmodel-savedstate-iosarm64",
+    "androidx.navigationevent:navigationevent",
+    "androidx.navigationevent:navigationevent-android",
+    "androidx.navigationevent:navigationevent-compose",
+    "androidx.navigationevent:navigationevent-compose-android",
+    "androidx.navigationevent:navigationevent-compose-iosarm64",
+    "androidx.navigationevent:navigationevent-iosarm64",
+    "androidx.profileinstaller:profileinstaller",
+    "androidx.savedstate:savedstate",
+    "androidx.savedstate:savedstate-android",
+    "androidx.savedstate:savedstate-compose",
+    "androidx.savedstate:savedstate-compose-android",
+    "androidx.savedstate:savedstate-compose-iosarm64",
+    "androidx.savedstate:savedstate-iosarm64",
+    "androidx.savedstate:savedstate-ktx",
+    "androidx.sqlite:sqlite",
+    "androidx.sqlite:sqlite-android",
+    "androidx.sqlite:sqlite-bundled",
+    "androidx.sqlite:sqlite-bundled-android",
+    "androidx.sqlite:sqlite-bundled-iosarm64",
+    "androidx.sqlite:sqlite-framework",
+    "androidx.sqlite:sqlite-framework-iosarm64",
+    "androidx.sqlite:sqlite-iosarm64",
+    "androidx.startup:startup-runtime",
+    "androidx.tracing:tracing",
+    "androidx.versionedparcelable:versionedparcelable",
+    "androidx.window:window",
+    "androidx.window:window-core",
+    "androidx.window:window-core-android",
+    "org.jetbrains.kotlinx:atomicfu",
+    "org.jetbrains.kotlinx:atomicfu-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-android",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-bom",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-core",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-core-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-slf4j",
+    "org.jetbrains.kotlinx:kotlinx-datetime",
+    "org.jetbrains.kotlinx:kotlinx-datetime-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-datetime-jvm",
+    "org.jetbrains.kotlinx:kotlinx-io-bytestring",
+    "org.jetbrains.kotlinx:kotlinx-io-bytestring-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm",
+    "org.jetbrains.kotlinx:kotlinx-io-core",
+    "org.jetbrains.kotlinx:kotlinx-io-core-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-io-core-jvm",
+    "org.jetbrains.kotlinx:kotlinx-serialization-bom",
+    "org.jetbrains.kotlinx:kotlinx-serialization-core",
+    "org.jetbrains.kotlinx:kotlinx-serialization-core-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-serialization-core-jvm",
+    "org.jetbrains.kotlinx:kotlinx-serialization-json",
+    "org.jetbrains.kotlinx:kotlinx-serialization-json-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-serialization-json-jvm",
+    "org.jetbrains:annotations",
+}
 
 # What Skiko bundles into the iOS binary: (name, licence id). Skia's bundled skcms is under Skia's licence.
 NATIVE_COMPONENTS = [
@@ -191,6 +344,17 @@ def licence_for(group):
     return best[1] if best else None
 
 
+def needs_approval(group):
+    for pattern in ARTIFACT_APPROVAL_GROUPS:
+        if pattern.endswith(".*"):
+            base = pattern[:-2]
+            if group == base or group.startswith(base + "."):
+                return True
+        elif group == pattern:
+            return True
+    return False
+
+
 def licence_text(licence_id):
     text = (LICENCES / LICENCES_BY_ID[licence_id][1]).read_text(encoding="utf-8")
     return text.strip("\n")
@@ -216,8 +380,22 @@ def generate(android, ios):
             + "\n".join(lines)
         )
 
+    unapproved = sorted({f"{g}:{n}" for g, n, _ in android | ios if needs_approval(g) and f"{g}:{n}" not in APPROVED_ARTIFACTS})
+    if unapproved:
+        raise NoticeError(
+            "These artifacts are not in APPROVED_ARTIFACTS in scripts/third-party-notices.py.\n"
+            "Read each one's licence; if it is the Apache License 2.0, add it to the list, otherwise give it its own entry:\n"
+            + "\n".join(f"  {a}" for a in unapproved)
+        )
+
     skiko = sorted({v for g, n, v in ios if g == "org.jetbrains.skiko" and n.startswith("skiko")})
     bundled = bool(skiko)
+    if not bundled and any(g.startswith("org.jetbrains.compose") for g, _, _ in ios):
+        raise NoticeError(
+            "The iOS report has Compose Multiplatform but no Skiko, which Compose draws with on iOS.\n"
+            "The report is probably of the wrong configuration; without Skiko the notices would leave out\n"
+            "the native code it bundles (NATIVE_COMPONENTS)."
+        )
     if bundled and skiko != [SKIKO_VERIFIED]:
         raise NoticeError(
             f"iOS links Skiko {', '.join(skiko)}, but the bundled native components were checked for {SKIKO_VERIFIED}.\n"

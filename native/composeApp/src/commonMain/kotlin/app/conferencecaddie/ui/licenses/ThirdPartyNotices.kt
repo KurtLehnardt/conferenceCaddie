@@ -1824,7 +1824,7 @@ signatory of Adobe. If any part of this Agreement is found void and
 unenforceable, it will not affect the validity of the balance of the Agreement,
 which shall remain valid and enforceable according to its terms."""
 
-    private const val SLF4J = """Copyright (c) 2004-2022 QOS.ch Sarl (Switzerland)
+    private const val SLF4J = """Copyright (c) 2004-2023 QOS.ch
 All rights reserved.
 
 Permission is hereby granted, free  of charge, to any person obtaining
@@ -8715,7 +8715,7 @@ SOFTWARE."""
         ),
         Notice(
             id = "slf4j",
-            title = "SLF4J (MIT)",
+            title = "SLF4J API (MIT)",
             android = listOf(
                 Module("org.slf4j:slf4j-api", "2.0.19"),
             ),
