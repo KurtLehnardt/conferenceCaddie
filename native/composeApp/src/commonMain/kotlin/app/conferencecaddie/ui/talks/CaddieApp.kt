@@ -1,10 +1,15 @@
 package app.conferencecaddie.ui.talks
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -14,12 +19,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.Embedder
@@ -32,6 +44,7 @@ import app.conferencecaddie.shared.core.CoreState
 import app.conferencecaddie.shared.core.Defaults
 import app.conferencecaddie.shared.core.SemanticState
 import app.conferencecaddie.ui.App
+import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.SkeletonCard
 import app.conferencecaddie.ui.components.StateAction
 import app.conferencecaddie.ui.components.StateView
@@ -78,7 +91,15 @@ fun CaddieApp(
 ) {
     val state by core.state.collectAsState()
     val scope = rememberCoroutineScope()
-    val search = remember(core) { SearchModel(scope) { core.search(it) } }
+    // The Search screen's state outlives the composition while its owner lives (the activity across
+    // a rotation on Android); without an owner it lives as long as this composition.
+    val owner = LocalViewModelStoreOwner.current
+    val search = if (owner != null) {
+        viewModel(viewModelStoreOwner = owner, key = "search") { SearchViewModel(scope) { core.search(it) } }.model
+    } else {
+        remember(core) { SearchModel(scope) { core.search(it) } }
+    }
+    remember(search, scope) { search.attach(scope) }
     val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
     var pickerOpen by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
@@ -86,9 +107,9 @@ fun CaddieApp(
     var theme by remember { mutableStateOf(launch.theme ?: ThemePreference.System) }
     var pendingConnect by remember { mutableStateOf(launch.connect) }
     val onConnectHandled = { pendingConnect = null }
-    var openTalk by remember { mutableStateOf<String?>(null) }
+    var openTalk by rememberSaveable { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<ToastData?>(null) }
-    var undo by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var undo by remember { mutableStateOf<Pair<Talk, Boolean>?>(null) }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
     val nowMs by produceState(Clock.System.now().toEpochMilliseconds()) {
         while (true) {
@@ -133,11 +154,20 @@ fun CaddieApp(
     val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, state.semantic, nowMs / 60_000)
     LaunchedEffect(forYouInputs) { if (ready != null) forYou.refresh(state.selectedSlug, forYouInputs) }
 
+    // The person is told once when the stored data could not be opened.
+    LaunchedEffect(state.storageReset) {
+        if (state.storageReset) {
+            toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = TalkStrings.STORAGE_RESET)
+            core.dismissStorageReset()
+        }
+    }
+
     val interestedIds = state.interested.toSet()
+    val interestedTalks = state.interestedTalks()
     val toggle: (Talk) -> Unit = { talk ->
         val on = talk.talkId !in interestedIds
-        core.setInterested(talk.talkId, on)
-        undo = talk.talkId to !on
+        core.setInterested(talk, on)
+        undo = talk to !on
         toast = ToastData(
             id = Clock.System.now().toEpochMilliseconds(),
             message = if (on) Strings.Toasts.ADDED else Strings.Toasts.REMOVED,
@@ -146,16 +176,19 @@ fun CaddieApp(
     }
 
     App(
-        state = shellState(state, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast),
+        state = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast),
         actions = ShellActions(
             onSelectConference = core::selectConference,
             onRetryConferences = { core.refresh(force = true) },
             onChangeServer = { base ->
+                // A server from a link or QR code never gets the debug builds' local http exception;
+                // only one typed in Settings does.
+                val fromLink = pendingConnect != null
                 onConnectHandled()
                 if (base == Defaults.BACKEND) {
                     core.setBackend(null)
                 } else {
-                    (BackendUrl.normalise(base, allowLocalHttp = isDebugBuild) as? BackendUrl.Valid)?.let { core.setBackend(it) }
+                    (BackendUrl.normalise(base, allowLocalHttp = isDebugBuild && !fromLink) as? BackendUrl.Valid)?.let { core.setBackend(it) }
                 }
             },
             onDeclineConnect = onConnectHandled,
@@ -169,7 +202,7 @@ fun CaddieApp(
             },
             onDismissToast = { toast = null },
             onToastAction = {
-                undo?.let { (id, on) -> core.setInterested(id, on) }
+                undo?.let { (talk, on) -> core.setInterested(talk, on) }
                 undo = null
                 toast = null
             },
@@ -197,7 +230,7 @@ fun CaddieApp(
             },
             interested = {
                 BundleGate(state, core) { r ->
-                    InterestedScreen(r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl)
+                    InterestedScreen(r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl, state.interestedSnapshots)
                 }
             },
         ),
@@ -218,7 +251,8 @@ fun CaddieApp(
         }
     }
 
-    val talk = openTalk?.let { ready?.bundle?.talksById?.get(it) }
+    // A marked talk the bundle no longer holds opens from its saved copy.
+    val talk = openTalk?.let { id -> ready?.bundle?.talksById?.get(id) ?: interestedTalks.firstOrNull { it.talkId == id } }
     if (talk != null && ready != null) {
         // The sheet sits outside App(), so it takes the same theme itself.
         CaddieTheme(theme) {
@@ -274,7 +308,10 @@ private fun BundleGate(state: CoreState, core: CaddieCore, content: @Composable 
     val name = (state.conferences as? ConferencesState.Ready)?.conferences
         ?.firstOrNull { it.conference.slug == state.selectedSlug }?.conference?.name ?: ""
     when (val b = state.bundle) {
-        is BundleState.Ready -> content(b)
+        is BundleState.Ready -> Column(Modifier.fillMaxSize()) {
+            if (b.updateApp || (state.conferences as? ConferencesState.Ready)?.updateApp == true) UpdateNotice()
+            content(b)
+        }
         BundleState.None, is BundleState.Loading -> Column(
             Modifier.fillMaxSize().padding(top = 12.dp).testTag("bundle-loading"),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -311,8 +348,30 @@ private fun BundleGate(state: CoreState, core: CaddieCore, content: @Composable 
     }
 }
 
+/** The notice above the talk screens when the schedule shown is the last one this app could read. */
+@Composable
+private fun UpdateNotice() {
+    val c = Caddie.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Caddie.dimens.gutter)
+            .padding(top = 4.dp, bottom = 8.dp)
+            .background(c.fill, RoundedCornerShape(Caddie.dimens.radius))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("update-notice")
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        LucideImage(LucideIcon.Info, null, size = 18.dp, tint = c.text2)
+        Text(TalkStrings.UPDATE_APP_NOTICE, style = Caddie.type.meta, color = c.text2, modifier = Modifier.weight(1f))
+    }
+}
+
 private fun shellState(
     s: CoreState,
+    interestedCount: Int,
     theme: ThemePreference,
     cacheBytes: Long?,
     isDebugBuild: Boolean,
@@ -327,7 +386,9 @@ private fun shellState(
         is ConferencesState.Failed -> null
         ConferencesState.Loading -> null
     }
-    val offline = caps?.cached == true || (s.conferences as? ConferencesState.Ready)?.offline == true ||
+    // A stored copy shown while the backend is asked again, or because it needs a newer app, is not
+    // "offline".
+    val offline = (caps?.cached == true && !caps.checking && !caps.updateApp) || (s.conferences as? ConferencesState.Ready)?.offline == true ||
         (s.bundle as? BundleState.Ready)?.offline == true || s.capabilities == CapabilitiesState.Unreachable
     return ShellState(
         capabilities = caps?.forThisApp ?: Capabilities.None,
@@ -349,12 +410,13 @@ private fun shellState(
             CapabilitiesState.UpdateApp -> ServerStatus.UpdateApp
             is CapabilitiesState.Ready -> when {
                 c.updateApp -> ServerStatus.UpdateApp
+                c.checking -> ServerStatus.Checking
                 c.cached || c.usingFallback -> ServerStatus.Unreachable
                 else -> ServerStatus.Ok
             }
         },
         online = !offline,
-        interestedCount = s.interested.size,
+        interestedCount = interestedCount,
         theme = theme,
         savedSchedulesBytes = cacheBytes,
         appVersion = appVersion,

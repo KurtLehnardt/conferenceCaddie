@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import app.conferencecaddie.shared.bundle.InterestedTalk
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.bundle.TalkTime
@@ -25,7 +26,8 @@ import app.conferencecaddie.ui.theme.Caddie
 /**
  * My schedule (web/src/components/interested.tsx, List view): the talks the person marked for this
  * conference, grouped by the conference's local day in start order, kept on this device only.
- * Marked talks that a newer bundle no longer holds are left out.
+ * A marked talk that a newer bundle no longer holds is shown from the copy kept when it was marked
+ * ([snapshots]), as the web keeps its copies in local storage.
  */
 @Composable
 fun InterestedScreen(
@@ -35,8 +37,9 @@ fun InterestedScreen(
     onToggleInterested: (Talk) -> Unit,
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
+    snapshots: Map<String, InterestedTalk> = emptyMap(),
 ) {
-    val talks = interested.mapNotNull { bundle.talksById[it] }.sortedWith(compareBy<Talk> { it.startEpochMs }.thenBy { it.talkId })
+    val talks = interested.mapNotNull { bundle.talksById[it] ?: snapshots[it]?.toTalk() }.sortedWith(compareBy<Talk> { it.startEpochMs }.thenBy { it.talkId })
     if (talks.isEmpty()) {
         InterestedPlaceholder()
         return

@@ -2,7 +2,10 @@ package app.conferencecaddie.shared.bundle
 
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.Http
+import app.conferencecaddie.shared.net.ResponseTooLarge
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 
 /**
@@ -69,10 +72,14 @@ class BundleSync(
         return IndexResult(cached?.let { parse(it.body) }, fresh = false, error = "status ${response.status}")
     }
 
+    /** The stored copy of `conferences.json` at [bundleBase], without asking the network, or null. */
+    suspend fun cachedIndex(bundleBase: String): ConferenceIndex? =
+        database.cachedResponse("${bundleBase}conferences.json")?.let { parse(it.body) }?.takeIf { it.ok }
+
     /** When `conferences.json` at [bundleBase] was last fetched or confirmed, or null. */
     suspend fun indexFetchedAt(bundleBase: String): Long? = database.cachedResponse("${bundleBase}conferences.json")?.fetchedAtMs
 
-    /** The bundle installed for [scope], read from disk, or null. */
+    /** The bundle installed for [scope], read from disk, or null when there is none or its files are gone. */
     suspend fun installed(backend: String, scope: String): TalkBundle? {
         val hash = database.installedBundle(scope) ?: return null
         val bytes = files.read(backend, hash) ?: return null
@@ -81,47 +88,72 @@ class BundleSync(
 
     /**
      * Makes the bundle of [entry] the installed bundle of [scope], downloading it from [bundleBase]
-     * unless it is installed already.
+     * unless it is installed already. [current] is the installed bundle when the caller has it read
+     * already, which saves reading it again.
+     *
+     * The downloads hold no lock. Writing the files, installing them in the database and deleting
+     * the bundles no scope uses any more happen under one lock, so two installs never delete each
+     * other's files.
      */
-    suspend fun install(backend: String, scope: String, bundleBase: String, slug: String, entry: BundleEntry): InstallResult {
-        val current = installed(backend, scope)
-        if (current != null && current.contentHash == entry.contentHash) return InstallResult.Installed(current, updated = false)
+    suspend fun install(
+        backend: String,
+        scope: String,
+        bundleBase: String,
+        slug: String,
+        entry: BundleEntry,
+        current: TalkBundle? = null,
+    ): InstallResult {
+        val installedHash = database.installedBundle(scope)
+        val have = current?.takeIf { it.contentHash == installedHash }
+        if (installedHash == entry.contentHash) {
+            // The database says it is installed; it is usable only while its files are there (an iOS
+            // restore brings the database back without them).
+            (have ?: installed(backend, scope))?.let { return InstallResult.Installed(it, updated = false) }
+        }
+        // The previous bundle, read only when a failure needs it.
+        suspend fun kept(): TalkBundle? = have ?: if (installedHash != null) installed(backend, scope) else null
 
         val downloaded = HashMap<String, ByteArray>()
         for (name in BundleVerifier.BUNDLE_FILES) {
-            val expected = entry.files[name]?.bytes ?: return InstallResult.Failed(listOf("$name: not listed"), current)
-            if (expected > MAX_FILE_BYTES) return InstallResult.Failed(listOf("$name: larger than the app accepts"), current)
+            val expected = entry.files[name]?.bytes ?: return InstallResult.Failed(listOf("$name: not listed"), kept())
+            if (expected > MAX_FILE_BYTES) return InstallResult.Failed(listOf("$name: larger than the app accepts"), kept())
             val response = try {
                 http.get("$bundleBase${entry.path}$name", ifNoneMatch = null, maxBytes = expected)
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: ResponseTooLarge) {
+                return InstallResult.Failed(listOf("$name: larger than the index says"), kept())
             } catch (e: Exception) {
-                return InstallResult.Failed(listOf("$name: download failed"), current)
+                return InstallResult.Failed(listOf("$name: $DOWNLOAD_FAILED"), kept())
             }
-            if (response.status != 200) return InstallResult.Failed(listOf("$name: status ${response.status}"), current)
+            if (response.status != 200) return InstallResult.Failed(listOf("$name: status ${response.status}"), kept())
             downloaded[name] = response.body
         }
         val problems = BundleVerifier.verify(entry.raw, downloaded)
-        if (problems.isNotEmpty()) return InstallResult.Failed(problems, current)
+        if (problems.isNotEmpty()) return InstallResult.Failed(problems, kept())
         val bundle = TalkBundle.decode(
             entry.contentHash,
             downloaded.getValue(BundleVerifier.BUNDLE_FILE),
             downloaded.getValue(BundleVerifier.VECTOR_FILE),
         )
-            ?: return InstallResult.Failed(listOf("${BundleVerifier.BUNDLE_FILE}: does not match the schema"), current)
+            ?: return InstallResult.Failed(listOf("${BundleVerifier.BUNDLE_FILE}: does not match the schema"), kept())
         if (bundle.conference.slug != slug) {
-            return InstallResult.Failed(listOf("${BundleVerifier.BUNDLE_FILE}: belongs to another conference"), current)
+            return InstallResult.Failed(listOf("${BundleVerifier.BUNDLE_FILE}: belongs to another conference"), kept())
         }
-        try {
-            files.write(backend, entry.contentHash, downloaded)
-            database.install(scope, bundle, nowMs())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return InstallResult.Failed(listOf("the bundle could not be stored"), current)
+        val stored = commit.withLock {
+            try {
+                files.write(backend, entry.contentHash, downloaded)
+                database.install(scope, bundle, nowMs())
+                val keep = database.installedBundles().filterKeys { it.startsWith(scopePrefix(backend)) }.values.toSet()
+                files.prune(backend, keep)
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                false
+            }
         }
-        val keep = database.installedBundles().filterKeys { it.startsWith(scopePrefix(backend)) }.values.toSet()
-        files.prune(backend, keep)
+        if (!stored) return InstallResult.Failed(listOf("the bundle could not be stored"), kept())
         return InstallResult.Installed(bundle, updated = true)
     }
 
@@ -131,7 +163,12 @@ class BundleSync(
         null
     }
 
+    private val commit = Mutex()
+
     companion object {
+        /** The problem an install reports when a file could not be downloaded. */
+        const val DOWNLOAD_FAILED = "download failed"
+
         /** conferences.json lists every conference; a few hundred KB at most. */
         const val MAX_INDEX_BYTES = 8L * 1024 * 1024
 

@@ -16,4 +16,10 @@ object TalkStrings {
     const val UPDATE_APP_BODY = "Update Conference Caddie to open this conference."
     const val LIST_OFFLINE = "You're offline, and no conference list is saved on this phone yet."
     const val LIST_FAILED = "The conference list could not be loaded."
+
+    /** Shown above the talk screens while the list or the bundle in use is the last this app can read. */
+    const val UPDATE_APP_NOTICE = "Update Conference Caddie to get the latest schedule. Until then, this is the copy saved on this phone."
+
+    /** A toast at start when the stored data could not be opened (CoreState.storageReset). */
+    const val STORAGE_RESET = "The data saved on this phone could not be opened, so the app started without it."
 }

@@ -102,7 +102,8 @@ data class SearchResult(
  *   - Keywords: SQLite FTS5 with the Porter stemmer, as the server's english analyzer has, and
  *     English stop words dropped, over title (weight 2), abstract, speakers and taglines. Queries of
  *     one or two terms must match every term; longer ones must match 60% of them (the server's
- *     `minimum_should_match: "2<60%"`). Ordered by BM25, then talk id.
+ *     `minimum_should_match: "2<60%"`), all within one field, as the server's best_fields query
+ *     counts them. Ordered by BM25, then talk id.
  *   - Meaning: the query, after time phrases left it, is embedded with the model's retrieval
  *     instruction ([embedder]) and compared with the bundle's int8 talk vectors; the
  *     [SearchResult.SEMANTIC_K] nearest among the talks that pass the base filters B, by cosine, then
@@ -150,7 +151,7 @@ class TalkSearch(
         val keyword: List<Talk> = if (text.isBlank()) {
             bundle.talks.filter(passes)
         } else {
-            lexical(text, if (semantic) SERVER_COLUMNS else "").mapNotNull { bundle.talksById[it] }.filter(passes)
+            lexical(text, if (semantic) SERVER_COLUMNS else COLUMNS).mapNotNull { bundle.talksById[it] }.filter(passes)
         }
         // The nearest talks by meaning among those that pass B, best first.
         val nearest: List<Talk> = if (queryVector != null && vectors != null) {
@@ -284,21 +285,31 @@ class TalkSearch(
      */
     internal suspend fun lexicalTitleAbstract(text: String): List<String> = lexical(text, TITLE_ABSTRACT)
 
-    /**
-     * The keyword matches of [text] in BM25 order, in the columns of the FTS5 column filter
-     * [prefix]: the columns the server's multi_match reads (title, abstract, speakers and taglines)
-     * when meaning-based matching runs too, and every column (also topics, track and room, which
-     * stand in for meaning) when it does not.
-     */
-    private suspend fun lexical(text: String, prefix: String): List<String> {
+    // The keyword matches of [text] in BM25 order, in [columns]: the fields the server's multi_match
+    // reads (title, abstract, speakers and taglines) when meaning-based matching runs too, and every
+    // column (also topics, track and room, which stand in for meaning) when it does not.
+    //
+    // The server's multi_match is of type best_fields, which applies minimum_should_match to each
+    // field on its own: a talk matches when one field holds enough of the terms, not when the terms
+    // are spread over several fields. So each term is looked up in each column, and a talk is kept
+    // when its best column reaches the required count. The ranking is BM25 over those columns.
+    private suspend fun lexical(text: String, columns: List<String>): List<String> {
         val terms = terms(text)
         if (terms.isEmpty()) return emptyList()
-        val quoted = terms.map { prefix + "\"" + it.replace("\"", "\"\"") + "\"" }
-        val (sets, ranked) = database.match(scope, quoted, quoted.joinToString(" OR "))
+        val quoted = terms.map { "\"" + it.replace("\"", "\"\"") + "\"" }
+        val perColumn = columns.flatMap { column -> quoted.map { "$column : $it" } }
+        val filter = columns.joinToString(" ", prefix = "{", postfix = "} : ")
+        val (sets, ranked) = database.match(scope, perColumn, quoted.joinToString(" OR ") { filter + it })
         val required = if (terms.size <= 2) terms.size else maxOf(1, (terms.size * 3) / 5)
-        val hits = HashMap<String, Int>()
-        for (set in sets) for (id in set) hits[id] = (hits[id] ?: 0) + 1
-        return ranked.filter { (hits[it] ?: 0) >= required }
+        val best = HashMap<String, Int>()
+        for (column in columns.indices) {
+            val hits = HashMap<String, Int>()
+            for (term in quoted.indices) {
+                for (id in sets[column * quoted.size + term]) hits[id] = (hits[id] ?: 0) + 1
+            }
+            for ((id, n) in hits) if (n > (best[id] ?: 0)) best[id] = n
+        }
+        return ranked.filter { (best[it] ?: 0) >= required }
     }
 
     private fun passesBase(t: Talk, r: SearchRequest, phrases: TimePhrases.Filter, nowMs: Long): Boolean {
@@ -338,9 +349,9 @@ class TalkSearch(
         const val MAX_QUERY = 200
         const val HAPPENING_NOW_AHEAD_MS = 60 * 60 * 1000L
 
-        /** FTS5 column filters: the fields of the server's search multi_match, and of its For you fallback. */
-        private const val SERVER_COLUMNS = "{title abstract speakers taglines} : "
-        private const val TITLE_ABSTRACT = "{title abstract} : "
+        /** The fields of the server's search multi_match, and of its For you fallback. */
+        private val SERVER_COLUMNS = listOf("title", "abstract", "speakers", "taglines")
+        private val TITLE_ABSTRACT = listOf("title", "abstract")
 
         /** Lucene's English stop words, which the server's english analyzer drops. */
         val STOP_WORDS = setOf(
@@ -356,6 +367,9 @@ class TalkSearch(
             .take(MAX_TERMS)
 
         private const val MAX_TERMS = 32
+
+        /** The columns of the FTS5 table `talk_fts` (CaddieDatabase.MIGRATIONS), in table order. */
+        private val COLUMNS = listOf("title", "abstract", "speakers", "taglines", "topics", "track", "room")
 
         // The server matches a speaker name as a phrase inside the speakers field.
         private fun speakerMatches(speaker: String, name: String): Boolean {

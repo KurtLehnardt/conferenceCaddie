@@ -68,6 +68,19 @@ class SearchTest {
     }
 
     @Test
+    fun theTermsMustMatchWithinOneField() = runTest {
+        // The server's best_fields query counts minimum_should_match per field, so two terms that
+        // are only found in different fields of a talk do not match it.
+        assertEquals(emptyList(), ids("kubernetes maintainer"), "1002: kubernetes in the title, maintainer in a tagline")
+        assertEquals(emptyList(), ids("energy pods"), "1003: energy in the title, pods in the abstract")
+        assertEquals(emptyList(), ids("linus scheduling"), "1003: a speaker and a title word")
+        assertEquals(listOf(A), ids("mcp audit"), "1001's abstract holds both")
+        assertEquals(listOf(C), ids("ada linus"), "1003's speakers hold both")
+        // With three terms one is enough, wherever it is.
+        assertEquals(setOf(B, C), ids("kubernetes maintainer pods").toSet())
+    }
+
+    @Test
     fun tuesdayAfternoonOnAMondayConference() = runTest {
         // m1 on the fixture: the conference has no Tuesday, so "tuesday" stays in the text, and
         // "afternoon" is recognised and filters.

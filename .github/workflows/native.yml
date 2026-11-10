@@ -17,11 +17,15 @@ on:
   pull_request:
     paths:
       - 'native/**'
+      # The shared tests compile the contract fixtures and follow the contract schemas.
+      - 'contracts/**'
       - '.github/workflows/native.yml'
   push:
     branches: [main]
     paths:
       - 'native/**'
+      # The shared tests compile the contract fixtures and follow the contract schemas.
+      - 'contracts/**'
       - '.github/workflows/native.yml'
   workflow_dispatch:
 

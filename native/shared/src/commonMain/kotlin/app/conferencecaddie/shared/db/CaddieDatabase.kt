@@ -3,6 +3,7 @@ package app.conferencecaddie.shared.db
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.sqlite.execSQL
+import app.conferencecaddie.shared.bundle.InterestedTalk
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.bundle.Topic
@@ -10,34 +11,67 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
+import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
 
 /**
- * The app's SQLite database, through the bundled driver of androidx.sqlite, which compiles SQLite
- * with FTS5 on every platform. It holds:
+ * The app's SQLite databases, through the bundled driver of androidx.sqlite, which compiles SQLite
+ * with FTS5 on every platform. There are two files on one connection:
  *
- * - `settings`: small key-value pairs (the chosen backend, the selected conference, the cached
- *   capabilities document and the "has served a document" mark per backend base).
- * - `http_cache`: the last good body and ETag of `conferences.json` per URL, for offline use and
- *   `If-None-Match`.
- * - `installed_bundle` and the talk search index (`talk_row` and the FTS5 table `talk_fts`), one
- *   set per scope. A scope is a backend base and a conference slug, so two backends never share
- *   state.
- * - `interested`: the talks the person marked, per scope.
+ * - The main database, which holds what the person made and what cannot be fetched again:
+ *   - `settings`: small key-value pairs (the chosen backend, the selected conference, the cached
+ *     capabilities document and the "has served a document" mark per backend base).
+ *   - `interested`: the talks the person marked, per scope, each with a copy of its public schedule
+ *     fields ([InterestedTalk]) so it can be shown after a newer bundle drops it.
+ * - The cache database, attached as `cache`, which holds only what can be downloaded again, so the
+ *   platforms can keep it out of backups (iOS) and a broken one can simply be replaced:
+ *   - `http_cache`: the last good body and ETag of `conferences.json` per URL, for offline use and
+ *     `If-None-Match`.
+ *   - `installed_bundle` and the talk search index (`talk_row` and the FTS5 table `talk_fts`), one
+ *     set per scope.
  *
- * The schema version is SQLite's `user_version`; [MIGRATIONS] move it forward one step at a time,
- * each in its own transaction. A connection is not thread-safe, so every statement runs on one
- * dispatcher that never runs two blocks at once.
+ * A scope is a backend base and a conference slug, so two backends never share state.
+ *
+ * Each file's schema version is its `user_version`; [MIGRATIONS] and [CACHE_MIGRATIONS] move them
+ * forward one step at a time, each in its own transaction. A connection is not thread-safe, so every
+ * statement runs on one dispatcher that never runs two blocks at once.
+ *
+ * [openLazily] opens the files on that dispatcher at the first statement, never on the caller's
+ * thread, and never fails: a main database that cannot be opened or migrated (a corrupt file, or
+ * one from a newer version of the app after a downgrade or a restored backup) is moved aside to
+ * `{path}.unreadable` and replaced by an empty one, and [wasReset] says so once; a broken cache
+ * database is deleted and created again.
  */
-class CaddieDatabase private constructor(private val connection: SQLiteConnection) {
+class CaddieDatabase private constructor(private val opener: () -> Opened) {
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private var opened: Opened? = null
+    private var resetReported = false
+
+    private class Opened(val connection: SQLiteConnection, val reset: Boolean)
+
+    private fun connection(): SQLiteConnection = (opened ?: opener().also { opened = it }).connection
 
     /** Runs [block] with the connection, alone. */
-    suspend fun <T> run(block: (SQLiteConnection) -> T): T = withContext(dispatcher) { block(connection) }
+    suspend fun <T> run(block: (SQLiteConnection) -> T): T = withContext(dispatcher) { block(connection()) }
 
     /** Runs [block] in a transaction that commits when it returns and rolls back when it throws. */
     suspend fun <T> transaction(block: (SQLiteConnection) -> T): T = run { c -> c.inTransaction(block) }
 
-    fun close() = connection.close()
+    /**
+     * True, once, when the stored main database could not be opened and an empty one replaced it.
+     * It opens the database if that has not happened yet.
+     */
+    suspend fun wasReset(): Boolean = withContext(dispatcher) {
+        connection()
+        val reset = opened?.reset == true && !resetReported
+        resetReported = true
+        reset
+    }
+
+    /** Closes the connection. Call it only once nothing runs on the database any more. */
+    fun close() {
+        opened?.connection?.close()
+    }
 
     // ---------------------------------------------------------------------------------------------
     // Settings
@@ -208,12 +242,30 @@ class CaddieDatabase private constructor(private val connection: SQLiteConnectio
         }
     }
 
-    suspend fun setInterested(scope: String, talkId: String, interested: Boolean, nowMs: Long) = run { c ->
+    /** The copies kept of [scope]'s marked talks, by talk id. Talks marked without a copy are left out. */
+    suspend fun interestedSnapshots(scope: String): Map<String, InterestedTalk> = run { c ->
+        c.prepare("SELECT talk_id, snapshot FROM interested WHERE scope = ? AND snapshot IS NOT NULL").use { s ->
+            s.bindText(1, scope)
+            buildMap {
+                while (s.step()) InterestedTalk.fromJson(s.getText(1))?.takeIf { it.talkId == s.getText(0) }?.let { put(it.talkId, it) }
+            }
+        }
+    }
+
+    /**
+     * Marks or unmarks [talkId] in [scope]. A mark keeps [snapshot] when one is given; marking a
+     * talk that is marked already keeps its date and only refreshes the copy.
+     */
+    suspend fun setInterested(scope: String, talkId: String, interested: Boolean, nowMs: Long, snapshot: InterestedTalk? = null) = run { c ->
         if (interested) {
-            c.prepare("INSERT OR IGNORE INTO interested (scope, talk_id, added_at) VALUES (?, ?, ?)").use { s ->
+            c.prepare(
+                "INSERT INTO interested (scope, talk_id, added_at, snapshot) VALUES (?, ?, ?, ?) " +
+                    "ON CONFLICT(scope, talk_id) DO UPDATE SET snapshot = coalesce(excluded.snapshot, interested.snapshot)",
+            ).use { s ->
                 s.bindText(1, scope)
                 s.bindText(2, talkId)
                 s.bindLong(3, nowMs)
+                if (snapshot == null) s.bindNull(4) else s.bindText(4, snapshot.toJson())
                 s.step()
             }
         } else {
@@ -226,6 +278,29 @@ class CaddieDatabase private constructor(private val connection: SQLiteConnectio
         Unit
     }
 
+    /**
+     * Brings the copies of [scope]'s marked talks up to date with [bundle], for the talks it still
+     * holds; the copies of talks it dropped stay as they were.
+     */
+    suspend fun refreshInterested(scope: String, bundle: TalkBundle) = transaction { c ->
+        val ids = c.prepare("SELECT talk_id, snapshot FROM interested WHERE scope = ?").use { s ->
+            s.bindText(1, scope)
+            buildMap { while (s.step()) put(s.getText(0), if (s.isNull(1)) null else s.getText(1)) }
+        }
+        c.prepare("UPDATE interested SET snapshot = ? WHERE scope = ? AND talk_id = ?").use { s ->
+            for ((id, old) in ids) {
+                val talk = bundle.talksById[id] ?: continue
+                val copy = InterestedTalk.from(talk).toJson()
+                if (copy == old) continue
+                s.reset()
+                s.bindText(1, copy)
+                s.bindText(2, scope)
+                s.bindText(3, id)
+                s.step()
+            }
+        }
+    }
+
     companion object {
         /**
          * BM25 column weights, in table order: title, abstract, speakers, taglines, topics, track,
@@ -236,8 +311,11 @@ class CaddieDatabase private constructor(private val connection: SQLiteConnectio
         const val WEIGHTS = "2.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5"
 
         /**
-         * The schema, one migration per version: MIGRATIONS[0] takes an empty database to version 1.
-         * Add a migration at the end; never change one that has shipped.
+         * The main database's schema, one migration per version: MIGRATIONS[0] takes an empty
+         * database to version 1. Add a migration at the end; never change one that has shipped.
+         *
+         * Version 2 moves everything that can be downloaded again to the cache database (the old
+         * tables are dropped; the bundles are downloaded again) and keeps a copy of each marked talk.
          */
         val MIGRATIONS: List<List<String>> = listOf(
             listOf(
@@ -249,35 +327,166 @@ class CaddieDatabase private constructor(private val connection: SQLiteConnectio
                     "tokenize = 'porter unicode61 remove_diacritics 2')",
                 "CREATE TABLE interested (scope TEXT NOT NULL, talk_id TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY (scope, talk_id))",
             ),
+            listOf(
+                "DROP TABLE main.talk_fts",
+                "DROP TABLE main.talk_row",
+                "DROP TABLE main.installed_bundle",
+                "DROP TABLE main.http_cache",
+                "ALTER TABLE main.interested ADD COLUMN snapshot TEXT",
+            ),
         )
 
-        /** Opens (creating if needed) the database at [path] and migrates it. ":memory:" is a test database. */
-        fun open(path: String): CaddieDatabase {
-            val connection = BundledSQLiteDriver().open(path)
+        /** The cache database's schema, attached as `cache`; the same rules as [MIGRATIONS]. */
+        val CACHE_MIGRATIONS: List<List<String>> = listOf(
+            listOf(
+                "CREATE TABLE cache.http_cache (url TEXT PRIMARY KEY NOT NULL, body BLOB NOT NULL, etag TEXT, fetched_at INTEGER NOT NULL)",
+                "CREATE TABLE cache.installed_bundle (scope TEXT PRIMARY KEY NOT NULL, content_hash TEXT NOT NULL, installed_at INTEGER NOT NULL)",
+                "CREATE TABLE cache.talk_row (rowid INTEGER PRIMARY KEY, scope TEXT NOT NULL, talk_id TEXT NOT NULL, UNIQUE (scope, talk_id))",
+                "CREATE VIRTUAL TABLE cache.talk_fts USING fts5(title, abstract, speakers, taglines, topics, track, room, " +
+                    "tokenize = 'porter unicode61 remove_diacritics 2')",
+            ),
+        )
+
+        private const val MEMORY = ":memory:"
+
+        /**
+         * Opens (creating if needed) the database at [path], with its cache database at [cachePath]
+         * (by default next to it, `{name}-cache.db`), and migrates both. ":memory:" is a test
+         * database. It throws when either cannot be opened or migrated; the apps use [openLazily].
+         */
+        fun open(path: String, cachePath: String = defaultCachePath(path)): CaddieDatabase {
+            val connection = openMain(path)
             try {
-                connection.execSQL("PRAGMA foreign_keys = ON")
-                if (path != ":memory:") connection.execSQL("PRAGMA journal_mode = WAL")
-                migrate(connection)
+                attachCache(connection, cachePath)
             } catch (e: Throwable) {
                 connection.close()
                 throw e
             }
-            return CaddieDatabase(connection)
+            return CaddieDatabase { Opened(connection, reset = false) }.also { it.connection() }
         }
 
-        /** The schema version of a connection. */
-        fun version(connection: SQLiteConnection): Int =
-            connection.prepare("PRAGMA user_version").use { s -> if (s.step()) s.getLong(0).toInt() else 0 }
-
-        internal fun migrate(connection: SQLiteConnection) {
-            val current = version(connection)
-            require(current <= MIGRATIONS.size) {
-                "The database is from a newer version of the app (schema $current, this app knows ${MIGRATIONS.size})."
+        /**
+         * A database that opens [path] and [cachePath] at its first statement, on its own
+         * dispatcher, and recovers instead of failing (see the class comment). If even an empty
+         * database cannot be created there, it runs in memory for this launch.
+         */
+        fun openLazily(path: String, cachePath: String = defaultCachePath(path)): CaddieDatabase = CaddieDatabase {
+            var reset = false
+            val connection = try {
+                openMain(path)
+            } catch (e: Throwable) {
+                reset = true
+                // Only a file that is itself unusable is moved aside. Any other failure (no space, no
+                // permission) leaves it alone, and this launch runs in memory.
+                if (isUnusableFile(e)) {
+                    moveAside(path)
+                    try {
+                        openMain(path)
+                    } catch (_: Throwable) {
+                        openMain(MEMORY)
+                    }
+                } else {
+                    openMain(MEMORY)
+                }
             }
-            for (v in current until MIGRATIONS.size) {
+            try {
+                attachCache(connection, cachePath)
+            } catch (_: Throwable) {
+                try {
+                    connection.execSQL("DETACH DATABASE cache")
+                } catch (_: Throwable) {
+                    // It was never attached.
+                }
+                deleteFiles(cachePath)
+                try {
+                    attachCache(connection, cachePath)
+                } catch (_: Throwable) {
+                    attachCache(connection, MEMORY)
+                }
+            }
+            Opened(connection, reset)
+        }
+
+        fun defaultCachePath(path: String): String = if (path == MEMORY) MEMORY else path.removeSuffix(".db") + "-cache.db"
+
+        /** The schema version of a connection's main database, or of [schema]. */
+        fun version(connection: SQLiteConnection, schema: String = "main"): Int =
+            connection.prepare("PRAGMA $schema.user_version").use { s -> if (s.step()) s.getLong(0).toInt() else 0 }
+
+        private fun openMain(path: String): SQLiteConnection {
+            if (path != MEMORY) Path(path).parent?.let { if (!SystemFileSystem.exists(it)) SystemFileSystem.createDirectories(it) }
+            val connection = BundledSQLiteDriver().open(path)
+            try {
+                connection.execSQL("PRAGMA foreign_keys = ON")
+                if (path != MEMORY) connection.execSQL("PRAGMA journal_mode = WAL")
+                migrate(connection, "main", MIGRATIONS)
+            } catch (e: Throwable) {
+                connection.close()
+                throw e
+            }
+            return connection
+        }
+
+        private fun attachCache(connection: SQLiteConnection, cachePath: String) {
+            if (cachePath != MEMORY) Path(cachePath).parent?.let { if (!SystemFileSystem.exists(it)) SystemFileSystem.createDirectories(it) }
+            connection.prepare("ATTACH DATABASE ? AS cache").use { s ->
+                s.bindText(1, cachePath)
+                s.step()
+            }
+            if (cachePath != MEMORY) connection.execSQL("PRAGMA cache.journal_mode = WAL")
+            migrate(connection, "cache", CACHE_MIGRATIONS)
+        }
+
+        internal fun migrate(connection: SQLiteConnection, schema: String, migrations: List<List<String>>) {
+            val current = version(connection, schema)
+            require(current <= migrations.size) {
+                "The $schema database is from a newer version of the app (schema $current, this app knows ${migrations.size})."
+            }
+            for (v in current until migrations.size) {
                 connection.inTransaction { c ->
-                    MIGRATIONS[v].forEach { c.execSQL(it) }
-                    c.execSQL("PRAGMA user_version = ${v + 1}")
+                    migrations[v].forEach { c.execSQL(it) }
+                    c.execSQL("PRAGMA $schema.user_version = ${v + 1}")
+                }
+            }
+        }
+
+        /**
+         * True for the failures that mean the file cannot be used as it is: a schema from a newer
+         * version of the app, or SQLite's SQLITE_CORRUPT (11) and SQLITE_NOTADB (26).
+         */
+        internal fun isUnusableFile(e: Throwable): Boolean {
+            if (e is IllegalArgumentException && e.message?.contains("newer version of the app") == true) return true
+            val m = e.message ?: return false
+            return Regex("""\b(?:code|Error code):? ?(?:11|26)\b""", RegexOption.IGNORE_CASE).containsMatchIn(m) ||
+                m.contains("not a database", ignoreCase = true) || m.contains("malformed", ignoreCase = true)
+        }
+
+        // Keeps the unreadable file, so nothing is destroyed, and frees the path for a new database.
+        private fun moveAside(path: String) {
+            if (path == MEMORY) return
+            for (suffix in listOf("", "-wal", "-shm")) {
+                val from = Path(path + suffix)
+                val to = Path("$path.unreadable$suffix")
+                try {
+                    SystemFileSystem.delete(to, mustExist = false)
+                    if (SystemFileSystem.exists(from)) SystemFileSystem.atomicMove(from, to)
+                } catch (_: Exception) {
+                    try {
+                        SystemFileSystem.delete(from, mustExist = false)
+                    } catch (_: Exception) {
+                        // Opening again will fail, and the database runs in memory.
+                    }
+                }
+            }
+        }
+
+        private fun deleteFiles(path: String) {
+            if (path == MEMORY) return
+            for (suffix in listOf("", "-wal", "-shm")) {
+                try {
+                    SystemFileSystem.delete(Path(path + suffix), mustExist = false)
+                } catch (_: Exception) {
+                    // Opening again will fail, and the cache runs in memory.
                 }
             }
         }
