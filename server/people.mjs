@@ -753,6 +753,19 @@ export async function deleteConnections(eventId, profileId) {
   await deleteWhere(NUDGES_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } });
 }
 
+// Deletes a profile and everything that connects it to others. The connections go first: if
+// removing them fails, the profile document is still there, so the request answers 502 and trying
+// again authenticates against it and runs the whole delete again. Deleting the document first
+// would make that second attempt find no profile, answer 200 and leave the meets, push
+// subscriptions and nudge records stored. The second pass removes anything another person
+// created with this profile while the first one ran, since the profile could still be found
+// until it was deleted.
+async function deleteProfileAndConnections(eventId, profileId) {
+  await deleteConnections(eventId, profileId);
+  await deleteDoc(docId(eventId, profileId));
+  await deleteConnections(eventId, profileId);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Ranking people relative to the requester: one rrf retriever over
 //   1. my learn_topics against their speak_topics,
@@ -1034,10 +1047,7 @@ async function putProfile(req, res) {
 
   // Both visibility choices off: the document must not exist, nor anything that connected it.
   if (!body.open_to_meet && !shared.length) {
-    if (own.found) {
-      await deleteDoc(id);
-      await deleteConnections(conf.slug, device.profileId);
-    }
+    if (own.found) await deleteProfileAndConnections(conf.slug, device.profileId);
     sendJson(res, 200, { ok: true, open_to_meet: false, shared_talk_ids: [] });
     return;
   }
@@ -1133,8 +1143,7 @@ async function deleteProfile(req, res, url) {
   const own = await ownDoc(slug, device.profileId);
   if (own.found) {
     if (!secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
-    await deleteDoc(docId(slug, device.profileId));
-    await deleteConnections(slug, device.profileId);
+    await deleteProfileAndConnections(slug, device.profileId);
   }
   sendJson(res, 200, { ok: true });
 }
