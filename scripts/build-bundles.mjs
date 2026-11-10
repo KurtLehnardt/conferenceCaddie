@@ -217,7 +217,7 @@ export function trimTalk(raw) {
   };
 }
 
-const TAKEDOWN_KEYS = new Set(['slug', 'talk_id', 'speaker', 'reason', 'date']);
+const TAKEDOWN_KEYS = new Set(['slug', 'talk_id', 'speaker', 'reason', 'date', 'purged']);
 
 /**
  * The takedown list: [{ slug, talk_id?, speaker?, reason, date }]. A missing file is an empty list; a
@@ -245,6 +245,7 @@ export function loadTakedowns(file, { dataDir = null } = {}) {
     if (e.talk_id === undefined && e.speaker === undefined) throw bad('talk_id or speaker is required');
     if (e.talk_id !== undefined && (typeof e.talk_id !== 'string' || !e.talk_id.startsWith(`${e.slug}:`))) throw bad('talk_id must be a string starting with "<slug>:"');
     if (e.speaker !== undefined && (typeof e.speaker !== 'string' || !normalizeKey(e.speaker))) throw bad('speaker must be a non-empty name');
+    if (e.purged !== undefined && typeof e.purged !== 'boolean') throw bad('purged must be true or false');
   });
   return list;
 }
@@ -253,8 +254,10 @@ export function loadTakedowns(file, { dataDir = null } = {}) {
  * Applies the takedowns of one conference to its raw talks. An entry with only talk_id drops that
  * talk. An entry with a speaker removes that name (compared with normalizeKey, so case, accents and
  * punctuation do not matter) and its tagline from the talk named by talk_id, or from every talk of the
- * conference when there is none. An entry that matches nothing is an error: the content it was meant to
- * remove may still be published under another spelling. Returns { talks }.
+ * conference when there is none. An entry that matches nothing is an error, because the content it was
+ * meant to remove may still be published under another spelling, unless it is marked purged: true, which
+ * says the content is already gone from data/ and the entry stays only as a guard against a later
+ * re-ingest bringing it back (it still applies if it matches again). Returns { talks }.
  */
 export function applyTakedowns(slug, talks, takedowns) {
   let out = talks.map((t) => ({ ...t }));
@@ -277,7 +280,7 @@ export function applyTakedowns(slug, talks, takedowns) {
         return { ...t, speakers: names, speaker_taglines: taglines, speaker_profiles: names.map((name, j) => ({ name, tagline: taglines[j] })) };
       });
     }
-    if (!hit) throw new Error(`takedown for ${slug} (${e.talk_id ?? ''}${e.speaker ? ` speaker ${JSON.stringify(e.speaker)}` : ''}) matched nothing in the data; fix the entry or the data before publishing`);
+    if (!hit && !e.purged) throw new Error(`takedown for ${slug} (${e.talk_id ?? ''}${e.speaker ? ` speaker ${JSON.stringify(e.speaker)}` : ''}) matched nothing in the data; fix the entry or the data before publishing`);
   }
   return { talks: out };
 }

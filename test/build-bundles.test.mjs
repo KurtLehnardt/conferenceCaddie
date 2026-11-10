@@ -461,6 +461,12 @@ test('takedowns drop a talk or a speaker, adjust the talk count, and are validat
     writeFileSync(bad, doc);
     assert.throws(() => loadTakedowns(bad, { dataDir }), doc);
   }
+  // A purged entry may match nothing, but still applies when it matches; purged must be a boolean.
+  assert.deepEqual(applyTakedowns(SLUG, talks, [{ slug: SLUG, speaker: 'Nobody Here', reason: 'r', date: '2026-01-01', purged: true }]).talks.length, talks.length);
+  const guarded = applyTakedowns(SLUG, talks, [{ slug: SLUG, speaker: gone, reason: 'r', date: '2026-01-01', purged: true }]).talks;
+  assert.ok(!guarded.some((x) => x.speakers.includes(gone)), 'a purged entry still applies if it matches');
+  writeFileSync(bad, JSON.stringify([{ ...base, purged: 'yes' }]));
+  assert.throws(() => loadTakedowns(bad, { dataDir }), /purged must be/);
   // An entry for a conference that is being built but matches nothing fails the whole run.
   writeFileSync(path.join(dataDir, 'takedowns.json'), JSON.stringify([{ ...base, speaker: 'Nobody Here' }]));
   await assert.rejects(run(parseArgs(['--out', path.join(root, 'out-fail'), '--reuse-from', 'none']), { embedder: hashEmbedder(), dataDir, log: () => {} }), /matched nothing/);
