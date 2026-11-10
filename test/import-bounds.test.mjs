@@ -284,11 +284,11 @@ describe('pasted text with filename and mime hints, as the Worker accepts it', (
     assert.deepEqual(titlesOf(r.body), two);
   });
 
-  test('text with a .tsv hint reads as tab separated, even when the first line has commas', async () => {
-    const text = 'Session\tSpeaker\n"Inside the Kubernetes Scheduler, Part 1"\tXavier Dupont\nRust Operators for Kubernetes\tArjun Mehta\n';
+  test('text with a .tsv hint reads as tab separated, even when commas outnumber tabs in the header', async () => {
+    const text = 'Session, title\tSpeaker, name, role\nInside the Kubernetes Scheduler\tXavier Dupont\nRust Operators for Kubernetes\tArjun Mehta\n';
     const r = await importSchedule({ text, filename: 'my.tsv' });
     assert.equal(r.status, 200);
-    assert.ok(sent.some((s) => s.text === 'Rust Operators for Kubernetes'));
+    assert.ok(titlesOf(r.body).includes('Rust Operators for Kubernetes'));
   });
 
   test('text with an ics hint and an iCalendar body reads as iCalendar', async () => {
