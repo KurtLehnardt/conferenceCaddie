@@ -93,7 +93,10 @@ fun Modifier.caddieClickable(
 
 enum class ButtonVariant { Primary, Tonal, Text, Danger }
 
-/** .btn: a pill button at least 44 dp tall (.btn-primary, -tonal, -text, -danger; .btn-small). */
+/**
+ * .btn: a pill button at least 44 dp tall (.btn-primary, -tonal, -text, -danger; .btn-small), with
+ * an optional icon before the text, filled when [iconFilled] (the star of an "Interested" button).
+ */
 @Composable
 fun CaddieButton(
     text: String,
@@ -103,6 +106,8 @@ fun CaddieButton(
     small: Boolean = false,
     enabled: Boolean = true,
     icon: LucideIcon? = null,
+    iconFilled: Boolean = false,
+    iconSize: Dp = 18.dp,
 ) {
     val c = Caddie.colors
     val (bg, fg) = when (variant) {
@@ -121,7 +126,7 @@ fun CaddieButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
     ) {
-        if (icon != null) LucideImage(icon, null, size = 18.dp, tint = fg)
+        if (icon != null) LucideImage(icon, null, size = iconSize, tint = fg, filled = iconFilled)
         // The web keeps a button on one line; here a long label may wrap instead, so it stays
         // readable at large system font sizes.
         Text(

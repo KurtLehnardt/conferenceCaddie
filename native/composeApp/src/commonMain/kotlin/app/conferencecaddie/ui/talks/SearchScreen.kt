@@ -22,6 +22,7 @@ import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.bundle.TalkTime
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.search.SearchRequest
+import app.conferencecaddie.shared.search.Evidence
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.ui.components.CaddieChip
 import app.conferencecaddie.ui.components.ChipKind
@@ -114,6 +115,16 @@ fun SearchScreen(
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
+                    if (result.degraded) {
+                        item("degraded") {
+                            Text(
+                                Strings.ForYou.DEGRADED_NATIVE,
+                                style = Caddie.type.meta,
+                                color = Caddie.colors.text2,
+                                modifier = Modifier.padding(horizontal = Caddie.dimens.gutter).testTag("search-degraded"),
+                            )
+                        }
+                    }
                     if (result.talks.isEmpty()) {
                         item("empty") {
                             StateView(
@@ -125,7 +136,15 @@ fun SearchScreen(
                     } else {
                         val terms = markTerms(result.searchText)
                         items(result.talks, key = { it.talkId }) { talk ->
-                            TalkResult(talk, bundle, terms, talk.talkId in interested, nowMs, onToggleInterested, onOpenTalk, onOpenUrl)
+                            TalkResult(
+                                talk, bundle, terms, talk.talkId in interested, nowMs, onToggleInterested, onOpenTalk, onOpenUrl,
+                                searchText = result.searchText,
+                                rank = if (browse) {
+                                    null
+                                } else {
+                                    { RankDrawer(talk.talkId, result.ranking[talk.talkId], result, model.filters, conference) }
+                                },
+                            )
                         }
                     }
                 }
@@ -155,6 +174,8 @@ internal fun TalkResult(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     showEvidence: Boolean = true,
+    searchText: String = "",
+    rank: (@Composable () -> Unit)? = null,
 ) {
     val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
     TalkCard(
@@ -164,7 +185,7 @@ internal fun TalkResult(
         speakers = talk.speakers.joinToString(", ").takeIf { it.isNotEmpty() },
         room = talk.room,
         tags = talkTags(talk),
-        evidence = if (showEvidence) evidenceText(talk)?.let { highlight(it, terms) } else null,
+        evidence = if (showEvidence) highlight(Evidence.forTalk(talk, searchText), terms) else null,
         interested = interested,
         onToggleInterested = { onToggleInterested(talk) },
         ended = TalkTime.hasEnded(talk, nowMs),
@@ -172,10 +193,18 @@ internal fun TalkResult(
         links = cardLinks(talk),
         onOpenLink = onOpenUrl,
         onClick = { onOpenTalk(talk) },
-        extra = if (talk.kind == "talk") {
-            { RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk) }
-        } else {
-            null
+        // Under the actions, as on the web: the ranking drawer of a text search, then related talks.
+        extra = when {
+            talk.kind == "talk" -> {
+                {
+                    rank?.invoke()
+                    RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, onOpenUrl = onOpenUrl)
+                }
+            }
+            rank != null -> {
+                { rank() }
+            }
+            else -> null
         },
     )
 }

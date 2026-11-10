@@ -74,3 +74,24 @@ kotlin {
 dependencies {
     androidRuntimeClasspath(libs.compose.uiTooling)
 }
+
+// The query embedding model and its vocabulary ship with the app as Compose resources
+// (files/embedding/), on Android in the APK's assets and on iOS in the app's compose-resources
+// folder. shared downloads and verifies them (gradle/pinned-downloads.properties); this copies them
+// into a resource directory of their own, which git never sees.
+val embeddingResources = tasks.register<Sync>("embeddingResources") {
+    dependsOn(":shared:downloadEmbeddingModel", ":shared:downloadEmbeddingVocab")
+    from(rootProject.layout.projectDirectory.dir("shared/build/embedding/bge-small-en-v1.5")) {
+        include("model_quantized.onnx", "vocab.txt")
+        into("files/embedding")
+    }
+    into(layout.buildDirectory.dir("generated/embeddingResources"))
+}
+
+compose.resources {
+    packageOfResClass = "app.conferencecaddie.ui.resources"
+    customDirectory(
+        sourceSetName = "commonMain",
+        directoryProvider = embeddingResources.map { layout.buildDirectory.dir("generated/embeddingResources").get() },
+    )
+}
