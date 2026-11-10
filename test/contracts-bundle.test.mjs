@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   quantizeRow, encodeVectors, decodeVectors, cosine, relatedTalks, contentHash, verifyBundle, sha256hex, textHash, buildBundle,
-  normalizeKey, buildFacets, bundleTalk, compareSimilarity, DIMS, MODEL, passageText, queryText,
+  normalizeKey, buildFacets, bundleTalk, compareSimilarity, readConferenceIndex, DIMS, MODEL, passageText, queryText,
 } from '../contracts/js/bundle.mjs';
 import { canonicalJson } from '../contracts/js/canonical-json.mjs';
 import { buildFixtureBundles, BUNDLE_OUT } from '../contracts/js/fixtures.mjs';
@@ -239,6 +239,12 @@ test('reference embeddings: inputs follow the conventions and the numbers agree'
     assert.equal(best(ref.similarities_q8[i]), best(ref.similarities[i]));
     assert.equal(best(ref.documents.map((d) => cosine(q.vector, quantizeRow(d.vector)))), best(ref.similarities[i]));
   });
+  // The two likely mistakes, mean pooling and a query without its instruction, each miss the
+  // reference by more than the tolerance somewhere, so a check against it catches them.
+  for (const wrong of ['similarities_mean_pooling', 'similarities_no_query_instruction']) {
+    const worst = Math.max(...ref[wrong].flatMap((row, i) => row.map((x, j) => Math.abs(x - ref.similarities[i][j]))));
+    assert.ok(worst > ref.tolerance, `${wrong} differs by at most ${worst}`);
+  }
   // The query about securing MCP servers finds the MCP talk; the one about power finds the scheduling talk.
   assert.equal(ref.documents[best(ref.similarities[0])].talk_id, A);
   assert.equal(ref.documents[best(ref.similarities[1])].talk_id, C);
@@ -253,6 +259,55 @@ test('verification refuses a malformed entry instead of throwing, and lists exac
   const withExtra = structuredClone(index);
   withExtra.conferences[0].bundle.files['extra.bin'] = { bytes: 0, sha256: '0'.repeat(64) };
   assert.equal(validator('conferences-index.v1')(withExtra).valid, false, 'the schema names the two files');
+});
+
+test('verification never throws on a malformed bundle.json whose hashes match', () => {
+  const forge = (value) => {
+    const f = { 'bundle.json': Buffer.from(JSON.stringify(value), 'utf8'), 'vectors.i8': files['vectors.i8'] };
+    const e = structuredClone(entry);
+    for (const [name, bytes] of Object.entries(f)) e.files[name] = { bytes: bytes.length, sha256: sha256hex(bytes) };
+    e.content_hash = contentHash(f);
+    e.path = `${SLUG}/${e.content_hash.slice(0, 16)}/`;
+    return () => verifyBundle(e, f, { producer: true });
+  };
+  const cases = {
+    null: null,
+    'an array': [],
+    'a talk with no fields': { ...bundle, talks: [{}] },
+    'talks as an object': { ...bundle, talks: { a: 1 } },
+    'related lists that are not arrays': { ...bundle, related: { [A]: 'x' } },
+    'related as an array': { ...bundle, related: [] },
+    'vectors without rows': { ...bundle, vectors: { ...bundle.vectors, rows: null } },
+    'topics of the wrong type': { ...bundle, topics: [null] },
+    'a float somewhere': { ...bundle, conference: { ...bundle.conference, talk_count: 0.5 } },
+    'speakers that are not strings': { ...bundle, talks: bundle.talks.map((t) => ({ ...t, speakers: [1] })) },
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    let problems;
+    assert.doesNotThrow(() => { problems = forge(value)(); }, name);
+    assert.ok(problems.length > 0, `${name} must be refused`);
+  }
+});
+
+test('a client reads conferences.json entry by entry and skips bad ones', () => {
+  const doc = structuredClone(index);
+  doc.conferences.push(
+    { slug: 'broken', name: 42 },
+    'not an object',
+    { ...structuredClone(index.conferences[0]), slug: 'later-format-2099', bundle: { bundle_version: 2, content_hash: 'a'.repeat(64), path: 'later-format-2099/aaaaaaaaaaaaaaaa/', files: { 'bundle.json': { bytes: 1, sha256: 'b'.repeat(64) }, 'vectors.f16': { bytes: 2, sha256: 'c'.repeat(64) } }, model: 'other/model', dims: 768 } },
+    { ...structuredClone(index.conferences[0]), slug: 'bad-bundle-2099', bundle: { bundle_version: 1, content_hash: 'nope' } },
+  );
+  const r = readConferenceIndex(doc);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.conferences.map((c) => [c.conference.slug, c.bundle_status]), [
+    [SLUG, 'ok'], ['caddie-unavailable-2099', 'none'], ['later-format-2099', 'unsupported'], ['bad-bundle-2099', 'invalid'],
+  ]);
+  assert.deepEqual(r.skipped.map((x) => [x.position, x.slug]), [[2, 'broken'], [3, null]]);
+  assert.equal(r.conferences[0].bundle.content_hash, entry.content_hash);
+  assert.equal(readConferenceIndex({ ...index, index_version: 2 }).reason, 'update_app');
+  assert.equal(readConferenceIndex(null).reason, 'invalid');
+  // The schema accepts a later bundle_version in the index; the two-file and model rules bind v1 only.
+  assert.equal(validator('conferences-index.v1')(doc.conferences[4] ? { ...index, conferences: [doc.conferences[4]] } : index).valid, true);
 });
 
 test('buildBundle refuses an incomplete or unavailable conference', () => {

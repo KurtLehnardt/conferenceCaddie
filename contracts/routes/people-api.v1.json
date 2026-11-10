@@ -113,7 +113,8 @@
       "summary": "Which of the tokens this phone heard belong to strong matches right here. The request shape is the same in both Bluetooth modes; in derived-v1 the answer also carries the requester's current ble_key_id, and resolution follows the Phase 4 rules of docs/contracts/ble-tokens.md.",
       "errors": [
         { "status": 403, "error": "profile_required" },
-        { "status": 403, "error": "ble_required", "when": "the requester is not around with Bluetooth on, or (derived-v1) its session was issued under a retired master" }
+        { "status": 403, "error": "ble_required", "when": "the requester is not around with Bluetooth on" },
+        { "status": 403, "error": "ble_rekey", "when": "derived-v1: the requester's session was issued under a master the server no longer holds; the device gets a new key (docs/contracts/ble-tokens.md, Re-keying)" }
       ]
     },
     {

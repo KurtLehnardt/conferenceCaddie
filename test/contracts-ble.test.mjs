@@ -303,34 +303,51 @@ test('the token table holds three tokens per session, a nonce tag and no key mat
   assert.equal(B.windowOf(599.999), 0n);
 });
 
-test('the per-device caps keep at most 10 new people per window and 30 per hour', () => {
-  const people = Array.from({ length: 40 }, (_, i) => ({ id: `p${String(i).padStart(2, '0')}`, key: Buffer.alloc(32, i + 1) }));
-  const t = 1794312300;
-  const table = new Map([...B.resolverAt(people, t)].map(([token, id]) => [token, { profile_id: id, nonce_tag: 'x' }]));
-  const sightingsFor = (ids) => ids.map((id) => ({ token: B.encodeToken(B.tokenAt(people.find((p) => p.id === id).key, t)), rssi: -50 }));
-  const seen = { window: new Set(), hour: new Set() };
-  const first = B.resolveSightings(sightingsFor(people.slice(0, 15).map((p) => p.id)), table, { seen });
-  assert.equal(first.length, 10);
-  // Someone already resolved keeps resolving; nobody new does in this window.
-  const again = B.resolveSightings(sightingsFor([first[0].id, 'p20']), table, { seen });
-  assert.deepEqual(again.map((r) => r.id), [first[0].id]);
-  const ids = people.map((p) => p.id);
-  for (const w of [1, 2]) {
-    seen.window = new Set();
-    assert.equal(B.resolveSightings(sightingsFor(ids.slice(w * 10, w * 10 + 15)), table, { seen }).length, 10, `window ${w}`);
+test('the caps apply to the final answer: 10 new people per window, 30 per rolling hour', () => {
+  const ids = Array.from({ length: 40 }, (_, i) => `p${String(i).padStart(2, '0')}`);
+  const answer = (list) => list.map((id) => ({ ref: id }));
+  const t0 = 2990520 * 600 * 1000; // the start of a window, in ms
+  const win = (k) => t0 + k * 600_000 + 1000; // one second into window k
+  let state = { entries: [] };
+  let r = B.applyCaps(answer(ids.slice(0, 15)), state, { nowMs: win(0) });
+  assert.deepEqual(r.kept.map((x) => x.ref), ids.slice(0, 10), 'at most 10 new people in a window, in answer order');
+  state = r.state;
+  // Someone already returned in this window passes; nobody new does.
+  r = B.applyCaps(answer(['p03', 'p20']), state, { nowMs: win(0) + 5000 });
+  assert.deepEqual(r.kept.map((x) => x.ref), ['p03']);
+  state = r.state;
+  for (const k of [1, 2]) {
+    r = B.applyCaps(answer(ids.slice(k * 10, k * 10 + 15)), state, { nowMs: win(k) });
+    assert.equal(r.kept.length, 10, `window ${k}`);
+    state = r.state;
   }
-  assert.equal(seen.hour.size, 30);
-  seen.window = new Set();
-  assert.deepEqual(B.resolveSightings(sightingsFor(ids.slice(30)), table, { seen }), [], 'the hour is full');
-  assert.deepEqual(B.resolveSightings(sightingsFor(['p00']), table, { seen }).map((r) => r.id), ['p00'], 'someone already resolved this hour still resolves');
+  r = B.applyCaps(answer(ids.slice(30)), state, { nowMs: win(3) });
+  assert.deepEqual(r.kept, [], 'the hour is full');
+  r = B.applyCaps(answer(['p00']), state, { nowMs: win(3) });
+  assert.deepEqual(r.kept.map((x) => x.ref), ['p00'], 'someone returned in the last hour still passes in a new window');
+  // The hour rolls: an hour after window 0, its ten people no longer count, but windows 1 and 2
+  // (20 people) and p00, returned again in window 3, still do: 9 places are free.
+  r = B.applyCaps(answer(ids.slice(30)), r.state, { nowMs: win(0) + 3_600_000 + 1000 });
+  assert.equal(r.kept.length, 9);
+  assert.ok(r.state.entries.every((e) => e.at > win(0) + 1000), 'entries older than an hour are dropped');
 });
 
-test('co-location: the same zone, or the same ~100 m cell', () => {
-  const cell = { lat: 1.5, lon: 2.5 };
+test('resolution refuses to skip the co-location rule silently', () => {
+  assert.throws(() => B.resolveSightings([], new Map()), /current/);
+  assert.deepEqual(B.resolveSightings([], new Map(), { colocationRequired: false }), []);
+});
+
+test('co-location: the same zone, or the same or a neighbouring ~100 m cell', () => {
+  const cell = { lat: 40.767, lon: -111.89 };
+  const step = 0.001 / Math.cos((40.767 * Math.PI) / 180);
   assert.equal(B.colocated({ zone: 'Hall A', cell: null }, { zone: 'Hall A', cell: null }), true);
   assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { ...cell } }), true);
-  assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { lat: 1.5, lon: 2.6 } }), false);
+  assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { lat: 40.768, lon: -111.89 } }), true, 'north neighbour');
+  assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { lat: 40.766, lon: Number((-111.89 + step).toFixed(6)) } }), true, 'diagonal neighbour');
+  assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { lat: 40.769, lon: -111.89 } }), false, 'two cells north');
+  assert.equal(B.colocated({ zone: 'Hall A', cell }, { zone: 'Expo hall', cell: { lat: 40.767, lon: Number((-111.89 + 2 * step).toFixed(6)) } }), false, 'two cells east');
   assert.equal(B.colocated({ zone: null, cell: null }, { zone: null, cell: null }), false);
+  assert.equal(B.neighbouringCells({ lat: 0, lon: 179.9995 }, { lat: 0, lon: -179.9995 }), true, 'across the antimeridian');
 });
 
 test('fresh keys and nonces have the right sizes and differ', () => {

@@ -223,18 +223,35 @@ export function resolverAt(keys, unixSeconds, windowS = WINDOW_S) {
   return table;
 }
 
-/** Default caps on distinct people resolved for one requesting device (Phase 4 mitigations). */
+/** Default caps on distinct people in one device's answers (Phase 4 mitigations). */
 export const RESOLVE_CAPS = Object.freeze({ perHour: 30, perWindow: 10 });
 
-const sameCell = (a, b) => Boolean(a && b) && a.lat === b.lat && a.lon === b.lon;
+/** The grid of presence cells, as server/people.mjs builds it: 0.001 degree of latitude (about 111 m). */
+export const CELL_DEG = 0.001;
+const rad = (deg) => (deg * Math.PI) / 180;
+// The longitude step of the grid at a latitude (capped at one degree near the poles), as cellFor does.
+const lonStepAt = (lat) => CELL_DEG / Math.max(Math.cos(rad(lat)), CELL_DEG);
+
+/**
+ * True when two cell centres are the same cell or one of its eight neighbours. A position near a
+ * cell edge jitters between neighbouring cells from one fix to the next, so the 3 x 3 block around
+ * a cell (about 330 m across) counts as co-located.
+ */
+export function neighbouringCells(a, b) {
+  if (!a || !b || !Number.isFinite(a.lat) || !Number.isFinite(a.lon) || !Number.isFinite(b.lat) || !Number.isFinite(b.lon)) return false;
+  if (Math.abs(a.lat - b.lat) > CELL_DEG * 1.5) return false;
+  let dLon = Math.abs(a.lon - b.lon);
+  if (dLon > 180) dLon = 360 - dLon;
+  return dLon <= Math.max(lonStepAt(a.lat), lonStepAt(b.lat)) * 1.5;
+}
 
 /**
  * True when two people count as co-located for Bluetooth resolution: the same presence zone, or
- * both have a stored position in the same ~100 m cell (the proximity band same_zone or near).
+ * both have a stored position in the same ~100 m cell or a neighbouring one.
  */
 export function colocated(requester, person) {
   if (requester.zone && requester.zone === person.zone) return true;
-  return sameCell(requester.cell, person.cell);
+  return neighbouringCells(requester.cell, person.cell);
 }
 
 /**
@@ -243,19 +260,18 @@ export function colocated(requester, person) {
  *   1. the strongest RSSI per token, dropping those under nearRssi;
  *   2. the token table entry of each token;
  *   3. only entries whose profile is in `current` (the store, read for this request) with the same
- *      nonce_tag, presence still live, and not the requester, so a cached table can never resolve a
- *      replaced session or one whose presence ended;
- *   4. only people co-located with the requester (unless colocationRequired is false), and at most
- *      caps.perWindow distinct people per window and caps.perHour per hour for this device; `seen`
- *      is the device's record { window: Set, hour: Set } of people resolved in the current window
- *      and in the last hour, updated in place (the caller empties each set when its period ends).
- * current: Map profile_id -> { nonce_tag, presence_until (ms), zone, cell }.
- * requester: { profile_id, zone, cell }.
- * Returns [{ id, rssi }] strongest first.
+ *      nonce_tag and presence still live, and not the requester, so a cached table can never
+ *      resolve a replaced session or one whose presence ended;
+ *   4. only people co-located with the requester (unless colocationRequired is false).
+ * current: Map profile_id -> { nonce_tag, presence_until (ms), zone, cell }, required unless the
+ * co-location rule is off (a caller cannot apply the rule without the store, so it must not
+ * silently skip it). requester: { profile_id, zone, cell }.
+ * Returns [{ id, rssi }] strongest first. The caps apply later, to the final answer (applyCaps).
  */
 export function resolveSightings(sightings, table, {
-  nearRssi = -75, requester = {}, current = null, nowMs = Date.now(), colocationRequired = true, caps = RESOLVE_CAPS, seen = null,
+  nearRssi = -75, requester = {}, current = null, nowMs = Date.now(), colocationRequired = true,
 } = {}) {
+  if (colocationRequired && !current) throw new TypeError('the co-location rule needs the current store (current)');
   const best = new Map();
   for (const { token, rssi } of sightings) {
     const known = best.get(token);
@@ -273,21 +289,38 @@ export function resolveSightings(sightings, table, {
     }
     if (!people.has(entry.profile_id) || rssi > people.get(entry.profile_id)) people.set(entry.profile_id, rssi);
   }
-  let out = [...people].map(([id, rssi]) => ({ id, rssi })).sort((a, b) => b.rssi - a.rssi || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  if (seen) {
-    const kept = [];
-    for (const r of out) {
-      // A person already counted in this window always passes. Anyone else needs room in this
-      // window, and, unless already counted this hour, room in the hour.
-      const inWindow = seen.window.has(r.id);
-      const roomInWindow = seen.window.size < caps.perWindow;
-      const roomInHour = seen.hour.has(r.id) || seen.hour.size < caps.perHour;
-      if (!inWindow && !(roomInWindow && roomInHour)) continue;
-      seen.window.add(r.id);
-      seen.hour.add(r.id);
-      kept.push(r);
+  return [...people].map(([id, rssi]) => ({ id, rssi })).sort((a, b) => b.rssi - a.rssi || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * The per-device caps, applied to the final `nearby` answer (after blocks, ranking and the
+ * strong-match rule), in its order. state is the device's record { entries: [{ id, at, w }] }:
+ * each person returned, with the time (ms) and window it was returned in. It is kept where every
+ * instance of the backend sees it (docs/contracts/ble-tokens.md, Phase 4 mitigations).
+ *   - a person already returned to this device in the current window always passes;
+ *   - anyone else needs fewer than caps.perWindow distinct people returned in the current window,
+ *     and, unless returned within the last hour, fewer than caps.perHour distinct people returned
+ *     in the rolling hour before nowMs.
+ * Returns { kept, state }, the new state holding only the last hour's entries.
+ */
+export function applyCaps(nearby, state, { nowMs = Date.now(), windowS = WINDOW_S, caps = RESOLVE_CAPS } = {}) {
+  const w = Number(windowOf(nowMs / 1000, windowS));
+  const entries = (state?.entries ?? []).filter((e) => e.at > nowMs - HOUR_MS && e.at <= nowMs);
+  const inWindow = new Set(entries.filter((e) => e.w === w).map((e) => e.id));
+  const inHour = new Set(entries.map((e) => e.id));
+  const kept = [];
+  for (const item of nearby) {
+    const id = item.id ?? item.ref;
+    if (!inWindow.has(id)) {
+      if (inWindow.size >= caps.perWindow) continue;
+      if (!inHour.has(id) && inHour.size >= caps.perHour) continue;
+      inWindow.add(id);
+      inHour.add(id);
+      entries.push({ id, at: nowMs, w });
     }
-    out = kept;
+    kept.push(item);
   }
-  return out;
+  return { kept, state: { entries } };
 }

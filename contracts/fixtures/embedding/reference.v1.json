@@ -1,5 +1,5 @@
 {
-  "description": "Reference embeddings for the talk bundle embedding conventions (docs/contracts/talk-bundle.md, Embedding conventions), so that the bundle builder, the phones (ONNX Runtime) and a tier 2 Worker (Workers AI) can check they embed the same way. The documents are the three talks of the fixture bundle, embedded from document_text with no instruction; the queries are embedded with the query instruction. Vectors are CLS-pooled and L2-normalised, rounded to 6 decimals. similarities are query-by-document cosines of the fp32 vectors, rounded to 4 decimals; similarities_q8 come from the int8-quantised ONNX export of the same model. An implementation matches when every cosine is within 0.02 of similarities and the best document for each query is the same.",
+  "description": "Reference embeddings for the talk bundle embedding conventions (docs/contracts/talk-bundle.md, Embedding conventions), so that the bundle builder, the phones (ONNX Runtime) and a tier 2 Worker (Workers AI) can check they embed the same way. The documents are the three talks of the fixture bundle, embedded from document_text with no instruction; the queries are embedded with the query instruction. Vectors are CLS-pooled and L2-normalised, rounded to 6 decimals. similarities are query-by-document cosines of the fp32 vectors, rounded to 4 decimals; similarities_q8 come from the int8-quantised ONNX export of the same model. An implementation matches when every cosine is within 0.02 of similarities and the best document for each query is the same. similarities_mean_pooling (mean pooling instead of CLS) and similarities_no_query_instruction (queries embedded without the instruction) show what the two most likely mistakes give: each differs from similarities by more than the tolerance somewhere, so a conformance check catches them.",
   "produced_with": "transformers.js 3.8.1 feature-extraction, model Xenova/bge-small-en-v1.5, dtype fp32 (model.onnx) and q8 (model_quantized.onnx), pooling cls, normalize true, Node 26, 2026-11-10",
   "tolerance": 0.02,
   "model": {
@@ -60,5 +60,13 @@
   "similarities_q8": [
     [0.8865, 0.5571, 0.5454],
     [0.481, 0.5907, 0.8389]
+  ],
+  "similarities_mean_pooling": [
+    [0.8634, 0.498, 0.468],
+    [0.412, 0.5266, 0.8269]
+  ],
+  "similarities_no_query_instruction": [
+    [0.8947, 0.5822, 0.5799],
+    [0.522, 0.6259, 0.8876]
   ]
 }

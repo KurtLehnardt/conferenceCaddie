@@ -11,6 +11,7 @@
 
 import crypto from 'node:crypto';
 import { canonicalJson } from './canonical-json.mjs';
+import { validator } from './schemas.mjs';
 
 export const BUNDLE_VERSION = 1;
 export const INDEX_VERSION = 1;
@@ -122,36 +123,44 @@ export function cosine(a, b) {
  * and the talk_id tie-break applies exactly to true ties.
  */
 export function compareSimilarity(a, b1, b2) {
-  const n1 = BigInt(dot(b1, b1));
-  const n2 = BigInt(dot(b2, b2));
-  const d1 = n1 === 0n ? 0n : BigInt(dot(a, b1));
-  const d2 = n2 === 0n ? 0n : BigInt(dot(a, b2));
-  const sgn = (d) => (d < 0n ? -1n : d > 0n ? 1n : 0n);
-  // A zero row (or a zero dot product) has similarity 0: compare signs first.
-  const s1 = sgn(d1);
-  const s2 = sgn(d2);
+  return compareKeys(similarityKey(a, b1, BigInt(dot(b1, b1))), similarityKey(a, b2, BigInt(dot(b2, b2))));
+}
+
+// The exact sort key of candidate b for anchor a: its dot product with a and its squared norm n
+// (passed in, so a caller computes each row's norm once). A zero row has dot product 0.
+const similarityKey = (a, b, n) => ({ d: n === 0n ? 0n : BigInt(dot(a, b)), n });
+const sgn = (d) => (d < 0n ? -1n : d > 0n ? 1n : 0n);
+
+// Negative when x is more similar than y, 0 on a true tie (see compareSimilarity).
+function compareKeys(x, y) {
+  const s1 = sgn(x.d);
+  const s2 = sgn(y.d);
   if (s1 !== s2) return s1 > s2 ? -1 : 1;
   if (s1 === 0n) return 0;
-  const l = s1 * d1 * d1 * n2;
-  const r = s2 * d2 * d2 * n1;
+  const l = s1 * x.d * x.d * y.n;
+  const r = s2 * y.d * y.d * x.n;
   return l > r ? -1 : l < r ? 1 : 0;
 }
 
 /**
  * The top-k related talks of every talk of a related kind: the other related-kind talks by cosine
  * similarity, highest first, compared exactly (compareSimilarity), true ties broken by talk_id in
- * ascending code-unit order. No threshold. Returns { talk_id: [talk_id, ...] } for every such talk
- * with a row.
+ * ascending code-unit order. No threshold. Each row's squared norm is computed once and each
+ * anchor's dot products once per candidate. Returns { talk_id: [talk_id, ...] } for every such
+ * talk with a row.
  */
 export function relatedTalks(talks, rowsById, k = RELATED_K) {
   const eligible = talks.filter((t) => RELATED_KINDS.includes(t.kind) && rowsById.has(t.talk_id)).map((t) => t.talk_id);
+  const norms = new Map(eligible.map((id) => [id, BigInt(dot(rowsById.get(id), rowsById.get(id)))]));
   const out = {};
   for (const id of eligible) {
     const row = rowsById.get(id);
     out[id] = eligible
       .filter((other) => other !== id)
-      .sort((x, y) => compareSimilarity(row, rowsById.get(x), rowsById.get(y)) || (x < y ? -1 : x > y ? 1 : 0))
-      .slice(0, k);
+      .map((other) => ({ other, key: similarityKey(row, rowsById.get(other), norms.get(other)) }))
+      .sort((x, y) => compareKeys(x.key, y.key) || (x.other < y.other ? -1 : x.other > y.other ? 1 : 0))
+      .slice(0, k)
+      .map((x) => x.other);
   }
   return out;
 }
@@ -350,6 +359,47 @@ export function verifyBundle(entry, files, { producer = false } = {}) {
   } catch {
     return [...problems, `${BUNDLE_FILE}: not JSON`];
   }
+  // A bundle whose hashes match can still be malformed; check the shape before reading it, and
+  // never throw (an unexpected error is reported as a problem too).
+  const shape = shapeProblems(bundle);
+  if (shape.length) return [...problems, ...shape];
+  try {
+    return [...problems, ...semanticProblems(entry, files, bundle, producer)];
+  } catch (err) {
+    return [...problems, `${BUNDLE_FILE}: could not be checked (${err?.name ?? 'error'})`];
+  }
+}
+
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isStr = (v) => typeof v === 'string';
+const isStrArray = (v) => Array.isArray(v) && v.every(isStr);
+
+// The structure verifyBundle relies on, checked without assuming anything about the content.
+function shapeProblems(bundle) {
+  if (!isObj(bundle)) return [`${BUNDLE_FILE}: not an object`];
+  const p = [];
+  if (!isObj(bundle.conference) || !isStr(bundle.conference.slug)) p.push('conference missing or malformed');
+  if (!isObj(bundle.attribution)) p.push('attribution missing or malformed');
+  if (!isObj(bundle.model)) p.push('model missing or malformed');
+  const v = bundle.vectors;
+  if (!isObj(v) || !isStrArray(v.rows) || !Number.isInteger(v.count) || !Number.isInteger(v.dims) || v.dims <= 0) p.push('vectors missing or malformed');
+  if (!Array.isArray(bundle.talks)) p.push('talks is not an array');
+  else {
+    bundle.talks.forEach((t, i) => {
+      if (!isObj(t) || !isStr(t.talk_id) || !isStr(t.kind) || !isStr(t.title) || !isStr(t.abstract) || !isStr(t.start)
+        || !isStrArray(t.speakers) || !Array.isArray(t.speaker_taglines) || !isStrArray(t.topics) || !isStr(t.text_hash)) {
+        p.push(`talks[${i}] malformed`);
+      }
+    });
+  }
+  if (!Array.isArray(bundle.topics) || !bundle.topics.every((t) => isObj(t) && isStr(t.topic_id))) p.push('topics malformed');
+  if (!isObj(bundle.related) || !Object.values(bundle.related).every(isStrArray)) p.push('related malformed');
+  return p;
+}
+
+// The rules a schema cannot state, on a bundle whose shape shapeProblems accepted.
+function semanticProblems(entry, files, bundle, producer) {
+  const problems = [];
   if (canonicalJson(bundle) !== Buffer.from(files[BUNDLE_FILE]).toString('utf8')) problems.push(`${BUNDLE_FILE}: not canonical JSON`);
   if (bundle.bundle_version !== entry.bundle_version) problems.push('bundle_version differs from the index entry');
   const v = bundle.vectors ?? {};
@@ -397,4 +447,39 @@ export function verifyBundle(entry, files, { producer = false } = {}) {
     }
   }
   return problems;
+}
+
+/**
+ * Reads a conferences.json the way a client should: each conference entry is checked on its own
+ * and a bad one is skipped, so one malformed entry never hides the others. Returns
+ * { ok, reason, conferences: [{ conference, bundle, bundle_status }], skipped: [{ position, slug, reason }] }.
+ * bundle_status is 'ok' (a v1 bundle this client can use), 'none' (bundle null), 'unsupported' (a
+ * bundle_version this client does not implement: keep the bundle it has and say the app needs an
+ * update) or 'invalid' (a malformed entry: ignore the bundle). An index_version other than 1 is
+ * { ok: false, reason: 'update_app' }; something that is not an index is { ok: false, reason: 'invalid' }.
+ */
+export function readConferenceIndex(doc) {
+  const out = { ok: false, reason: 'invalid', conferences: [], skipped: [] };
+  if (!isObj(doc) || !Array.isArray(doc.conferences)) return out;
+  if (doc.index_version !== INDEX_VERSION) return { ...out, reason: Number.isInteger(doc.index_version) && doc.index_version > INDEX_VERSION ? 'update_app' : 'invalid' };
+  const checkConference = validator('conferences-index.v1', 'Conference');
+  const checkEntry = validator('conferences-index.v1', 'BundleEntry');
+  doc.conferences.forEach((e, position) => {
+    if (!isObj(e)) {
+      out.skipped.push({ position, slug: null, reason: 'not an object' });
+      return;
+    }
+    const { bundle = null, ...conference } = e;
+    if (!checkConference(conference).valid) {
+      out.skipped.push({ position, slug: isStr(e.slug) ? e.slug : null, reason: 'invalid conference entry' });
+      return;
+    }
+    let status;
+    if (bundle === null) status = 'none';
+    else if (!isObj(bundle) || !checkEntry(bundle).valid) status = 'invalid';
+    else if (bundle.bundle_version !== BUNDLE_VERSION) status = 'unsupported';
+    else status = 'ok';
+    out.conferences.push({ conference, bundle: status === 'ok' ? bundle : null, bundle_status: status });
+  });
+  return { ...out, ok: true, reason: null };
 }

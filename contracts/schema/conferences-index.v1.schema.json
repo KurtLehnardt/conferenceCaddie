@@ -52,21 +52,21 @@
       }
     },
     "BundleEntry": {
+      "description": "A conference's current bundle. Every version has bundle_version, content_hash, path and files; the rest of the shape is fixed per bundle_version, so a v1 client can read an index that also lists bundles of a later version and skip them.",
       "type": "object",
-      "required": ["bundle_version", "content_hash", "path", "model", "dims", "talk_count", "vector_count", "files"],
+      "required": ["bundle_version", "content_hash", "path", "files"],
       "properties": {
-        "bundle_version": { "description": "Major version of the bundle format. A client skips a bundle whose major it does not implement.", "type": "integer", "minimum": 1 },
+        "bundle_version": { "description": "Major version of the bundle format. A client skips a bundle whose major it does not implement. Changing the embedding model is a new major.", "type": "integer", "minimum": 1 },
         "content_hash": { "description": "SHA-256 over the file listing (docs/contracts/talk-bundle.md, Content hash).", "$ref": "#/$defs/Sha256" },
         "path": { "description": "Directory of the bundle relative to bundle_base: {slug}/{first 16 hex digits of content_hash}/.", "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}/[0-9a-f]{16}/$" },
-        "model": { "description": "Embedding model of vectors.i8. A client compares vectors only from the model it runs itself.", "type": "string" },
+        "model": { "description": "Embedding model of the vectors. A client compares vectors only from the model it runs itself.", "type": "string" },
         "dims": { "type": "integer", "minimum": 1 },
         "talk_count": { "description": "Items of kind talk.", "type": "integer", "minimum": 0 },
         "vector_count": { "type": "integer", "minimum": 0 },
         "files": {
-          "description": "Exactly the two files of a v1 bundle; clients download these and nothing else.",
+          "description": "The bundle's files by name.",
           "type": "object",
-          "required": ["bundle.json", "vectors.i8"],
-          "propertyNames": { "enum": ["bundle.json", "vectors.i8"] },
+          "minProperties": 1,
           "additionalProperties": {
             "type": "object",
             "required": ["bytes", "sha256"],
@@ -75,6 +75,16 @@
               "sha256": { "$ref": "#/$defs/Sha256" }
             }
           }
+        }
+      },
+      "if": { "properties": { "bundle_version": { "const": 1 } }, "required": ["bundle_version"] },
+      "then": {
+        "description": "A v1 bundle: exactly bundle.json and vectors.i8, bge-small-en-v1.5 vectors of 384 dimensions.",
+        "required": ["model", "dims", "talk_count", "vector_count"],
+        "properties": {
+          "model": { "const": "BAAI/bge-small-en-v1.5" },
+          "dims": { "const": 384 },
+          "files": { "required": ["bundle.json", "vectors.i8"], "propertyNames": { "enum": ["bundle.json", "vectors.i8"] } }
         }
       }
     },

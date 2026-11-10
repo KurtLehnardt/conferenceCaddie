@@ -36,6 +36,10 @@ test('numbers', () => {
   ok({ multipleOf: 0.1 }, 0.3);
   ok({ multipleOf: 0.01 }, 1.15);
   no({ multipleOf: 0.1 }, 0.35);
+  no({ multipleOf: 0.1 }, 0.3000001);
+  ok({ multipleOf: 3 }, 9007199254740990);
+  no({ multipleOf: 2 }, 9007199254740991);
+  no({ multipleOf: 0.1 }, 1e300);
 });
 
 test('strings count code points and patterns use the u flag', () => {

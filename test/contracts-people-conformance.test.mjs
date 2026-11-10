@@ -201,7 +201,8 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (op === '_doc' && method === 'GET') {
     const doc = store(index).get(id);
-    return doc ? json({ _id: id, found: true, _seq_no: doc.seq, _primary_term: 1, _source: structuredClone(doc.source) }) : json({ _id: id, found: false }, 404);
+    const includes = params._source_includes ? params._source_includes.split(',') : true;
+    return doc ? json({ _id: id, found: true, _seq_no: doc.seq, _primary_term: 1, _source: pickSource(doc.source, includes) }) : json({ _id: id, found: false }, 404);
   }
   if (op === '_doc' && method === 'DELETE') {
     const status = write(index, 'delete', id, null, params);
@@ -234,7 +235,11 @@ const HANDLERS = [handlePeopleApi, handleConnectApi, handleBleApi, handleReportA
 const newDevice = () => ({ profileId: crypto.randomBytes(16).toString('base64url'), secret: crypto.randomBytes(32).toString('base64url') });
 let ip = 0;
 
+// The body of the last request, so conforms() can check it against the route's request schema.
+let lastBody;
+
 async function call(method, pathAndQuery, { device, body, headers = {} } = {}) {
+  lastBody = body;
   const raw = body === undefined ? '' : JSON.stringify(body);
   const req = Readable.from(raw ? [Buffer.from(raw)] : []);
   req.method = method;
@@ -259,8 +264,9 @@ async function call(method, pathAndQuery, { device, body, headers = {} } = {}) {
   return { status: res.status, headers: res.headers, body: res.text ? JSON.parse(res.text) : null };
 }
 
-// Routes exercised with a 200, by route id.
+// Routes exercised with a 200, by route id, and the request bodies checked against their schema.
 const covered = new Set();
+let requestChecks = 0;
 
 // Finds the route a request belongs to and checks the answer against its definition.
 function conforms(method, pathname, r, expectStatus = 200) {
@@ -271,6 +277,13 @@ function conforms(method, pathname, r, expectStatus = 200) {
     const result = validator('people-api.v1', route.response)(r.body, { closed: true });
     assert.equal(result.valid, true, `${route.id}\n${formatErrors(result.errors)}\n${JSON.stringify(r.body)}`);
     covered.add(route.id);
+    // Every body the server accepted is one the request schema accepts too.
+    if (lastBody !== undefined) {
+      assert.ok(route.request, `${route.id} took a body the contract does not define`);
+      const req = validator('people-api.v1', route.request)(lastBody, { closed: true });
+      assert.equal(req.valid, true, `${route.id} request\n${formatErrors(req.errors)}`);
+      requestChecks++;
+    }
   } else {
     assert.equal(validator('people-api.v1', 'ErrorBody')(r.body, { closed: true }).valid, true, `${route.id} error ${JSON.stringify(r.body)}`);
     const listed = [...table.common_errors, ...route.errors].some((e) => e.status === r.status && (e.error === r.body.error || e.error === '*'));
@@ -458,8 +471,10 @@ test('ending presence and deleting the profile', async () => {
   conforms('DELETE', '/api/people/profile', await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: leaver }));
 });
 
-test('all 24 routes answered 200 at least once and were validated', () => {
+test('all 24 routes answered 200 at least once and were validated', (t) => {
   const all = table.routes.map((r) => r.id);
   assert.equal(all.length, 24);
   assert.deepEqual(all.filter((id) => !covered.has(id)), []);
+  t.diagnostic(`request bodies checked against their schema: ${requestChecks}`);
+  assert.ok(requestChecks >= 32, `only ${requestChecks} request bodies were checked`);
 });

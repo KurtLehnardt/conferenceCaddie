@@ -119,7 +119,10 @@
         "contact": {
           "type": "object",
           "required": ["linkedin_url", "contact_note"],
-          "properties": { "linkedin_url": { "$ref": "#/$defs/NullableString" }, "contact_note": { "$ref": "#/$defs/NullableString" } }
+          "properties": {
+            "linkedin_url": { "anyOf": [{ "type": "string", "pattern": "^https://(www\\.)?linkedin\\.com/in/[A-Za-z0-9_-]{3,100}/?$" }, { "type": "null" }] },
+            "contact_note": { "$ref": "#/$defs/NullableString" }
+          }
         },
         "evidence": { "description": "The matched passage; <mark> is the only markup, everything else HTML-escaped. Null for a broad match or a profile with no text.", "$ref": "#/$defs/NullableString" },
         "around": { "type": "boolean" },
@@ -295,6 +298,14 @@
         "held": { "$ref": "#/$defs/Held" }
       },
       "dependentRequired": { "ble_key": ["ble_key_id"], "ble_key_id": ["ble_key"] }
+    },
+    "PresencePutResponseDerived": {
+      "description": "PUT /api/presence with ble: true on a derived-v1 backend: the key and its id are both required.",
+      "allOf": [{ "$ref": "#/$defs/PresencePutResponse" }, { "required": ["ble_key", "ble_key_id"] }]
+    },
+    "SightingsResponseDerived": {
+      "description": "POST /api/presence/sightings on a derived-v1 backend: the requester's current key id is required.",
+      "allOf": [{ "$ref": "#/$defs/SightingsResponse" }, { "required": ["ble_key_id"] }]
     },
     "BleRotateRequest": {
       "type": "object",
