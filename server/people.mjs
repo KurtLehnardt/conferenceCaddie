@@ -45,6 +45,7 @@ import crypto from 'node:crypto';
 import { take, clientIp } from './ratelimit.mjs';
 import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
+import { pauseSemantic, semanticAvailable } from './semantic.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
@@ -757,7 +758,7 @@ const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'samp
 // or 'everyone'), or null when there is nothing to rank by. nudge.mjs and ble.mjs run the same
 // query as the person whose presence was just written or who is scanning, so the push rule, the
 // Bluetooth matches and the matches view agree.
-export function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false, origin = null }) {
+export function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false, origin = null, semantic = true }) {
   const filter = {
     bool: {
       filter: [{ term: { event_id: me.event_id } }, { range: { visible_until: { gt: 'now' } } }, ...filters],
@@ -786,22 +787,28 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
     query: { bool: { should: mine.map((t) => ({ term: { [theirField]: t } })), minimum_should_match: 1 } },
   });
 
+  // With semantic off (the inference endpoint is unavailable, see semantic.mjs) each knn leg
+  // becomes a keyword match on the same text, so matching keeps working with less recall.
+  const lexical = (fields, modelText) => ({ query: { multi_match: { query: modelText, fields, minimum_should_match: '2<60%' } } });
   const text = query || me.interests || '';
   if (me.learn_topics?.length) add('topics', topics('speak_topics', me.learn_topics));
   if (me.speak_topics?.length) add('topics', topics('learn_topics', me.speak_topics));
   if (text) {
-    add('text', knn('expertise_semantic', text));
-    highlight.expertise_semantic = { number_of_fragments: 1 };
+    add('text', semantic ? knn('expertise_semantic', text) : lexical(['expertise'], text));
+    if (semantic) highlight.expertise_semantic = { number_of_fragments: 1 };
+    else highlight.expertise = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
   }
   if (query) {
-    add('text', knn('about_semantic', query));
-    highlight.about_semantic = { number_of_fragments: 1 };
+    add('text', semantic ? knn('about_semantic', query) : lexical(['about'], query));
+    if (semantic) highlight.about_semantic = { number_of_fragments: 1 };
+    else highlight.about = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
   }
   if (me.expertise) {
-    add('text', knn('interests_semantic', me.expertise));
-    highlight.interests_semantic = { number_of_fragments: 1 };
+    add('text', semantic ? knn('interests_semantic', me.expertise) : lexical(['interests'], me.expertise));
+    if (semantic) highlight.interests_semantic = { number_of_fragments: 1 };
+    else highlight.interests = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
   }
-  if (query) {
+  if (query && semantic) {
     add('text', { query: { multi_match: { query, fields: ['expertise', 'about'], minimum_should_match: '2<60%' } } });
     highlight.expertise = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
     highlight.about = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
@@ -856,9 +863,12 @@ export function cutText(raw, max) {
   return t;
 }
 
+// The lexical fallback highlights carry <mark> tags from the html encoder; passages are plain text.
+const unmark = (f) => (typeof f === 'string' ? f.replace(/<\/?mark>/g, '').replace(/\s+/g, ' ').trim() : f);
+
 function passageFrom(hit) {
   const hl = hit.highlight ?? {};
-  const raw = hl.expertise_semantic?.[0] ?? hl.interests_semantic?.[0];
+  const raw = hl.expertise_semantic?.[0] ?? hl.interests_semantic?.[0] ?? unmark(hl.expertise?.[0]) ?? unmark(hl.interests?.[0]);
   return raw ? cutText(raw, PASSAGE_MAX) || null : null;
 }
 
@@ -1134,7 +1144,9 @@ async function matches(req, res) {
   const blocked = await blockedIds(conf.slug, me.profile_id);
   // A requester who is around with a position gets the distance leg; the origin is their own
   // stored, rounded location and never leaves the query.
-  const q = peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: locationOf(me) });
+  const build = (semantic) => peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: locationOf(me), semantic });
+  let semantic = semanticAvailable();
+  let q = build(semantic);
   if (!q) {
     sendJson(res, 200, { results: [], from, size, has_more: false });
     return;
@@ -1143,7 +1155,20 @@ async function matches(req, res) {
   // reveals a talk circle the requester has not joined.
   const mine = new Set(me.shared_talk_ids ?? []);
   const talkIds = interested.filter((id) => mine.has(id));
-  const [json, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
+  // When the semantic legs fail (inference endpoint unavailable), the same request is answered
+  // with keyword legs and says so; semantic queries pause for a minute (semantic.mjs).
+  const run = async () => {
+    try {
+      return await searchPeople(conf.slug, q.body);
+    } catch (err) {
+      if (!semantic || !q.legs.includes('text') || !(err instanceof UpstreamError)) throw err;
+      pauseSemantic(err);
+      semantic = false;
+      q = build(false);
+      return searchPeople(conf.slug, q.body);
+    }
+  };
+  const [json, topics] = await Promise.all([run(), topicsOf(conf.slug)]);
   const all = json.hits?.hits ?? [];
   // Broad matches are dropped from a text search and from the "anyone" view. The "around now"
   // view keeps those who are in the requester's own zone right now, after every specific match
@@ -1157,6 +1182,7 @@ async function matches(req, res) {
   const titles = new Map([...talks].map(([id, s]) => [id, s.title ?? '']));
   sendJson(res, 200, {
     results: hits.map((h) => toPerson(h, me, topics.labels, titles, null, { search: Boolean(query), broad: broad.has(h) })),
+    ...(semantic || !q.legs.includes('text') ? {} : { degraded: { semantic: true } }),
     from,
     size,
     has_more: all.length === size,
@@ -1190,10 +1216,21 @@ async function members(req, res) {
   if (!me || !(me.shared_talk_ids ?? []).includes(talkId)) throw new HttpError(403, { error: 'share_required', count });
 
   const blocked = await blockedIds(conf.slug, me.profile_id);
-  const q = peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked });
+  const membersQuery = (semantic) => peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked, semantic });
+  const path = withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(conf.slug));
+  const membersSearch = async () => {
+    const semantic = semanticAvailable();
+    try {
+      return await people('POST', path, membersQuery(semantic).body);
+    } catch (err) {
+      if (!semantic || !(err instanceof UpstreamError)) throw err;
+      pauseSemantic(err);
+      return people('POST', path, membersQuery(false).body);
+    }
+  };
   const [talks, { json }, labels] = await Promise.all([
     talksById(conf.slug, [talkId], ['title', 'start', 'end', 'url', 'speaker_profiles']),
-    people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(conf.slug)), q.body),
+    membersSearch(),
     topicLabels(conf.slug),
   ]);
   const talk = talks.get(talkId);

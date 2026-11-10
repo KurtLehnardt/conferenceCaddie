@@ -12,7 +12,7 @@ type RecState =
   | { kind: 'loading' }
   | { kind: 'needs_profile' }
   | { kind: 'error'; message: string }
-  | { kind: 'ok'; results: Recommendation[] };
+  | { kind: 'ok'; results: Recommendation[]; degraded?: boolean };
 
 /** What a finished request produced, and the exact inputs it was computed for. */
 interface Settled {
@@ -69,7 +69,7 @@ function useRecommendations(conference: ConferenceLike, interested: InterestedPr
           setDone({
             slug,
             key,
-            outcome: r.needs_profile ? { kind: 'needs_profile' } : { kind: 'ok', results: r.results ?? [] },
+            outcome: r.needs_profile ? { kind: 'needs_profile' } : { kind: 'ok', results: r.results ?? [], degraded: r.degraded?.semantic === true },
           });
         })
         .catch((err) => {
@@ -196,6 +196,9 @@ export function ForYouRow({
       {state.kind === 'ok' && state.results.length === 0 && (
         <p class="pp-hint pp-pad">No upcoming talks match your topics yet. Try adding a few more.</p>
       )}
+      {state.kind === 'ok' && state.degraded && (
+        <p class="pp-hint pp-pad" role="status">Meaning-based matching is paused right now; these are keyword matches.</p>
+      )}
       {state.kind === 'ok' && state.results.length > 0 && (
         <ul class={`pp-row${view.refreshing ? ' is-refreshing' : ''}`} role="list" aria-busy={view.refreshing}>
           {state.results.slice(0, 5).map((rec) => {
@@ -250,6 +253,9 @@ export function ForYouScreen({
       {state.kind === 'error' && <p class="pp-error pp-pad">{state.message}</p>}
       {state.kind === 'ok' && state.results.length === 0 && (
         <p class="pp-hint pp-pad">No upcoming talks match your topics yet. Try adding a few more.</p>
+      )}
+      {state.kind === 'ok' && state.degraded && (
+        <p class="pp-hint pp-pad" role="status">Meaning-based matching is paused right now; these are keyword matches.</p>
       )}
       {state.kind === 'ok' && (
         <div class={`pp-list${view.refreshing ? ' is-refreshing' : ''}`} aria-busy={view.refreshing}>

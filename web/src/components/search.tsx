@@ -903,6 +903,11 @@ export function Results({
           {countLabel}
         </p>
       </div>
+      {data.degraded?.semantic && (
+        <p class="degraded-note" role="status">
+          Meaning-based matching is paused right now; these are keyword matches.
+        </p>
+      )}
       {data.results.length === 0 ? (
         <div class="state">
           <SearchX size={40} class="state-icon" aria-hidden="true" />

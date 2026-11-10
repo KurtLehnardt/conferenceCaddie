@@ -61,6 +61,7 @@ import { searchableConference } from './conferences.mjs';
 import { parseTimePhrases } from './phrases.mjs';
 import { suggestChips } from './facets.mjs';
 import { conferencePreference, withPreference } from './preference.mjs';
+import { pauseSemantic, semanticAvailable } from './semantic.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
@@ -133,8 +134,12 @@ async function msearch(searches, header = {}) {
   const body = searches.flatMap((s) => [head, JSON.stringify(s)]).join('\n') + '\n';
   const json = await esRequest(`/${encodeURIComponent(ES_INDEX)}/_msearch`, body, { contentType: 'application/x-ndjson' });
   const responses = json.responses ?? [];
-  if (responses.length !== searches.length || responses.some((r) => r.error)) {
-    throw new UpstreamError('msearch item failed');
+  if (responses.length !== searches.length) throw new UpstreamError('msearch item failed');
+  const failed = responses.find((r) => r.error);
+  if (failed) {
+    // Only the error's type is kept: an Elasticsearch reason can echo the query text.
+    const type = failed.error?.caused_by?.type ?? failed.error?.type ?? 'unknown';
+    throw new UpstreamError(`msearch item failed: ${type}`, failed.status);
   }
   return responses;
 }
@@ -416,10 +421,13 @@ const AGGS = {
   tag_keys: { terms: { field: 'tag_keys', size: 2000 } },
 };
 
-// The rrf retriever's two children: the lexical query, then the knn query.
-function childQueries(query, knnFilter) {
+// The rrf retriever's two children: the lexical query, then the knn query. With semantic off
+// (the inference endpoint is unavailable, see semantic.mjs) only the lexical query is built.
+function childQueries(query, knnFilter, semantic = true) {
+  const lexical = { multi_match: { query, fields: LEXICAL_FIELDS, minimum_should_match: LEXICAL_MIN_MATCH } };
+  if (!semantic) return [lexical];
   return [
-    { multi_match: { query, fields: LEXICAL_FIELDS, minimum_should_match: LEXICAL_MIN_MATCH } },
+    lexical,
     {
       knn: {
         field: 'semantic',
@@ -434,10 +442,12 @@ function childQueries(query, knnFilter) {
 
 // knnFilter holds only the base filters, so the nearest-neighbour set does not depend on the
 // facet selections; the selections are applied to it afterwards through the rrf filter.
-function retrieverFor(query, filter, knnFilter) {
+function retrieverFor(query, filter, knnFilter, semantic = true) {
+  const children = childQueries(query, knnFilter, semantic);
+  if (children.length === 1) return { standard: { query: children[0], filter } };
   return {
     rrf: {
-      retrievers: childQueries(query, knnFilter).map((q) => ({ standard: { query: q } })),
+      retrievers: children.map((q) => ({ standard: { query: q } })),
       filter,
       rank_window_size: RANK_WINDOW,
     },
@@ -455,13 +465,13 @@ function childSearch(childQuery, filter) {
   };
 }
 
-function matchBody(query, filter, knnFilter) {
-  return query ? { retriever: retrieverFor(query, filter, knnFilter) } : { query: { bool: { filter } } };
+function matchBody(query, filter, knnFilter, semantic = true) {
+  return query ? { retriever: retrieverFor(query, filter, knnFilter, semantic) } : { query: { bool: { filter } } };
 }
 
-function mainSearch(query, filter, knnFilter, size, aggs, from = 0) {
+function mainSearch(query, filter, knnFilter, size, aggs, from = 0, semantic = true) {
   const body = {
-    ...matchBody(query, filter, knnFilter),
+    ...matchBody(query, filter, knnFilter, semantic),
     size,
     track_total_hits: true,
     _source: SOURCE_FIELDS,
@@ -473,7 +483,7 @@ function mainSearch(query, filter, knnFilter, size, aggs, from = 0) {
       fields: {
         abstract: { fragment_size: 200, number_of_fragments: 1, no_match_size: 200 },
         title: { number_of_fragments: 0, no_match_size: 300 },
-        semantic: { number_of_fragments: 2 },
+        ...(semantic ? { semantic: { number_of_fragments: 2 } } : {}),
       },
     };
   } else {
@@ -490,8 +500,8 @@ function mainSearch(query, filter, knnFilter, size, aggs, from = 0) {
   return body;
 }
 
-function facetSearch(query, filter, knnFilter, agg) {
-  return { ...matchBody(query, filter, knnFilter), size: 0, track_total_hits: false, aggs: { [agg]: AGGS[agg] } };
+function facetSearch(query, filter, knnFilter, agg, semantic = true) {
+  return { ...matchBody(query, filter, knnFilter, semantic), size: 0, track_total_hits: false, aggs: { [agg]: AGGS[agg] } };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -620,18 +630,35 @@ export async function search(params) {
 
   const mainAggs = { day: AGGS.day, track: AGGS.track, has_slides: AGGS.has_slides, tag_keys: AGGS.tag_keys };
   if (hasLevel) mainAggs.level = AGGS.level;
-  const searches = [mainSearch(query, [...base, ...selectionClauses(groups, null)], base, size, mainAggs, query ? 0 : from)];
-  for (const g of groups) searches.push(facetSearch(query, [...base, ...selectionClauses(groups, g.name)], base, g.agg));
-  searches.push(runningTodaySearch(conference, params.timeZone));
   const debug = params.debug && Boolean(query);
-  if (debug) {
-    for (const q of childQueries(query, base)) searches.push(childSearch(q, [...base, ...selectionClauses(groups, null)]));
-  }
+  const build = (semantic) => {
+    const searches = [mainSearch(query, [...base, ...selectionClauses(groups, null)], base, size, mainAggs, query ? 0 : from, semantic)];
+    for (const g of groups) searches.push(facetSearch(query, [...base, ...selectionClauses(groups, g.name)], base, g.agg, semantic));
+    searches.push(runningTodaySearch(conference, params.timeZone));
+    if (debug) {
+      for (const q of childQueries(query, base, semantic)) searches.push(childSearch(q, [...base, ...selectionClauses(groups, null)]));
+    }
+    return searches;
+  };
 
   // Every search of the request, and every later request for this conference, reads the same shard
-  // copy, so ties are broken the same way each time.
+  // copy, so ties are broken the same way each time. A text query runs semantic plus keyword; when
+  // the semantic query fails (the inference endpoint is unavailable), the same request is answered
+  // by keyword matching alone and says so, and semantic queries pause for a minute (semantic.mjs).
+  let semantic = Boolean(query) && semanticAvailable();
+  const header = { preference: conferencePreference(conference) };
+  const run = async () => {
+    try {
+      return await msearch(build(semantic), header);
+    } catch (err) {
+      if (!semantic || !(err instanceof UpstreamError)) throw err;
+      pauseSemantic(err);
+      semantic = false;
+      return msearch(build(false), header);
+    }
+  };
   const [all, suggestions] = await Promise.all([
-    msearch(searches, { preference: conferencePreference(conference) }),
+    run(),
     // Names in the search text, offered as chips; empty for browse mode and on any failure.
     query ? suggestChips(conference, query, filters) : [],
   ]);
@@ -667,6 +694,8 @@ export async function search(params) {
     results: hits.map((h) => toResult(h, labels)),
     facets,
   };
+  // Present only when a text query was answered by keyword matching alone.
+  if (query && !semantic) response.degraded = { semantic: true };
   if (debug) {
     // Position in each Elasticsearch-ordered child list, 1-based; nothing is re-sorted here.
     const positions = all.slice(2 + groups.length).map((r) => {
@@ -675,7 +704,7 @@ export async function search(params) {
       return at;
     });
     response.results.forEach((r, i) => {
-      r.ranking = { rank: i + 1, keyword_rank: positions[0].get(r.talk_id) ?? null, semantic_rank: positions[1].get(r.talk_id) ?? null };
+      r.ranking = { rank: i + 1, keyword_rank: positions[0]?.get(r.talk_id) ?? null, semantic_rank: positions[1]?.get(r.talk_id) ?? null };
     });
     response.ranking = {
       rank_window: RANK_WINDOW,
