@@ -69,8 +69,9 @@ import kotlinx.coroutines.delay
  * core's state, with the talk screens in its For you, Search and Interested tabs. People appears only
  * when the backend serves people features (phase 3).
  *
- * [embedder] loads the query embedder (the shipped model by default); search and For you use
- * keywords alone until it is loaded, and for good if it returns null or fails.
+ * [embedder] loads the query embedder; the hosts pass [EmbeddingModel.load], the shipped model. Search
+ * and For you use keywords alone until it is loaded, for good if it returns null or fails, and
+ * without one (the UI tests that do not need it).
  *
  * [launch] holds the debug builds' launch options (the release hosts pass the defaults);
  * [initialQuery] types a search, which opens the Search tab, and [talkLaunch] opens a sheet or
@@ -87,7 +88,7 @@ fun CaddieApp(
     launch: DebugLaunch = DebugLaunch(),
     initialQuery: String? = null,
     talkLaunch: TalkLaunch = TalkLaunch(),
-    embedder: (suspend () -> Embedder?)? = { EmbeddingModel.load() },
+    embedder: (suspend () -> Embedder?)? = null,
 ) {
     val state by core.state.collectAsState()
     val scope = rememberCoroutineScope()

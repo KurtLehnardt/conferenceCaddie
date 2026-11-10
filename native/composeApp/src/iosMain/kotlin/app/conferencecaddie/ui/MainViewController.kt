@@ -5,6 +5,7 @@ import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.core.IosCore
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
+import app.conferencecaddie.ui.talks.EmbeddingModel
 import app.conferencecaddie.ui.talks.TalkLaunch
 import app.conferencecaddie.ui.theme.HostController
 import kotlin.experimental.ExperimentalNativeApi
@@ -34,6 +35,14 @@ fun MainViewController(): UIViewController {
     }
     val version = NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: ""
     return ComposeUIViewController {
-        CaddieApp(core = core, isDebugBuild = isDebugBuild, appVersion = version, launch = launch, initialQuery = query, talkLaunch = talkLaunch)
+        CaddieApp(
+            core = core,
+            isDebugBuild = isDebugBuild,
+            appVersion = version,
+            launch = launch,
+            initialQuery = query,
+            talkLaunch = talkLaunch,
+            embedder = { EmbeddingModel.load() },
+        )
     }.also { HostController.current = it }
 }

@@ -457,12 +457,14 @@ class CaddieCore(
     /**
      * Brings the selected conference's bundle in line with the conference list: uses the installed
      * one when it is current or cannot be replaced, else starts its download (once per bundle).
+     * [from] is the state to publish with it, so a new list and its bundle appear in one update and
+     * no screen sees the list marked offline next to a bundle that is not.
      */
-    private fun ensureBundle() {
-        val s = _state.value
-        val slug = s.selectedSlug ?: return
+    private fun ensureBundle(from: CoreState = _state.value) {
+        val s = from
+        val slug = s.selectedSlug ?: return publishState(s)
         val conferences = s.conferences
-        if (conferences is ConferencesState.Loading) return
+        if (conferences is ConferencesState.Loading) return publishState(s)
         val list = conferences as? ConferencesState.Ready
         val key = BundleSync.scope(s.backend.base, slug)
         val installed = s.bundle as? BundleState.Ready
@@ -487,12 +489,17 @@ class CaddieCore(
         }
         val bundle = entry!!.bundle!!
         val jobKey = key + "\n" + bundle.contentHash
-        if (bundleJobKey == jobKey && bundleJob?.isActive == true) return
+        if (bundleJobKey == jobKey && bundleJob?.isActive == true) return publishState(s)
         bundleJob?.cancel()
         bundleJobKey = jobKey
         _state.value = s.copy(bundle = installed?.copy(offline = offline, updateApp = false) ?: BundleState.Loading(slug))
         val id = session
         bundleJob = launchGuarded { download(id, s.backend, slug, bundleBase!!, bundle, installed, offline, jobKey) }
+    }
+
+    // The state [ensureBundle] was given, when it leaves the bundle as it is.
+    private fun publishState(s: CoreState) {
+        _state.value = s
     }
 
     private fun mark(talkId: String, talk: Talk?, on: Boolean) = command {
@@ -556,8 +563,7 @@ class CaddieCore(
                     learn = selection.learn,
                 )
             }
-            _state.value = next
-            ensureBundle()
+            ensureBundle(next)
         }
     }
 
