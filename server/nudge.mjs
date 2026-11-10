@@ -20,15 +20,19 @@
 //   hour, counted from the records' receivers field. Records expire with the conference.
 // - The push names nobody: the title is "Conference Caddie", the body is the sentence above with
 //   the other person's matched passage (<mark> stripped, about 80 characters, else their first
-//   speak topic), the data is the app URL. No name, no distance, no ref, no profile_id.
+//   speak topic), the data is the app URL. No name, no distance, no ref, no profile_id, and never
+//   a spot line.
+// - A profile hidden after reports, or a sample (demo or seeded) profile, never takes part: as the
+//   trigger the rule stops before any query, and as the other person the query leaves them out
+//   (peopleQuery drops hidden documents; sample ones are filtered here). So a hidden profile's
+//   text never reaches anyone through a push, and no sample profile can push a real attendee.
 // - A subscription the push service reports gone (404 or 410) is deleted.
 
 import {
   people, idx, NUDGES_INDEX, UpstreamError,
-  peopleQuery, searchPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, locationOf,
+  peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf,
 } from './people.mjs';
 import { subscriptionsFor, deleteSubscriptionById } from './push.mjs';
-import { semanticAvailable } from './semantic.mjs';
 
 const CANDIDATES = 20;
 const EVIDENCE_MAX = 80;
@@ -134,17 +138,21 @@ export async function nudgeAfterPresence(me, conf) {
   try {
     const zone = me.presence_zone;
     if (!zone || !isAround(me)) return;
+    if (me.hidden === true || me.sample === true) return;
     const send = await transport();
     if (!send) return;
     const blocked = await blockedIds(conf.slug, me.profile_id);
     // The same query the Around view runs, distance leg included when I sent a position; the
-    // distance leg never decides specificity (people.mjs), so it cannot create a nudge.
-    const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { range: { presence_until: { gt: 'now' } } }], { size: CANDIDATES, blocked, explain: true, origin: locationOf(me), semantic: semanticAvailable() });
-    if (!q) return;
-    const [json, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
+    // distance leg never decides specificity (people.mjs), so it cannot create a nudge. When
+    // inference fails it falls back to keyword legs like the Around view (rankPeople).
+    const filters = [{ term: { open_to_meet: true } }, { range: { presence_until: { gt: 'now' } } }, { bool: { must_not: [{ term: { sample: true } }] } }];
+    const build = (semantic) => peopleQuery(me, filters, { size: CANDIDATES, blocked, explain: true, origin: cellOf(me), semantic });
+    const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
+    if (!ranked) return;
+    const { json, q } = ranked;
     const hits = (json.hits?.hits ?? []).filter((h) => {
       const s = h._source ?? {};
-      return s.profile_id && isAround(s) && s.presence_zone === zone && !isBroad(h, q.legs, me, topics.common);
+      return s.profile_id && s.sample !== true && isAround(s) && s.presence_zone === zone && !isBroad(h, q.legs, me, topics.common);
     });
     if (!hits.length) return;
 

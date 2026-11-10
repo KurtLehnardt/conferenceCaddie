@@ -188,6 +188,17 @@ export async function dropBrowserSubscription(): Promise<void> {
   }
 }
 
+/**
+ * The server deleted this conference's subscription with the profile (both visibility choices
+ * off): off on the device too, so the switch shows it and turning it on sends it again.
+ */
+export function pushDeletedOnServer(slug: string): void {
+  const state = getPush(slug);
+  if (!state.on && !state.endpoint) return;
+  setPush(slug, { on: false, endpoint: null });
+  if (!slugsWithPush().length) void dropBrowserSubscription();
+}
+
 /** Turns nudges off everywhere on this device, as part of "Delete my profile". */
 export async function forgetPush(): Promise<void> {
   for (const slug of slugsWithPush()) setPush(slug, { on: false, endpoint: null });
