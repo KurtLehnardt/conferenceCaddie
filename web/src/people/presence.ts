@@ -12,7 +12,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { loadSchedule } from '../offline/status';
 import { deletePresence, PeopleApiError, putPresence } from './api';
 import { getPresence, setPresence } from './storage';
-import type { Position, PresenceMode, TalkLike } from './types';
+import type { Presence, Position, PresenceMode, TalkLike } from './types';
 
 export const PRESENCE_NOTICE =
   "While this is on, people you can see can also see that you're around and which zone you're in. How to spot you is shared only with someone you accept, only until you meet, and never stored after. Your exact position is shared only with someone you accept, only until you meet, and never stored after. It turns off by itself after an hour unless you choose to stay around for the day.";
@@ -113,11 +113,27 @@ let watchedSlug: string | null = null;
 let expiryTimer: number | undefined;
 let hiddenTimer: number | undefined;
 let lastZone: string | null = null;
+// Moves on whenever presence is turned off here, so a turnOn whose write was still under way
+// does not switch it back on afterwards.
+let epoch = 0;
+
+const OFF: Partial<Presence> = { on: false, zone: null, until: null, position: false, confirmed_at: null, confirm_pending: false };
 
 function clearTimers() {
   window.clearTimeout(expiryTimer);
   window.clearTimeout(hiddenTimer);
   expiryTimer = hiddenTimer = undefined;
+}
+
+// Every presence write (zone, position, Bluetooth token, delete) runs one at a time, in the order
+// it was asked for, so a slow position write can never land after the delete that turned
+// presence off and switch it back on on the server.
+let writes: Promise<unknown> = Promise.resolve();
+
+export function presenceWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const p = writes.then(fn, fn);
+  writes = p.catch(() => undefined);
+  return p;
 }
 
 /* ---------- Position watch ---------- */
@@ -158,13 +174,21 @@ async function sendFix(slug: string) {
   }
   const fix = pendingFix;
   pendingFix = null;
-  const p = getPresence(slug);
-  if (!fix || !p.on || !p.zone || !p.position || watchSlug !== slug) return;
+  const wanted = () => {
+    const p = getPresence(slug);
+    return p.on && p.zone && p.position && watchSlug === slug ? p : null;
+  };
+  if (!fix || !wanted()) return;
   sending = true;
   lastSentAt = Date.now();
   try {
-    await putPresence(slug, p.zone, p.spot, fix, p.mode);
-    lastSentFix = fix;
+    await presenceWrite(async () => {
+      // Presence may have been turned off (here or in another tab) while this waited its turn.
+      const p = wanted();
+      if (!p) return;
+      await putPresence(slug, p.zone as string, p.spot, fix, p.mode);
+      lastSentFix = fix;
+    });
   } catch (err) {
     // A profile that is gone, or presence the server no longer accepts: stop sending positions;
     // the zone-only timers decide the rest.
@@ -244,7 +268,10 @@ export async function sharePosition(slug: string, on: boolean): Promise<void> {
   } else {
     syncPositionWatch(slug);
     try {
-      await putPresence(slug, p.zone, p.spot, null, p.mode);
+      await presenceWrite(async () => {
+        const now = getPresence(slug);
+        if (now.on && now.zone) await putPresence(slug, now.zone, now.spot, null, now.mode);
+      });
     } catch {
       // It lapses with the presence; the hour on the device is unchanged.
     }
@@ -362,8 +389,11 @@ export function presenceProblem(err: unknown): string {
  * there is one. Returns an error message, or null.
  */
 export async function turnOn(slug: string, zone: string, spot: string, mode: PresenceMode = getPresence(slug).mode): Promise<string | null> {
+  const started = epoch;
   try {
-    const res = await putPresence(slug, zone, spot, null, mode);
+    const res = await presenceWrite(() => putPresence(slug, zone, spot, null, mode));
+    // Turned off while the write was under way: the delete queued behind it has the last word.
+    if (epoch !== started) return null;
     const until =
       typeof res.presence_until === 'string' && Number.isFinite(Date.parse(res.presence_until))
         ? res.presence_until
@@ -400,22 +430,29 @@ export function extend(slug: string): Promise<string | null> {
   return turnOn(slug, p.zone, p.spot, p.mode);
 }
 
-/** Turns presence off on the device at once and tells the server; a failed delete is retried once. */
+/**
+ * Turns presence off on the device at once and tells the server once any presence write still
+ * under way has finished, so that write cannot land after the delete; a failed delete is retried
+ * once.
+ */
 export async function turnOff(slug: string): Promise<void> {
   const p = getPresence(slug);
   if (p.on) lastZone = p.zone;
-  setPresence(slug, { on: false, zone: null, until: null, position: false, confirmed_at: null, confirm_pending: false });
+  epoch++;
+  setPresence(slug, OFF);
   clearTimers();
   stopPositionWatch();
-  try {
-    await deletePresence(slug);
-  } catch {
+  await presenceWrite(async () => {
     try {
       await deletePresence(slug);
     } catch {
-      // The server lets it lapse on its own at presence_until.
+      try {
+        await deletePresence(slug);
+      } catch {
+        // The server lets it lapse on its own at presence_until.
+      }
     }
-  }
+  });
 }
 
 /** The zone the user last chose, for the picker's default. */
