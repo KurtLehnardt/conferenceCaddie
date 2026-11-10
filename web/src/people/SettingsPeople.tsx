@@ -139,7 +139,7 @@ export function PeopleIWatch({ conference }: { conference: ConferenceLike }) {
             </button>
           </div>
         ))}
-        <p class="settings-row settings-text">You'll be told here when they're around. Saved on this phone only.</p>
+        <p class="settings-row settings-text">While you're around with the app open and nudges on, the People tab tells you when one of them is around. Saved on this phone only.</p>
       </div>
     </section>
   );

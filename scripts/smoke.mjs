@@ -1097,6 +1097,23 @@ try {
     report(problems.length === 0, 'q6b: a silent "Not now" leaves the asker\'s view, details and cancel unchanged', problems.length ? problems.join('; ') : 'same view with zone, 200 details, 200 cancelled, then 410 cancelled');
   });
 
+  await check('q6c: asking again after Not now answers 409 meet_open, as for a pending ask', async () => {
+    if (!refA) throw new Error('A has no ref');
+    // F asks A here, and cancels at the end, so no declined ask stands in the way of later asks.
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: F, label: 'F-meet' });
+    if (r.status !== 200) throw new Error(`request gave ${r.status} ${r.json.error ?? ''}`);
+    const decline = await api('POST', `/api/meet/${r.json.meet_id}/decline`, {}, { device: A, label: 'A-meet' });
+    const again = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: F, label: 'F-meet' });
+    const inboxA = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: A, label: 'A-inbox' });
+    const cancel = await api('POST', `/api/meet/${r.json.meet_id}/cancel`, {}, { device: F, label: 'F-meet' });
+    const problems = [];
+    if (decline.status !== 200 || decline.json.state !== 'declined') problems.push(`decline gave ${decline.status} ${decline.json.state}`);
+    if (again.status !== 409 || again.json.error !== 'meet_open' || again.json.meet_id !== r.json.meet_id) problems.push(`asking again gave ${again.status} ${JSON.stringify(again.json)}`);
+    if ((inboxA.json.incoming ?? []).some((m) => m.from?.display_name === testName('F'))) problems.push('A got a new card from F');
+    if (cancel.status !== 200 || cancel.json.state !== 'cancelled') problems.push(`cancel gave ${cancel.status} ${cancel.json.state}`);
+    report(problems.length === 0, 'q6c: asking again after Not now answers 409 meet_open, as for a pending ask', problems.length ? problems.join('; ') : 'the re-ask gets 409 meet_open with the same meet, A sees no new card');
+  });
+
   await check('q7: presence expires', async () => {
     if (!ES_WRITE_KEY) {
       skip('q7: presence expires', 'no Elasticsearch write key in the environment');
@@ -1142,6 +1159,64 @@ try {
     if (!(list.json.refs ?? []).includes(refF) || !(list.json.blocks ?? []).some((b) => b.ref === refF && b.display_name === testName('F'))) problems.push('blocks list lacks F');
     if (un.status !== 200 || !names(after.json.results).includes(testName('F'))) problems.push('F not back after unblock');
     report(problems.length === 0, 'q8: block is symmetric and refuses a meet either way with the same body', problems.length ? problems.join('; ') : 'hidden both ways, 403 blocked both ways, listed, unblocked');
+  });
+
+  await check('q8a: a block refuses every meet route between the pair, and closes their meet', async () => {
+    if (!refF || !refA) throw new Error('refs missing');
+    // F asks, so A's asks stay within the hourly limit.
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: F, label: 'F-meet' });
+    if (r.status !== 200) throw new Error(`request gave ${r.status} ${r.json.error ?? ''}`);
+    const id = r.json.meet_id;
+    const accept = await api('POST', `/api/meet/${id}/accept`, {}, { device: A, label: 'A-meet' });
+    if (accept.status !== 200) throw new Error(`accept gave ${accept.status} ${accept.json.error ?? ''}`);
+    const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
+    const fGet = await api('GET', `/api/meet/${id}`, undefined, { device: F, label: 'F-meet' });
+    const fDetails = await api('PUT', `/api/meet/${id}/details`, { spot_me: 'by the door' }, { device: F, label: 'F-meet' });
+    const fCancel = await api('POST', `/api/meet/${id}/cancel`, {}, { device: F, label: 'F-meet' });
+    const aGet = await api('GET', `/api/meet/${id}`, undefined, { device: A, label: 'A-meet' });
+    const un = await api('DELETE', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
+    const after = await api('GET', `/api/meet/${id}`, undefined, { device: A, label: 'A-meet' });
+    const problems = [];
+    if (blk.status !== 200 || un.status !== 200) problems.push(`block ${blk.status}, unblock ${un.status}`);
+    const refused = [fGet, fDetails, fCancel, aGet];
+    if (!refused.every((x) => x.status === 403 && x.json.error === 'blocked')) problems.push(`while blocked: ${refused.map((x) => `${x.status} ${x.json.error}`).join(', ')}`);
+    if (after.status !== 410) problems.push(`after unblock the meet answers ${after.status} ${after.json.state ?? ''}`);
+    report(problems.length === 0, 'q8a: a block refuses every meet route between the pair, and closes their meet', problems.length ? problems.join('; ') : 'GET, details and cancel 403 blocked both ways; the meet stays over after unblock');
+  });
+
+  await check('q8b: the inbox omits the spot-me line once a presence lapses', async () => {
+    if (!ES_WRITE_KEY) {
+      skip('q8b: the inbox omits the spot-me line once a presence lapses', 'no Elasticsearch write key in the environment');
+      return;
+    }
+    if (!refA) throw new Error('A has no ref');
+    // K (around since q5) asks A; K's presence is then aged directly, as in q7, without the
+    // DELETE that would close the meet.
+    const kSpot = `smoke-kspot-${runTag}`;
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: K, label: 'K-meet' });
+    if (r.status !== 200) throw new Error(`request gave ${r.status} ${r.json.error ?? ''}`);
+    const id = r.json.meet_id;
+    const accept = await api('POST', `/api/meet/${id}/accept`, {}, { device: A, label: 'A-meet' });
+    const details = await api('PUT', `/api/meet/${id}/details`, { spot_me: kSpot }, { device: K, label: 'K-meet' });
+    if (accept.status !== 200 || details.status !== 200) throw new Error(`accept ${accept.status}, details ${details.status}`);
+    const before = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: A, label: 'A-inbox' });
+    const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
+      method: 'POST',
+      headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
+      body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${K.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const aged = res.ok ? await res.json().catch(() => ({})) : {};
+    if (!res.ok) await res.body?.cancel();
+    if (!res.ok || aged.errors) throw new Error(`aging K's presence gave ${res.status}`);
+    const inbox = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: A, label: 'A-inbox' });
+    const meet = await api('GET', `/api/meet/${id}`, undefined, { device: A, label: 'A-meet' });
+    const problems = [];
+    const seenBefore = [...(before.json.incoming ?? []), ...(before.json.outgoing ?? [])].find((m) => m.meet_id === id);
+    if (seenBefore?.other?.spot_me !== kSpot) problems.push('the active meet\'s card lacked the spot-me line while both were around');
+    if (inbox.status !== 200 || JSON.stringify(inbox.json).includes(kSpot)) problems.push(`after K's presence lapsed the inbox gave ${inbox.status} and ${JSON.stringify(inbox.json).includes(kSpot) ? 'still carries' : 'omits'} the spot-me line`);
+    if (meet.status !== 410) problems.push(`the meet answers ${meet.status}`);
+    report(problems.length === 0, 'q8b: the inbox omits the spot-me line once a presence lapses', problems.length ? problems.join('; ') : 'shown while both around, gone from the inbox once K lapsed, and the meet is over');
   });
 
   await check('q9: delete removes everything', async () => {
@@ -1587,8 +1662,9 @@ await check('inst1: the manifest makes the app installable and the page links it
     for (const s of [...secrets, ...hashes]) if (r.text.includes(s)) hits.push(`a device secret, id or hash in ${r.path}`);
     // Spot lines and spot-me lines leave the server only to the meet's two participants, inside the meet.
     if (r.text.includes(spotMarker) && !(['A-meet', 'F-meet'].includes(r.label) && r.path.startsWith('/api/meet/')) && !['A-presence', 'F-presence'].includes(r.label)) hits.push(`a spot line in ${r.label} ${r.path}`);
-    // C shared only for the circle talk, so only fellow sharers (A) may see C's contact.
-    if (r.text.includes(contactMarker('C')) && r.label !== 'A-members') hits.push(`C's contact in ${r.label}`);
+    // C shared only for the circle talk, so only fellow sharers may see C's contact: A, and B,
+    // which q10 makes share for the circle talk too.
+    if (r.text.includes(contactMarker('C')) && !['A-members', 'B-members'].includes(r.label)) hits.push(`C's contact in ${r.label}`);
     // Nobody may see the expired profile's contact.
     if (r.text.includes(contactMarker('Expired'))) hits.push(`the expired contact in ${r.label}`);
     // A non-sharer and anonymous callers see no contact details at all.

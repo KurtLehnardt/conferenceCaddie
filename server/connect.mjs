@@ -202,8 +202,9 @@ function activate(s, me, other, nowMs) {
 const bothAround = (me, other) => isAround(me) && Boolean(other) && isAround(other);
 const sameZone = (me, other) => bothAround(me, other) && typeof me.presence_zone === 'string' && me.presence_zone === other.presence_zone;
 
-// Closes every open meet that matches the filters, in the state endState(source) gives. A meet
-// changed by someone else in the meantime keeps that change; its own transition applies then.
+// Closes every open meet that matches the filters, in the state endState(source) gives. _bulk
+// answers 200 even when an item fails, so each item's result is checked: a meet that someone else
+// changed in the meantime (a version conflict) is read again and closed from its new state.
 async function closeMeets(slug, filters, endState) {
   const { json } = await people('POST', withPreference(`${idx(MEETS_INDEX)}/_search?ignore_unavailable=true&seq_no_primary_term=true`, peoplePreference(slug)), {
     size: INBOX_SIZE,
@@ -217,7 +218,33 @@ async function closeMeets(slug, filters, endState) {
     endMeet(s, endState(s), now);
     return `${JSON.stringify({ index: { _id: h._id, if_seq_no: h._seq_no, if_primary_term: h._primary_term } })}\n${JSON.stringify(s)}\n`;
   }).join('');
-  await people('POST', `${idx(MEETS_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
+  const { json: result } = await people('POST', `${idx(MEETS_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
+  const conflicts = [];
+  for (const item of result.items ?? []) {
+    const r = item.index ?? {};
+    if (r.status === 409) conflicts.push(r._id);
+    else if (!(r.status >= 200 && r.status <= 299)) throw new UpstreamError(`bulk item status ${r.status}`);
+  }
+  await Promise.all(conflicts.map((id) => closeMeet(id, endState)));
+}
+
+const CLOSE_ATTEMPTS = 5;
+
+// Closes one meet by id, reading it again after each version conflict, until it is closed or no
+// longer open.
+async function closeMeet(id, endState) {
+  for (let attempt = 0; attempt < CLOSE_ATTEMPTS; attempt++) {
+    const meet = await loadMeet(id);
+    if (!meet || !OPEN_STATES.includes(meet.source.state)) return;
+    endMeet(meet.source, endState(meet.source), Date.now());
+    try {
+      await saveMeet(meet);
+      return;
+    } catch (err) {
+      if (!(err instanceof HttpError && err.status === 409)) throw err;
+    }
+  }
+  throw new UpstreamError('a meet kept changing while it was being closed');
 }
 
 // The state one participant sees. An open meet past expires_at reads "expired" even before a
@@ -278,13 +305,15 @@ function meetView(s, me, other, labels, { withDistance = false } = {}) {
       around: Boolean(other) && isAround(other),
       zone: showZone ? other.presence_zone ?? null : null,
       spot: active && together && other.presence_spot_pending !== true ? other.presence_spot ?? null : null,
-      spot_me: active && otherId && s.spot_me_pending?.[otherId] !== true ? s.spot_me?.[otherId] ?? null : null,
+      spot_me: active && together && otherId && s.spot_me_pending?.[otherId] !== true ? s.spot_me?.[otherId] ?? null : null,
       ...position,
     },
   };
 }
 
-// Loads a meet for one of its participants: 404 when there is none, 403 for anyone else.
+// Loads a meet for one of its participants: 404 when there is none, 403 for anyone else. A pair
+// with a block in either direction gets the same 403 { error: "blocked" } as an ask between them,
+// whatever state the meet document is in, so a meet a block failed to close reveals nothing.
 async function participantMeet(device, id) {
   const meet = await loadMeet(id);
   if (!meet) throw notFound();
@@ -294,6 +323,7 @@ async function participantMeet(device, id) {
   // A meet hidden after reports exists only for the reported participant.
   if (s.hidden === true && s.hidden_owner_id !== me.profile_id) throw notFound();
   const otherId = s.participants.find((p) => p !== me.profile_id);
+  if (await blockedBetween(s.event_id, me.profile_id, otherId)) throw blocked();
   const [other, labels] = await Promise.all([peopleByIds(s.event_id, [otherId]).then((m) => m.get(otherId) ?? null), topicLabels(s.event_id)]);
   return { meet, me, other, labels };
 }
@@ -483,12 +513,27 @@ async function requestMeet(req, res) {
     throw new HttpError(429, { error: 'paused', message: 'Three people said not now today. You can ask again tomorrow.', retry_at: iso(day.end) }, { 'Retry-After': String(Math.max(1, Math.ceil((day.end - now) / 1000))) });
   }
 
+  // "Not now" is silent: the requester of a declined ask still sees it as waiting until it runs out
+  // or they cancel it (silentlyDeclined), so asking again answers the same 409 meet_open as a
+  // pending ask and notifies nobody. requester_cancelled is not in the mapping, so that flag is
+  // checked on the returned documents.
   const existing = await people('POST', withPreference(`${idx(MEETS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(conf.slug)), {
-    size: 1,
-    _source: ['meet_id'],
-    query: { bool: { filter: [{ term: { event_id: conf.slug } }, { term: { participants: me.profile_id } }, { term: { participants: them.profile_id } }, { terms: { state: OPEN_STATES } }, { range: { expires_at: { gt: 'now' } } }] } },
+    size: 10,
+    _source: ['meet_id', 'state', 'requester_id', 'requester_cancelled', 'expires_at'],
+    query: {
+      bool: {
+        filter: [{ term: { event_id: conf.slug } }, { term: { participants: me.profile_id } }, { term: { participants: them.profile_id } }, { range: { expires_at: { gt: 'now' } } }],
+        should: [
+          { terms: { state: OPEN_STATES } },
+          { bool: { filter: [{ term: { state: 'declined' } }, { term: { requester_id: me.profile_id } }] } },
+        ],
+        minimum_should_match: 1,
+      },
+    },
   });
-  const openId = existing.json.hits?.hits?.[0]?._source?.meet_id;
+  const openId = (existing.json.hits?.hits ?? [])
+    .map((h) => h._source ?? {})
+    .find((m) => OPEN_STATES.includes(m.state) || silentlyDeclined(m, me))?.meet_id;
   if (openId) throw new HttpError(409, { error: 'meet_open', meet_id: openId });
 
   const labels = await topicLabels(conf.slug);
@@ -528,7 +573,7 @@ async function inbox(req, res, url) {
   const [hidden, labels, { json }] = await Promise.all([
     blockedIds(conf.slug, me.profile_id),
     topicLabels(conf.slug),
-    people('POST', withPreference(`${idx(MEETS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(conf.slug)), {
+    people('POST', withPreference(`${idx(MEETS_INDEX)}/_search?ignore_unavailable=true&seq_no_primary_term=true`, peoplePreference(conf.slug)), {
       size: INBOX_SIZE,
       sort: [{ created_at: 'desc' }],
       query: {
@@ -543,24 +588,40 @@ async function inbox(req, res, url) {
       },
     }),
   ]);
-  const meets = (json.hits?.hits ?? []).map((h) => h._source ?? {}).filter((s) => Array.isArray(s.participants));
-  const otherIds = meets.map((s) => s.participants.find((p) => p !== me.profile_id));
+  const meets = (json.hits?.hits ?? [])
+    .map((h) => ({ source: h._source ?? {}, seqNo: h._seq_no, primaryTerm: h._primary_term }))
+    .filter((m) => Array.isArray(m.source.participants));
+  const otherIds = meets.map((m) => m.source.participants.find((p) => p !== me.profile_id));
   const others = await peopleByIds(conf.slug, otherIds);
+  const now = Date.now();
   const incoming = [];
   const outgoing = [];
-  for (const s of meets) {
+  const ended = [];
+  for (const meet of meets) {
+    const s = meet.source;
     const otherId = s.participants.find((p) => p !== me.profile_id);
     const other = others.get(otherId);
     // A meet hidden after reports reaches only the reported participant; a hidden profile is
     // treated like a missing document.
     if (s.hidden === true && s.hidden_owner_id !== me.profile_id) continue;
     if (!other || other.hidden === true || hidden.has(otherId)) continue;
+    // The transitions getMeet applies: an active meet with either presence gone is over, so its
+    // card, with the zone, spot and spot-me lines, is left out.
+    if (s.state === 'active' && (Date.parse(s.expires_at) <= now || !bothAround(me, other))) {
+      endMeet(s, 'expired', now);
+      ended.push(meet);
+      continue;
+    }
     const view = meetView(s, me, other, labels);
     // A silently declined ask the requester has cancelled is over for them.
     if (!OPEN_STATES.includes(view.state)) continue;
     if (s.requester_id === me.profile_id) outgoing.push({ ...view, to: { ref: view.other.ref, display_name: other.display_name ?? '' } });
     else incoming.push({ ...view, from: { ref: view.other.ref, display_name: other.display_name ?? '', about: other.about ?? '' } });
   }
+  // Written back as getMeet does; a meet the other participant changed first keeps that change.
+  await Promise.all(ended.map((m) => saveMeet(m).catch((err) => {
+    if (!(err instanceof HttpError && err.status === 409)) throw err;
+  })));
   sendJson(res, 200, { incoming, outgoing });
 }
 

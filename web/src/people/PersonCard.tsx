@@ -17,6 +17,9 @@ import { toast } from './ui';
 import { Marked } from './util';
 import { isWatched, toggleWatch } from './watch';
 
+// The watch is checked by the in-app nudge (nudges.ts), which runs only while the app is open and
+// I am around with nudges on, so the copy promises no more than that. Nothing is sent to the phone.
+export const watchOnCopy = (name: string) => `Watching ${name}. While you're around with the app open and nudges on, the People tab tells you when they're around.`;
 export const WAVED_COPY = "Waved. You'll hear back here.";
 export const waveNote = (zone: string) => `I'm in ${zone} too — want to talk shop?`.slice(0, 140);
 
@@ -181,7 +184,7 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
             aria-pressed={watched}
             onClick={() => {
               const on = toggleWatch(slug, person);
-              toast(on ? `You'll be told when ${person.display_name} is around.` : `Stopped watching ${person.display_name}.`);
+              toast(on ? watchOnCopy(person.display_name) : `Stopped watching ${person.display_name}.`);
             }}
           >
             {watched ? <BellOff size={16} aria-hidden="true" /> : <Bell size={16} aria-hidden="true" />}

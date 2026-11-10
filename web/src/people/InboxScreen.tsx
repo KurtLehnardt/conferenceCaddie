@@ -6,7 +6,7 @@ import { Inbox, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
 import { meetAction, PeopleApiError } from './api';
 import { blockWithConfirm, dropIncoming, getInbox, OPEN_STATES, setIncomingState, useInboxWatch } from './connect';
-import { getPresence, usePeopleStore } from './storage';
+import { usePeopleStore } from './storage';
 import type { ConferenceLike, InboxIncoming } from './types';
 import { toast } from './ui';
 
@@ -25,7 +25,9 @@ function IncomingCard({ slug, request }: { slug: string; request: InboxIncoming 
   const [error, setError] = useState<string | null>(null);
   const name = request.from.display_name;
   const waiting = request.state === 'requested';
-  const zone = request.same_zone ? (request.other?.zone ?? getPresence(slug).zone) : null;
+  // Only the zone the server sends: it is cleared once the two no longer share a zone or either
+  // presence ends, so the card never claims the asker is in the reader's zone after they moved.
+  const zone = request.same_zone ? (request.other?.zone ?? null) : null;
   const hint = waiting ? expiresIn(request.expires_at) : null;
 
   const act = async (action: 'accept' | 'decline') => {
