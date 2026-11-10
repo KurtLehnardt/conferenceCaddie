@@ -345,11 +345,8 @@ tasks.register<Test>("smokeTalks") {
     outputs.upToDateWhen { false }
     doFirst { if (site.orNull.isNullOrBlank()) throw GradleException("Pass -Pcaddie.smokeSite=<directory written by scripts/build-bundles.mjs>.") }
 }
-val simulator = providers.gradleProperty("caddie.iosSimulator")
 tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
     environment("SIMCTL_CHILD_CADDIE_EMBEDDING_DIR", embeddingDir.get().asFile.absolutePath)
     environment("SIMCTL_CHILD_ORT_DISABLE_TELEMETRY", "1")
-    // -Pcaddie.iosSimulator=<name> runs the tests on that simulator instead of Kotlin's default one.
-    simulator.orNull?.let { device.set(it) }
 }

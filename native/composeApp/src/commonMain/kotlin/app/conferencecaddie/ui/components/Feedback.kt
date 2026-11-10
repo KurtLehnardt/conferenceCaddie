@@ -17,13 +17,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -144,15 +147,26 @@ fun NeedsConnection(title: String, body: String = Strings.Offline.NEEDS_CONNECTI
 data class ToastData(val id: Long, val message: String, val actionLabel: String? = null)
 
 /**
- * .toast: a dark bar above the tab bar that dismisses itself after five seconds, as on the web.
- * [onAction] runs the action and the toast then closes.
+ * .toast: a dark bar above the tab bar that dismisses itself after five seconds, as on the web, or
+ * after the longer time the person asked for in the system's accessibility settings (Android's "Time
+ * to take action"), which also counts whether the toast has an action. [onAction] runs the action
+ * and the toast then closes.
  */
 @Composable
 fun Toast(toast: ToastData, onDismiss: () -> Unit, onAction: () -> Unit, modifier: Modifier = Modifier) {
     val c = Caddie.colors
+    // The latest callback, so a toast that outlives a recomposition dismisses through the current one.
+    val dismiss by rememberUpdatedState(onDismiss)
+    val accessibility = LocalAccessibilityManager.current
     LaunchedEffect(toast.id) {
-        delay(5_000)
-        onDismiss()
+        val timeout = accessibility?.calculateRecommendedTimeoutMillis(
+            TOAST_MILLIS,
+            containsIcons = false,
+            containsText = true,
+            containsControls = toast.actionLabel != null,
+        ) ?: TOAST_MILLIS
+        delay(timeout)
+        dismiss()
     }
     Row(
         modifier
@@ -170,10 +184,14 @@ fun Toast(toast: ToastData, onDismiss: () -> Unit, onAction: () -> Unit, modifie
         Text(toast.message, style = Caddie.type.toast, color = c.toastText, modifier = Modifier.weight(1f))
         if (toast.actionLabel != null) {
             Box(
-                Modifier.heightIn(min = 44.dp).caddieClickable(RoundedCornerShape(8.dp)) {
-                    onAction()
-                    onDismiss()
-                }.padding(horizontal = 14.dp),
+                Modifier
+                    .minimumInteractiveComponentSize()
+                    .heightIn(min = Caddie.dimens.minTouch)
+                    .caddieClickable(RoundedCornerShape(8.dp)) {
+                        onAction()
+                        onDismiss()
+                    }
+                    .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(toast.actionLabel, style = Caddie.type.button.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold), color = c.toastAction)
@@ -181,6 +199,9 @@ fun Toast(toast: ToastData, onDismiss: () -> Unit, onAction: () -> Unit, modifie
         }
     }
 }
+
+/** How long a toast stays, as on the web, before the accessibility settings lengthen it. */
+private const val TOAST_MILLIS = 5_000L
 
 /** .card.skeleton: a pulsing placeholder card while results load. */
 @Composable

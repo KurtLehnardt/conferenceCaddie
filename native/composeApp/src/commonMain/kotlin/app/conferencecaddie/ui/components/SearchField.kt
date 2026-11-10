@@ -47,9 +47,9 @@ import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 
 /**
- * .search-bar and .search-field: a 48 dp field on the fill colour with the search icon, a clear
- * button once there is text, the accent ring while focused, and the thin progress bar underneath
- * while [loading]. At most 200 characters, as on the web.
+ * .search-bar and .search-field: a field at least 48 dp tall (it grows with large text) on the fill
+ * colour with the search icon, a clear button once there is text, the accent ring while focused,
+ * and the thin progress bar underneath while [loading]. At most 200 characters, as on the web.
  */
 @Composable
 fun SearchField(
@@ -72,14 +72,14 @@ fun SearchField(
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(d.searchFieldHeight)
+                .heightIn(min = d.searchFieldHeight)
                 .clip(shape)
                 .background(c.fill)
                 .then(if (focused) Modifier.border(2.dp, c.accent, shape) else Modifier),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             LucideImage(LucideIcon.Search, null, Modifier.padding(start = 14.dp, end = 10.dp), size = 20.dp)
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            Box(Modifier.weight(1f).padding(vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
                 if (value.isEmpty()) Text(placeholder, style = Caddie.type.body, color = c.text2, maxLines = 1)
                 BasicTextField(
                     value = value,

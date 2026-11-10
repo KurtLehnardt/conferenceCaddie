@@ -38,7 +38,8 @@ object Strings {
         const val CLOSE = "Close"
         const val SEARCHABLE = "Searchable conferences"
         const val UNAVAILABLE_HEADING = "Schedule not available here yet"
-        const val OPENS_OFFICIAL = ", opens the official schedule in a new tab"
+        /** Native wording: the web says "in a new tab"; the apps open the link in the browser. */
+        const val OPENS_OFFICIAL = ", opens the official schedule in the browser"
         const val VIRTUAL = "Virtual"
     }
 

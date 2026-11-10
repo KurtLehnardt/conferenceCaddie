@@ -1,5 +1,7 @@
 package app.conferencecaddie.ui
 
+import androidx.compose.ui.graphics.vector.PathNode
+import androidx.compose.ui.graphics.vector.VectorPath
 import app.conferencecaddie.ui.format.Format
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.icons.vector
@@ -8,6 +10,8 @@ import app.conferencecaddie.ui.strings.Strings
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 // The web's formatting (web/src/lib/time.ts and web/src/components/search.tsx), with the values the
@@ -68,11 +72,23 @@ class FormatTest {
     }
 
     @Test
-    fun everyIconParses() {
+    fun everyIconParsesIntoOneStrokeAPath() {
         for (icon in LucideIcon.entries) {
-            val v = icon.vector()
-            assertEquals(24f, v.viewportWidth, icon.name)
             assertTrue(icon.paths.isNotEmpty(), icon.name)
+            val v = icon.vector(strokeWidth = 1.75f)
+            // One drawn path per SVG path, each starting with a move, stroked at the width asked for.
+            assertEquals(icon.paths.size, v.root.size, icon.name)
+            for (i in 0 until v.root.size) {
+                val path = v.root[i] as VectorPath
+                assertTrue(path.pathData.isNotEmpty(), "${icon.name} path $i is empty")
+                val first = path.pathData.first()
+                assertTrue(first is PathNode.MoveTo || first is PathNode.RelativeMoveTo, "${icon.name} path $i starts with $first")
+                assertEquals(1.75f, path.strokeLineWidth, icon.name)
+                assertNull(path.fill, icon.name)
+            }
+            // The filled variant (the star of a talk marked Interested) fills every path.
+            val filled = icon.vector(filled = true)
+            for (i in 0 until filled.root.size) assertNotNull((filled.root[i] as VectorPath).fill, icon.name)
         }
     }
 }

@@ -1,5 +1,6 @@
 package app.conferencecaddie.ui
 
+import androidx.compose.ui.uikit.OnFocusBehavior
 import androidx.compose.ui.window.ComposeUIViewController
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.core.IosCore
@@ -34,7 +35,13 @@ fun MainViewController(): UIViewController {
         query = get("caddie.query")
     }
     val version = NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: ""
-    return ComposeUIViewController {
+    return ComposeUIViewController(
+        configure = {
+            // The screens keep their fields above the keyboard themselves (imePadding), as on
+            // Android, instead of the whole view sliding up under the status bar.
+            onFocusBehavior = OnFocusBehavior.DoNothing
+        },
+    ) {
         CaddieApp(
             core = core,
             isDebugBuild = isDebugBuild,

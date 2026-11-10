@@ -218,7 +218,9 @@ class TalkStatesUiTest {
         onNodeWithTag("search-field").performTextReplacement("kubernetes")
         waitFor(text = Strings.Search.count(2, browse = false, includeEvents = false))
         onNodeWithTag("search-results").performScrollToNode(hasTestTag("talk-$alpha:3"))
-        onNodeWithText("Kubernetes scheduling deep dive").performClick()
+        // The title itself: a card is taller than a short screen once it has Why this rank, and a tap
+        // at the middle of the whole card can land on one of its buttons.
+        onNodeWithText("Kubernetes scheduling deep dive", useUnmergedTree = true).performClick()
         waitFor(tag = "talk-sheet")
 
         tester.emulateSaveAndRestore()

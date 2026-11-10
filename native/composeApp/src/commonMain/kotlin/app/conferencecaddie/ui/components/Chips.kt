@@ -6,6 +6,9 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -44,8 +48,9 @@ enum class ChipKind {
 }
 
 /**
- * .chip: a 36 dp pill. Off, it has a strong border on the surface colour; on, it fills with the
- * accent tint and drops the border, as on the web. [onClear] adds the separate clear button (×) an
+ * .chip: a 36 dp pill that grows with large text; its touch target is the platform's minimum (48 dp
+ * on Android, 44 pt on iOS). Off, it has a strong border on the surface colour; on, it fills with
+ * the accent tint and drops the border, as on the web. [onClear] adds the separate clear button (×) an
  * active chip has, named [clearLabel] for screen readers. [leadingIcon] replaces the check of a
  * toggle chip (the Filters and Happening now chips have their own icons). [disabled] is the dashed,
  * faded look of an unavailable chip.
@@ -68,9 +73,11 @@ fun CaddieChip(
     val shape = Pill
     Row(
         modifier
-            .heightIn(min = Caddie.dimens.minTouch)
-            .padding(vertical = 4.dp)
-            .height(Caddie.dimens.chipHeight)
+            .minimumInteractiveComponentSize()
+            .heightIn(min = Caddie.dimens.chipHeight)
+            // Both tap areas (the chip and its clear button) fill the pill's height, whatever the
+            // text size makes it.
+            .height(IntrinsicSize.Min)
             .alpha(if (disabled && !active) 0.65f else 1f)
             .background(if (active) c.accentTint else c.surface, shape)
             .then(if (active) Modifier else Modifier.border(1.dp, c.borderStrong, shape)),
@@ -89,7 +96,7 @@ fun CaddieChip(
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
                 if (disabled && !active) this.disabled()
             }
-            .padding(start = 14.dp, end = if (active && onClear != null) 2.dp else 14.dp)
+            .padding(start = 14.dp, end = if (active && onClear != null) 2.dp else 14.dp, top = 4.dp, bottom = 4.dp)
         Row(main, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val fg = when {
                 active -> c.accentInk
@@ -173,24 +180,36 @@ fun SuggestionChip(kindLabel: String, label: String, onClick: () -> Unit, modifi
 }
 
 /**
- * .chip-row: chips in one line that scrolls sideways, with the page gutter at both ends. [lead] is
- * the "Did you mean" text of the suggestion row.
+ * .chip-row: chips in one line that scrolls sideways, with the page gutter at both ends; in the wide
+ * layout the chips wrap onto more lines instead, as on the web. [lead] is the "Did you mean" text of
+ * the suggestion row.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChipRow(
     modifier: Modifier = Modifier,
     lead: String? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
-    Row(
-        modifier
-            .horizontalScroll(rememberScrollState())
-            .padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, bottom = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (lead != null) Text(lead, style = Caddie.type.meta, color = Caddie.colors.text2)
+    val padding = Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, bottom = 8.dp)
+    val items: @Composable RowScope.() -> Unit = {
+        if (lead != null) Text(lead, style = Caddie.type.meta, color = Caddie.colors.text2, modifier = Modifier.align(Alignment.CenterVertically))
         content()
+    }
+    if (LocalWideLayout.current) {
+        FlowRow(
+            modifier.then(padding),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+            content = { items() },
+        )
+    } else {
+        Row(
+            modifier.horizontalScroll(rememberScrollState()).then(padding),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = items,
+        )
     }
 }
 
@@ -198,7 +217,11 @@ fun ChipRow(
 @Composable
 fun ClearAllButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
-        modifier.heightIn(min = Caddie.dimens.minTouch).caddieClickable(Pill, onClick = onClick).padding(horizontal = 8.dp),
+        modifier
+            .minimumInteractiveComponentSize()
+            .heightIn(min = Caddie.dimens.minTouch)
+            .caddieClickable(Pill, onClick = onClick)
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(Strings.Chips.CLEAR_ALL, style = Caddie.type.buttonSmall, color = Caddie.colors.accentInk)

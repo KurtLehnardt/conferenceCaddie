@@ -97,7 +97,9 @@ class TalkScreensUiTest {
         // Open a talk: the sheet shows the speaker's tagline and the related talks. The list is
         // lazy, so on a short screen the card is brought into view first.
         onNodeWithTag("search-results").performScrollToNode(hasTestTag("talk-alpha-conf-2099:3"))
-        onNodeWithText("Kubernetes scheduling deep dive").performClick()
+        // The title itself: a card is taller than a short screen once it has Why this rank, and a tap
+        // at the middle of the whole card can land on one of its buttons.
+        onNodeWithText("Kubernetes scheduling deep dive", useUnmergedTree = true).performClick()
         waitFor(tag = "talk-sheet")
         waitFor(text = "Maintainer").assertIsDisplayed()
         waitFor(tag = "related-talks")

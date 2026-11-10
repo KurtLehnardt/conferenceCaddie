@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -46,7 +47,7 @@ fun SwitcherSheet(
         }
         val searchable = conferences.orEmpty().filter { it.searchable }
         val unavailable = conferences.orEmpty().filter { !it.searchable }
-        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics { contentDescription = Strings.Switcher.SEARCHABLE }) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics { isTraversalGroup = true }) {
             searchable.forEach { c ->
                 ConferenceRow(c, current = c.id == current, trailing = if (c.id == current) LucideIcon.Check else null) { onPick(c.id) }
             }

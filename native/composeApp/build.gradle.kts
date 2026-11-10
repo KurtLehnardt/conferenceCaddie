@@ -1,6 +1,5 @@
 import java.util.Base64
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
 
 // The Compose Multiplatform UI. On Android it is a library that androidApp hosts; on iOS it is the
 // "ComposeApp" framework that the Xcode project in iosApp/ embeds. The framework re-exports
@@ -99,6 +98,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.compose.uiTest)
         }
+        // The iOS UI tests send the system Back through a navigation event dispatcher of their own.
+        iosTest.dependencies {
+            implementation(libs.jetbrains.navigationevent.compose)
+        }
         getByName("androidDeviceTest") {
             // The embedding measurement (EmbeddingDeviceTest) runs on Android devices only; the same
             // measurement runs on the iOS simulator in shared's tests.
@@ -136,10 +139,4 @@ compose.resources {
         sourceSetName = "commonMain",
         directoryProvider = embeddingResources.map { layout.buildDirectory.dir("generated/embeddingResources").get() },
     )
-}
-
-// -Pcaddie.iosSimulator=<name> runs the UI tests on that simulator instead of Kotlin's default one.
-val simulator = providers.gradleProperty("caddie.iosSimulator")
-tasks.withType<KotlinNativeSimulatorTest>().configureEach {
-    simulator.orNull?.let { device.set(it) }
 }
