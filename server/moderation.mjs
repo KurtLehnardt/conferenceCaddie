@@ -46,7 +46,7 @@ const RULES_TIMEOUT_MS = 3000;
 const RULES_RETRY_MS = 60_000;
 
 // Classifier.
-const CLASSIFIER_MODE = (process.env.MOD_CLASSIFIER || 'auto').toLowerCase(); // auto | on | off
+const CLASSIFIER_MODE = (process.env.MOD_CLASSIFIER || 'off').toLowerCase(); // off (default) | auto | on
 const CLASSIFIER_URL = process.env.MOD_CLASSIFIER_URL || 'https://language.googleapis.com/v1/documents:moderateText';
 const METADATA_URL = process.env.MOD_METADATA_URL || 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
 const DEFAULT_CATEGORIES = ['Toxic', 'Insult', 'Profanity', 'Derogatory', 'Sexual', 'Violent'];
@@ -194,8 +194,9 @@ async function fetchToken() {
 }
 
 // Decides once, when the server starts: MOD_CLASSIFIER=off turns it off, "on" keeps it on even
-// when the metadata server cannot be reached (every line is then held), and "auto" (the default)
-// turns it on only when the metadata server answers, so a local run skips it.
+// when the metadata server cannot be reached (every line is then held), and "auto"
+// turns it on only when the metadata server answers, so a local run skips it. Unset means off:
+// the Natural Language API is billed and must be enabled on purpose.
 const classifierReady = (async () => {
   if (CLASSIFIER_MODE === 'off') {
     classifierOn = false;
