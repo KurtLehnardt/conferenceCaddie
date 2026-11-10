@@ -13,14 +13,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// A profile whose delete hid it and has not finished (server/people-shared.mjs says why that
+// state marks a pending delete).
+import { PENDING_DELETE_QUERY } from '../server/people-shared.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const PAGE = 1000;
-// A profile whose delete hid it and has not finished: the same query as PENDING_DELETE_QUERY in
-// server/people.mjs, which says why that state marks a pending delete.
-const PENDING_DELETE = { bool: { filter: [{ term: { open_to_meet: false } }], must_not: [{ exists: { field: 'shared_talk_ids' } }] } };
 
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -57,7 +57,7 @@ for (;;) {
   const body = {
     size: PAGE,
     _source: { excludes: ['secret_hash', 'text_hash', '*_semantic', 'presence_*', 'ble_*'] },
-    query: { bool: { filter: [{ term: { event_id: slug } }], must_not: [PENDING_DELETE] } },
+    query: { bool: { filter: [{ term: { event_id: slug } }], must_not: [PENDING_DELETE_QUERY] } },
     sort: [{ updated_at: 'asc' }, { profile_id: 'asc' }],
   };
   if (after) body.search_after = after;

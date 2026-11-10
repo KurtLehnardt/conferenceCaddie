@@ -67,6 +67,7 @@ const SPOT_MAX = 60;
 const ACCURACY_MAX_M = 200;
 const COORD_DECIMALS = 5;
 const DISTANCE_STEP_M = 10;
+const PRESENCE_OFF_RETRIES = 3;
 const NOTE_MAX = 140;
 const MEET_REQUESTS_PER_HOUR = 10;
 const DECLINES_PER_DAY = 3;
@@ -351,6 +352,16 @@ async function emptyBody(req) {
 
 const BLOCK_KEYS = new Set(['event', 'ref']);
 
+// When the purge may delete a block: the latest of the conference's end and the visible_until of
+// the two profiles, so a block never runs out while either of them can still be found. A later end
+// date set after the block was written reaches the block only when it is written again (blocking
+// the same person again rewrites it); until then the block runs out at the end it was written
+// with.
+function blockExpiry(conf, me, them) {
+  const ends = [conf.visibleUntil, me.visible_until, them.visible_until].filter((v) => typeof v === 'string' && Number.isFinite(Date.parse(v)));
+  return ends.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+}
+
 async function block(req, res) {
   const device = writer(req);
   const body = await jsonBody(req, BLOCK_KEYS);
@@ -365,8 +376,7 @@ async function block(req, res) {
     blocked_id: them.profile_id,
     blocked_ref: ref,
     created_at: iso(Date.now()),
-    // The purge deletes the block once its conference has ended.
-    expires_at: conf.visibleUntil,
+    expires_at: blockExpiry(conf, me, them),
   });
   // An open meet between the two ends: silently when the blocker was asked, as a cancellation
   // when the blocker asked.
@@ -477,7 +487,8 @@ async function deletePresence(req, res, url) {
   const conf = await conferenceFor(eventOf(url));
   const me = await authenticated(device, conf.slug);
   if (me) {
-    const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: PRESENCE_OFF });
+    // Unguarded on purpose (it only clears); a concurrent write is retried by Elasticsearch.
+    const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id), retry_on_conflict: PRESENCE_OFF_RETRIES } }, { doc: PRESENCE_OFF });
     if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
     // A meet that was active ends when either presence ends.
     await closeMeets(conf.slug, [{ term: { participants: me.profile_id } }, { term: { state: 'active' } }], () => 'expired');
