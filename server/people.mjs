@@ -710,28 +710,47 @@ export async function blockedBetween(eventId, a, b) {
 // The filter clause that hides blocked pairs from a people query.
 const notBlocked = (eventId, ids) => (ids.size ? [{ ids: { values: [...ids].map((id) => docId(eventId, id)) } }] : []);
 
+const DELETE_BATCH = 1000;
+const DELETE_ROUNDS = 20;
+
+// Deletes every document of one event's index that matches the query, so the next request already
+// sees them gone. The people key holds read and write but not the refresh privilege that
+// _delete_by_query?refresh=true needs (it answers 403 after deleting), so the ids are searched for
+// and removed with a Bulk delete and refresh=wait_for, which write covers.
+export async function deleteWhere(index, eventId, query) {
+  for (let round = 0; round < DELETE_ROUNDS; round++) {
+    const { json } = await people('POST', withPreference(`${idx(index)}/_search?ignore_unavailable=true`, peoplePreference(eventId)), {
+      size: DELETE_BATCH,
+      _source: false,
+      query,
+    });
+    const ids = (json.hits?.hits ?? []).map((h) => h._id);
+    if (!ids.length) return;
+    const body = ids.map((id) => `${JSON.stringify({ delete: { _id: id } })}\n`).join('');
+    const { json: result } = await people('POST', `${idx(index)}/_bulk?refresh=wait_for`, body, { ndjson: true });
+    for (const item of result.items ?? []) {
+      const status = item.delete?.status ?? 500;
+      if (status !== 404 && (status < 200 || status > 299)) throw new UpstreamError(`bulk item status ${status}`);
+    }
+    if (ids.length < DELETE_BATCH) return;
+  }
+  throw new UpstreamError('too many documents to delete');
+}
+
 // Everything that connects a person to others at one conference: their blocks in both directions,
 // every meet they take part in, their push subscriptions and the nudges they were part of. Runs
-// when the profile is deleted. refresh=true, so the next request already sees them gone.
+// when the profile is deleted, and the next request already sees them gone.
 export async function deleteConnections(eventId, profileId) {
-  await people('POST', `${idx(BLOCKS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: {
-      bool: {
-        filter: [{ term: { event_id: eventId } }],
-        should: [{ term: { blocker_id: profileId } }, { term: { blocked_id: profileId } }],
-        minimum_should_match: 1,
-      },
+  await deleteWhere(BLOCKS_INDEX, eventId, {
+    bool: {
+      filter: [{ term: { event_id: eventId } }],
+      should: [{ term: { blocker_id: profileId } }, { term: { blocked_id: profileId } }],
+      minimum_should_match: 1,
     },
   });
-  await people('POST', `${idx(MEETS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } },
-  });
-  await people('POST', `${idx(PUSH_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } },
-  });
-  await people('POST', `${idx(NUDGES_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } },
-  });
+  await deleteWhere(MEETS_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } });
+  await deleteWhere(PUSH_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } });
+  await deleteWhere(NUDGES_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } });
 }
 
 // ---------------------------------------------------------------------------------------------

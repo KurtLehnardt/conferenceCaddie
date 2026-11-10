@@ -52,7 +52,7 @@ import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
   conferenceFor, dayBounds, topicLabels, zonesFor, authenticated, bulkOne, isAround, PRESENCE_OFF,
-  peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch,
+  peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch, deleteWhere,
   locationOf, distanceM, bearingDeg,
 } from './people.mjs';
 
@@ -373,9 +373,7 @@ async function unblock(req, res) {
   const conf = await conferenceFor(body.event);
   const me = await requireProfile(device, conf.slug);
   // By the stored ref, so a block can be lifted after the blocked person deleted their profile.
-  await people('POST', `${idx(BLOCKS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: { bool: { filter: [{ term: { event_id: conf.slug } }, { term: { blocker_id: me.profile_id } }, { term: { blocked_ref: ref } }] } },
-  });
+  await deleteWhere(BLOCKS_INDEX, conf.slug, { bool: { filter: [{ term: { event_id: conf.slug } }, { term: { blocker_id: me.profile_id } }, { term: { blocked_ref: ref } }] } });
   sendJson(res, 200, { ok: true });
 }
 

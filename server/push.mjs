@@ -24,7 +24,7 @@ import { clientIp } from './ratelimit.mjs';
 import {
   people, idx, PUSH_INDEX, LIMITS,
   HttpError, UpstreamError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
-  conferenceFor, authenticated, dispatch,
+  conferenceFor, authenticated, dispatch, deleteWhere,
 } from './people.mjs';
 
 const ENDPOINT_MAX = 2048;
@@ -108,11 +108,9 @@ async function deleteSubscription(req, res) {
   const conf = await conferenceFor(body.event);
   const me = await requireProfile(device, conf.slug);
   // Only the subscription's own profile can remove it; anyone else's request changes nothing.
-  await people('POST', `${idx(PUSH_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: {
-      bool: {
-        filter: [{ ids: { values: [subscriptionId(endpoint)] } }, { term: { event_id: conf.slug } }, { term: { profile_id: me.profile_id } }],
-      },
+  await deleteWhere(PUSH_INDEX, conf.slug, {
+    bool: {
+      filter: [{ ids: { values: [subscriptionId(endpoint)] } }, { term: { event_id: conf.slug } }, { term: { profile_id: me.profile_id } }],
     },
   });
   sendJson(res, 200, { ok: true });
