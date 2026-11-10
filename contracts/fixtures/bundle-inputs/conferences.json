@@ -1,0 +1,32 @@
+[
+  {
+    "slug": "caddie-fixture-2099",
+    "name": "Caddie Fixture Conference",
+    "start_date": "2099-03-02",
+    "end_date": "2099-03-02",
+    "time_zone": "Europe/Amsterdam",
+    "location": { "city": "Amsterdam", "region": "", "country": "Netherlands", "virtual": false },
+    "status": "searchable",
+    "official_schedule_url": "https://example.org/caddie-fixture/schedule/",
+    "source": "sessionize",
+    "has_level": true,
+    "track_group": "Track",
+    "tag_groups": ["Format"],
+    "talk_count": 3
+  },
+  {
+    "slug": "caddie-unavailable-2099",
+    "name": "Caddie Unavailable Fixture",
+    "start_date": "2099-04-01",
+    "end_date": "2099-04-02",
+    "time_zone": null,
+    "location": { "city": "", "region": "", "country": "", "virtual": true },
+    "status": "unavailable",
+    "official_schedule_url": "https://example.org/caddie-unavailable/",
+    "source": "sessionize",
+    "has_level": false,
+    "track_group": null,
+    "tag_groups": [],
+    "talk_count": 0
+  }
+]

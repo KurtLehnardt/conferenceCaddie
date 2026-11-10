@@ -1,0 +1,68 @@
+{
+  "index_version": 1,
+  "generated_at": "2026-11-10T00:00:00Z",
+  "conferences": [
+    {
+      "slug": "caddie-fixture-2099",
+      "name": "Caddie Fixture Conference",
+      "start_date": "2099-03-02",
+      "end_date": "2099-03-02",
+      "time_zone": "Europe/Amsterdam",
+      "location": {
+        "city": "Amsterdam",
+        "region": "",
+        "country": "Netherlands",
+        "virtual": false
+      },
+      "status": "searchable",
+      "official_schedule_url": "https://example.org/caddie-fixture/schedule/",
+      "source": "sessionize",
+      "has_level": true,
+      "track_group": "Track",
+      "tag_groups": [
+        "Format"
+      ],
+      "talk_count": 3,
+      "bundle": {
+        "bundle_version": 1,
+        "content_hash": "a5ec3d7519c37b893ec32cc3f4d2274cd81d0d5758b149269da88b71bf2c593b",
+        "path": "caddie-fixture-2099/a5ec3d7519c37b89/",
+        "model": "BAAI/bge-small-en-v1.5",
+        "dims": 384,
+        "talk_count": 3,
+        "vector_count": 3,
+        "files": {
+          "bundle.json": {
+            "bytes": 5674,
+            "sha256": "75380cd14db51b0ca3170c4c35a6958d66a6a95cba0b9d95c4e78f024af961ea"
+          },
+          "vectors.i8": {
+            "bytes": 1152,
+            "sha256": "e9a59e1175adf3e679f65296842af976cc7962c0459f884e39d013ef99d5c1f5"
+          }
+        }
+      }
+    },
+    {
+      "slug": "caddie-unavailable-2099",
+      "name": "Caddie Unavailable Fixture",
+      "start_date": "2099-04-01",
+      "end_date": "2099-04-02",
+      "time_zone": null,
+      "location": {
+        "city": "",
+        "region": "",
+        "country": "",
+        "virtual": true
+      },
+      "status": "unavailable",
+      "official_schedule_url": "https://example.org/caddie-unavailable/",
+      "source": "sessionize",
+      "has_level": false,
+      "track_group": null,
+      "tag_groups": [],
+      "talk_count": 0,
+      "bundle": null
+    }
+  ]
+}

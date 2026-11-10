@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/conferences-index.v1.schema.json",
+  "title": "Conference index (conferences.json), v1",
+  "description": "{bundle_base}conferences.json: every conference the backend knows, in the GET /api/conferences entry shape, each with the conference's current talk bundle or null. It is a superset of the GET /api/conferences response, so a client that reads one can read the other. See docs/contracts/talk-bundle.md.",
+  "type": "object",
+  "required": ["index_version", "generated_at", "conferences"],
+  "properties": {
+    "index_version": { "description": "Major version of this file.", "type": "integer", "minimum": 1 },
+    "generated_at": { "$ref": "#/$defs/Instant" },
+    "conferences": { "type": "array", "items": { "$ref": "#/$defs/IndexedConference" } }
+  },
+  "$defs": {
+    "Instant": { "type": "string", "format": "date-time" },
+    "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "Conference": {
+      "description": "The public conference shape of GET /api/conferences, field for field.",
+      "type": "object",
+      "required": ["slug", "name", "start_date", "end_date", "time_zone", "location", "status", "official_schedule_url", "source", "has_level", "track_group", "tag_groups", "talk_count"],
+      "properties": {
+        "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}$" },
+        "name": { "type": "string" },
+        "start_date": { "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }] },
+        "end_date": { "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }] },
+        "time_zone": { "description": "IANA zone, or null when unknown.", "type": ["string", "null"] },
+        "location": {
+          "type": "object",
+          "required": ["city", "region", "country", "virtual"],
+          "properties": {
+            "city": { "type": "string" },
+            "region": { "type": "string" },
+            "country": { "type": "string" },
+            "virtual": { "type": "boolean" }
+          }
+        },
+        "status": { "enum": ["searchable", "unavailable"] },
+        "official_schedule_url": { "type": ["string", "null"] },
+        "source": { "type": "string" },
+        "has_level": { "type": "boolean" },
+        "track_group": { "type": ["string", "null"] },
+        "tag_groups": { "type": "array", "items": { "type": "string" } },
+        "talk_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "BundleEntry": {
+      "type": "object",
+      "required": ["bundle_version", "content_hash", "path", "model", "dims", "talk_count", "vector_count", "files"],
+      "properties": {
+        "bundle_version": { "description": "Major version of the bundle format. A client skips a bundle whose major it does not implement.", "type": "integer", "minimum": 1 },
+        "content_hash": { "description": "SHA-256 over the file listing (docs/contracts/talk-bundle.md, Content hash).", "$ref": "#/$defs/Sha256" },
+        "path": { "description": "Directory of the bundle relative to bundle_base: {slug}/{first 16 hex digits of content_hash}/.", "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}/[0-9a-f]{16}/$" },
+        "model": { "description": "Embedding model of vectors.i8. A client compares vectors only from the model it runs itself.", "type": "string" },
+        "dims": { "type": "integer", "minimum": 1 },
+        "talk_count": { "description": "Items of kind talk.", "type": "integer", "minimum": 0 },
+        "vector_count": { "type": "integer", "minimum": 0 },
+        "files": {
+          "type": "object",
+          "required": ["bundle.json", "vectors.i8"],
+          "additionalProperties": {
+            "type": "object",
+            "required": ["bytes", "sha256"],
+            "properties": {
+              "bytes": { "type": "integer", "minimum": 0 },
+              "sha256": { "$ref": "#/$defs/Sha256" }
+            }
+          }
+        }
+      }
+    },
+    "IndexedConference": {
+      "description": "A conference entry plus its bundle. Producers write exactly the Conference fields and bundle; the closed-mode check enforces that through the properties listed here.",
+      "type": "object",
+      "required": ["slug", "name", "start_date", "end_date", "time_zone", "location", "status", "official_schedule_url", "source", "has_level", "track_group", "tag_groups", "talk_count", "bundle"],
+      "properties": {
+        "slug": { "$ref": "#/$defs/Conference/properties/slug" },
+        "name": { "$ref": "#/$defs/Conference/properties/name" },
+        "start_date": { "$ref": "#/$defs/Conference/properties/start_date" },
+        "end_date": { "$ref": "#/$defs/Conference/properties/end_date" },
+        "time_zone": { "$ref": "#/$defs/Conference/properties/time_zone" },
+        "location": { "$ref": "#/$defs/Conference/properties/location" },
+        "status": { "$ref": "#/$defs/Conference/properties/status" },
+        "official_schedule_url": { "$ref": "#/$defs/Conference/properties/official_schedule_url" },
+        "source": { "$ref": "#/$defs/Conference/properties/source" },
+        "has_level": { "$ref": "#/$defs/Conference/properties/has_level" },
+        "track_group": { "$ref": "#/$defs/Conference/properties/track_group" },
+        "tag_groups": { "$ref": "#/$defs/Conference/properties/tag_groups" },
+        "talk_count": { "$ref": "#/$defs/Conference/properties/talk_count" },
+        "bundle": { "anyOf": [{ "$ref": "#/$defs/BundleEntry" }, { "type": "null" }] }
+      },
+      "if": { "properties": { "status": { "const": "unavailable" } } },
+      "then": { "properties": { "bundle": { "type": "null" } } }
+    }
+  }
+}

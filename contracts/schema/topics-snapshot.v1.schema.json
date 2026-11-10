@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/topics-snapshot.v1.schema.json",
+  "title": "Live topic list snapshot",
+  "description": "contracts/fixtures/topics-live/{slug}.json: one GET /api/topics?event={slug} response of the live service, with where and when it was taken. The reference the Phase 1 Node topics builder is diffed against.",
+  "type": "object",
+  "required": ["snapshot", "event", "topics"],
+  "properties": {
+    "snapshot": {
+      "type": "object",
+      "required": ["taken_on", "fetched_at", "source", "status", "note"],
+      "properties": {
+        "taken_on": { "type": "string", "format": "date" },
+        "fetched_at": { "type": "string", "format": "date-time" },
+        "source": { "type": "string", "pattern": "^GET https://[^\\s]+/api/topics\\?event=[a-z0-9-]+$" },
+        "status": { "const": 200 },
+        "note": { "type": "string" }
+      }
+    },
+    "event": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}$" },
+    "topics": {
+      "type": "array",
+      "maxItems": 150,
+      "items": {
+        "type": "object",
+        "required": ["topic_id", "label", "talk_count"],
+        "properties": {
+          "topic_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,99}$" },
+          "label": { "type": "string", "minLength": 1 },
+          "talk_count": { "type": "integer", "minimum": 3 }
+        }
+      }
+    }
+  }
+}
