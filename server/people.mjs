@@ -13,6 +13,9 @@
 //   ES_PEOPLE_PUSH_INDEX  default caddie-people-push (Web Push subscriptions, push.mjs).
 //   ES_PEOPLE_NUDGES_INDEX default caddie-people-nudges (nudges sent, nudge.mjs).
 //   REF_SALT              optional salt for the opaque result reference.
+//   PEOPLE_SEMANTIC_MIN_SIMILARITY the lowest cosine similarity a semantic people leg keeps
+//                         (default 0.84, measured for caddie-e5-small; "off" for no floor; see
+//                         semanticMinSimilarity).
 //
 // Rules this module keeps:
 // - Elasticsearch does all matching, ranking and filtering. People are ranked by one rrf
@@ -86,6 +89,33 @@ const EVIDENCE_FALLBACK = 160;
 const QUERY_MAX = 300;
 const COMMON_TOPICS = 10;
 const BLOCKS_MAX = 1000;
+
+// The lowest cosine similarity a semantic people leg keeps, passed as the knn query's `similarity`
+// (Elasticsearch compares it with the raw cosine of a profile's best chunk, not with the score).
+// Without it a knn leg returns the k nearest profiles whatever their score, and with the E5 small
+// model that is nearly everyone. Measured on 2026-11-10: against the smoke's made-up text, which
+// none of the 132 KubeCon sample profiles has anything to do with, the best of them scored 0.79
+// to 0.83 (their median 0.76 to 0.81), while the profiles written with that text scored 0.88 to
+// 0.94. Every profile joined every semantic leg, so anyone who also shared a common topic
+// outranked the one person whose text matched. 0.84 kept at least one relevant profile on the
+// expertise leg for each of ten realistic queries while leaving out all but 29 of 943 unrelated
+// pairs (DECISIONS.md). The value belongs to the model behind the people index's semantic_text
+// fields: a new inference endpoint needs a new measurement. PEOPLE_SEMANTIC_MIN_SIMILARITY
+// overrides it.
+export const SEMANTIC_MIN_SIMILARITY_DEFAULT = 0.84;
+
+/**
+ * PEOPLE_SEMANTIC_MIN_SIMILARITY as a cosine clamped to -1..1, null for "off" (no floor), or the
+ * default when it is unset, empty or not a number.
+ */
+export function semanticMinSimilarity(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return SEMANTIC_MIN_SIMILARITY_DEFAULT;
+  if (String(value).trim().toLowerCase() === 'off') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return SEMANTIC_MIN_SIMILARITY_DEFAULT;
+  return Math.min(1, Math.max(-1, n));
+}
+export const SEMANTIC_MIN_SIMILARITY = semanticMinSimilarity(process.env.PEOPLE_SEMANTIC_MIN_SIMILARITY);
 
 // Zones a person can say they are in, besides the conference's room names.
 export const FIXED_ZONES = ['Expo hall', 'Registration', 'Food and coffee', 'Hallway', 'Outside'];
@@ -959,9 +989,10 @@ export async function finishPendingDeletes() {
 //      presence_cell (100 m pivot, origin the requester's own cell) over people who are around
 //      now, so nearby people rank higher; it is a ranking signal and nothing else, and like the
 //      band it sees cells only,
-// skipping any whose input is empty. Circles add a retriever that matches every member, so a
-// member with nothing in common is still listed, below everyone who shares something. Every
-// retriever is named so that the explanation of a hit says which ones it came from.
+// skipping any whose input is empty. Each semantic leg keeps only the profiles at or above
+// SEMANTIC_MIN_SIMILARITY. Circles add a retriever that matches every member, so a member with
+// nothing in common is still listed, below everyone who shares something. Every retriever is
+// named so that the explanation of a hit says which ones it came from.
 
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
 const DISTANCE_PIVOT = '100m';
@@ -993,6 +1024,7 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
         field,
         k: KNN_K,
         num_candidates: KNN_CANDIDATES,
+        ...(SEMANTIC_MIN_SIMILARITY === null ? {} : { similarity: SEMANTIC_MIN_SIMILARITY }),
         filter,
         query_vector_builder: { text_embedding: { model_text: modelText } },
       },
@@ -1054,14 +1086,34 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
   return { body, legs };
 }
 
-// The retrievers a hit was found by, as indexes into legs, read from the rrf explanation: one
-// detail per retriever, whose value is the hit's rank there and 0 when it was not found. Returns
-// null when the response carries no explanation, so the caller keeps the hit.
-function matchedLegs(hit, legs) {
+// The rrf node of a hit's explanation: the node whose description reads "rrf score: [..] computed
+// for initial ranks [..]" and which has one detail per retriever, each with the hit's rank in that
+// retriever as its value (0, "result not found in query", when the retriever did not find it).
+// Elasticsearch 9.5 does not put that node at the top: on an index with nested fields (the
+// semantic_text chunks) the top is a "sum of:" whose details are the rrf node and the rrf filter's
+// required clause, so the top level always has two details whatever the number of retrievers.
+// The node is looked for down to RRF_NODE_DEPTH levels below the top; null when there is none.
+const RRF_NODE_DEPTH = 3;
+const RRF_NODE_RE = /^rrf score: .*computed for initial ranks/;
+function rrfNode(node, n, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > RRF_NODE_DEPTH) return null;
+  const details = Array.isArray(node.details) ? node.details : [];
+  if (RRF_NODE_RE.test(node.description ?? '') && details.length === n) return node;
+  for (const d of details) {
+    const found = rrfNode(d, n, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+// The retrievers a hit was found by, as indexes into legs, read from the rrf node of its
+// explanation. Returns null when the legs are unknown: the response carries no explanation (the
+// cluster refused it, see searchPeople) or none whose shape is recognised.
+export function matchedLegs(hit, legs) {
   if (legs.length === 1) return [0];
-  const details = hit._explanation?.details;
-  if (!Array.isArray(details) || details.length !== legs.length) return null;
-  return details.map((d, i) => (d && d.value > 0 && !/not found/.test(d.description ?? '') ? i : -1)).filter((i) => i >= 0);
+  const node = rrfNode(hit._explanation, legs.length);
+  if (!node) return null;
+  return node.details.map((d, i) => (d && d.value > 0 && !/not found/.test(d.description ?? '') ? i : -1)).filter((i) => i >= 0);
 }
 
 const listFormat = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
@@ -1439,7 +1491,7 @@ async function deleteProfile(req, res, url) {
 const MATCHES_KEYS = new Set(['event', 'interested_talk_ids', 'query', 'when', 'from', 'size']);
 
 // Runs a people search. Should the cluster refuse the explanation, the search runs again without
-// it and every hit is kept.
+// it; the legs of every hit are then unknown, which isBroad resolves per caller.
 export async function searchPeople(slug, body) {
   const path = withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(slug));
   try {
@@ -1480,11 +1532,23 @@ function sharedTopics(me, s) {
 
 // The specificity rule: a hit is a broad match when it was found only by the topic retrievers and
 // every topic it shares with the requester is one of the conference's ten most common. A hit found
-// by a text retriever, or one whose explanation is missing, is specific. Being nearby is not
-// experience, so the distance leg counts neither way.
-export function isBroad(hit, legs, me, common) {
+// by a text retriever is specific. Being nearby is not experience, so the distance leg counts
+// neither way.
+//
+// When the legs that found a hit are unknown (matchedLegs gives null), `unknown` decides. With
+// 'topics', the default, the hit is judged by its shared topics alone, as if only the topic legs
+// had found it: it is broad unless it shares a topic outside the common ones. The push nudge
+// (nudge.mjs) and Bluetooth sightings (ble.mjs) use the default, because they reach a person who
+// did not search, and a generic match there costs a notification. With 'specific' the hit is
+// kept; the matches view uses it, so that a person searching never loses a real match to an
+// explanation this module cannot read.
+export function isBroad(hit, legs, me, common, { unknown = 'topics' } = {}) {
   const matched = matchedLegs(hit, legs);
-  if (!matched || matched.some((i) => legs[i] !== 'topics' && legs[i] !== 'distance')) return false;
+  if (!matched) {
+    if (unknown === 'specific') return false;
+  } else if (matched.some((i) => legs[i] !== 'topics' && legs[i] !== 'distance')) {
+    return false;
+  }
   return sharedTopics(me, hit._source ?? {}).every((t) => common.has(t));
 }
 
@@ -1529,7 +1593,7 @@ async function matches(req, res) {
   // Broad matches are dropped from a text search and from the "anyone" view. The "around now"
   // view keeps those who are in the requester's own zone right now, after every specific match
   // on the page; that is the only place this module changes the order Elasticsearch returned.
-  const broad = new Set(all.filter((h) => isBroad(h, q.legs, me, topics.common)));
+  const broad = new Set(all.filter((h) => isBroad(h, q.legs, me, topics.common, { unknown: 'specific' })));
   const sameZone = (h) => isAround(me) && isAround(h._source ?? {}) && h._source.presence_zone === me.presence_zone;
   const specific = all.filter((h) => !broad.has(h));
   const hits = query || when !== 'around_now' ? specific : [...specific, ...all.filter((h) => broad.has(h) && sameZone(h))];

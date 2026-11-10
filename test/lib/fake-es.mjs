@@ -8,9 +8,15 @@
 // range, match_all, knn, multi_match, distance_feature, standard and rrf retrievers, a terms
 // aggregation) well enough to exercise the routes; it ranks nothing. `fake.inject` lets a test
 // answer one call itself, to inject a failure.
+//
+// A knn query matches every document whose source field has text, at a cosine of 1, unless a
+// test sets `fake.cosine(modelText, passage)`; a knn `similarity` then keeps only the documents
+// at or above it, as Elasticsearch does. With `explain: true` an rrf search explains each hit in
+// the shape Elasticsearch 9.5.6 returns on the people index (test/lib/rrf-explanation.mjs).
 
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
+import { rrfExplanation } from './rrf-explanation.mjs';
 
 export const ES_HOST = 'es.caddie.test';
 export const PUSH_HOST = 'push.caddie.test';
@@ -64,7 +70,12 @@ export function matches(q, id, src) {
     const x = toMs(v);
     return !((r.gt !== undefined && !(x > toMs(r.gt))) || (r.gte !== undefined && !(x >= toMs(r.gte))) || (r.lt !== undefined && !(x < toMs(r.lt))) || (r.lte !== undefined && !(x <= toMs(r.lte))));
   }
-  if (q.knn) return (!q.knn.filter || matches(q.knn.filter, id, src)) && Boolean(src[SEMANTIC_BASE[q.knn.field]]);
+  if (q.knn) {
+    const passage = src[SEMANTIC_BASE[q.knn.field]];
+    if ((q.knn.filter && !matches(q.knn.filter, id, src)) || !passage) return false;
+    const model = q.knn.query_vector_builder?.text_embedding?.model_text ?? '';
+    return q.knn.similarity === undefined || (fake.cosine ? fake.cosine(model, passage) : 1) >= q.knn.similarity;
+  }
   if (q.multi_match) {
     const words = q.multi_match.query.toLowerCase().split(/\W+/).filter(Boolean);
     return q.multi_match.fields.some((f) => words.some((w) => String(src[f] ?? '').toLowerCase().includes(w)));
@@ -80,6 +91,7 @@ export const fake = {
   calls: [], // { method, index, op, id, body }
   pushes: [], // { endpoint, payload }
   inject: null, // (call) => Response | undefined
+  cosine: null, // (modelText, passage) => the cosine a knn query sees; null for 1 everywhere
   seq: 1,
   store(name) {
     if (!this.indices.has(name)) this.indices.set(name, new Map());
@@ -97,6 +109,7 @@ export const fake = {
     this.calls.length = 0;
     this.pushes.length = 0;
     this.inject = null;
+    this.cosine = null;
     this.put('caddie-conferences', EVENT, { slug: EVENT, status: 'searchable', end_date: '2099-12-31', time_zone: 'UTC' });
     for (const [i, t] of ['kubernetes', 'ai', 'cloud', 'security', 'observability', 'platform', 'gitops', 'networking', 'storage', 'wasm', 'ebpf', 'gpu', 'postgres'].entries()) {
       this.put('caddie-topics', `${EVENT}:${t}`, { conference: EVENT, topic_id: t, label: t, talk_count: 100 - i });
@@ -113,10 +126,12 @@ export const fake = {
 function search(name, body) {
   let filterQ = body.query;
   let legs = null;
+  let names = [];
   if (body.retriever) {
     if (body.retriever.rrf) {
       filterQ = body.retriever.rrf.filter;
       legs = body.retriever.rrf.retrievers.map((r) => r.standard.query);
+      names = body.retriever.rrf.retrievers.map((r, i) => r.standard._name ?? `${i}`);
     } else {
       filterQ = body.retriever.standard.filter;
       legs = [body.retriever.standard.query];
@@ -124,12 +139,13 @@ function search(name, body) {
   }
   let hits = [...fake.store(name)].filter(([id, d]) => matches(filterQ, id, d.source));
   if (legs) hits = hits.filter(([id, d]) => legs.some((q) => matches(q, id, d.source)));
+  // Each retriever's ranks, in store order, for the explanation.
+  const ranksOf = legs ? legs.map((q) => new Map(hits.filter(([id, d]) => matches(q, id, d.source)).map(([id], i) => [id, i + 1]))) : [];
   const from = body.from ?? 0;
   const page = hits.slice(from, from + (body.size ?? 10)).map(([id, d]) => {
     const hit = { _id: id, _source: pick(d.source, body._source), _seq_no: d.seq, _primary_term: 1 };
-    if (body.explain && legs) {
-      hit._explanation = { value: 1, details: legs.map((q, i) => (matches(q, id, d.source) ? { value: i + 1, description: `rrf score for rank [${i + 1}]` } : { value: 0, description: 'result not found in query' })) };
-    }
+    if (body.explain && legs && body.retriever.rrf) hit._explanation = rrfExplanation(ranksOf.map((m) => m.get(id) ?? 0), names);
+    else if (body.explain && legs) hit._explanation = { value: 1, description: 'sum of:', details: [] };
     return hit;
   });
   const res = { hits: { total: { value: hits.length }, hits: page } };
@@ -296,4 +312,4 @@ export const profileBody = (name, o = {}, open = true) => ({
 
 /** An Elasticsearch error response. */
 export const esError = (status, type, reason = 'error') => json({ error: { root_cause: [{ type, reason }], type, reason }, status }, status);
-export { json };
+export { json, rrfExplanation };
