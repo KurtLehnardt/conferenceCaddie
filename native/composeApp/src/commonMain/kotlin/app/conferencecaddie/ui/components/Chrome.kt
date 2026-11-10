@@ -3,6 +3,8 @@ package app.conferencecaddie.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -172,7 +174,8 @@ fun <T> NavBar(items: List<NavItem<T>>, selected: T?, onSelect: (T) -> Unit, mod
 /**
  * The wide layout's side rail (.nav at min-width 768px): the web app's icon on top, then the same
  * destinations as [NavBar], each at least 64 dp tall, on the surface colour with a hairline on the right. It
- * stays clear of the status bar, the display cutout and the navigation bar.
+ * stays clear of the status bar, the display cutout and the navigation bar, and scrolls when the
+ * window is too short for all of it.
  */
 @Composable
 fun <T> NavRail(items: List<NavItem<T>>, selected: T?, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
@@ -187,6 +190,8 @@ fun <T> NavRail(items: List<NavItem<T>>, selected: T?, onSelect: (T) -> Unit, mo
                         .union(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)),
                 )
                 .width(d.railWidth - 1.dp)
+                // A phone in landscape can be shorter than the icon and four tabs.
+                .verticalScroll(rememberScrollState())
                 .padding(top = 12.dp)
                 .selectableGroup()
                 .semantics { isTraversalGroup = true },

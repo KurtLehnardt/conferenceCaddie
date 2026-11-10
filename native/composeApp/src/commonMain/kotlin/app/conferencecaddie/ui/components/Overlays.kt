@@ -48,7 +48,8 @@ import app.conferencecaddie.ui.theme.Caddie
 /**
  * .sheet: a bottom sheet with the web's handle, a header with [title] and a close button named
  * [closeLabel], a scrolling body, and an optional [footer] row above a hairline (the Filters sheet's
- * "Clear all" and "Show 12 talks").
+ * "Clear all" and "Show 12 talks"). With [scrollable] false the body does not scroll itself, for
+ * content that scrolls on its own, such as a LazyColumn.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,6 +59,7 @@ fun CaddieSheet(
     modifier: Modifier = Modifier,
     closeLabel: String = Strings.Common.CLOSE,
     footer: (@Composable RowScope.() -> Unit)? = null,
+    scrollable: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Caddie.colors
@@ -90,7 +92,10 @@ fun CaddieSheet(
                 CaddieIconButton(LucideIcon.X, closeLabel, onClose, iconSize = 22.dp)
             }
             Column(
-                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = d.gutter),
+                Modifier
+                    .weight(1f, fill = false)
+                    .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                    .padding(horizontal = d.gutter),
                 content = content,
             )
             if (footer != null) {

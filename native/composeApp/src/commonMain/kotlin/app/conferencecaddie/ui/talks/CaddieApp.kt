@@ -55,6 +55,7 @@ import app.conferencecaddie.ui.shell.ShellState
 import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.shell.TabContent
 import app.conferencecaddie.ui.shell.isWebLink
+import app.conferencecaddie.ui.shell.pendingAfterSwitch
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.CaddieTheme
@@ -166,10 +167,10 @@ fun CaddieApp(
             onChangeServer = { base ->
                 // A server from a link or QR code never gets the debug builds' local http exception;
                 // only one typed in Settings does. A link's base is always https, so a typed http
-                // base is never taken for it. The shell asks about a typed server before a pending
-                // link, so a link still waits after a typed server is confirmed.
+                // base is never taken for it. A link that arrived while a typed server was being
+                // confirmed stays pending (pendingAfterSwitch), and the shell asks about it next.
                 val fromLink = base == pendingConnect
-                if (fromLink) onConnectHandled()
+                pendingConnect = pendingAfterSwitch(pendingConnect, base)
                 if (base == Defaults.BACKEND) {
                     core.setBackend(null)
                 } else {

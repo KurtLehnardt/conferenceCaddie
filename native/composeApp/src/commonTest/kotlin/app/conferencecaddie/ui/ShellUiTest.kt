@@ -31,6 +31,7 @@ import app.conferencecaddie.ui.shell.ShellActions
 import app.conferencecaddie.ui.shell.ShellState
 import app.conferencecaddie.ui.shell.StandaloneShell
 import app.conferencecaddie.ui.shell.Tab
+import app.conferencecaddie.ui.shell.pendingAfterSwitch
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.ThemePreference
 import kotlin.test.Test
@@ -227,6 +228,41 @@ class ShellUiTest {
     }
 
     @Test
+    fun confirmingATypedServerKeepsAWaitingLinkForTheNextQuestion() = runComposeUiTest {
+        val link = "https://kurtlehnardt.github.io/conferenceCaddie"
+        val changed = mutableListOf<String>()
+        var current by mutableStateOf(state())
+        setContent {
+            App(
+                current,
+                ShellActions(
+                    // As ShellActions.onChangeServer asks: clear the link only when it was the one answered.
+                    onChangeServer = {
+                        changed += it
+                        current = current.copy(serverBase = it, pendingConnect = pendingAfterSwitch(current.pendingConnect, it))
+                    },
+                ),
+            )
+        }
+
+        onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
+        typeServer("https://caddie.example.net")
+        saveServer()
+        current = current.copy(pendingConnect = link)
+        waitForIdle()
+
+        // Switching to the typed server answers that question only; the link is asked next.
+        onNodeWithText(Strings.Connect.SWITCH).performClick()
+        waitForIdle()
+        assertEquals(listOf("https://caddie.example.net"), changed)
+        onNodeWithText(Strings.Connect.prompt(link)).assertIsDisplayed()
+        onNodeWithText(Strings.Connect.SWITCH).performClick()
+        waitForIdle()
+        assertEquals(listOf("https://caddie.example.net", link), changed)
+        onNodeWithTag("connect-confirmation").assertDoesNotExist()
+    }
+
+    @Test
     fun theThemeSettingReportsTheChoice() = runComposeUiTest {
         var chosen: ThemePreference? = null
         setContent { App(state(), ShellActions(onThemeChange = { chosen = it })) }
@@ -356,6 +392,23 @@ class ShellUiTest {
         onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
         onNodeWithTag("settings-screen").assertIsDisplayed()
         onNodeWithTag("tab-Search").assertIsNotSelected()
+    }
+
+    @Test
+    fun theRailShowsEveryTabOnAShortWindowAndScrollsOnAShorterOne() = runComposeUiTest {
+        var height by mutableStateOf(360.dp)
+        setContent { TestDevice(DpSize(780.dp, height)) { App(state(peopleEnabled = true)) } }
+        val labels = listOf(Strings.Tabs.PEOPLE, Strings.Tabs.FOR_YOU, Strings.Tabs.SEARCH, Strings.Tabs.INTERESTED)
+
+        onNodeWithTag("nav-rail").assertIsDisplayed()
+        for (label in labels) onNodeWithTag("tab-$label").assertIsDisplayed()
+
+        // Shorter than the icon and four tabs: the rail scrolls, and every tab can still be reached.
+        height = 260.dp
+        waitForIdle()
+        for (label in labels) onNodeWithTag("tab-$label").performScrollTo().assertIsDisplayed()
+        onNodeWithTag("tab-${Strings.Tabs.INTERESTED}").performClick()
+        onNodeWithTag("tab-${Strings.Tabs.INTERESTED}").assertIsSelected()
     }
 
     @Test
