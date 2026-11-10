@@ -13,7 +13,7 @@
 //   of scanning whole tables (rows read are a daily cap).
 // - a partial index on people.text_pending, so the embedding retry reads only pending rows.
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -159,14 +159,51 @@ CREATE INDEX IF NOT EXISTS nudge_sends_receiver ON nudge_sends(receiver_id, sent
 CREATE INDEX IF NOT EXISTS nudge_sends_expires ON nudge_sends(expires_at_ms);
 `;
 
-// Brings a ConferenceDO database up to SCHEMA_VERSION. Every statement is idempotent, so a crash
-// part way through is repaired by the next run.
+// Version 2 (the free-stack review, 2026-11-10):
+// - blocks.blocked_ref and blocks.expires_at_ms. A block belongs to its blocker and outlives the
+//   blocked profile until the conference ends (server/connect.mjs, docs/contracts/people-api.md),
+//   so it keeps the blocked person's ref, for the blocks list and for unblocking after that profile
+//   is gone, and its own expiry, which the purge honours. Rows written before version 2 have both
+//   null: the ref is computed when it is needed, and the purge gives them the conference's end.
+// - presence.presence_nonce and presence.ble_master_id: the derived-token session of Bluetooth
+//   tokens v1 (docs/contracts/ble-tokens.md). The nonce is 16 bytes as base64url; no key is stored.
+//   presence.ble_rotated: the session's legacy token was rotated, which only the old Android app
+//   does, so a session under a retired master is answered for it instead of 403 ble_rekey.
+// - ble_caps: whom Bluetooth sightings answers returned to each requesting device, for the caps of
+//   the Phase 4 mitigations (10 new people per token window, 30 per rolling hour). Pruned to the
+//   last hour on every write, kept across presence sessions, and deleted with the profile.
+const V2_COLUMNS = [
+  ['blocks', 'blocked_ref', 'TEXT'],
+  ['blocks', 'expires_at_ms', 'INTEGER'],
+  ['presence', 'presence_nonce', 'TEXT'],
+  ['presence', 'ble_master_id', 'TEXT'],
+  ['presence', 'ble_rotated', 'INTEGER'],
+];
+const V2 = `
+CREATE INDEX IF NOT EXISTS blocks_expires ON blocks(expires_at_ms);
+CREATE TABLE IF NOT EXISTS ble_caps (
+  profile_id TEXT NOT NULL, ref TEXT NOT NULL, at_ms INTEGER NOT NULL, w INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ble_caps_profile ON ble_caps(profile_id, at_ms);
+`;
+
+// Adds a column unless the table already has it, so a run interrupted after the ALTER is repaired
+// by the next one (ALTER TABLE ADD COLUMN itself is not idempotent).
+function addColumn(sql, table, column, type) {
+  const have = sql.exec(`PRAGMA table_info(${table})`).toArray().some((c) => c.name === column);
+  if (!have) sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
+// Brings a ConferenceDO database up to SCHEMA_VERSION. Every step is idempotent, so a crash part
+// way through is repaired by the next run.
 export function migrate(sql) {
   sql.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
   const row = sql.exec("SELECT v FROM meta WHERE k = 'schema_version'").toArray()[0];
   const current = row ? Number(row.v) : 0;
   if (current >= SCHEMA_VERSION) return;
-  sql.exec(V1);
+  if (current < 1) sql.exec(V1);
+  for (const [table, column, type] of V2_COLUMNS) addColumn(sql, table, column, type);
+  sql.exec(V2);
   sql.exec("INSERT INTO meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(SCHEMA_VERSION));
 }
 
@@ -184,6 +221,21 @@ CREATE TABLE IF NOT EXISTS conferences (
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 `;
 
+// has_object: the conference's ConferenceDO has been given its document (it was searchable once),
+// so it may hold people, and owner deletes, the admin routes and the cron still reach it after its
+// status turns unavailable. holds: what the last cron call found in it (people, presence, blocks,
+// meets, push subscriptions and nudge records), so the cron keeps purging a conference that still
+// holds personal data, whatever its status and end date.
 export function migrateDirectory(sql) {
   sql.exec(DIRECTORY_V1);
+  const cols = new Set(sql.exec('PRAGMA table_info(conferences)').toArray().map((c) => c.name));
+  if (!cols.has('has_object')) {
+    sql.exec('ALTER TABLE conferences ADD COLUMN has_object INTEGER NOT NULL DEFAULT 0');
+    sql.exec("UPDATE conferences SET has_object = 1 WHERE status = 'searchable'");
+  }
+  // Until the cron has looked, an object is assumed to hold data, so it is visited at least once.
+  if (!cols.has('holds')) {
+    sql.exec('ALTER TABLE conferences ADD COLUMN holds INTEGER NOT NULL DEFAULT 0');
+    sql.exec('UPDATE conferences SET holds = 1 WHERE has_object = 1');
+  }
 }

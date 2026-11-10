@@ -31,6 +31,12 @@
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
+//   SMOKE_BLE=1          run the Bluetooth resolution checks (ble2) against a remote API. They put test
+//                        profiles with a specific match around, so they run by default only against a
+//                        local API (localhost or 127.0.0.1), never next to real attendees.
+//   SMOKE_UNAVAILABLE=<slug>  with an admin token and a local API: flip that conference to unavailable
+//                        for check unav1 (an owner can still delete) and restore it. Never against a
+//                        deployed Worker, because the conference would vanish from the app meanwhile.
 //   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only against Cloud Run, and only
 //                        when there is no admin token, to write and remove one expired test profile
 //                        directly, because the API can never create one, and to age one test profile's
@@ -55,6 +61,8 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { validator } from '../contracts/js/schemas.mjs';
+import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -165,6 +173,9 @@ const LEARN = ['ebpf', 'gpu', 'llm'];
 // empty while they are around: a nudge is looked for without a search text, so it reads topics,
 // interests and expertise and never about, and a semantic neighbour cannot pick them either.
 const runTag = crypto.randomBytes(4).toString('hex');
+// A local API (wrangler dev or a local server): checks that need test profiles with a specific match
+// to be around, or a conference to be flipped, run only here unless asked for.
+const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
 // What A wants to learn (A's interests) and B, C, R and the expired profile have worked on (their
 // expertise; B also wants it, so B finds R).
 const SMOKE_SUBJECT = `zqvsmoke${runTag} vexmorlith quabbit flarnishing`;
@@ -446,6 +457,7 @@ const names = (results) => (results ?? []).map((p) => p.display_name);
 // ---------------------------------------------------------------------------------------------
 // Conferences.
 
+const NOT_WORKER_WHY_EARLY = 'the API is not the Worker (same-origin, no CORS)';
 let conferences = [];
 await check('conf: GET /api/conferences lists the conferences', async () => {
   const { status, json } = await api('GET', '/api/conferences');
@@ -459,11 +471,34 @@ await check('conf: GET /api/conferences lists the conferences', async () => {
 });
 const confBySlug = new Map(conferences.map((c) => [c.slug, c]));
 
+// The Worker's capabilities document (docs/contracts/capabilities.md), validated as a producer's,
+// in closed mode. Later checks read ble.mode from it.
+let capsDoc = null;
+if (!IS_WORKER) {
+  skip('cap1: GET /api/capabilities serves a valid tier 2 document', NOT_WORKER_WHY_EARLY);
+} else {
+  await check('cap1: GET /api/capabilities serves a valid tier 2 document', async () => {
+    const res = await fetch(`${API_BASE}/api/capabilities`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    const text = await res.text();
+    otherResponses.push({ label: 'capabilities', path: '/api/capabilities', text, headersText: headerText(res.headers) });
+    const problems = [];
+    if (res.status !== 200) throw new Error(`status ${res.status}`);
+    capsDoc = JSON.parse(text);
+    const v = validator('capabilities.v1')(capsDoc, { closed: true });
+    if (!v.valid) problems.push(`schema: ${v.errors.slice(0, 3).map((e) => `${e.path} ${e.message}`).join('; ')}`);
+    if (capsDoc.tier !== 'free') problems.push(`tier ${capsDoc.tier}`);
+    if (capsDoc.talks?.bundle_base !== 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/') problems.push(`bundle_base ${capsDoc.talks?.bundle_base}`);
+    if (!/public/.test(res.headers.get('cache-control') ?? '') || !/max-age=300/.test(res.headers.get('cache-control') ?? '')) problems.push(`Cache-Control ${res.headers.get('cache-control')}`);
+    if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
+    report(problems.length === 0, 'cap1: GET /api/capabilities serves a valid tier 2 document', problems.length ? problems.join('; ') : `closed-mode valid, ble.mode ${capsDoc.ble?.mode}, people.semantic ${capsDoc.people?.semantic}`);
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Cross-origin behaviour of the Worker. Cloud Run serves the app and the API from one origin and sends
 // no CORS headers, so the checks that need the Worker are skipped there.
 
-const NOT_WORKER_WHY = 'the API is not the Worker (same-origin, no CORS)';
+const NOT_WORKER_WHY = NOT_WORKER_WHY_EARLY;
 const listHas = (value, item) => (value ?? '').split(',').map((x) => x.trim().toLowerCase()).includes(item.toLowerCase());
 const hasCorsHeader = (headers) => [...headers.keys()].some((k) => k.toLowerCase().startsWith('access-control-'));
 
@@ -1061,6 +1096,16 @@ await check('im3: a PDF goes through the attachment processor and finds the same
   if (status !== 200) throw new Error(`status ${status}${json.error ? `: ${json.error}` : ''}`);
   const exact = exactHits(json);
   report(exact >= 4, 'im3: a PDF goes through the attachment processor and finds the same talks', `${exact} of ${picks.length} at exact title, ${json.extracted_chars} characters extracted`);
+});
+
+await check('im3b: text the browser extracted from a PDF, sent with its file name and type, finds the same talks', async () => {
+  // The Pages build (VITE_CLIENT_EXTRACT=1) reads a PDF, Word or OpenDocument file in the browser
+  // and sends { filename, mime: 'text/plain', text }; filename and mime are only format hints.
+  const pdf = makePdf(importBody.split('\n'));
+  const { status, json } = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'schedule.pdf', mime: 'text/plain', text: extractPdfText(pdf) });
+  if (status !== 200) throw new Error(`status ${status}${json.error ? `: ${json.error}` : ''}`);
+  const exact = exactHits(json);
+  report(exact >= 4, 'im3b: text the browser extracted from a PDF, sent with its file name and type, finds the same talks', `${exact} of ${picks.length} at exact title`);
 });
 
 await check('im4: a 6 MB upload gets 413, and unknown keys, binary files and unknown conferences are refused', async () => {
@@ -1888,6 +1933,130 @@ try {
     if (!orders[0].length) problems.push('no results');
     if (distinct.size !== 1) problems.push(`${distinct.size} different orders in 5 identical requests`);
     report(problems.length === 0, 'r8: the same For you request made five times returns the same talk order', problems.length ? problems.join('; ') : `5 requests, one order of ${orders[0].length} talks for "${topic}"`);
+  });
+
+  await check('q8c: a block outlives the blocked profile: a re-created profile stays blocked, and the block can still be lifted', async () => {
+    // Blocks belong to the blocker (docs/contracts/people-api.md). Both profiles have only about
+    // text, which nudges never read, so being around for the ask cannot nudge anyone.
+    const BL = newDevice();
+    const BD = newDevice();
+    const word = `zqvblock${runTag}`;
+    const aboutBL = `untangles glimberwick ${word} sprockets`;
+    const aboutBD = `polishes quorbial ${word} flanges`;
+    await putProfile(BL, PRIMARY, 'BL', { about: aboutBL }, { open: true });
+    await putProfile(BD, PRIMARY, 'BD', { about: aboutBD }, { open: true });
+    const find = (device, label, query) => api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], query }, { device, label });
+    const refBD = ((await find(BL, 'BL-find', `quorbial ${word} flanges`)).json.results ?? []).find((p) => p.display_name === testName('BD'))?.ref;
+    const refBL = ((await find(BD, 'BD-find', `glimberwick ${word} sprockets`)).json.results ?? []).find((p) => p.display_name === testName('BL'))?.ref;
+    if (!refBD || !refBL) throw new Error('the two profiles did not find each other');
+    const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refBD }, { device: BL, label: 'BL-block' });
+    const gone = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: BD, label: 'BD-delete' });
+    const listGone = await api('GET', `/api/people/blocks?event=${PRIMARY}`, undefined, { device: BL, label: 'BL-blocks' });
+    await putProfile(BD, PRIMARY, 'BD', { about: aboutBD }, { open: true });
+    const fromBD = await find(BD, 'BD-find', `glimberwick ${word} sprockets`);
+    await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: BL, label: 'BL-presence' });
+    await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: BD, label: 'BD-presence' });
+    const ask = await api('POST', '/api/meet', { event: PRIMARY, ref: refBL, topic_id: null, note: '' }, { device: BD, label: 'BD-meet' });
+    const un = await api('DELETE', '/api/people/block', { event: PRIMARY, ref: refBD }, { device: BL, label: 'BL-block' });
+    const listAfter = await api('GET', `/api/people/blocks?event=${PRIMARY}`, undefined, { device: BL, label: 'BL-blocks' });
+    await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: BL, label: 'BL-presence' });
+    await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: BD, label: 'BD-presence' });
+    if (ask.status === 200) await api('POST', `/api/meet/${ask.json.meet_id}/cancel`, {}, { device: BD, label: 'BD-meet' });
+    const problems = [];
+    if (blk.status !== 200 || gone.status !== 200) problems.push(`block ${blk.status}, delete ${gone.status}`);
+    const row = (listGone.json.blocks ?? []).find((b) => b.ref === refBD);
+    if (!row || row.display_name !== null || !(listGone.json.refs ?? []).includes(refBD)) problems.push(`after the delete the blocks list holds ${JSON.stringify(listGone.json)}`);
+    if (names(fromBD.json.results).includes(testName('BL'))) problems.push('the re-created profile finds the blocker');
+    if (ask.status !== 403 || ask.json.error !== 'blocked') problems.push(`the re-created profile's ask gave ${ask.status} ${JSON.stringify(ask.json)}`);
+    if (un.status !== 200 || (listAfter.json.blocks ?? []).length !== 0) problems.push(`unblock gave ${un.status}, list after ${JSON.stringify(listAfter.json)}`);
+    report(problems.length === 0, 'q8c: a block outlives the blocked profile: a re-created profile stays blocked, and the block can still be lifted', problems.length ? problems.join('; ') : 'listed with display_name null, still hidden and 403 blocked after re-creating, unblocked by ref');
+  });
+
+  // Bluetooth. ble1 needs no match: a profile with only the common topic, so it is safe anywhere.
+  const tokenOf = (keyText, dw = 0) => encodeToken(deriveToken(decodeKey(keyText), windowOf(Date.now() / 1000) + BigInt(dw)));
+  await check('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', async () => {
+    if (!IS_WORKER || !capsDoc) {
+      skip('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', 'no capabilities document');
+      return;
+    }
+    const BT = newDevice();
+    await putProfile(BT, PRIMARY, 'BT', { speak: [COMMON_TOPIC] }, { open: true });
+    const on = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: BT, label: 'BT-presence' });
+    const derived = capsDoc.ble?.mode === 'derived-v1';
+    const problems = [];
+    const pv = validator('people-api.v1', 'PresencePutResponse')(on.json, { closed: true });
+    if (on.status !== 200 || !pv.valid) problems.push(`presence gave ${on.status}${pv.valid ? '' : `, schema: ${pv.errors[0]?.path} ${pv.errors[0]?.message}`}`);
+    if (derived && !(/^[A-Za-z0-9_-]{43}$/.test(on.json.ble_key ?? '') && /^[A-Za-z0-9_-]{11}$/.test(on.json.ble_key_id ?? ''))) problems.push('derived-v1 but no ble_key and ble_key_id');
+    if (!derived && (on.json.ble_key || !on.json.ble?.token)) problems.push('server-rotate but no legacy token, or a key');
+    const own = derived ? tokenOf(on.json.ble_key) : on.json.ble?.token;
+    const sight = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: -40 }, { token: crypto.randomBytes(16).toString('base64url'), rssi: -40 }] }, { device: BT, label: 'BT-sightings' });
+    const sv = validator('people-api.v1', 'SightingsResponse')(sight.json, { closed: true });
+    if (sight.status !== 200 || !sv.valid || (sight.json.nearby ?? []).length !== 0) problems.push(`own and unknown tokens gave ${sight.status} ${JSON.stringify(sight.json)}`);
+    if (derived && sight.json.ble_key_id !== on.json.ble_key_id) problems.push('the sightings answer does not name the current key');
+    const off = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: false }, { device: BT, label: 'BT-presence' });
+    const after = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: -40 }] }, { device: BT, label: 'BT-sightings' });
+    if (off.status !== 200 || after.status !== 403 || after.json.error !== 'ble_required') problems.push(`after ble:false sightings gave ${after.status} ${JSON.stringify(after.json)}`);
+    await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: BT, label: 'BT-presence' });
+    report(problems.length === 0, 'ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', problems.length ? problems.join('; ') : `${capsDoc.ble?.mode}: ${derived ? 'key and key id once, ' : ''}own and unknown tokens resolve nobody, 403 ble_required after ble:false`);
+  });
+
+  await check('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', async () => {
+    if (!IS_WORKER || !capsDoc || capsDoc.ble?.mode === 'none') {
+      skip('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', 'no Bluetooth on this backend');
+      return;
+    }
+    if (!LOCAL_API && process.env.SMOKE_BLE !== '1') {
+      skip('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
+      return;
+    }
+    const derived = capsDoc.ble.mode === 'derived-v1';
+    const word = `zqvble${runTag}`;
+    const BR = newDevice();
+    await putProfile(BR, PRIMARY, 'BR', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+    await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: BR, label: 'BR-presence' });
+    const tokens = [];
+    const around = [BR];
+    for (let i = 0; i < 12; i++) {
+      const d = newDevice();
+      around.push(d);
+      await putProfile(d, PRIMARY, `BN${i}`, { expertise: `tuned ${word} glimmering quabbit rigs ${i}` }, { open: true });
+      const p = await api('PUT', '/api/presence', { event: PRIMARY, zone: i === 11 ? ZONE_F : ZONE_A, spot: '', ble: true }, { device: d, label: `BN${i}-presence` });
+      tokens.push(derived ? tokenOf(p.json.ble_key) : p.json.ble?.token);
+    }
+    const near = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: -50 })) }, { device: BR, label: 'BR-sightings' });
+    const far = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: -40 }] }, { device: BR, label: 'BR-sightings' });
+    for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble2-presence' });
+    const nearby = near.json.nearby ?? [];
+    const problems = [];
+    if (near.status !== 200) problems.push(`sightings gave ${near.status}`);
+    if (nearby.length !== 10) problems.push(`${nearby.length} of 11 co-located matches returned, expected the cap of 10`);
+    if (nearby.some((p) => p.zone !== ZONE_A)) problems.push('a same-zone person came without the zone');
+    if ((far.json.nearby ?? []).length !== 0) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
+    report(problems.length === 0, 'ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', problems.length ? problems.join('; ') : `${capsDoc.ble.mode}: 10 of 11 co-located matches, zone shown, another zone resolves nobody`);
+  });
+
+  await check('unav1: an owner can delete while the conference is unavailable', async () => {
+    const slug = process.env.SMOKE_UNAVAILABLE;
+    if (!slug || WRITE_MODE !== 'admin' || !LOCAL_API) {
+      skip('unav1: an owner can delete while the conference is unavailable', 'needs SMOKE_UNAVAILABLE=<slug>, an admin token and a local API');
+      return;
+    }
+    const doc = JSON.parse(readFileSync(join(ROOT, 'data', slug, 'conference.json'), 'utf8'));
+    const U = newDevice();
+    await putProfile(U, slug, 'U', {}, { open: true });
+    const flip = await admin('PUT', '/admin/conferences', { conferences: [{ ...doc, status: 'unavailable', status_reason: 'fetch_failed' }] });
+    const write = await api('PUT', '/api/people/profile', { event: slug, profile: profileBody(slug, 'U'), open_to_meet: true, shared_talk_ids: [] }, { device: U, label: 'U-put' });
+    const presence = await api('DELETE', `/api/presence?event=${slug}`, undefined, { device: U, label: 'U-presence' });
+    const del = await api('DELETE', `/api/people/profile?event=${slug}`, undefined, { device: U, label: 'U-delete' });
+    const stats = await admin('GET', `/admin/stats?event=${slug}`);
+    const restore = await admin('PUT', '/admin/conferences', { conferences: [doc] });
+    const problems = [];
+    if (flip.status !== 200) problems.push(`flip gave ${flip.status}`);
+    if (write.status !== 400) problems.push(`a profile write while unavailable gave ${write.status}`);
+    if (presence.status !== 200 || del.status !== 200) problems.push(`presence delete ${presence.status}, profile delete ${del.status}`);
+    if (stats.status !== 200) problems.push(`admin stats gave ${stats.status}`);
+    if (restore.status !== 200 || restore.json.searchable !== 1) problems.push(`restore gave ${restore.status}`);
+    report(problems.length === 0, 'unav1: an owner can delete while the conference is unavailable', problems.length ? problems.join('; ') : 'writes refused, presence and profile deletes and admin stats served, restored');
   });
 } catch (err) {
   report(false, 'people checks', err.message);

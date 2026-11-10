@@ -8,6 +8,7 @@
 import { ConferenceDO } from './conference.js';
 import { DirectoryDO } from './directory.js';
 import { CONFERENCE_ADMIN_PATHS } from './admin.js';
+import { capabilitiesDocument, CAPABILITIES_MAX_AGE_S } from './capabilities.js';
 import { json, isPlainObject, SLUG_RE, dailyLimitResponse, isDailyLimitError } from './lib/http.js';
 import { utcDay } from './lib/time.js';
 
@@ -22,6 +23,8 @@ const CAP_IMPORT = 1024 * KB;
 const CAP_ADMIN = 4 * 1024 * KB;
 const HEALTH_PER_MIN = 600;
 const VAPID_PER_MIN = 60;
+// Polled at every cold start of every app behind one venue address, so as generous as health.
+const CAPABILITIES_PER_MIN = 600;
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -34,8 +37,12 @@ const SECURITY_HEADERS = {
 //   style: which error messages today's server gives for a bad or unknown slug
 //   origin: a present but foreign Origin gets 403 cross-origin request
 //   cap: the body cap in bytes
+//   owner: an owner's delete or a read of what they made, served for any conference whose object
+//          exists (has_object), not only a searchable one, so nobody is locked out of deleting
+//          their data when a conference turns unavailable
 
 const people = (src) => ({ src, key: 'event', style: 'people', origin: true });
+const owner = (src) => ({ ...people(src), owner: true });
 const ROUTES = {
   '/api/search': { POST: { src: 'body', key: 'conference', style: 'search', origin: false, cap: CAP_SEARCH } },
   '/api/schedule': { GET: { src: 'query', key: 'event', style: 'schedule', origin: false } },
@@ -47,17 +54,17 @@ const ROUTES = {
   '/api/import/github': { POST: { src: 'body', key: 'event', style: 'valid', origin: true } },
   '/api/circles/counts': { POST: people('body') },
   '/api/circles/members': { POST: people('body') },
-  '/api/people/profile': { PUT: people('body'), DELETE: people('query') },
+  '/api/people/profile': { PUT: people('body'), DELETE: owner('query') },
   '/api/people/matches': { POST: people('body') },
-  '/api/people/block': { POST: people('body'), DELETE: people('body') },
-  '/api/people/blocks': { GET: people('query') },
+  '/api/people/block': { POST: people('body'), DELETE: owner('body') },
+  '/api/people/blocks': { GET: owner('query') },
   '/api/people/report': { POST: people('body') },
-  '/api/presence': { PUT: people('body'), DELETE: people('query') },
+  '/api/presence': { PUT: people('body'), DELETE: owner('query') },
   '/api/presence/ble/rotate': { POST: people('body') },
   '/api/presence/sightings': { POST: people('body') },
   '/api/meet': { POST: people('body') },
   '/api/meet/inbox': { GET: people('query') },
-  '/api/push/subscription': { PUT: people('body'), DELETE: people('body') },
+  '/api/push/subscription': { PUT: people('body'), DELETE: owner('body') },
 };
 const MEET_PATH_RE = /^\/api\/meet\/([A-Za-z0-9_-]{22})(?:\/(accept|decline|found|cancel|details))?$/;
 const MEET_METHODS = { '': 'GET', accept: 'POST', decline: 'POST', found: 'POST', cancel: 'POST', details: 'PUT' };
@@ -145,10 +152,15 @@ async function getDirectory(env, { fresh = false, early = false } = {}) {
   }
 }
 
-async function searchableSlug(env, slug, opts) {
-  let d = await getDirectory(env, opts);
-  if (d.bySlug.get(slug)?.status !== 'searchable' && !opts?.fresh) d = await getDirectory(env, { early: true });
-  return d.bySlug.get(slug)?.status === 'searchable';
+// True when the slug is searchable, or, with ownerRoute, when its object exists (has_object).
+async function servedSlug(env, slug, { ownerRoute = false, fresh = false } = {}) {
+  const ok = (d) => {
+    const c = d.bySlug.get(slug);
+    return c?.status === 'searchable' || (ownerRoute && c?.has_object === true);
+  };
+  let d = await getDirectory(env, { fresh });
+  if (!ok(d) && !fresh) d = await getDirectory(env, { early: true });
+  return ok(d);
 }
 
 async function slugForMeet(env, meetId) {
@@ -235,6 +247,13 @@ async function handleApi(request, env, url, originAllowed) {
   const path = url.pathname;
   const method = request.method;
 
+  if (path === '/api/capabilities') {
+    if (method !== 'GET' && method !== 'HEAD') throw reply(405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' });
+    const retry = take(`capabilities:${request.headers.get('cf-connecting-ip') || 'unknown'}`, CAPABILITIES_PER_MIN);
+    if (retry) throw reply(429, { error: 'Too many requests' }, { 'Retry-After': String(retry) });
+    return json(200, capabilitiesDocument(env), { 'Cache-Control': `public, max-age=${CAPABILITIES_MAX_AGE_S}`, 'Access-Control-Allow-Origin': '*' });
+  }
+
   if (path === '/api/health' || path === '/api/push/vapid') {
     if (method !== 'GET' && method !== 'HEAD') throw reply(405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' });
     const ip = request.headers.get('cf-connecting-ip') || 'unknown';
@@ -285,7 +304,7 @@ async function handleApi(request, env, url, originAllowed) {
     }
     if (typeof value !== 'string') throw reply(400, { error: errors.type });
     if (!SLUG_RE.test(value)) throw reply(400, { error: errors.bad });
-    if (!(await searchableSlug(env, value))) throw reply(400, { error: errors.unknown });
+    if (!(await servedSlug(env, value, { ownerRoute: spec.owner === true }))) throw reply(400, { error: errors.unknown });
     slug = value;
   }
 
@@ -324,10 +343,13 @@ async function handleAdmin(request, env, url) {
       body: raw ?? '',
     });
     if (!res.ok) return res;
-    const { upserted, searchable } = await res.json();
+    // searchable: the documents to copy into each conference's object (searchable ones, and those
+    // whose object exists, so it learns its status).
+    const { upserted, searchable: docs } = await res.json();
+    const searchable = docs.filter((c) => c.doc?.status === 'searchable');
     directory = null;
     let synced = 0;
-    for (const c of searchable) {
+    for (const c of docs) {
       const r = await callDo(conferenceStub(env, c.slug), 'https://conference.internal/internal/conference', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Caddie-Slug': c.slug },
@@ -342,7 +364,10 @@ async function handleAdmin(request, env, url) {
   if (!CONFERENCE_ADMIN_PATHS.has(path)) throw reply(404, { error: 'Not found' });
   const slug = url.searchParams.get('event');
   if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw reply(400, { error: 'event must be a conference slug' });
-  if (!(await searchableSlug(env, slug, { fresh: true }))) throw reply(400, { error: 'conference is not available' });
+  // Any conference the directory knows: the operator's moderation, stats and test routes must reach
+  // a conference whose status turned unavailable.
+  const known = (await getDirectory(env, { fresh: true })).bySlug.has(slug);
+  if (!known) throw reply(400, { error: 'conference is not available' });
   return callDo(conferenceStub(env, slug), `https://conference.internal${path}${url.search}`, {
     method,
     headers: forwardHeaders(request, slug),
@@ -355,7 +380,7 @@ async function handleAdmin(request, env, url) {
 
 function template(path) {
   if (MEET_PATH_RE.test(path)) return path.split('/').length > 4 ? '/api/meet/:id/:action' : '/api/meet/:id';
-  if (ROUTES[path] || CONFERENCE_ADMIN_PATHS.has(path) || ['/api/health', '/api/push/vapid', '/api/conferences', '/admin/conferences'].includes(path)) return path;
+  if (ROUTES[path] || CONFERENCE_ADMIN_PATHS.has(path) || ['/api/health', '/api/capabilities', '/api/push/vapid', '/api/conferences', '/admin/conferences'].includes(path)) return path;
   return path.startsWith('/admin/') ? '/admin/other' : path.startsWith('/api/') ? '/api/other' : '/other';
 }
 
@@ -428,8 +453,9 @@ export default {
     return response;
   },
 
-  // Every 10 minutes: purge, expiry and embedding retries in each recent searchable conference,
-  // and the cross-conference usage totals (PLAN sections 1.5, 1.10 and 1.14).
+  // Every 10 minutes: purge, expiry and embedding retries in each conference the directory's
+  // cron targets name (recent ones, and any whose object still holds personal data, whatever its
+  // status), and the cross-conference usage totals (PLAN sections 1.5, 1.10 and 1.14).
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runCron(env));
   },
@@ -446,6 +472,7 @@ async function runCron(env) {
   const day = utcDay(Date.now());
   const prev = usageDay === day && isPlainObject(usage) ? usage : {};
   const results = {};
+  const holds = {};
   await Promise.all(
     targets.map(async ({ slug }) => {
       const others = { requests: 0, rows_read: 0, rows_written: 0 };
@@ -464,6 +491,7 @@ async function runCron(env) {
         if (r.ok) {
           const u = await r.json();
           results[slug] = { day: u.day, requests: u.requests, rows_read: u.rows_read, rows_written: u.rows_written };
+          if (Number.isFinite(u.holds)) holds[slug] = u.holds;
         }
       } catch (err) {
         console.error(`cron call failed: ${err?.name ?? 'Error'}`);
@@ -473,7 +501,7 @@ async function runCron(env) {
   await dir.fetch('https://directory.internal/internal/usage', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ day, usage: results }),
+    body: JSON.stringify({ day, usage: results, holds }),
   });
   console.log(`cron conferences=${targets.length} answered=${Object.keys(results).length}`);
 }

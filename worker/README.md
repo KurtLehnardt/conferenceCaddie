@@ -51,7 +51,13 @@ npx wrangler dev --local --port 8787
 
   The proxy reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from its own environment, so
   the token never enters the Worker or `.dev.vars`. `node scripts/dev-vars.mjs` without
-  `--real-ai` switches back to fake vectors. `EMBED_PROXY` is never set in `wrangler.toml`.
+  `--real-ai` switches back to fake vectors. `EMBED_PROXY` is never set in `wrangler.toml`. The
+  proxy forwards the Worker's `pooling: "cls"`, so local vectors match the deployed Worker's and
+  the talk bundles' (`src/lib/embed.js`, Embedding conventions).
+- Bluetooth derived tokens v1 in a local run: `node scripts/dev-vars.mjs --ble` adds a random
+  development `BLE_MASTER_KEYRING`; without it the local Worker serves legacy tokens only
+  (`ble.mode: server-rotate` in `GET /api/capabilities`). `node scripts/ble-parity.mjs` checks the
+  Worker's Bluetooth code against `contracts/fixtures/ble/` with no Worker running.
 - Parallel local runs use port 8787 plus a task number, so they do not collide.
 - To exercise the Cron Trigger, start with `npx wrangler dev --local --port 8787 --test-scheduled`
   and request `http://localhost:8787/__scheduled?cron=*/10+*+*+*+*`.
@@ -112,6 +118,8 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    `~/.config/conference-caddie/admin-token` with mode 0600 (for the smoke, migration and
    moderation runs). `--only-missing` skips names the Worker already has. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.
+   The first `BLE_MASTER_KEYRING` (Bluetooth derived tokens v1, one random master) is created
+   when the Worker has none and never replaced; rotate it by hand (docs/FREE_HOSTING.md).
    The output names secrets only.
 
 3. **Migrate the data** from the Elasticsearch backup (one time).
@@ -140,8 +148,9 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 
    The Pages workflow builds `web/` with `VITE_BASE=/conferenceCaddie/`,
    `VITE_API_BASE=$CADDIE_API_BASE` and `VITE_CLIENT_EXTRACT=1`, and fails when the variable is
-   empty. The weekly talk ingest (`.github/workflows/ingest.yml`) uses the same variable and the
-   `ADMIN_TOKEN` repository secret; start it by hand with `gh workflow run ingest.yml`.
+   empty, then builds the talk bundles into the same artifact (docs/BUNDLES.md). The weekly talk
+   ingest (`.github/workflows/ingest.yml`) uses the same variable and the `CADDIE_ADMIN_TOKEN`
+   repository secret; start it by hand with `gh workflow run ingest.yml`.
 
 5. **Run the smoke** against the live stack (next section).
 

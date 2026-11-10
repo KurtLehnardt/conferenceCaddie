@@ -40,7 +40,14 @@ const DISTANCE_PIVOT_M = 100;
 // matches at 0.65 to 0.93). Without a floor nearly every candidate joins every semantic leg, so
 // anyone who also shares a common topic outranks the one person whose text actually matches.
 // env.PEOPLE_SEMANTIC_FLOOR overrides the value; a model not listed here has no floor.
-const SEMANTIC_FLOOR = { '@cf/baai/bge-small-en-v1.5': 0.55 };
+// Those numbers were measured with Workers AI's default mean pooling. The embedding conventions
+// (lib/embed.js) call it with CLS pooling, which raises every cosine by about 0.05: re-measured on
+// 2026-11-10 over the 30 sample profiles of data/samples/people.json (one profile's interests
+// against another's expertise, 812 pairs), the unrelated median went from 0.58 to 0.64 and the best
+// match of five off-topic queries from 0.47-0.71 to 0.52-0.76. The old floor of 0.55 kept 70% of
+// the pairs that share no learn/speak topic under mean pooling; 0.61 keeps about the same share
+// (63% to 76% between 0.62 and 0.60) under CLS, so it is the floor for CLS vectors.
+const SEMANTIC_FLOOR = { '@cf/baai/bge-small-en-v1.5': 0.61 };
 function semanticFloor(ctx) {
   const v = Number.parseFloat(ctx.env?.PEOPLE_SEMANTIC_FLOOR ?? '');
   if (Number.isFinite(v)) return v;
@@ -129,7 +136,8 @@ export async function rankPeople(ctx, me, {
       return null;
     }
     try {
-      return await embedQuery(ctx, textValue);
+      // As a document, like the stored profile vectors it is compared with (lib/embed.js).
+      return await embedQuery(ctx, textValue, { instruction: false });
     } catch (err) {
       if (!(err instanceof EmbedUnavailable)) throw err;
       state.semantic = false;

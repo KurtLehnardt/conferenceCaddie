@@ -13,7 +13,7 @@
 import { forbidden } from './lib/http.js';
 import { hashSecret, secretMatches, refFor, sha256Hex } from './lib/device.js';
 import { toBlob, fromBlob } from './lib/vectors.js';
-import { embedPassages, semanticAvailable, modelOf, EmbedUnavailable } from './lib/embed.js';
+import { embedPassages, semanticAvailable, EmbedUnavailable, conventionsId, documentText } from './lib/embed.js';
 import { visibleUntilMs } from './lib/time.js';
 
 // Zones a person can say they are in, besides the conference's room names.
@@ -113,6 +113,9 @@ function presenceFromRow(r, location) {
     until_ms: r.until_ms,
     ble_token: r.ble_token ?? null,
     ble_token_until_ms: r.ble_token_until_ms ?? null,
+    presence_nonce: r.presence_nonce ?? null,
+    ble_master_id: r.ble_master_id ?? null,
+    ble_rotated: r.ble_rotated === 1,
     location: location ?? null,
   };
 }
@@ -235,18 +238,20 @@ export class Store {
     return this.#talks().byRowid.get(rowid) ?? null;
   }
 
-  // Map talk_id -> { title: Float32Array|null, chunks: [{ text, vec }] }.
+  // Map talk_id -> { doc: Float32Array|null, chunks: [{ text, vec }] }. doc is the vector of the
+  // talk's document text (title + "\n" + abstract, the bundle's); a 'title' row from before the
+  // embedding conventions stands in for it until the talk is embedded again.
   talkVectors() {
     if (!this.vectorsC) {
       const map = new Map();
       for (const r of this.sql('SELECT talk_id, part, chunk, vec FROM talk_vectors')) {
         let e = map.get(r.talk_id);
         if (!e) {
-          e = { title: null, chunks: [] };
+          e = { doc: null, chunks: [] };
           map.set(r.talk_id, e);
         }
         const vec = fromBlob(r.vec);
-        if (r.part === 'title') e.title = vec;
+        if (r.part === 'doc' || (r.part === 'title' && !e.doc)) e.doc = vec;
         else e.chunks.push({ text: r.chunk, vec, n: Number(String(r.part).split(':')[1]) || 0 });
       }
       for (const e of map.values()) {
@@ -550,13 +555,19 @@ export class Store {
     return p;
   }
 
-  // Deletes the rows of one person in every table (except reports). Runs inside a transaction.
+  // Deletes the rows of one person in every table (except reports, and the blocks other people
+  // made of this person). Runs inside a transaction.
+  //
+  // A block belongs to its blocker (server/connect.mjs, docs/contracts/people-api.md): it goes with
+  // the blocker's profile, with an unblock, or with the purge once its expires_at_ms (the end of the
+  // conference) has passed. The blocked person deleting their profile leaves it in place, so a
+  // profile re-created from the same device is still blocked.
   #deleteRows(id) {
     this.sql('DELETE FROM presence WHERE profile_id = ?', id);
     this.sql('DELETE FROM shared_talks WHERE profile_id = ?', id);
     this.sql('DELETE FROM people_fts WHERE rowid = (SELECT rowid FROM people WHERE profile_id = ?)', id);
     this.sql('DELETE FROM blocks WHERE blocker_id = ?', id);
-    this.sql('DELETE FROM blocks WHERE blocked_id = ?', id);
+    this.sql('DELETE FROM ble_caps WHERE profile_id = ?', id);
     this.sql('DELETE FROM meets WHERE requester_id = ? OR recipient_id = ?', id, id);
     this.sql('DELETE FROM push_subs WHERE profile_id = ?', id);
     this.sql('DELETE FROM nudges WHERE a_id = ? OR b_id = ?', id, id);
@@ -575,17 +586,17 @@ export class Store {
         this.peopleC.byRowid.delete(p._rowid);
       }
     }
+    // Only the blocks this person made go; the blocks others made of them stay (#deleteRows).
     if (this.blocksC) {
       for (const other of this.blocksC.by.get(id) ?? []) this.blocksC.of.get(other)?.delete(id);
-      for (const other of this.blocksC.of.get(id) ?? []) this.blocksC.by.get(other)?.delete(id);
       this.blocksC.by.delete(id);
-      this.blocksC.of.delete(id);
     }
   }
 
-  // In one transaction: presence, shared talks, the FTS row, blocks in both directions, meets the
-  // person takes part in, push subscriptions, nudges and nudge sends naming the person, then the
-  // people row. Reports are kept. Returns true when a row existed.
+  // In one transaction: presence, shared talks, the FTS row, the blocks the person made, the
+  // Bluetooth caps record, meets the person takes part in, push subscriptions, nudges and nudge
+  // sends naming the person, then the people row. Reports and the blocks other people made of the
+  // person are kept. Returns true when a row existed.
   deletePersonEverywhere(id) {
     const existed = this.sql('SELECT 1 FROM people WHERE profile_id = ?', id).toArray().length > 0;
     this.tx(() => this.#deleteRows(id));
@@ -597,25 +608,27 @@ export class Store {
   // Presence and positions.
 
   // Upserts the presence row, merged with the current one. fields: zone, spot, spot_pending,
-  // since_ms, until_ms, ble_token, ble_token_until_ms. until_ms must end up set.
+  // since_ms, until_ms, ble_token, ble_token_until_ms, presence_nonce, ble_master_id, ble_rotated.
+  // until_ms must end up set.
   setPresence(id, fields) {
     const p = this.person(id);
     if (!p) return null;
     const cur = p.presence ?? {};
-    const n = { zone: null, spot: null, spot_pending: false, since_ms: null, until_ms: null, ble_token: null, ble_token_until_ms: null };
+    const n = { zone: null, spot: null, spot_pending: false, since_ms: null, until_ms: null, ble_token: null, ble_token_until_ms: null, presence_nonce: null, ble_master_id: null, ble_rotated: false };
     for (const k of Object.keys(n)) {
       if (k in fields && fields[k] !== undefined) n[k] = fields[k];
       else if (k in cur) n[k] = cur[k];
     }
     if (!Number.isFinite(n.until_ms)) throw new TypeError('setPresence needs until_ms');
     this.sql(
-      `INSERT INTO presence (profile_id, zone, spot, spot_pending, since_ms, until_ms, ble_token, ble_token_until_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO presence (profile_id, zone, spot, spot_pending, since_ms, until_ms, ble_token, ble_token_until_ms, presence_nonce, ble_master_id, ble_rotated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(profile_id) DO UPDATE SET zone = excluded.zone, spot = excluded.spot, spot_pending = excluded.spot_pending,
-         since_ms = excluded.since_ms, until_ms = excluded.until_ms, ble_token = excluded.ble_token, ble_token_until_ms = excluded.ble_token_until_ms`,
-      id, n.zone, n.spot, b(n.spot_pending), n.since_ms, n.until_ms, n.ble_token, n.ble_token_until_ms,
+         since_ms = excluded.since_ms, until_ms = excluded.until_ms, ble_token = excluded.ble_token, ble_token_until_ms = excluded.ble_token_until_ms,
+         presence_nonce = excluded.presence_nonce, ble_master_id = excluded.ble_master_id, ble_rotated = excluded.ble_rotated`,
+      id, n.zone, n.spot, b(n.spot_pending), n.since_ms, n.until_ms, n.ble_token, n.ble_token_until_ms, n.presence_nonce, n.ble_master_id, b(n.ble_rotated),
     );
-    p.presence = { ...n, spot_pending: Boolean(n.spot_pending), location: this.locations.get(id) ?? null };
+    p.presence = { ...n, spot_pending: Boolean(n.spot_pending), ble_rotated: Boolean(n.ble_rotated), location: this.locations.get(id) ?? null };
     return p.presence;
   }
 
@@ -664,8 +677,15 @@ export class Store {
     return Boolean(c.by.get(a)?.has(b2) || c.by.get(b2)?.has(a));
   }
 
-  addBlock(blocker, blocked) {
-    this.sql('INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at_ms) VALUES (?, ?, ?)', blocker, blocked, Date.now());
+  // Writes blocker's block of blocked, whose ref is blockedRef, running out at expiresAtMs.
+  // Blocking the same person again rewrites the row, as server/connect.mjs rewrites the document.
+  addBlock(blocker, blocked, blockedRef, expiresAtMs) {
+    this.sql(
+      `INSERT INTO blocks (blocker_id, blocked_id, created_at_ms, blocked_ref, expires_at_ms) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(blocker_id, blocked_id) DO UPDATE SET created_at_ms = excluded.created_at_ms,
+         blocked_ref = excluded.blocked_ref, expires_at_ms = excluded.expires_at_ms`,
+      blocker, blocked, Date.now(), blockedRef, expiresAtMs,
+    );
     const c = this.#blocks();
     if (!c.by.has(blocker)) c.by.set(blocker, new Set());
     c.by.get(blocker).add(blocked);
@@ -673,20 +693,52 @@ export class Store {
     c.of.get(blocked).add(blocker);
   }
 
-  // Removes blocker's block of the person with this ref. Returns the number of rows removed.
-  removeBlockByRef(blocker, ref) {
-    const them = this.personByRef(ref);
-    if (!them) return 0;
-    const n = this.#count('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ? RETURNING 1', blocker, them.profile_id);
+  // Removes blocker's block of the person with this ref, by the stored ref, so a block can be
+  // lifted after the blocked person deleted their profile. A row written before blocks kept the
+  // ref has it computed (refFor). Returns the number of rows removed.
+  async removeBlockByRef(blocker, ref) {
+    const gone = this.sql('DELETE FROM blocks WHERE blocker_id = ? AND blocked_ref = ? RETURNING blocked_id', blocker, ref).toArray().map((r) => r.blocked_id);
+    for (const r of this.sql('SELECT blocked_id FROM blocks WHERE blocker_id = ? AND blocked_ref IS NULL', blocker).toArray()) {
+      if ((await refFor(this.owner.env, this.slug, r.blocked_id)) !== ref) continue;
+      gone.push(...this.sql('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ? RETURNING blocked_id', blocker, r.blocked_id).toArray().map((x) => x.blocked_id));
+    }
     const c = this.#blocks();
-    c.by.get(blocker)?.delete(them.profile_id);
-    c.of.get(them.profile_id)?.delete(blocker);
-    return n;
+    for (const id of gone) {
+      c.by.get(blocker)?.delete(id);
+      c.of.get(id)?.delete(blocker);
+    }
+    return gone.length;
   }
 
-  // [{ profile_id, created_at_ms }] of the people id blocked, newest first (at most 1,000).
-  blocksBy(id) {
-    return this.sql('SELECT blocked_id AS profile_id, created_at_ms FROM blocks WHERE blocker_id = ? ORDER BY created_at_ms DESC LIMIT 1000', id).toArray();
+  // [{ profile_id, ref, created_at_ms }] of the people id blocked and whose block has not run out,
+  // newest first (at most 1,000). ref is null on a row written before blocks kept it.
+  blocksBy(id, now = Date.now()) {
+    return this.sql(
+      `SELECT blocked_id AS profile_id, blocked_ref AS ref, created_at_ms FROM blocks
+       WHERE blocker_id = ? AND (expires_at_ms IS NULL OR expires_at_ms > ?) ORDER BY created_at_ms DESC LIMIT 1000`,
+      id, now,
+    ).toArray();
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // The Bluetooth caps record (docs/contracts/ble-tokens.md, Phase 4 mitigation 2): whom sightings
+  // answers returned to a requesting device in the last hour, as applyCaps's state.
+
+  // An entry stamped later than now (by a request that started later but wrote first, while this
+  // one waited on ranking) counts as returned at now, as server/ble.mjs capsState clamps it, so
+  // concurrent requests of one device cannot together exceed the caps.
+  bleCaps(id, now = Date.now()) {
+    const entries = this.sql('SELECT ref, at_ms, w FROM ble_caps WHERE profile_id = ? AND at_ms > ?', id, now - 3600_000).toArray();
+    return { entries: entries.map((e) => ({ id: e.ref, at: Math.min(e.at_ms, now), w: e.w })) };
+  }
+
+  // Adds the entries an answer added to the device's record ([{ id, at, w }], id being a ref) and
+  // prunes the record to the last hour, in one transaction.
+  addBleCaps(id, added, now = Date.now()) {
+    this.tx(() => {
+      this.sql('DELETE FROM ble_caps WHERE profile_id = ? AND at_ms <= ?', id, now - 3600_000);
+      for (const e of added) this.sql('INSERT INTO ble_caps (profile_id, ref, at_ms, w) VALUES (?, ?, ?, ?)', id, e.id, e.at, e.w);
+    });
   }
 
   // ------------------------------------------------------------------------------------------
@@ -801,14 +853,16 @@ export class Store {
     return { embedded, pending };
   }
 
-  // Embeds title and abstract chunks of the given talks (rows with talk_id, title, abstract,
-  // text_hash) and replaces their vectors. Returns { embedded, pending }. Never throws for an AI
-  // failure: those talks stay pending and meta.talks_pending is set for the cron.
+  // Embeds the given talks (rows with talk_id, title, abstract, text_hash) and replaces their
+  // vectors: one 'doc' vector of the document text, exactly as the talk bundles embed it
+  // (lib/embed.js, Embedding conventions), plus abstract chunks of at most 250 words, which pick
+  // the evidence passage. Returns { embedded, pending }. Never throws for an AI failure: those
+  // talks stay pending and meta.talks_pending is set for the cron.
   async embedTalks(ctx, talks) {
     if (!talks.length) return { embedded: 0, pending: 0 };
     const parts = [];
     for (const t of talks) {
-      parts.push({ t, part: 'title', text: t.title || chunkWords(t.abstract)[0] || '' });
+      parts.push({ t, part: 'doc', text: documentText(t) });
       chunkWords(t.abstract).forEach((c, i) => parts.push({ t, part: `chunk:${i}`, text: c }));
     }
     let vecs;
@@ -820,11 +874,11 @@ export class Store {
       return { embedded: 0, pending: talks.length };
     }
     const dim = vecs.find(Boolean)?.length ?? 384;
-    const model = modelOf(ctx);
+    const model = conventionsId(ctx);
     this.tx(() => {
       for (const t of talks) this.sql('DELETE FROM talk_vectors WHERE talk_id = ?', t.talk_id);
       parts.forEach((p, i) => {
-        if (p.part !== 'title' && !vecs[i]) return;
+        if (p.part !== 'doc' && !vecs[i]) return;
         this.sql(
           'INSERT INTO talk_vectors (talk_id, part, chunk, text_hash, model, vec) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(talk_id, part) DO UPDATE SET chunk = excluded.chunk, text_hash = excluded.text_hash, model = excluded.model, vec = excluded.vec',
           p.t.talk_id, p.part, p.text, p.t.text_hash ?? '', model, toBlob(vecs[i] ?? new Float32Array(dim)),
@@ -836,24 +890,49 @@ export class Store {
     return { embedded: talks.length, pending: 0 };
   }
 
+  // Marks every talk and every profile with text as pending once, when the stored vectors were
+  // made under other embedding conventions than conventionsId (lib/embed.js). The old vectors
+  // stay in use until the new ones replace them.
+  #reembedOnConventionsChange(ctx) {
+    const want = conventionsId(ctx);
+    const have = this.sql("SELECT v FROM meta WHERE k = 'embed_conventions'").toArray()[0]?.v;
+    if (have === want) return;
+    this.tx(() => {
+      this.sql("UPDATE people SET text_pending = 1 WHERE text_pending = 0 AND (about != '' OR interests != '' OR expertise != '')");
+      this.sql("INSERT INTO meta (k, v) VALUES ('talks_pending', '1') ON CONFLICT(k) DO UPDATE SET v = excluded.v");
+      this.sql("INSERT INTO meta (k, v) VALUES ('embed_conventions', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", want);
+    });
+    if (this.peopleC) for (const p of this.peopleC.byId.values()) if (TEXT_FIELDS.some((f) => p[f].trim())) p.text_pending = true;
+  }
+
+  // The talks whose 'doc' vector is missing, stale or from other conventions (at most limit).
+  #talksToEmbed(ctx, limit) {
+    return this.sql(
+      `SELECT t.talk_id, t.title, t.abstract, t.text_hash FROM talks t
+       WHERE NOT EXISTS (SELECT 1 FROM talk_vectors v WHERE v.talk_id = t.talk_id AND v.part = 'doc' AND v.model = ? AND v.text_hash = IFNULL(t.text_hash, ''))
+       LIMIT ?`,
+      conventionsId(ctx), limit,
+    ).toArray();
+  }
+
   // Step 6 of the purge, also run by POST /admin/embed-pending: up to 25 people and 25 talks
-  // with missing vectors, unless semantic calls are paused. Returns { embedded, pending }.
+  // with missing vectors, unless semantic calls are paused. Returns { embedded, pending }; while
+  // paused, pending counts the waiting people and talks (talks up to 25), so a caller that drains
+  // until nothing is pending does not stop early.
   async embedPending(ctx) {
+    this.#reembedOnConventionsChange(ctx);
     if (!semanticAvailable(ctx)) {
-      const pending = this.sql('SELECT COUNT(*) AS n FROM people WHERE text_pending = 1').one().n;
-      return { embedded: 0, pending, paused: true };
+      const people = this.sql('SELECT COUNT(*) AS n FROM people WHERE text_pending = 1').one().n;
+      const flag = this.sql("SELECT v FROM meta WHERE k = 'talks_pending'").toArray()[0]?.v;
+      const talks = flag === '1' ? this.#talksToEmbed(ctx, RETRY_BATCH).length : 0;
+      return { embedded: 0, pending: people + talks, paused: true };
     }
     const ids = this.sql('SELECT profile_id FROM people WHERE text_pending = 1 LIMIT ?', RETRY_BATCH).toArray().map((r) => r.profile_id);
     const people = await this.embedPeople(ctx, ids);
     let talks = { embedded: 0, pending: 0 };
     const flag = this.sql("SELECT v FROM meta WHERE k = 'talks_pending'").toArray()[0]?.v;
     if (flag === '1') {
-      const rows = this.sql(
-        `SELECT t.talk_id, t.title, t.abstract, t.text_hash FROM talks t
-         WHERE NOT EXISTS (SELECT 1 FROM talk_vectors v WHERE v.talk_id = t.talk_id AND v.part = 'title' AND v.text_hash = IFNULL(t.text_hash, ''))
-         LIMIT ?`,
-        RETRY_BATCH,
-      ).toArray();
+      const rows = this.#talksToEmbed(ctx, RETRY_BATCH);
       talks = await this.embedTalks(ctx, rows);
       if (!rows.length || (rows.length < RETRY_BATCH && !talks.pending)) {
         this.sql("INSERT INTO meta (k, v) VALUES ('talks_pending', '0') ON CONFLICT(k) DO UPDATE SET v = excluded.v");
@@ -869,7 +948,7 @@ export class Store {
   // filters by time. Returns counts.
   purge(now = Date.now()) {
     const expired = this.sql('SELECT profile_id FROM people WHERE visible_until_ms <= ?', now).toArray().map((r) => r.profile_id);
-    const out = { people: expired.length, presence: 0, meets: 0, scrubbed: 0, push_subs: 0, nudges: 0, nudge_sends: 0 };
+    const out = { people: expired.length, presence: 0, meets: 0, scrubbed: 0, blocks: 0, ble_caps: 0, push_subs: 0, nudges: 0, nudge_sends: 0 };
     if (expired.length) {
       const sub = 'SELECT profile_id FROM people WHERE visible_until_ms <= ?';
       this.tx(() => {
@@ -877,7 +956,7 @@ export class Store {
         this.sql(`DELETE FROM shared_talks WHERE profile_id IN (${sub})`, now);
         this.sql('DELETE FROM people_fts WHERE rowid IN (SELECT rowid FROM people WHERE visible_until_ms <= ?)', now);
         this.sql(`DELETE FROM blocks WHERE blocker_id IN (${sub})`, now);
-        this.sql(`DELETE FROM blocks WHERE blocked_id IN (${sub})`, now);
+        this.sql(`DELETE FROM ble_caps WHERE profile_id IN (${sub})`, now);
         this.sql(`DELETE FROM meets WHERE requester_id IN (${sub}) OR recipient_id IN (${sub})`, now, now);
         this.sql(`DELETE FROM push_subs WHERE profile_id IN (${sub})`, now);
         this.sql(`DELETE FROM nudges WHERE a_id IN (${sub}) OR b_id IN (${sub})`, now, now);
@@ -906,6 +985,13 @@ export class Store {
        RETURNING 1`,
       now,
     );
+    // Blocks run out at their expires_at_ms (the end of the conference, or later while either
+    // profile is still visible). A row from before blocks carried it gets the conference's end.
+    const confEnd = this.owner.conf?.visible_until_ms;
+    if (Number.isFinite(confEnd)) this.sql('UPDATE blocks SET expires_at_ms = ? WHERE expires_at_ms IS NULL', confEnd);
+    out.blocks = this.#count('DELETE FROM blocks WHERE expires_at_ms <= ? RETURNING 1', now);
+    if (out.blocks) this.blocksC = null;
+    out.ble_caps = this.#count('DELETE FROM ble_caps WHERE at_ms <= ? RETURNING 1', now - 3600_000);
     out.push_subs = this.#count('DELETE FROM push_subs WHERE expires_at_ms <= ? RETURNING 1', now);
     out.nudges = this.#count('DELETE FROM nudges WHERE expires_at_ms <= ? RETURNING 1', now);
     out.nudge_sends = this.#count('DELETE FROM nudge_sends WHERE expires_at_ms <= ? RETURNING 1', now);

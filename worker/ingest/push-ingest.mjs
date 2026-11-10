@@ -27,8 +27,19 @@ import { pathToFileURL } from 'node:url';
 import { ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, withTopics } from './lib.mjs';
 import { resolveTopics, loadStoplist } from './topics-local.mjs';
 import { buildFacets, countByKind } from './facets-local.mjs';
+import { MODEL } from '../../contracts/js/bundle.mjs';
+import { CONVENTIONS } from '../src/lib/embed.js';
 
 const DATA = join(ROOT, 'data');
+
+// The model block of the talk bundles (contracts/js/bundle.mjs MODEL) must be the one the Worker
+// embeds under (src/lib/embed.js CONVENTIONS), or the Worker's query vectors would not match the
+// bundle vectors the phones search. Throws before anything is pushed when they differ.
+const MODEL_FIELDS = ['id', 'dims', 'pooling', 'normalize', 'max_tokens', 'truncation', 'document_instruction', 'document_text', 'query_instruction'];
+export function assertModelBlock(model = MODEL, conventions = CONVENTIONS) {
+  const differ = MODEL_FIELDS.filter((k) => model[k] !== conventions[k]);
+  if (differ.length) throw new UsageError(`The Worker's embedding conventions differ from the talk bundle model block in: ${differ.join(', ')}.`);
+}
 
 function readConference(slug) {
   const path = join(DATA, slug, 'conference.json');
@@ -70,6 +81,19 @@ async function pushEvent(conf, { admin, dryRun, generation, rebuild, stop }) {
   return `${head}; upserted ${total.upserted}, unchanged ${total.unchanged}, embedded ${total.embedded}, pending ${pendingAfter ?? '?'}; finalized ${fin.talks ?? '?'} talks, deleted ${fin.deleted ?? 0}; topics stored ${tp.topics ?? '?'}, facets stored ${fc.facets ?? '?'}.`;
 }
 
+// The slugs the Worker lists as searchable (GET /api/conferences), or an empty set when it cannot
+// say, in which case nothing is kept back.
+async function liveSearchable(api) {
+  try {
+    const res = await fetch(`${api}/api/conferences`, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return new Set();
+    const { conferences } = await res.json();
+    return new Set((conferences ?? []).filter((c) => c?.status === 'searchable').map((c) => c.slug));
+  } catch {
+    return new Set();
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics'], values: ['api'], multi: ['event'] });
   const api = normalizeApiBase(args.api);
@@ -101,13 +125,20 @@ async function main() {
         }
       }
     : admin;
+  assertModelBlock();
   const stop = loadStoplist();
   const generation = Date.now();
 
   const searchable = confs.filter((c) => c.status === 'searchable' && existsSync(join(DATA, c.slug, 'talks.ndjson')));
   console.log(`Conferences: ${confs.length} selected, ${searchable.length} searchable with a talk file${dryRun ? ' (dry run)' : ''}.`);
   if (!dryRun) {
-    const r = await admin('PUT', '/admin/conferences', { conferences: confs });
+    // A schedule that could not be fetched this time (status_reason fetch_failed, which
+    // scripts/ingest.mjs records on a transient error) must not take down a conference the Worker
+    // serves: its document is left out of the upsert, so the Worker keeps the last good one.
+    const live = await liveSearchable(api);
+    const kept = confs.filter((c) => c.status !== 'searchable' && c.status_reason === 'fetch_failed' && live.has(c.slug));
+    for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
+    const r = await admin('PUT', '/admin/conferences', { conferences: confs.filter((c) => !kept.includes(c)) });
     console.log(`Conferences upserted: ${r.upserted ?? '?'}.`);
   }
 

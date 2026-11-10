@@ -18,6 +18,15 @@ const WINDOW_MIN = 10;
 const BUCKET_SWEEP_EVERY = 1000;
 const num = (v, d) => (Number.isFinite(Number(v)) && v !== undefined && v !== '' ? Number(v) : d);
 const zero = (day) => ({ day, requests: 0, rows_read: 0, rows_written: 0 });
+// The routes an object serves while its conference is not searchable: an owner's deletes and the
+// list of their own blocks, so nobody is locked out of deleting their data (the Worker forwards
+// these for any conference whose object exists).
+const OWNER_ROUTES = new Set([
+  'DELETE /api/people/profile', 'DELETE /api/presence', 'DELETE /api/push/subscription', 'DELETE /api/people/block', 'GET /api/people/blocks',
+]);
+// The tables whose rows the cron still has to purge; while any holds a row, the directory keeps
+// the conference among the cron targets.
+const HELD_TABLES = ['people', 'presence', 'blocks', 'meets', 'push_subs', 'nudges', 'nudge_sends', 'ble_caps'];
 
 // The daily meter of section 1.14: API requests served, and SQLite rows read and written, per UTC
 // day, plus the other conferences' totals from the last cron call.
@@ -283,7 +292,7 @@ export class ConferenceDO extends DurableObject {
         res = allowed.size
           ? json(405, { error: 'Method not allowed' }, { Allow: [...allowed].join(', ') })
           : json(404, { error: 'Not found' });
-      } else if (!admin && (!this.conf || this.conf.status !== 'searchable')) {
+      } else if (!admin && (!this.conf || (this.conf.status !== 'searchable' && !OWNER_ROUTES.has(`${route.method} ${path}`)))) {
         res = json(400, { error: 'conference is not available' });
       } else {
         res = await route.handler(this.#ctx(request, now), request, params);
@@ -330,8 +339,11 @@ export class ConferenceDO extends DurableObject {
       this.#drain();
       this.meter.flush();
       this.#drain();
+      // One row read per table (EXISTS), not a count, so the check stays cheap every 10 minutes.
+      const holds = HELD_TABLES.some((t) => this.exec(`SELECT EXISTS (SELECT 1 FROM ${t}) AS x`).one().x === 1) ? 1 : 0;
+      this.#drain();
       const { day, requests, rows_read, rows_written } = this.meter.usage;
-      return json(200, { day, requests, rows_read, rows_written, purged: purged.people, embedded: embedded.embedded });
+      return json(200, { day, requests, rows_read, rows_written, purged: purged.people, embedded: embedded.embedded, holds });
     }
     return json(404, { error: 'Not found' });
   }
