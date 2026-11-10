@@ -123,6 +123,7 @@ export function isFiltered(line) {
 
 let rulesRetryAt = 0; // After a failure the wordlist decides until this time, then we try again.
 let rulesState = 'unknown'; // For the transition log lines only.
+let rulesKnownNonEmptyUntil = 0; // A recent count showed the index holds rules, so zero hits is a real "no match".
 
 function noteRules(state, why) {
   if (state === rulesState) return;
@@ -176,8 +177,32 @@ async function percolate(normalized) {
   }
   const total = json.hits?.total;
   const count = typeof total === 'number' ? total : total?.value ?? json.hits?.hits?.length ?? 0;
+  if (count > 0) {
+    noteRules('percolator');
+    return true;
+  }
+  // Zero hits means "no rule matched" only when the index holds rules. An index that exists but is
+  // empty (a fresh setup, or a failed reload) would otherwise accept every line with the rules
+  // layer silently off, so the wordlist decides until the index has rules again.
+  if (Date.now() >= rulesKnownNonEmptyUntil) {
+    try {
+      const counted = await fetch(`${ES_URL}/${encodeURIComponent(RULES_INDEX)}/_count`, { headers: { Authorization: `ApiKey ${PEOPLE_KEY}` }, signal: AbortSignal.timeout(RULES_TIMEOUT_MS) });
+      const body = counted.ok ? await counted.json() : null;
+      if (!body || typeof body.count !== 'number') throw new Error('no count');
+      if (body.count === 0) {
+        rulesRetryAt = Date.now() + RULES_RETRY_MS;
+        noteRules('wordlist', 'rules index is empty');
+        return null;
+      }
+      rulesKnownNonEmptyUntil = Date.now() + RULES_RETRY_MS;
+    } catch {
+      rulesRetryAt = Date.now() + RULES_RETRY_MS;
+      noteRules('wordlist', 'rules count failed');
+      return null;
+    }
+  }
   noteRules('percolator');
-  return count > 0;
+  return false;
 }
 
 // ---------------------------------------------------------------------------------------------

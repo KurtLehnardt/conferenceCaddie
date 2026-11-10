@@ -8,6 +8,8 @@
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
 //   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when web/dist has not been built.
+//   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
+//                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
 //   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only to write and remove one
 //                        expired test profile directly, because the API can never create one, and to
@@ -21,7 +23,8 @@
 // seeded sample profiles. Key values are compared in-process and never printed.
 //
 // Each check prints one PASS, FAIL or SKIP line. The script exits 1 if any check fails. A request
-// that answers 5xx or fails on its first attempt is retried once, and prints a NOTE line either way.
+// that answers 5xx or fails on its first attempt is retried once, and prints a NOTE line either way;
+// with SMOKE_STRICT=1 those first-attempt failures also fail the run.
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -102,6 +105,11 @@ const sharing = new Map();
 // request's.
 let echoChecked = 0;
 const echoMismatches = [];
+// Accepted profile writes read back through the API the app uses (POST /api/circles/members answers
+// from the stored profile), and the writes whose stored shared talks differed from the request's.
+let storedChecked = 0;
+const storedMismatches = [];
+const storedInconclusive = [];
 // Requests that answered 5xx or failed on the first attempt and were retried.
 let retried = 0;
 
@@ -109,6 +117,8 @@ const MAX_RATE_WAITS = 8;
 
 async function api(method, path, body, { device, label = '', origin } = {}) {
   let lastError;
+  let result;
+  let readBackJob = null;
   let rateWaits = 0;
   const url = new URL(path, BASE_URL);
   const event = body?.event ?? url.searchParams.get('event');
@@ -159,12 +169,15 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
           const echoed = Array.isArray(json.shared_talk_ids) ? json.shared_talk_ids : null;
           echoChecked++;
           if (JSON.stringify(echoed) !== JSON.stringify(requested)) echoMismatches.push(label || 'no label');
+          const before = sharing.get(device).get(event) ?? [];
           sharing.get(device).set(event, requested);
+          readBackJob = { device, event, requested, before, label: label || 'no label' };
         }
         if (method === 'DELETE') sharing.get(device).delete(event);
       }
       responses.push({ path, label, status: res.status, text, json, request: body, sharedTalks });
-      return { status: res.status, json, headers: res.headers };
+      result = { status: res.status, json, headers: res.headers };
+      break;
     } catch (err) {
       lastError = err;
       if (attempt === 0) {
@@ -173,7 +186,35 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       }
     }
   }
-  throw new Error(`${method} ${path} failed: ${lastError?.message ?? 'unknown error'}`);
+  if (!result) throw new Error(`${method} ${path} failed: ${lastError?.message ?? 'unknown error'}`);
+  // The read-back runs outside the retry loop above, so a failure in it can never repeat the write.
+  if (readBackJob) await readBackShared(readBackJob.device, readBackJob.event, readBackJob.requested, readBackJob.before, readBackJob.label);
+  return result;
+}
+
+// The server echoes the list it parsed, which says nothing about what it stored. So read the stored
+// profile back the way the app does: POST /api/circles/members authenticates the device, loads its
+// stored profile and answers 200 only for a talk the stored shared_talk_ids holds, or 403 with
+// share_required for any other. A sample of the requested talks must answer 200 and a sample of
+// the talks the device shared before and no longer does must answer 403 share_required.
+async function readBackShared(device, event, requested, before, label) {
+  const present = [...new Set([requested[0], requested[Math.floor(requested.length / 2)], requested[requested.length - 1]])].filter(Boolean);
+  const removed = before.filter((id) => !requested.includes(id)).slice(0, 2);
+  for (const [talkId, shouldHold] of [...present.map((id) => [id, true]), ...removed.map((id) => [id, false])]) {
+    try {
+      const r = await api('POST', '/api/circles/members', { event, talk_id: talkId }, { device, label: `${label}-readback` });
+      storedChecked++;
+      if (r.status === 200) {
+        if (!shouldHold) storedMismatches.push(`${label} (${talkId} should not be stored, status 200)`);
+      } else if (r.status === 403 && r.json.error === 'share_required') {
+        if (shouldHold) storedMismatches.push(`${label} (${talkId} should be stored, answered share_required)`);
+      } else {
+        storedInconclusive.push(`${label} (status ${r.status})`);
+      }
+    } catch (err) {
+      storedInconclusive.push(`${label} (${err.message})`);
+    }
+  }
 }
 
 async function search(body) {
@@ -1711,9 +1752,15 @@ await check('inst1: the manifest makes the app installable and the page links it
     if (['N-members', 'anon-members', 'public-counts', 'C-matches', 'recs'].includes(r.label) && /linkedin_url|contact_note/.test(r.text)) hits.push(`contact fields in ${r.label}`);
   }
   const unique = [...new Set(hits)];
-  // l trusts the shared talks each accepted profile write sent; the server must have stored and
-  // echoed exactly that list.
-  report(echoMismatches.length === 0, 'l0: every accepted profile write echoes the shared talks it sent', echoMismatches.length ? `different echo in ${[...new Set(echoMismatches)].slice(0, 4).join(', ')}` : `${echoChecked} writes checked`);
+  // l trusts the shared talks each accepted profile write sent; the server must have echoed
+  // exactly that list and, read back through the app's own API, must have stored it.
+  const l0Problems = [
+    ...(echoMismatches.length ? [`different echo in ${[...new Set(echoMismatches)].slice(0, 4).join(', ')}`] : []),
+    ...(storedMismatches.length ? [`stored differently: ${[...new Set(storedMismatches)].slice(0, 4).join('; ')}`] : []),
+    ...(storedInconclusive.length ? [`read-back inconclusive: ${[...new Set(storedInconclusive)].slice(0, 4).join('; ')}`] : []),
+    ...(echoChecked > 0 && storedChecked === 0 ? ['no stored profile was read back'] : []),
+  ];
+  report(l0Problems.length === 0, 'l0: every accepted profile write echoes and stores the shared talks it sent', l0Problems.length ? l0Problems.join('; ') : `${echoChecked} writes checked, ${storedChecked} talks read back`);
   report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked`);
 }
 
@@ -1752,5 +1799,8 @@ await check('inst1: the manifest makes the app installable and the page links it
   }
 }
 
+if (process.env.SMOKE_STRICT === '1') {
+  report(retried === 0, 'strict: no request answered 5xx or failed on its first attempt', retried ? `${retried} did; see the NOTE lines above` : 'none needed a retry');
+}
 if (retried) console.log(`NOTE ${retried} request${retried === 1 ? '' : 's'} answered 5xx or failed on the first attempt and ${retried === 1 ? 'was' : 'were'} retried; see the NOTE lines above`);
 process.exit(failures ? 1 : 0);
