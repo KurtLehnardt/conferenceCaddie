@@ -4,7 +4,7 @@
 
 Prepared 2026-11-10. When it was prepared this was planning only: no code in the repository was changed, nothing was pushed or deployed, and Elasticsearch was not queried.
 
-Every repository citation is `path:line` relative to the repository root. They were read from a detached worktree of `origin/main` at commit `3a10fbc`. External facts carry a link; all links are collected again in section 17. Anything not verified is labelled ASSUMPTION and listed in section 16.
+Every repository citation is `path:line` relative to the repository root. They were read from a detached worktree of `origin/main` at commit `3a10fbc`, an ancestor of the current `main`; every citation is pinned to that commit and may have moved since. External facts carry a link; all links are collected again in section 17. Anything not verified is labelled ASSUMPTION and listed in section 16.
 
 ---
 
@@ -22,24 +22,24 @@ Every repository citation is `path:line` relative to the repository root. They w
   Ported as it is, today's server would use 118% to 2,358% of the Workers free request allowance (section 7.5).
 - **No free service promises to be free forever.** Only Neon states "permanent (not a trial)". Section 7.6 flags each service's permanence with its source. The precedent that matters: Firebase moved Cloud Storage off its free Spark plan in October 2024. Tier 2 is designed to degrade rather than break if an allowance disappears. Semantic matching falls back to keywords. Durable Objects can fall back to D1 with polling for small conferences.
 - **The Bluetooth redesign also fixes the 2026-11-09 Android failure at its root.** Tokens become `HMAC(key, 10-minute window)`, computed natively by the phone. Nothing has to wake the JavaScript layer or call the server to rotate. Privacy stays as it is today: nothing about the person goes over the air, and only the server can resolve a token.
-- **Distribution.** The Apple Developer Program is already paid, so TestFlight, the App Store, APNs and the background entitlements are all available. On Android, a directly downloaded APK costs $0. Google Play costs a one-time $25, which counts as a payment under the user's definition of free. Global Android developer verification arrives in 2027 (section 9).
+- **Distribution.** The Apple Developer Program is already paid, so TestFlight, the App Store, APNs and the background entitlements are all available. On Android, a directly downloaded APK costs $0. Google Play costs a one-time $25, which counts as a payment under the maintainer's definition of free. Global Android developer verification arrives in 2027 (section 9).
 - **Stack recommendation:** a Kotlin Multiplatform shared core with Compose Multiplatform UI on both platforms, plus thin platform modules: Kotlin on Android, Swift on iOS for Core Bluetooth and notifications. For one developer who works in JavaScript and TypeScript, this means one new language for almost everything and one implementation of ranking and protocol logic. If iOS must use UIKit-native widgets, SwiftUI screens can sit over the same core (section 10).
 
 ---
 
-## 2. User decisions incorporated (2026-11-10)
+## 2. Maintainer decisions incorporated (2026-11-10)
 
 - The Apple Developer Program ($99 a year) is already paid, so App Store, TestFlight, APNs push and entitlements are available.
-- "Free" means the user pays nothing. Free tiers are acceptable only if free forever: no trial credits and no "free for 12 months". Any tier whose permanence is uncertain is flagged with its source (section 7.6).
+- "Free" means the maintainer pays nothing. Free tiers are acceptable only if free forever: no trial credits and no "free for 12 months". Any tier whose permanence is uncertain is flagged with its source (section 7.6).
 - The repository is open source and meant for anyone. The design therefore has pluggable deployment tiers (1: free-forever demo without interest-based peer finding; 2: Cloudflare free plan; 3: existing paid Cloud Run + Elastic), and the same native apps work against any tier through a configurable backend URL and capability flags.
-- The user asked for "full native Android and iOS apps", so section 10 recommends between Kotlin + Compose with Swift + SwiftUI, and a Kotlin Multiplatform shared core.
+- The maintainer asked for "full native Android and iOS apps", so section 10 recommends between Kotlin + Compose with Swift + SwiftUI, and a Kotlin Multiplatform shared core.
 
 ---
 
 ## 3. How this was researched
 
-- I read the repository in a detached worktree. Documents: `README.md`, `docs/CONTRACT.md`, `DECISIONS.md`, `docs/ANDROID.md`, `docs/OPERATOR_CHECKLIST.md`, `docs/FIND_AND_CONNECT_SPEC.md` and `DATA_NOTES.md`. Code: the server routes, the Android Bluetooth plugin, and the web client's Bluetooth and polling code.
-- Data volumes come from the committed files under `data/` (I counted lines and bytes and tallied statuses with Node) and from figures recorded in the docs. I made no Elasticsearch query and no live API call.
+- The repository was read in a detached worktree. Documents: `README.md`, `docs/CONTRACT.md`, `DECISIONS.md`, `docs/ANDROID.md`, `docs/OPERATOR_CHECKLIST.md`, `docs/FIND_AND_CONNECT_SPEC.md` and `DATA_NOTES.md`. Code: the server routes, the Android Bluetooth plugin, and the web client's Bluetooth and polling code.
+- Data volumes come from the committed files under `data/` (lines and bytes were counted and statuses tallied with Node) and from figures recorded in the docs. No Elasticsearch query was made and no live API call.
 - Pricing, free-tier limits, platform behaviour and model sizes come from web sources fetched on 2026-11-10.
 
 ---
@@ -62,7 +62,7 @@ Every repository citation is `path:line` relative to the repository root. They w
   - The APK is a debug build from GitHub Actions with the Cloud Run URL baked in (`.github/workflows/android-apk.yml:26`, `:56`). The artifact is kept for 14 days (`:70`) and needs a GitHub sign-in to download (`README.md:20`).
   - iOS was not attempted, because of background advertising limits (`DECISIONS.md:292`).
 - **Code size (measured).** About 6,540 lines in `server/*.mjs`, and about 14,700 lines of TS/TSX in `web/src`, of which 7,369 are the people screens in `web/src/people/`.
-- **The repository has no license file.** `gh repo view` reports `licenseInfo: null`. Until a license is added, it is publicly visible but not legally open source.
+- **The repository was unlicensed when this plan was written.** It is licensed Apache-2.0 since 2026-11-10 (decision 1). The license covers the code and documentation authored here; the schedule snapshots under `data/` keep their owners' terms (see `NOTICE`).
 
 ### 4.2 Feature inventory
 
@@ -244,7 +244,7 @@ All tiers serve talk features from the same static bundle format, searched on th
 
 ### 7.2 How the apps find out what a backend can do
 
-- **Backend URL.** The URL is baked in at build time; decision 6 in section 14 sets which default store builds ship with. It can be changed in Settings → Server, or with an operator deep link or QR code (`caddie://connect?url=…`). Device secrets (`profile_id`, `secret`, `docs/CONTRACT.md:279`) are stored per backend origin, so one backend's secret is never sent to another.
+- **Backend URL.** The URL is baked in at build time; decision 6 in section 14 sets which default store builds ship with. It can be changed in Settings → Server, or with an operator deep link or QR code (`caddie://connect?url=…`). A link must use https. The app shows a confirmation screen naming the origin and warns when it is not the official backend, and it never switches backends automatically from a link. Device secrets (`profile_id`, `secret`, `docs/CONTRACT.md:279`) are stored per backend origin, so one backend's secret is never sent to another.
 - **Capabilities document.** It is `GET {backend}/api/capabilities` in tiers 2 and 3, and the static file `capabilities.json` in tier 1. A backend without it (today's tier 3 server, before Phase 1) is treated as legacy with the full current feature set.
 - **Illustrative shape.** This is not a final contract:
 
@@ -355,10 +355,10 @@ None of these services is contractually free forever. The table records what eac
 | Workers AI free allocation | Optional server-side people vectors | 10,000 neurons a day ([pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)) | Called a "free allocation"; no permanence wording | **Uncertain.** Tier 2 defaults to `people.semantic: client`, so this is optional |
 | Firebase Spark: FCM only | Native push from the official tier 2 backend | FCM "No-cost"; Spark needs "No payment method" ([pricing](https://firebase.google.com/pricing)) | Firebase removed Cloud Storage from Spark for new projects from 2024-10-30 ([FAQ](https://firebase.google.com/docs/storage/faqs-storage-changes-announced-sept-2024)), a precedent for Spark features changing | **Uncertain.** Push is a capability flag, and the app works without it |
 | Android limited-distribution account | Optional free registration (20 devices) | 20 devices, email only ([Android blog](https://developer.android.com/blog/posts/android-developer-verification-rolling-out-to-all-developers-on-play-console-and-android-developer-console)) | Launched globally in August 2026; no permanence wording | New programme; may change |
-| Neon Free (not used; noted because the user's stack is Postgres) | none | 1 GB per project, 100 CU-hours a month ([pricing](https://neon.com/pricing)) | "permanent (not a trial); no credit card required" | The only explicit permanence statement found |
+| Neon Free (not used; noted because the maintainer's stack is Postgres) | none | 1 GB per project, 100 CU-hours a month ([pricing](https://neon.com/pricing)) | "permanent (not a trial); no credit card required" | The only explicit permanence statement found |
 | Cloudflare sign-up without a card | Tier 2 account | not applicable | Reported by third parties ([freetier.co](https://freetier.co/directory/products/cloudflare-workers)) (ASSUMPTION) | Verify at sign-up |
 
-Excluded because they are not free forever, or would cost the user money:
+Excluded because they are not free forever, or would cost the maintainer money:
 - Elastic Cloud trials.
 - Cloud Run's free tier, which needs a billing account. ASSUMPTION.
 - Google Play's $25 one-time fee.
@@ -369,10 +369,11 @@ Excluded because they are not free forever, or would cost the user money:
 
 ### 8.1 Derived tokens (protocol v1)
 
-1. **Key issue.** When the user turns Bluetooth on (`PUT /api/presence` with `ble: true`), the server mints a random 32-byte `ble_key`. It stores the key unindexed on the person's document and never returns it again, the same way as `secret_hash`. The key goes to the device once and is kept in the Android Keystore or the iOS Keychain. Its expiry is `presence_until`.
+1. **Key issue.** When a person turns Bluetooth on (`PUT /api/presence` with `ble: true`), the server generates a random `presence_nonce` and stores it on the profile, replacing the previous one, so a nonce is valid for one presence session only. The device key is derived, not stored: `ble_key = HMAC-SHA256(ble_master_secret, "caddie-ble-key-v1" ‖ profile_id ‖ presence_nonce)`. `ble_master_secret` is a server secret (Secret Manager on tier 3, a Worker secret on tier 2). The key is returned to the device once, kept in the Android Keystore or the iOS Keychain, and never stored by the server, which recomputes it to resolve tokens. Its expiry is `presence_until`.
+   - **Threat model.** A leak of `ble_master_secret` lets an attacker who also has profile ids and nonces link tokens to people. A database leak alone does not, because the nonce is harmless without the master secret. Data export must never include material derived from `presence_nonce`.
 2. **Token.** `token_w = first 16 bytes of HMAC-SHA256(ble_key, "caddie-ble-v1" ‖ uint64be(w))`, where `w = floor(unix_seconds / window_s)` and `window_s` is 600. The phone computes this natively at any moment, including inside an iOS background read wake, with no network call. The rotate route becomes unnecessary, and so does the 11-minute self-stop that caused the failure in section 4.5.
 3. **Resolution.**
-   - On a sightings request, the server matches the reported tokens against `token_w` and `token_{w-1}` (allowing for clock skew) of the conference's live Bluetooth users.
+   - On a sightings request, the server matches the reported tokens against `token_{w-1}`, `token_w` and `token_{w+1}` (allowing for clock skew in both directions), recomputing each live user's key from the master secret and nonce of the conference's live Bluetooth users.
    - It caches that map once per window. Tier 2 caches it in Durable Object memory; tier 3 in each instance, built from one query.
    - It then applies the existing ranking and the strong-match rule (`server/ble.mjs:157`, `docs/CONTRACT.md:360`).
 4. **Privacy.** Nothing about the person goes over the air. Tokens cannot be linked across windows without the key. The server stores no sightings. All of this is unchanged from today (`DECISIONS.md:294`).
@@ -390,7 +391,7 @@ Excluded because they are not free forever, or would cost the user money:
 - **Two backgrounded iPhones.** Discovery may fail. Mitigations: an Android phone nearby helps (Herald's pattern); "keep the app open" guidance; Phase 0 measurement.
 - **Crowd density.** Interrogating hundreds of Apple devices costs battery and connection slots. Mitigations: the RSSI gate, a per-address cache and a cap on connections per minute, with battery measured in Phase 3.
 - **Scan permission side effect.** `neverForLocation` scanning may filter out some advertisement formats. ASSUMPTION: Apple's are delivered; Phase 0 tests it.
-- **Play review.** The `connectedDevice` declaration may not be accepted; `specialUse` is the fallback.
+- **Play review (only if Play is reconsidered).** The `connectedDevice` declaration may not be accepted; `specialUse` is the fallback.
 
 ---
 
@@ -411,8 +412,8 @@ Excluded because they are not free forever, or would cost the user money:
   - From 2026-09-30, apps must be registered by verified developers to install on certified devices in Brazil, Indonesia, Singapore and Thailand. Global rollout is planned for "2027 and beyond". Unregistered apps still install through ADB or the "advanced flow" ([Android blog, updated 2026-09-29](https://developer.android.com/blog/posts/android-developer-verification-rolling-out-to-all-developers-on-play-console-and-android-developer-console)).
   - The free limited-distribution account covers up to 20 devices.
   - Whether full verification outside Play carries a fee is unconfirmed. Third parties cite $25 ([Doply](https://www.doply.io/en/blog/android-developer-verification-explained)) (ASSUMPTION).
-- **Google Play: 25 USD one time, so not free under the user's definition** ([Play fee](https://support.google.com/googleplay/android-developer/answer/6112435)). New personal accounts must first run a closed test with 12 testers opted in for 14 consecutive days ([Play testing](https://support.google.com/googleplay/android-developer/answer/14151465)). A foreground-service declaration is also required.
-- **F-Droid: $0.** It requires a FOSS license, builds from source, and does not allow Firebase or Google Play Services ([F-Droid policy](https://f-droid.org/docs/Inclusion_Policy/)). An F-Droid build therefore ships with `push.fcm` off. The repository needs a license first (section 4.1).
+- **Google Play: 25 USD one time, so not free under the maintainer's definition** ([Play fee](https://support.google.com/googleplay/android-developer/answer/6112435)). New personal accounts must first run a closed test with 12 testers opted in for 14 consecutive days ([Play testing](https://support.google.com/googleplay/android-developer/answer/14151465)). A foreground-service declaration is also required.
+- **F-Droid: $0.** It requires a FOSS license, builds from source, and does not allow Firebase or Google Play Services ([F-Droid policy](https://f-droid.org/docs/Inclusion_Policy/)). An F-Droid build therefore ships with `push.fcm` off. The repository is Apache-2.0 since 2026-11-10 (decision 1), which satisfies the FOSS requirement. The F-Droid build is a separate Gradle flavor with no Firebase or Google Play Services; it ignores `push.fcm` and uses in-app and local notifications only.
 - **Release signing.** CI currently signs with a debug key on a fresh runner each time, and no keystore is cached (`.github/workflows/android-apk.yml:56`). ASSUMPTION: every build therefore has a different signature and cannot update the previous one. A stable release keystore stored as a GitHub secret fixes this at $0.
 
 ---
@@ -434,8 +435,8 @@ Excluded because they are not free forever, or would cost the user money:
 
 ### 10.2 Why Kotlin Multiplatform with Compose Multiplatform, for one JavaScript/TypeScript developer
 
-1. **One new language for almost all of the code.** Kotlin's coroutines, lambdas, data classes and null safety map onto the async/await and type-driven TypeScript the user already writes. Swift is confined to about three platform modules: Core Bluetooth, notifications and APNs registration, and the ONNX Runtime bridge.
-2. **Compose matches the user's React/Preact experience.** Composable functions, state hoisting and recomposition correspond to components, props and state, and re-rendering. About 14,700 lines of TS/TSX UI have to be recreated in any native stack. With Compose Multiplatform they are recreated once rather than twice.
+1. **One new language for almost all of the code.** Kotlin's coroutines, lambdas, data classes and null safety map onto the async/await and type-driven TypeScript the maintainer already writes. Swift is confined to about three platform modules: Core Bluetooth, notifications and APNs registration, and the ONNX Runtime bridge.
+2. **Compose matches the maintainer's React/Preact experience.** Composable functions, state hoisting and recomposition correspond to components, props and state, and re-rendering. About 14,700 lines of TS/TSX UI have to be recreated in any native stack. With Compose Multiplatform they are recreated once rather than twice.
 3. **Matching must behave identically on both platforms.** The specificity rule, reciprocal rank fusion, time phrases, the BM25 leg, token derivation and the sightings rules are product rules. One implementation with golden fixtures keeps an Android user and an iPhone user from seeing different matches for the same profile.
 4. **The platform work is unavoidable and stays small.** The Bluetooth peripheral role, background modes and notifications need platform code in every stack. Kotlin Multiplatform does not add to that work; it removes the duplication around it.
 5. **Risks.**
@@ -443,11 +444,11 @@ Excluded because they are not free forever, or would cost the user money:
    - Swift-only APIs do not appear directly in Kotlin. The fix is to define interfaces in Kotlin and implement them in Swift.
    - On iOS the UI is drawn by Compose, not UIKit.
 
-   If the user wants UIKit-native screens on iOS, the fallback is the second column: SwiftUI over the same core, at the cost of a second UI codebase.
+   If the maintainer wants UIKit-native screens on iOS, the fallback is the second column: SwiftUI over the same core, at the cost of a second UI codebase.
 6. **Alternatives not recommended.**
    - **Two independent native apps:** every feature and every ranking rule written twice.
    - **React Native or Flutter:** not native UI toolkits, and every screen is rewritten anyway.
-   - **Keeping the Capacitor shell:** cheapest, and it is what runs today. It is not what the user asked for. It remains a fallback for tier 1 on the web.
+   - **Keeping the Capacitor shell:** cheapest, and it is what runs today. It is not what the maintainer asked for. It remains a fallback for tier 1 on the web.
 
 ### 10.3 Shape of the native code (illustrative)
 
@@ -469,7 +470,7 @@ Excluded because they are not free forever, or would cost the user money:
 
 1. **Adopt the three pluggable tiers**, with one capabilities document and three shared contracts: the talk bundle, People API v1 and derived Bluetooth tokens v1.
 2. **Build the apps** with a Kotlin Multiplatform shared core and Compose Multiplatform UI, plus platform modules in Kotlin and Swift.
-3. **Default store builds to the user's own tier 2 deployment** (decision 6 in section 14 keeps the live tier 3 server as the default until tier 2 passes its exit criteria), with tier 1 as the fallback when it is unreachable. Keep tier 3 working for operators who pay.
+3. **Default to the live tier 3 server until the official tier 2 passes its exit criteria, then switch to tier 2; tier 1 is the fallback** (decision 6). Keep tier 3 working for operators who pay.
 4. **Use `bge-small-en-v1.5`** (34 MB int8) for talk embeddings in CI and on devices. Tier 2 people vectors are computed on the client by default (`people.semantic: client`), with Workers AI as an optional upgrade, because the Workers AI allocation has no permanence wording.
 5. **Fix the Android background failure** through the derived-token protocol and native sightings handling.
 
@@ -477,7 +478,7 @@ Excluded because they are not free forever, or would cost the user money:
 
 ## 12. Phased plan
 
-There are no dates or deadlines; each phase ends at its exit criteria. Phases 3 and 4 can run in parallel worktrees once Phase 1's contracts are frozen. Suggested worker tiers follow the user's global rules: Opus for protocol, Bluetooth and backend security; Sonnet for the data pipeline and screens; Haiku for mechanical moves.
+There are no dates or deadlines; each phase ends at its exit criteria. Phases 3 and 4 can run in parallel worktrees once Phase 1's contracts are frozen.
 
 ### Phase 0: decisions and spikes
 
@@ -487,8 +488,9 @@ There are no dates or deadlines; each phase ends at its exit criteria. Phases 3 
 - **S2, embeddings.** `bge-small-en-v1.5` int8 through ORT on both platforms: median and p95 latency and memory, and ranking agreement with Elasticsearch on the queries in `scripts/smoke.mjs`.
 - **S3, root cause.** Confirm the section 4.5 cause on a device with `adb logcat`.
 - **S4, preconditions.**
-  - Choose and add a license.
-  - Read the Sessionize and Linux Foundation events terms before scheduling automated fetches (the user's standing rule).
+  - License: done. Apache-2.0 since 2026-11-10 (decision 1), with a data carve-out recorded in `NOTICE`.
+  - Terms review: done and recorded 2026-11-10. Linux Foundation site content is CC BY 3.0 ([terms](https://www.linuxfoundation.org/legal/terms)). Sessionize offers an API for read-only access to public schedules. The Linux Foundation `robots.txt` carries a Content-Signal of `ai-train=no`, so embeddings for search are fine and training on the content is not. Scheduled fetches are therefore acceptable.
+  - Redistribution in public bundles: bundles carry the CC BY 3.0 attribution and a takedown contact, and speaker data in them is trimmed to name, title and organization, with no bios, photos or social links.
   - Create a release keystore as a GitHub secret.
 - **S5, skeleton.** A Kotlin Multiplatform and Compose Multiplatform skeleton that builds for Android and iOS on GitHub Actions and uploads to TestFlight.
 
@@ -503,6 +505,7 @@ There are no dates or deadlines; each phase ends at its exit criteria. Phases 3 
 - Written specifications with golden fixtures for: talk bundle v1, the capabilities document, People API v1 (frozen from `docs/CONTRACT.md`), and Bluetooth derived tokens v1.
 - The GitHub Action pipeline: ingest dry-run, topics port, facets, embeddings, related talks, and publication to Pages.
 - `capabilities.json` for tier 1.
+- The web app (decision 9) reads `capabilities.json` and, on tier 1, searches the static bundle in the browser with no server. Tier 2 and 3 backends send CORS headers for the Pages origin if the web app calls them cross-origin.
 - `GET /api/capabilities` added to the tier 3 server, pointing `talks.bundle_base` at the Pages bundles.
 
 **Exit criteria:**
@@ -565,15 +568,15 @@ There are no dates or deadlines; each phase ends at its exit criteria. Phases 3 
 
 **Deliverables:**
 - App Store release.
-- Signed APK on GitHub Releases, plus Play or F-Droid per decision 4.
+- Signed APK on GitHub Releases, plus F-Droid later (decision 4); no Google Play.
 - Operator guides for each tier: tier 1 is "fork and enable Pages and the Action"; tier 2 is "`wrangler deploy` plus secrets"; tier 3 is the existing checklist plus the new steps.
 - README, `docs/CONTRACT.md` and `DECISIONS.md` updated.
-- The user's own deployment moved to the default tier chosen in decision 6.
+- Default builds point at the live tier 3 server until the official tier 2 passes its exit criteria, then switch to tier 2; tier 1 is the fallback (decision 6).
 
 **Exit criteria:**
 - A fresh fork reaches a working tier 1 by following the guide alone, and likewise for tier 2.
 - The legacy Capacitor APK is retired after its users are told.
-- Any deletion of the user's Elastic deployment or Cloud Run service waits for the user's explicit confirmation (decision 7), because it is irreversible.
+- Any deletion of the maintainer's Elastic deployment or Cloud Run service waits for the maintainer's explicit confirmation (decision 7), because it is irreversible.
 
 ---
 
@@ -581,7 +584,7 @@ There are no dates or deadlines; each phase ends at its exit criteria. Phases 3 
 
 - **Talks and conferences** are already committed under `data/`; no Elasticsearch export is needed. Topic lists exist only in Elasticsearch, so capture them through the public `GET /api/topics?event={slug}` before any shutdown, to diff against the Node builder.
 - **Profiles are not migrated server to server.**
-  - They expire at the end of their conference (`docs/CONTRACT.md:169-170`). KubeCon North America 2026 ends 2026-11-12 (`DATA_NOTES.md:55`).
+  - They expire at the end of their conference (`docs/CONTRACT.md:169-170`). KubeCon North America 2026 ends 2026-11-12 (`data/kubecon-cloudnativecon-north-america-2026/conference.json`, `end_date`).
   - The current apps keep the profile (`caddie.profile.v1`) and the device id and secret (`caddie.device.v1`) on the device (`docs/CONTRACT.md:406`). The native apps cannot read the Capacitor WebView's storage directly.
   - Options: a one-time "export my profile" link or QR code in the last Capacitor build, which the native app imports, or accepting re-entry. Profiles are per conference and short.
   - `scripts/export-people.mjs` should not be used for this; it would move personal data through the operator.
@@ -607,6 +610,8 @@ These decisions were made by the maintainer's agent under a "free forever first,
 10. **Language: English-only semantic matching with `bge-small-en-v1.5` for v1.**
 11. **Bluetooth on tier 2:** a "right near you" nudge may arrive up to the operator-set sightings interval late, which is up to 5 minutes at KubeCon scale.
 
+---
+
 ## 15. Risks
 
 | Risk | Effect | Mitigation |
@@ -615,12 +620,12 @@ These decisions were made by the maintainer's agent under a "free forever first,
 | Discovery between two backgrounded iPhones fails | Fewer nudges in crowds of iPhones | S1 measurement; Android-assisted discovery; honest copy |
 | Dense venue: many Apple devices to interrogate | Android battery drain and connection-slot exhaustion | RSSI gate, per-address cache, connection cap; Phase 4 measurement |
 | Tier 2 near the daily cap at high adoption | 1027 errors at peak | Operator sightings interval; delta sync; fail-open client |
-| Push is unavailable on third-party backends | Asks are not seen while the app is closed | In-app badges; Bluetooth local notifications; optional gateway (question 3) |
+| Push is unavailable on third-party backends | Asks are not seen while the app is closed | In-app badges; Bluetooth local notifications (decision 3: no gateway) |
 | Kotlin/Native and Xcode build friction for a new Kotlin developer | Slower start | S5 skeleton first; Swift only behind interfaces |
-| Compose UI on iOS feels non-native | User complaints | SwiftUI interop for specific screens; question 2 |
-| Play rejects the `connectedDevice` foreground service | No Play listing | `specialUse`; GitHub Releases and F-Droid |
+| Compose UI on iOS feels non-native | User complaints | SwiftUI interop for specific screens (decision 2) |
+| Play rejects the `connectedDevice` foreground service (only if Play is reconsidered) | No Play listing | `specialUse`; GitHub Releases and F-Droid |
 | Android verification goes global in 2027 | Sideloading friction | Register the app (free 20-device account or verified console account), or document ADB and the advanced flow |
-| `bge-small-en` is English-only | Weaker matching for non-English text | Question 10 |
+| `bge-small-en` is English-only | Weaker matching for non-English text | Decision 10: English-only for v1; `multilingual-e5-small` (118 MB) is the later upgrade path |
 | Sessionize or Linux Foundation terms forbid scheduled fetches | No automatic tier 1 refresh | S4 check; operator-run refresh as today |
 | User-generated content on third-party servers at App Review | Rejection or removal | Report and block work against every tier; operator guide requires moderation |
 

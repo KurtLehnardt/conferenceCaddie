@@ -1,1 +1,1 @@
-{ "name": "caddie-hello", "private": true, "type": "module", "scripts": { "start": "node server.mjs" } }
+{ "name": "caddie-hello", "private": true, "license": "Apache-2.0", "type": "module", "scripts": { "start": "node server.mjs" } }
