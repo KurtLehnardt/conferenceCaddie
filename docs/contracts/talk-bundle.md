@@ -108,7 +108,9 @@ The talk text is title and abstract only. Today's tier 3 server copies the title
 
 ## Related talks
 
-For every `kind: talk` item with a row, the other `kind: talk` items with a row, ordered by the similarity above (int8 rows against int8 rows) from highest to lowest, ties broken by `talk_id` in ascending code-unit order, the first 5 kept. There is no similarity threshold. Ambient items are neither given nor used as related talks.
+For every `kind: talk` item with a row, the other `kind: talk` items with a row, ordered by cosine similarity (int8 rows against int8 rows) from highest to lowest, true ties broken by `talk_id` in ascending code-unit order, the first 5 kept. There is no similarity threshold. Ambient items are neither given nor used as related talks.
+
+The order is decided in exact integer arithmetic, not floating point, so every platform gets the same lists: for the talk's row `a` and two candidates `b1` and `b2`, with `d = dot(a, b)` and `n = dot(b, b)`, `b1` ranks higher when `sign(d1) × d1² × n2 > sign(d2) × d2² × n1`; a zero row has similarity 0. These products reach about 2.4 × 10²⁰, beyond 64 bits, so they need a big-integer type or a 128-bit product (`compareSimilarity()` uses BigInt). Doubles would not do: rows `[1, 1, 0, …]` and `[5, 5, 0, …]` have exactly the same cosine against any row, yet `dot / (|a| × |b|)` in double precision can differ in the last bit and put them in either order.
 
 The bundle builder computes the lists and checks them again before publishing (`verifyBundle(entry, files, { producer: true })`); clients use them as published and do not recompute them, so a difference in the last bit of another platform's floating point can never make a good bundle fail. Parity with tier 3's `GET /api/related` is not promised: that route runs a kNN query on Elasticsearch's own embeddings of title and abstract chunks with a different model.
 

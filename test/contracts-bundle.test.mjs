@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   quantizeRow, encodeVectors, decodeVectors, cosine, relatedTalks, contentHash, verifyBundle, sha256hex, textHash, buildBundle,
-  normalizeKey, buildFacets, bundleTalk, DIMS, MODEL, passageText, queryText,
+  normalizeKey, buildFacets, bundleTalk, compareSimilarity, DIMS, MODEL, passageText, queryText,
 } from '../contracts/js/bundle.mjs';
 import { canonicalJson } from '../contracts/js/canonical-json.mjs';
 import { buildFixtureBundles, BUNDLE_OUT } from '../contracts/js/fixtures.mjs';
@@ -90,6 +90,20 @@ test('quantisation: per-row max-abs scale, half away from zero, never -128', () 
     // int8 cosine stays close to float cosine with itself rotated slightly.
     assert.ok(cosine(v, q) > 0.999);
   }
+});
+
+test('related talks are ordered exactly: true ties go by talk_id even when doubles differ', () => {
+  const a = Int8Array.from([3, 5, -7]);
+  const small = Int8Array.from([1, 1, 0]);
+  const big = Int8Array.from([5, 5, 0]);
+  // The same cosine, but the doubles differ in the last bit.
+  assert.notEqual(cosine(a, small), cosine(a, big));
+  assert.equal(compareSimilarity(a, small, big), 0);
+  const rows = new Map([['s:0', a], ['s:2', big], ['s:1', small], ['s:3', Int8Array.from([-3, -5, 7])], ['s:4', Int8Array.from([0, 0, 0])]]);
+  const talks = [...rows.keys()].map((talk_id) => ({ talk_id, kind: 'talk' }));
+  assert.deepEqual(relatedTalks(talks, rows)['s:0'], ['s:1', 's:2', 's:4', 's:3']);
+  assert.ok(compareSimilarity(a, a, small) < 0, 'a row is most similar to itself');
+  assert.ok(compareSimilarity(a, Int8Array.from([0, 0, 0]), Int8Array.from([-3, -5, 7])) < 0, 'zero beats negative');
 });
 
 test('related talks break ties by talk_id and never include other kinds', () => {

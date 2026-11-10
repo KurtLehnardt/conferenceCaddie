@@ -112,9 +112,36 @@ export function cosine(a, b) {
 }
 
 /**
+ * Compares cos(a, b1) with cos(a, b2) exactly, for int8 rows: negative when b1 is more similar, 0
+ * on a true tie, positive otherwise. For a fixed a, cos(a, b) orders as dot(a, b) / |b|, and that
+ * orders as sign(d) * d^2 / n with d = dot(a, b) and n = dot(b, b); cross-multiplying gives
+ * sign(d1) * d1^2 * n2 against sign(d2) * d2^2 * n1, all integers. |d| and n are at most
+ * 384 * 127 * 127 = 6,193,536, so d^2 * n can reach about 2.4e20, past 64 bits: use BigInt here,
+ * BigInteger or a 128-bit product (Math.multiplyHigh, multipliedFullWidth) elsewhere. A zero row has
+ * similarity 0. No floating point is involved, so every platform orders related talks the same way,
+ * and the talk_id tie-break applies exactly to true ties.
+ */
+export function compareSimilarity(a, b1, b2) {
+  const n1 = BigInt(dot(b1, b1));
+  const n2 = BigInt(dot(b2, b2));
+  const d1 = n1 === 0n ? 0n : BigInt(dot(a, b1));
+  const d2 = n2 === 0n ? 0n : BigInt(dot(a, b2));
+  const sgn = (d) => (d < 0n ? -1n : d > 0n ? 1n : 0n);
+  // A zero row (or a zero dot product) has similarity 0: compare signs first.
+  const s1 = sgn(d1);
+  const s2 = sgn(d2);
+  if (s1 !== s2) return s1 > s2 ? -1 : 1;
+  if (s1 === 0n) return 0;
+  const l = s1 * d1 * d1 * n2;
+  const r = s2 * d2 * d2 * n1;
+  return l > r ? -1 : l < r ? 1 : 0;
+}
+
+/**
  * The top-k related talks of every talk of a related kind: the other related-kind talks by cosine
- * similarity, highest first, ties broken by talk_id in ascending code-unit order. No threshold, as
- * GET /api/related has none. Returns { talk_id: [talk_id, ...] } for every such talk with a row.
+ * similarity, highest first, compared exactly (compareSimilarity), true ties broken by talk_id in
+ * ascending code-unit order. No threshold. Returns { talk_id: [talk_id, ...] } for every such talk
+ * with a row.
  */
 export function relatedTalks(talks, rowsById, k = RELATED_K) {
   const eligible = talks.filter((t) => RELATED_KINDS.includes(t.kind) && rowsById.has(t.talk_id)).map((t) => t.talk_id);
@@ -123,10 +150,8 @@ export function relatedTalks(talks, rowsById, k = RELATED_K) {
     const row = rowsById.get(id);
     out[id] = eligible
       .filter((other) => other !== id)
-      .map((other) => ({ other, s: cosine(row, rowsById.get(other)) }))
-      .sort((x, y) => y.s - x.s || (x.other < y.other ? -1 : x.other > y.other ? 1 : 0))
-      .slice(0, k)
-      .map((x) => x.other);
+      .sort((x, y) => compareSimilarity(row, rowsById.get(x), rowsById.get(y)) || (x < y ? -1 : x > y ? 1 : 0))
+      .slice(0, k);
   }
   return out;
 }
