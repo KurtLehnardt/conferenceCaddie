@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -133,10 +134,14 @@ private fun ServerGroup(state: ShellState, actions: ShellActions, onServerTyped:
     var draft by rememberSaveable(state.serverBase) { mutableStateOf(state.serverBase) }
     var error by remember(state.serverBase) { mutableStateOf<String?>(null) }
     val c = Caddie.colors
+    val focusManager = LocalFocusManager.current
     val save = {
         when (val result = BackendUrl.normalise(draft, allowLocalHttp = state.isDebugBuild)) {
             is BackendUrl.Valid -> {
                 draft = result.base
+                // The keyboard goes away before the confirmation opens, so the question is asked on
+                // a settled screen; a refused address keeps it, so the person can correct it.
+                focusManager.clearFocus()
                 if (result.base != state.serverBase) onServerTyped(result.base)
             }
             is BackendUrl.Invalid -> error = result.reason.message(state.isDebugBuild)
