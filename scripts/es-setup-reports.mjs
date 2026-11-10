@@ -8,11 +8,14 @@
 //        --meets says otherwise.
 //
 // The reports index defaults to caddie-people-reports-v1 behind the alias caddie-people-reports.
-// Pass --alias "" to skip the alias step. Every step is idempotent:
+// The alias moves only for the default index or caddie-people-reports-v<N>; any other name gets no
+// alias unless --alias names one. Pass --alias "" to skip the alias step. Every step is idempotent:
 // - The reports index is created when missing and left alone otherwise.
 // - hidden (boolean) and spot_hidden (boolean) are PUT to the people mapping. That is additive and
 //   never names a semantic_text field, so nothing is re-embedded. The people index must exist.
 // - hidden (boolean) is PUT to the meets mapping when that index exists, and skipped otherwise.
+
+import { chooseAlias } from './lib/alias.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -33,7 +36,8 @@ const aliasArg = opt('--alias');
 const peopleIndex = opt('--people') || process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const meetsIndex = opt('--meets') || process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
 const index = args[0] || 'caddie-people-reports-v1';
-const alias = aliasArg !== undefined ? aliasArg : 'caddie-people-reports';
+const { alias, hint } = chooseAlias({ index, explicit: aliasArg, defaultIndex: 'caddie-people-reports-v1', defaultAlias: 'caddie-people-reports' });
+if (hint) console.log(hint);
 
 for (const name of [index, alias, peopleIndex, meetsIndex]) {
   if (name && !name.startsWith('caddie-')) {
