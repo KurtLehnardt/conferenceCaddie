@@ -46,6 +46,7 @@ import { take, clientIp } from './ratelimit.mjs';
 import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
+import { reportCountsFor, HIDE_AT } from './report.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
@@ -1121,6 +1122,24 @@ export async function reembedPending(eventId, profileId) {
   return !written.degraded;
 }
 
+// The report flags for a profile document that is being created or fully reindexed: the flags it
+// already carries, and hidden or spot_hidden again when its reports (which outlive the document,
+// see report.mjs) reach HIDE_AT. Fails closed: when counting fails, a reindex keeps the stored
+// flags and never unhides, and a create (which has no stored flags to keep) fails with the error,
+// so a deleted and re-made profile is never created visible on a guess.
+async function reportFlags(slug, ref, own) {
+  const stored = { hidden: own.found && own.source.hidden === true, spot_hidden: own.found && own.source.spot_hidden === true };
+  let counts;
+  try {
+    counts = await reportCountsFor(slug, ref);
+  } catch (err) {
+    if (!own.found) throw err;
+    console.error(`Counting reports failed; keeping the stored flags: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
+    return stored;
+  }
+  return { hidden: stored.hidden || counts.profile >= HIDE_AT, spot_hidden: stored.spot_hidden || counts.spot >= HIDE_AT };
+}
+
 async function putProfile(req, res) {
   const ip = clientIp(req);
   limit(`people-write:ip:${ip}`, LIMITS.writeIp);
@@ -1164,10 +1183,14 @@ async function putProfile(req, res) {
   };
   // Presence needs conference-wide visibility, so turning that off clears it. Otherwise a full
   // reindex carries the stored presence over and a partial update leaves it alone.
-  const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
+  const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : { ...PRESENCE_OFF };
   if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
-  // The report flags live on the document too; a full reindex would otherwise unhide silently.
-  const flags = own.found ? { hidden: own.source.hidden === true, spot_hidden: own.source.spot_hidden === true } : {};
+  // The report flags live on the document too, and a create or a full reindex writes them from the
+  // stored flags and the reports on file (reportFlags), so neither unhides silently, not even after
+  // the owner deleted the document. A partial update leaves them as they are.
+  const partial = own.found && own.source.text_hash === hash;
+  const flags = partial ? null : await reportFlags(conf.slug, common.ref, own);
+  if (flags?.spot_hidden) presence.presence_spot = null;
 
   let status;
   let degraded = false;
@@ -1184,13 +1207,14 @@ async function putProfile(req, res) {
         sample: false,
         secret_hash: hashSecret(device.secret),
         text_hash: hash,
+        ...flags,
         ...common,
       },
     ));
     if (status === 409) throw forbidden();
   } else {
     const guard = { _id: id, if_seq_no: own.seqNo, if_primary_term: own.primaryTerm };
-    if (own.source.text_hash === hash) {
+    if (partial) {
       // Text unchanged: a Bulk partial update without the text fields reuses the embeddings.
       status = await bulkOne({ update: guard }, { doc: common });
     } else {
@@ -1218,7 +1242,7 @@ async function putProfile(req, res) {
     ok: true,
     open_to_meet: body.open_to_meet,
     shared_talk_ids: shared,
-    hidden_for_owner: own.found && own.source.hidden === true,
+    hidden_for_owner: flags ? flags.hidden : own.source.hidden === true,
     // Present only when the text could not be embedded and was left off the document for now.
     ...(degraded ? { degraded: { semantic: true } } : {}),
   });
