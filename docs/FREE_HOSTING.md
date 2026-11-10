@@ -2,16 +2,64 @@
 
 This page describes the free version of Conference Caddie, which has no expiry and needs no Elasticsearch and no Google Cloud. The people features are the main feature: profiles, people matching, talk circles, asks, waves, meets, presence, block, report, moderation, nudges and push. Talk search, browse, schedule, For you, topics and schedule import come along.
 
-## Status on 2026-11-10 (read this first)
+## What you need to do next (read this first)
+
+The free stack is built, reviewed and fixed, but it is **not deployed**, and four things only you can do stand in the way. Nothing below has been done on your behalf.
+
+1. **Create a Cloudflare API token** with these Account permissions: Workers Scripts: Edit, Workers AI: Read and Account Settings: Read. The current token lacks Workers Scripts: Edit, so every call on a named Worker script answers HTTP 403.
+2. **Open Workers & Pages once** in the Cloudflare dashboard, so the account gets a `workers.dev` subdomain. (`worker/scripts/deploy.sh` can also create it, but only with the new token.)
+3. **Put the new token in `CLOUDFLARE_API_TOKEN`** (and keep `CLOUDFLARE_ACCOUNT_ID` set).
+4. **Re-run the deploy steps** in [Go live](#go-live-about-10-minutes): `bash worker/scripts/deploy.sh`, then `node worker/scripts/setup-secrets.mjs --only-missing`, then the migration, the repository variable `CADDIE_API_BASE`, the two workflows and the smoke script, exactly as listed there. Merge PR #24 first, because it holds the review fixes (see the [review](#review-2026-11-10)).
+
+Two decisions are also yours:
+
+- **Decide where the app lives (open finding R18).** Device secrets sit in `localStorage` on `https://kurtlehnardt.github.io`, an origin shared with seven other live sites of this account. Fixing it needs a custom domain or a separate GitHub account. This should be settled before go-live, and `ALLOWED_ORIGINS` should then name only the new origin.
+- **Approve, step by step, the shutdown of the paid stack** (Cloud Run, Artifact Registry, Secret Manager, Elastic, billing). The full list with commands is in [Approvals needed](#approvals-needed-shutting-down-the-paid-stack). Several steps are irreversible. None has been done, and none should happen until the free stack has passed the live smoke for a full day and the Android build points at the Worker.
+
+The detailed findings and checks are in [REVIEW_NOTES_FREE.md](../REVIEW_NOTES_FREE.md).
+
+## Status on 2026-11-10
 
 The code is finished and tested locally, but **the Worker is not deployed yet**, so the free stack is not live.
 
 - The Cloudflare API token in `CLOUDFLARE_API_TOKEN` is active and Workers AI works with it. Every call on a named Worker script (upload, secrets) answers HTTP 403 "No access to the specified resource", and so do `/workers/subdomain` and `/workers/durable_objects/namespaces`. The token therefore lacks the permission **Workers Scripts: Edit**, even though the brief said it had it. There is no wrangler login on the build machine to fall back on.
 - GitHub Pages is enabled (source: GitHub Actions) but nothing has been published, so https://kurtlehnardt.github.io/conferenceCaddie/ shows GitHub's 404 page for now. The Pages and ingest workflows are on `main` and skip with a notice while the repository variable `CADDIE_API_BASE` (and, for the ingest, the secret `CADDIE_ADMIN_TOKEN`) is unset, so they do not fail.
-- The last full local run of the ported smoke script (`scripts/smoke.mjs`) against a local Worker with real Workers AI embeddings gave 86 PASS, 0 FAIL.
+- The last full local run of the ported smoke script (`scripts/smoke.mjs`), on the review fixes of PR #24 and against a local Worker with real Workers AI embeddings, gave 92 PASS, 0 FAIL, 0 SKIP. The 86 PASS before the fixes came from the earlier run.
 - The Cloud Run and Elasticsearch stack is untouched and still serves https://conference-caddie-265846417372.us-west1.run.app.
 
-To finish, follow [Go live](#go-live-about-10-minutes) below.
+To finish, follow [What you need to do next](#what-you-need-to-do-next-read-this-first) and then [Go live](#go-live-about-10-minutes).
+
+## Review (2026-11-10)
+
+**Verdict.** The second review of the free stack found eight must-fix problems. Seven are fixed and checked locally; the eighth needs your decision. With PR #24 merged, I found nothing else that blocks a deploy except the missing Cloudflare token permission. Without PR #24 the stack on `main` should not be deployed, because blocks can be escaped and native apps cannot discover the Worker's tier.
+
+**How it ran.** The Worker is not deployed, so the review and the fix round ran locally: `wrangler dev --local` with real Workers AI embeddings, plus the web app built in Pages mode and served under `/conferenceCaddie/` by a GitHub Pages stand-in. There was no live smoke run and no reading of CPU use on the deployed Worker.
+
+**Must-fix items.** The fixes are on branch `fix/free-review` (2759457 and 2f6d613, rebased onto `origin/main` at 110c513) and open as [PR #24](https://github.com/KurtLehnardt/conferenceCaddie/pull/24). I did not push the fixes to `main`: the project rules allow that only when you say "push to main", and nothing was deployed.
+
+1. **Blocks (fixed).** A block now belongs to the person who made it. If the blocked person deletes and re-creates their profile, they are still blocked. The blocks list shows such a block with `display_name: null`, unblocking by ref still works, and blocks run out at the conference end.
+2. **Bluetooth tokens v1 (fixed).** Ported from the tier 3 code of PR #23; it needs the `BLE_MASTER_KEYRING` Worker secret. Turning on Bluetooth returns `ble_key` and `ble_key_id` once. Sightings resolve the previous, current and next 10-minute windows, and the answer carries `ble_key_id`. A session under a retired master gets 403 `ble_rekey`. The protections now apply to old-style tokens too: only people in the same zone or nearby cells resolve, at most 10 new people per window and 30 per hour per device, and a zone is shown only when it is the requester's own.
+3. **`GET /api/capabilities` (fixed).** It now serves a valid tier 2 document, publicly cached for 5 minutes.
+4. **Embedding parity (fixed).** Embeddings now match the talk bundles: CLS pooling, each talk embedded as title plus newline plus abstract, and the query instruction on talk searches. The model settings are checked before every ingest push, and stored vectors are re-embedded when the settings change. I re-measured the people match threshold with real Workers AI and raised it from 0.55 to 0.61.
+5. **Pages workflow (fixed).** `pages.yml` now builds the talk bundles into `dist-pages/`. The pinned embedding model is cached, bundle directories the live site still names are copied forward, every vector is rebuilt weekly, and pushes to `data/` and the bundle builder trigger a rebuild.
+6. **Schedule import (fixed).** It accepts `filename` and `mime` alongside `text`, so PDF import in the Pages build works.
+7. **Unavailable conferences (fixed).** When a conference turns unavailable, people can still delete their data, admin routes still reach it, and the 10-minute cleanup job keeps purging it until it is empty. The ingest push no longer takes a conference down after a one-off fetch failure.
+8. **Shared origin (not fixed, R18).** The device secrets still live on the github.io origin shared with the account's seven other live sites. Fixing it needs you to choose a custom domain or a separate GitHub account.
+
+**Checks, all run locally.**
+
+- The Worker builds (`wrangler deploy --dry-run`).
+- The smoke script passed all 92 checks, with no failures or skips, using real Workers AI embeddings. It includes the new checks for these fixes (`cap1`, `im3b`, `q8c`, `ble1`, `ble2`, `unav1`).
+- `node worker/scripts/ble-parity.mjs` passed 29 of 29 against the golden vectors and resolution cases in `contracts/fixtures/ble/`.
+
+**Notes.**
+
+- The review ran against `origin/main` at 6f55b8e, with fake embeddings; the fix round used real ones.
+- Not exercised against a running Worker: the 403 `ble_rekey` answer itself (the parity run covers retired masters) and `pages.yml` on GitHub (its steps ran locally, in order).
+- Set `BLE_MASTER_KEYRING` before the first live smoke run, or the capabilities document says `server-rotate`.
+- Unchanged and mirroring `main`: reports are never purged automatically (the operator purges them), and the device header is a static bearer credential.
+- The Worker's import body cap is 1 MB while the web app allows 5 MB, so files over about 750 KB get 413.
+- Full findings, proofs and the list of what was not covered are in [REVIEW_NOTES_FREE.md](../REVIEW_NOTES_FREE.md).
 
 ## Live URLs
 
@@ -78,7 +126,7 @@ GitHub Actions: weekly ingest ──admin routes──> Worker
 
 ## Go live (about 10 minutes)
 
-1. **Fix the token.** In the Cloudflare dashboard, create an account API token with Workers Scripts: Edit and Workers AI: Read (add Workers Tail: Read only if you want CPU readings). If the account has no `workers.dev` subdomain, create it under Workers & Pages, Overview. Put the new token in `CLOUDFLARE_API_TOKEN`.
+1. **Fix the token.** In the Cloudflare dashboard, create an account API token with Workers Scripts: Edit, Workers AI: Read and Account Settings: Read (add Workers Tail: Read only if you want CPU readings). If the account has no `workers.dev` subdomain, create it under Workers & Pages, Overview. Put the new token in `CLOUDFLARE_API_TOKEN`.
 2. From the repository root, in order (each step prints names and counts only):
 
    ```sh
@@ -131,7 +179,7 @@ Never print the file. The old token stops working as soon as the Worker secret i
 - **Not deployed yet.** See the status section above. No live smoke run, CPU reading on the deployed Worker or live usage meter exists yet.
 - **People vectors are server-side.** The capabilities document says `people.semantic: server` and `people.live: poll`: client-computed profile vectors and the WebSocket channel of the tier 2 fixture are not implemented.
 - **The import body cap is 1 MB** in the Worker, while the web app allows files up to 5 MB. Text files between about 750 KB and 5 MB get 413.
-- **Shared github.io origin.** Every project site of the account shares `https://kurtlehnardt.github.io`. Another site there could read the device secret in `localStorage`, and the origin is an allowed CORS origin. A custom domain or a dedicated GitHub account removes the risk.
+- **Shared github.io origin (R18, open, needs your decision before go-live).** Every project site of the account shares `https://kurtlehnardt.github.io`. Another site there could read the device secret in `localStorage`, and the origin is an allowed CORS origin. A custom domain or a dedicated GitHub account removes the risk.
 - **Four real profiles were not migrated.** The owners' device secrets live on the Cloud Run origin, so they make a new profile on Pages.
 - **English-only embeddings.** bge-small is English-only. If non-English talks matter, set `EMBED_MODEL` to `@cf/baai/bge-m3`, clear the vectors and run the admin re-embed.
 - **Ranking differs from Elasticsearch.** FTS5 BM25 and the 0.61 people floor order results a little differently from the E5 and Lucene setup, and the smoke is the only gate.
