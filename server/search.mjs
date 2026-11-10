@@ -61,7 +61,7 @@ import { searchableConference } from './conferences.mjs';
 import { parseTimePhrases } from './phrases.mjs';
 import { suggestChips } from './facets.mjs';
 import { conferencePreference, withPreference } from './preference.mjs';
-import { pauseSemantic, semanticAvailable } from './semantic.mjs';
+import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
@@ -85,16 +85,21 @@ const SOURCE_FIELDS = ['talk_id', 'conference', 'title', 'speakers', 'room', 'st
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
 
 export class BadRequest extends Error {}
+// status is the HTTP (or msearch item) status when Elasticsearch answered; types and
+// inferenceReason come from esErrorInfo (semantic.mjs) and say whether inference failed. Only the
+// message, a status or an error type, is ever logged.
 export class UpstreamError extends Error {
-  constructor(message, status = null) {
+  constructor(message, status = null, details = {}) {
     super(message);
     this.status = status;
+    this.types = details.types ?? [];
+    this.inferenceReason = details.inferenceReason === true;
   }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Elasticsearch transport. Error bodies from Elasticsearch are never passed on; only the status
-// code is kept, for the server log.
+// code is kept for the server log, and the error types to tell an inference failure apart.
 //
 // esRequest(path, body, options) sends one request and returns the parsed JSON response.
 // - body: an object (sent as JSON), a string (sent as is) or undefined (no body).
@@ -118,8 +123,13 @@ export async function esRequest(path, body, options = {}) {
     throw new UpstreamError(err?.name === 'TimeoutError' ? 'timeout' : 'network error');
   }
   if (!res.ok) {
-    await res.body?.cancel();
-    throw new UpstreamError(`status ${res.status}`, res.status);
+    let info = {};
+    try {
+      info = esErrorInfo((await res.json())?.error);
+    } catch {
+      // Not JSON, or the body could not be read: the status alone.
+    }
+    throw new UpstreamError(`status ${res.status}`, res.status, info);
   }
   try {
     return await res.json();
@@ -139,7 +149,7 @@ async function msearch(searches, header = {}) {
   if (failed) {
     // Only the error's type is kept: an Elasticsearch reason can echo the query text.
     const type = failed.error?.caused_by?.type ?? failed.error?.type ?? 'unknown';
-    throw new UpstreamError(`msearch item failed: ${type}`, failed.status);
+    throw new UpstreamError(`msearch item failed: ${type}`, failed.status, esErrorInfo(failed.error));
   }
   return responses;
 }
@@ -643,15 +653,16 @@ export async function search(params) {
 
   // Every search of the request, and every later request for this conference, reads the same shard
   // copy, so ties are broken the same way each time. A text query runs semantic plus keyword; when
-  // the semantic query fails (the inference endpoint is unavailable), the same request is answered
-  // by keyword matching alone and says so, and semantic queries pause for a minute (semantic.mjs).
+  // the semantic query fails because the inference endpoint did (isInferenceFailure), the same
+  // request is answered by keyword matching alone and says so, and semantic queries pause for a
+  // minute (semantic.mjs). Any other failure fails the request as before.
   let semantic = Boolean(query) && semanticAvailable();
   const header = { preference: conferencePreference(conference) };
   const run = async () => {
     try {
       return await msearch(build(semantic), header);
     } catch (err) {
-      if (!semantic || !(err instanceof UpstreamError)) throw err;
+      if (!semantic || !(err instanceof UpstreamError) || !isInferenceFailure(err)) throw err;
       pauseSemantic(err);
       semantic = false;
       return msearch(build(false), header);
