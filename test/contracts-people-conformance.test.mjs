@@ -7,9 +7,10 @@
 // index with sequence numbers, and evaluates the filters the server sends (bool, term, terms,
 // range, ids, exists, match_all, and the filter of a retriever) and terms aggregations. Scoring
 // clauses (knn, multi_match, distance_feature) match everything, so ranking is not under test
-// here, only shapes. All 24 routes run, and every list the schema describes comes back non-empty
-// at least once, so Person, MeetView, the inbox items, circle members and the rest are checked
-// against real handler output.
+// here, only shapes; with `explain: true` an rrf search explains every hit as found by every
+// retriever, in the shape Elasticsearch 9.5.6 returns (test/lib/rrf-explanation.mjs). All 24
+// routes run, and every list the schema describes comes back non-empty at least once, so Person,
+// MeetView, the inbox items, circle members and the rest are checked against real handler output.
 //
 // Nothing here reaches the network: fetch is replaced before the server modules are imported and
 // a call to any other host fails the test. The keys, URL and device credentials are dummy values.
@@ -21,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rrfExplanation } from './lib/rrf-explanation.mjs';
 
 const ES_HOST = 'es.contracts.test';
 Object.assign(process.env, {
@@ -142,7 +144,11 @@ function search(index, body) {
   }
   const from = body.from ?? 0;
   const size = body.size ?? 10;
-  const hits = docs.slice(from, from + size).map(({ _id, __seq, ...source }) => ({ _id, _seq_no: __seq, _primary_term: 1, _source: pickSource(source, body._source) }));
+  const retrievers = body.explain ? body.retriever?.rrf?.retrievers : undefined;
+  const hits = docs.slice(from, from + size).map(({ _id, __seq, ...source }, i) => ({
+    _id, _seq_no: __seq, _primary_term: 1, _source: pickSource(source, body._source),
+    ...(retrievers ? { _explanation: rrfExplanation(retrievers.map(() => from + i + 1), retrievers.map((r) => r.standard._name)) } : {}),
+  }));
   const aggregations = {};
   for (const [name, agg] of Object.entries(body.aggs ?? {})) {
     if (!agg.terms) continue;

@@ -32,13 +32,14 @@ const KNN_K = 100;
 const RANK_WINDOW = 100;
 const DISTANCE_PIVOT_M = 100;
 
-// The lowest cosine similarity a semantic people leg keeps, per embedding model. Elasticsearch's
-// kNN returned the k nearest profiles whatever their score, and with E5 that was harmless. With
-// bge-small, a conference's profiles all score between about 0.4 and 0.6 against a query they have
-// nothing to do with (measured on the KubeCon sample profiles on 2026-11-10: unrelated profiles
-// sit at a median of 0.39 to 0.60, a synthetic query's best unrelated profile at 0.53, and real
-// matches at 0.65 to 0.93). Without a floor nearly every candidate joins every semantic leg, so
-// anyone who also shares a common topic outranks the one person whose text actually matches.
+// The lowest cosine similarity a semantic people leg keeps, per embedding model. The floor keeps
+// weak semantic matches out of the results; the server learned this the hard way in PR #25 when its
+// kNN returned the k nearest profiles regardless of their score, letting unrelated profiles outrank
+// actual text matches. This value is calibrated for bge-small-en-v1.5 with CLS pooling and is not
+// comparable to the server's E5 floors. With bge-small, a conference's profiles all score between
+// about 0.4 and 0.6 against a query they have nothing to do with (measured on the KubeCon sample
+// profiles on 2026-11-10: unrelated profiles sit at a median of 0.39 to 0.60, a synthetic query's
+// best unrelated profile at 0.53, and real matches at 0.65 to 0.93).
 // env.PEOPLE_SEMANTIC_FLOOR overrides the value; a model not listed here has no floor.
 // Those numbers were measured with Workers AI's default mean pooling. The embedding conventions
 // (lib/embed.js) call it with CLS pooling, which raises every cosine by about 0.05: re-measured on
