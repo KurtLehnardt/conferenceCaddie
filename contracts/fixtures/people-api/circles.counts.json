@@ -1,0 +1,26 @@
+{
+  "route": "circles.counts",
+  "examples": [
+    {
+      "name": "counts",
+      "request": {
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "talk_ids": [
+            "kubecon-cloudnativecon-north-america-2026:1371070",
+            "kubecon-cloudnativecon-north-america-2026:1371071"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "counts": {
+            "kubecon-cloudnativecon-north-america-2026:1371070": 4,
+            "kubecon-cloudnativecon-north-america-2026:1371071": 0
+          }
+        }
+      }
+    }
+  ]
+}

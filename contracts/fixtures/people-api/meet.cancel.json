@@ -1,0 +1,68 @@
+{
+  "route": "meet.cancel",
+  "examples": [
+    {
+      "name": "cancel",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "path_params": {
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw",
+          "state": "cancelled",
+          "requested_by_me": true,
+          "same_zone": true,
+          "topic": {
+            "topic_id": "ebpf",
+            "label": "eBPF"
+          },
+          "topic_label": "eBPF",
+          "note": null,
+          "created_at": "2026-11-10T17:02:00.000Z",
+          "active_since": null,
+          "active_until": null,
+          "expires_at": "2026-11-10T17:17:00.000Z",
+          "rendezvous": null,
+          "mine": {
+            "spot_me": null,
+            "around": true
+          },
+          "other": {
+            "ref": "3f2a9c0d1e4b5a68",
+            "display_name": "Sample Person",
+            "about": "",
+            "around": true,
+            "zone": null,
+            "spot": null,
+            "spot_me": null
+          }
+        }
+      }
+    },
+    {
+      "name": "already over",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "path_params": {
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw"
+        }
+      },
+      "response": {
+        "status": 410,
+        "body": {
+          "error": "over",
+          "state": "cancelled"
+        }
+      }
+    }
+  ]
+}

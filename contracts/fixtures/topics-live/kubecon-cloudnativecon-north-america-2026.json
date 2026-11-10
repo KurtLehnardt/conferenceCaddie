@@ -1,0 +1,492 @@
+{
+  "snapshot": {
+    "taken_on": "2026-11-10",
+    "fetched_at": "2026-11-10T08:51:32Z",
+    "source": "GET https://conference-caddie-265846417372.us-west1.run.app/api/topics?event=kubecon-cloudnativecon-north-america-2026",
+    "status": 200,
+    "note": "Public data from the live tier 3 service, captured once for the Phase 1 topics port: the Node topics builder is diffed against these lists before Elasticsearch is decommissioned. A snapshot, not a contract: it is never refreshed automatically."
+  },
+  "event": "kubecon-cloudnativecon-north-america-2026",
+  "topics": [
+    {
+      "topic_id": "ai",
+      "label": "AI",
+      "talk_count": 114
+    },
+    {
+      "topic_id": "kubernetes",
+      "label": "Kubernetes",
+      "talk_count": 114
+    },
+    {
+      "topic_id": "agents",
+      "label": "Agents",
+      "talk_count": 80
+    },
+    {
+      "topic_id": "ai-agents",
+      "label": "AI Agents",
+      "talk_count": 32
+    },
+    {
+      "topic_id": "cloud-native",
+      "label": "Cloud Native",
+      "talk_count": 28
+    },
+    {
+      "topic_id": "gpu",
+      "label": "GPU",
+      "talk_count": 28
+    },
+    {
+      "topic_id": "platform",
+      "label": "Platform",
+      "talk_count": 27
+    },
+    {
+      "topic_id": "inference",
+      "label": "Inference",
+      "talk_count": 25
+    },
+    {
+      "topic_id": "llm",
+      "label": "LLM",
+      "talk_count": 20
+    },
+    {
+      "topic_id": "open-source",
+      "label": "Open Source",
+      "talk_count": 17
+    },
+    {
+      "topic_id": "observability",
+      "label": "Observability",
+      "talk_count": 13
+    },
+    {
+      "topic_id": "gateway",
+      "label": "Gateway",
+      "talk_count": 12
+    },
+    {
+      "topic_id": "opentelemetry",
+      "label": "OpenTelemetry",
+      "talk_count": 11
+    },
+    {
+      "topic_id": "scheduling",
+      "label": "Scheduling",
+      "talk_count": 11
+    },
+    {
+      "topic_id": "security",
+      "label": "Security",
+      "talk_count": 11
+    },
+    {
+      "topic_id": "sig",
+      "label": "SIG",
+      "talk_count": 11
+    },
+    {
+      "topic_id": "community",
+      "label": "Community",
+      "talk_count": 10
+    },
+    {
+      "topic_id": "llm-inference",
+      "label": "LLM Inference",
+      "talk_count": 10
+    },
+    {
+      "topic_id": "sandbox",
+      "label": "Sandbox",
+      "talk_count": 10
+    },
+    {
+      "topic_id": "identity",
+      "label": "Identity",
+      "talk_count": 9
+    },
+    {
+      "topic_id": "mcp",
+      "label": "MCP",
+      "talk_count": 9
+    },
+    {
+      "topic_id": "traffic",
+      "label": "Traffic",
+      "talk_count": 9
+    },
+    {
+      "topic_id": "istio",
+      "label": "Istio",
+      "talk_count": 8
+    },
+    {
+      "topic_id": "mesh",
+      "label": "Mesh",
+      "talk_count": 8
+    },
+    {
+      "topic_id": "multi-cluster",
+      "label": "Multi-Cluster",
+      "talk_count": 8
+    },
+    {
+      "topic_id": "operator",
+      "label": "Operator",
+      "talk_count": 8
+    },
+    {
+      "topic_id": "container",
+      "label": "Container",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "dra",
+      "label": "DRA",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "ebpf",
+      "label": "eBPF",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "gateway-api",
+      "label": "Gateway API",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "hardware",
+      "label": "Hardware",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "networking",
+      "label": "Networking",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "pipeline",
+      "label": "Pipeline",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "policy",
+      "label": "Policy",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "runtime",
+      "label": "Runtime",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "serving",
+      "label": "Serving",
+      "talk_count": 7
+    },
+    {
+      "topic_id": "envoy",
+      "label": "Envoy",
+      "talk_count": 6
+    },
+    {
+      "topic_id": "gitops",
+      "label": "GitOps",
+      "talk_count": 6
+    },
+    {
+      "topic_id": "kubeflow",
+      "label": "Kubeflow",
+      "talk_count": 6
+    },
+    {
+      "topic_id": "kyverno",
+      "label": "Kyverno",
+      "talk_count": 6
+    },
+    {
+      "topic_id": "maintainer",
+      "label": "Maintainer",
+      "talk_count": 6
+    },
+    {
+      "topic_id": "platform-engineering",
+      "label": "Platform Engineering",
+      "talk_count": 6
+    },
+    {
+      "topic_id": "ai-inference",
+      "label": "AI Inference",
+      "talk_count": 5
+    },
+    {
+      "topic_id": "autoscaling",
+      "label": "Autoscaling",
+      "talk_count": 5
+    },
+    {
+      "topic_id": "kagent",
+      "label": "kagent",
+      "talk_count": 5
+    },
+    {
+      "topic_id": "network",
+      "label": "Network",
+      "talk_count": 5
+    },
+    {
+      "topic_id": "orchestration",
+      "label": "Orchestration",
+      "talk_count": 5
+    },
+    {
+      "topic_id": "yaml",
+      "label": "YAML",
+      "talk_count": 5
+    },
+    {
+      "topic_id": "admission",
+      "label": "Admission",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "agent-substrate",
+      "label": "Agent Substrate",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "aware-scheduling",
+      "label": "Aware Scheduling",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "cadence",
+      "label": "Cadence",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "etcd",
+      "label": "etcd",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "governance",
+      "label": "Governance",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "harbor",
+      "label": "Harbor",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "ingress",
+      "label": "Ingress",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "kernel",
+      "label": "Kernel",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "kserve",
+      "label": "KServe",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "kubevirt",
+      "label": "KubeVirt",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "performance",
+      "label": "Performance",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "stateful",
+      "label": "Stateful",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "storage",
+      "label": "Storage",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "telemetry",
+      "label": "Telemetry",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "tenant",
+      "label": "Tenant",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "training",
+      "label": "Training",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "wg",
+      "label": "WG",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "workflows",
+      "label": "Workflows",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "anthropic",
+      "label": "Anthropic",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "apple",
+      "label": "Apple",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "authorization",
+      "label": "Authorization",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "cache",
+      "label": "Cache",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "ci",
+      "label": "CI",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "cilium",
+      "label": "Cilium",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "crossplane",
+      "label": "Crossplane",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "dashboards",
+      "label": "Dashboards",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "declarative",
+      "label": "Declarative",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "eks",
+      "label": "EKS",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "end-user",
+      "label": "End-User",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "flatcar",
+      "label": "Flatcar",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "fleet",
+      "label": "Fleet",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "flux",
+      "label": "Flux",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "go",
+      "label": "Go",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "governing",
+      "label": "Governing",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "heterogeneous",
+      "label": "Heterogeneous",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "keda",
+      "label": "KEDA",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "kubectl",
+      "label": "Kubectl",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "linux",
+      "label": "Linux",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "llm-serving",
+      "label": "LLM Serving",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "metal3",
+      "label": "Metal3",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "migration",
+      "label": "Migration",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "ml",
+      "label": "ML",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "scheduler",
+      "label": "Scheduler",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "securing",
+      "label": "Securing",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "service-mesh",
+      "label": "Service Mesh",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "supply",
+      "label": "Supply",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "topology",
+      "label": "Topology",
+      "talk_count": 3
+    }
+  ]
+}

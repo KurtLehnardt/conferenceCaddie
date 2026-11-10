@@ -1,0 +1,43 @@
+{
+  "route": "ble.rotate",
+  "examples": [
+    {
+      "name": "legacy rotation",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "ble": {
+            "token": "cHFyc3R1dnd4eXp7fH1-fw",
+            "rotate_at": "2026-11-10T17:20:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "presence is off",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026"
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "presence_required"
+        }
+      }
+    }
+  ]
+}

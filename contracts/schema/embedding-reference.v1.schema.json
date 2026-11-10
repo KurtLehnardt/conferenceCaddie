@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/embedding-reference.v1.schema.json",
+  "title": "Reference embeddings for the talk bundle conventions, v1",
+  "description": "contracts/fixtures/embedding/reference.v1.json: documents and queries embedded under the conventions of the talk bundle's model block, so that every embedder (the bundle builder, ONNX Runtime on the phones, Workers AI in a tier 2 Worker) can check it agrees within the tolerance.",
+  "type": "object",
+  "required": ["description", "produced_with", "tolerance", "model", "workers_ai_request", "documents", "queries", "similarities", "similarities_q8", "similarities_mean_pooling", "similarities_no_query_instruction"],
+  "properties": {
+    "description": { "type": "string" },
+    "produced_with": { "type": "string" },
+    "tolerance": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.05 },
+    "model": { "$ref": "talk-bundle.v1.schema.json#/properties/model" },
+    "workers_ai_request": {
+      "type": "object",
+      "required": ["model", "input"],
+      "properties": {
+        "model": { "const": "@cf/baai/bge-small-en-v1.5" },
+        "input": {
+          "type": "object",
+          "required": ["text", "pooling"],
+          "properties": {
+            "text": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+            "pooling": { "const": "cls" }
+          }
+        }
+      }
+    },
+    "documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["talk_id", "input", "vector"],
+        "properties": {
+          "talk_id": { "type": "string" },
+          "input": { "type": "string" },
+          "vector": { "$ref": "#/$defs/Vector" }
+        }
+      }
+    },
+    "queries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["query", "input", "vector"],
+        "properties": {
+          "query": { "type": "string" },
+          "input": { "type": "string", "pattern": "^Represent this sentence for searching relevant passages: " },
+          "vector": { "$ref": "#/$defs/Vector" }
+        }
+      }
+    },
+    "similarities": { "$ref": "#/$defs/Matrix" },
+    "similarities_q8": { "$ref": "#/$defs/Matrix" },
+    "similarities_mean_pooling": { "description": "The same cosines with mean pooling instead of CLS: a wrong embedder.", "$ref": "#/$defs/Matrix" },
+    "similarities_no_query_instruction": { "description": "The same cosines with queries embedded without the instruction: a wrong embedder.", "$ref": "#/$defs/Matrix" }
+  },
+  "$defs": {
+    "Vector": { "type": "array", "minItems": 384, "maxItems": 384, "items": { "type": "number", "minimum": -1, "maximum": 1 } },
+    "Matrix": { "type": "array", "items": { "type": "array", "items": { "type": "number", "minimum": -1, "maximum": 1 } } }
+  }
+}
