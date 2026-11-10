@@ -263,7 +263,7 @@ All tiers serve talk features from the same static bundle format, searched on th
 ```
 
 - **Effect on the app.** Each flag shows or hides whole screens and controls. Tier 1 hides the People tab and opens on For you. `ble.near_rssi` and `sightings_min_interval_s` replace the server-side tuning knob `BLE_NEAR_RSSI` (`DECISIONS.md:295`), so operators can tune them without an app update.
-- **Native push and the APNs and FCM keys.** Only a backend that holds the publisher's keys can push to the published apps. APNs authenticates with the key of the Apple team that signs the app, and FCM with the Firebase project the app is registered to. ASSUMPTION; this is standard platform behaviour. Third-party tier 2 or 3 operators using the official apps therefore get `push.apns: false` and `push.fcm: false`, and fall back to in-app nudges and Bluetooth local notifications. Open question 3 asks whether to build a push gateway instead.
+- **Native push and the APNs and FCM keys.** Only a backend that holds the publisher's keys can push to the published apps. APNs authenticates with the key of the Apple team that signs the app, and FCM with the Firebase project the app is registered to. ASSUMPTION; this is standard platform behaviour. Third-party tier 2 or 3 operators using the official apps therefore get `push.apns: false` and `push.fcm: false`, and fall back to in-app nudges and Bluetooth local notifications. Decision 3 in section 14 is not to build a push gateway.
 
 ### 7.3 Shared contracts, defined once and implemented by every tier
 
