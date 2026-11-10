@@ -27,6 +27,7 @@ import app.conferencecaddie.ui.components.CaddieChip
 import app.conferencecaddie.ui.components.ChipKind
 import app.conferencecaddie.ui.components.ChipRow
 import app.conferencecaddie.ui.components.ClearAllButton
+import app.conferencecaddie.ui.components.ErrorBanner
 import app.conferencecaddie.ui.components.FiltersChip
 import app.conferencecaddie.ui.components.NoteText
 import app.conferencecaddie.ui.components.SearchField
@@ -99,10 +100,23 @@ fun SearchScreen(
                     )
                 }
             }
+            val error = model.error
             when {
+                // web/src/components/search.tsx: a failed search with nothing to show is a state with
+                // Retry; with earlier results it is a banner above them.
+                result == null && error != null -> item("error") {
+                    StateView(
+                        Modifier.testTag("search-error"),
+                        icon = LucideIcon.CircleExclamationPoint,
+                        title = Strings.Blockers.SOMETHING_WRONG,
+                        body = error,
+                        action = StateAction(Strings.Common.RETRY, model::retry),
+                    )
+                }
                 result == null -> items(3) { SkeletonCard(Modifier.padding(horizontal = Caddie.dimens.gutter)) }
                 else -> {
                     val browse = result.searchText.isBlank()
+                    if (error != null) item("error") { ErrorBanner(error, Modifier.testTag("search-error"), onRetry = model::retry) }
                     item("count") {
                         Text(
                             Strings.Search.count(result.total, browse, model.filters.includeEvents),
