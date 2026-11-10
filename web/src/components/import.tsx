@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { CircleCheck, CircleExclamationPoint, ClipboardPaste, FileUp, Info, LoaderCircle, X } from 'lucide-preact';
 import type { Conference, SearchResult } from '../types';
+import { CLIENT_EXTRACT, ExtractError, extractText, needsExtraction } from './extract';
 import { ApiError, importSchedule, isAbort, type ImportConfidence, type ImportPayload, type ImportResponse } from '../api';
 import { useFocusTrap } from '../lib/focus';
 import { formatWhen, localDay, zoneOf } from '../lib/time';
@@ -121,6 +122,19 @@ export function ImportSheet({
     }
     if (!file.size) {
       setError('That file is empty.');
+      return;
+    }
+    if (CLIENT_EXTRACT && needsExtraction(file)) {
+      // This build's API reads text only, so the file is read here and only its text is sent.
+      setBusy(true);
+      setError(null);
+      try {
+        const text = await extractText(file);
+        void run({ filename: file.name.slice(0, 255), mime: 'text/plain', text });
+      } catch (err) {
+        setError(err instanceof ExtractError ? err.message : 'That file could not be opened on this device.');
+        setBusy(false);
+      }
       return;
     }
     let content: string;

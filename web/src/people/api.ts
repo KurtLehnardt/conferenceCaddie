@@ -1,6 +1,8 @@
 // Calls to the people, circles, recommendations and topics endpoints of CONTRACT3.
 // The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence,
 // /api/meet/* and /api/push/subscription. This is the only place that reads the device secret.
+import { apiFetch } from '../lib/apiBase';
+import { pausedMessage } from '../lib/pace';
 import { deleteCovers, getDevice } from './storage';
 import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
@@ -133,7 +135,7 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean; tim
 async function exchange<T>(path: string, init: RequestInit, headers: Record<string, string>, signal: AbortSignal | undefined): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, { method: init.method ?? 'GET', headers, body: init.body, signal });
+    res = await apiFetch(path, { method: init.method ?? 'GET', headers, body: init.body, signal });
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
     throw new PeopleApiError(friendly(0), 0);
@@ -154,6 +156,7 @@ async function exchange<T>(path: string, init: RequestInit, headers: Record<stri
     }
     const wait = res.headers.get('Retry-After');
     const retryAfter = wait && /^\d{1,6}$/.test(wait.trim()) ? Number(wait.trim()) : null;
+    if (res.status === 503 && code === 'daily_limit') throw new PeopleApiError(pausedMessage(wait), 503, code, count, body, retryAfter);
     throw new PeopleApiError(
       (res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status, code, message),
       res.status,

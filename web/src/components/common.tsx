@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { EllipsisVertical, Search, Sparkles, Star, Users } from 'lucide-preact';
+import { appPath } from '../lib/apiBase';
 import { useFocusTrap } from '../lib/focus';
 import { tabHash, type Tab, type TabParams } from '../lib/route';
 
@@ -36,7 +37,7 @@ export function NavBar({
   return (
     <nav class="nav" aria-label="Main">
       <div class="nav-brand" aria-hidden="true">
-        <img src="/icons/icon-192.png" alt="" width={32} height={32} />
+        <img src={appPath('icons/icon-192.png')} alt="" width={32} height={32} />
       </div>
       {TABS.map(({ id, label, Icon }) => (
         <a
