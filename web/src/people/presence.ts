@@ -112,6 +112,9 @@ export function matchZone(zones: string[], raw: string): string | null {
 let watchedSlug: string | null = null;
 let expiryTimer: number | undefined;
 let hiddenTimer: number | undefined;
+// When the page last went to the background. A suspended page (iOS) runs no timers, so the
+// five-minute rule is also checked against this when it comes back.
+let hiddenAt: number | null = null;
 let lastZone: string | null = null;
 // Moves on whenever presence is turned off here, so a turnOn whose write was still under way
 // does not switch it back on afterwards.
@@ -292,6 +295,7 @@ function onVisibility() {
   if (!slug) return;
   if (document.visibilityState === 'hidden') {
     window.clearTimeout(hiddenTimer);
+    if (hiddenAt === null) hiddenAt = Date.now();
     // Five minutes in the background end an hour-mode presence. In the day mode backgrounding is
     // the normal state (the phone is in a pocket), so presence stays and the next foreground asks
     // whether the zone still holds.
@@ -302,9 +306,12 @@ function onVisibility() {
   } else {
     window.clearTimeout(hiddenTimer);
     hiddenTimer = undefined;
-    // Back after a long time away: the server has already let it lapse.
+    const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+    hiddenAt = null;
     const p = getPresence(slug);
-    if (p.on && p.until && Date.parse(p.until) <= Date.now()) void turnOff(slug);
+    // Back after a long time away: the server has already let it lapse. Or back in hour mode
+    // after five minutes or more: the timer could not run while the page was suspended.
+    if (p.on && ((p.until && Date.parse(p.until) <= Date.now()) || (p.mode === 'hour' && away >= HIDDEN_MS))) void turnOff(slug);
     else {
       checkZoneAge(slug);
       syncPositionWatch(slug);
@@ -370,6 +377,7 @@ export function usePresenceWatch(slug: string | null): void {
       document.removeEventListener('visibilitychange', onVisibility);
       clearTimers();
       stopPositionWatch();
+      hiddenAt = null;
       if (watchedSlug === slug) watchedSlug = null;
     };
   }, [slug]);
