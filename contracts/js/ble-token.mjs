@@ -1,7 +1,9 @@
 // Reference implementation of Bluetooth derived tokens v1 (docs/contracts/ble-tokens.md).
 //
 //   ble_key = HMAC-SHA256(ble_master_secret, "caddie-ble-key-v1" || uint16be(n) || profile_id_utf8 || presence_nonce)
-//             where n is the byte length of profile_id_utf8 and presence_nonce is 16 bytes
+//             where n is the byte length of profile_id_utf8, presence_nonce is 16 bytes, and the
+//             master secret is the one whose id is stored with the nonce (ble_master_id)
+//   ble_key_id = base64url(first 8 bytes of HMAC-SHA256(ble_key, "caddie-ble-key-id-v1"))
 //   token_w = first 16 bytes of HMAC-SHA256(ble_key, "caddie-ble-v1" || uint64be(w))
 //   w       = floor(unix_seconds / window_s), window_s = 600
 //
@@ -9,8 +11,9 @@
 // document, rotated on every presence write with ble: true, derives the key from its master secret,
 // returns it to the device once and forgets it. The phone derives the token of the current window
 // from that key with no network call. To resolve a sighting, the server derives the keys of the
-// conference's live Bluetooth users again and matches the reported token against windows w - 1, w
-// and w + 1 of its own clock. Only node:crypto is used.
+// conference's live Bluetooth users again, matches the reported token against windows w - 1, w and
+// w + 1 of its own clock, checks the match against the stored session, and applies the co-location
+// rule and the per-device caps. Only node:crypto is used.
 
 import crypto from 'node:crypto';
 
@@ -80,9 +83,12 @@ export function decodeKey(text) {
   return key;
 }
 
-/** The window index of a Unix time in whole seconds: floor(seconds / windowS), as a BigInt. */
+/**
+ * The window index of a Unix time: floor(seconds / windowS), as a BigInt. Fractional seconds (a
+ * number from Date.now() / 1000) are floored first.
+ */
 export function windowOf(unixSeconds, windowS = WINDOW_S) {
-  const s = BigInt(unixSeconds);
+  const s = typeof unixSeconds === 'number' ? BigInt(Math.floor(unixSeconds)) : BigInt(unixSeconds);
   if (s < 0n) throw new RangeError('unix seconds must not be negative');
   return s / BigInt(windowS);
 }
@@ -139,24 +145,69 @@ export function decodePayload(bytes) {
   return null;
 }
 
+/** The ASCII label of the key id HMAC. */
+export const KEY_ID_LABEL = 'caddie-ble-key-id-v1';
+
 /**
- * The server's lookup table for one moment, built from what it stores: token (base64url) ->
- * profile_id for every live Bluetooth user of a conference ([{ profile_id, nonce }], nonce as bytes
- * or base64url), for windows w - 1, w and w + 1 of the server's clock. The keys are derived again
- * from the master secret and never kept.
+ * ble_key_id: base64url of the first 8 bytes of HMAC-SHA256(ble_key, "caddie-ble-key-id-v1"),
+ * 11 characters. It names a key without revealing it: the server sends it with the key and with
+ * every sightings answer, and a device whose stored key has another id writes presence with
+ * ble: true again to get a fresh key.
  */
-export function resolverForPeople(master, people, unixSeconds, windowS = WINDOW_S) {
-  const keys = people.map(({ profile_id: id, nonce }) => ({
-    id,
-    key: deriveBleKey(master, id, typeof nonce === 'string' ? Buffer.from(nonce, 'base64url') : nonce),
-  }));
-  return resolverAt(keys, unixSeconds, windowS);
+export function keyId(key) {
+  const k = Buffer.from(key);
+  if (k.length !== KEY_BYTES) throw new TypeError('ble_key must be 32 bytes');
+  return crypto.createHmac('sha256', k).update(Buffer.from(KEY_ID_LABEL, 'ascii')).digest().subarray(0, 8).toString('base64url');
+}
+
+/** nonce_tag: the first 16 hex digits of sha256(presence_nonce). The token table names a session by it. */
+export const nonceTag = (nonce) => crypto.createHash('sha256').update(Buffer.from(nonce)).digest('hex').slice(0, 16);
+
+const asBytes = (v) => (typeof v === 'string' ? Buffer.from(v, 'base64url') : Buffer.from(v));
+// masters: a Map or an object, master id -> secret (bytes or hex).
+const masterFor = (masters, id) => {
+  const m = masters instanceof Map ? masters.get(id) : masters?.[id];
+  if (m === undefined) return null;
+  return typeof m === 'string' ? Buffer.from(m, 'hex') : Buffer.from(m);
+};
+
+/**
+ * The key of one stored presence session, or null when the master that issued its nonce is no
+ * longer held (it was retired, for example after a leak). person is { profile_id, presence_nonce,
+ * ble_master_id }, the nonce as bytes or base64url.
+ */
+export function sessionKey(masters, person) {
+  const master = masterFor(masters, person.ble_master_id);
+  if (!master) return null;
+  return deriveBleKey(master, person.profile_id, asBytes(person.presence_nonce));
 }
 
 /**
- * The lookup table for given keys: token (base64url) -> owner id for windows w - 1, w and w + 1.
- * keys is [{ id, key }], key as bytes or base64url. A real server caches the table per window and
- * rebuilds it when w changes or a nonce changes.
+ * The token table of a conference: token (base64url) -> { profile_id, nonce_tag } for every stored
+ * Bluetooth session ([{ profile_id, presence_nonce, ble_master_id }]) and for windows w - 1, w and
+ * w + 1 of the server's clock. Keys are derived and dropped; the table holds no key material. A
+ * server may cache it per window (step 2 of the spec's resolution), because step 3 checks every
+ * entry against the store again.
+ */
+export function tokenTable(masters, people, unixSeconds, windowS = WINDOW_S) {
+  const w = windowOf(unixSeconds, windowS);
+  const table = new Map();
+  for (const person of people) {
+    const key = sessionKey(masters, person);
+    if (!key) continue;
+    const entry = { profile_id: person.profile_id, nonce_tag: nonceTag(asBytes(person.presence_nonce)) };
+    for (const d of ACCEPT_OFFSETS) {
+      const wi = w + BigInt(d);
+      if (wi < 0n || wi > UINT64_MAX) continue;
+      table.set(encodeToken(deriveToken(key, wi)), entry);
+    }
+  }
+  return table;
+}
+
+/**
+ * Token (base64url) -> id for given keys ([{ id, key }]), windows w - 1, w and w + 1. A lower-level
+ * helper for tests and tools; the server uses tokenTable.
  */
 export function resolverAt(keys, unixSeconds, windowS = WINDOW_S) {
   const w = windowOf(unixSeconds, windowS);
@@ -165,19 +216,46 @@ export function resolverAt(keys, unixSeconds, windowS = WINDOW_S) {
     const k = typeof key === 'string' ? decodeKey(key) : Buffer.from(key);
     for (const d of ACCEPT_OFFSETS) {
       const wi = w + BigInt(d);
-      if (wi < 0n) continue;
+      if (wi < 0n || wi > UINT64_MAX) continue;
       table.set(encodeToken(deriveToken(k, wi)), id);
     }
   }
   return table;
 }
 
+/** Default caps on distinct people resolved for one requesting device (Phase 4 mitigations). */
+export const RESOLVE_CAPS = Object.freeze({ perHour: 30, perWindow: 10 });
+
+const sameCell = (a, b) => Boolean(a && b) && a.lat === b.lat && a.lon === b.lon;
+
 /**
- * Resolves a sightings report the way the server does before ranking: the strongest RSSI per
- * token, those at or above nearRssi, then the owners of the tokens that resolve, without
- * duplicates and without the reporter. Returns [{ id, rssi }] strongest first.
+ * True when two people count as co-located for Bluetooth resolution: the same presence zone, or
+ * both have a stored position in the same ~100 m cell (the proximity band same_zone or near).
  */
-export function resolveSightings(sightings, table, { nearRssi = -75, self = null } = {}) {
+export function colocated(requester, person) {
+  if (requester.zone && requester.zone === person.zone) return true;
+  return sameCell(requester.cell, person.cell);
+}
+
+/**
+ * Resolves a sightings report the way the server does before ranking (docs/contracts/ble-tokens.md,
+ * Resolution, steps 1 to 4):
+ *   1. the strongest RSSI per token, dropping those under nearRssi;
+ *   2. the token table entry of each token;
+ *   3. only entries whose profile is in `current` (the store, read for this request) with the same
+ *      nonce_tag, presence still live, and not the requester, so a cached table can never resolve a
+ *      replaced session or one whose presence ended;
+ *   4. only people co-located with the requester (unless colocationRequired is false), and at most
+ *      caps.perWindow distinct people per window and caps.perHour per hour for this device; `seen`
+ *      is the device's record { window: Set, hour: Set } of people resolved in the current window
+ *      and in the last hour, updated in place (the caller empties each set when its period ends).
+ * current: Map profile_id -> { nonce_tag, presence_until (ms), zone, cell }.
+ * requester: { profile_id, zone, cell }.
+ * Returns [{ id, rssi }] strongest first.
+ */
+export function resolveSightings(sightings, table, {
+  nearRssi = -75, requester = {}, current = null, nowMs = Date.now(), colocationRequired = true, caps = RESOLVE_CAPS, seen = null,
+} = {}) {
   const best = new Map();
   for (const { token, rssi } of sightings) {
     const known = best.get(token);
@@ -186,9 +264,30 @@ export function resolveSightings(sightings, table, { nearRssi = -75, self = null
   const people = new Map();
   for (const [token, rssi] of best) {
     if (rssi < nearRssi) continue;
-    const id = table.get(token);
-    if (id === undefined || id === self) continue;
-    if (!people.has(id) || rssi > people.get(id)) people.set(id, rssi);
+    const entry = table.get(token);
+    if (!entry || entry.profile_id === requester.profile_id) continue;
+    if (current) {
+      const now = current.get(entry.profile_id);
+      if (!now || now.nonce_tag !== entry.nonce_tag || !(now.presence_until > nowMs)) continue;
+      if (colocationRequired && !colocated(requester, now)) continue;
+    }
+    if (!people.has(entry.profile_id) || rssi > people.get(entry.profile_id)) people.set(entry.profile_id, rssi);
   }
-  return [...people].map(([id, rssi]) => ({ id, rssi })).sort((a, b) => b.rssi - a.rssi || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  let out = [...people].map(([id, rssi]) => ({ id, rssi })).sort((a, b) => b.rssi - a.rssi || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (seen) {
+    const kept = [];
+    for (const r of out) {
+      // A person already counted in this window always passes. Anyone else needs room in this
+      // window, and, unless already counted this hour, room in the hour.
+      const inWindow = seen.window.has(r.id);
+      const roomInWindow = seen.window.size < caps.perWindow;
+      const roomInHour = seen.hour.has(r.id) || seen.hour.size < caps.perHour;
+      if (!inWindow && !(roomInWindow && roomInHour)) continue;
+      seen.window.add(r.id);
+      seen.hour.add(r.id);
+      kept.push(r);
+    }
+    out = kept;
+  }
+  return out;
 }

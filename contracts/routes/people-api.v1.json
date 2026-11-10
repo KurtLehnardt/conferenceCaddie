@@ -87,7 +87,8 @@
       "errors": [
         { "status": 400, "error": "filtered", "extra": ["message"], "when": "the spot line hit the filter" },
         { "status": 400, "error": "*", "when": "a zone that is not one of the conference's, a malformed location, or the conference has ended" },
-        { "status": 403, "error": "profile_required", "when": "no live profile with open_to_meet: true" }
+        { "status": 403, "error": "profile_required", "when": "no live profile with open_to_meet: true" },
+        { "status": 409, "error": "*", "when": "a concurrent write to the same profile won; a tier may guard presence writes with a version check. Retry once." }
       ]
     },
     {
@@ -102,16 +103,17 @@
       "summary": "Legacy server-rotate mode only: a new server-minted token every ten minutes. Kept for the Capacitor APK until it is retired; derived-v1 clients never call it.",
       "errors": [
         { "status": 403, "error": "profile_required" },
-        { "status": 403, "error": "presence_required" }
+        { "status": 403, "error": "presence_required" },
+        { "status": 409, "error": "*", "when": "a concurrent write to the same profile won. Retry once." }
       ]
     },
     {
       "id": "sightings", "method": "POST", "path": "/api/presence/sightings", "status": "frozen", "auth": "device",
       "query": [], "request": "SightingsRequest", "response": "SightingsResponse", "limits": ["sightings"], "capability": "ble.mode",
-      "summary": "Which of the tokens this phone heard belong to strong matches right here. The request shape is the same in both Bluetooth modes.",
+      "summary": "Which of the tokens this phone heard belong to strong matches right here. The request shape is the same in both Bluetooth modes; in derived-v1 the answer also carries the requester's current ble_key_id, and resolution follows the Phase 4 rules of docs/contracts/ble-tokens.md.",
       "errors": [
         { "status": 403, "error": "profile_required" },
-        { "status": 403, "error": "ble_required", "when": "the requester is not around with Bluetooth on" }
+        { "status": 403, "error": "ble_required", "when": "the requester is not around with Bluetooth on, or (derived-v1) its session was issued under a retired master" }
       ]
     },
     {
