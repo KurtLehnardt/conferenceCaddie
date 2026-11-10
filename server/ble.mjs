@@ -39,14 +39,16 @@
 //      strong-match rule (people.mjs's peopleQuery, so nothing is ranked twice or differently);
 //   6. the caps on the final answer, at most 10 new people per token window and 30 per rolling hour
 //      for one device, recorded on the requester's own people document (ble_caps, a list of
-//      { ref, at, w } pruned to the last hour, written with the guarded own-document update only
-//      when an answer adds someone new); and a zone only for people in the requester's own zone.
+//      { ref, at, w } pruned to the last hour, with ble_caps_until, written with the guarded
+//      own-document update only when an answer adds someone new, and cleared by the purge once the
+//      newest entry is an hour old); and a zone only for people in the requester's own zone.
 //
 // Rules this module keeps:
 // - Symmetric by construction: both phones scan and both report, so each side learns on its own.
 //   A device may ask who is near only while it is itself around with a live Bluetooth session:
-//   otherwise 403 ble_required; a derived session whose master has been retired is 403 ble_rekey,
-//   and the device fetches a new key with a presence write.
+//   otherwise 403 ble_required; a derived session whose master has been retired is 403 ble_rekey
+//   (unless it is an old app's, whose rotated legacy token keeps it going), and the device fetches
+//   a new key with a presence write.
 // - No sighting is stored or logged. Which tokens a device heard exists on the server for the
 //   duration of the request only. The caps record names only people the device was answered with.
 // - The answer carries only what a match card already shows (ref, display name, evidence, speak
@@ -114,7 +116,7 @@ export const bleView = (fields) => ({ token: fields.ble_token, rotate_at: fields
  * ble_key_id). The key exists only in view; nothing stores it.
  */
 export function mintBleSession(profileId, nowMs, presenceUntilMs, keyring = BLE_KEYRING) {
-  const legacy = mintBleToken(nowMs, presenceUntilMs);
+  const legacy = { ...mintBleToken(nowMs, presenceUntilMs), ble_rotated: null };
   if (!keyring) return { fields: { ...legacy, presence_nonce: null, ble_master_id: null }, view: { ble: bleView(legacy) } };
   const nonce = newPresenceNonce();
   const key = deriveBleKey(keyring.masters.get(keyring.current), profileId, nonce);
@@ -161,7 +163,9 @@ async function rotate(req, res) {
     if (!me || me.open_to_meet !== true) throw profileRequired();
     if (!isAround(me)) throw new HttpError(403, { error: 'presence_required' });
     const fields = mintBleToken(Date.now(), Date.parse(me.presence_until));
-    return { doc: fields, fields };
+    // Only the old APK calls this route, so a rotated token marks a session of an old app
+    // (sightings answers it under a retired master instead of asking it to re-key).
+    return { doc: { ...fields, ble_rotated: true }, fields };
   });
   sendJson(res, 200, { ok: true, ble: bleView(fields) });
 }
@@ -169,14 +173,21 @@ async function rotate(req, res) {
 // ---------------------------------------------------------------------------------------------
 // The token table of derived sessions, per conference, cached in this instance per window.
 
-const tables = new Map(); // slug -> { w, builtAt, promise }
+const tables = new Map(); // slug -> { w, builtAt, promise }, least recently used first
 
 // Reads the conference's live sessions and derives their tokens for windows w - 1, w and w + 1.
-// The table holds profile ids and nonce tags only; the keys are derived and dropped.
+// The table holds profile ids and nonce tags only; the keys are derived and dropped. Every presence
+// write with ble: true stores a legacy token next to the nonce, and ble: false clears both, so only
+// documents with a ble_token can hold a session (the nonce itself is not indexed).
 async function buildTable(slug, nowMs) {
   const sessions = [];
   let after;
-  for (let page = 0; page < TABLE_MAX_PAGES; page++) {
+  let truncated = false;
+  for (let page = 0; ; page++) {
+    if (page === TABLE_MAX_PAGES) {
+      truncated = true;
+      break;
+    }
     const body = {
       size: TABLE_PAGE,
       _source: ['profile_id', 'presence_nonce', 'ble_master_id'],
@@ -184,6 +195,7 @@ async function buildTable(slug, nowMs) {
         bool: {
           filter: [
             { term: { event_id: slug } },
+            { exists: { field: 'ble_token' } },
             { range: { presence_until: { gt: 'now' } } },
             { range: { visible_until: { gt: 'now' } } },
             { term: { open_to_meet: true } },
@@ -203,23 +215,27 @@ async function buildTable(slug, nowMs) {
     if (hits.length < TABLE_PAGE || !Array.isArray(hits[hits.length - 1].sort)) break;
     after = hits[hits.length - 1].sort;
   }
+  // The count only: never a profile id, a nonce or a token.
+  if (truncated) console.error(`The Bluetooth token table of ${slug} stopped at ${TABLE_MAX_PAGES * TABLE_PAGE} live documents; the rest do not resolve.`);
   return tokenTable(BLE_KEYRING.masters, sessions, Math.floor(nowMs / 1000));
 }
 
-// The table for the window of nowMs. With refresh, a table older than 30 seconds is rebuilt.
+// The table for the window of nowMs. With refresh, a table older than 30 seconds is rebuilt. At
+// most TABLES_MAX conferences are kept; the one used least recently goes first.
 function tableFor(slug, nowMs, { refresh = false } = {}) {
   const w = Number(windowOf(Math.floor(nowMs / 1000)));
   let entry = tables.get(slug);
   if (!entry || entry.w !== w || (refresh && nowMs - entry.builtAt > TABLE_STALE_MS)) {
-    if (!tables.has(slug) && tables.size >= TABLES_MAX) tables.delete(tables.keys().next().value);
     entry = { w, builtAt: nowMs, promise: buildTable(slug, nowMs) };
-    tables.set(slug, entry);
     const built = entry;
     // A failed build is not cached: the next request tries again.
     built.promise.catch(() => {
       if (tables.get(slug) === built) tables.delete(slug);
     });
   }
+  tables.delete(slug);
+  tables.set(slug, entry);
+  if (tables.size > TABLES_MAX) tables.delete(tables.keys().next().value);
   return entry.promise;
 }
 
@@ -227,34 +243,53 @@ function tableFor(slug, nowMs, { refresh = false } = {}) {
 // The caps of mitigation 2, on the requester's own document.
 
 const isEntry = (e) => isPlainObject(e) && typeof e.ref === 'string' && Number.isFinite(e.at) && Number.isInteger(e.w);
-// The stored record as applyCaps's state ({ entries: [{ id, at, w }] }), and back.
-const capsState = (source) => ({ entries: (Array.isArray(source.ble_caps) ? source.ble_caps : []).filter(isEntry).map((e) => ({ id: e.ref, at: e.at, w: e.w })) });
-const capsRecord = (state) => state.entries.map((e) => ({ ref: e.id, at: e.at, w: e.w }));
-// The entries applyCaps keeps from a state: those of the last hour.
-const recentCount = (state, nowMs) => state.entries.filter((e) => e.at > nowMs - HOUR_MS && e.at <= nowMs).length;
+// The stored record as applyCaps's state ({ entries: [{ id, at, w }] }) at time t. An entry stamped
+// later than t, by a request that started after this one but wrote first, or by the other instance
+// with its clock ahead, counts as returned at t: applyCaps leaves out entries from after its now,
+// and without the clamp such a request's people would not count against this one's caps.
+const capsState = (source, t) => ({
+  entries: (Array.isArray(source.ble_caps) ? source.ble_caps : []).filter(isEntry).map((e) => ({ id: e.ref, at: Math.min(e.at, t), w: e.w })),
+});
+// The fields to store for a state: the record, and when its newest entry leaves the rolling hour,
+// after which the purge clears both (EXPIRED_CAPS_QUERY).
+function capsFields(state) {
+  if (!state.entries.length) return { ble_caps: [], ble_caps_until: null };
+  const newest = Math.max(...state.entries.map((e) => e.at));
+  return { ble_caps: state.entries.map((e) => ({ ref: e.id, at: e.at, w: e.w })), ble_caps_until: iso(newest + HOUR_MS) };
+}
+// applyCaps at time t on a stored record. added is true when the answer returns someone the record
+// does not hold for this window, which is when the record must be written.
+function capsAt(nearby, source, t) {
+  const before = capsState(source, t).entries.filter((e) => e.at > t - HOUR_MS).length;
+  const { kept, state } = applyCaps(nearby, capsState(source, t), { nowMs: t, caps: RESOLVE_CAPS });
+  return { kept, state, added: state.entries.length > before };
+}
 
 /**
  * Applies the caps to the final answer (each item carries ref) and records whom it returned.
  * The record is written only when the answer adds someone new to it, guarded by the sequence
  * number of the profile read; on a conflict the profile is read again and the caps recomputed
- * from what is stored. When a second conflict prevents the write, the answer keeps only the
- * people already returned to this device in this window, so the caps hold either way.
+ * from what is stored, at the time of that read. When a second conflict prevents the write, the
+ * answer keeps only the people already returned to this device in this window, so the caps hold
+ * either way. The write skips refresh=wait_for: the guard reads the document with a realtime GET,
+ * and nothing searches for the record at once.
  */
-async function capped(device, slug, me, nearby, nowMs) {
+async function capped(device, slug, me, nearby) {
   if (!nearby.length) return [];
-  const first = applyCaps(nearby, capsState(me), { nowMs, caps: RESOLVE_CAPS });
-  if (first.state.entries.length === recentCount(capsState(me), nowMs)) return first.kept;
+  const t0 = Date.now();
+  const first = capsAt(nearby, me, t0);
+  if (!first.added) return first.kept;
   try {
     const { kept } = await updateOwnProfile(device, slug, (fresh) => {
       if (!fresh || fresh.open_to_meet !== true) throw profileRequired();
-      const { kept, state } = applyCaps(nearby, capsState(fresh), { nowMs, caps: RESOLVE_CAPS });
-      return { doc: { ble_caps: capsRecord(state) }, kept };
-    }, { current: me });
+      const { kept, state } = capsAt(nearby, fresh, Date.now());
+      return { doc: capsFields(state), kept };
+    }, { current: me, refresh: false });
     return kept;
   } catch (err) {
     if (!(err instanceof HttpError) || err.status !== 409) throw err;
-    const w = Number(windowOf(Math.floor(nowMs / 1000)));
-    const returned = new Set(capsState(me).entries.filter((e) => e.w === w && e.at > nowMs - HOUR_MS).map((e) => e.id));
+    const w = Number(windowOf(Math.floor(t0 / 1000)));
+    const returned = new Set(capsState(me, t0).entries.filter((e) => e.w === w && e.at > t0 - HOUR_MS).map((e) => e.id));
     return nearby.filter((p) => returned.has(p.ref));
   }
 }
@@ -294,12 +329,14 @@ async function sightings(req, res) {
 
   // Only a phone that is itself around with a live Bluetooth session may ask who is near it: a
   // derived session whose master is held, or a live legacy token. A derived session under a
-  // retired master asks the device for a new key, unless a live legacy token keeps an old app going.
+  // retired master asks the device for a new key (403 ble_rekey), unless the session is an old
+  // app's: its legacy token is live and was rotated, which only the old APK does, and the old APK
+  // does not know ble_rekey. A new app never rotates, so it is asked to re-key at once.
   const session = BLE_KEYRING ? derivedSession(me) : null;
   const myKey = keyOfSession(session);
   const legacyLive = hasLiveToken(me, now);
   if (!isAround(me)) throw bleRequired();
-  if (session && !myKey && !legacyLive) throw bleRekey();
+  if (session && !myKey && !(legacyLive && me.ble_rotated === true)) throw bleRekey();
   if (!myKey && !legacyLive) throw bleRequired();
   const answer = (nearby) => sendJson(res, 200, myKey ? { nearby, ble_key_id: keyId(myKey) } : { nearby });
 
@@ -395,7 +432,7 @@ async function sightings(req, res) {
     const zone = p.zone !== null && p.zone === me.presence_zone ? p.zone : null;
     return { ref: p.ref, display_name: p.display_name, evidence: p.evidence, speak_topics: p.speak_topics, zone };
   });
-  answer(await capped(device, conf.slug, me, nearby, now));
+  answer(await capped(device, conf.slug, me, nearby));
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fake, EVENT, FUTURE, newDevice, hashOf, request, profileBody, advanceClock, json } from './lib/fake-es.mjs';
+import { fake, EVENT, FUTURE, newDevice, hashOf, request, profileBody, advanceClock, json, matches } from './lib/fake-es.mjs';
 import * as B from '../contracts/js/ble-token.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { formatErrors } from '../contracts/js/validate.mjs';
@@ -74,10 +74,13 @@ function person(profileId, fields = {}) {
 }
 const patch = (profileId, fields) => fake.put(PEOPLE, `${EVENT}:${profileId}`, { ...docOf(profileId), ...fields });
 
+// The legacy token that every presence write with ble: true stores next to the nonce, as the
+// server does (the token table reads only documents that carry one).
+const legacyToken = () => ({ ble_token: crypto.randomBytes(16).toString('base64url'), ble_token_until: iso(Date.now() + 600_000), ble_rotated: null });
 // A derived session under a master, with a fresh nonce; returns its key.
 function session(profileId, masterId = 'm1') {
   const nonce = B.newPresenceNonce();
-  patch(profileId, { presence_nonce: nonce.toString('base64url'), ble_master_id: masterId });
+  patch(profileId, { presence_nonce: nonce.toString('base64url'), ble_master_id: masterId, ...legacyToken() });
   return MASTERS.has(masterId) ? B.deriveBleKey(MASTERS.get(masterId), profileId, nonce) : null;
 }
 const tokenNow = (key, offsetWindows = 0) => B.encodeToken(B.deriveToken(key, B.windowOf(Math.floor(Date.now() / 1000)) + BigInt(offsetWindows)));
@@ -100,6 +103,7 @@ const refsOf = (r) => r.body.nearby.map((p) => p.ref).sort();
 const tableBuilds = () => fake.calls.filter((c) => c.index === PEOPLE && c.op === '_search' && c.body?.sort?.[0]?.profile_id).length;
 
 test('the capabilities document advertises derived-v1', () => {
+  assert.equal(process.env.BLE_MASTER_KEYRING, undefined, 'the keyring is taken out of the environment once read');
   assert.equal(CAPABILITIES.ble.mode, 'derived-v1');
   assert.equal(CAPABILITIES.ble.colocation_required, true);
   assert.equal(CAPABILITIES.ble.window_s, 600);
@@ -116,7 +120,7 @@ describe('the resolution cases of contracts/fixtures/ble, through the real handl
   const REQUESTER = pid('fixture-requester');
   const idOf = (profileId) => (profileId === cases.requester.profile_id ? REQUESTER : profileId);
   for (const p of cases.people) {
-    person(idOf(p.profile_id), { presence_zone: p.zone, presence_cell: p.cell, presence_until: p.presence_until, presence_nonce: p.presence_nonce, ble_master_id: p.ble_master_id });
+    person(idOf(p.profile_id), { presence_zone: p.zone, presence_cell: p.cell, presence_until: p.presence_until, presence_nonce: p.presence_nonce, ble_master_id: p.ble_master_id, ...legacyToken() });
   }
   const requester = deviceFor(REQUESTER);
   const requesterNonce = Buffer.from(fixtureRequester.presence_nonce, 'base64url');
@@ -285,7 +289,8 @@ describe('requesters: ble_required, ble_rekey and legacy sessions', () => {
     advanceClock(60_000);
     const retired = person(pid('retired-requester'), { presence_zone: 'Hall A' });
     session(retired.profileId, 'gone');
-    assert.deepEqual((await sight(retired, [])).body, { error: 'ble_rekey' });
+    assert.ok(Date.parse(docOf(retired.profileId).ble_token_until) > Date.now(), 'its legacy token is live');
+    assert.deepEqual((await sight(retired, [])).body, { error: 'ble_rekey' }, 'a new app never rotates its legacy token, so it is asked to re-key at once');
 
     const none = person(pid('no-session-at-all'), { presence_zone: 'Hall A' });
     assert.deepEqual((await sight(none, [])).body, { error: 'ble_required' });
@@ -295,12 +300,29 @@ describe('requesters: ble_required, ble_rekey and legacy sessions', () => {
     assert.deepEqual((await sight(away, [])).body, { error: 'ble_required' }, 'not around: the device stops, it does not re-key');
   });
 
-  test('an old app with a live legacy token keeps working whatever its stored nonce, without a key id', async () => {
-    const old = person(pid('old-app-requester'), { ble_token: 'b2xkLWFwcC10b2tlbi0xNg', ble_token_until: iso(Date.now() + 600_000) });
+  test('an old app, whose live legacy token was rotated, keeps working whatever its stored nonce, without a key id', async () => {
+    const old = person(pid('old-app-requester'));
     session(old.profileId, 'gone');
+    const rotated = await request(handleBleApi, 'POST', '/api/presence/ble/rotate', old, { event: EVENT });
+    assert.equal(rotated.status, 200);
+    assert.equal(docOf(old.profileId).ble_rotated, true, 'the rotate route marks the session as an old app\'s');
     const r = await sight(old, []);
     assert.equal(r.status, 200);
     assert.deepEqual(r.body, { nearby: [] });
+    patch(old.profileId, { ble_token_until: iso(Date.now() - 1000) });
+    assert.deepEqual((await sight(old, [])).body, { error: 'ble_rekey' }, 'once its legacy token has run out, the session is asked to re-key');
+  });
+
+  test('a new presence session with ble: true resets the rotation mark', async () => {
+    const device = newDevice();
+    assert.equal((await request(handlePeopleApi, 'PUT', '/api/people/profile', device, profileBody('Rotation Mark', { learn: ['ebpf'], speak: ['ebpf'] }))).status, 200);
+    assert.equal((await request(handleConnectApi, 'PUT', '/api/presence', device, { event: EVENT, zone: 'Hall A', ble: true })).status, 200);
+    assert.equal((await request(handleBleApi, 'POST', '/api/presence/ble/rotate', device, { event: EVENT })).status, 200);
+    assert.equal(docOf(device.profileId).ble_rotated, true);
+    assert.equal((await request(handleConnectApi, 'PUT', '/api/presence', device, { event: EVENT, zone: 'Hall A', ble: true })).status, 200);
+    assert.equal(docOf(device.profileId).ble_rotated, null);
+    assert.equal((await request(handleConnectApi, 'PUT', '/api/presence', device, { event: EVENT, zone: 'Hall A', ble: false })).status, 200);
+    assert.equal(docOf(device.profileId).ble_rotated, null);
   });
 
   test('a session under a retired master resolves nobody', async () => {
@@ -401,6 +423,10 @@ describe('the caps, on the final answer', () => {
     const record = docOf(me.profileId).ble_caps;
     assert.equal(record.length, 10);
     assert.ok(record.every((e) => /^[0-9a-f]{16}$/.test(e.ref) && e.w === Math.floor(Date.now() / 1000 / W) && e.at === record[0].at), 'the record holds { ref, at, w } entries only');
+    assert.equal(docOf(me.profileId).ble_caps_until, iso(record[0].at + 3600_000), 'ble_caps_until is when the newest entry leaves the rolling hour');
+    const write = fake.calls.filter((c) => c.index === PEOPLE && c.op === '_bulk' && String(c.body).includes('ble_caps')).at(-1);
+    assert.equal(write.params.get('refresh'), null, 'the record is written without refresh=wait_for');
+    assert.ok(JSON.parse(String(write.body).split('\n')[0]).update.if_seq_no !== undefined, 'and guarded by the sequence number of the profile read');
     const writes = capsWrites();
     const again = await sight(me, report(1, 35));
     assert.deepEqual(refsOf(again), refsRange(1, 10), 'people already returned in this window keep being returned');
@@ -437,5 +463,114 @@ describe('the caps, on the final answer', () => {
     } finally {
       fake.inject = null;
     }
+  });
+
+  test('a request that started first but writes last counts the people of one that started later and wrote first', async () => {
+    at(start + 10 * W + 60);
+    const racer = person(pid('caps-racer'), { presence_zone: 'Room 201', presence_until: iso(Date.now() + 2 * 3600_000) });
+    session(racer.profileId);
+    const t0 = Date.now();
+    const w = Math.floor(t0 / 1000 / W);
+    // Request A reports people 1 to 10. Just before A writes its record, request B of the same
+    // device, which started five seconds later (or ran on the other instance, whose clock is ahead),
+    // writes people 11 to 20, stamped later than anything A's clock has reached. A's write then
+    // conflicts, and A reads the record again.
+    const later = ids.slice(10, 20).map((id) => ({ ref: ref(id), at: t0 + 5000, w }));
+    let raced = false;
+    fake.inject = (call) => {
+      if (raced || call.op !== '_bulk' || !String(call.body).includes(`${EVENT}:${racer.profileId}`)) return undefined;
+      raced = true;
+      patch(racer.profileId, { ble_caps: later, ble_caps_until: iso(t0 + 5000 + 3600_000) });
+      return json({ items: [{ update: { status: 409 } }] });
+    };
+    let r;
+    try {
+      r = await sight(racer, report(1, 10), { step: 0 });
+    } finally {
+      fake.inject = null;
+    }
+    assert.ok(raced, 'A tried to write and lost to B');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.nearby, [], 'B already returned ten new people in this window, so A returns nobody new');
+    const record = docOf(racer.profileId).ble_caps;
+    const inWindow = new Set(record.filter((e) => e.w === w).map((e) => e.ref));
+    assert.ok(inWindow.size <= 10, 'at most ten people in the window across both requests');
+    assert.deepEqual([...inWindow].sort(), refsRange(11, 20), 'the record holds B\'s people');
+    assert.ok(record.every((e) => e.at <= Date.now()), 'no entry is stamped later than the request that wrote it');
+
+    // The next window: ten more new people fit, and the hour then holds twenty.
+    at(start + 11 * W + 60);
+    assert.deepEqual(refsOf(await sight(racer, report(1, 10), { step: 0 })), refsRange(1, 10));
+    assert.equal(new Set(docOf(racer.profileId).ble_caps.map((e) => e.ref)).size, 20, 'the hour counts both requests\' people');
+  });
+});
+
+describe('derived sightings leave out blocked, hidden, invisible and broad matches', () => {
+  test('blocks in either direction and broad matches are dropped; hiding and visibility are re-checked against a cached table', async () => {
+    advanceClock(60_000);
+    const zone = 'Room 301';
+    const me = person(pid('filters-requester'), { presence_zone: zone, learn_topics: ['ebpf', 'kubernetes'], speak_topics: ['ebpf', 'kubernetes'] });
+    session(me.profileId);
+    const sighted = (label, fields = {}) => {
+      const device = person(pid(label), { presence_zone: zone, ...fields });
+      return { id: device.profileId, key: session(device.profileId) };
+    };
+    const strong = sighted('filters-strong');
+    const iBlocked = sighted('filters-i-blocked');
+    const blockedMe = sighted('filters-blocked-me');
+    const toHide = sighted('filters-to-hide');
+    const toLeave = sighted('filters-to-leave');
+    // Shares only kubernetes, one of the conference's ten most common topics: a broad match.
+    const broad = sighted('filters-broad', { learn_topics: ['kubernetes'], speak_topics: ['kubernetes'] });
+    fake.put('caddie-people-blocks', 'filters-b1', { event_id: EVENT, blocker_id: me.profileId, blocked_id: iBlocked.id, blocked_ref: ref(iBlocked.id) });
+    fake.put('caddie-people-blocks', 'filters-b2', { event_id: EVENT, blocker_id: blockedMe.id, blocked_id: me.profileId, blocked_ref: ref(me.profileId) });
+    const all = [strong, iBlocked, blockedMe, toHide, toLeave, broad].map((p) => ({ token: tokenNow(p.key), rssi: -55 }));
+
+    let legs = null;
+    fake.inject = (call) => {
+      if (call.index === PEOPLE && call.op === '_search' && call.body?.retriever) {
+        const r = call.body.retriever;
+        legs = r.rrf ? r.rrf.retrievers.map((x) => x.standard.query) : [r.standard.query];
+      }
+      return undefined;
+    };
+    let first;
+    try {
+      first = await sight(me, all, { step: 31 });
+    } finally {
+      fake.inject = null;
+    }
+    assert.deepEqual(refsOf(first), [strong, toHide, toLeave].map((p) => ref(p.id)).sort(), 'blocked either way and broad are left out');
+    assert.ok(legs.some((q) => matches(q, `${EVENT}:${broad.id}`, docOf(broad.id))), 'the broad person is a match, on a common topic only, so the strong-match rule is what drops it');
+
+    // Hidden after reports, and conference-wide visibility turned off, while this instance's table
+    // still holds both: the store check of step 3 leaves them out.
+    patch(toHide.id, { hidden: true });
+    patch(toLeave.id, { open_to_meet: false });
+    const builds = tableBuilds();
+    const second = await sight(me, all, { step: 10 });
+    assert.equal(tableBuilds(), builds, 'the cached table answered');
+    assert.deepEqual(refsOf(second), [ref(strong.id)]);
+  });
+});
+
+describe('a profile save keeps the Bluetooth state', () => {
+  test('a save that changes the text carries the session, the rotation mark and the caps record over', async () => {
+    advanceClock(60_000);
+    const device = newDevice();
+    assert.equal((await request(handlePeopleApi, 'PUT', '/api/people/profile', device, profileBody('Carry Over', { learn: ['ebpf'], speak: ['ebpf'] }))).status, 200);
+    assert.equal((await request(handleConnectApi, 'PUT', '/api/presence', device, { event: EVENT, zone: 'Hall A', ble: true })).status, 200);
+    patch(device.profileId, { ble_caps: [{ ref: '0123456789abcdef', at: Date.now(), w: 1 }], ble_caps_until: iso(Date.now() + 3600_000) });
+    const before = docOf(device.profileId);
+    const saved = await request(handlePeopleApi, 'PUT', '/api/people/profile', device, profileBody('Carry Over', { about: 'Kernel tracing with eBPF', learn: ['ebpf'], speak: ['ebpf'] }));
+    assert.equal(saved.status, 200);
+    const write = fake.calls.filter((c) => c.index === PEOPLE && c.op === '_bulk').at(-1);
+    assert.ok(JSON.parse(String(write.body).split('\n')[0]).index, 'a text change re-indexes the whole document');
+    const after = docOf(device.profileId);
+    assert.equal(after.about, 'Kernel tracing with eBPF');
+    for (const f of ['presence_nonce', 'ble_master_id', 'ble_token', 'ble_token_until', 'ble_rotated', 'ble_caps', 'ble_caps_until', 'presence_zone', 'presence_until']) {
+      assert.deepEqual(after[f], before[f], `${f} is carried over`);
+    }
+    assert.ok(after.presence_nonce, 'the session is still there');
   });
 });

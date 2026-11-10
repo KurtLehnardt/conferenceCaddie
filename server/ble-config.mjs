@@ -9,7 +9,8 @@
 //                       (ble.mode server-rotate). Set but unusable, including a current id that is
 //                       not one of its keys: importing this module throws, so the server refuses
 //                       to start rather than issue sessions that another instance could not resolve.
-//                       It is never logged, and no error quotes it.
+//                       It is never logged, no error quotes it, and it is removed from
+//                       process.env once read.
 //   BLE_NEAR_RSSI       the weakest RSSI, in dBm, that counts as right near (default -75), rounded
 //                       and clamped to -100..-30 as the capabilities contract requires.
 
@@ -42,8 +43,12 @@ export function keyringFrom(text) {
   }
 }
 
+// The keyring text is taken out of the environment before it is parsed, so nothing that later
+// reads or copies process.env (a child process, a diagnostic dump) can see it.
+const keyringText = process.env.BLE_MASTER_KEYRING;
+delete process.env.BLE_MASTER_KEYRING;
 /** The master keyring, or null when derived tokens are not configured. */
-export const BLE_KEYRING = keyringFrom(process.env.BLE_MASTER_KEYRING);
+export const BLE_KEYRING = keyringFrom(keyringText);
 /** derived-v1 when the keyring is configured; otherwise only the legacy server-minted tokens. */
 export const BLE_MODE = BLE_KEYRING ? 'derived-v1' : 'server-rotate';
 export const NEAR_RSSI = nearRssiFrom(process.env.BLE_NEAR_RSSI);

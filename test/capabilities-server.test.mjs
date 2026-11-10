@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import path from 'node:path';
@@ -176,7 +176,7 @@ test('every module the server imports from outside server/ is copied into the ru
   const dockerfile = readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
   const copied = [...dockerfile.matchAll(/^COPY (?!--from)(\S+) /gm)].map((m) => m[1]);
   const outside = new Set();
-  for (const f of ['capabilities.mjs', 'ble.mjs', 'ble-config.mjs', 'ble-keyring.mjs', 'index.mjs', 'connect.mjs', 'people.mjs']) {
+  for (const f of readdirSync(path.join(ROOT, 'server')).filter((name) => name.endsWith('.mjs'))) {
     const src = readFileSync(path.join(ROOT, 'server', f), 'utf8');
     for (const m of src.matchAll(/from '(\.\.\/[^']+)'/g)) outside.add(path.posix.normalize(path.posix.join('server', m[1])));
   }

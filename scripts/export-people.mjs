@@ -25,7 +25,7 @@ const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const PAGE = 1000;
-const EXCLUDED = ['secret_hash', 'text_hash', '*_semantic', 'presence_*', 'ble_*', 'presence_nonce', 'ble_master_id', 'ble_caps', 'ble_token', 'ble_token_until'];
+const EXCLUDED = ['secret_hash', 'text_hash', '*_semantic', 'presence_*', 'ble_*', 'presence_nonce', 'ble_master_id', 'ble_caps', 'ble_caps_until', 'ble_token', 'ble_token_until', 'ble_rotated'];
 
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');

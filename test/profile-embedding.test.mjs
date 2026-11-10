@@ -39,13 +39,13 @@ const TEXT = { expertise: 'Kubernetes operators for Postgres', about: 'SRE', int
 
 // Fails the first people Bulk write that carries the text fields, once: with this item, or with
 // the Response that item() returns when it is a function.
-function failTextWriteOnce(item) {
-  let done = false;
+function failTextWriteOnce(item, times = 1) {
+  let left = times;
   fake.inject = (c) => {
-    if (done || c.index !== 'caddie-people' || c.op !== '_bulk') return undefined;
+    if (!left || c.index !== 'caddie-people' || c.op !== '_bulk') return undefined;
     const [action, payload] = String(c.body).split('\n').filter(Boolean).map((l) => JSON.parse(l));
     if (!payload || !('about' in payload)) return undefined;
-    done = true;
+    left--;
     if (typeof item === 'function') return item();
     return json({ errors: true, items: [{ [Object.keys(action)[0]]: item }] });
   };
@@ -79,12 +79,23 @@ describe('PUT /api/people/profile when embedding fails', () => {
     }
   }
 
-  test('a version conflict (409 item) answers 409 and pauses nothing', async () => {
+  test('a version conflict (409 item) reads the profile again and writes once more, and pauses nothing', async () => {
     advanceClock(SEMANTIC_PAUSE_MS + 1000);
     fake.reset();
     const d = newDevice();
     assert.equal((await put(d, { speak: ['postgres'] })).status, 200);
     failTextWriteOnce({ status: 409, error: { type: 'version_conflict_engine_exception', reason: 'version conflict' } });
+    const { result, lines } = await quietly(() => put(d, TEXT));
+    assert.equal(result.status, 200);
+    assert.ok(!lines.some((l) => l.includes('Semantic matching paused')));
+  });
+
+  test('a second version conflict answers 409 and pauses nothing', async () => {
+    advanceClock(SEMANTIC_PAUSE_MS + 1000);
+    fake.reset();
+    const d = newDevice();
+    assert.equal((await put(d, { speak: ['postgres'] })).status, 200);
+    failTextWriteOnce({ status: 409, error: { type: 'version_conflict_engine_exception', reason: 'version conflict' } }, 2);
     const { result, lines } = await quietly(() => put(d, TEXT));
     assert.equal(result.status, 409);
     assert.ok(!lines.some((l) => l.includes('Semantic matching paused')));
