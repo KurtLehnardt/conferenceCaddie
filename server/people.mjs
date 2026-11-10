@@ -45,7 +45,7 @@ import crypto from 'node:crypto';
 import { take, clientIp } from './ratelimit.mjs';
 import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
-import { pauseSemantic, semanticAvailable } from './semantic.mjs';
+import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
@@ -105,13 +105,24 @@ export class HttpError extends Error {
     this.headers = headers;
   }
 }
-export class UpstreamError extends Error {}
+// An Elasticsearch request that failed. The message names a status or an error class and is the
+// only part that is logged; details carry `status`, and the error `types` and `inferenceReason`
+// of esErrorInfo (semantic.mjs) so a caller can tell an inference failure from anything else.
+export class UpstreamError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.status = details.status ?? null;
+    this.types = details.types ?? [];
+    this.inferenceReason = details.inferenceReason === true;
+  }
+}
 
 export const bad = (message) => new HttpError(400, { error: message });
 export const forbidden = () => new HttpError(403, { error: 'forbidden' });
 
 // ---------------------------------------------------------------------------------------------
-// Elasticsearch transport. Error bodies from Elasticsearch are never passed on or logged.
+// Elasticsearch transport. Error bodies from Elasticsearch are never passed on or logged; an
+// error response is read only for its status and error types (esErrorInfo).
 
 async function es(key, method, path, body, { ndjson = false, okStatuses = [] } = {}) {
   let res;
@@ -129,8 +140,13 @@ async function es(key, method, path, body, { ndjson = false, okStatuses = [] } =
     throw new UpstreamError(err?.name === 'TimeoutError' ? 'timeout' : 'network error');
   }
   if (!res.ok && !okStatuses.includes(res.status)) {
-    await res.body?.cancel();
-    throw new UpstreamError(`status ${res.status}`);
+    let info = {};
+    try {
+      info = esErrorInfo((await res.json())?.error);
+    } catch {
+      // Not JSON, or the body could not be read: the status alone.
+    }
+    throw new UpstreamError(`status ${res.status}`, { status: res.status, ...info });
   }
   try {
     return { status: res.status, json: await res.json() };
@@ -1192,6 +1208,26 @@ export async function searchPeople(slug, body) {
   }
 }
 
+// Runs the people query that build(semantic) returns (peopleQuery's { body, legs }, or null when
+// there is nothing to rank by), semantic when semantic.mjs allows it. When the semantic legs fail
+// because the inference endpoint did (isInferenceFailure), semantic queries pause for a minute and
+// the same request runs again with keyword legs; any other failure propagates. matches, circle
+// members, the push nudge (nudge.mjs) and Bluetooth sightings (ble.mjs) all rank through this.
+// Returns { json, q, semantic } with the query that answered, or null when build gave none.
+export async function rankPeople(slug, build) {
+  const semantic = semanticAvailable();
+  const q = build(semantic);
+  if (!q) return null;
+  try {
+    return { json: await searchPeople(slug, q.body), q, semantic };
+  } catch (err) {
+    if (!semantic || !q.legs.includes('text') || !isInferenceFailure(err)) throw err;
+    pauseSemantic(err);
+    const fallback = build(false);
+    return { json: await searchPeople(slug, fallback.body), q: fallback, semantic: false };
+  }
+}
+
 // The topics a hit shares with the requester, in either direction.
 function sharedTopics(me, s) {
   const theirSpeak = new Set(s.speak_topics ?? []);
@@ -1234,30 +1270,18 @@ async function matches(req, res) {
   // A requester who is around with a position gets the distance leg; the origin is their own
   // stored, rounded location and never leaves the query.
   const build = (semantic) => peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: locationOf(me), semantic });
-  let semantic = semanticAvailable();
-  let q = build(semantic);
-  if (!q) {
+  // When the semantic legs fail because inference did, the same request is answered with keyword
+  // legs and says so; semantic queries pause for a minute (rankPeople, semantic.mjs).
+  const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
+  if (!ranked) {
     sendJson(res, 200, { results: [], from, size, has_more: false });
     return;
   }
+  const { json, q, semantic } = ranked;
   // Only talks the requester marked and also shared for are named in a reason, so a match never
   // reveals a talk circle the requester has not joined.
   const mine = new Set(me.shared_talk_ids ?? []);
   const talkIds = interested.filter((id) => mine.has(id));
-  // When the semantic legs fail (inference endpoint unavailable), the same request is answered
-  // with keyword legs and says so; semantic queries pause for a minute (semantic.mjs).
-  const run = async () => {
-    try {
-      return await searchPeople(conf.slug, q.body);
-    } catch (err) {
-      if (!semantic || !q.legs.includes('text') || !(err instanceof UpstreamError)) throw err;
-      pauseSemantic(err);
-      semantic = false;
-      q = build(false);
-      return searchPeople(conf.slug, q.body);
-    }
-  };
-  const [json, topics] = await Promise.all([run(), topicsOf(conf.slug)]);
   const all = json.hits?.hits ?? [];
   // Broad matches are dropped from a text search and from the "anyone" view. The "around now"
   // view keeps those who are in the requester's own zone right now, after every specific match
@@ -1306,20 +1330,9 @@ async function members(req, res) {
 
   const blocked = await blockedIds(conf.slug, me.profile_id);
   const membersQuery = (semantic) => peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked, semantic });
-  const path = withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(conf.slug));
-  const membersSearch = async () => {
-    const semantic = semanticAvailable();
-    try {
-      return await people('POST', path, membersQuery(semantic).body);
-    } catch (err) {
-      if (!semantic || !(err instanceof UpstreamError)) throw err;
-      pauseSemantic(err);
-      return people('POST', path, membersQuery(false).body);
-    }
-  };
   const [talks, { json }, labels] = await Promise.all([
     talksById(conf.slug, [talkId], ['title', 'start', 'end', 'url', 'speaker_profiles']),
-    membersSearch(),
+    rankPeople(conf.slug, membersQuery),
     topicLabels(conf.slug),
   ]);
   const talk = talks.get(talkId);
