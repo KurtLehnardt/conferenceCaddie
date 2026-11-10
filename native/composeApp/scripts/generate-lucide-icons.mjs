@@ -1,0 +1,117 @@
+// Generates composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/icons/LucideIcon.kt from the
+// lucide-preact package the web app uses, so the native apps draw exactly the web app's icons.
+//
+// Usage, from the repository root after `npm --prefix web ci --ignore-scripts`:
+//   node native/composeApp/scripts/generate-lucide-icons.mjs
+//
+// Every icon the web app imports is listed in WEB_ICONS; NATIVE_ICONS are lucide icons used only by
+// native screens that have no web counterpart (the Server and cache rows of Settings, and the
+// calendar-check glyph of the web app icon, which the wide layout's rail draws). Lucide is
+// ISC-licensed (some icons MIT, from Feather); the licence text is in native/licenses/lucide.txt.
+
+import { readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const PKG = path.join(ROOT, 'web/node_modules/lucide-preact');
+const OUT = path.join(ROOT, 'native/composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/icons/LucideIcon.kt');
+
+const WEB_ICONS = [
+  'ArrowLeft', 'ArrowUp', 'Bell', 'BellOff', 'BellRing', 'Bluetooth', 'CalendarDays', 'CalendarX', 'Check',
+  'ChevronDown', 'ChevronLeft', 'ChevronRight', 'ChevronUp', 'CircleCheck', 'CircleExclamationPoint',
+  'ClipboardPaste', 'Clock', 'Download', 'EllipsisVertical', 'ExternalLink', 'EyeOff', 'FileUp', 'Hand', 'Inbox',
+  'Info', 'LoaderCircle', 'LocateFixed', 'MapPin', 'MessageCircle', 'MessagesSquare', 'Plus', 'Presentation',
+  'Search', 'SearchX', 'Settings', 'Share', 'SlidersHorizontal', 'Smartphone', 'Sparkles', 'SquarePlus', 'Star',
+  'Trash2', 'TriangleAlert', 'UserRound', 'Users', 'WifiOff', 'X',
+];
+const NATIVE_ICONS = ['Server', 'HardDrive', 'Scale', 'Link', 'CalendarCheck'];
+
+// The package's barrel names every icon and its aliases (Trash2 is trash.mjs, for example), so the
+// file is looked up there instead of guessing it from the name.
+const BARREL = readFileSync(path.join(PKG, 'dist/esm/lucide-preact.mjs'), 'utf8');
+const FILES = new Map();
+for (const m of BARREL.matchAll(/export \{([^}]*)\} from '\.\/icons\/([^']+)'/g)) {
+  for (const part of m[1].split(',')) {
+    const alias = part.trim().match(/^default as (\w+)$/);
+    if (alias) FILES.set(alias[1], m[2]);
+  }
+}
+
+async function iconNode(name) {
+  const file = FILES.get(name);
+  if (!file) throw new Error(`lucide icon ${name} is not exported by lucide-preact`);
+  const mod = await import(pathToFileURL(path.join(PKG, 'dist/esm/icons', file)).href);
+  return { node: mod.__iconData.node, id: mod.__iconData.name };
+}
+
+const n = (v) => Number(v);
+const f = (v) => String(Math.round(v * 1000) / 1000);
+
+// Turns one SVG element into path data, so every icon is a list of strokes.
+function toPath([tag, a]) {
+  switch (tag) {
+    case 'path':
+      return a.d;
+    case 'circle': {
+      const cx = n(a.cx), cy = n(a.cy), r = n(a.r);
+      return `M${f(cx - r)} ${f(cy)}a${f(r)} ${f(r)} 0 1 0 ${f(2 * r)} 0a${f(r)} ${f(r)} 0 1 0 ${f(-2 * r)} 0`;
+    }
+    case 'ellipse': {
+      const cx = n(a.cx), cy = n(a.cy), rx = n(a.rx), ry = n(a.ry);
+      return `M${f(cx - rx)} ${f(cy)}a${f(rx)} ${f(ry)} 0 1 0 ${f(2 * rx)} 0a${f(rx)} ${f(ry)} 0 1 0 ${f(-2 * rx)} 0`;
+    }
+    case 'line':
+      return `M${f(n(a.x1))} ${f(n(a.y1))}L${f(n(a.x2))} ${f(n(a.y2))}`;
+    case 'polyline':
+    case 'polygon': {
+      const pts = a.points.trim().split(/[\s,]+/).map(Number);
+      let d = `M${f(pts[0])} ${f(pts[1])}`;
+      for (let i = 2; i < pts.length; i += 2) d += `L${f(pts[i])} ${f(pts[i + 1])}`;
+      return tag === 'polygon' ? `${d}Z` : d;
+    }
+    case 'rect': {
+      const x = n(a.x ?? 0), y = n(a.y ?? 0), w = n(a.width), h = n(a.height);
+      let rx = a.rx !== undefined ? n(a.rx) : a.ry !== undefined ? n(a.ry) : 0;
+      let ry = a.ry !== undefined ? n(a.ry) : rx;
+      rx = Math.min(rx, w / 2);
+      ry = Math.min(ry, h / 2);
+      if (!rx || !ry) return `M${f(x)} ${f(y)}h${f(w)}v${f(h)}h${f(-w)}Z`;
+      return `M${f(x + rx)} ${f(y)}h${f(w - 2 * rx)}a${f(rx)} ${f(ry)} 0 0 1 ${f(rx)} ${f(ry)}v${f(h - 2 * ry)}` +
+        `a${f(rx)} ${f(ry)} 0 0 1 ${f(-rx)} ${f(ry)}h${f(-(w - 2 * rx))}a${f(rx)} ${f(ry)} 0 0 1 ${f(-rx)} ${f(-ry)}` +
+        `v${f(-(h - 2 * ry))}a${f(rx)} ${f(ry)} 0 0 1 ${f(rx)} ${f(-ry)}Z`;
+    }
+    default:
+      throw new Error(`unsupported element ${tag}`);
+  }
+}
+
+const version = JSON.parse(readFileSync(path.join(PKG, 'package.json'), 'utf8')).version;
+const entries = [...WEB_ICONS.map((x) => [x, true]), ...NATIVE_ICONS.map((x) => [x, false])];
+const lines = [];
+for (const [name, web] of entries) {
+  const { node, id } = await iconNode(name);
+  const paths = node.map(toPath);
+  const list = paths.map((p) => `"${p}"`).join(', ');
+  lines.push(`    /** lucide \`${id}\`${web ? '' : ' (native screens only)'}. */\n    ${name}(listOf(${list})),`);
+}
+
+const kt = `// Generated by native/composeApp/scripts/generate-lucide-icons.mjs from lucide-preact ${version},
+// the icon set of the web app. Do not edit by hand; run the script again instead.
+//
+// Lucide is licensed under the ISC licence, and the icons it took from Feather under the MIT
+// licence: Copyright (c) 2026 Lucide Icons and Contributors; Copyright (c) 2013-present Cole Bemis.
+// The full licence text is in native/licenses/lucide.txt and is shown in Settings.
+
+package app.conferencecaddie.ui.icons
+
+/**
+ * The lucide icons the apps draw, each as the SVG path data of its 24 by 24 viewBox. Lucide draws
+ * strokes only, with round caps and joins; [vector] builds the Compose image.
+ */
+enum class LucideIcon(val paths: List<String>) {
+${lines.join('\n')}
+}
+`;
+writeFileSync(OUT, kt);
+console.log(`wrote ${entries.length} icons to ${path.relative(ROOT, OUT)}`);

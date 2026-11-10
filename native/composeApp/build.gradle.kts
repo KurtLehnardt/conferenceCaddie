@@ -22,6 +22,14 @@ kotlin {
         androidResources {
             enable = true
         }
+
+        // The Compose UI tests in commonTest also run on an Android device or emulator
+        // (connectedAndroidDeviceTest), so one set of UI tests covers both platforms.
+        withDeviceTestBuilder {
+            sourceSetTreeName = "test"
+        }.configure {
+            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        }
     }
 
     listOf(
@@ -45,9 +53,24 @@ kotlin {
             implementation(libs.compose.material3)
             implementation(libs.compose.material.icons.core)
             implementation(libs.compose.ui)
+            implementation(libs.compose.ui.backhandler)
             implementation(libs.compose.components.resources)
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+        }
+        commonTest.dependencies {
+            implementation(libs.kotlin.test)
+            implementation(libs.compose.uiTest)
+        }
+        // The iOS UI tests send the system Back through a navigation event dispatcher of their own.
+        iosTest.dependencies {
+            implementation(libs.jetbrains.navigationevent.compose)
+        }
+        getByName("androidDeviceTest").dependencies {
+            implementation(libs.androidx.test.core)
+            implementation(libs.androidx.test.runner)
+            implementation(libs.androidx.compose.uiTestJunit4)
+            implementation(libs.androidx.compose.uiTestManifest)
         }
     }
 }

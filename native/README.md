@@ -1,8 +1,9 @@
 # Conference Caddie native apps
 
 This directory holds the native Android and iOS apps: a Kotlin Multiplatform core shared by both
-platforms, with the UI written once in Compose Multiplatform. It is a skeleton. The tabs are
-placeholders, and the app does not yet talk to a backend. The Capacitor app in `web/android` is
+platforms, with the UI written once in Compose Multiplatform. The UI follows the web app's design
+(see Design system below); the tabs hold placeholders until the talk features arrive, and the app
+does not yet talk to a backend. The Capacitor app in `web/android` is
 still the Android app people use today. The design and the phases these apps follow are in
 [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md); this skeleton is spike S5 of Phase 0.
 
@@ -11,10 +12,14 @@ still the Android app people use today. The design and the phases these apps fol
 | Path | What it is |
 |---|---|
 | `shared/` | Kotlin Multiplatform library with no UI. It holds the placeholder models (`Conference`, `Talk`), the `Capabilities` document, `BackendUrl` (the contract's backend URL rules), and the platform interfaces `Embedder`, `BleRadio`, `Notifier` and `SecureStore`. Its tests in `commonTest` run on the JVM and on the iOS simulator. |
-| `composeApp/` | Compose Multiplatform UI. `App()` draws the bottom bar: For you, Search, Interested, People (shown only when `capabilities.people.enabled` is true) and Settings, which has the Server URL field. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. |
-| `androidApp/` | The Android application: `MainActivity` hosts `App()`. |
+| `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, and `App()`, the web app's shell (see Design system). On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
+| `androidApp/` | The Android application: `MainActivity` hosts the shell. Its instrumented smoke test is in `src/androidTest`. |
 | `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController`, and a build phase runs Gradle to build and embed the framework. |
 | `gradle/libs.versions.toml` | Every dependency version, with the reasons for the choices. |
+| `scripts/generate-app-icons.py` | Makes the app icons and the iOS launch image from the web app's icons. |
+| `licenses/` | Licence texts of third-party material the apps ship: the lucide icons, the Apache 2.0 libraries, and the native code Skiko bundles into the iOS app (Skia, HarfBuzz, ICU and others). |
+| `scripts/third-party-notices.py` | Generates the notices Settings shows from the dependency graph and `licenses/`, and checks them in CI. |
+| `scripts/release-smoke.sh` | Starts the R8 release build on a device or emulator and checks it runs. |
 
 The structure follows the official JetBrains template for Android Gradle Plugin 9, where the
 Android application must be its own module and Kotlin Multiplatform modules use the
@@ -56,18 +61,87 @@ From `native/`:
 ./gradlew :shared:allTests              # shared tests on the JVM (and on the iOS simulator on a Mac)
 ./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-debug.apk
 ./gradlew :androidApp:installDebug      # installs on a connected phone or a running emulator
+./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests on a phone or emulator
+./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented smoke test
+./gradlew :androidApp:assembleRelease && scripts/release-smoke.sh   # the R8 release build, started on the device
 ```
+
+With more than one device connected, pick one with `ANDROID_SERIAL=emulator-5554`. The iOS
+simulator tests (`:shared:allTests` and `:composeApp:iosSimulatorArm64Test` on a Mac) run on the
+Kotlin plugin's default simulator; `-Pcaddie.iosTestDevice=<name or UDID>` picks another one.
 
 You can also open `native/` in Android Studio and run the `androidApp` configuration.
 
 Release builds run R8 (code shrinking and resource shrinking). Compose, AndroidX and
 kotlinx.serialization bring their own keep rules; app-specific rules go in
 `androidApp/proguard-rules.pro`. Check a release build on a device after adding anything that uses
-reflection.
+reflection: `scripts/release-smoke.sh` installs the release build (signed with the debug key when no
+release key is set), starts it, and opens Settings, and CI runs it on the emulator.
 
 The native app uses the same application id as the Capacitor app, `app.conferencecaddie`. A phone
 cannot have both installed at once. Installing a debug build over a release build, or the other way
 round, fails because the two are signed with different keys. Uninstall the other one first.
+
+## Design system
+
+The native apps look like the web app (`web/src`): same colours, type, spacing, icons, components
+and words. Everything lives in `composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/`:
+
+| Package | What it holds |
+|---|---|
+| `theme` | `CaddieTheme`: the web's design tokens from `web/src/styles.css` (`CaddieColors` for light and dark, `CaddieDimens`, `CaddieType`), provided as `Caddie.colors`, `Caddie.dimens` and `Caddie.type` and mapped onto Material 3. Dark mode follows the system unless the Theme setting says Light or Dark, as on the web. |
+| `icons` | `LucideIcon`: every lucide icon the web app uses, generated from the `lucide-preact` package by `composeApp/scripts/generate-lucide-icons.mjs`, drawn by `LucideIcon.vector()` with the web's stroke widths. |
+| `components` | The web's components: `AppBar`, `SwitcherButton`, `NavBar`, `CaddieButton`, `CaddieIconButton`, `CaddieChip` (toggle, dropdown and action chips), `FiltersChip`, `TimePhraseChip`, `SuggestionChip`, `ChipRow`, `SearchField`, `TalkCard`, `InterestedToggle`, `CaddieSheet`, `ConfirmDialog`, `Segmented`, `SwitchRow`, `OptionRow`, the settings rows, `StateView`, `ErrorBanner`, `Toast`, `OfflineBadge`, `NeedsConnection` and `SkeletonCard`. |
+| `strings` | `Strings`: the web's copy word for word, grouped by the web file it comes from. Copy that only the native apps need is marked "native only". |
+| `format` | `Format`: dates and times written as `web/src/lib/time.ts` writes them. |
+| `shell` | `App()`'s parts: `ShellState`, `ShellActions` and `TabContent`, the Settings screen, the conference switcher and the server confirmation. `StandaloneShell` runs the shell without a backend until the talk features replace it. |
+
+`App(state, actions, content)` is the web's shell: the conference switcher in the app bar, the
+Offline badge and the Settings gear on its right, and the tab bar People (only when the backend
+serves people features), For you, Search and Interested. Settings is a screen of its own with Back,
+as on the web. The caller owns the data (`ShellState`), answers `ShellActions`, and supplies each
+tab's screen through `TabContent`; tab content reaches the shell through `LocalShellNavigator`.
+
+In a window at least 768 dp wide (a tablet, or a phone in landscape) the shell takes the web's wide
+layout: the tabs move to a rail on the left with the app icon on top, the app bar and the screen stay
+in a column at most 720 dp wide, centred, and chip rows wrap instead of scrolling. Every part of the
+shell keeps clear of the status bar, the navigation bar, the display cutout and, on screens with a
+text field, the keyboard, in portrait and in landscape.
+
+Every size of text is in sp, so the system font size setting scales it, and controls grow with it:
+dialogs scroll their text and keep their buttons on screen, and tab labels shrink back towards their
+default size rather than wrap or be cut off. Controls keep the web's visible sizes (buttons and icon
+buttons 44 dp, chips 36 dp), and every control's touch target is at least the platform's minimum, 48
+dp on Android and 44 pt on iOS, through Material's `minimumInteractiveComponentSize()`. Icons that
+carry meaning have content descriptions, headings are marked as headings, and controls have keyboard
+focus rings like the web's.
+
+The web app sets no font of its own: its stack (`system-ui, -apple-system, ..., Roboto, ...`) is San
+Francisco on iPhones and Roboto on Android phones, which is what Compose's default font family
+draws, so no font is bundled. The lucide icons are ISC-licensed (MIT for those that came from
+Feather); `licenses/lucide.txt` holds the text. Settings shows it under Open-source licences with
+every third-party licence the apps ship: the Apache 2.0 libraries (Kotlin, Compose, AndroidX and
+the rest), each listed with its version and platform, and the native code that Skiko links into the
+iOS app (Skia, HarfBuzz, ICU, libpng, libjpeg-turbo, libwebp, zlib, Expat, Wuffs and the Adobe DNG
+SDK). `scripts/third-party-notices.py` generates that list from the Android release classpath and
+the iOS klibs; run it after changing dependencies. It fails on a dependency whose group is not in
+its licence table, on a new artifact in the broad AndroidX, `org.jetbrains` and kotlinx groups, or on
+a new Skiko version, until someone has checked the licence.
+
+The app icons and the iOS launch image come from `web/public/icons` through
+`scripts/generate-app-icons.py` (Pillow). Both apps open on the web's page colour, light or dark.
+
+Debug builds take launch options that open a screen directly, for screenshots and manual checks:
+`-caddie.tab Search`, `-caddie.open settings` (or `switcher`), `-caddie.theme dark`,
+`-caddie.connect https://example.org` and `-caddie.gallery 1` (the Search components drawn with the
+web's sample talk). On iOS they are launch arguments
+(`xcrun simctl launch <device> app.conferencecaddie -caddie.tab Search`); on Android they are intent
+extras (`adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.tab Search`). Release
+builds ignore them. `-caddie.connect` follows the rules of a `caddie://connect` link: the address is
+normalised, and anything a link could not name (not https, credentials, a query) is ignored.
+
+On iOS a Light or Dark Theme setting is applied to the app's window, so the status bar, the SwiftUI
+host and anything presented from it follow it too.
 
 ## Build and run on iOS
 
@@ -247,11 +321,12 @@ implemented in `shared` as `BackendUrl.normalise()`:
   `BackendUrl.kt`: it refuses backslashes, IPv4 shorthand and other inputs that a WHATWG parser
   quietly repairs.
 
-The skeleton does not fetch anything yet. Until it does, the "Preview people features" switch in
-Settings (debug builds only) swaps between the demo and legacy capabilities, to show the People tab
-appearing and disappearing. Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the
-default backend in builds; the skeleton leaves the field empty until the capabilities client
-exists.
+The app does not fetch anything yet. Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3
+server the default backend in builds, so the Server URL field starts with it. A server typed there,
+like one from a `caddie://connect` link, is switched to only after a confirmation that names its base
+URL exactly and warns when it is not the official server. Registering the `caddie://` link itself is
+still to do. The People tab shows only when the capabilities enable people features; the Compose UI
+tests check that gating.
 
 ## Privacy
 
@@ -280,7 +355,8 @@ Mac, so the iOS artifacts are covered, and review the diff:
 ```sh
 ./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
-  :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
+  :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
+  :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
   :composeApp:iosArm64ResolveResourcesFromDependencies \
   :composeApp:iosSimulatorArm64ResolveResourcesFromDependencies
 ```
@@ -303,8 +379,13 @@ dependencies.
   with the debug APK kept as an artifact. On `main` it also builds the unsigned release APK.
 - **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
   It is skipped with a notice when the signing secrets are missing.
-- **iOS simulator build** (macOS): the shared tests on the iOS simulator, the Release device
-  framework link, and an unsigned simulator build of the Xcode project.
+- **UI tests on an Android emulator** (Ubuntu): the Compose UI tests, the instrumented smoke test
+  and `scripts/release-smoke.sh` on the R8 release build, on an API 34 emulator started by
+  `reactivecircus/android-emulator-runner`. The emulator's booted state is cached as a snapshot.
+  No secrets. The release APK is signed only after this job passes.
+- **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
+  the third-party notices check, the Release device framework link, and an unsigned simulator build
+  of the Xcode project.
 - **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
   skipped when its secrets are missing.
 

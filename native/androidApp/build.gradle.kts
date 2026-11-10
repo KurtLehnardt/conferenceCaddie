@@ -45,6 +45,13 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.compose.uiToolingPreview)
     implementation(libs.compose.foundation)
+
+    // The instrumented smoke test (src/androidTest) launches MainActivity on a device or emulator.
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.compose.uiTestJunit4)
+    debugImplementation(libs.androidx.compose.uiTestManifest)
 }
 
 android {
@@ -59,6 +66,7 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = caddieVersionCode
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {

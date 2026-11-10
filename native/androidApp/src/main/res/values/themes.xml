@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The window theme. Compose draws everything; the window only supplies the background and the
+     launch screen, light by day and dark at night (values-night). -->
+<resources>
+    <style name="Theme.Caddie" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/caddie_bg</item>
+    </style>
+</resources>
