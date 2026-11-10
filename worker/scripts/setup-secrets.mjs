@@ -6,7 +6,7 @@
 //
 // Secrets:
 //   ADMIN_TOKEN        32 random bytes as hex. Opens the /admin routes (ingest, migration, smoke
-//                      fixtures, moderation). Also stored with `gh secret set ADMIN_TOKEN` for the
+//                      fixtures, moderation). Also stored with `gh secret set CADDIE_ADMIN_TOKEN` for the
 //                      ingest workflow and in ~/.config/conference-caddie/admin-token (mode 0600,
 //                      outside the repository) for the smoke, migration and moderation runs.
 //   REF_SALT           32 random bytes as hex. Salts every person's public ref. Changing it changes
@@ -46,6 +46,8 @@ const WORKER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TOKEN_FILE = process.env.ADMIN_TOKEN_FILE || join(homedir(), '.config', 'conference-caddie', 'admin-token');
 const GH_REPO = process.env.CADDIE_GH_REPO || 'KurtLehnardt/conferenceCaddie';
 const NAMES = ['ADMIN_TOKEN', 'REF_SALT', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY'];
+// The repository secret that holds ADMIN_TOKEN for the ingest workflow.
+const GH_SECRET = 'CADDIE_ADMIN_TOKEN';
 
 let options;
 try {
@@ -221,7 +223,7 @@ for (const name of NAMES) if (!plan.has(name) && has(name) && options['only-miss
 let syncGithubFromFile = false;
 if (!plan.has('ADMIN_TOKEN') && has('ADMIN_TOKEN') && !options['skip-gh']) {
   const ghNames = await githubSecretNames();
-  if (ghNames && !ghNames.has('ADMIN_TOKEN')) syncGithubFromFile = true;
+  if (ghNames && !ghNames.has(GH_SECRET)) syncGithubFromFile = true;
 }
 
 if (dryRun) {
@@ -231,10 +233,10 @@ if (dryRun) {
     console.log(`Would set ${name}: npx wrangler secret put ${name}  (value on standard input)`);
     if (name === 'ADMIN_TOKEN') {
       console.log(`Would write ${name} to ${TOKEN_FILE}  (mode 0600)`);
-      if (!options['skip-gh']) console.log(`Would set ${name}: gh secret set ${name} --repo ${GH_REPO}  (value on standard input)`);
+      if (!options['skip-gh']) console.log(`Would set ${GH_SECRET}: gh secret set ${GH_SECRET} --repo ${GH_REPO}  (value on standard input)`);
     }
   }
-  if (syncGithubFromFile) console.log(`Would set ADMIN_TOKEN: gh secret set ADMIN_TOKEN --repo ${GH_REPO}  (value from ${TOKEN_FILE}, on standard input)`);
+  if (syncGithubFromFile) console.log(`Would set ${GH_SECRET}: gh secret set ${GH_SECRET} --repo ${GH_REPO}  (value from ${TOKEN_FILE}, on standard input)`);
   if (!plan.size && !syncGithubFromFile) console.log('Nothing to set.');
   process.exit(0);
 }
@@ -243,10 +245,10 @@ if (plan.has('ADMIN_TOKEN')) {
   const token = randomHex(32);
   await putWorkerSecret('ADMIN_TOKEN', token);
   await writeTokenFile(token);
-  if (!options['skip-gh']) await putGithubSecret('ADMIN_TOKEN', token);
+  if (!options['skip-gh']) await putGithubSecret(GH_SECRET, token);
 } else if (syncGithubFromFile) {
   const token = await readTokenFile();
-  if (token) await putGithubSecret('ADMIN_TOKEN', token);
+  if (token) await putGithubSecret(GH_SECRET, token);
   else console.error(`ADMIN_TOKEN is set on the Worker but ${TOKEN_FILE} is missing, so the GitHub secret cannot be set. Rerun without --only-missing to rotate it.`);
 }
 if (plan.has('REF_SALT')) await putWorkerSecret('REF_SALT', randomHex(32));

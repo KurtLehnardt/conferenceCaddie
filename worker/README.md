@@ -108,7 +108,7 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    It generates `ADMIN_TOKEN` and `REF_SALT` (32 random bytes each, hex) and a VAPID P-256 pair
    with Web Crypto, and writes each value to the standard input of `npx wrangler secret put NAME`,
    never to a command line, a log or the terminal. `ADMIN_TOKEN` also goes to
-   `gh secret set ADMIN_TOKEN` (for the ingest workflow) and to
+   `gh secret set CADDIE_ADMIN_TOKEN` (for the ingest workflow) and to
    `~/.config/conference-caddie/admin-token` with mode 0600 (for the smoke, migration and
    moderation runs). `--only-missing` skips names the Worker already has. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.

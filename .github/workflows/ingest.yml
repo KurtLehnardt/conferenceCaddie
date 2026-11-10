@@ -4,11 +4,14 @@
 # committed. The Worker embeds only talks whose text changed.
 #
 # Set once in the repository settings:
-#   secret   ADMIN_TOKEN       the Worker's admin token
-#   variable CADDIE_API_BASE   the Worker's URL, for example https://conference-caddie-api.<subdomain>.workers.dev
+#   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it)
+#   variable CADDIE_API_BASE     the Worker's URL, for example https://conference-caddie-api.<subdomain>.workers.dev
 #
 # GitHub disables scheduled workflows after 60 days without repository activity. Run this workflow
-# by hand to enable it again. Purging expired profiles does not depend on it (the Worker's cron does).
+# by hand to enable it again. Until both values are set, a scheduled run only logs a notice and
+# succeeds, so the schedule does not fail every week before the Worker is deployed; a manual run
+# fails instead.
+# Purging expired profiles does not depend on it (the Worker's cron does).
 name: Ingest
 
 on:
@@ -40,21 +43,30 @@ jobs:
     env:
       EVENTS: ${{ inputs.events }}
       REBUILD_TOPICS: ${{ inputs.rebuild_topics }}
-      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+      ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check the configuration
+        id: config
+        run: |
+          missing=""
+          if [ -z "$ADMIN_TOKEN" ]; then missing="the CADDIE_ADMIN_TOKEN secret"; fi
+          if [ -z "$CADDIE_API_BASE" ]; then missing="${missing:+$missing and }the CADDIE_API_BASE variable"; fi
+          if [ -z "$missing" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then echo "::error::$missing is not set."; exit 1; fi
+          echo "::notice::Skipping the ingest: $missing is not set (the Worker is not deployed yet)."
+          echo "ready=false" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v4
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Check the configuration
-        run: |
-          if [ -z "$ADMIN_TOKEN" ]; then echo "The ADMIN_TOKEN secret is not set."; exit 1; fi
-          if [ -z "$CADDIE_API_BASE" ]; then echo "The CADDIE_API_BASE variable is not set."; exit 1; fi
-
       - name: Discover events and build the talk files
+        if: steps.config.outputs.ready == 'true'
         run: |
           set -u
           args=()
@@ -66,6 +78,7 @@ jobs:
           if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then exit "$status"; fi
 
       - name: Push to the Worker
+        if: steps.config.outputs.ready == 'true'
         run: |
           set -u
           args=()

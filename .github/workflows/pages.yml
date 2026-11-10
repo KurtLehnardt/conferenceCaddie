@@ -3,8 +3,9 @@ name: Deploy web app to GitHub Pages
 # Builds the web app for https://kurtlehnardt.github.io/conferenceCaddie/ and publishes it with the
 # official Pages actions. The app calls the Cloudflare Worker API cross-origin; its address is the
 # repository variable CADDIE_API_BASE (Settings, Secrets and variables, Actions, Variables). The
-# variable holds a public address, not a secret. The job fails when it is empty, because a build
-# without an API address would call the wrong host.
+# variable holds a public address, not a secret. A build without an API address would call the
+# wrong host, so while the variable is empty a push to main only logs a notice and publishes
+# nothing (the Worker is not deployed yet), and a manual run fails.
 #
 # Pages must be enabled once with the source set to "GitHub Actions" (Settings, Pages).
 
@@ -30,27 +31,37 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+    outputs:
+      ready: ${{ steps.config.outputs.ready }}
     steps:
       - name: Check the API address is set
+        id: config
         run: |
-          if [ -z "$CADDIE_API_BASE" ]; then
-            echo "The repository variable CADDIE_API_BASE is empty. Set it to the Worker's https address." >&2
+          if [ -n "$CADDIE_API_BASE" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "::error::The repository variable CADDIE_API_BASE is empty. Set it to the Worker's https address."
             exit 1
           fi
+          echo "::notice::Skipping the Pages deploy: the repository variable CADDIE_API_BASE is empty."
+          echo "ready=false" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
       - name: Install
+        if: steps.config.outputs.ready == 'true'
         working-directory: web
         run: npm ci
 
       - name: Build
+        if: steps.config.outputs.ready == 'true'
         working-directory: web
         env:
           VITE_BASE: /conferenceCaddie/
@@ -58,14 +69,17 @@ jobs:
           VITE_CLIENT_EXTRACT: '1'
         run: npm run build
 
-      - uses: actions/configure-pages@v5
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/configure-pages@v5
 
-      - uses: actions/upload-pages-artifact@v3
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist
 
   deploy:
     needs: build
+    if: needs.build.outputs.ready == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
