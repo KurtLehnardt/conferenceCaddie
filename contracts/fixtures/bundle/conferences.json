@@ -29,16 +29,16 @@
       "talk_count": 3,
       "bundle": {
         "bundle_version": 1,
-        "content_hash": "f100a4b257260abd26ef9d7a44b450eeffffab3143c6b104711dd75a0dfa3e7a",
-        "path": "caddie-fixture-2099/f100a4b257260abd/",
+        "content_hash": "af85300cea6e89c95f44e71c5a2c5302ccd6cda0cdf35586e1c03cf8bc2f0cf9",
+        "path": "caddie-fixture-2099/af85300cea6e89c9/",
         "model": "BAAI/bge-small-en-v1.5",
         "dims": 384,
         "talk_count": 3,
         "vector_count": 3,
         "files": {
           "bundle.json": {
-            "bytes": 5600,
-            "sha256": "ca52b90ed5a15c94d9535cf53e1f64ba7181411c753fe9fb94b3cf49ce016dcf"
+            "bytes": 5655,
+            "sha256": "2d779cce49b72c5b419b010f3f5ec5d0a462abd117f7aeefc99de7fd3421d405"
           },
           "vectors.i8": {
             "bytes": 1152,

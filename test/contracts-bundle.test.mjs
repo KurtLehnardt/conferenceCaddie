@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   quantizeRow, encodeVectors, decodeVectors, cosine, relatedTalks, contentHash, verifyBundle, sha256hex, textHash, buildBundle,
-  normalizeKey, buildFacets, TALK_FIELDS, DIMS, MODEL,
+  normalizeKey, buildFacets, bundleTalk, DIMS, MODEL, passageText, queryText,
 } from '../contracts/js/bundle.mjs';
 import { canonicalJson } from '../contracts/js/canonical-json.mjs';
 import { buildFixtureBundles, BUNDLE_OUT } from '../contracts/js/fixtures.mjs';
@@ -128,7 +128,7 @@ test('verification catches tampering', () => {
   assert.ok(verifyBundle({ ...entry, content_hash: '0'.repeat(64) }, files).some((p) => p.includes('content_hash')));
 
   // A consistent but wrong bundle (rehashed after editing) still fails the semantic checks.
-  const rehash = (mutate) => {
+  const rehash = (mutate, opts) => {
     const b = structuredClone(bundle);
     mutate(b);
     const f = { 'bundle.json': Buffer.from(canonicalJson(b), 'utf8'), 'vectors.i8': files['vectors.i8'] };
@@ -136,9 +136,12 @@ test('verification catches tampering', () => {
     for (const [name, bytes] of Object.entries(f)) e.files[name] = { bytes: bytes.length, sha256: sha256hex(bytes) };
     e.content_hash = contentHash(f);
     e.path = `${SLUG}/${e.content_hash.slice(0, 16)}/`;
-    return verifyBundle(e, f);
+    return verifyBundle(e, f, opts);
   };
-  assert.ok(rehash((b) => { b.related[A] = [B, C]; }).some((p) => p.includes('differ from the vectors')));
+  const producer = { producer: true };
+  assert.ok(rehash((b) => { b.related[A] = [B, C]; }, producer).some((p) => p.includes('differ from the vectors')), 'the producer check recomputes related lists');
+  assert.deepEqual(rehash((b) => { b.related[A] = [B, C]; }), [], 'a client does not recompute related lists');
+  assert.ok(rehash((b) => { b.talks[0].speaker_taglines = []; }).some((p) => p.includes('differ in length')));
   assert.ok(rehash((b) => { b.related[A] = [A]; }).some((p) => p.includes('itself')));
   assert.ok(rehash((b) => { b.talks.reverse(); }).some((p) => p.includes('sorted')));
   assert.ok(rehash((b) => { b.talks[0].topics = ['nope']; }).some((p) => p.includes('unknown topic')));
@@ -183,10 +186,74 @@ test('encodeVectors and decodeVectors round-trip and check dimensions', () => {
   assert.throws(() => decodeVectors(Buffer.alloc(DIMS + 1)), RangeError);
 });
 
-test('the model is bge-small-en-v1.5 with CLS pooling and the retrieval query prefix', () => {
+test('the model block pins the embedding conventions', () => {
+  assert.deepEqual(bundle.model, {
+    id: 'BAAI/bge-small-en-v1.5',
+    onnx: 'Xenova/bge-small-en-v1.5',
+    dims: 384,
+    pooling: 'cls',
+    normalize: true,
+    max_tokens: 512,
+    truncation: 'end',
+    document_instruction: '',
+    document_text: 'title + "\\n" + abstract',
+    query_instruction: 'Represent this sentence for searching relevant passages: ',
+  });
   assert.deepEqual(bundle.model, { ...MODEL });
-  assert.equal(MODEL.dims, 384);
-  assert.equal(MODEL.query_prefix, 'Represent this sentence for searching relevant passages: ');
+  assert.equal(queryText('kubernetes security'), 'Represent this sentence for searching relevant passages: kubernetes security');
+});
+
+test('reference embeddings: inputs follow the conventions and the numbers agree', () => {
+  const ref = JSON.parse(readFileSync(path.join(ROOT, 'contracts/fixtures/embedding/reference.v1.json'), 'utf8'));
+  const r = validator('embedding-reference.v1')(ref, { closed: true });
+  assert.equal(r.valid, true, formatErrors(r.errors));
+  assert.deepEqual(ref.model, { ...MODEL });
+  const inputs = JSON.parse(readFileSync(path.join(ROOT, 'contracts/fixtures/bundle-inputs', SLUG, 'talks.json'), 'utf8'));
+  for (const d of ref.documents) assert.equal(d.input, passageText(inputs.find((t) => t.talk_id === d.talk_id)), d.talk_id);
+  for (const q of ref.queries) assert.equal(q.input, queryText(q.query));
+  assert.deepEqual(ref.workers_ai_request.input.text, ref.queries.map((q) => q.input));
+  const norm = (v) => Math.hypot(...v);
+  for (const v of [...ref.documents, ...ref.queries].map((x) => x.vector)) assert.ok(Math.abs(norm(v) - 1) < 1e-4, 'L2-normalised');
+  const best = (row) => row.indexOf(Math.max(...row));
+  ref.queries.forEach((q, i) => {
+    ref.documents.forEach((d, j) => {
+      assert.ok(Math.abs(cosine(q.vector, d.vector) - ref.similarities[i][j]) < 2e-4, `fp32 ${i},${j}`);
+      assert.ok(Math.abs(ref.similarities_q8[i][j] - ref.similarities[i][j]) <= ref.tolerance, `q8 ${i},${j}`);
+      // The bundle stores int8 rows; a float query against them stays within the tolerance too.
+      assert.ok(Math.abs(cosine(q.vector, quantizeRow(d.vector)) - ref.similarities[i][j]) <= ref.tolerance, `int8 ${i},${j}`);
+    });
+    assert.equal(best(ref.similarities_q8[i]), best(ref.similarities[i]));
+    assert.equal(best(ref.documents.map((d) => cosine(q.vector, quantizeRow(d.vector)))), best(ref.similarities[i]));
+  });
+  // The query about securing MCP servers finds the MCP talk; the one about power finds the scheduling talk.
+  assert.equal(ref.documents[best(ref.similarities[0])].talk_id, A);
+  assert.equal(ref.documents[best(ref.similarities[1])].talk_id, C);
+});
+
+test('verification refuses a malformed entry instead of throwing, and lists exactly two files', () => {
+  assert.deepEqual(verifyBundle({ ...entry, content_hash: undefined }, files), ['content_hash missing or malformed']);
+  assert.deepEqual(verifyBundle(null, files), ['no index entry']);
+  const { 'vectors.i8': _v, ...onlyJson } = entry.files;
+  assert.ok(verifyBundle({ ...entry, files: onlyJson }, files).some((p) => p.includes('exactly')));
+  assert.ok(verifyBundle({ ...entry, files: { ...entry.files, 'extra.bin': { bytes: 0, sha256: '0'.repeat(64) } } }, files).some((p) => p.includes('exactly')));
+  const withExtra = structuredClone(index);
+  withExtra.conferences[0].bundle.files['extra.bin'] = { bytes: 0, sha256: '0'.repeat(64) };
+  assert.equal(validator('conferences-index.v1')(withExtra).valid, false, 'the schema names the two files');
+});
+
+test('buildBundle refuses an incomplete or unavailable conference', () => {
+  const attribution = { licensor: 'x', license: 'CC BY 3.0', license_url: 'https://creativecommons.org/licenses/by/3.0/', changes: 'x', takedown: 'https://example.org/t' };
+  const { name: _n, ...noName } = bundle.conference;
+  assert.throws(() => buildBundle({ conference: noName, talks: [], topics: [], vectors: new Map(), attribution }), /conference\.name/);
+  assert.throws(() => buildBundle({ conference: { ...bundle.conference, status: 'unavailable' }, talks: [], topics: [], vectors: new Map(), attribution }), /searchable/);
+});
+
+test('links are http(s) only', () => {
+  const check = validator('talk-bundle.v1', 'Talk');
+  const talk = bundle.talks.find((t) => t.talk_id === A);
+  assert.equal(check({ ...talk, url: 'Https://example.org/x' }).valid, true);
+  assert.equal(check({ ...talk, url: 'javascript:alert(1)' }).valid, false);
+  assert.equal(check({ ...talk, slides_url: 'file:///etc/passwd' }).valid, false);
 });
 
 test('normalizeKey matches the server and facets match scripts/build-facets.mjs rules', async () => {
@@ -217,7 +284,9 @@ test('the committed searchable conferences fit the bundle talk schema', () => {
     for (const t of lines) {
       // text_hash in talks.ndjson is sha256(title + "\n" + abstract): the passage the model embeds.
       assert.equal(textHash(t), t.text_hash, `${t.talk_id} text_hash`);
-      const talk = { ...Object.fromEntries(TALK_FIELDS.map((f) => [f, t[f] ?? null])), topics: [], text_hash: textHash(t) };
+      const talk = bundleTalk(t);
+      assert.equal(talk.speakers.length, talk.speaker_taglines.length, `${t.talk_id} speakers and taglines`);
+      assert.equal('speaker_profiles' in talk, false);
       const r = check(talk, { closed: true });
       assert.equal(r.valid, true, `${t.talk_id}\n${formatErrors(r.errors)}`);
     }
