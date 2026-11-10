@@ -973,6 +973,30 @@ export async function authenticated(device, slug) {
 // ---------------------------------------------------------------------------------------------
 // Handlers.
 
+// Writes a profile document. Indexing about/interests/expertise asks Elasticsearch to embed them
+// (semantic_text copy_to), so while the inference endpoint is unavailable (semantic.mjs) the same
+// document is written without those three fields and with text_hash null, which makes the next
+// save a full reindex that embeds them once the endpoint is back. The person stays visible and
+// can share meanwhile; only their text is missing until then.
+async function writeProfileDoc(action, doc) {
+  const hasText = 'about' in doc;
+  const withoutText = () => {
+    const { about, interests, expertise, ...rest } = doc;
+    return { ...rest, text_hash: null, text_pending: true };
+  };
+  if (hasText && !semanticAvailable()) return { status: await bulkOne(action, withoutText()), degraded: true };
+  let status;
+  try {
+    status = await bulkOne(action, doc);
+  } catch (err) {
+    if (!hasText || !(err instanceof UpstreamError)) throw err;
+    status = 500;
+  }
+  if (!hasText || status < 500) return { status, degraded: false };
+  pauseSemantic(new UpstreamError(`bulk item status ${status}`));
+  return { status: await bulkOne(action, withoutText()), degraded: true };
+}
+
 async function putProfile(req, res) {
   const ip = clientIp(req);
   limit(`people-write:ip:${ip}`, LIMITS.writeIp);
@@ -1025,9 +1049,10 @@ async function putProfile(req, res) {
   const flags = own.found ? { hidden: own.source.hidden === true, spot_hidden: own.source.spot_hidden === true } : {};
 
   let status;
+  let degraded = false;
   if (!own.found) {
     // op_type create: an existing document can never be taken over by a new device.
-    status = await bulkOne(
+    ({ status, degraded } = await writeProfileDoc(
       { create: { _id: id } },
       {
         event_id: conf.slug,
@@ -1040,7 +1065,7 @@ async function putProfile(req, res) {
         text_hash: hash,
         ...common,
       },
-    );
+    ));
     if (status === 409) throw forbidden();
   } else {
     const guard = { _id: id, if_seq_no: own.seqNo, if_primary_term: own.primaryTerm };
@@ -1048,7 +1073,7 @@ async function putProfile(req, res) {
       // Text unchanged: a Bulk partial update without the text fields reuses the embeddings.
       status = await bulkOne({ update: guard }, { doc: common });
     } else {
-      status = await bulkOne(
+      ({ status, degraded } = await writeProfileDoc(
         { index: guard },
         {
           event_id: conf.slug,
@@ -1063,12 +1088,19 @@ async function putProfile(req, res) {
           ...flags,
           ...common,
         },
-      );
+      ));
     }
     if (status === 409) throw new HttpError(409, { error: 'The profile changed at the same time; try again' });
   }
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, { ok: true, open_to_meet: body.open_to_meet, shared_talk_ids: shared, hidden_for_owner: own.found && own.source.hidden === true });
+  sendJson(res, 200, {
+    ok: true,
+    open_to_meet: body.open_to_meet,
+    shared_talk_ids: shared,
+    hidden_for_owner: own.found && own.source.hidden === true,
+    // Present only when the text could not be embedded and was left off the document for now.
+    ...(degraded ? { degraded: { semantic: true } } : {}),
+  });
 }
 
 async function deleteProfile(req, res, url) {

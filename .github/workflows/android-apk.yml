@@ -4,11 +4,10 @@
 name: Android APK
 
 on:
+  # Every push to an android/** branch, the branch's creation included (a paths filter would skip
+  # the first push, which has no diff to match), plus a manual run from the Actions tab.
   push:
     branches: ['android/**']
-    paths:
-      - 'web/**'
-      - '.github/workflows/android-apk.yml'
   workflow_dispatch:
 
 permissions:
