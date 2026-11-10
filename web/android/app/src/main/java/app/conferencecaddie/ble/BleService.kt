@@ -2,6 +2,7 @@ package app.conferencecaddie.ble
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -20,8 +21,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -29,6 +32,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.SystemClock
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -48,6 +52,13 @@ import app.conferencecaddie.R
  * The persistent notification says "Conference Caddie is finding people near you" and carries a
  * Stop action. The service stops by itself after the duration it was started with (the remaining
  * presence time), when Bluetooth turns off, when advertising fails, or when the app says stop.
+ *
+ * The two stop deadlines (presence expiry and the stale token) are kept on the elapsed-realtime
+ * clock, which keeps counting while the phone sleeps; a Handler alone counts uptime and would let
+ * a sleeping phone advertise a dead token for hours. A Handler stops on time while the phone is
+ * awake, the scan and flush callbacks check the deadlines whenever they run, and an inexact
+ * allow-while-idle alarm wakes the phone for the next deadline. The alarm needs no exact-alarm
+ * permission and may come some minutes late in Doze.
  *
  * The 16-byte token together with a 128-bit service UUID does not fit the 31-byte legacy
  * advertisement (2 + 16 + 16 = 34 bytes of service data), so the extended advertising of
@@ -70,6 +81,8 @@ class BleService : Service() {
         const val ACTION_START = "app.conferencecaddie.ble.START"
         const val ACTION_ROTATE = "app.conferencecaddie.ble.ROTATE"
         const val ACTION_STOP = "app.conferencecaddie.ble.STOP"
+        /** The wake-up alarm's broadcast, received only by a running service (not exported). */
+        const val ACTION_DEADLINE = "app.conferencecaddie.ble.DEADLINE"
         const val EXTRA_TOKEN = "token"
         const val EXTRA_SCAN = "scan"
         const val EXTRA_DURATION_MS = "duration_ms"
@@ -153,6 +166,7 @@ class BleService : Service() {
 
     private val flush = object : Runnable {
         override fun run() {
+            if (checkDeadlines()) return
             if (window.isNotEmpty()) {
                 val list = window.entries
                     .sortedByDescending { it.value }
@@ -165,8 +179,32 @@ class BleService : Service() {
         }
     }
 
-    private val expire = Runnable { stopWith("expired") }
-    private val stale = Runnable { stopWith("stale") }
+    /** Deadlines on SystemClock.elapsedRealtime(), 0 for none. */
+    private var expireAt = 0L
+    private var staleAt = 0L
+
+    private val deadlineCheck = Runnable { if (!checkDeadlines()) armDeadlines() }
+
+    private val deadlineReceiver = object : BroadcastReceiver() {
+        // The alarm manager holds a wake lock until this returns, so the stop below completes.
+        override fun onReceive(context: Context, intent: Intent) {
+            if (!checkDeadlines()) armDeadlines()
+        }
+    }
+
+    private val alarms by lazy { getSystemService(Context.ALARM_SERVICE) as AlarmManager }
+
+    /** A broadcast to deadlineReceiver; after the process is gone it reaches nothing. */
+    private val deadlineAlarm: PendingIntent by lazy {
+        checkNotNull(
+            PendingIntent.getBroadcast(
+                this,
+                3,
+                Intent(ACTION_DEADLINE).setPackage(packageName),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ),
+        )
+    }
 
     private val advertisingCallback = object : AdvertisingSetCallback() {
         override fun onAdvertisingSetStarted(set: AdvertisingSet?, txPower: Int, status: Int) {
@@ -188,10 +226,12 @@ class BleService : Service() {
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            if (checkDeadlines()) return
             record(result)
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
+            if (checkDeadlines()) return
             results.forEach { record(it) }
         }
 
@@ -208,6 +248,7 @@ class BleService : Service() {
         super.onCreate()
         ensureChannels(this)
         adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        ContextCompat.registerReceiver(this, deadlineReceiver, IntentFilter(ACTION_DEADLINE), ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -229,6 +270,7 @@ class BleService : Service() {
                 stopReason = null
                 schedule(duration)
                 freshen()
+                armDeadlines()
                 if (!startAdvertising(token)) return START_NOT_STICKY
                 if (intent.getBooleanExtra(EXTRA_SCAN, true)) startScanning()
                 handler.removeCallbacks(flush)
@@ -242,6 +284,8 @@ class BleService : Service() {
                 }
                 if (intent.hasExtra(EXTRA_DURATION_MS)) schedule(intent.getLongExtra(EXTRA_DURATION_MS, 0L))
                 freshen()
+                if (checkDeadlines()) return START_NOT_STICKY
+                armDeadlines()
                 rotateAdvertising(token)
             }
             ACTION_STOP -> stopWith("user")
@@ -253,6 +297,14 @@ class BleService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        alarms.cancel(deadlineAlarm)
+        expireAt = 0L
+        staleAt = 0L
+        try {
+            unregisterReceiver(deadlineReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Not registered.
+        }
         stopScanning()
         stopAdvertising()
         window.clear()
@@ -264,15 +316,45 @@ class BleService : Service() {
 
     // --- Lifecycle -----------------------------------------------------------------------------
 
+    /** Sets the presence expiry; 0 or less means none. armDeadlines() applies it. */
     private fun schedule(durationMs: Long) {
-        handler.removeCallbacks(expire)
-        if (durationMs > 0L) handler.postDelayed(expire, durationMs)
+        expireAt = if (durationMs > 0L) SystemClock.elapsedRealtime() + durationMs else 0L
     }
 
-    /** A fresh token arrived: the stale timer starts over. */
+    /** A fresh token arrived: the stale deadline starts over. armDeadlines() applies it. */
     private fun freshen() {
-        handler.removeCallbacks(stale)
-        handler.postDelayed(stale, BleConstants.STALE_MS)
+        staleAt = SystemClock.elapsedRealtime() + BleConstants.STALE_MS
+    }
+
+    /** Stops the service and returns true when a deadline has passed (or a stop is under way). */
+    private fun checkDeadlines(): Boolean {
+        if (!running) return false
+        if (stopReason != null) return true
+        val now = SystemClock.elapsedRealtime()
+        val passed = listOf(expireAt to "expired", staleAt to "stale")
+            .filter { it.first != 0L && now >= it.first }
+            .minByOrNull { it.first } ?: return false
+        // Stop sending the token now, while this callback or the alarm keeps the phone awake;
+        // onDestroy runs the same steps again, which is harmless.
+        stopAdvertising()
+        stopScanning()
+        stopWith(passed.second)
+        return true
+    }
+
+    /**
+     * Sets the Handler (on time while the phone is awake) and the alarm (wakes a sleeping phone)
+     * for the next deadline. Called whenever a deadline changes; one alarm replaces the last.
+     */
+    private fun armDeadlines() {
+        handler.removeCallbacks(deadlineCheck)
+        val next = listOf(expireAt, staleAt).filter { it != 0L }.minOrNull()
+        if (next == null) {
+            alarms.cancel(deadlineAlarm)
+            return
+        }
+        handler.postDelayed(deadlineCheck, (next - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+        alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, next, deadlineAlarm)
     }
 
     private fun stopWith(reason: String) {

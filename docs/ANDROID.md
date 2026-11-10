@@ -118,8 +118,14 @@ All are requested from the switch, after the first-time notice, with the rationa
   "Someone who's worked on {evidence} is right near you". Tapping it opens the People tab on
   "Around now" with that card highlighted.
 - The app fetches a new token 20 seconds before the old one stops resolving. If the app is closed
-  and cannot rotate, the service stops by itself after 11 minutes rather than advertise a dead
-  code; it also stops when presence ends, when Bluetooth is turned off, and on Stop.
+  and cannot rotate, the service stops by itself 11 minutes after the last token rather than
+  advertise a dead code; it also stops when presence ends, when Bluetooth is turned off, and on
+  Stop. The 11 minutes and the end of presence are counted on the clock that keeps running while
+  the phone sleeps (`SystemClock.elapsedRealtime`). While the phone is awake the stop is on time;
+  while it sleeps an inexact allow-while-idle alarm wakes it, so the app needs no exact-alarm
+  permission, and the stop can then come several minutes late (Android batches inexact alarms and
+  spaces them out in Doze). Every scan result and every ten-second flush also checks the two
+  deadlines.
 - Off, or presence off: the service stops and the token is cleared. Presence stays as it was when
   only the Bluetooth switch is turned off.
 - The server stores no sightings and logs none. See `docs/CONTRACT.md` for the exact routes and
