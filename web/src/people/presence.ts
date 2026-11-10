@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { loadSchedule } from '../offline/status';
 import { deletePresence, PeopleApiError, putPresence } from './api';
-import { getPresence, setPresence } from './storage';
+import { getPresence, onPresenceFromOtherTab, setPresence } from './storage';
 import type { Presence, Position, PresenceMode, TalkLike } from './types';
 
 export const PRESENCE_NOTICE =
@@ -374,6 +374,21 @@ export function usePresenceWatch(slug: string | null): void {
     };
   }, [slug]);
 }
+
+// Another tab turned presence off, or on, or changed it: this tab's timers and position watch
+// follow the stored state, so it never keeps writing a presence the user has ended.
+onPresenceFromOtherTab((changed) => {
+  const slug = watchedSlug;
+  if (!slug || (changed !== null && changed !== slug)) return;
+  if (!getPresence(slug).on) {
+    epoch++;
+    clearTimers();
+    stopPositionWatch();
+    return;
+  }
+  scheduleExpiry(slug);
+  syncPositionWatch(slug);
+});
 
 export function presenceProblem(err: unknown): string {
   if (err instanceof PeopleApiError) {
