@@ -1,0 +1,46 @@
+# Runs the server tests (`npm test`) and the web app's tests (`npm --prefix web test`, when the web
+# package has a test script) on Node 22, the oldest version package.json's engines field allows,
+# and on the latest Node. The server tests stub Elasticsearch in memory; nothing needs a secret or
+# any network beyond installing the dependencies.
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', 'latest']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - name: Server tests
+        run: |
+          npm ci
+          npm test
+
+      - name: Web tests
+        run: |
+          npm --prefix web ci
+          npm --prefix web test --if-present
