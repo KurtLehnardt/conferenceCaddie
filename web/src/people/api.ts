@@ -106,29 +106,37 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean; tim
     if (!d) throw new PeopleApiError(friendly(403), 403, 'no_device');
     headers['X-Caddie-Device'] = `${d.profile_id}.${d.secret}`;
   }
-  // A request with a time limit gets its own signal, aborted when the time is up (and when the
-  // caller's own signal aborts). The global timer works on every WebView, unlike AbortSignal.timeout.
-  let signal = init.signal ?? undefined;
+  if (!init.timeoutMs) return exchange<T>(path, init, headers, init.signal ?? undefined);
+  // A request with a time limit gets its own signal, aborted when the time is up or when the
+  // caller's own signal aborts. The limit covers reading the answer too, so a server that stalls
+  // in the middle of its answer cannot hold the request open. The global timer works on every
+  // WebView, unlike AbortSignal.timeout.
+  const ctrl = new AbortController();
   let timedOut = false;
-  let limit: ReturnType<typeof setTimeout> | undefined;
-  if (init.timeoutMs) {
-    const ctrl = new AbortController();
-    limit = setTimeout(() => {
-      timedOut = true;
-      ctrl.abort();
-    }, init.timeoutMs);
-    init.signal?.addEventListener('abort', () => ctrl.abort());
-    signal = ctrl.signal;
+  const limit = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, init.timeoutMs);
+  if (init.signal?.aborted) ctrl.abort();
+  else init.signal?.addEventListener('abort', () => ctrl.abort(), { once: true });
+  try {
+    return await exchange<T>(path, init, headers, ctrl.signal);
+  } catch (err) {
+    if (timedOut && !(err instanceof PeopleApiError)) throw new PeopleApiError(TIMEOUT_MESSAGE, 0, 'timeout');
+    throw err;
+  } finally {
+    clearTimeout(limit);
   }
+}
+
+/** Sends one request and reads its answer; call() sets the headers and the time limit. */
+async function exchange<T>(path: string, init: RequestInit, headers: Record<string, string>, signal: AbortSignal | undefined): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, { method: init.method ?? 'GET', headers, body: init.body, signal });
   } catch (err) {
-    if (timedOut) throw new PeopleApiError(TIMEOUT_MESSAGE, 0, 'timeout');
     if ((err as Error).name === 'AbortError') throw err;
     throw new PeopleApiError(friendly(0), 0);
-  } finally {
-    clearTimeout(limit);
   }
   if (!res.ok) {
     let code: string | null = null;

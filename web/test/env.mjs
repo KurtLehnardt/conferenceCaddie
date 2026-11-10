@@ -51,7 +51,7 @@ class MemoryStorage {
 Object.defineProperty(globalThis, 'localStorage', { value: new MemoryStorage(), configurable: true, writable: true });
 Object.defineProperty(globalThis, 'navigator', { value: { onLine: true, userAgent: 'node' }, configurable: true, writable: true });
 
-/** Every request the modules made, in order: { method, path, body }. */
+/** Every request the modules made, in order: { method, path, body, signal }. */
 export const calls = [];
 let handler = () => json(200, { ok: true });
 
@@ -61,7 +61,7 @@ export function onFetch(fn) {
 }
 
 globalThis.fetch = async (path, init = {}) => {
-  const call = { method: init.method ?? 'GET', path: String(path), body: init.body ? JSON.parse(init.body) : null };
+  const call = { method: init.method ?? 'GET', path: String(path), body: init.body ? JSON.parse(init.body) : null, signal: init.signal ?? null };
   calls.push(call);
   const answer = Promise.resolve(handler(call));
   const signal = init.signal;

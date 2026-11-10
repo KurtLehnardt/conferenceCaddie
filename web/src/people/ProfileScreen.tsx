@@ -91,16 +91,18 @@ function SaveStatus() {
   return null;
 }
 
-/** Explains the notice for a delete the server has not confirmed yet. */
+/** Explains the notice for a delete the server has not confirmed yet: "Delete my profile", or one conference's copy. */
 export const PENDING_DELETE_COPY =
   'Until the delete is done, the app does not share your profile, presence or Bluetooth signal, and sends no requests to talk shop. It tries again by itself.';
+export const PENDING_DELETE_ONE_COPY =
+  'Until it is done, the app does not share your profile, presence or Bluetooth signal there, and sends no requests to talk shop there. It tries again by itself.';
 
 /** Opens that explanation when a delete may have done part of its work. */
 export const PENDING_HIDDEN_COPY = 'It may already be hidden from other attendees.';
 
 /** Why "Stop trying" is offered: the server keeps refusing this device's key, or the delete keeps failing. */
 export const STOP_FORBIDDEN_COPY = "Our server keeps refusing this device's key, so trying again will not help.";
-export const STOP_FAILING_COPY = 'Deleting has not worked after several tries.';
+export const STOP_FAILING_COPY = 'Deleting has not finished after several tries or a day of trying.';
 
 /** What stopping does, after "Delete my profile" and after turning visibility off. */
 export const STOP_ALL_COPY =
@@ -141,7 +143,7 @@ function PendingDelete({ conference, onResult }: { conference: ConferenceLike; o
         <p class="pp-banner-text">
           <strong>{all ? 'Deleting your profile has not finished.' : `Removing your profile from ${where} has not finished.`}</strong>{' '}
           {pending.length > 0 && `${PENDING_HIDDEN_COPY} `}
-          {PENDING_DELETE_COPY}
+          {all ? PENDING_DELETE_COPY : PENDING_DELETE_ONE_COPY}
         </p>
       </div>
       {detail && <p class="pp-error pp-banner-actions">{detail}</p>}

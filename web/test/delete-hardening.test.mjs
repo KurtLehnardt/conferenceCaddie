@@ -215,6 +215,33 @@ test('A delete that never answers times out after 20 seconds, and an edit for an
   assert.equal(getSyncStatus().state, 'saved');
 });
 
+test('A delete whose answer stops halfway also times out after 20 seconds', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  published(SLUG);
+  // The headers arrive, then the body stops after a few bytes; only the request's signal ends it.
+  onFetch(
+    (call) =>
+      new Response(
+        new ReadableStream({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode('{"ok":'));
+            call.signal?.addEventListener('abort', () => stream.error(new DOMException('The operation was aborted.', 'AbortError')));
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+  );
+  const deleting = deleteMyProfile();
+  await settle();
+  assert.deepEqual(requests(), [DELETE]);
+  t.mock.timers.tick(20_000);
+  const result = await deleting;
+  assert.equal(result.done, false);
+  assert.match(result.message, /may be partly deleted/);
+  assert.ok(getDeleteAll(), 'the delete is tried again');
+  assert.ok(getDevice(), 'and the device keeps its key');
+});
+
 test('A save gives up waiting for the lock after 25 seconds with a message to try again', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const locks = installLocks();
