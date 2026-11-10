@@ -10,7 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "lucide-preact": "^1.70.0",
+    "pdfjs-dist": "^6.5.438",
     "preact": "^11.2.0"
   },
   "devDependencies": {

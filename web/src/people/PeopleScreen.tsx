@@ -5,6 +5,7 @@
 // with "Around now", People to meet, and the "For you" row.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, MessagesSquare, Search, UserRound, Users, X } from 'lucide-preact';
+import { pacedMs } from '../lib/pace';
 import { fetchMatches, isAbort, MATCH_PAGE, PeopleApiError } from './api';
 import { revealBleCard, useBleReveal } from './ble';
 import { takePendingSearch, withoutBlocked } from './connect';
@@ -29,7 +30,8 @@ export const AROUND_TITLE = "Who's around";
 export const AROUND_EMPTY = "Nobody else is around right now. People show up here as they turn on \"Around and up for a conversation\".";
 const DEBOUNCE_MS = 350;
 // The Around home list is refreshed quietly this often while the tab is visible: people come and go.
-const AROUND_REFRESH_MS = 60_000;
+// The Around refresh at pace 1; the real wait is stretched by the pace the API reports.
+const AROUND_REFRESH_MS = 120_000;
 
 export function EndedTalkBanner({
   conference,
@@ -318,7 +320,9 @@ function PeopleList({
   // left alone.
   useEffect(() => {
     if (!groupZone || !vis.open_to_meet) return;
-    const id = window.setInterval(() => {
+    let id: number | undefined;
+    const refresh = () => {
+      id = window.setTimeout(refresh, pacedMs(AROUND_REFRESH_MS));
       if (document.visibilityState !== 'visible' || !page || page.results.length > MATCH_PAGE) return;
       const ctl = new AbortController();
       const startKey = current.current;
@@ -329,8 +333,9 @@ function PeopleList({
           setPage({ key: startKey, results, done: results.length < MATCH_PAGE });
         })
         .catch(() => {});
-    }, AROUND_REFRESH_MS);
-    return () => window.clearInterval(id);
+    };
+    id = window.setTimeout(refresh, pacedMs(AROUND_REFRESH_MS));
+    return () => window.clearTimeout(id);
   }, [groupZone, key, vis.open_to_meet, page]);
 
   // Nudges: "See who" (and a tapped Bluetooth "right near you" notification in the Android app)
