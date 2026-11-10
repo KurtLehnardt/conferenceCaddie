@@ -413,6 +413,15 @@ export function presenceEndedOnServer(slug: string): void {
   if (watchSlug === slug) stopPositionWatch();
 }
 
+/** Stops every presence timer and the position watch, for "Delete my profile". */
+export function resetPresence(): void {
+  epoch++;
+  clearTimers();
+  stopPositionWatch();
+  hiddenAt = null;
+  lastZone = null;
+}
+
 export function presenceProblem(err: unknown): string {
   if (err instanceof PeopleApiError) {
     if (err.code === 'profile_required' || err.code === 'no_device') return 'Make your profile visible first.';

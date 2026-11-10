@@ -3,6 +3,10 @@
 import { useState } from 'preact/hooks';
 import { EyeOff, Trash2 } from 'lucide-preact';
 import { deleteProfile, PeopleApiError } from './api';
+import { resetBle } from './ble';
+import { clearInbox } from './connect';
+import { resetNudges } from './nudges';
+import { resetPresence } from './presence';
 import { forgetPush } from './push';
 import { ImportGitHub, mergeGithubImport } from './ImportGitHub';
 import { VISIBILITY_NOTICE } from './PeopleScreen';
@@ -18,6 +22,7 @@ import {
 } from './storage';
 import { changeVisibility, getSyncStatus, LINKEDIN_RE, scheduleProfileSync, unshareAll } from './sync';
 import { TopicPicker } from './TopicPicker';
+import { clearWatches } from './watch';
 import type { ConferenceLike, InterestedProp, Profile, TopicRef } from './types';
 import { interestedIds } from './util';
 
@@ -136,6 +141,13 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
       }
       // The server deleted the push subscriptions with the profile; the browser's own goes too.
       await forgetPush();
+      // The server cleared presence, meets and the Bluetooth token with the profile: the
+      // position watch, the timers, the inbox poll's state and the nudges stop here too.
+      await resetBle();
+      resetPresence();
+      clearInbox();
+      resetNudges();
+      clearWatches();
       clearAllPeopleData();
       setConfirmDelete(false);
       setDeleteMessage('Your profile was deleted from this phone and from our server.');

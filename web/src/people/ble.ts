@@ -406,6 +406,12 @@ export async function stopBle(slug: string, { tellServer = true }: { tellServer?
   if (tellServer) await clearOnServer(slug);
 }
 
+/** Stops the feature and forgets its device state, for "Delete my profile" (the server cleared the token). */
+export async function resetBle(): Promise<void> {
+  if (session) await stopBle(session.slug, { tellServer: false });
+  stateMem.clear();
+}
+
 /**
  * On opening the People tab: the device says the feature is on, so pick the session back up if
  * the service is still running (a fresh token at once), otherwise record that it is off.

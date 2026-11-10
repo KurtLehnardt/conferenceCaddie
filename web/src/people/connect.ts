@@ -59,6 +59,19 @@ export function openMeetId(err: unknown): string | null {
   return errorField(err, 'meet_id');
 }
 
+/** Forgets every request, meet and person this visit knew, for "Delete my profile". */
+export function clearInbox(): void {
+  inflight?.abort();
+  inflight = null;
+  inboxSlug = null;
+  inbox = { incoming: [], outgoing: [] };
+  inboxLoaded = false;
+  asked.clear();
+  meetRefs.clear();
+  seen.clear();
+  notify();
+}
+
 function resetInbox(slug: string) {
   inboxSlug = slug;
   inbox = { incoming: [], outgoing: [] };

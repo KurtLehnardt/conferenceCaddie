@@ -375,17 +375,30 @@ export function removeMet(slug: string, index: number): void {
   notify();
 }
 
+// Kept by watch.ts, nudges.ts and ble.ts, which hold their own in-memory copies and reset them
+// when the profile is deleted.
+const CLEARED_PREFIXES = [
+  VIS_PREFIX,
+  PRESENCE_PREFIX,
+  PUSH_PREFIX,
+  BLOCKS_PREFIX,
+  'caddie.watch.v1.',
+  'caddie.nudged.v1.',
+  'caddie.nudges.v1.',
+  'caddie.ble.v1.',
+];
+
 /**
- * Removes the profile, the device identity and every visibility, presence, push and block record
- * from the device. The "People I met" list is the user's own notes and stays, like the Interested
- * list.
+ * Removes the profile, the device identity and every visibility, presence, push, block, watch,
+ * nudge and Bluetooth record from the device. The "People I met" list is the user's own notes and
+ * stays, like the Interested list.
  */
 export function clearAllPeopleData(): void {
   const keys: string[] = [DEVICE_KEY, PROFILE_KEY];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith(VIS_PREFIX) || key?.startsWith(PRESENCE_PREFIX) || key?.startsWith(PUSH_PREFIX) || key?.startsWith(BLOCKS_PREFIX)) keys.push(key);
+      if (key && CLEARED_PREFIXES.some((p) => key.startsWith(p))) keys.push(key);
     }
   } catch {
     // Nothing to enumerate.
