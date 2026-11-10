@@ -29,6 +29,7 @@
 
 import { take, clientIp } from './ratelimit.mjs';
 import { conferencePreference, peoplePreference, withPreference } from './preference.mjs';
+import { pauseSemantic, semanticAvailable } from './semantic.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_API_KEY = process.env.ES_API_KEY || '';
@@ -291,18 +292,26 @@ function semanticRetriever(text, filter) {
   };
 }
 
-function buildSearch(p) {
+// Keyword stand-in for the semantic retriever while the inference endpoint is unavailable
+// (semantic.mjs): the interests text as a lenient multi_match over title and abstract.
+function lexicalRetriever(text) {
+  return { standard: { query: { multi_match: { query: text, fields: ['title^2', 'abstract'], minimum_should_match: '2<60%' } } } };
+}
+
+function buildSearch(p, semantic = true) {
   const filter = baseFilter(p);
   const weighted = [];
   if (p.learn.length) weighted.push({ retriever: topicRetriever(p.learn), weight: 1 });
-  if (p.interests) weighted.push({ retriever: semanticRetriever(p.interests, filter), weight: 1 });
+  if (p.interests) weighted.push({ retriever: semantic ? semanticRetriever(p.interests, filter) : lexicalRetriever(p.interests), weight: 1 });
   const body = {
     retriever: { rrf: { retrievers: weighted, filter, rank_window_size: RANK_WINDOW } },
     size: p.size,
     _source: ['talk_id', 'conference', 'title', 'abstract', 'speakers', 'room', 'start', 'end', 'track', 'level', 'tags', 'slides_url', 'url', 'topics', 'speaker_profiles'],
   };
   if (p.interests) {
-    body.highlight = { encoder: 'default', pre_tags: [''], post_tags: [''], fields: { semantic: { number_of_fragments: 2 } } };
+    body.highlight = semantic
+      ? { encoder: 'default', pre_tags: [''], post_tags: [''], fields: { semantic: { number_of_fragments: 2 } } }
+      : { encoder: 'default', pre_tags: [''], post_tags: [''], fields: { abstract: { fragment_size: 200, number_of_fragments: 1 } } };
   }
   return body;
 }
@@ -359,8 +368,25 @@ async function topicLabels(event, topicIds) {
   return new Map((json.hits?.hits ?? []).map((h) => [h._source.topic_id, h._source.label]));
 }
 
+// Runs the recommendation search; when the semantic retriever fails, answers with keyword
+// matching alone and pauses semantic queries for a minute (semantic.mjs). Returns the hits and
+// whether the answer is degraded.
+async function recommendSearch(p) {
+  let semantic = Boolean(p.interests) && semanticAvailable();
+  let json;
+  try {
+    json = await searchTalks(buildSearch(p, semantic), p.event);
+  } catch (err) {
+    if (!semantic || !(err instanceof UpstreamError)) throw err;
+    pauseSemantic(err);
+    semantic = false;
+    json = await searchTalks(buildSearch(p, false), p.event);
+  }
+  return { json, degraded: Boolean(p.interests) && !semantic };
+}
+
 async function recommend(p) {
-  const json = await searchTalks(buildSearch(p), p.event);
+  const { json, degraded } = await recommendSearch(p);
   const hits = json.hits?.hits ?? [];
   // The reasons are built only from the topics of this request, never from anything remembered or
   // from the talk's other topics, so a topic the user has removed can never be named.
@@ -368,10 +394,10 @@ async function recommend(p) {
   const ids = hits.map((h) => String(h._source?.talk_id ?? h._id));
   const [labels, counts] = await Promise.all([topicLabels(p.event, topicIds), circleCounts(p.event, ids)]);
 
-  return hits.map((hit) => {
+  const results = hits.map((hit) => {
     const s = hit._source ?? {};
     const talkTopics = s.topics ?? [];
-    const passage = passageFor(hit);
+    const passage = passageFor(hit) ?? (hit.highlight?.abstract?.[0] ? trimText(String(hit.highlight.abstract[0]).replace(/<\/?mark>/g, ''), PASSAGE_MAX) : null);
     const named = (ids) => ids.filter((t) => talkTopics.includes(t) && labels.has(t)).map((t) => labels.get(t));
     const learnMatched = named(p.learn);
     const talkId = String(s.talk_id ?? hit._id);
@@ -396,6 +422,7 @@ async function recommend(p) {
       circle_count: counts[talkId] ?? 0,
     };
   });
+  return { results, degraded };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -415,7 +442,9 @@ export async function handleRecommendationsApi(req, res, url) {
       sendJson(res, 200, { results: [], needs_profile: true });
       return true;
     }
-    sendJson(res, 200, { results: await recommend(params) });
+    const { results, degraded } = await recommend(params);
+    // degraded is present only when the interests text was matched by keywords alone.
+    sendJson(res, 200, degraded ? { results, degraded: { semantic: true } } : { results });
   } catch (err) {
     failure(res, err, 'Recommendations');
   }

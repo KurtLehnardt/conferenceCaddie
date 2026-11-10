@@ -1814,3 +1814,10 @@ mark {
     justify-content: flex-start;
   }
 }
+
+/* Keyword-only notice while semantic matching is paused */
+.degraded-note {
+  margin: 0 16px 8px;
+  font-size: 0.875rem;
+  color: var(--text-2, #6b7280);
+}
