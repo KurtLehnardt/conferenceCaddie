@@ -375,17 +375,30 @@ export function removeMet(slug: string, index: number): void {
   notify();
 }
 
+// Kept by watch.ts, nudges.ts and ble.ts, which hold their own in-memory copies and reset them
+// when the profile is deleted.
+const CLEARED_PREFIXES = [
+  VIS_PREFIX,
+  PRESENCE_PREFIX,
+  PUSH_PREFIX,
+  BLOCKS_PREFIX,
+  'caddie.watch.v1.',
+  'caddie.nudged.v1.',
+  'caddie.nudges.v1.',
+  'caddie.ble.v1.',
+];
+
 /**
- * Removes the profile, the device identity and every visibility, presence, push and block record
- * from the device. The "People I met" list is the user's own notes and stays, like the Interested
- * list.
+ * Removes the profile, the device identity and every visibility, presence, push, block, watch,
+ * nudge and Bluetooth record from the device. The "People I met" list is the user's own notes and
+ * stays, like the Interested list.
  */
 export function clearAllPeopleData(): void {
   const keys: string[] = [DEVICE_KEY, PROFILE_KEY];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith(VIS_PREFIX) || key?.startsWith(PRESENCE_PREFIX) || key?.startsWith(PUSH_PREFIX) || key?.startsWith(BLOCKS_PREFIX)) keys.push(key);
+      if (key && CLEARED_PREFIXES.some((p) => key.startsWith(p))) keys.push(key);
     }
   } catch {
     // Nothing to enumerate.
@@ -400,25 +413,59 @@ export function clearAllPeopleData(): void {
   notify();
 }
 
+const presenceListeners = new Set<(slug: string | null) => void>();
+
+/**
+ * Runs `fn` after another tab changed the stored presence of a conference (null: of every
+ * conference), once this tab's copy has been dropped, so the timers and the position watch can
+ * follow the new state. Returns the unsubscribe function.
+ */
+export function onPresenceFromOtherTab(fn: (slug: string | null) => void): () => void {
+  presenceListeners.add(fn);
+  return () => {
+    presenceListeners.delete(fn);
+  };
+}
+
 // Another tab or window of this site shares localStorage but not these in-memory copies. When it
 // writes, the copies are dropped and read again, so this tab never keeps working from an older
-// profile, and the screens that depend on it fetch again.
+// profile or presence (a presence turned off there must stop this tab's writes too), and the
+// screens that depend on it fetch again.
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
     const key = e.key;
+    let presenceSlug: string | null | undefined;
     // A null key means the other tab cleared all storage.
     if (key === null) {
       profileMem = undefined;
       deviceMem = undefined;
       visMem.clear();
+      presenceMem.clear();
+      pushMem.clear();
+      blocksMem.clear();
+      metMem.clear();
+      presenceSlug = null;
     } else if (key === PROFILE_KEY) {
       profileMem = undefined;
     } else if (key === DEVICE_KEY) {
       deviceMem = undefined;
     } else if (key.startsWith(VIS_PREFIX)) {
       visMem.delete(key.slice(VIS_PREFIX.length));
+    } else if (key.startsWith(PRESENCE_PREFIX)) {
+      presenceSlug = key.slice(PRESENCE_PREFIX.length);
+      presenceMem.delete(presenceSlug);
+    } else if (key.startsWith(PUSH_PREFIX)) {
+      pushMem.delete(key.slice(PUSH_PREFIX.length));
+    } else if (key.startsWith(BLOCKS_PREFIX)) {
+      blocksMem.delete(key.slice(BLOCKS_PREFIX.length));
+    } else if (key.startsWith(MET_PREFIX)) {
+      metMem.delete(key.slice(MET_PREFIX.length));
     } else {
       return;
+    }
+    if (presenceSlug !== undefined) {
+      const slug = presenceSlug;
+      presenceListeners.forEach((fn) => fn(slug));
     }
     notify();
   });

@@ -11,6 +11,10 @@
 // - A target is a person's profile (kind profile, named by their ref), their presence spot line
 //   (kind spot, the same ref) or a meet (kind meet, named by its meet_id; the reporter must be a
 //   participant and ref must name the other one). Reporting oneself is a 404, like blocking.
+// - The reports outlive the people document: when a profile is created again or fully reindexed,
+//   people.mjs counts them (reportCountsFor) and sets hidden and spot_hidden again at HIDE_AT, so
+//   deleting and re-making a profile does not undo a hide. Only the operator's --unhide (which
+//   deletes the reports) or --purge does.
 // - Two distinct reporters hide the target. A profile gets hidden: true, a meet gets hidden: true
 //   and hidden_owner_id (the reported participant, who alone keeps seeing it), a spot gets its
 //   presence_spot cleared and spot_hidden: true. The hide is a Bulk partial update
@@ -27,6 +31,9 @@
 
 import { clientIp } from './ratelimit.mjs';
 import { refFor } from './device.mjs';
+import { peoplePreference, withPreference } from './preference.mjs';
+// people.mjs imports reportCountsFor and HIDE_AT from here in turn; neither module uses the other's
+// bindings while it is being evaluated, so the cycle is safe.
 import {
   people, idx, docId, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
@@ -93,6 +100,24 @@ async function reporterCount(slug, kind, id) {
     query: { bool: { filter: [{ term: { event_id: slug } }, { term: { target_kind: kind } }, { term: { target_id: id } }] } },
   });
   return json.count ?? 0;
+}
+
+// The distinct reporters of one person's profile and of their spot line, as { profile, spot }:
+// one small search (size 0) with a terms aggregation on target_kind, since both kinds are named by
+// the person's ref. people.mjs reads it whenever it creates or fully reindexes a profile document,
+// because the reports outlive the document: a profile hidden after reports whose owner turns both
+// visibility choices off (which deletes the document) and on again is hidden again. A missing
+// reports index counts as none. Throws the transport's UpstreamError when the search fails, and
+// the caller fails closed.
+export async function reportCountsFor(slug, ref) {
+  const { json } = await people('POST', withPreference(`${idx(REPORTS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(slug)), {
+    size: 0,
+    query: { bool: { filter: [{ term: { event_id: slug } }, { terms: { target_kind: ['profile', 'spot'] } }, { term: { target_id: ref } }] } },
+    aggs: { kinds: { terms: { field: 'target_kind', size: 2 } } },
+  });
+  const counts = { profile: 0, spot: 0 };
+  for (const b of json.aggregations?.kinds?.buckets ?? []) if (b.key === 'profile' || b.key === 'spot') counts[b.key] = b.doc_count ?? 0;
+  return counts;
 }
 
 // Marks a target hidden. A target that is already gone (404) needs nothing. A meet also records

@@ -29,7 +29,7 @@
 
 import { take, clientIp } from './ratelimit.mjs';
 import { conferencePreference, peoplePreference, withPreference } from './preference.mjs';
-import { pauseSemantic, semanticAvailable } from './semantic.mjs';
+import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_API_KEY = process.env.ES_API_KEY || '';
@@ -52,7 +52,16 @@ const TALK_ID_RE = /^[a-z0-9][a-z0-9-]{0,119}:[A-Za-z0-9_-]{1,64}$/;
 const TOPIC_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}-]{0,79}$/u;
 
 export class BadRequest extends Error {}
-export class UpstreamError extends Error {}
+// status, types and inferenceReason (esErrorInfo, semantic.mjs) say whether inference failed;
+// only the message, a status, is ever logged.
+export class UpstreamError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.status = details.status ?? null;
+    this.types = details.types ?? [];
+    this.inferenceReason = details.inferenceReason === true;
+  }
+}
 
 // ---------------------------------------------------------------------------------------------
 // HTTP helpers, shared with topics-api.mjs.
@@ -177,7 +186,7 @@ export function failure(res, err, what) {
 
 // ---------------------------------------------------------------------------------------------
 // Elasticsearch transport. Error bodies from Elasticsearch are never passed on; only the status
-// code is kept, for the server log.
+// code is kept for the server log, and the error types to tell an inference failure apart.
 
 export async function esRequest(path, body, key = ES_API_KEY) {
   let res;
@@ -192,8 +201,13 @@ export async function esRequest(path, body, key = ES_API_KEY) {
     throw new UpstreamError(err?.name === 'TimeoutError' ? 'timeout' : 'network error');
   }
   if (!res.ok) {
-    await res.body?.cancel();
-    throw new UpstreamError(`status ${res.status}`);
+    let info = {};
+    try {
+      info = esErrorInfo((await res.json())?.error);
+    } catch {
+      // Not JSON, or the body could not be read: the status alone.
+    }
+    throw new UpstreamError(`status ${res.status}`, { status: res.status, ...info });
   }
   try {
     return await res.json();
@@ -368,16 +382,17 @@ async function topicLabels(event, topicIds) {
   return new Map((json.hits?.hits ?? []).map((h) => [h._source.topic_id, h._source.label]));
 }
 
-// Runs the recommendation search; when the semantic retriever fails, answers with keyword
-// matching alone and pauses semantic queries for a minute (semantic.mjs). Returns the hits and
-// whether the answer is degraded.
+// Runs the recommendation search; when the semantic retriever fails because inference did
+// (isInferenceFailure), answers with keyword matching alone and pauses semantic queries for a
+// minute (semantic.mjs); any other failure propagates. Returns the hits and whether the answer is
+// degraded.
 async function recommendSearch(p) {
   let semantic = Boolean(p.interests) && semanticAvailable();
   let json;
   try {
     json = await searchTalks(buildSearch(p, semantic), p.event);
   } catch (err) {
-    if (!semantic || !(err instanceof UpstreamError)) throw err;
+    if (!semantic || !(err instanceof UpstreamError) || !isInferenceFailure(err)) throw err;
     pauseSemantic(err);
     semantic = false;
     json = await searchTalks(buildSearch(p, false), p.event);
