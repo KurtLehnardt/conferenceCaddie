@@ -83,6 +83,10 @@ export const LIMITS = {
   writeIp: 60,
   readDevice: 30,
   readIp: 90,
+  // The inbox and meet polls (every 20 and 10 seconds per device), kept apart from the read
+  // buckets so that many attendees behind one venue address do not starve searches.
+  pollDevice: 30,
+  pollIp: 1200,
   publicIp: 60,
 };
 
@@ -144,8 +148,11 @@ export const docId = (eventId, profileId) => `${eventId}:${profileId}`;
 // every cold start, and then once an hour while an instance stays up. A document without
 // visible_until is never live, so it is deleted too. The same pass clears presence that has
 // expired (a Bulk partial update of the presence fields, so nothing is re-embedded) and
-// deletes meets whose expires_at has passed, then push subscriptions and nudge records whose
-// expires_at (the end of their conference) has passed. The purge CLI runs the same steps.
+// deletes meets whose expires_at has passed. A declined meet is the evidence for the daily
+// "Not now" pause, so it is kept until its day is over (two days after ended_at, which covers a
+// 25-hour day); once it has run out, its note, meeting point and spot-me lines are scrubbed. Then
+// it deletes push subscriptions and nudge records whose expires_at (the end of their conference)
+// has passed. The purge CLI runs the same steps.
 const PURGE_INTERVAL_MS = 60 * 60_000;
 const PURGE_PRESENCE_PAGE = 500;
 export const EXPIRED_PEOPLE_QUERY = {
@@ -155,7 +162,22 @@ export const EXPIRED_PEOPLE_QUERY = {
   },
 };
 export const EXPIRED_PRESENCE_QUERY = { range: { presence_until: { lt: 'now' } } };
-export const EXPIRED_MEETS_QUERY = { range: { expires_at: { lt: 'now' } } };
+export const EXPIRED_MEETS_QUERY = {
+  bool: {
+    should: [
+      { bool: { filter: [{ range: { expires_at: { lt: 'now' } } }], must_not: [{ term: { state: 'declined' } }] } },
+      { bool: { filter: [{ term: { state: 'declined' } }, { range: { expires_at: { lt: 'now' } } }], must_not: [{ range: { ended_at: { gte: 'now-2d' } } }] } },
+    ],
+    minimum_should_match: 1,
+  },
+};
+// Declined meets that have run out but are still kept for the pause: their requester-visible
+// fields are cleared. A meet that is already clear is left untouched.
+export const RUN_OUT_DECLINED_QUERY = { bool: { filter: [{ term: { state: 'declined' } }, { range: { expires_at: { lt: 'now' } } }] } };
+export const SCRUB_MEET_SCRIPT = {
+  lang: 'painless',
+  source: "if (ctx._source.note == null && ctx._source.rendezvous == null && (ctx._source.spot_me == null || ctx._source.spot_me.isEmpty()) && (ctx._source.spot_me_pending == null || ctx._source.spot_me_pending.isEmpty()) && ctx._source.note_pending != true) { ctx.op = 'noop'; } else { ctx._source.note = null; ctx._source.rendezvous = null; ctx._source.spot_me = [:]; ctx._source.spot_me_pending = [:]; ctx._source.note_pending = false; }",
+};
 export const EXPIRED_AT_QUERY = { range: { expires_at: { lt: 'now' } } };
 // The Bluetooth token (ble.mjs) rides along with presence: cleared with it, carried through a reindex.
 export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, ble_token: null, ble_token_until: null };
@@ -192,6 +214,15 @@ async function purgeExpired() {
     if (json.deleted) console.log(`Deleted ${json.deleted} expired meets.`);
   } catch (err) {
     console.error(`Deleting expired meets failed: ${err.message}`);
+  }
+  try {
+    const { json } = await people('POST', `${idx(MEETS_INDEX)}/_update_by_query?conflicts=proceed&ignore_unavailable=true`, {
+      query: RUN_OUT_DECLINED_QUERY,
+      script: SCRUB_MEET_SCRIPT,
+    });
+    if (json.updated) console.log(`Scrubbed ${json.updated} run-out declined meets.`);
+  } catch (err) {
+    console.error(`Scrubbing run-out declined meets failed: ${err.message}`);
   }
   for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records']]) {
     try {

@@ -326,7 +326,7 @@ function PeopleList({
         .then((r) => {
           if (ctl.signal.aborted || current.current !== startKey) return;
           const results = r.results ?? [];
-          setPage({ key, results, done: results.length < MATCH_PAGE });
+          setPage({ key: startKey, results, done: results.length < MATCH_PAGE });
         })
         .catch(() => {});
     }, AROUND_REFRESH_MS);
@@ -364,10 +364,10 @@ function PeopleList({
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;
   if (error) return <p class="pp-error pp-pad">{error}</p>;
   // The earlier list stays, dimmed, until the one for the current profile and search arrives.
-  const shown = page && page.key.startsWith(`${slug}|`) ? page : null;
-  if (!shown) return <p class="pp-hint pp-pad">Finding people…</p>;
-  const refreshing = saving || shown.key !== key;
-  const results = withoutBlocked(slug, shown.results);
+  const view = page && page.key.startsWith(`${slug}|`) ? page : null;
+  if (!view) return <p class="pp-hint pp-pad">Finding people…</p>;
+  const refreshing = saving || view.key !== key;
+  const results = withoutBlocked(slug, view.results);
   if (!results.length) {
     return (
       <p class="pp-hint pp-pad">
@@ -394,7 +394,7 @@ function PeopleList({
         {elsewhere.map((p) => (
           <PersonCard key={p.ref} person={p} slug={slug} />
         ))}
-        {!shown.done && !refreshing && (
+        {!view.done && !refreshing && (
           <div ref={sentinel} class="pp-more-sentinel" aria-hidden={!more}>
             {more && <p class="pp-hint">Finding more people…</p>}
           </div>

@@ -33,7 +33,14 @@ import fs from 'node:fs';
 
 const WORDS_FILE = new URL('../config/moderation-words.json', import.meta.url);
 const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
-const URL_RE = /(?:https?:\/\/|www\.)[^\s]+|\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|co|ai|app|me|ly|gg|xyz|info|us|uk|de|tv|link|to|sh|is|it|nl|fr|es|ca)\b(?:\/[^\s]*)?/gi;
+// A web address is one of two shapes. With a scheme or www., anything counts. A bare domain
+// counts only when a '/' path follows it, for any listed top-level domain. A bare domain alone is
+// not taken for an address, so normal tech text (node.js, v1.2, k8s.io, socket.io, install.sh,
+// example.com) and a missed space after a full stop ("jacket.It is me") pass.
+const URL_RES = [
+  /(?:https?:\/\/|www\.)[^\s]+/gi,
+  /\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|co|ai|app|me|ly|gg|xyz|info|us|uk|de|tv|link|to|sh|is|it|nl|fr|es|ca)\/[^\s]*/gi,
+];
 
 export const FILTERED = { error: 'filtered', message: 'That was held back by the filter. Edit it and try again.' };
 export const HELD = { error: 'held', message: 'Waiting for the filter; it will appear shortly.' };
@@ -46,7 +53,7 @@ const RULES_TIMEOUT_MS = 3000;
 const RULES_RETRY_MS = 60_000;
 
 // Classifier.
-const CLASSIFIER_MODE = (process.env.MOD_CLASSIFIER || 'auto').toLowerCase(); // auto | on | off
+const CLASSIFIER_MODE = (process.env.MOD_CLASSIFIER || 'off').toLowerCase(); // off (default) | auto | on
 const CLASSIFIER_URL = process.env.MOD_CLASSIFIER_URL || 'https://language.googleapis.com/v1/documents:moderateText';
 const METADATA_URL = process.env.MOD_METADATA_URL || 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
 const DEFAULT_CATEGORIES = ['Toxic', 'Insult', 'Profanity', 'Derogatory', 'Sexual', 'Violent'];
@@ -93,7 +100,7 @@ function hostOf(match) {
 }
 
 function hasForeignUrl(line) {
-  for (const m of String(line).match(URL_RE) ?? []) {
+  for (const m of URL_RES.flatMap((re) => String(line).match(re) ?? [])) {
     const host = hostOf(m);
     if (host !== 'linkedin.com' && !host.endsWith('.linkedin.com')) return true;
   }
@@ -194,8 +201,9 @@ async function fetchToken() {
 }
 
 // Decides once, when the server starts: MOD_CLASSIFIER=off turns it off, "on" keeps it on even
-// when the metadata server cannot be reached (every line is then held), and "auto" (the default)
-// turns it on only when the metadata server answers, so a local run skips it.
+// when the metadata server cannot be reached (every line is then held), and "auto"
+// turns it on only when the metadata server answers, so a local run skips it. Unset means off:
+// the Natural Language API is billed and must be enabled on purpose.
 const classifierReady = (async () => {
   if (CLASSIFIER_MODE === 'off') {
     classifierOn = false;

@@ -306,9 +306,9 @@ const server = http.createServer((req, res) => {
   handleStatic(req, res, pathname);
 });
 
-// The people, circles, blocks, presence, meets, Bluetooth, reports, push, recommendations, topics,
-// GitHub import, related and schedule import routes. Each handler reads its own body with its own
-// size limit and resolves to true when it handled the request.
+// The people, circles, blocks, presence, meets, Bluetooth, reports, push, recommendations, topics, related,
+// GitHub import and schedule import routes. Each handler reads its own body with its own size limit
+// and resolves to true when it handled the request.
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;

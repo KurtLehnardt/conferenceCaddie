@@ -27,9 +27,9 @@ export interface Route {
   tab: Tab;
   /** The rest of the hash for `#/meet/{id}` and `#/here/{zone}`, raw (still encoded). */
   param: string | null;
-  params: TabParams;
-  /** The whole query after the tab, as in `#/people?around=1` (a push nudge opens Around now). */
+  /** The query after the tab, as in `#/people?around=1` (a push nudge opens Around now). */
   query: URLSearchParams;
+  params: TabParams;
 }
 
 export function readRoute(): Route {
@@ -45,22 +45,22 @@ export function readRoute(): Route {
   }
   const full = location.hash.replace(/^#\/?/, '');
   const qm = full.indexOf('?');
-  const q = new URLSearchParams(qm >= 0 ? full.slice(qm + 1) : '');
+  const query = new URLSearchParams(qm >= 0 ? full.slice(qm + 1) : '');
   const h = qm >= 0 ? full.slice(0, qm) : full;
   const params: TabParams = {};
-  const view = q.get('view') as TabView | null;
+  const view = query.get('view') as TabView | null;
   if (view && VIEWS.includes(view)) params.view = view;
-  const day = q.get('day');
+  const day = query.get('day');
   if (day && DAY.test(day)) params.day = day;
   const slash = h.indexOf('/');
   const head = (slash >= 0 ? h.slice(0, slash) : h) as Tab;
   const rest = slash >= 0 ? h.slice(slash + 1) : '';
-  if (!TABS.includes(head)) return { slug, tab: 'people', param: null, params: {}, query: q };
+  if (!TABS.includes(head)) return { slug, tab: 'people', param: null, query, params: {} };
   // Only the meet and here routes take a parameter, and they need one.
   if (head === 'meet' || head === 'here') {
-    return rest ? { slug, tab: head, param: rest.slice(0, 200), params: {}, query: q } : { slug, tab: 'people', param: null, params: {}, query: q };
+    return rest ? { slug, tab: head, param: rest.slice(0, 200), query, params: {} } : { slug, tab: 'people', param: null, query, params: {} };
   }
-  return { slug, tab: head, param: null, params, query: q };
+  return { slug, tab: head, param: null, query, params };
 }
 
 /** A route parameter as written in the hash, decoded; the raw value when it is not valid encoding. */

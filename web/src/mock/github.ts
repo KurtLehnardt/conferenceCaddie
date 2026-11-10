@@ -2,7 +2,7 @@
 // A stand-in for POST /api/import/github, used only in development with VITE_MOCK=1. The handle
 // "octocat" gets a fixed proposal whose topics exist in the mock topic list; any other handle is
 // "not_found", so both the preview and the error copy can be exercised without GitHub.
-import type { GithubProposal } from '../people/importGithub';
+import type { GithubProposal } from '../people/githubApi';
 
 type Json = Record<string, unknown>;
 

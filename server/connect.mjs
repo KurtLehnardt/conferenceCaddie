@@ -29,9 +29,11 @@
 //   yourself; the ask runs out 15 minutes after it was made; accept means now, so it moves the
 //   meet straight to active (20 minutes). Nothing is booked for later. The legacy state
 //   "accepted" is never written; a document still carrying it reads as expired.
-// - "Not now" is silent: the requester keeps seeing "requested" until the request runs out.
-//   Three "Not now" replies in one day pause the requester until the next day. When a meet
-//   ends, only participants, topic, state and times are kept.
+// - "Not now" is silent: the requester keeps seeing "requested" until the request runs out, with
+//   the same note, meeting point, own spot-me line and same-zone view as before, and can still
+//   save their own details or cancel. Three "Not now" replies in one day pause the requester
+//   until the next day. When a meet ends, only participants, topic, state and times are kept; a
+//   declined meet keeps the requester's view until it runs out, and the purge scrubs it then.
 // - Spot lines, notes and spot-me lines pass the filter in moderation.mjs (rules, then the
 //   classifier). A rejected line is 400 filtered; a held line is stored with a *_pending flag,
 //   shown only to its author, answered with `held` on the 200 and reported as 'classifier'.
@@ -80,6 +82,9 @@ const presenceRequired = () => new HttpError(403, { error: 'presence_required', 
 const notAround = () => new HttpError(409, { error: 'not_around', message: "They're not around right now." });
 
 // The write and read rate limits of people.mjs, so the buckets are shared. Each returns the device.
+// The inbox and meet polls run in the background on every device that is around, and attendees
+// often share one venue Wi-Fi address, so they have their own buckets: a large per-address one
+// and a per-device one. Searches, circles and blocks keep the shared read buckets.
 function writer(req) {
   limit(`people-write:ip:${clientIp(req)}`, LIMITS.writeIp);
   const device = requireDevice(req);
@@ -90,6 +95,12 @@ function reader(req) {
   limit(`people-read:ip:${clientIp(req)}`, LIMITS.readIp);
   const device = requireDevice(req);
   limit(`people-read:dev:${device.profileId}`, LIMITS.readDevice);
+  return device;
+}
+function poller(req) {
+  limit(`people-poll:ip:${clientIp(req)}`, LIMITS.pollIp);
+  const device = requireDevice(req);
+  limit(`people-poll:dev:${device.profileId}`, LIMITS.pollDevice);
   return device;
 }
 
@@ -159,6 +170,25 @@ function endMeet(s, state, nowMs) {
   s.note_pending = false;
 }
 
+// "Not now" is silent, so a decline keeps what the requester sees until the ask runs out: the
+// note, the meeting point, the requester's own spot-me line and same_zone. The decliner's own
+// spot-me line is dropped, since the requester never sees it before a meet is active. The purge
+// scrubs the kept fields once expires_at has passed.
+function declineMeet(s, nowMs) {
+  const requesterSpot = s.spot_me?.[s.requester_id];
+  s.state = 'declined';
+  s.ended_at = iso(nowMs);
+  const requesterPending = s.spot_me_pending?.[s.requester_id] === true;
+  s.spot_me = requesterSpot ? { [s.requester_id]: requesterSpot } : {};
+  s.spot_me_pending = requesterSpot && requesterPending ? { [s.requester_id]: true } : {};
+}
+
+// True when me asked, the other person silently declined, the ask has not run out and the
+// requester has not cancelled it. The requester then still sees and may change their ask.
+function silentlyDeclined(s, me) {
+  return s.state === 'declined' && s.requester_id === me.profile_id && s.requester_cancelled !== true && Date.parse(s.expires_at) > Date.now();
+}
+
 // Accept means now: both are around, and the meet runs for 20 minutes from this moment. In the
 // same zone the shared zone is the meeting point unless someone set another.
 function activate(s, me, other, nowMs) {
@@ -192,11 +222,12 @@ async function closeMeets(slug, filters, endState) {
 
 // The state one participant sees. An open meet past expires_at reads "expired" even before a
 // read has written that. "Not now" is silent, so the requester of a declined meet sees
-// "requested" until it runs out, and "expired" afterwards.
+// "requested" until it runs out, and "expired" afterwards; once they cancel it, "cancelled".
 function stateFor(s, me) {
   const ranOut = Date.parse(s.expires_at) <= Date.now();
   if (OPEN_STATES.includes(s.state)) return ranOut ? 'expired' : s.state;
   if (s.state !== 'declined' || s.requester_id !== me.profile_id) return s.state;
+  if (s.requester_cancelled === true) return 'cancelled';
   return ranOut ? 'expired' : 'requested';
 }
 
@@ -204,7 +235,8 @@ const over = (s, me) => new HttpError(410, { error: 'over', state: stateFor(s, m
 
 // What a participant may see of a meet. The other person's zone and spot appear only while the
 // meet is active (so while both are around), their spot-me line only then as well. A same-zone
-// ask also carries the zone while it waits: both are around and it is the reader's own zone. With
+// ask also carries the zone while it waits: both are around and it is the reader's own zone. The
+// requester of a silently declined ask sees it exactly as a waiting ask, zone included. With
 // withDistance (the meet read only, never the inbox or an action), an active meet between two
 // people who both have a position adds the distance (to 10 m) and the bearing from me to them;
 // otherwise neither key is present. No coordinate ever leaves here.
@@ -214,7 +246,7 @@ function meetView(s, me, other, labels, { withDistance = false } = {}) {
   const otherId = (s.participants ?? []).find((p) => p !== me.profile_id) ?? null;
   const topic = s.topic_id && labels.has(s.topic_id) ? { topic_id: s.topic_id, label: labels.get(s.topic_id) } : null;
   const together = bothAround(me, other);
-  const showZone = together && (active || (s.state === 'requested' && s.same_zone === true && sameZone(me, other)));
+  const showZone = together && (active || (state === 'requested' && s.same_zone === true && sameZone(me, other)));
   const position = {};
   if (withDistance && active && other) {
     const a = locationOf(me);
@@ -490,7 +522,7 @@ async function requestMeet(req, res) {
 }
 
 async function inbox(req, res, url) {
-  const device = reader(req);
+  const device = poller(req);
   const conf = await conferenceFor(eventOf(url));
   const me = await requireProfile(device, conf.slug);
   const [hidden, labels, { json }] = await Promise.all([
@@ -524,6 +556,8 @@ async function inbox(req, res, url) {
     if (s.hidden === true && s.hidden_owner_id !== me.profile_id) continue;
     if (!other || other.hidden === true || hidden.has(otherId)) continue;
     const view = meetView(s, me, other, labels);
+    // A silently declined ask the requester has cancelled is over for them.
+    if (!OPEN_STATES.includes(view.state)) continue;
     if (s.requester_id === me.profile_id) outgoing.push({ ...view, to: { ref: view.other.ref, display_name: other.display_name ?? '' } });
     else incoming.push({ ...view, from: { ref: view.other.ref, display_name: other.display_name ?? '', about: other.about ?? '' } });
   }
@@ -531,7 +565,7 @@ async function inbox(req, res, url) {
 }
 
 async function getMeet(req, res, id) {
-  const device = reader(req);
+  const device = poller(req);
   const { meet, me, other, labels } = await participantMeet(device, id);
   let s = meet.source;
   const now = Date.now();
@@ -575,18 +609,26 @@ async function action(req, res, id, name) {
       }
       activate(s, me, other, now);
     } else {
-      endMeet(s, 'declined', now);
+      declineMeet(s, now);
     }
   } else if (name === 'found') {
+    // A silently declined ask answers exactly as a waiting one would.
+    if (silentlyDeclined(s, me)) throw new HttpError(409, { error: 'state', state: 'requested' });
     expectState(s, me, ['active']);
     endMeet(s, 'found', now);
+  } else if (silentlyDeclined(s, me)) {
+    // The requester cancels an ask that was silently declined. It stays "declined" in the store,
+    // so it still counts towards the daily pause, and the requester sees "cancelled" from now on.
+    endMeet(s, 'declined', Date.parse(s.ended_at) || now);
+    s.requester_cancelled = true;
   } else {
     expectState(s, me, OPEN_STATES);
     endMeet(s, 'cancelled', now);
   }
   await saveMeet(meet);
-  // The person who acted sees the real state, so a decline answers "declined" to the recipient.
-  sendJson(res, 200, { ok: true, ...meetView(s, me, other, labels), state: s.state });
+  // The person who acted sees their own state, so a decline answers "declined" to the recipient
+  // and the requester of a silently declined ask sees "cancelled" after cancelling it.
+  sendJson(res, 200, { ok: true, ...meetView(s, me, other, labels), state: stateFor(s, me) });
 }
 
 async function putDetails(req, res, id) {
@@ -595,8 +637,10 @@ async function putDetails(req, res, id) {
   const { meet, me, other, labels } = await participantMeet(device, id);
   const s = meet.source;
   // Either participant may write their line or a meeting point while the meet is open; the
-  // other person sees a spot-me line only once the meet is active.
-  expectState(s, me, OPEN_STATES);
+  // other person sees a spot-me line only once the meet is active. The requester of a silently
+  // declined ask may still save theirs: it is stored and shown back to them, and the decliner
+  // never sees it.
+  if (!silentlyDeclined(s, me)) expectState(s, me, OPEN_STATES);
   let heldFields = [];
   if (body.spot_me !== undefined) {
     const { text: spotMe, pending } = await line(body.spot_me, 'spot_me', SPOT_MAX);

@@ -52,11 +52,11 @@ ES_RULES_INDEX="caddie-people-rules"
 # uses that project for quota, so caddie-runtime needs no role beyond the API being enabled. If
 # a call ever fails with PERMISSION_DENIED naming serviceusage.services.use, grant that one
 # role to caddie-runtime on this project; nothing else.
-# MOD_CLASSIFIER: auto (on when the metadata server answers), on, or off. Scores at or above
+# MOD_CLASSIFIER: off (the default, because it needs the billed language.googleapis.com API), auto (on when the metadata server answers), or on. Scores at or above
 # MOD_REJECT reject, at or above MOD_HOLD hold ("Waiting for the filter"), and any classifier
 # error or timeout (MOD_TIMEOUT_MS) holds too. MOD_CATEGORIES (default Toxic, Insult, Profanity,
 # Derogatory, Sexual, Violent) holds commas, so set it only with gcloud's "^|^" delimiter syntax.
-MOD_CLASSIFIER="auto"
+MOD_CLASSIFIER="off"
 MOD_REJECT="0.8"
 MOD_HOLD="0.5"
 MOD_TIMEOUT_MS="3000"
