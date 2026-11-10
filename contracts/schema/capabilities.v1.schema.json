@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/capabilities.v1.schema.json",
+  "title": "Conference Caddie capabilities document, v1",
+  "description": "What one backend can do. Served at GET {backend}/api/capabilities (tiers 2 and 3) or as the static file {backend}/capabilities.json (tier 1). See docs/contracts/capabilities.md. Consumers ignore unknown fields; producers validate in closed mode, so every field they send is one this schema names.",
+  "type": "object",
+  "required": ["api_version", "tier", "talks", "people", "ble", "push", "imports"],
+  "properties": {
+    "api_version": {
+      "description": "Major version of this document and of the People API the backend serves. Additive changes never raise it.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "min_api_version": {
+      "description": "Oldest major version whose clients this backend still serves correctly. Defaults to api_version. A client that implements any major from min_api_version to api_version uses the highest one it implements.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "tier": {
+      "description": "Informational label of the deployment tier. Clients never gate a feature on it; only the flags below do.",
+      "type": "string",
+      "enum": ["demo", "free", "paid"]
+    },
+    "talks": {
+      "type": "object",
+      "required": ["bundle_base", "server_search"],
+      "properties": {
+        "bundle_base": {
+          "description": "Absolute https URL, ending in '/', under which conferences.json and the content-addressed talk bundles live (docs/contracts/talk-bundle.md). Null when the backend publishes no bundles.",
+          "anyOf": [
+            { "type": "string", "format": "uri", "pattern": "^https://[^\\s?#]+/$", "maxLength": 2048 },
+            { "type": "null" }
+          ]
+        },
+        "server_search": {
+          "description": "True when POST /api/search, GET /api/related and POST /api/recommendations are served as well. Optional on every tier; the bundle is the primary path.",
+          "type": "boolean"
+        }
+      }
+    },
+    "people": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "description": "Whether the People API v1 (docs/contracts/people-api.md) is served. False hides the People tab.", "type": "boolean" },
+        "semantic": {
+          "description": "Where meaning-based people matching runs: on the server, from vectors the client computes, or not at all (keyword and topic legs only).",
+          "type": "string",
+          "enum": ["server", "client", "off"]
+        },
+        "presence": { "description": "PUT and DELETE /api/presence and the around_now view.", "type": "boolean" },
+        "gps_bands": { "description": "The optional position with presence, proximity bands and the distance inside an active meet.", "type": "boolean" },
+        "meets": { "description": "Ask to talk shop, Wave, the meet inbox and the meet screen.", "type": "boolean" },
+        "circles": { "description": "Per-talk sharing, circle counts and circle members.", "type": "boolean" },
+        "reports": { "description": "POST /api/people/report. Must be true whenever enabled is true: every tier that shows other people's text lets users report and block it.", "type": "boolean" },
+        "live": {
+          "description": "How the client learns about inbox and presence changes. poll is always available, because every People API v1 route is served by every tier; websocket is an optimisation whose protocol is defined separately.",
+          "type": "string",
+          "enum": ["websocket", "poll"]
+        }
+      },
+      "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] },
+      "then": {
+        "required": ["semantic", "presence", "gps_bands", "meets", "circles", "reports", "live"],
+        "properties": { "reports": { "const": true } }
+      }
+    },
+    "ble": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "description": "derived-v1: tokens derived on the phone (docs/contracts/ble-tokens.md). server-rotate: the legacy server-minted tokens with POST /api/presence/ble/rotate. none: no Bluetooth proximity.",
+          "type": "string",
+          "enum": ["derived-v1", "server-rotate", "none"]
+        },
+        "service_uuid": {
+          "description": "The 128-bit service UUID phones advertise and scan for. Always the value below in v1.",
+          "type": "string",
+          "const": "e52c391c-b926-4856-9a38-d46c3c10c733"
+        },
+        "near_rssi": {
+          "description": "The weakest RSSI, in dBm, that counts as right near. The server applies it; clients should not report weaker sightings.",
+          "type": "integer",
+          "minimum": -127,
+          "maximum": 20
+        },
+        "window_s": {
+          "description": "Token window length in seconds. 600 in derived-v1.",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600
+        },
+        "sightings_min_interval_s": {
+          "description": "The shortest interval, in seconds, between two sightings reports from one device. At most window_s / 2 in derived-v1, so that a token is reported before its window can fall outside w - 1.",
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 1800
+        }
+      },
+      "if": { "properties": { "mode": { "const": "derived-v1" } }, "required": ["mode"] },
+      "then": {
+        "required": ["service_uuid", "near_rssi", "window_s", "sightings_min_interval_s"],
+        "properties": { "window_s": { "const": 600 }, "sightings_min_interval_s": { "maximum": 300 } }
+      },
+      "else": {
+        "if": { "properties": { "mode": { "const": "server-rotate" } }, "required": ["mode"] },
+        "then": { "required": ["service_uuid", "near_rssi", "sightings_min_interval_s"] }
+      }
+    },
+    "push": {
+      "type": "object",
+      "required": ["apns", "fcm", "webpush"],
+      "properties": {
+        "apns": { "description": "This backend can push to the iOS app through APNs (it holds the publisher's key).", "type": "boolean" },
+        "fcm": { "description": "This backend can push to the Android app through FCM.", "type": "boolean" },
+        "webpush": { "description": "Web Push routes are served (GET /api/push/vapid says whether keys are configured).", "type": "boolean" }
+      }
+    },
+    "imports": {
+      "type": "object",
+      "required": ["github", "schedule"],
+      "properties": {
+        "github": { "description": "device: the app calls api.github.com itself. server: POST /api/import/github is served.", "type": "string", "enum": ["device", "server"] },
+        "schedule": { "description": "device: the app parses the file itself. server: POST /api/import/schedule is served.", "type": "string", "enum": ["device", "server"] }
+      }
+    }
+  },
+  "if": { "properties": { "people": { "properties": { "enabled": { "const": false } } } } },
+  "then": { "properties": { "ble": { "properties": { "mode": { "const": "none" } } } } }
+}

@@ -1,0 +1,27 @@
+{
+  "api_version": 2,
+  "min_api_version": 1,
+  "tier": "free",
+  "operator": { "name": "Example operator", "contact": "https://example.org/contact" },
+  "talks": { "bundle_base": "https://owner.github.io/conferenceCaddie/bundles/", "server_search": false, "bundle_formats": [1, 2] },
+  "people": {
+    "enabled": true,
+    "semantic": "hybrid-v2",
+    "presence": true,
+    "gps_bands": false,
+    "meets": true,
+    "circles": true,
+    "reports": true,
+    "live": "server-sent-events",
+    "chat": true
+  },
+  "ble": {
+    "mode": "derived-v2",
+    "service_uuid": "e52c391c-b926-4856-9a38-d46c3c10c733",
+    "near_rssi": -70,
+    "window_s": 300,
+    "sightings_min_interval_s": 120
+  },
+  "push": { "apns": false, "fcm": true, "webpush": true, "unifiedpush": true },
+  "imports": { "github": "device", "schedule": "device", "linkedin": "device" }
+}

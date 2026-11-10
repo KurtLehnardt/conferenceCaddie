@@ -1,0 +1,9 @@
+{
+  "api_version": 1,
+  "tier": "free",
+  "talks": { "bundle_base": "https://owner.github.io/conferenceCaddie/bundles/", "server_search": false },
+  "people": { "enabled": true, "semantic": "client", "presence": true, "gps_bands": true, "meets": true, "circles": true, "reports": true, "live": "poll" },
+  "ble": { "mode": "derived-v1", "service_uuid": "e52c391c-b926-4856-9a38-d46c3c10c733", "near_rssi": -75, "window_s": 600, "sightings_min_interval_s": 600 },
+  "push": { "apns": false, "fcm": false, "webpush": false },
+  "imports": { "github": "device", "schedule": "device" }
+}
