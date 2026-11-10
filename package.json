@@ -27,6 +27,7 @@
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web ci && npm --prefix web run build",
     "smoke": "node scripts/smoke.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
     "deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {

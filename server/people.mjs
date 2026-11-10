@@ -737,10 +737,14 @@ export async function deleteWhere(index, eventId, query) {
   throw new UpstreamError('too many documents to delete');
 }
 
-// Everything that connects a person to others at one conference: their blocks in both directions,
-// every meet they take part in, their push subscriptions and the nudges they were part of. Runs
-// when the profile is deleted, and the next request already sees them gone.
+// Everything that connects a person to others at one conference: every meet they take part in,
+// their push subscriptions, the nudges they were part of and, last, their blocks in both
+// directions (deleteProfileAndConnections says why the blocks go last). Runs when the profile is
+// deleted, and the next request already sees them gone.
 export async function deleteConnections(eventId, profileId) {
+  await deleteWhere(MEETS_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } });
+  await deleteWhere(PUSH_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } });
+  await deleteWhere(NUDGES_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } });
   await deleteWhere(BLOCKS_INDEX, eventId, {
     bool: {
       filter: [{ term: { event_id: eventId } }],
@@ -748,9 +752,47 @@ export async function deleteConnections(eventId, profileId) {
       minimum_should_match: 1,
     },
   });
-  await deleteWhere(MEETS_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } });
-  await deleteWhere(PUSH_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } });
-  await deleteWhere(NUDGES_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } });
+}
+
+// The partial update that hides a profile while it is being deleted. Matches, the Around view,
+// nudges and Bluetooth sightings require open_to_meet; circle members, circle counts and For
+// you's circle counts require a shared talk; asks (personByRef) require either. Presence and the
+// Bluetooth token are cleared as a presence delete clears them. visible_until is left alone, so
+// the hourly purge cannot remove the document before a retry has finished the delete.
+const HIDE_FOR_DELETE = { open_to_meet: false, shared_talk_ids: [], ...PRESENCE_OFF };
+
+// Deletes a profile and everything that connects it to others, in an order that keeps every
+// failure safe to retry:
+// 1. One partial update hides the profile and waits for the refresh, so from then on no match,
+//    circle, ask, nudge or Bluetooth sighting finds the person, whatever happens next. A 404 means
+//    the document went between the caller's read and this write, and the delete answers 200 as
+//    it does when the read finds no document.
+// 2. Meets, push subscriptions and nudge records are deleted, and then blocks. Blocks go last
+//    because a delete that fails part-way leaves a hidden profile that its owner can make
+//    visible again with a profile write, and it must still carry every block when that happens.
+// 3. The document is deleted last. Until then, any failed step answers 502, and trying again
+//    authenticates against the document and runs the whole delete again.
+// The hide stops new lookups, not requests already under way: an ask that passed personByRef just
+// before the hide, a nudge that was already ranking, a block made by ref (docByRef finds hidden
+// profiles on purpose) or the owner's own device subscribing to push can still write a meet, a
+// nudge record, a block or a push subscription after step 2 has finished with that index. The
+// second pass, after the document is gone, removes what has landed by then. It is best effort: a
+// failure there is logged and the delete still answers 200, because trying again would find no
+// profile and change nothing. A write that lands even later stays: the purge removes such a meet
+// once it runs out, and a push subscription or nudge record once the conference ends; a late
+// block is never purged, but it only keeps two people apart.
+async function deleteProfileAndConnections(eventId, profileId) {
+  const id = docId(eventId, profileId);
+  const status = await bulkOne({ update: { _id: id } }, { doc: HIDE_FOR_DELETE });
+  if (status === 404) return;
+  if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
+  await deleteConnections(eventId, profileId);
+  await deleteDoc(id);
+  try {
+    await deleteConnections(eventId, profileId);
+  } catch (err) {
+    console.error(`Deleting a deleted profile's connections again failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1034,10 +1076,7 @@ async function putProfile(req, res) {
 
   // Both visibility choices off: the document must not exist, nor anything that connected it.
   if (!body.open_to_meet && !shared.length) {
-    if (own.found) {
-      await deleteDoc(id);
-      await deleteConnections(conf.slug, device.profileId);
-    }
+    if (own.found) await deleteProfileAndConnections(conf.slug, device.profileId);
     sendJson(res, 200, { ok: true, open_to_meet: false, shared_talk_ids: [] });
     return;
   }
@@ -1133,8 +1172,7 @@ async function deleteProfile(req, res, url) {
   const own = await ownDoc(slug, device.profileId);
   if (own.found) {
     if (!secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
-    await deleteDoc(docId(slug, device.profileId));
-    await deleteConnections(slug, device.profileId);
+    await deleteProfileAndConnections(slug, device.profileId);
   }
   sendJson(res, 200, { ok: true });
 }

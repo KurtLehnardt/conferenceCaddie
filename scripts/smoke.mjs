@@ -20,7 +20,8 @@
 // deletes them at the end, together with the blocks and meets they made. It never changes the
 // seeded sample profiles. Key values are compared in-process and never printed.
 //
-// Each check prints one PASS, FAIL or SKIP line. The script exits 1 if any check fails.
+// Each check prints one PASS, FAIL or SKIP line. The script exits 1 if any check fails. A request
+// that answers 5xx or fails on its first attempt is retried once, and prints a NOTE line either way.
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -92,12 +93,26 @@ async function check(name, fn) {
 const responses = [];
 // Every search result seen, for the evidence check.
 const allResults = [];
+// The talks each test device shares for, per conference: device -> Map(event -> talk ids). A
+// profile write the server accepted (200) records the list its request sent, and a delete clears
+// it. Each recorded response carries its caller's list from when the request was sent, so the leak
+// check can tell a fellow sharer from anyone else whatever order the checks run in.
+const sharing = new Map();
+// Accepted profile writes, and those whose answer echoed a different shared_talk_ids from the
+// request's.
+let echoChecked = 0;
+const echoMismatches = [];
+// Requests that answered 5xx or failed on the first attempt and were retried.
+let retried = 0;
 
 const MAX_RATE_WAITS = 8;
 
 async function api(method, path, body, { device, label = '', origin } = {}) {
   let lastError;
   let rateWaits = 0;
+  const url = new URL(path, BASE_URL);
+  const event = body?.event ?? url.searchParams.get('event');
+  const sharedTalks = [...(device && event ? sharing.get(device)?.get(event) ?? [] : [])];
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const headers = {};
@@ -121,7 +136,11 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
         attempt--;
         continue;
       }
+      // A 5xx is retried once, but never silently: a check that passes on the retry can still
+      // hide a server error, so every first-attempt 5xx prints a NOTE line.
       if (res.status >= 500 && attempt === 0) {
+        retried++;
+        console.log(`NOTE ${method} ${url.pathname} (${label || 'no label'}) answered ${res.status} on the first attempt; retrying once`);
         lastError = new Error(`status ${res.status}`);
         continue;
       }
@@ -131,10 +150,27 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       } catch {
         /* keep {} */
       }
-      responses.push({ path, label, status: res.status, text, json });
+      if (device && event && res.status === 200 && url.pathname === '/api/people/profile') {
+        if (!sharing.has(device)) sharing.set(device, new Map());
+        if (method === 'PUT') {
+          // The request is the source of truth for what the device now shares; the server drops
+          // duplicates, so they are dropped here too before its echo is compared with it.
+          const requested = Array.isArray(body?.shared_talk_ids) ? [...new Set(body.shared_talk_ids)] : [];
+          const echoed = Array.isArray(json.shared_talk_ids) ? json.shared_talk_ids : null;
+          echoChecked++;
+          if (JSON.stringify(echoed) !== JSON.stringify(requested)) echoMismatches.push(label || 'no label');
+          sharing.get(device).set(event, requested);
+        }
+        if (method === 'DELETE') sharing.get(device).delete(event);
+      }
+      responses.push({ path, label, status: res.status, text, json, request: body, sharedTalks });
       return { status: res.status, json, headers: res.headers };
     } catch (err) {
       lastError = err;
+      if (attempt === 0) {
+        retried++;
+        console.log(`NOTE ${method} ${url.pathname} (${label || 'no label'}) failed on the first attempt (${err.message}); retrying once`);
+      }
     }
   }
   throw new Error(`${method} ${path} failed: ${lastError?.message ?? 'unknown error'}`);
@@ -1662,15 +1698,22 @@ await check('inst1: the manifest makes the app installable and the page links it
     for (const s of [...secrets, ...hashes]) if (r.text.includes(s)) hits.push(`a device secret, id or hash in ${r.path}`);
     // Spot lines and spot-me lines leave the server only to the meet's two participants, inside the meet.
     if (r.text.includes(spotMarker) && !(['A-meet', 'F-meet'].includes(r.label) && r.path.startsWith('/api/meet/')) && !['A-presence', 'F-presence'].includes(r.label)) hits.push(`a spot line in ${r.label} ${r.path}`);
-    // C shared only for the circle talk, so only fellow sharers may see C's contact: A, and B,
-    // which q10 makes share for the circle talk too.
-    if (r.text.includes(contactMarker('C')) && !['A-members', 'B-members'].includes(r.label)) hits.push(`C's contact in ${r.label}`);
+    // C shared only for the circle talk, so C's contact may appear only in that circle's member
+    // list, answered to a caller who shared for the talk when it asked: A from p1 on, and B once q10
+    // makes it share too (until p11 deletes it). api() records who shared what from the profile
+    // writes the server accepted, so this does not depend on labels or on the order of the checks.
+    const circleId = circleTalk?.talk_id;
+    const fellowSharer = Boolean(circleId) && r.path === '/api/circles/members' && r.request?.talk_id === circleId && r.sharedTalks.includes(circleId);
+    if (r.text.includes(contactMarker('C')) && !fellowSharer) hits.push(`C's contact in ${r.label}`);
     // Nobody may see the expired profile's contact.
     if (r.text.includes(contactMarker('Expired'))) hits.push(`the expired contact in ${r.label}`);
     // A non-sharer and anonymous callers see no contact details at all.
     if (['N-members', 'anon-members', 'public-counts', 'C-matches', 'recs'].includes(r.label) && /linkedin_url|contact_note/.test(r.text)) hits.push(`contact fields in ${r.label}`);
   }
   const unique = [...new Set(hits)];
+  // l trusts the shared talks each accepted profile write sent; the server must have stored and
+  // echoed exactly that list.
+  report(echoMismatches.length === 0, 'l0: every accepted profile write echoes the shared talks it sent', echoMismatches.length ? `different echo in ${[...new Set(echoMismatches)].slice(0, 4).join(', ')}` : `${echoChecked} writes checked`);
   report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked`);
 }
 
@@ -1709,4 +1752,5 @@ await check('inst1: the manifest makes the app installable and the page links it
   }
 }
 
+if (retried) console.log(`NOTE ${retried} request${retried === 1 ? '' : 's'} answered 5xx or failed on the first attempt and ${retried === 1 ? 'was' : 'were'} retried; see the NOTE lines above`);
 process.exit(failures ? 1 : 0);
