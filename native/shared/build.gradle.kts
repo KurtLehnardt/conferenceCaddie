@@ -1,5 +1,18 @@
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.time.Duration
 import java.util.Base64
+import java.util.Properties
+import java.util.zip.ZipFile
+import javax.inject.Inject
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
 
 // The platform-neutral core: models, the capabilities and talk bundle clients, the SQLite store and
 // keyword search, and the interfaces that each platform implements (embeddings, Bluetooth,
@@ -54,6 +67,164 @@ val generateContractFixtures = tasks.register<GenerateContractFixtures>("generat
     outputDir.set(layout.buildDirectory.dir("generated/contractFixtures/kotlin"))
 }
 
+/**
+ * Downloads one file of gradle/pinned-downloads.properties and refuses it unless its size and SHA-256
+ * are the pinned ones. The verified file is kept in Gradle's user home under its SHA-256, so it is
+ * fetched once per machine, and copied to [output].
+ */
+abstract class PinnedDownload : DefaultTask() {
+    @get:Input
+    abstract val url: Property<String>
+
+    @get:Input
+    abstract val sha256: Property<String>
+
+    @get:Input
+    abstract val bytes: Property<Long>
+
+    @get:Internal
+    abstract val cacheDir: DirectoryProperty
+
+    @get:OutputFile
+    abstract val output: RegularFileProperty
+
+    @TaskAction
+    fun download() {
+        val expected = sha256.get().lowercase()
+        val cached = cacheDir.get().asFile.resolve("$expected/${url.get().substringAfterLast('/')}")
+        if (problem(cached) != null) {
+            cached.parentFile.mkdirs()
+            val partial = File(cached.parentFile, cached.name + ".partial")
+            val client = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(30))
+                .build()
+            val request = HttpRequest.newBuilder(URI(url.get())).timeout(Duration.ofMinutes(15)).GET().build()
+            val response = client.send(request, HttpResponse.BodyHandlers.ofFile(partial.toPath()))
+            if (response.statusCode() != 200) {
+                partial.delete()
+                throw GradleException("${url.get()} answered HTTP ${response.statusCode()}.")
+            }
+            // A redirect must stay on https.
+            if (response.uri().scheme != "https") {
+                partial.delete()
+                throw GradleException("${url.get()} redirected to a URL that is not https.")
+            }
+            problem(partial)?.let {
+                partial.delete()
+                throw GradleException("${url.get()} failed verification against its pinned size and SHA-256 ($it) and was deleted.")
+            }
+            Files.move(partial.toPath(), cached.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        }
+        val out = output.get().asFile
+        out.parentFile.mkdirs()
+        Files.copy(cached.toPath(), out.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    private fun problem(file: File): String? {
+        if (!file.isFile) return "missing"
+        if (file.length() != bytes.get()) return "${file.length()} bytes, expected ${bytes.get()}"
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 16)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        return if (actual == sha256.get().lowercase()) null else "SHA-256 $actual"
+    }
+}
+
+/**
+ * Unpacks the ONNX Runtime pod archive into what the cinterop needs: the C headers, and the static
+ * library of each iOS slice as a thin arm64 archive named libonnxruntime.a (the simulator slice is a
+ * fat x86_64 and arm64 archive, and Kotlin/Native builds no x86_64 simulator target).
+ */
+abstract class UnpackOnnxRuntimeApple : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val archive: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @get:Inject
+    abstract val exec: ExecOperations
+
+    @TaskAction
+    fun unpack() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        val slices = mapOf(
+            "onnxruntime.xcframework/ios-arm64/onnxruntime.framework/onnxruntime" to "ios-arm64",
+            "onnxruntime.xcframework/ios-arm64_x86_64-simulator/onnxruntime.framework/onnxruntime" to "ios-simulator-arm64",
+        )
+        ZipFile(archive.get().asFile).use { zip ->
+            for (entry in zip.entries()) {
+                val name = entry.name
+                val target = when {
+                    name.startsWith("Headers/") && name.endsWith(".h") -> File(out, name)
+                    name == "LICENSE" -> File(out, "LICENSE")
+                    name in slices -> File(out, "${slices.getValue(name)}/fat-onnxruntime")
+                    else -> null
+                } ?: continue
+                target.parentFile.mkdirs()
+                zip.getInputStream(entry).use { input -> target.outputStream().use { input.copyTo(it) } }
+            }
+        }
+        for (slice in slices.values) {
+            val fat = File(out, "$slice/fat-onnxruntime")
+            if (!fat.isFile) throw GradleException("The ONNX Runtime archive has no $slice library.")
+            exec.exec { commandLine("lipo", fat.absolutePath, "-thin", "arm64", "-output", File(out, "$slice/libonnxruntime.a").absolutePath) }
+            fat.delete()
+        }
+    }
+}
+
+val pinned = Properties().apply {
+    rootProject.layout.projectDirectory.file("gradle/pinned-downloads.properties").asFile.inputStream().use { load(it) }
+}
+val pinnedCache = File(gradle.gradleUserHomeDir, "caches/caddie-pinned")
+
+fun TaskContainer.registerPinned(name: String, key: String, target: Provider<RegularFile>) = register<PinnedDownload>(name) {
+    group = "caddie"
+    url.set(pinned.getProperty("$key.url"))
+    sha256.set(pinned.getProperty("$key.sha256"))
+    bytes.set(pinned.getProperty("$key.bytes").toLong())
+    cacheDir.set(pinnedCache)
+    output.set(target)
+}
+
+/** The query embedding model and its vocabulary; composeApp ships both as Compose resources. */
+val embeddingDir = layout.buildDirectory.dir("embedding/bge-small-en-v1.5")
+val downloadEmbeddingModel = tasks.registerPinned("downloadEmbeddingModel", "embedding.model", embeddingDir.map { it.file("model_quantized.onnx") })
+val downloadEmbeddingVocab = tasks.registerPinned("downloadEmbeddingVocab", "embedding.vocab", embeddingDir.map { it.file("vocab.txt") })
+tasks.register("embeddingFiles") {
+    group = "caddie"
+    description = "Downloads and verifies the query embedding model and its vocabulary."
+    dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
+}
+
+val onnxRuntimeVersion = libs.versions.onnxruntime.get()
+check(pinned.getProperty("onnxruntime.apple.url").endsWith("-$onnxRuntimeVersion.zip")) {
+    "gradle/pinned-downloads.properties must pin the ONNX Runtime $onnxRuntimeVersion archive for iOS, the version libs.versions.toml uses."
+}
+val downloadOnnxRuntimeApple = tasks.registerPinned(
+    "downloadOnnxRuntimeApple",
+    "onnxruntime.apple",
+    layout.buildDirectory.file("downloads/onnxruntime-apple-$onnxRuntimeVersion.zip"),
+)
+val onnxRuntimeAppleDir = layout.buildDirectory.dir("onnxruntime-apple")
+val unpackOnnxRuntimeApple = tasks.register<UnpackOnnxRuntimeApple>("unpackOnnxRuntimeApple") {
+    group = "caddie"
+    archive.set(downloadOnnxRuntimeApple.flatMap { it.output })
+    outputDir.set(onnxRuntimeAppleDir)
+}
+
 kotlin {
     android {
         namespace = "app.conferencecaddie.shared"
@@ -76,8 +247,19 @@ kotlin {
 
     // iosX64 is left out: Compose Multiplatform 1.12 publishes no x86_64 simulator artifacts, and
     // Xcode 27 runs only on Apple silicon.
-    iosArm64()
-    iosSimulatorArm64()
+    //
+    // ONNX Runtime's C API through cinterop, linked statically: the static library goes into the
+    // klib, and from there into the ComposeApp framework and the test executables.
+    // src/nativeInterop/cinterop/onnxruntime.def lists the system frameworks it needs.
+    fun KotlinNativeTarget.onnxRuntime(slice: String) {
+        compilations.getByName("main").cinterops.create("onnxruntime") {
+            definitionFile.set(project.file("src/nativeInterop/cinterop/onnxruntime.def"))
+            includeDirs(onnxRuntimeAppleDir.map { it.dir("Headers") })
+            extraOpts("-libraryPath", onnxRuntimeAppleDir.get().dir(slice).asFile.absolutePath, "-staticLibrary", "libonnxruntime.a")
+        }
+    }
+    iosArm64 { onnxRuntime("ios-arm64") }
+    iosSimulatorArm64 { onnxRuntime("ios-simulator-arm64") }
 
     sourceSets {
         commonMain.dependencies {
@@ -89,11 +271,21 @@ kotlin {
             implementation(libs.ktor.client.core)
             implementation(libs.androidx.sqlite.bundled)
         }
-        androidMain.dependencies {
-            implementation(libs.ktor.client.okhttp)
+        // ONNX Runtime's Java API is the same on Android and the JVM, so one source file
+        // (src/ortJava) serves both, compiled against each platform's own artifact.
+        androidMain {
+            kotlin.srcDir("src/ortJava/kotlin")
+            dependencies {
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.onnxruntime.android)
+            }
         }
-        jvmMain.dependencies {
-            implementation(libs.ktor.client.okhttp)
+        jvmMain {
+            kotlin.srcDir("src/ortJava/kotlin")
+            dependencies {
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.onnxruntime.jvm)
+            }
         }
         iosMain.dependencies {
             implementation(libs.ktor.client.darwin)
@@ -107,4 +299,18 @@ kotlin {
             }
         }
     }
+}
+
+// The cinterop reads the headers and the static library that unpackOnnxRuntimeApple writes.
+tasks.matching { it.name.startsWith("cinteropOnnxruntime") }.configureEach { dependsOn(unpackOnnxRuntimeApple) }
+
+// The embedding tests run the real model: on the JVM they find it through a system property, on the
+// iOS simulator through an environment variable (simctl passes SIMCTL_CHILD_ variables to the app).
+tasks.named<Test>("jvmTest") {
+    dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
+    systemProperty("caddie.embeddingDir", embeddingDir.get().asFile.absolutePath)
+}
+tasks.withType<KotlinNativeSimulatorTest>().configureEach {
+    dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
+    environment("SIMCTL_CHILD_CADDIE_EMBEDDING_DIR", embeddingDir.get().asFile.absolutePath)
 }
