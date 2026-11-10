@@ -1,8 +1,9 @@
 #!/bin/bash
-# Deploys the Conference Caddie API Worker (the free stack) to Cloudflare.
+# Deploys Conference Caddie's free stack to Cloudflare: one Worker, "conference-caddie", that serves
+# the web app as static assets and the API on the same origin.
 #
 # Usage, from anywhere in the repository:
-#   bash worker/scripts/deploy.sh                    ensure the workers.dev subdomain, then deploy
+#   bash worker/scripts/deploy.sh                    ensure the workers.dev subdomain, build the app, deploy
 #   bash worker/scripts/deploy.sh --subdomain-only   only ensure the workers.dev subdomain
 #
 # Reads CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID from the environment and never prints them.
@@ -13,15 +14,19 @@
 #   1. GET /accounts/{account}/workers/subdomain. When the account has no workers.dev subdomain yet,
 #      PUT {"subdomain":"kurtlehnardt"}, and on a conflict fall back to
 #      conference-caddie-<6 random lowercase letters>.
-#   2. npx wrangler deploy from worker/ (the wrangler version pinned in worker/package.json).
-#      Its output goes to a temporary file that is deleted on exit; only the Worker URL is printed.
+#   2. Build the web app in Worker mode (npm --prefix web run build:worker: base "/", same-origin
+#      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
+#      wrangler.toml, so the app ships with the Worker.
+#   3. npx wrangler deploy from worker/ (the wrangler version pinned in worker/package.json).
+#      Its output goes to a temporary file that is deleted on exit; only the URL is printed.
 #
-# Output is the subdomain name and the Worker URL only. On a failure the script prints the HTTP
-# status and Cloudflare's error codes, or the last lines of the wrangler output with the token
-# value redacted.
+# Output is the subdomain name and the app URL (which is also the API's base) only. On a failure
+# the script prints the HTTP status and Cloudflare's error codes, the last lines of the build
+# output, or the last lines of the wrangler output with the token value redacted.
 #
-# Deploy order (worker/README.md): this script, then node worker/scripts/setup-secrets.mjs, then
-# the migration, then GitHub Pages. Until ADMIN_TOKEN exists the admin routes answer 404.
+# Deploy order (docs/FREE_HOSTING.md, Go live): this script, then node
+# worker/scripts/setup-secrets.mjs, then the migration, then the repository variables and the
+# workflows. Until ADMIN_TOKEN exists the admin routes answer 404.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +40,7 @@ for arg in "$@"; do
   case "$arg" in
     --subdomain-only) SUBDOMAIN_ONLY=1 ;;
     -h|--help)
-      sed -n '2,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -159,7 +164,27 @@ if [ "$SUBDOMAIN_ONLY" = "1" ]; then
   exit 0
 fi
 
-# 2. Deploy with the wrangler pinned in worker/package.json. Its output can list bindings and
+# 2. Build the web app in Worker mode into web/dist-worker/.
+WEB_DIR="$(cd "$WORKER_DIR/../web" && pwd)"
+if [ ! -d "$WEB_DIR/node_modules" ]; then
+  if ! npm --prefix "$WEB_DIR" ci --no-audit --no-fund >"$WORK/web-npm.log" 2>&1; then
+    echo "npm ci failed in web/:" >&2
+    tail -n 20 "$WORK/web-npm.log" >&2
+    exit 1
+  fi
+fi
+if ! npm --prefix "$WEB_DIR" run build:worker >"$WORK/web-build.log" 2>&1; then
+  echo "The Worker-mode web build failed:" >&2
+  tail -n 30 "$WORK/web-build.log" >&2
+  exit 1
+fi
+if [ ! -f "$WEB_DIR/dist-worker/index.html" ] || [ ! -f "$WEB_DIR/dist-worker/_headers" ]; then
+  echo "The Worker-mode web build wrote no web/dist-worker/index.html or _headers." >&2
+  exit 1
+fi
+echo "Built the web app into web/dist-worker."
+
+# 3. Deploy with the wrangler pinned in worker/package.json. Its output can list bindings and
 # variables, so it is kept in a temporary file and only the URL is printed.
 cd "$WORKER_DIR"
 if [ ! -d node_modules ]; then
@@ -200,7 +225,7 @@ fi
 worker_name="$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' wrangler.toml | head -n 1)"
 url="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' "$WORK/deploy.log" | head -n 1 || true)"
 if [ -z "$url" ] && [ -n "$subdomain" ]; then
-  url="https://${worker_name:-conference-caddie-api}.$subdomain.workers.dev"
+  url="https://${worker_name:-conference-caddie}.$subdomain.workers.dev"
 fi
 if [ -z "$url" ]; then
   echo "Deployed, but the workers.dev URL is unknown: the subdomain could not be read and wrangler printed no URL." >&2
@@ -210,7 +235,8 @@ if [ -z "$subdomain" ]; then
   subdomain="$(printf '%s' "$url" | sed -n 's|^https://[^.]*\.\([^.]*\)\.workers\.dev$|\1|p')"
   echo "workers.dev subdomain: ${subdomain:-unknown}"
 fi
-echo "Worker URL: $url"
+echo "App URL (also the API base, CADDIE_APP_URL and CADDIE_API_BASE): $url"
+echo "KubeCon NA 2026 link: $url/e/kubecon-cloudnativecon-north-america-2026"
 
 # A new workers.dev subdomain can take a minute or two to resolve, so a failed health check is a
 # warning, not a failure.

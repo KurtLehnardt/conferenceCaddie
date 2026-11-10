@@ -8,7 +8,7 @@ The embedding library lives in its own package, `tools/bundles/`, so the root `n
 
 ```
 npm ci
-npm run build                                                        # the web app into dist-pages/ (base /conferenceCaddie/)
+mkdir -p dist-pages                                                  # bundles and a landing page only; the web app is served by the Worker
 npm --prefix tools/bundles ci --ignore-scripts                       # the embedding library; no install script runs
 node scripts/build-bundles.mjs --takedown <contact> --publisher-name <name>   # bundles/, conferences.json, capabilities.json
 ```

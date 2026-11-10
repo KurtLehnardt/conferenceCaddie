@@ -1,10 +1,20 @@
 # Conference Caddie API on Cloudflare (the free stack)
 
-This directory holds the free-hosting backend of Conference Caddie: one Cloudflare Worker,
-`conference-caddie-api`, with SQLite-backed Durable Objects for all storage (FTS5 for keyword
-search, float32 vectors with brute-force cosine in code), Workers AI for embeddings, a Cron Trigger
-for purges and expiry, and VAPID Web Push sent from the Worker. The web app is served from GitHub
-Pages at `https://kurtlehnardt.github.io/conferenceCaddie/` and calls the Worker cross-origin.
+This directory holds the free hosting of Conference Caddie: one Cloudflare Worker,
+`conference-caddie`, that serves the web app as static assets and the API on the same origin
+(`https://conference-caddie.<subdomain>.workers.dev`), with SQLite-backed Durable Objects for all
+storage (FTS5 for keyword search, float32 vectors with brute-force cosine in code), Workers AI for
+embeddings, a Cron Trigger for purges and expiry, and VAPID Web Push sent from the Worker. GitHub
+Pages publishes only the public talk bundles and a landing page that links to the app; the app is
+not served there, because that origin is shared with other sites (docs/FREE_HOSTING.md, Where the
+app lives).
+
+Static assets come from `web/dist-worker/`, the Worker-mode build (`npm --prefix web run
+build:worker`), as `[assets]` in `wrangler.toml` says. They never run the Worker's code: only
+`/api`, `/admin` and their subpaths do (`run_worker_first`), and any other path with no file gets
+`index.html`, so deep links work. Their headers (Content-Security-Policy, the other security
+headers and Cache-Control) come from the `_headers` file that build writes. Build the app before
+any `wrangler dev` or `wrangler deploy`, or wrangler refuses the missing directory.
 
 The Cloud Run plus Elasticsearch stack in `server/` and `scripts/deploy.sh` is unchanged and stays
 deployable from `main`. `worker/` is listed in `.gcloudignore` and `.dockerignore`, so the Cloud
@@ -30,11 +40,19 @@ Never print a token, a secret or a device secret: no `set -x`, no `curl -v`, no 
 ## Local run
 
 ```sh
+npm --prefix web ci && npm --prefix web run build:worker   # the app, into web/dist-worker/
 cd worker
 npm ci
 node scripts/dev-vars.mjs            # writes the git-ignored .dev.vars (EMBED_FAKE=1 unless --real-ai)
 npx wrangler dev --local --port 8787
 ```
+
+The app and the API are then both on http://localhost:8787 (`npm run dev` in `worker/` does the
+build and the start in one go). Rebuild the app after a change under `web/`; wrangler picks up
+the new files. For hot reload while working on the app, run the Vite dev server instead
+(`npm --prefix web run dev`, which proxies `/api` to port 8080; point it at the Worker by changing
+`server.proxy` locally, or build with `VITE_API_BASE=http://localhost:8787`, an origin the
+Worker allows through `ALLOWED_ORIGINS`).
 
 - `.dev.vars` holds development-only values: a random `ADMIN_TOKEN` and `REF_SALT`, a fresh VAPID
   pair, and `EMBED_FAKE=1`. With `EMBED_FAKE=1` embeddings are deterministic feature-hashed vectors
@@ -78,8 +96,8 @@ npx wrangler dev --local --port 8787
   node worker/ingest/push-ingest.mjs --api http://localhost:8787
   ```
 
-- To serve the web app from a port that `wrangler.toml` does not list, add that origin to the
-  local allow-list, for example
+- The Worker always accepts its own origin. To call it from a web app on another local port
+  that `wrangler.toml` does not list, add that origin to the local allow-list, for example
   `node scripts/dev-vars.mjs --set ALLOWED_ORIGINS=http://127.0.0.1:8792,http://localhost:4173`,
   and run the smoke with `SMOKE_ORIGIN` set to the same origin. Values in `.dev.vars` override
   `[vars]` only in local runs.
@@ -88,7 +106,7 @@ npx wrangler dev --local --port 8787
 
 Run these from the repository root, in this order. Each step is safe to repeat.
 
-1. **Deploy the Worker.**
+1. **Build the app and deploy the Worker.**
 
    ```sh
    bash worker/scripts/deploy.sh
@@ -96,9 +114,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 
    The script makes sure the account has a `workers.dev` subdomain (it reads it with the
    Cloudflare API and, when there is none, creates `kurtlehnardt`, or
-   `conference-caddie-<6 random letters>` if that name is taken), then runs `npx wrangler deploy`.
-   It prints only the subdomain and the Worker URL. Until step 2 has run, the admin routes answer
-   404, because admin fails closed without `ADMIN_TOKEN`.
+   `conference-caddie-<6 random letters>` if that name is taken), builds the web app in Worker
+   mode into `web/dist-worker/`, then runs `npx wrangler deploy`, which uploads the app with the
+   Worker. It prints only the subdomain and the app URL, which is also the API's base. Until
+   step 2 has run, the admin routes answer 404, because admin fails closed without `ADMIN_TOKEN`.
 
    If the token cannot read or create the subdomain (HTTP 403 from the subdomain API), create it
    once in the Cloudflare dashboard (Workers & Pages, Overview, `workers.dev` subdomain) and run the
@@ -125,7 +144,8 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 3. **Migrate the data** from the Elasticsearch backup (one time).
 
    ```sh
-   export CADDIE_API_BASE=https://conference-caddie-api.<subdomain>.workers.dev
+   export CADDIE_APP_URL=https://conference-caddie.<subdomain>.workers.dev   # the URL deploy.sh printed
+   export CADDIE_API_BASE="$CADDIE_APP_URL"
    export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
    node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE" --dry-run
    node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE"
@@ -137,40 +157,51 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    script prints counts only. `data/exports/` is git-ignored and must stay that way, because the
    backup holds personal data.
 
-4. **Publish the web app on GitHub Pages.**
+4. **Set the repository variables and publish the talk bundles on GitHub Pages.**
 
    ```sh
+   gh variable set CADDIE_APP_URL --body "$CADDIE_APP_URL"
    gh variable set CADDIE_API_BASE --body "$CADDIE_API_BASE"
    gh api -X POST repos/KurtLehnardt/conferenceCaddie/pages -f build_type=workflow \
      || gh api -X PUT repos/KurtLehnardt/conferenceCaddie/pages -f build_type=workflow   # on HTTP 409
    gh workflow run pages.yml
    ```
 
-   The Pages workflow builds `web/` with `VITE_BASE=/conferenceCaddie/`,
-   `VITE_API_BASE=$CADDIE_API_BASE` and `VITE_CLIENT_EXTRACT=1`, and fails when the variable is
-   empty, then builds the talk bundles into the same artifact (docs/BUNDLES.md). The weekly talk
-   ingest (`.github/workflows/ingest.yml`) uses the same variable and the `CADDIE_ADMIN_TOKEN`
-   repository secret; start it by hand with `gh workflow run ingest.yml`.
+   The Pages workflow publishes only the talk bundles (docs/BUNDLES.md), `conferences.json`, the
+   tier 1 `capabilities.json` and a landing page with no script that links to `CADDIE_APP_URL`. It
+   skips with a notice while `CADDIE_API_BASE` is empty, and a manual run fails then. The weekly
+   talk ingest (`.github/workflows/ingest.yml`) uses `CADDIE_API_BASE` and the
+   `CADDIE_ADMIN_TOKEN` repository secret; start it by hand with `gh workflow run ingest.yml`.
 
-5. **Run the smoke** against the live stack (next section).
+5. **Run the smoke** against the live Worker (next section).
+
+6. **Regenerate the demo QR code** for the new app URL, and commit it through a pull request:
+
+   ```sh
+   node worker/scripts/make-qr.mjs --app-url "$CADDIE_APP_URL"
+   ```
+
+   It writes `docs/demo/qr-kubecon.png` (1280 px) and `qr-kubecon.svg`, high error correction,
+   for `<app URL>/e/kubecon-cloudnativecon-north-america-2026`, with a pinned one-off `npx`
+   QR code tool, so the repository gains no dependency.
 
 ## Smoke
 
 The smoke script in `scripts/smoke.mjs` is the only verification. Against the free stack:
 
 ```sh
-BASE_URL=https://kurtlehnardt.github.io/conferenceCaddie \
-API_BASE="$CADDIE_API_BASE" \
+BASE_URL="$CADDIE_APP_URL" \
 ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token \
 node scripts/smoke.mjs
 ```
 
-`BASE_URL` is the web app including its base path, `API_BASE` the Worker, and `SMOKE_ORIGIN` (by
-default the origin of `BASE_URL`) the `Origin` the browser-like checks send. With an admin token
-the smoke uses the `/admin/test/*` fixtures; without one those checks are skipped. For a local
-run, build the web app with `VITE_BASE=/conferenceCaddie/ VITE_API_BASE=http://localhost:8787`,
-serve it with `npx vite preview --port 4173`, and use
-`BASE_URL=http://localhost:4173/conferenceCaddie API_BASE=http://localhost:8787`.
+`BASE_URL` is the app, and the API defaults to the same origin. The admin token makes it a Worker
+run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures, sends
+the app's own origin as `Origin` (`SMOKE_ORIGIN` changes it), checks the static files' security
+and cache headers (`host1`), and scans `web/dist-worker/` for leaked keys (`SMOKE_DIST` changes
+it). For a local run, build the app with `npm --prefix web run build:worker`, start
+`npx wrangler dev --local --port 8787` as above, load the data, and use
+`BASE_URL=http://localhost:8787`.
 
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
 
@@ -182,7 +213,7 @@ undoes or confirms hides with `worker/scripts/moderation.mjs`, which calls
 (default `~/.config/conference-caddie/admin-token`):
 
 ```sh
-export CADDIE_API_BASE=https://conference-caddie-api.<subdomain>.workers.dev
+export CADDIE_API_BASE=https://conference-caddie.<subdomain>.workers.dev
 node worker/scripts/moderation.mjs --event <slug> --hidden
 node worker/scripts/moderation.mjs --event <slug> --since 2026-11-10T08:00:00Z
 node worker/scripts/moderation.mjs --event <slug> --hidden --show-content
@@ -281,6 +312,6 @@ no script, workflow or agent does it on its own, and several of the steps are ir
 covers the Cloud Run service and its images, the Secret Manager secrets and service accounts, the
 Elasticsearch indices, API keys and deployment, the Google Cloud billing account, and the local
 backup in `data/exports/`. Do it only after the free stack has passed the smoke against the live
-Worker and Pages for at least one full day, and after the Android build's API origin points at the
+Worker for at least one full day, and after the Android build's API origin points at the
 Worker. The ordered checklist is section 8 of the free-hosting plan, and the morning report of the
 free-stack rollout repeats it.

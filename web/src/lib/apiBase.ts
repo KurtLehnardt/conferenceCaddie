@@ -1,7 +1,8 @@
 import { notePace } from './pace';
 
 // Where the API and the app live. Both are build settings with empty defaults, so the Cloud Run
-// build keeps relative `/api/...` calls and root paths, and the GitHub Pages build sets them:
+// and Cloudflare Worker builds keep relative `/api/...` calls and root paths. A build for another host
+// can set them:
 //   VITE_API_BASE  the Worker's origin, for example https://caddie.example.workers.dev
 //   VITE_BASE      the path the app is served under, for example /conferenceCaddie/ (read by Vite,
 //                  which exposes it here as import.meta.env.BASE_URL, always with a trailing slash)

@@ -1,4 +1,4 @@
-// Reads the text of a schedule file in the browser, for the Pages build (VITE_CLIENT_EXTRACT=1),
+// Reads the text of a schedule file in the browser, for the Worker build (VITE_CLIENT_EXTRACT=1),
 // whose API runs on a Worker that cannot parse PDF or office files. The file never leaves the
 // device: only the extracted text is sent to the import route. The two libraries are imported
 // lazily, so neither is in the entry chunk and a visitor who never imports a file never loads them.
