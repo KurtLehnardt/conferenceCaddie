@@ -5,8 +5,10 @@
 // Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY,
 //        ES_INFERENCE_ID (default inference endpoint for the semantic_text fields).
 //
-// The people index defaults to caddie-people-v2 and its alias to caddie-people. Pass --alias ""
-// to skip the alias steps, for example for a development index. --lexical-only leaves out the
+// The people index defaults to caddie-people-v2 and its alias to caddie-people. The live aliases
+// move only for the default index or caddie-people-v<N>; any other name, such as a development
+// index, gets none unless --alias names one (scripts/lib/alias.mjs). --alias "" skips the alias
+// steps. --lexical-only leaves out the
 // three semantic_text fields, so nothing is embedded; matching then fails on the semantic
 // retrievers, so use it only for tests that never send free text.
 //
@@ -53,7 +55,10 @@ const inferenceIdArg = opt('--inference-id');
 const inferenceId = inferenceIdArg !== undefined ? inferenceIdArg : process.env.ES_INFERENCE_ID ?? 'caddie-e5-small';
 const DEFAULT_INDEX = 'caddie-people-v2';
 const index = args[0] || DEFAULT_INDEX;
-const alias = aliasArg !== undefined ? aliasArg : 'caddie-people';
+// The blocks and meets aliases follow: none unless the people index gets one.
+import { chooseAlias } from './lib/alias.mjs';
+const { alias, hint: aliasHint } = chooseAlias({ index, explicit: aliasArg, defaultIndex: DEFAULT_INDEX, defaultAlias: 'caddie-people' });
+if (aliasHint) console.log(aliasHint);
 
 if (!index.startsWith('caddie-') || (alias && !alias.startsWith('caddie-'))) {
   console.error('Index and alias names must start with "caddie-".');

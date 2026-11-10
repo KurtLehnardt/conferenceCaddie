@@ -6,7 +6,9 @@
 //
 // Defaults: caddie-people-push-v1 behind caddie-people-push, and caddie-people-nudges-v1 behind
 // caddie-people-nudges. Both are caddie-people-*, so the people key covers them. Every step is
-// idempotent: an index that exists is left alone, an alias is pointed at the index.
+// idempotent: an index that exists is left alone, an alias is pointed at the index. The alias is
+// the index name without its -v<N> suffix, so a live alias moves only for caddie-people-push-v<N>
+// or caddie-people-nudges-v<N>; a name without the suffix gets no alias.
 //
 // The subscription's endpoint and keys are keyword fields with index: false, so they are stored
 // and never searchable; a subscription is found by its _id (sha256 of the endpoint) or by
@@ -104,7 +106,16 @@ async function ensureIndex(name, props) {
   console.log(`Created ${name}.`);
 }
 
+// The alias of a versioned name; none for a name without -v<N>, which would otherwise ask for an
+// alias named like the index itself.
+async function pointVersionAlias(index) {
+  if (!withAlias) return;
+  const name = index.replace(/-v\d+$/, '');
+  if (name === index) return console.log(`No alias for ${index}: the name has no -v<N> suffix.`);
+  await pointAlias(name, index);
+}
+
 await ensureIndex(pushIndex, pushProperties);
-if (withAlias) await pointAlias(pushIndex.replace(/-v\d+$/, ''), pushIndex);
+await pointVersionAlias(pushIndex);
 await ensureIndex(nudgesIndex, nudgesProperties);
-if (withAlias) await pointAlias(nudgesIndex.replace(/-v\d+$/, ''), nudgesIndex);
+await pointVersionAlias(nudgesIndex);
