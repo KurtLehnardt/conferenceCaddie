@@ -23,7 +23,10 @@
 //   match, left out of a text search, and shown in the "around now" view only when both are in
 //   the same zone, after the specific matches of the page.
 // - A people document exists only while its owner is visible conference-wide or shares for at
-//   least one talk. Every people query filters on event_id and on visible_until > now, and
+//   least one talk. The one exception is transient: a delete first hides the document
+//   (open_to_meet false, no shared talk, presence off) and removes it last, so a delete that fails
+//   part-way leaves it hidden until a retry or the hourly purge finishes the delete
+//   (isPendingDelete). Every people query filters on event_id and on visible_until > now, and
 //   leaves out anyone the requester has blocked or who has blocked the requester.
 // - secret_hash, text_hash and profile_id are never returned; results carry ref instead, which
 //   is also stored on the document so a block or a meet request can name a person by it.
@@ -35,8 +38,9 @@
 //   on the people document and is returned to another person only while both are around. The
 //   location itself is returned to nobody: it ranks nearby people higher through a
 //   distance_feature leg and becomes a band (same_zone, near, around, venue) on a result; only an
-//   active meet learns a distance and a bearing (connect.mjs). Blocks and meets are deleted with
-//   the profile.
+//   active meet learns a distance and a bearing (connect.mjs). Meets and the blocks the person
+//   made are deleted with the profile; blocks others made of the person stay until the
+//   conference ends, so deleting and re-creating a profile never lifts a block.
 //
 // The block, presence and meet routes themselves are in connect.mjs, which uses the transport,
 // plumbing and lookups exported here.
@@ -152,10 +156,12 @@ export const docId = (eventId, profileId) => `${eventId}:${profileId}`;
 // deletes meets whose expires_at has passed. A declined meet is the evidence for the daily
 // "Not now" pause, so it is kept until its day is over (two days after ended_at, which covers a
 // 25-hour day); once it has run out, its note, meeting point and spot-me lines are scrubbed. Then
-// it deletes push subscriptions and nudge records whose expires_at (the end of their conference)
-// has passed. The purge CLI runs the same steps.
+// it deletes push subscriptions, nudge records and blocks whose expires_at (the end of their
+// conference) has passed. Before all of that it finishes profile deletes that hid a profile and
+// then failed (finishPendingDeletes). The purge CLI runs the same steps.
 const PURGE_INTERVAL_MS = 60 * 60_000;
 const PURGE_PRESENCE_PAGE = 500;
+const PURGE_PENDING_PAGE = 100;
 export const EXPIRED_PEOPLE_QUERY = {
   bool: {
     should: [{ range: { visible_until: { lt: 'now' } } }, { bool: { must_not: { exists: { field: 'visible_until' } } } }],
@@ -182,9 +188,25 @@ export const SCRUB_MEET_SCRIPT = {
 export const EXPIRED_AT_QUERY = { range: { expires_at: { lt: 'now' } } };
 // The Bluetooth token (ble.mjs) rides along with presence: cleared with it, carried through a reindex.
 export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, ble_token: null, ble_token_until: null };
+// A profile whose delete hid it (deleteProfileAndConnections, step 1) and has not finished yet:
+// not visible conference-wide and sharing for no talk. No other write leaves a document in that
+// state, because a profile write with both choices off deletes the document instead, so the
+// state itself marks a pending delete and needs no field of its own (and no mapping change). The
+// purge finishes such deletes, the export leaves them out, and authenticated() and peopleByIds
+// treat them as gone. An empty shared_talk_ids array indexes no value, so exists is false for it.
+// scripts/export-people.mjs and scripts/purge-expired-people.mjs repeat this query.
+export const PENDING_DELETE_QUERY = { bool: { filter: [{ term: { open_to_meet: false } }], must_not: [{ exists: { field: 'shared_talk_ids' } }] } };
+const noValue = (v) => v === undefined || v === null || (Array.isArray(v) && v.length === 0);
+export const isPendingDelete = (source) => source?.open_to_meet === false && noValue(source.shared_talk_ids);
 
-async function purgeExpired() {
+// Exported for the tests.
+export async function purgeExpired() {
   if (!PEOPLE_KEY) return;
+  try {
+    await finishPendingDeletes();
+  } catch (err) {
+    console.error(`Finishing pending profile deletes failed: ${err.message}`);
+  }
   try {
     const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_delete_by_query?conflicts=proceed`, {
       query: EXPIRED_PEOPLE_QUERY,
@@ -225,7 +247,8 @@ async function purgeExpired() {
   } catch (err) {
     console.error(`Scrubbing run-out declined meets failed: ${err.message}`);
   }
-  for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records']]) {
+  // A block without expires_at (written before blocks carried it) matches nothing here and stays.
+  for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records'], [BLOCKS_INDEX, 'blocks']]) {
     try {
       const { json } = await people('POST', `${idx(name)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
         query: EXPIRED_AT_QUERY,
@@ -630,12 +653,18 @@ export async function bulkOne(action, doc) {
   return result.status ?? 500;
 }
 
-async function deleteDoc(id) {
-  await people('DELETE', `${idx(PEOPLE_INDEX)}/_doc/${encodeURIComponent(id)}?refresh=wait_for`, undefined, { okStatuses: [404] });
+// Deletes one people document and returns the status (404 when it was already gone). With a
+// guard ({ seqNo, primaryTerm }) the delete applies only while the document is unchanged since it
+// was read, and answers 409 otherwise.
+async function deleteDoc(id, guard = null) {
+  const cas = guard ? `&if_seq_no=${guard.seqNo}&if_primary_term=${guard.primaryTerm}` : '';
+  const { status } = await people('DELETE', `${idx(PEOPLE_INDEX)}/_doc/${encodeURIComponent(id)}?refresh=wait_for${cas}`, undefined, { okStatuses: guard ? [404, 409] : [404] });
+  return status;
 }
 
 // Other people's documents by profile id, as a Map profile_id -> source limited to OTHER_FIELDS.
-// Missing documents are left out.
+// Missing documents are left out, and so are profiles whose delete has not finished yet
+// (isPendingDelete): a meet or a block list shows such a person as gone.
 export async function peopleByIds(eventId, profileIds) {
   const ids = [...new Set(profileIds)].filter((id) => typeof id === 'string' && id);
   if (!ids.length) return new Map();
@@ -644,7 +673,7 @@ export async function peopleByIds(eventId, profileIds) {
     docs: ids.map((id) => ({ _id: docId(eventId, id), _source: OTHER_FIELDS })),
   });
   const map = new Map();
-  for (const d of json.docs ?? []) if (d.found && d._source?.profile_id) map.set(d._source.profile_id, d._source);
+  for (const d of json.docs ?? []) if (d.found && d._source?.profile_id && !isPendingDelete(d._source)) map.set(d._source.profile_id, d._source);
   return map;
 }
 
@@ -674,6 +703,10 @@ export async function personByRef(me, ref) {
 
 // ---------------------------------------------------------------------------------------------
 // Blocks. A block is one document per direction; every people query leaves out both directions.
+// A block belongs to its blocker: it goes with the blocker's profile, with an unblock, or with
+// the purge once its expires_at (the end of the conference) has passed. The blocked person's
+// delete leaves it in place, so a profile re-created from the same device (the same profile_id)
+// is still blocked.
 
 export const blockId = (eventId, blockerId, blockedId) => `${eventId}:${blockerId}:${blockedId}`;
 
@@ -737,53 +770,73 @@ export async function deleteWhere(index, eventId, query) {
   throw new UpstreamError('too many documents to delete');
 }
 
-// Everything that connects a person to others at one conference: every meet they take part in,
-// their push subscriptions, the nudges they were part of and, last, their blocks in both
-// directions (deleteProfileAndConnections says why the blocks go last). Runs when the profile is
-// deleted, and the next request already sees them gone.
+const errorText = (err) => (err instanceof UpstreamError ? err.message : (err?.name ?? 'error'));
+
+// Every meet a person takes part in, their push subscriptions and the nudge records they were
+// part of, at one conference. The three indices are cleared concurrently; a failure is thrown only
+// once all three have finished, so nothing is still deleting when the caller answers or retries.
+async function deleteMeetsPushAndNudges(eventId, profileId) {
+  const results = await Promise.allSettled([
+    deleteWhere(MEETS_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } }),
+    deleteWhere(PUSH_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } }),
+    deleteWhere(NUDGES_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } }),
+  ]);
+  const failed = results.find((r) => r.status === 'rejected');
+  if (failed) throw failed.reason;
+}
+
+// The blocks a person made at one conference. Blocks other people made of them are not touched.
+export const ownBlocksQuery = (eventId, profileId) => ({ bool: { filter: [{ term: { event_id: eventId } }, { term: { blocker_id: profileId } }] } });
+const deleteOwnBlocks = (eventId, profileId) => deleteWhere(BLOCKS_INDEX, eventId, ownBlocksQuery(eventId, profileId));
+
+// Everything that connects a person to others at one conference and goes with their profile:
+// meets, push subscriptions and nudge records, then the blocks they made
+// (deleteProfileAndConnections says why those go last). Blocks others made of this person stay
+// until the conference ends, so deleting and re-creating the profile from the same device never
+// lifts them. Runs when the profile is deleted, and the next request already sees them gone.
 export async function deleteConnections(eventId, profileId) {
-  await deleteWhere(MEETS_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } });
-  await deleteWhere(PUSH_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } });
-  await deleteWhere(NUDGES_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } });
-  await deleteWhere(BLOCKS_INDEX, eventId, {
-    bool: {
-      filter: [{ term: { event_id: eventId } }],
-      should: [{ term: { blocker_id: profileId } }, { term: { blocked_id: profileId } }],
-      minimum_should_match: 1,
-    },
-  });
+  await deleteMeetsPushAndNudges(eventId, profileId);
+  await deleteOwnBlocks(eventId, profileId);
 }
 
 // The partial update that hides a profile while it is being deleted. Matches, the Around view,
 // nudges and Bluetooth sightings require open_to_meet; circle members, circle counts and For
 // you's circle counts require a shared talk; asks (personByRef) require either. Presence and the
-// Bluetooth token are cleared as a presence delete clears them. visible_until is left alone, so
-// the hourly purge cannot remove the document before a retry has finished the delete.
+// Bluetooth token are cleared as a presence delete clears them. The result is the state
+// isPendingDelete recognises. visible_until is left alone, so the hourly purge does not take the
+// document for an expired one; it finishes the delete instead (finishPendingDeletes).
 const HIDE_FOR_DELETE = { open_to_meet: false, shared_talk_ids: [], ...PRESENCE_OFF };
+// A presence write or a report landing on the document at the same moment is a version conflict
+// that Elasticsearch retries itself, instead of failing the delete with a 502.
+const HIDE_RETRIES = 3;
 
 // Deletes a profile and everything that connects it to others, in an order that keeps every
 // failure safe to retry:
 // 1. One partial update hides the profile and waits for the refresh, so from then on no match,
 //    circle, ask, nudge or Bluetooth sighting finds the person, whatever happens next. A 404 means
 //    the document went between the caller's read and this write, and the delete answers 200 as
-//    it does when the read finds no document.
-// 2. Meets, push subscriptions and nudge records are deleted, and then blocks. Blocks go last
-//    because a delete that fails part-way leaves a hidden profile that its owner can make
-//    visible again with a profile write, and it must still carry every block when that happens.
+//    it does when the read finds no document. It is a plain update (no upsert), so it never
+//    creates a document.
+// 2. Meets, push subscriptions and nudge records are deleted concurrently, and then the blocks
+//    this person made. Blocks go last because a delete that fails part-way leaves a hidden
+//    profile that its owner can make visible again with a profile write, and it must still carry
+//    every block when that happens.
 // 3. The document is deleted last. Until then, any failed step answers 502, and trying again
-//    authenticates against the document and runs the whole delete again.
+//    authenticates against the document and runs the whole delete again. A delete that is never
+//    tried again is finished by the hourly purge (finishPendingDeletes); until then the hidden
+//    document is found by nothing, every route but this one and the profile write treat it as no
+//    profile (authenticated), and the export leaves it out.
 // The hide stops new lookups, not requests already under way: an ask that passed personByRef just
-// before the hide, a nudge that was already ranking, a block made by ref (docByRef finds hidden
-// profiles on purpose) or the owner's own device subscribing to push can still write a meet, a
-// nudge record, a block or a push subscription after step 2 has finished with that index. The
-// second pass, after the document is gone, removes what has landed by then. It is best effort: a
-// failure there is logged and the delete still answers 200, because trying again would find no
-// profile and change nothing. A write that lands even later stays: the purge removes such a meet
-// once it runs out, and a push subscription or nudge record once the conference ends; a late
-// block is never purged, but it only keeps two people apart.
+// before the hide, a nudge that was already ranking, or the owner's own device blocking someone
+// or subscribing to push, can still write a meet, a nudge record, a block or a push subscription
+// after step 2 has finished with that index. The second pass, after the document is gone, removes
+// what has landed by then. It is best effort: a failure there is logged and the delete still
+// answers 200, because trying again would find no profile and change nothing. A write that lands
+// even later stays: the purge removes such a meet once it runs out, and a push subscription, a
+// nudge record or a block once the conference ends.
 async function deleteProfileAndConnections(eventId, profileId) {
   const id = docId(eventId, profileId);
-  const status = await bulkOne({ update: { _id: id } }, { doc: HIDE_FOR_DELETE });
+  const status = await bulkOne({ update: { _id: id, retry_on_conflict: HIDE_RETRIES } }, { doc: HIDE_FOR_DELETE });
   if (status === 404) return;
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
   await deleteConnections(eventId, profileId);
@@ -791,8 +844,47 @@ async function deleteProfileAndConnections(eventId, profileId) {
   try {
     await deleteConnections(eventId, profileId);
   } catch (err) {
-    console.error(`Deleting a deleted profile's connections again failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
+    console.error(`Deleting a deleted profile's connections again failed: ${errorText(err)}`);
   }
+}
+
+// Finishes profile deletes that hid the profile, then failed, and were never tried again (step 1
+// of deleteProfileAndConnections without step 3). For each such document, at most 100 a run: its
+// meets, push subscriptions and nudge records, then the document itself, then the blocks it made.
+// The document delete is guarded by the sequence number the search returned, so a profile that
+// changed since then (its owner made it visible again, or a report marked it) answers 409 and is
+// kept; a pending one is found again by the next run. The blocks go after the document, so a
+// profile kept that way still has every one of its blocks. A failure is logged and leaves the
+// document for the next run; one after the document is gone leaves blocks that run out with the
+// conference.
+export async function finishPendingDeletes() {
+  const { json } = await people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search?seq_no_primary_term=true`, PEOPLE_PURGE_PREFERENCE), {
+    size: PURGE_PENDING_PAGE,
+    _source: ['event_id', 'profile_id'],
+    query: PENDING_DELETE_QUERY,
+  });
+  let finished = 0;
+  let kept = 0;
+  for (const h of json.hits?.hits ?? []) {
+    const { event_id: eventId, profile_id: profileId } = h._source ?? {};
+    if (typeof eventId !== 'string' || typeof profileId !== 'string' || h._id !== docId(eventId, profileId)) continue;
+    try {
+      await deleteMeetsPushAndNudges(eventId, profileId);
+      const status = await deleteDoc(h._id, { seqNo: h._seq_no, primaryTerm: h._primary_term });
+      if (status === 409) {
+        kept++;
+        continue;
+      }
+      // 404: the owner's own retry deleted it, blocks included, in the meantime.
+      if (status === 404) continue;
+      await deleteOwnBlocks(eventId, profileId);
+      finished++;
+    } catch (err) {
+      console.error(`Finishing a pending profile delete failed: ${errorText(err)}`);
+    }
+  }
+  if (finished) console.log(`Finished ${finished} pending profile deletes.`);
+  if (kept) console.log(`Kept ${kept} pending profile deletes that changed since they were found.`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1022,13 +1114,40 @@ async function circleCounts(slug, ids) {
 }
 
 // The requester's stored profile, authenticated by the device secret. Throws 403 on a wrong
-// secret; returns null when there is no live document.
+// secret; returns null when there is no live document, or when the document is a delete that has
+// not finished (isPendingDelete): someone who asked to be deleted blocks, asks, reports and
+// subscribes no more. Only the profile write (which can make it visible again) and the delete
+// read the document themselves. _seq_no and _primary_term are those of this read, for
+// updateOwnProfile.
 export async function authenticated(device, slug) {
   const own = await ownDoc(slug, device.profileId);
   if (!own.found) return null;
   if (!secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
-  if (!isLive(own.source)) return null;
-  return { ...own.source, event_id: slug, profile_id: device.profileId };
+  if (!isLive(own.source) || isPendingDelete(own.source)) return null;
+  return { ...own.source, event_id: slug, profile_id: device.profileId, _seq_no: own.seqNo, _primary_term: own.primaryTerm };
+}
+
+const OWN_UPDATE_ATTEMPTS = 2;
+
+// A Bulk partial update of the requester's own document that applies only while the document is
+// still the one authenticated() read (if_seq_no and if_primary_term). build(me) gets the result of
+// authenticated(), null included, throws to refuse the request (it must for null), and returns
+// { doc, ...anything } where doc is
+// the partial document to write. When the document changed or went away between the read and the
+// write, it is read and built again once; so a write that read the profile before a delete hid
+// it can never put presence or a Bluetooth token back on the hidden document: the second read
+// finds no profile. A second conflict answers 409. Resolves to { me, ...what build returned }.
+export async function updateOwnProfile(device, slug, build) {
+  for (let attempt = 1; ; attempt++) {
+    const me = await authenticated(device, slug);
+    const write = await build(me);
+    const action = { update: { _id: docId(slug, me.profile_id), if_seq_no: me._seq_no, if_primary_term: me._primary_term } };
+    const status = await bulkOne(action, { doc: write.doc });
+    if (status >= 200 && status <= 299) return { me, ...write };
+    if ((status === 409 || status === 404) && attempt < OWN_UPDATE_ATTEMPTS) continue;
+    if (status === 409) throw new HttpError(409, { error: 'The profile changed at the same time; try again' });
+    throw new UpstreamError(`bulk item status ${status}`);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

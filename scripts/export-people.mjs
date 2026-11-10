@@ -3,10 +3,12 @@
 // Usage: node scripts/export-people.mjs --event <slug>
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY); ES_PEOPLE_INDEX (default caddie-people).
 //
-// The export leaves out secret_hash, text_hash, the embeddings and the presence fields (zone,
-// spot, times, position): presence is transient and a position never leaves Elasticsearch as
-// such. data/exports/ is git-ignored, because the file holds personal data; delete it when you
-// no longer need it.
+// The export leaves out secret_hash, text_hash, the embeddings, the presence fields (zone, spot,
+// times, position) and the Bluetooth token: presence is transient and a position never leaves
+// Elasticsearch as such. It also leaves out every profile whose owner asked to delete it and whose
+// delete has not finished yet (hidden, sharing nothing and not visible conference-wide; the
+// server's hourly purge finishes those deletes). data/exports/ is git-ignored, because the file
+// holds personal data; delete it when you no longer need it.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,6 +18,9 @@ const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const PAGE = 1000;
+// A profile whose delete hid it and has not finished: the same query as PENDING_DELETE_QUERY in
+// server/people.mjs, which says why that state marks a pending delete.
+const PENDING_DELETE = { bool: { filter: [{ term: { open_to_meet: false } }], must_not: [{ exists: { field: 'shared_talk_ids' } }] } };
 
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -51,8 +56,8 @@ let after;
 for (;;) {
   const body = {
     size: PAGE,
-    _source: { excludes: ['secret_hash', 'text_hash', '*_semantic', 'presence_*'] },
-    query: { term: { event_id: slug } },
+    _source: { excludes: ['secret_hash', 'text_hash', '*_semantic', 'presence_*', 'ble_*'] },
+    query: { bool: { filter: [{ term: { event_id: slug } }], must_not: [PENDING_DELETE] } },
     sort: [{ updated_at: 'asc' }, { profile_id: 'asc' }],
   };
   if (after) body.search_after = after;

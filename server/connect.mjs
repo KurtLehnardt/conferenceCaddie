@@ -13,7 +13,10 @@
 // - Every route needs the device header and a live profile of the requester at that conference.
 //   A meet is read or changed only by its two participants; everyone else gets 403.
 // - A block is symmetric and silent: both people vanish from each other's matches, circles and
-//   meets, and a meet attempt in either direction gets the same 403 { error: "blocked" }.
+//   meets, and a meet attempt in either direction gets the same 403 { error: "blocked" }. It lasts
+//   until the blocker lifts it, deletes their own profile, or the conference ends (expires_at,
+//   which the purge honours); the blocked person deleting and re-creating their profile does not
+//   lift it.
 // - Presence lives on the people document and is written with a Bulk partial update of its six
 //   fields only, so it never re-runs the embedding model. It ends 60 minutes after it was turned
 //   on, or with until: 'day' at the end of the conference day, at the latest at the end of the
@@ -51,7 +54,7 @@ import { peoplePreference, withPreference } from './preference.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
-  conferenceFor, dayBounds, topicLabels, zonesFor, authenticated, bulkOne, isAround, PRESENCE_OFF,
+  conferenceFor, dayBounds, topicLabels, zonesFor, authenticated, updateOwnProfile, bulkOne, isAround, PRESENCE_OFF,
   peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch, deleteWhere,
   locationOf, distanceM, bearingDeg,
 } from './people.mjs';
@@ -199,7 +202,11 @@ function activate(s, me, other, nowMs) {
   if (s.same_zone && !s.rendezvous) s.rendezvous = me.presence_zone;
 }
 
-const bothAround = (me, other) => isAround(me) && Boolean(other) && isAround(other);
+// Around, for a meet: live presence on a profile that is visible conference-wide. Presence needs
+// that visibility and is cleared with it, so this differs from isAround only for a document a
+// presence write reached after a delete hid it, and such a person counts as not around.
+const present = (p) => Boolean(p) && p.open_to_meet === true && isAround(p);
+const bothAround = (me, other) => present(me) && present(other);
 const sameZone = (me, other) => bothAround(me, other) && typeof me.presence_zone === 'string' && me.presence_zone === other.presence_zone;
 
 // Closes every open meet that matches the filters, in the state endState(source) gives. _bulk
@@ -297,12 +304,12 @@ function meetView(s, me, other, labels, { withDistance = false } = {}) {
     active_until: active ? s.expires_at ?? null : null,
     expires_at: s.expires_at ?? null,
     rendezvous: s.rendezvous ?? null,
-    mine: { spot_me: s.spot_me?.[me.profile_id] ?? null, around: isAround(me) },
+    mine: { spot_me: s.spot_me?.[me.profile_id] ?? null, around: present(me) },
     other: {
       ref: otherId ? refFor(s.event_id, otherId) : null,
       display_name: other?.display_name ?? '',
       about: other?.about ?? '',
-      around: Boolean(other) && isAround(other),
+      around: present(other),
       zone: showZone ? other.presence_zone ?? null : null,
       spot: active && together && other.presence_spot_pending !== true ? other.presence_spot ?? null : null,
       spot_me: active && together && otherId && s.spot_me_pending?.[otherId] !== true ? s.spot_me?.[otherId] ?? null : null,
@@ -358,6 +365,8 @@ async function block(req, res) {
     blocked_id: them.profile_id,
     blocked_ref: ref,
     created_at: iso(Date.now()),
+    // The purge deletes the block once its conference has ended.
+    expires_at: conf.visibleUntil,
   });
   // An open meet between the two ends: silently when the blocker was asked, as a cancellation
   // when the blocker asked.
@@ -388,6 +397,8 @@ async function blocks(req, res, url) {
     query: { bool: { filter: [{ term: { event_id: conf.slug } }, { term: { blocker_id: me.profile_id } }] } },
   });
   const rows = (json.hits?.hits ?? []).map((h) => h._source ?? {}).filter((s) => s.blocked_ref);
+  // A block outlives the blocked profile; once that profile is gone or being deleted, its row
+  // keeps the ref (so it can still be lifted) with display_name null.
   const docs = await peopleByIds(conf.slug, rows.map((s) => s.blocked_id));
   sendJson(res, 200, {
     refs: rows.map((s) => s.blocked_ref),
@@ -431,27 +442,30 @@ async function putPresence(req, res) {
   if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour' or 'day'");
   if (body.ble !== undefined && typeof body.ble !== 'boolean') throw bad('ble must be a boolean');
   const conf = await conferenceFor(body.event);
-  const me = await authenticated(device, conf.slug);
-  if (!me || me.open_to_meet !== true) throw profileRequired();
-  if (!(await zonesFor(conf.slug)).has(zone)) throw bad("zone must be one of the conference's zones");
-  const now = Date.now();
-  // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
-  // the client's zone confirmation does the safeguarding instead. Never past visible_until.
-  const span = mode === 'day' ? dayBounds(now, conf.timeZone).end : now + PRESENCE_MS;
-  const untilMs = Math.min(span, Date.parse(conf.visibleUntil));
-  if (untilMs <= now) throw bad('conference has ended');
-  // Turning it on again while it is on extends it; since keeps the first time.
-  const since = isAround(me) && typeof me.presence_since === 'string' ? me.presence_since : iso(now);
-  // A spot line hidden after reports stays off until the operator unhides it.
-  const storedSpot = me.spot_hidden === true ? null : spot;
-  // A write without a usable position clears any stored one, so the presence is zone-only again.
-  const held = Boolean(storedSpot) && spotPending;
-  const presence = { presence_zone: zone, presence_spot: storedSpot, presence_spot_pending: held, presence_since: since, presence_until: iso(untilMs), ...location };
-  // Android companion (ble.mjs): ble: true mints a ten-minute Bluetooth token in the same bulk
-  // update as the presence, ble: false clears it, and a write that says nothing leaves it as it was.
-  const ble = body.ble === true ? mintBleToken(now, untilMs) : body.ble === false ? BLE_OFF : {};
-  const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: { ...presence, ...ble } });
-  if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
+  // Guarded by the sequence number of the profile read (updateOwnProfile), so a presence write
+  // that read the profile just before a delete hid it cannot bring presence back on the hidden
+  // document: the write conflicts, the profile is read again and is no longer there.
+  const { me, presence, ble, held, storedSpot, since } = await updateOwnProfile(device, conf.slug, async (me) => {
+    if (!me || me.open_to_meet !== true) throw profileRequired();
+    if (!(await zonesFor(conf.slug)).has(zone)) throw bad("zone must be one of the conference's zones");
+    const now = Date.now();
+    // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
+    // the client's zone confirmation does the safeguarding instead. Never past visible_until.
+    const span = mode === 'day' ? dayBounds(now, conf.timeZone).end : now + PRESENCE_MS;
+    const untilMs = Math.min(span, Date.parse(conf.visibleUntil));
+    if (untilMs <= now) throw bad('conference has ended');
+    // Turning it on again while it is on extends it; since keeps the first time.
+    const since = isAround(me) && typeof me.presence_since === 'string' ? me.presence_since : iso(now);
+    // A spot line hidden after reports stays off until the operator unhides it.
+    const storedSpot = me.spot_hidden === true ? null : spot;
+    // A write without a usable position clears any stored one, so the presence is zone-only again.
+    const held = Boolean(storedSpot) && spotPending;
+    const presence = { presence_zone: zone, presence_spot: storedSpot, presence_spot_pending: held, presence_since: since, presence_until: iso(untilMs), ...location };
+    // Android companion (ble.mjs): ble: true mints a ten-minute Bluetooth token in the same bulk
+    // update as the presence, ble: false clears it, and a write that says nothing leaves it as it was.
+    const ble = body.ble === true ? mintBleToken(now, untilMs) : body.ble === false ? BLE_OFF : {};
+    return { doc: { ...presence, ...ble }, presence, ble, held, storedSpot, since };
+  });
   if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);
   sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null, ...(body.ble === true ? { ble: bleView(ble) } : {}), ...heldInfo(held ? ['spot'] : []) });
   // After the answer: the push nudge for strong matches in this zone (nudge.mjs never throws).
@@ -495,8 +509,8 @@ async function requestMeet(req, res) {
   if (!them) throw notFound();
   if (await blockedBetween(conf.slug, me.profile_id, them.profile_id)) throw blocked();
   // Now-only: both must be around. A match who is not around is watched on the device, not booked.
-  if (!isAround(me)) throw presenceRequired();
-  if (!isAround(them)) throw notAround();
+  if (!present(me)) throw presenceRequired();
+  if (!present(them)) throw notAround();
 
   const now = Date.now();
   const day = dayBounds(now, conf.timeZone);
@@ -599,8 +613,9 @@ async function inbox(req, res, url) {
     const s = meet.source;
     const otherId = s.participants.find((p) => p !== me.profile_id);
     const other = others.get(otherId);
-    // A meet hidden after reports reaches only the reported participant; a hidden profile is
-    // treated like a missing document.
+    // A meet hidden after reports reaches only the reported participant; a profile hidden after
+    // reports is treated like a missing document, as is one being deleted (peopleByIds leaves
+    // those out).
     if (s.hidden === true && s.hidden_owner_id !== me.profile_id) continue;
     if (!other || other.hidden === true || hidden.has(otherId)) continue;
     // The transitions getMeet applies: an active meet with either presence gone is over, so its
@@ -660,7 +675,7 @@ async function action(req, res, id, name) {
     if (name === 'accept') {
       // Accept means now. The one accepting must be around; if the asker has meanwhile left,
       // the ask is over.
-      if (!isAround(me)) throw presenceRequired();
+      if (!present(me)) throw presenceRequired();
       if (!bothAround(me, other)) {
         endMeet(s, 'expired', now);
         await saveMeet(meet);

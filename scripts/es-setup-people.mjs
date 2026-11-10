@@ -21,7 +21,9 @@
 //   presence_accuracy) are PUT to its mapping. That is additive and never touches the
 //   semantic_text fields, so nothing is re-embedded. --recreate deletes and recreates it instead.
 // - The blocks index (caddie-people-blocks-v1 behind caddie-people-blocks) and the meets index
-//   (caddie-people-meets-v1 behind caddie-people-meets) are created when missing. With a custom
+//   (caddie-people-meets-v1 behind caddie-people-meets) are created when missing. On a blocks
+//   index that already exists, expires_at (added when blocks began to outlive the blocked
+//   person's profile until the conference ends) is PUT to the mapping, additively. With a custom
 //   people index name the two take the same suffix after "caddie-people" (the default
 //   caddie-people-v2 keeps them at v1); with --alias "" they get no alias.
 
@@ -140,6 +142,8 @@ const blocksProperties = {
   blocked_id: { type: 'keyword' },
   blocked_ref: { type: 'keyword' },
   created_at: { type: 'date' },
+  // The end of the conference (its visible_until); the purge deletes the block after it.
+  expires_at: { type: 'date' },
 };
 
 const meetsProperties = {
@@ -207,7 +211,12 @@ if (exists.status !== 200 || recreate) {
 await pointAlias(alias, index);
 
 // The blocks and meets indices.
-await ensureIndex(sibling('blocks'), blocksProperties);
+if (!(await ensureIndex(sibling('blocks'), blocksProperties))) {
+  // Additive: expires_at came after the index existed. Until it is mapped, the purge's range
+  // query on it matches nothing, so no block is deleted early.
+  const put = await es('PUT', `/${sibling('blocks')}/_mapping`, { properties: { expires_at: blocksProperties.expires_at } });
+  if (put.status !== 200) fail(`Adding expires_at to ${sibling('blocks')}`, put);
+}
 await pointAlias(siblingAlias('blocks'), sibling('blocks'));
 if (!(await ensureIndex(sibling('meets'), meetsProperties))) {
   // Additive: same_zone came after the index existed.
