@@ -2,8 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- No backups and no device-to-device transfer: the WebView's storage holds the device secret
+         of the people features, which must not leave the phone. allowBackup="false" covers
+         Android 11 and older; dataExtractionRules covers Android 12 and newer, where allowBackup
+         alone does not stop a device-to-device transfer. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
