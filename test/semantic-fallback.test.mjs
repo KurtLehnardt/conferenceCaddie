@@ -8,19 +8,23 @@
 //   mapping error whose reason quotes the document);
 // - people matches, circle members, talk search and recommendations pause semantic queries and
 //   answer with keyword legs only after an inference failure, and that any other failure (here a
-//   503 whose error type is not an inference one) fails that request alone and pauses nothing.
+//   503 whose error type is not an inference one) fails that request alone and pauses nothing;
+// - Bluetooth sightings and the push nudge fall back the same way instead of failing (a 502 for
+//   every sightings report, a dropped nudge) while inference is down.
 //
 // Semantic pauses last a minute and live in the module, so the tests that pause run after those
 // that must not, and each one moves the clock past the previous pause first.
 
 import { test, describe, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { fake, EVENT, newDevice, request, profileBody, esError, json } from './lib/fake-es.mjs';
+import { fake, EVENT, FUTURE, newDevice, request, profileBody, esError, json } from './lib/fake-es.mjs';
 
 const { isInferenceFailure, esErrorInfo, SEMANTIC_PAUSE_MS } = await import('../server/semantic.mjs');
 const { handlePeopleApi } = await import('../server/people.mjs');
 const { handleRecommendationsApi } = await import('../server/recommend.mjs');
 const { validate: validateSearch, search } = await import('../server/search.mjs');
+const { handleBleApi } = await import('../server/ble.mjs');
+const { nudgeAfterPresence } = await import('../server/nudge.mjs');
 
 // Moves the clock past any semantic pause for the rest of the file.
 let offset = 0;
@@ -186,5 +190,56 @@ describe('talk search and recommendations', () => {
     const { result } = await quietly(recommend);
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.degraded, { semantic: true });
+  });
+});
+
+// Two people around in Hall A with live Bluetooth tokens and a push subscription each. Presence is
+// written straight into the stand-in, so no background nudge runs while a test injects failures.
+async function twoAround() {
+  const { asker, other } = await twoPeople();
+  const until = new Date(Date.now() + 30 * 60_000).toISOString();
+  const around = (d, token) => {
+    const id = `${EVENT}:${d.profileId}`;
+    fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_since: new Date().toISOString(), presence_until: until, ble_token: token, ble_token_until: until });
+    fake.put('caddie-people-push', `push-${token}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${token}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+  };
+  around(asker, 'AAAAAAAAAAAAAAAAAAAAAA');
+  around(other, 'BBBBBBBBBBBBBBBBBBBBBB');
+  fake.calls.length = 0;
+  return { asker, other };
+}
+const sightings = (d) => request(handleBleApi, 'POST', '/api/presence/sightings', d, { event: EVENT, sightings: [{ token: 'BBBBBBBBBBBBBBBBBBBBBB', rssi: -50 }] });
+
+describe('Bluetooth sightings and the push nudge', () => {
+  test('sightings: a non-inference failure still answers 502 and pauses nothing', async () => {
+    skipPause();
+    const { asker } = await twoAround();
+    fake.inject = (c) => (c.index === 'caddie-people' && c.body?.retriever ? esError(503, 'injected') : undefined);
+    const { result, lines } = await quietly(() => sightings(asker));
+    assert.equal(result.status, 502);
+    assert.ok(!lines.some((l) => l.includes('Semantic matching paused')));
+  });
+
+  test('sightings: an inference failure answers with keyword legs instead of 502', async () => {
+    skipPause();
+    const { asker } = await twoAround();
+    fake.inject = (c) => (c.index === 'caddie-people' && semanticBody(c.body) ? esError(500, 'status_exception', 'inference unavailable') : undefined);
+    const { result } = await quietly(() => sightings(asker));
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.nearby.map((p) => p.display_name), ['Other']);
+    const searches = fake.peopleSearches();
+    assert.ok(searches.length === 2 && semanticBody(searches[0].body) && !semanticBody(searches[1].body), 'semantic, then keyword-only');
+  });
+
+  test('nudge: an inference failure still nudges, with keyword legs', async () => {
+    skipPause();
+    const { asker } = await twoAround();
+    fake.inject = (c) => (c.index === 'caddie-people' && semanticBody(c.body) ? esError(500, 'status_exception', 'inference unavailable') : undefined);
+    const me = { ...fake.doc('caddie-people', `${EVENT}:${asker.profileId}`), expertise: 'eBPF tracing' };
+    await quietly(() => nudgeAfterPresence(me, { slug: EVENT, timeZone: 'UTC', visibleUntil: FUTURE }));
+    assert.ok(fake.pushes.length >= 1, 'a push was sent');
+    assert.ok(fake.pushes.every((p) => /^Someone who's worked on .+ is in Hall A right now$/.test(p.payload.body)), JSON.stringify(fake.pushes));
+    const searches = fake.peopleSearches();
+    assert.ok(searches.length === 2 && semanticBody(searches[0].body) && !semanticBody(searches[1].body), 'semantic, then keyword-only');
   });
 });
