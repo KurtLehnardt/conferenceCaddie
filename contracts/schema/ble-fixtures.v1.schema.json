@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/ble-fixtures.v1.schema.json",
+  "title": "Bluetooth derived tokens v1: golden vector files",
+  "description": "The shape of contracts/fixtures/ble/golden-vectors.v1.json (GoldenVectors) and contracts/fixtures/ble/resolution-cases.v1.json (ResolutionCases), so every implementation's test harness can read them the same way. The protocol itself is in docs/contracts/ble-tokens.md.",
+  "oneOf": [{ "$ref": "#/$defs/GoldenVectors" }, { "$ref": "#/$defs/ResolutionCases" }],
+  "$defs": {
+    "Hex16": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "Hex32": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "Uint64": { "description": "An unsigned 64-bit integer as a decimal string.", "type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$" },
+    "Token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+    "Key": { "type": "object", "required": ["hex", "base64url"], "properties": { "hex": { "$ref": "#/$defs/Hex32" }, "base64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" } } },
+    "GoldenVectors": {
+      "type": "object",
+      "required": ["protocol", "description", "constants", "cross_check", "windows", "keys", "tokens", "key_derivation"],
+      "properties": {
+        "protocol": { "const": "caddie-ble-v1" },
+        "description": { "type": "string" },
+        "constants": {
+          "type": "object",
+          "required": ["token_label", "token_label_hex", "key_label", "key_label_hex", "window_s", "accept_offsets", "key_bytes", "nonce_bytes", "token_bytes", "service_uuid", "token_characteristic_uuid", "payload_format_v1"],
+          "properties": {
+            "token_label": { "const": "caddie-ble-v1" },
+            "token_label_hex": { "const": "6361646469652d626c652d7631" },
+            "key_label": { "const": "caddie-ble-key-v1" },
+            "key_label_hex": { "const": "6361646469652d626c652d6b65792d7631" },
+            "window_s": { "const": 600 },
+            "accept_offsets": { "const": [-1, 0, 1] },
+            "key_bytes": { "const": 32 },
+            "nonce_bytes": { "const": 16 },
+            "token_bytes": { "const": 16 },
+            "service_uuid": { "const": "e52c391c-b926-4856-9a38-d46c3c10c733" },
+            "token_characteristic_uuid": { "const": "944ddf9a-6eea-4583-978f-9da68fc3f562" },
+            "payload_format_v1": { "const": 1 }
+          }
+        },
+        "cross_check": {
+          "type": "object",
+          "required": ["tool", "command", "checked_on"],
+          "properties": { "tool": { "type": "string" }, "command": { "type": "string" }, "checked_on": { "type": "string", "format": "date" } }
+        },
+        "windows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["unix_seconds", "w", "note"],
+            "properties": { "unix_seconds": { "$ref": "#/$defs/Uint64" }, "w": { "$ref": "#/$defs/Uint64" }, "note": { "type": "string" } }
+          }
+        },
+        "keys": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/Key" } },
+        "tokens": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["key", "w", "message_hex", "hmac_sha256_hex", "token_hex", "token_base64url", "payload_hex"],
+            "properties": {
+              "key": { "type": "string" },
+              "w": { "$ref": "#/$defs/Uint64" },
+              "message_hex": { "type": "string", "pattern": "^6361646469652d626c652d7631[0-9a-f]{16}$" },
+              "hmac_sha256_hex": { "$ref": "#/$defs/Hex32" },
+              "token_hex": { "$ref": "#/$defs/Hex16" },
+              "token_base64url": { "$ref": "#/$defs/Token" },
+              "payload_hex": { "type": "string", "pattern": "^01[0-9a-f]{32}$" }
+            }
+          }
+        },
+        "key_derivation": {
+          "type": "object",
+          "required": ["master_secret", "cases"],
+          "properties": {
+            "master_secret": { "$ref": "#/$defs/Key" },
+            "cases": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["profile_id", "presence_nonce_hex", "presence_nonce_base64url", "key_message_hex", "ble_key_hex", "ble_key_base64url", "tokens"],
+                "properties": {
+                  "profile_id": { "type": "string", "minLength": 1 },
+                  "presence_nonce_hex": { "$ref": "#/$defs/Hex16" },
+                  "presence_nonce_base64url": { "$ref": "#/$defs/Token" },
+                  "key_message_hex": { "type": "string", "pattern": "^6361646469652d626c652d6b65792d7631([0-9a-f]{2})+$" },
+                  "ble_key_hex": { "$ref": "#/$defs/Hex32" },
+                  "ble_key_base64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+                  "tokens": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": ["w", "hmac_sha256_hex", "token_hex", "token_base64url"],
+                      "properties": {
+                        "w": { "$ref": "#/$defs/Uint64" },
+                        "hmac_sha256_hex": { "$ref": "#/$defs/Hex32" },
+                        "token_hex": { "$ref": "#/$defs/Hex16" },
+                        "token_base64url": { "$ref": "#/$defs/Token" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ResolutionCases": {
+      "type": "object",
+      "required": ["description", "near_rssi", "window_s", "master_secret_hex", "people", "cases"],
+      "properties": {
+        "description": { "type": "string" },
+        "near_rssi": { "type": "integer" },
+        "window_s": { "const": 600 },
+        "master_secret_hex": { "$ref": "#/$defs/Hex32" },
+        "people": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["profile_id", "nonce"],
+            "properties": { "profile_id": { "type": "string" }, "nonce": { "$ref": "#/$defs/Token" } }
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "server_unix_seconds", "sightings", "expected"],
+            "properties": {
+              "name": { "type": "string" },
+              "server_unix_seconds": { "$ref": "#/$defs/Uint64" },
+              "reporter": { "type": "string" },
+              "sightings": { "$ref": "people-api.v1.schema.json#/$defs/SightingsRequest/properties/sightings" },
+              "expected": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["profile_id", "rssi"],
+                  "properties": { "profile_id": { "type": "string" }, "rssi": { "type": "integer" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

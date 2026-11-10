@@ -1,0 +1,190 @@
+{
+  "description": "Server-side resolution of sightings reports under derived-v1, with the master secret and the two people of golden-vectors.v1.json key_derivation. near_rssi is -75. The server derives every live key from (master, profile_id, presence_nonce), builds the token table for windows w - 1, w and w + 1 of its own clock, keeps the strongest RSSI per token, drops those under near_rssi and the reporter, and answers strongest first.",
+  "near_rssi": -75,
+  "window_s": 600,
+  "master_secret_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+  "people": [
+    {
+      "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+      "nonce": "8PHy8_T19vf4-fr7_P3-_w"
+    },
+    {
+      "profile_id": "_____________________w",
+      "nonce": "AAECAwQFBgcICQoLDA0ODw"
+    }
+  ],
+  "cases": [
+    {
+      "name": "current window resolves",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -60
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -60
+        }
+      ]
+    },
+    {
+      "name": "previous window resolves (late report or slow advertiser clock)",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "p56T4ZNatlOM6xvdhLbvlg",
+          "rssi": -70
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "_____________________w",
+          "rssi": -70
+        }
+      ]
+    },
+    {
+      "name": "next window resolves (fast advertiser clock)",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "70PcspH3xzi41cwcGyx-5g",
+          "rssi": -65
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -65
+        }
+      ]
+    },
+    {
+      "name": "two windows back does not resolve",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "kq5X_jcWuo_H6KZsYEKXmw",
+          "rssi": -50
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "two windows ahead does not resolve",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "gCQKhg1jKhapAGcVuzp9tQ",
+          "rssi": -50
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "weaker than near_rssi is dropped before resolving",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -80
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "strongest sighting per token counts",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -80
+        },
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -72
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -72
+        }
+      ]
+    },
+    {
+      "name": "unknown token resolves to nobody",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "AAAAAAAAAAAAAAAAAAAAAA",
+          "rssi": -40
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "a key from an old nonce no longer resolves",
+      "server_unix_seconds": "1794312300",
+      "sightings": [
+        {
+          "token": "__K81XT3xUp3Po3Wx0ejpQ",
+          "rssi": -55
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "both people, strongest first, the reporter left out",
+      "server_unix_seconds": "1794312300",
+      "reporter": "_____________________w",
+      "sightings": [
+        {
+          "token": "ZJ-4knqe0iX_uxLpbZJ1nQ",
+          "rssi": -40
+        },
+        {
+          "token": "VqOlyrpkFVyNjTcqh58ZBQ",
+          "rssi": -74
+        },
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -66
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -66
+        }
+      ]
+    },
+    {
+      "name": "at the window boundary the server accepts the old and the new token",
+      "server_unix_seconds": "1794312600",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -60
+        },
+        {
+          "token": "zEh80vz2Qc19IkeaTg7DhA",
+          "rssi": -61
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -60
+        },
+        {
+          "profile_id": "_____________________w",
+          "rssi": -61
+        }
+      ]
+    }
+  ]
+}
