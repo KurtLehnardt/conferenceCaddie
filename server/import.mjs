@@ -1,8 +1,10 @@
 // POST /api/import/schedule: finds one conference's talks in a personal schedule that an attendee
 // exported from anywhere, so the app can offer to mark them as Interested on the device.
 //
-// Body: { event, filename?, mime?, content_base64 } for a file, or { event, text } for pasted
-// text. Unknown keys get 400. A file may hold at most 5 MB once decoded; a larger body gets 413.
+// Body: { event, filename?, mime?, content_base64 } for a file, or { event, text, filename?, mime? }
+// for pasted or browser-extracted text, as the Worker accepts it. With text, filename and mime are
+// format hints only: they help choose CSV, TSV, iCalendar or plain text and never cause anything to
+// be fetched or decoded. Unknown keys get 400, and so do both or neither of content_base64 and text. A file may hold at most 5 MB once decoded; a larger body gets 413.
 // Response: { matched: [ { talk, confidence, matched_text_excerpt } ], unmatched_count,
 // extracted_chars }. talk has the search result shape; matched_text_excerpt is a short piece of
 // the requester's own file and goes back only to them.
@@ -132,7 +134,7 @@ async function validate(body) {
   const hasFile = body.content_base64 !== undefined;
   const hasText = body.text !== undefined;
   if (hasFile === hasText) throw new BadRequest('Send either content_base64 or text');
-  if (hasText && (body.filename !== undefined || body.mime !== undefined)) throw new BadRequest('filename and mime go with content_base64 only');
+  // With text, filename and mime are hints about its format and nothing more, as in the Worker.
   if (body.filename !== undefined && (typeof body.filename !== 'string' || body.filename.length > 255)) throw new BadRequest('filename must be a string of at most 255 characters');
   if (body.mime !== undefined && (typeof body.mime !== 'string' || body.mime.length > 127)) throw new BadRequest('mime must be a string of at most 127 characters');
 

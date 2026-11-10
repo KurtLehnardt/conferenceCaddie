@@ -273,3 +273,68 @@ describe('the bounds keep the results of ordinary files', () => {
     assert.deepEqual(titlesOf(r.body), ['Rust Operators for Kubernetes']);
   });
 });
+
+describe('pasted text with filename and mime hints, as the Worker accepts it', () => {
+  const csvText = 'Session,Speaker\nInside the Kubernetes Scheduler,Xavier Dupont\nRust Operators for Kubernetes,Arjun Mehta\n';
+  const two = ['Inside the Kubernetes Scheduler', 'Rust Operators for Kubernetes'];
+
+  test('text with a .csv hint reads as CSV', async () => {
+    const r = await importSchedule({ text: csvText, filename: 'my.csv', mime: 'text/csv' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(titlesOf(r.body), two);
+  });
+
+  test('text with a .tsv hint reads as tab separated, even when commas outnumber tabs in the header', async () => {
+    const text = 'Session, title\tSpeaker, name, role\nInside the Kubernetes Scheduler\tXavier Dupont\nRust Operators for Kubernetes\tArjun Mehta\n';
+    const r = await importSchedule({ text, filename: 'my.tsv' });
+    assert.equal(r.status, 200);
+    assert.ok(titlesOf(r.body).includes('Rust Operators for Kubernetes'));
+  });
+
+  test('text with an ics hint and an iCalendar body reads as iCalendar', async () => {
+    const r = await importSchedule({ text: ics('SUMMARY:Inside the Kubernetes Scheduler', 'DTSTART:20991111T220000Z'), filename: 'cal.ics', mime: 'text/calendar' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(titlesOf(r.body), [TALKS[0].title]);
+  });
+
+  test('text without hints behaves as before', async () => {
+    const r = await importSchedule({ text: 'My picks\nInside the Kubernetes Scheduler\nRust Operators for Kubernetes\n' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(titlesOf(r.body), two);
+  });
+
+  test('the browser-extracted PDF shape { filename, mime: text/plain, text } is plain text', async () => {
+    const r = await importSchedule({ text: 'Inside the Kubernetes Scheduler\nRust Operators for Kubernetes\n', filename: 'schedule.pdf', mime: 'text/plain' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(titlesOf(r.body), two);
+  });
+
+  test('an unexpected mime falls back to content detection', async () => {
+    const r = await importSchedule({ text: 'Inside the Kubernetes Scheduler\nRust Operators for Kubernetes\n', filename: 'x.bin', mime: 'application/octet-stream' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(titlesOf(r.body), two);
+  });
+
+  test('hints are validated: a non-string or an overlong value gets 400', async () => {
+    const t = 'Inside the Kubernetes Scheduler';
+    assert.equal((await importSchedule({ text: t, filename: 5 })).status, 400);
+    assert.equal((await importSchedule({ text: t, filename: 'a'.repeat(256) })).status, 400);
+    assert.equal((await importSchedule({ text: t, mime: 'a'.repeat(128) })).status, 400);
+  });
+
+  test('unknown keys are still rejected, with or without hints', async () => {
+    assert.equal((await importSchedule({ text: 'Inside the Kubernetes Scheduler', filename: 'a.csv', store: true })).status, 400);
+  });
+
+  test('text together with content_base64 is rejected, as in the Worker', async () => {
+    const r = await importSchedule({ text: 'Inside the Kubernetes Scheduler', filename: 'a.txt', content_base64: Buffer.from('x').toString('base64') });
+    assert.equal(r.status, 400);
+  });
+
+  test('size limits still apply with hints', async () => {
+    const long = await importSchedule({ text: 'a'.repeat(200001), filename: 'a.csv', mime: 'text/csv' });
+    assert.equal(long.status, 413);
+    const empty = await importSchedule({ text: '   ', filename: 'a.csv' });
+    assert.equal(empty.status, 422);
+  });
+});
