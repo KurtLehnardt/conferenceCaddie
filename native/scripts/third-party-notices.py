@@ -54,6 +54,7 @@ LICENCES_BY_ID = {
     "expat": ("Expat (MIT)", "expat.txt"),
     "wuffs": ("Wuffs (MIT or Apache License 2.0)", "wuffs.txt"),
     "dng-sdk": ("Adobe DNG SDK", "dng-sdk.txt"),
+    "slf4j": ("SLF4J API (MIT)", "slf4j.txt"),
 }
 
 # Module group -> licence id. A pattern ending in ".*" matches that group and every group below it;
@@ -62,6 +63,9 @@ LICENCES_BY_ID = {
 LICENCE_TABLE = [
     ("androidx.*", "apache-2.0"),
     ("com.google.guava", "apache-2.0"),
+    ("com.squareup.okhttp3", "apache-2.0"),
+    ("com.squareup.okio", "apache-2.0"),
+    ("io.ktor", "apache-2.0"),
     ("org.jetbrains", "apache-2.0"),
     ("org.jetbrains.androidx.*", "apache-2.0"),
     ("org.jetbrains.compose.*", "apache-2.0"),
@@ -69,6 +73,8 @@ LICENCE_TABLE = [
     ("org.jetbrains.kotlinx", "apache-2.0"),
     ("org.jetbrains.skiko", "apache-2.0"),
     ("org.jspecify", "apache-2.0"),
+    # Ktor's logging facade; the POM names no licence, the jar carries the MIT text (licenses/slf4j.txt).
+    ("org.slf4j", "slf4j"),
 ]
 
 # What Skiko bundles into the iOS binary: (name, licence id). Skia's bundled skcms is under Skia's licence.
