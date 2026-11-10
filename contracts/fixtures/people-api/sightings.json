@@ -84,7 +84,7 @@
       }
     },
     {
-      "name": "derived-v1: the session was replaced or its master retired, so the device must get a new key",
+      "name": "derived-v1: the session was issued under a retired master, so the device must get a new key",
       "request": {
         "headers": {
           "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
@@ -97,7 +97,7 @@
       "response": {
         "status": 403,
         "body": {
-          "error": "ble_required"
+          "error": "ble_rekey"
         }
       }
     }

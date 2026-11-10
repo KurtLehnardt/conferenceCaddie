@@ -86,7 +86,7 @@
           "maximum": -30
         },
         "colocation_required": {
-          "description": "derived-v1: a sighted person resolves only when they share the requester's presence zone or ~100 m cell (docs/contracts/ble-tokens.md, Phase 4 mitigations). Default true; an operator may turn it off for a single-room event.",
+          "description": "derived-v1: a sighted person resolves only when they share the requester's presence zone, or the same or a neighbouring ~100 m cell (docs/contracts/ble-tokens.md, Phase 4 mitigations). Default true; an operator may turn it off for a single-room event.",
           "type": "boolean"
         },
         "window_s": {

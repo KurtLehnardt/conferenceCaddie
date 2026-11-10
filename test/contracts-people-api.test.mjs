@@ -88,6 +88,16 @@ test('the derived-v1 presence response carries ble_key; the legacy one carries b
   const presence = fixtures.get('presence.put').examples;
   assert.ok(presence.some((e) => typeof e.response.body.ble_key === 'string' && !e.response.body.ble));
   assert.ok(presence.some((e) => e.response.body.ble && !e.response.body.ble_key));
+  // The derived-v1 variants require the key and its id.
+  const derivedPresence = validator('people-api.v1', 'PresencePutResponseDerived');
+  for (const e of presence.filter((x) => x.response.status === 200)) {
+    assert.equal(derivedPresence(e.response.body, { closed: true }).valid, typeof e.response.body.ble_key === 'string', e.name);
+  }
+  const derivedSightings = validator('people-api.v1', 'SightingsResponseDerived');
+  const sightings = fixtures.get('sightings').examples.filter((x) => x.response.status === 200);
+  assert.ok(sightings.some((e) => derivedSightings(e.response.body, { closed: true }).valid));
+  assert.ok(sightings.some((e) => !derivedSightings(e.response.body).valid), 'a server-rotate answer has no key id');
+  assert.equal(validator('people-api.v1', 'Person')({ ...fixtures.get('matches').examples[0].response.body.results[0], contact: { linkedin_url: 'https://evil.example/in/x', contact_note: null } }).valid, false);
   const action = validator('people-api.v1', 'MeetActionResponse');
   const read = fixtures.get('meet.get').examples.find((e) => e.response.status === 200).response.body;
   assert.equal(typeof read.other.distance_m, 'number');

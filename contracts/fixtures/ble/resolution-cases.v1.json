@@ -1,5 +1,5 @@
 {
-  "description": "Server-side resolution of sightings reports under derived-v1 (docs/contracts/ble-tokens.md, Resolution). masters is the keyring, master id -> secret (hex); people is the store at request time, one stored session each (presence_nonce base64url, the id of the master that issued it, presence_until, zone and ~100 m cell). For each case: drop the masters in retired_masters, build the token table from table_people (a stale cached table) or else people, apply current_overrides to the store, then resolve with near_rssi, the requester, the co-location rule (on unless colocation_required is false) and the server clock. The keys of the first two people are the key_derivation cases of golden-vectors.v1.json.",
+  "description": "Server-side resolution of sightings reports under derived-v1 (docs/contracts/ble-tokens.md, Resolution). masters is the keyring, master id -> secret (hex); people is the store at request time, one stored session each (presence_nonce base64url, the id of the master that issued it, presence_until, zone and the centre of its ~100 m cell; co-location accepts the same cell or one of its eight neighbours). For each case: drop the masters in retired_masters, build the token table from table_people (a stale cached table) or else people, apply current_overrides to the store, then resolve with near_rssi, the requester, the co-location rule (on unless colocation_required is false) and the server clock. The keys of the first two people are the key_derivation cases of golden-vectors.v1.json.",
   "near_rssi": -75,
   "window_s": 600,
   "masters": {
@@ -58,6 +58,28 @@
       "zone": "Hall A",
       "cell": {
         "lat": 40.76752,
+        "lon": -111.89036
+      }
+    },
+    {
+      "profile_id": "ICEiIyQlJicoKSorLC0uLw",
+      "presence_nonce": "VVVVVVVVVVVVVVVVVVVVVQ",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hallway",
+      "cell": {
+        "lat": 40.76852,
+        "lon": -111.89036
+      }
+    },
+    {
+      "profile_id": "MDEyMzQ1Njc4OTo7PD0-Pw",
+      "presence_nonce": "ZmZmZmZmZmZmZmZmZmZmZg",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hallway",
+      "cell": {
+        "lat": 40.76952,
         "lon": -111.89036
       }
     }
@@ -318,6 +340,33 @@
           "rssi": -61
         }
       ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "a neighbouring ~100 m cell counts as co-located (position jitter)",
+      "sightings": [
+        {
+          "token": "45d_AgRD2LW59ivGdK6lyQ",
+          "rssi": -58
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "ICEiIyQlJicoKSorLC0uLw",
+          "rssi": -58
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "two cells away is not co-located",
+      "sightings": [
+        {
+          "token": "JIc6IjmLfXiYVJUH-bNMiQ",
+          "rssi": -58
+        }
+      ],
+      "expected": []
     }
   ]
 }
