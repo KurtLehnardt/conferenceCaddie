@@ -12,8 +12,11 @@
 //   <kind> is profile, spot or meet; <id> is the person's ref (16 hex characters) for a profile or
 //   a spot and the meet id for a meet, as --hidden and --since print them.
 //
-// Env: ES_URL; ELASTISEARCH_API_KEY (the admin key, the only key that can read the conference for
-//      --purge) or ES_PEOPLE_API_KEY for the other actions; ES_PEOPLE_INDEX (default caddie-people),
+// Env: ES_URL; ELASTISEARCH_API_KEY (the admin key). --unhide and --purge require it as an operator-only
+//      policy, and the people key cannot do them anyway: they delete
+//      reports with _delete_by_query?refresh=true, which the people key cannot refresh, and
+//      --purge also reads the conference. --hidden, --since and --delete also run with
+//      ES_PEOPLE_API_KEY alone; ES_PEOPLE_INDEX (default caddie-people),
 //      ES_PEOPLE_MEETS_INDEX (default caddie-people-meets), ES_PEOPLE_REPORTS_INDEX (default
 //      caddie-people-reports), ES_CONFERENCES_INDEX (default caddie-conferences).
 //
@@ -33,10 +36,6 @@ const REF_RE = /^[0-9a-f]{16}$/;
 const MEET_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const KINDS = ['profile', 'spot', 'meet'];
 
-if (!API_KEY) {
-  console.error('Set ELASTISEARCH_API_KEY or ES_PEOPLE_API_KEY.');
-  process.exit(1);
-}
 
 const usage = (message) => {
   if (message) console.error(message);
@@ -73,6 +72,17 @@ if (flag('--purge')) actions.push(['purge']);
 if (args.length) usage(`Unknown argument: ${args[0]}`);
 if (actions.length !== 1) usage('Give exactly one action.');
 const [action, arg] = actions[0];
+// Operator policy: --unhide and --purge delete reports with _delete_by_query?refresh=true, so they
+// take the admin key only (API_KEY is the admin key whenever it is set) and refuse the people key.
+// The action-specific check comes before the generic one so its message is the one an operator sees.
+if ((action === 'unhide' || action === 'purge') && !process.env.ELASTISEARCH_API_KEY) {
+  console.error(`--${action} needs ELASTISEARCH_API_KEY (the admin key); ES_PEOPLE_API_KEY is not accepted for it.`);
+  process.exit(1);
+}
+if (!API_KEY) {
+  console.error('Set ELASTISEARCH_API_KEY or ES_PEOPLE_API_KEY.');
+  process.exit(1);
+}
 
 // --unhide and --delete name a target as kind:id.
 function parseTarget(value) {

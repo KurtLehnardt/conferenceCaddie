@@ -79,7 +79,7 @@ Both are samples. Both appear in the app with the "Sample" badge and a name that
 
 The shared talk is on Thursday 12 November, 15:30 to 16:00 (Mountain time), in 255 BC at the Salt Palace, so it has not ended at demo time. It spans the topics of both profiles (platform and security) and suits the story. If you demo after it has ended, choose another talk that ends on 12 November and re-seed with `--talk "<title>"`.
 
-The demo profiles expire at the end of the conference (the app removes them after 12 November). To re-seed them, which first deletes the earlier profiles with the label `demo` for that event and touches no other sample, run this from the repository root with the admin key in `ELASTISEARCH_API_KEY` (or the people key in `ES_PEOPLE_API_KEY` and the read key in `ES_API_KEY`):
+The demo profiles expire at the end of the conference (the app removes them after 12 November). To re-seed them, which first deletes the earlier profiles with the label `demo` for that event and touches no other sample, run this from the repository root with the admin key in `ELASTISEARCH_API_KEY` (required: the cleanup of the earlier samples deletes by query, which the people key cannot do; `ES_PEOPLE_API_KEY` and `ES_API_KEY`, when set, are still used to write and read):
 
 ```
 node scripts/seed-people.mjs --event kubecon-cloudnativecon-north-america-2026 --file data/samples/demo-people.json --label demo
