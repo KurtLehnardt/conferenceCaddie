@@ -1,12 +1,19 @@
 // Creates the versioned people indices with their mappings and points the aliases at them.
 //
 // Usage: node scripts/es-setup-people.mjs [index] [--recreate] [--alias name] [--lexical-only]
-// Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.
+//                                         [--inference-id id]
+// Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY,
+//        ES_INFERENCE_ID (default inference endpoint for the semantic_text fields).
 //
-// The people index defaults to caddie-people-v1 and its alias to caddie-people. Pass --alias ""
+// The people index defaults to caddie-people-v2 and its alias to caddie-people. Pass --alias ""
 // to skip the alias steps, for example for a development index. --lexical-only leaves out the
 // three semantic_text fields, so nothing is embedded; matching then fails on the semantic
 // retrievers, so use it only for tests that never send free text.
+//
+// The three semantic_text fields use the inference endpoint caddie-e5-small, the multilingual E5
+// small model deployed on the cluster's own ML node (see DECISIONS.md). --inference-id <id> or
+// ES_INFERENCE_ID picks another endpoint, and --inference-id "" leaves inference_id out so the
+// fields use the cluster's default endpoint. The setting applies only when the index is created.
 //
 // Every step is idempotent, so the command can be re-run after a release that adds fields:
 // - A people index that already exists is kept, and only the fields that Find & connect added
@@ -15,8 +22,8 @@
 //   semantic_text fields, so nothing is re-embedded. --recreate deletes and recreates it instead.
 // - The blocks index (caddie-people-blocks-v1 behind caddie-people-blocks) and the meets index
 //   (caddie-people-meets-v1 behind caddie-people-meets) are created when missing. With a custom
-//   people index name the two take the same suffix after "caddie-people"; with --alias "" they
-//   get no alias.
+//   people index name the two take the same suffix after "caddie-people" (the default
+//   caddie-people-v2 keeps them at v1); with --alias "" they get no alias.
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -42,7 +49,10 @@ const flag = (name) => {
 const recreate = flag('--recreate');
 const lexicalOnly = flag('--lexical-only');
 const aliasArg = opt('--alias');
-const index = args[0] || 'caddie-people-v1';
+const inferenceIdArg = opt('--inference-id');
+const inferenceId = inferenceIdArg !== undefined ? inferenceIdArg : process.env.ES_INFERENCE_ID ?? 'caddie-e5-small';
+const DEFAULT_INDEX = 'caddie-people-v2';
+const index = args[0] || DEFAULT_INDEX;
 const alias = aliasArg !== undefined ? aliasArg : 'caddie-people';
 
 if (!index.startsWith('caddie-') || (alias && !alias.startsWith('caddie-'))) {
@@ -50,8 +60,11 @@ if (!index.startsWith('caddie-') || (alias && !alias.startsWith('caddie-'))) {
   process.exit(1);
 }
 
-// caddie-people-v1 gives caddie-people-blocks-v1; caddie-dev-x gives caddie-dev-x-blocks.
-const sibling = (kind) => (index.startsWith('caddie-people') ? `caddie-people-${kind}${index.slice('caddie-people'.length)}` : `${index}-${kind}`);
+// caddie-people-v3 gives caddie-people-blocks-v3; caddie-dev-x gives caddie-dev-x-blocks. The
+// default people index is the exception: it moved to v2 when its semantic_text fields moved to
+// caddie-e5-small, while the sibling indices have no semantic_text field and stayed at v1.
+const siblingSuffix = index === DEFAULT_INDEX ? '-v1' : index.slice('caddie-people'.length);
+const sibling = (kind) => (index.startsWith('caddie-people') ? `caddie-people-${kind}${siblingSuffix}` : `${index}-${kind}`);
 const siblingAlias = (kind) => (alias ? `${alias}-${kind}` : '');
 
 async function es(method, path, body) {
@@ -115,9 +128,10 @@ const properties = {
   ...connectProperties,
 };
 if (!lexicalOnly) {
-  properties.about_semantic = { type: 'semantic_text' };
-  properties.interests_semantic = { type: 'semantic_text' };
-  properties.expertise_semantic = { type: 'semantic_text' };
+  const semantic = () => (inferenceId ? { type: 'semantic_text', inference_id: inferenceId } : { type: 'semantic_text' });
+  properties.about_semantic = semantic();
+  properties.interests_semantic = semantic();
+  properties.expertise_semantic = semantic();
 }
 
 const blocksProperties = {
