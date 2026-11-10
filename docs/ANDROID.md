@@ -24,6 +24,7 @@ What is where:
 | Offline shell (service worker) | yes | not registered; the pages come from the bundle, the saved schedule still works through Cache Storage |
 | Find people near me by Bluetooth | no row shown | yes, Android 8.0+ with Bluetooth 5 extended advertising; the row is hidden on a phone without Bluetooth LE and the switch explains itself when the chip cannot send the code |
 | Local "right near you" notification | no | yes, one per person per day |
+| System Back | the browser's Back | walks back through the app's screens (each is a hash route, so a WebView history entry); on the first screen it sends the app to the background instead of closing it, so a Bluetooth session keeps running (`MainActivity.kt`) |
 
 ## Build
 
