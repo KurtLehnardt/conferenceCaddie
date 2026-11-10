@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
@@ -16,8 +17,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
@@ -118,17 +120,17 @@ class ShellUiTest {
         onNodeWithTag("settings-screen").assertExists()
 
         // Refused addresses explain themselves and ask nothing.
-        onNodeWithTag("server-url").performTextReplacement("not a url")
-        onNodeWithTag("server-save").performClick()
+        typeServer("not a url")
+        saveServer()
         onNodeWithText(Strings.Settings.URL_NOT_A_URL).assertExists()
-        onNodeWithTag("server-url").performTextReplacement("http://caddie.example.net")
-        onNodeWithTag("server-save").performClick()
+        typeServer("http://caddie.example.net")
+        saveServer()
         onNodeWithText(Strings.Settings.URL_HTTPS).assertExists()
         onNodeWithTag("connect-confirmation").assertDoesNotExist()
 
         // A good address is normalised and named exactly in the confirmation; Cancel changes nothing.
-        onNodeWithTag("server-url").performTextReplacement("https://Caddie.Example.net:443/demo/")
-        onNodeWithTag("server-save").performClick()
+        typeServer("https://Caddie.Example.net:443/demo/")
+        saveServer()
         onNodeWithTag("connect-prompt").assertExists()
         onNodeWithText(Strings.Connect.prompt("https://caddie.example.net/demo")).assertIsDisplayed()
         onNodeWithText(Strings.Connect.NOT_OFFICIAL).assertExists()
@@ -137,7 +139,7 @@ class ShellUiTest {
         assertNull(changed)
 
         // Saving again and confirming switches.
-        onNodeWithTag("server-save").performClick()
+        saveServer()
         onNodeWithText(Strings.Connect.SWITCH).performClick()
         waitForIdle()
         assertEquals("https://caddie.example.net/demo", changed)
@@ -203,8 +205,8 @@ class ShellUiTest {
         }
 
         onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
-        onNodeWithTag("server-url").performTextReplacement("https://caddie.example.net")
-        onNodeWithTag("server-save").performClick()
+        typeServer("https://caddie.example.net")
+        saveServer()
         onNodeWithText(Strings.Connect.prompt("https://caddie.example.net")).assertIsDisplayed()
 
         // A link arrives while the typed server's question is open: the question stays as it is.
@@ -337,8 +339,10 @@ class ShellUiTest {
 
         // The web's layout from 768 px: the tabs on a rail at the left, in the same order.
         onNodeWithTag("nav-rail").assertIsDisplayed()
+        // The window is scaled down to fit the test device's screen, so a pixel can be several dp.
+        val slack = (3f / onNodeWithTag("nav-rail").fetchSemanticsNode().layoutInfo.density.density).dp
         val rail = onNodeWithTag("nav-rail").getUnclippedBoundsInRoot()
-        assertAbout(88.dp, rail.right - rail.left)
+        assertAbout(88.dp, rail.right - rail.left, slack)
         val people = onNodeWithTag("tab-People").getUnclippedBoundsInRoot()
         val interested = onNodeWithTag("tab-Interested").getUnclippedBoundsInRoot()
         assertTrue(people.top < interested.top, "the rail's tabs are not stacked in order")
@@ -346,8 +350,8 @@ class ShellUiTest {
         // The content stays within 720 dp, centred in the space right of the rail.
         onNodeWithTag("tab-Search").performClick()
         val body = onNodeWithTag("tab-body-Search").getUnclippedBoundsInRoot()
-        assertAbout(720.dp, body.right - body.left)
-        assertAbout((1024.dp - 88.dp - 720.dp) / 2, body.left - rail.right)
+        assertAbout(720.dp, body.right - body.left, slack)
+        assertAbout((1024.dp - 88.dp - 720.dp) / 2, body.left - rail.right, slack)
 
         onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
         onNodeWithTag("settings-screen").assertIsDisplayed()
@@ -370,7 +374,16 @@ class ShellUiTest {
         onNodeWithContentDescription(Strings.AppBar.BACK).assertIsDisplayed()
     }
 
-    // Sizes measured through a forced window size go through pixels, so allow a fraction of a dp.
-    private fun assertAbout(expected: Dp, actual: Dp) =
-        assertTrue(actual in (expected - 1.dp)..(expected + 1.dp), "expected about $expected, got $actual")
+    // Sizes measured in a scaled-down window go through whole pixels, so allow [slack] either way.
+    private fun assertAbout(expected: Dp, actual: Dp, slack: Dp) =
+        assertTrue(actual in (expected - slack)..(expected + slack), "expected about $expected, got $actual")
+
+    // Puts [text] in the Server URL field as typing would, without focusing it: a focused field
+    // brings up the software keyboard on an emulator, which covers the screen of a small device
+    // while it animates and makes the test depend on the keyboard. The keyboard itself is checked on
+    // devices (see the pull request's screenshots).
+    private fun ComposeUiTest.typeServer(text: String) =
+        onNodeWithTag("server-url").performSemanticsAction(SemanticsActions.SetText) { it(AnnotatedString(text)) }
+
+    private fun ComposeUiTest.saveServer() = onNodeWithTag("server-save").performScrollTo().performClick()
 }
