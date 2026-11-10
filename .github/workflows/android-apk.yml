@@ -1,0 +1,71 @@
+# Builds the Android companion's debug APK and keeps it as a workflow artifact (visible to the
+# repository's collaborators under the Actions tab) for sideloading. This is the project's
+# Android build tool, not a test suite: the Kotlin plugin cannot be compiled without the SDK.
+name: Android APK
+
+on:
+  push:
+    branches: ['android/**']
+    paths:
+      - 'web/**'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The API origin the native app talks to. The bundled web app is the same as the PWA.
+      VITE_API_ORIGIN: https://conference-caddie-265846417372.us-west1.run.app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0 platform-tools'
+
+      - name: Build the web app and sync it into the Android project
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+
+      - name: Assemble the debug APK
+        working-directory: web/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Name the APK after the commit
+        id: apk
+        run: |
+          short=$(git rev-parse --short HEAD)
+          out="conference-caddie-${short}-debug.apk"
+          cp web/android/app/build/outputs/apk/debug/app-debug.apk "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.file }}
+          path: ${{ steps.apk.outputs.file }}
+          retention-days: 14

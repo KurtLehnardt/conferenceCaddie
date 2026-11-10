@@ -1,0 +1,66 @@
+/* Import from GitHub, inside the About you card. Uses only the shell's custom properties. */
+
+.pp-gh {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pp-gh .pp-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pp-gh-form {
+  margin: 0;
+}
+
+.pp-gh-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pp-gh-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pp-gh-row .btn {
+  flex: none;
+  min-height: 44px;
+}
+
+.pp-gh-preview {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.pp-gh-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pp-gh-title {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.pp-gh-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.pp-gh-extra {
+  overflow-wrap: anywhere;
+}

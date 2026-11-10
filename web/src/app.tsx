@@ -41,6 +41,8 @@ import {
   ForYouScreen,
   InboxScreen,
   MeetScreen,
+  NudgeSetting,
+  NudgeSettings,
   PeopleIMet,
   PeopleIWatch,
   PeopleScreen,
@@ -132,6 +134,8 @@ export function App() {
   const online = useOnline();
 
   const { slug, tab, param, params } = route;
+  // A push nudge opens #/people?around=1: the People tab with "Around now" on.
+  const aroundNow = route.query.get('around') === '1';
   const searchView = params.view === 'schedule' ? 'schedule' : 'search';
   // The view and day last shown on each tab of this conference, so the tab bar returns to them.
   const tabViews = useRef<{ slug: string | null; views: Partial<Record<Tab, TabParams>> }>({ slug: null, views: {} });
@@ -584,7 +588,7 @@ export function App() {
                 setToast(null);
                 setImportOpen(true);
               }}
-              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /></> : null}
+              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /><NudgeSetting conference={searchable} /><NudgeSettings conference={searchable} /></> : null}
             />
           ) : !searchable ? (
             blocker()
@@ -604,6 +608,7 @@ export function App() {
                   onOpenTalk={onOpenTalk}
                   hereZone={tab === 'here' ? param : null}
                   onHereHandled={hereHandled}
+                  aroundNow={aroundNow}
                 />
               )}
               {online && tab === 'inbox' && <InboxScreen key={searchable.slug} conference={searchable} />}

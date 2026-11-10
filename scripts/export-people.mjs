@@ -3,8 +3,10 @@
 // Usage: node scripts/export-people.mjs --event <slug>
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY); ES_PEOPLE_INDEX (default caddie-people).
 //
-// The export leaves out secret_hash, text_hash and the embeddings. data/exports/ is git-ignored,
-// because the file holds personal data; delete it when you no longer need it.
+// The export leaves out secret_hash, text_hash, the embeddings and the presence fields (zone,
+// spot, times, position): presence is transient and a position never leaves Elasticsearch as
+// such. data/exports/ is git-ignored, because the file holds personal data; delete it when you
+// no longer need it.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -49,7 +51,7 @@ let after;
 for (;;) {
   const body = {
     size: PAGE,
-    _source: { excludes: ['secret_hash', 'text_hash', '*_semantic'] },
+    _source: { excludes: ['secret_hash', 'text_hash', '*_semantic', 'presence_*'] },
     query: { term: { event_id: slug } },
     sort: [{ updated_at: 'asc' }, { profile_id: 'asc' }],
   };

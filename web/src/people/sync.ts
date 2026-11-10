@@ -153,6 +153,7 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>)
       open_to_meet: res.open_to_meet,
       shared_talk_ids: res.shared_talk_ids,
       on_server: res.open_to_meet || res.shared_talk_ids.length > 0,
+      hidden_for_owner: res.hidden_for_owner === true,
     });
     setStatus({ state: 'saved' });
     return null;
@@ -259,7 +260,9 @@ export function scheduleProfileSync(): void {
     }
     try {
       for (const slug of slugsOnServer()) {
-        await putChecked(slug, getProfile() ?? p, getVisibility(slug));
+        const res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
+        // The server says whether this profile is hidden after reports; the profile screen shows it.
+        if ((res.hidden_for_owner === true) !== getVisibility(slug).hidden_for_owner) setVisibility(slug, { hidden_for_owner: res.hidden_for_owner === true });
       }
       setStatus({ state: 'saved' });
     } catch (err) {

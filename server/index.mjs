@@ -4,7 +4,12 @@
 //      ES_CONFERENCES_INDEX (default caddie-conferences), ES_TOPICS_INDEX (default caddie-topics),
 //      STATIC_DIR (default web/dist), ES_PEOPLE_API_KEY (people, circles and circle counts only),
 //      ES_PEOPLE_INDEX (default caddie-people), ES_PEOPLE_BLOCKS_INDEX (default
-//      caddie-people-blocks), ES_PEOPLE_MEETS_INDEX (default caddie-people-meets), REF_SALT (optional).
+//      caddie-people-blocks), ES_PEOPLE_MEETS_INDEX (default caddie-people-meets),
+//      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), ES_PEOPLE_PUSH_INDEX (default
+//      caddie-people-push), ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges), REF_SALT
+//      (optional), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (secret) and VAPID_SUBJECT for push nudges,
+//      BLE_NEAR_RSSI (default -75, the Bluetooth "a few metres" threshold of ble.mjs), and the
+//      filter's ES_RULES_INDEX and MOD_* (moderation.mjs).
 //
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
@@ -16,8 +21,12 @@ import { validate, search, BadRequest, UpstreamError } from './search.mjs';
 import { publicConferences } from './conferences.mjs';
 import { handlePeopleApi } from './people.mjs';
 import { handleConnectApi } from './connect.mjs';
+import { handleBleApi } from './ble.mjs';
+import { handleReportApi } from './report.mjs';
+import { handlePushApi } from './push.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
+import { handleImportGithubApi } from './import-github.mjs';
 import { handleRelatedApi } from './related.mjs';
 import { handleSchedule } from './schedule.mjs';
 import { handleImportApi } from './import.mjs';
@@ -42,7 +51,7 @@ const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Strict-Transport-Security': 'max-age=31536000',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Permissions-Policy': 'geolocation=(self), camera=(), microphone=()',
 };
 
 const MIME = {
@@ -297,15 +306,19 @@ const server = http.createServer((req, res) => {
   handleStatic(req, res, pathname);
 });
 
-// The people, circles, blocks, presence, meets, recommendations, topics, related and import routes.
-// Each handler reads its own body with its own size limit and resolves to true when it handled the
-// request.
+// The people, circles, blocks, presence, meets, reports, push, recommendations, topics, related,
+// GitHub import and schedule import routes. Each handler reads its own body with its own size limit
+// and resolves to true when it handled the request.
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
   if (await handleConnectApi(req, res, url)) return;
+  if (await handleBleApi(req, res, url)) return;
+  if (await handleReportApi(req, res, url)) return;
+  if (await handlePushApi(req, res, url)) return;
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
+  if (await handleImportGithubApi(req, res, url)) return;
   if (await handleRelatedApi(req, res, url)) return;
   if (await handleImportApi(req, res, url)) return;
   if (!withinLimit(req, res, 'api-unknown', UNKNOWN_API_PER_MIN)) return;

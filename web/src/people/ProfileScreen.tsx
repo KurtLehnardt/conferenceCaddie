@@ -1,8 +1,10 @@
 // The profile editor. The profile lives on this device and reaches the server only
 // while the user is visible conference-wide or shares for a talk.
 import { useState } from 'preact/hooks';
-import { Trash2 } from 'lucide-preact';
+import { EyeOff, Trash2 } from 'lucide-preact';
 import { deleteProfile, PeopleApiError } from './api';
+import { forgetPush } from './push';
+import { ImportGitHub, mergeGithubImport } from './ImportGitHub';
 import { VISIBILITY_NOTICE } from './PeopleScreen';
 import {
   clearAllPeopleData,
@@ -21,6 +23,9 @@ import { interestedIds } from './util';
 
 /** Under both free-text fields: specific words are what the people search matches on. */
 export const SPECIFIC_HINT = 'The more specific, the better the matches.';
+
+/** Under the "Hidden after reports" heading for the owner of a profile two people reported. */
+export const HIDDEN_COPY = 'Other attendees cannot see your profile, and you cannot ask to talk shop, until we have looked at it.';
 
 function TextField({
   id,
@@ -129,6 +134,8 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
           if (!(err instanceof PeopleApiError && err.status === 404)) throw err;
         }
       }
+      // The server deleted the push subscriptions with the profile; the browser's own goes too.
+      await forgetPush();
       clearAllPeopleData();
       setConfirmDelete(false);
       setDeleteMessage('Your profile was deleted from this phone and from our server.');
@@ -143,6 +150,16 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
   return (
     <div class="pp-screen pp-profile">
       <SaveStatus />
+      {vis.hidden_for_owner && (
+        <div class="pp-banner pp-hidden-banner" role="status">
+          <div class="pp-banner-row">
+            <EyeOff size={20} aria-hidden="true" class="pp-banner-icon" />
+            <p class="pp-banner-text">
+              <strong>Hidden after reports.</strong> {HIDDEN_COPY}
+            </p>
+          </div>
+        </div>
+      )}
 
       <section class="pp-card" aria-labelledby="pp-about-h">
         <h2 id="pp-about-h" class="pp-card-title">
@@ -165,9 +182,7 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
           placeholder="One or two lines, for example your role and what you work on"
           onInput={(v) => update({ about: v })}
         />
-        <button type="button" class="btn btn-tonal btn-small pp-import" disabled>
-          Import from LinkedIn (coming soon)
-        </button>
+        <ImportGitHub slug={slug} onAccept={(a) => { const m = mergeGithubImport(profile, topics.speak, a); update(m.patch); setTopics('speak', m.speak); }} />
       </section>
 
       <section class="pp-card">
