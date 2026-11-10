@@ -296,6 +296,21 @@ test('A first share whose answer is lost counts as maybe on the server, and Dele
   assert.deepEqual(requests(), [DELETE]);
 });
 
+test('A refused share after a lost first write keeps the conference covered by Delete my profile', async () => {
+  ensureDevice();
+  setProfile({ ...EMPTY_PROFILE, display_name: 'Sam' });
+  onFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+  await changeVisibility(SLUG, { open_to_meet: true });
+  assert.equal(getVisibility(SLUG).maybe_on_server, true);
+  // The second try is refused; that says nothing about whether the first one landed.
+  onFetch((call) => (call.method === 'PUT' ? json(429, { error: 'Too many requests' }) : json(200, { ok: true })));
+  await changeVisibility(SLUG, { open_to_meet: true });
+  assert.equal(getVisibility(SLUG).maybe_on_server, true);
+  calls.length = 0;
+  assert.equal((await deleteMyProfile()).done, true);
+  assert.deepEqual(requests(), [DELETE]);
+});
+
 test('A first share the server refuses leaves nothing to delete', async () => {
   ensureDevice();
   setProfile({ ...EMPTY_PROFILE, display_name: 'Sam' });

@@ -260,6 +260,9 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>,
   setStatus({ state: 'saving' });
   // Until the server answers a first write, it may hold a document or not; a delete covers both.
   const creating = !current.on_server;
+  // Only the write that set the flag may clear it: an earlier first write whose answer was lost
+  // may have created the document, whatever this one is told.
+  const flaggedHere = creating && !current.maybe_on_server;
   if (creating) setVisibility(slug, { maybe_on_server: true });
   try {
     const res = await putChecked(slug, p as Profile, next);
@@ -276,7 +279,7 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>,
     setStatus({ state: 'saved' });
     return null;
   } catch (err) {
-    if (creating && refusedOrUnsent(err)) setVisibility(slug, { maybe_on_server: false });
+    if (flaggedHere && refusedOrUnsent(err)) setVisibility(slug, { maybe_on_server: false });
     const message = messageFor(err);
     setStatus({ state: 'error', message });
     return message;
