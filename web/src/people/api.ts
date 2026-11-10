@@ -10,12 +10,15 @@ export class PeopleApiError extends Error {
   status: number;
   code: string | null;
   count: number | null;
+  /** Seconds the server asked the client to wait (Retry-After), or null. */
+  retryAfter: number | null;
 
-  constructor(message: string, status: number, code: string | null = null, count: number | null = null) {
+  constructor(message: string, status: number, code: string | null = null, count: number | null = null, retryAfter: number | null = null) {
     super(message);
     this.status = status;
     this.code = code;
     this.count = count;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -89,7 +92,9 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
     } catch {
       // The body is not JSON; the status is enough.
     }
-    throw new PeopleApiError((res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status, code, message), res.status, code, count);
+    const wait = res.headers.get('Retry-After');
+    const retryAfter = wait && /^\d{1,6}$/.test(wait.trim()) ? Number(wait.trim()) : null;
+    throw new PeopleApiError((res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status, code, message), res.status, code, count, retryAfter);
   }
   return (await res.json()) as T;
 }

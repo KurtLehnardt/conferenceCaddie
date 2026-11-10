@@ -6,7 +6,7 @@ import { ImportGitHub, mergeGithubImport } from './ImportGitHub';
 import { VISIBILITY_NOTICE } from './PeopleScreen';
 import {
   EMPTY_PROFILE,
-  getDeletePending,
+  getDeleteAll,
   getProfile,
   getVisibility,
   setProfile,
@@ -15,14 +15,15 @@ import {
   usePeopleStore,
 } from './storage';
 import {
+  canStopTrying,
   changeVisibility,
-  DELETED_MESSAGE,
   deleteMyProfile,
   finishPendingDeletes,
   getPendingDeleteDetail,
   getSyncStatus,
   LINKEDIN_RE,
   scheduleProfileSync,
+  stopTrying,
   unshareAll,
 } from './sync';
 import { TopicPicker } from './TopicPicker';
@@ -90,37 +91,69 @@ function SaveStatus() {
   return null;
 }
 
-/** Under the heading of the notice for a delete the server has not confirmed yet. */
-export const PENDING_DELETE_COPY =
-  'It may already be hidden from other attendees. The app will not share it again while the delete is unfinished, and it tries again each time it opens or comes back online.';
+/** Explains the notice for a delete the server has not confirmed yet. */
+export const PENDING_DELETE_COPY = 'The app will not share your profile while the delete is unfinished, and it tries again by itself.';
 
-/** Shown while a profile delete has not been confirmed by the server, with a way to try again. */
-function PendingDelete() {
+/** Opens that explanation when a delete may have done part of its work. */
+export const PENDING_HIDDEN_COPY = 'It may already be hidden from other attendees.';
+
+/** Offered once the server has refused this device's key three times in a row. */
+export const STOP_TRYING_COPY = "Our server keeps refusing this device's key, so trying again will not help.";
+
+/** What stopping does, after "Delete my profile" and after turning visibility off. */
+export const STOP_ALL_COPY = 'If you stop, your profile is deleted from this phone only; anything our server still holds is removed after the conference ends.';
+export const STOP_ONE_COPY = 'If you stop, this phone stops trying; anything our server still holds is removed after the conference ends.';
+
+/**
+ * Shown while a profile delete has not been confirmed by the server, with a way to try again and,
+ * once the server keeps refusing this device, a way to stop. What "Delete my profile" reports goes
+ * to `onResult`, so the Delete card shows it.
+ */
+function PendingDelete({ conference, onResult }: { conference: ConferenceLike; onResult: (message: string) => void }) {
   const [busy, setBusy] = useState(false);
+  const all = getDeleteAll() !== null;
   const pending = slugsDeletePending();
-  if (!pending.length) return null;
-  // Part of "Delete my profile": trying again runs the whole delete, so the device's data goes too.
-  const wipe = pending.some((s) => getDeletePending(s)?.wipe === true);
+  if (!all && !pending.length) return null;
   const detail = getPendingDeleteDetail();
-  const retry = async () => {
+  const where =
+    pending.length > 1
+      ? `${pending.length} conferences`
+      : pending[0] === conference.slug
+        ? conference.name
+        : 'another conference';
+  const run = async (fn: () => Promise<string | null>) => {
     setBusy(true);
-    await (wipe ? deleteMyProfile() : finishPendingDeletes());
+    const message = await fn();
+    if (message) onResult(message);
     setBusy(false);
   };
+  // After "Delete my profile", trying again runs the whole delete, so the device's data goes too.
+  const retry = () => run(async () => (all ? (await deleteMyProfile()).message : (await finishPendingDeletes(), null)));
   return (
     <div class="pp-banner" role="status">
       <div class="pp-banner-row">
         <TriangleAlert size={20} aria-hidden="true" class="pp-banner-icon" />
         <p class="pp-banner-text">
-          <strong>{wipe ? 'Deleting your profile has not finished.' : 'Removing your profile from a conference has not finished.'}</strong>{' '}
+          <strong>{all ? 'Deleting your profile has not finished.' : `Removing your profile from ${where} has not finished.`}</strong>{' '}
+          {pending.length > 0 && `${PENDING_HIDDEN_COPY} `}
           {PENDING_DELETE_COPY}
         </p>
       </div>
       {detail && <p class="pp-error pp-banner-actions">{detail}</p>}
-      <div class="pp-banner-actions">
+      {canStopTrying() && (
+        <p class="pp-hint pp-banner-actions">
+          {STOP_TRYING_COPY} {all ? STOP_ALL_COPY : STOP_ONE_COPY}
+        </p>
+      )}
+      <div class="pp-banner-actions pp-actions">
         <button type="button" class="btn btn-tonal btn-small" disabled={busy} onClick={retry}>
-          {busy ? 'Trying again…' : 'Try again'}
+          {busy ? 'Working…' : 'Try again'}
         </button>
+        {canStopTrying() && (
+          <button type="button" class="btn btn-text btn-small pp-danger" disabled={busy} onClick={() => run(stopTrying)}>
+            Stop trying on this device
+          </button>
+        )}
       </div>
     </div>
   );
@@ -171,16 +204,16 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
   const removeEverything = async () => {
     setDeleting(true);
     setDeleteMessage(null);
-    const message = await deleteMyProfile();
-    if (message === null) setConfirmDelete(false);
-    setDeleteMessage(message ?? DELETED_MESSAGE);
+    const result = await deleteMyProfile();
+    if (result.done) setConfirmDelete(false);
+    setDeleteMessage(result.message);
     setDeleting(false);
   };
 
   return (
     <div class="pp-screen pp-profile">
       <SaveStatus />
-      <PendingDelete />
+      <PendingDelete conference={conference} onResult={setDeleteMessage} />
       {vis.hidden_for_owner && (
         <div class="pp-banner pp-hidden-banner" role="status">
           <div class="pp-banner-row">
