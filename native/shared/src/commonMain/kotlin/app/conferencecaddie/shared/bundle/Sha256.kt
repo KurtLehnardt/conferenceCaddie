@@ -90,8 +90,34 @@ object Sha256 {
     /** The digest of [data] as 64 lower-case hex digits. */
     fun hex(data: ByteArray): String = digest(data).toHex()
 
-    /** The digest of the UTF-8 encoding of [text] as 64 lower-case hex digits. */
-    fun hex(text: String): String = hex(text.encodeToByteArray())
+    /** The digest of the UTF-8 encoding of [text] ([utf8]) as 64 lower-case hex digits. */
+    fun hex(text: String): String = hex(utf8(text))
+
+    /**
+     * [text] in UTF-8, with every lone surrogate written as U+FFFD (EF BF BD), as Node's
+     * `Buffer.from(text, 'utf8')` and Kotlin/Native write it. The JVM's encoder writes '?' instead,
+     * so without this a hash of such text would differ between Android and iOS, and from the
+     * producer's.
+     */
+    fun utf8(text: String): ByteArray {
+        if (text.none { it.isSurrogate() }) return text.encodeToByteArray()
+        val sb = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            when {
+                c.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate() -> {
+                    sb.append(c).append(text[i + 1])
+                    i += 2
+                    continue
+                }
+                c.isSurrogate() -> sb.append('\uFFFD')
+                else -> sb.append(c)
+            }
+            i++
+        }
+        return sb.toString().encodeToByteArray()
+    }
 
     private const val DIGITS = "0123456789abcdef"
 

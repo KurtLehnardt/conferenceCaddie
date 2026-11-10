@@ -18,10 +18,44 @@ class PrimitivesTest {
             Sha256.hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
         )
         assertEquals("cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0", Sha256.hex(ByteArray(1_000_000) { 'a'.code.toByte() }))
-        // Lengths around the 55/56/64-byte padding boundaries.
-        for (n in listOf(55, 56, 63, 64, 65)) assertEquals(64, Sha256.hex(ByteArray(n)).length)
+        // NIST's 896-bit message, whose padding spills into a third block.
+        assertEquals(
+            "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1",
+            Sha256.hex(
+                "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+            ),
+        )
+        // Zero bytes at the lengths around the 55/56/64-byte padding boundaries (Python's hashlib).
+        val boundaries = mapOf(
+            55 to "02779466cdec163811d078815c633f21901413081449002f24aa3e80f0b88ef7",
+            56 to "d4817aa5497628e7c77e6b606107042bbba3130888c5f47a375e6179be789fbb",
+            63 to "c7723fa1e0127975e49e62e753db53924c1bd84b8ac1ac08df78d09270f3d971",
+            64 to "f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b",
+            65 to "98ce42deef51d40269d542f5314bef2c7468d401ad5d85168bfab4c0108f75f7",
+        )
+        for ((n, digest) in boundaries) assertEquals(digest, Sha256.hex(ByteArray(n)), "$n zero bytes")
         assertEquals("2d779cce49b72c5b419b010f3f5ec5d0a462abd117f7aeefc99de7fd3421d405", Sha256.hex(Fixtures.files.getValue("bundle.json")))
         assertEquals("e9a59e1175adf3e679f65296842af976cc7962c0459f884e39d013ef99d5c1f5", Sha256.hex(Fixtures.files.getValue("vectors.i8")))
+    }
+
+    @Test
+    fun loneSurrogatesHashAsTheReplacementCharacterOnEveryPlatform() {
+        // Node and Kotlin/Native write a lone surrogate as U+FFFD (EF BF BD); the JVM would write '?'.
+        // The surrogates are built from their code units, so no source literal holds a lone one.
+        val hi = Char(0xD800).toString()
+        val lo = Char(0xDC00).toString()
+        val replacement = "83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097"
+        assertEquals(replacement, Sha256.hex(hi), "a lone high surrogate")
+        assertEquals(replacement, Sha256.hex(lo), "a lone low surrogate")
+        assertEquals("05087813392efc16fe8ff448920c6328e53af865df39419436659d9ffda90f7b", Sha256.hex("a${hi}b"))
+        assertEquals("52793f8dc1d85e409f8c88be99d8b31d58f676246340150f406289e04a11151e", Sha256.hex(lo + hi), "a reversed pair is two lone surrogates")
+        assertEquals(
+            "2b402c90e9b15d9c3ef65c432c4111108f54ee544cda5424db46f6ac974928e4",
+            Sha256.hex(Char(0xD83D).toString() + Char(0xDD10)),
+            "a valid pair is one character",
+        )
+        kotlin.test.assertContentEquals(byteArrayOf(0xef.toByte(), 0xbf.toByte(), 0xbd.toByte()), Sha256.utf8(hi))
+        assertEquals(Sha256.hex("\uFFFD\n"), BundleVerifier.textHash(hi, ""))
     }
 
     @Test
