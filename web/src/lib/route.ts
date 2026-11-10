@@ -1,9 +1,11 @@
 import type { Conference } from '../types';
+import { appPath, stripBase } from './apiBase';
 
 // Routes are /e/{slug} with a hash tab on top, for example /e/some-event-2026#/search.
 // A tab can carry a view and a day, for example #/interested?view=day&day=2026-11-10 or
 // #/search?view=schedule&day=2026-11-10, so Back and a reload keep the view.
-// The server serves index.html for unknown HTML paths, so no router library is needed.
+// The server serves index.html for unknown HTML paths, so no router library is needed. When the app
+// is served under a path (GitHub Pages: /conferenceCaddie/), every path here is under that base.
 
 export type Tab = 'people' | 'for-you' | 'search' | 'interested' | 'profile' | 'settings' | 'inbox' | 'meet' | 'here';
 
@@ -33,7 +35,7 @@ export interface Route {
 }
 
 export function readRoute(): Route {
-  const m = location.pathname.match(/^\/e\/([^/]+)\/?$/);
+  const m = stripBase(location.pathname).match(/^\/e\/([^/]+)\/?$/);
   let slug: string | null = null;
   if (m) {
     try {
@@ -91,7 +93,7 @@ export function replaceTabParams(tab: Tab, params: TabParams): void {
 }
 
 export function conferencePath(slug: string, tab: Tab): string {
-  return `/e/${encodeURIComponent(slug)}#/${tab}`;
+  return `${appPath(`e/${encodeURIComponent(slug)}`)}#/${tab}`;
 }
 
 /** Navigates to another conference, adding a history entry so Back returns. */

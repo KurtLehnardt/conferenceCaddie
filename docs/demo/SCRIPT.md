@@ -2,7 +2,7 @@
 
 The demo shows one idea: find the right talk, and the right people around it. It runs on a phone, on KubeCon + CloudNativeCon North America 2026 (9 to 12 November, Salt Lake City), with labelled sample profiles standing in for other attendees: two demo profiles, 100 dummy profiles and 30 ordinary samples.
 
-The QR code is `docs/demo/qr-kubecon.png` (1280 px, high error correction; a vector copy is `qr-kubecon.svg`). It opens `https://conference-caddie-265846417372.us-west1.run.app/e/kubecon-cloudnativecon-north-america-2026`. The slug ends in `-2026`, which differs from the path in the original brief; the real slug is the one the app serves.
+The QR code is `docs/demo/qr-kubecon.png` (1280 px, high error correction; a vector copy is `qr-kubecon.svg`). It opens `https://kurtlehnardt.github.io/conferenceCaddie/e/kubecon-cloudnativecon-north-america-2026`, the free GitHub Pages app (see [docs/FREE_HOSTING.md](../FREE_HOSTING.md)). The old Cloud Run address `https://conference-caddie-265846417372.us-west1.run.app` keeps working until the paid stack is shut down, but the QR code no longer points at it. The QR code works only once the Worker API is deployed and the Pages workflow has published the app; until then the link shows GitHub's 404 page. The slug ends in `-2026`, which differs from the path in the original brief; the real slug is the one the app serves.
 
 ## Before you start
 
@@ -36,7 +36,7 @@ Say: "Everyone at a conference wants to meet the right people. Scan this and you
 - Tap People at the bottom. The audience sees "Find people worth meeting" replaced by "Turn on visibility to see who to meet", with the short notice that says what is stored, who sees it and how to undo it. Read the notice's first sentence aloud.
 - Tap "Make me visible". The audience sees "Finding people…" and then cards.
 - Above the cards is the line "Profiles marked Sample are demo profiles, not real attendees." The first card is "Sample · Demo B", with the blue outlined "SAMPLE" badge. Point at the shaded line with the speech icon: "They can speak to eBPF, OpenTelemetry, Security, and Observability, which you want to learn about." That is the opener. Below it is a second reason, "They want to learn about Platform and GitOps, which you can speak to.", then the lines "Can speak to:" and "Wants to learn:", and under "How to reach me" the note "Sample profile, not a real person".
-- Say: "Elasticsearch matched what I want to learn against what they can speak to, and the reverse. The reason names the topic. No model wrote this sentence."
+- Say: "The app matched what I want to learn against what they can speak to, and the reverse. The reason names the topic. No model wrote this sentence."
 - Scroll once to show the other profiles below it, all of them dummy or ordinary samples, each with the "SAMPLE" badge. In the rehearsal run the next five were "Sample · Meera Kapoor", "Sample · Kofi Adeyemi", "Sample · Ethan Rowan", "Sample · Budi Tupou" and "Sample · Aarav Iyer", and the list held 20 people. A dummy profile has a "LinkedIn profile" link under "How to reach me", with the note "Sample profile for the demo". Do not tap the link: all 100 dummies point at the same address, which is the owner's own LinkedIn page.
 
 ### 3. A talk circle shows who else is interested (1:20 to 1:50)
@@ -50,7 +50,7 @@ Say: "Everyone at a conference wants to meet the right people. Scan this and you
 
 - Tap "For you" at the bottom. The audience sees "Talks picked from what you want to learn. Ended talks and talks you marked are left out." and a list of 20 talks. The shared talk is not in it, because it is already marked.
 - Point at the line "You want to learn:" on the first card, which names the learn topics it matched. In the rehearsal run the first card was "GPU Observability with eBPF: From Kernel Hooks to Kubernetes Metrics" with "You want to learn: eBPF, Observability, Kubernetes", then "You want to learn: OpenTelemetry, Observability", "You want to learn: Security, Kubernetes" and so on. Only the five learn topics count here; the speak topics are not used. Talks that match equally well can swap places between runs, so do not promise a particular first talk. This profile has no free text, so the cards show topics only; a highlighted passage appears when the profile has free text. Most cards now also show "N people want to talk about this", from the dummies' shared talks (1 to 11 in the rehearsal run); point at one.
-- Say: "Ranking is Elasticsearch hybrid search: topic matches and meaning together, fused with reciprocal rank fusion. Talks that have ended, and talks I already marked, are left out."
+- Say: "Ranking is hybrid search: keyword matches and meaning (embeddings) together, fused with reciprocal rank fusion. Talks that have ended, and talks I already marked, are left out."
 - Tap "I'm interested" on the first suggestion. The button changes to "Interested", the message "Added to Interested" appears at the bottom, and the Interested badge goes to 2.
 
 ### 5. Airplane mode shows what still works (2:20 to 2:55)
@@ -64,7 +64,7 @@ Say: "Everyone at a conference wants to meet the right people. Scan this and you
 
 ### Closing line (2:55 to 3:00)
 
-Say: "Everything you saw is in Elasticsearch, which holds the talks, the topics and the people and does all the matching and ranking with hybrid search, and we chose not to build sign-in, messaging, push notifications, location or any scheduling, because the official schedule already does that."
+Say: "Everything you saw runs on a free Cloudflare Worker with embeddings and keyword search, and we chose not to build sign-in, messaging, push notifications, location or any scheduling, because the official schedule already does that."
 
 ## The two demo profiles
 
@@ -96,7 +96,7 @@ At the owner's request, 100 invented profiles were seeded so that anyone who ope
 - Every dummy links to `https://linkedin.com/in/kurtlehnardt` (the owner's choice) and has the contact note "Sample profile for the demo". All are open to meet.
 - Names: 100 distinct names across ten regions, none of them a public figure.
 - Topics: the conference has 96 topics. Each dummy learns exactly 10 and can speak to exactly 10, never the same topic in both sets. Every topic is learned by 10 or 11 dummies and spoken to by 10 or 11, so any topic a new user picks finds a match.
-- Shared talks: each dummy shares for 10 upcoming talks that Elasticsearch ranked for its learn topics, from a different window of the top 50 per profile. Together they cover 323 distinct talks; one talk has 15 sharers at most, the median is 3.
+- Shared talks: each dummy shares for 10 upcoming talks that were ranked for its learn topics, from a different window of the top 50 per profile. Together they cover 323 distinct talks; one talk has 15 sharers at most, the median is 3.
 - They disappear with the other samples at the end of the conference. Re-run the generator and then the seed command (see "Before you start") for fresh talk picks, for example if some of the shared talks have ended; the generator needs the admin key in `ELASTISEARCH_API_KEY`.
 - Checked on 9 November against the live service: 20 throwaway visible profiles, each with 10 random topics, all got at least 3 people to meet (the list shows at most 20), and every reason named topics that really overlap; the circle counts of 10 shared talks matched the file; a profile that is not visible got no matches (403). The throwaway profiles were deleted afterwards.
 

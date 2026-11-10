@@ -1,0 +1,6 @@
+# Local development secrets written by scripts/dev-vars.mjs. Never commit these.
+.dev.vars*
+
+# Local wrangler state (Durable Object SQLite files) and dependencies.
+.wrangler/
+node_modules/
