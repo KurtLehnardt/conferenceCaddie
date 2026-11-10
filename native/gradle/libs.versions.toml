@@ -1,0 +1,44 @@
+# Versions chosen on 2026-11-10. Kotlin 2.4.21 is the newest stable Kotlin; its Gradle plugin is
+# documented as compatible with Gradle up to 9.7 and AGP up to 9.3, so AGP stays on the newest 9.3
+# patch even though AGP 9.5.1 exists. Compose Multiplatform 1.12.2 pairs with Material3
+# 1.12.0-alpha03 and Lifecycle 2.11.0 in its release notes.
+#
+# compileSdk is 37 because Compose 1.12 and Lifecycle 2.11 refuse to build against anything older.
+# targetSdk stays at 36: compileSdk only decides which APIs the code can see, while targetSdk decides
+# which runtime behaviour changes the app opts in to.
+[versions]
+agp = "9.3.3"
+android-compileSdk = "37"
+android-minSdk = "26"
+android-targetSdk = "36"
+androidx-activity = "1.13.0"
+androidx-lifecycle = "2.11.0"
+compose-material-icons = "1.7.3"
+compose-material3 = "1.12.0-alpha03"
+compose-multiplatform = "1.12.2"
+kotlin = "2.4.21"
+kotlinx-coroutines = "1.11.0"
+kotlinx-serialization = "1.12.0"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-lifecycle-runtimeCompose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidx-lifecycle" }
+compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose-multiplatform" }
+compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
+compose-material-icons-core = { module = "org.jetbrains.compose.material:material-icons-core", version.ref = "compose-material-icons" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-material3" }
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-multiplatform" }
+compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose-multiplatform" }
+compose-uiTooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose-multiplatform" }
+compose-uiToolingPreview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-multiplatform" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+
+[plugins]
+androidApplication = { id = "com.android.application", version.ref = "agp" }
+androidMultiplatformLibrary = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinxSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

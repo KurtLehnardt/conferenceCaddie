@@ -1,0 +1,17 @@
+// Build settings shared by every iOS build. Nothing here is secret.
+//
+// The Apple team id is not committed. To sign for a device, copy Local.xcconfig.example to
+// Local.xcconfig (gitignored) and set TEAM_ID there. CI passes DEVELOPMENT_TEAM on the command line.
+TEAM_ID =
+BUNDLE_ID = app.conferencecaddie
+APP_NAME = Conference Caddie
+
+// CI overrides CURRENT_PROJECT_VERSION with the workflow run number, because every TestFlight
+// upload needs a new build number.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+// Compose Multiplatform publishes no x86_64 simulator libraries, so simulator builds are arm64 only.
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = x86_64
+
+#include? "Local.xcconfig"

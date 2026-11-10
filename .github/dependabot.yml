@@ -1,0 +1,15 @@
+# Weekly update proposals for the pinned GitHub Actions and the native apps' Gradle dependencies.
+# Actions are pinned to commit SHAs; Dependabot updates the SHA and the version comment together.
+# A Gradle update also needs native/gradle/verification-metadata.xml regenerated (see
+# native/README.md, "Dependency verification"), or the Native apps workflow fails on the pull request.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gradle
+    directory: /native
+    schedule:
+      interval: weekly

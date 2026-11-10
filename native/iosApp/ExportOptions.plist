@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Export options for App Store Connect with manual signing. The native workflow's ios-sign job
+     copies this file, sets teamID from the APPLE_TEAM_ID secret and adds the App Store profile's
+     UUID under provisioningProfiles, so no team id or profile is committed. "destination: export"
+     makes `xcodebuild -exportArchive` write a signed IPA and upload nothing; the separate
+     testflight-upload job uploads that IPA with the App Store Connect API key. -->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
+	<key>teamID</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

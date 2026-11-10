@@ -1,0 +1,38 @@
+*.iml
+.kotlin
+.gradle
+**/build/
+xcuserdata
+!src/**/build/
+local.properties
+.idea
+.DS_Store
+captures
+.externalNativeBuild
+.cxx
+
+# Xcode: keep the project file, shared schemes and workspace settings; ignore per-user state.
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+DerivedData/
+
+# Per-developer signing settings for iOS (the Apple team id). See iosApp/Configuration/Config.xcconfig.
+iosApp/Configuration/Local.xcconfig
+
+# Signing material and App Store Connect keys. Never commit these.
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+keystore.properties
+
+# Build outputs that can end up outside build/ (Android Studio's "Generate Signed APK" writes to
+# androidApp/release/).
+androidApp/release/
+*.aab
+*.apk
