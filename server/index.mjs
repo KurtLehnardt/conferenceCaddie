@@ -27,7 +27,9 @@ import { handlePushApi } from './push.mjs';
 import { handleRecommendationsApi } from './recommend.mjs';
 import { handleTopicsApi } from './topics-api.mjs';
 import { handleImportGithubApi } from './import-github.mjs';
+import { handleRelatedApi } from './related.mjs';
 import { handleSchedule } from './schedule.mjs';
+import { handleImportApi } from './import.mjs';
 import { take, clientIp } from './ratelimit.mjs';
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -36,6 +38,13 @@ const MAX_BODY = 4096;
 // Every text search embeds its query, so searches share the per-address limit of the other
 // public endpoints.
 const SEARCH_PER_MIN = 60;
+// The other /api/* routes that had no limit. The health check is cheap and may be polled by
+// monitors, so its limit is generous; it is limited, not exempt, so that no route is open to a
+// flood. The conference list is read from the cache on most requests. Unknown /api/* paths get
+// a small limit of their own, so a scanner cannot probe without being slowed.
+const HEALTH_PER_MIN = 600;
+const CONFERENCES_PER_MIN = 120;
+const UNKNOWN_API_PER_MIN = 60;
 
 const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
@@ -113,6 +122,14 @@ function readBody(req) {
   });
 }
 
+// Returns true when the request may continue. Otherwise the 429 has been sent.
+function withinLimit(req, res, name, perMin) {
+  const rate = take(`${name}:${clientIp(req)}`, perMin);
+  if (rate.ok) return true;
+  sendJson(res, 429, { error: 'Too many requests' }, { 'Retry-After': String(rate.retryAfterSec) });
+  return false;
+}
+
 async function handleSearch(req, res) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Use POST' }, { Allow: 'POST' });
@@ -164,6 +181,7 @@ async function handleConferences(req, res) {
     sendJson(res, 405, { error: 'Use GET' }, { Allow: 'GET, HEAD' });
     return;
   }
+  if (!withinLimit(req, res, 'conferences', CONFERENCES_PER_MIN)) return;
   try {
     const conferences = await publicConferences();
     sendJson(res, 200, { conferences }, { 'Cache-Control': 'public, max-age=60' });
@@ -255,6 +273,7 @@ const server = http.createServer((req, res) => {
       sendJson(res, 405, { error: 'Use GET' }, { Allow: 'GET, HEAD' });
       return;
     }
+    if (!withinLimit(req, res, 'health', HEALTH_PER_MIN)) return;
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -287,8 +306,9 @@ const server = http.createServer((req, res) => {
   handleStatic(req, res, pathname);
 });
 
-// The people, circles, blocks, presence, meets, reports, push, recommendations and topics routes. Each handler
-// reads its own body with its own size limit and resolves to true when it handled the request.
+// The people, circles, blocks, presence, meets, Bluetooth, reports, push, recommendations, topics,
+// GitHub import, related and schedule import routes. Each handler reads its own body with its own
+// size limit and resolves to true when it handled the request.
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', 'http://localhost');
   if (await handlePeopleApi(req, res, url)) return;
@@ -299,6 +319,9 @@ async function handleApi(req, res) {
   if (await handleRecommendationsApi(req, res, url)) return;
   if (await handleTopicsApi(req, res, url)) return;
   if (await handleImportGithubApi(req, res, url)) return;
+  if (await handleRelatedApi(req, res, url)) return;
+  if (await handleImportApi(req, res, url)) return;
+  if (!withinLimit(req, res, 'api-unknown', UNKNOWN_API_PER_MIN)) return;
   sendJson(res, 404, { error: 'Not found' });
 }
 

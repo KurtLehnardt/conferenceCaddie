@@ -9,8 +9,9 @@
 //   cached the first time it loads.
 // - GET /api/conferences, GET /api/schedule and the full topic list (GET /api/topics without a
 //   query) are network-first and fall back to the cached copy when the network fails.
-// - Nothing else is cached. /api/people/*, /api/circles/*, /api/recommendations, searches and
-//   every non-GET request always go to the network, so no profile or match data is ever stored.
+// - Nothing else is cached. /api/people/* (matches, people search, blocks), /api/circles/*,
+//   /api/presence, /api/meet/* (asks, the inbox and meets), /api/recommendations, searches and every
+//   non-GET request always go to the network, so no profile, presence or meet data is ever stored.
 // - At activation, the data cache of an older build is copied into this build's data cache, so a
 //   saved schedule survives an update, and every older cache is then deleted.
 // - Web Push: a push event shows its payload as a notification ("Conference Caddie" with the
@@ -29,7 +30,7 @@ const STATIC_FILES = [
   '/icons/icon-maskable-512.png',
   '/icons/apple-touch-icon.png',
 ];
-const NEVER_CACHE = /^\/api\/(people|circles)(\/|$)|^\/api\/recommendations(\/|$)/;
+const NEVER_CACHE = /^\/api\/(people|circles|presence|meet|recommendations)(\/|$)/;
 
 function isCachedApi(url) {
   if (NEVER_CACHE.test(url.pathname)) return false;

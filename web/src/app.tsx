@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { ArrowLeft, CalendarX, CircleExclamationPoint, CircleUserRound, ExternalLink, Inbox, X } from 'lucide-preact';
-import type { Conference, InterestedTalk, SearchFilters, SearchResponse, Talk } from './types';
+import { ArrowLeft, CalendarX, ChevronLeft, CircleExclamationPoint, ExternalLink, Inbox, Settings, X } from 'lucide-preact';
+import type { Conference, Facets, InterestedTalk, SearchFilters, SearchResponse, SearchResult, Talk } from './types';
 import { EMPTY_FILTERS } from './types';
 import { ApiError, getConferences, isAbort, search } from './api';
 import {
@@ -13,12 +13,27 @@ import {
   toInterested,
   type ThemePref,
 } from './lib/storage';
-import { decodeParam, defaultConference, goToConference, readRoute, replaceConference, type Route } from './lib/route';
+import {
+  decodeParam,
+  defaultConference,
+  goToConference,
+  readRoute,
+  replaceConference,
+  replaceTabParams,
+  tabHash,
+  type Route,
+  type Tab,
+  type TabParams,
+} from './lib/route';
+import { visit } from './lib/trail';
 import { useFocusTrap } from './lib/focus';
-import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Toast, type ConfirmData, type ToastData } from './components/common';
-import { ChipRow, FilterSheet, Results, SearchField, activeFilterCount, type SheetSection } from './components/search';
+import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Segmented, Toast, type ConfirmData, type ToastData } from './components/common';
+import { ChipRow, FilterSheet, Results, SearchField, SuggestionRow, activeFilterCount, type SheetSection } from './components/search';
 import { InterestedScreen } from './components/interested';
+import { ImportSheet } from './components/import';
+import { FullSchedule } from './components/schedule';
 import { SettingsScreen } from './components/settings';
+import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
 import {
@@ -44,6 +59,10 @@ import { NeedsConnection, OfflineBadge, OfflineSearch } from './offline/OfflineS
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 20;
+
+// The screens reached from the tab bar. Settings, Profile, Requests and a meet sit on top of them
+// and get a Back button instead.
+const isTab = (t: Tab) => t !== 'profile' && t !== 'settings' && t !== 'inbox' && t !== 'meet';
 
 function errorMessage(err: unknown): string {
   return err instanceof ApiError ? err.message : 'Search is unavailable right now. Please try again.';
@@ -97,20 +116,37 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmData | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [openTalk, setOpenTalk] = useState<Talk | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   // Search state lives here so it survives tab switches; it resets per conference.
   const [input, setInput] = useState('');
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
+  // Time phrases ("tuesday", "after lunch") whose chip the person removed.
+  const [ignored, setIgnored] = useState<string[]>([]);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [lastQuery, setLastQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<{ open: boolean; section?: SheetSection }>({ open: false });
+  // The full schedule (Search tab, Schedule view) keeps its own filters; its day comes from day chips.
+  const [schedFilters, setSchedFilters] = useState<SearchFilters>(EMPTY_FILTERS);
+  const [schedFacets, setSchedFacets] = useState<{ facets: Facets | null; total: number | null }>({ facets: null, total: null });
   const online = useOnline();
 
-  const { slug, tab, param } = route;
+  const { slug, tab, param, params } = route;
   // A push nudge opens #/people?around=1: the People tab with "Around now" on.
   const aroundNow = route.query.get('around') === '1';
+  const searchView = params.view === 'schedule' ? 'schedule' : 'search';
+  // The view and day last shown on each tab of this conference, so the tab bar returns to them.
+  const tabViews = useRef<{ slug: string | null; views: Partial<Record<Tab, TabParams>> }>({ slug: null, views: {} });
+  if (tabViews.current.slug !== slug) tabViews.current = { slug, views: {} };
+  tabViews.current.views[tab] = params;
+  // The screen in the history entry behind this one, so Back from Settings, Profile, Requests or a
+  // meet can pop history instead of pushing. Null when it is not known, for example after a reload.
+  // #/here/{zone} is never the screen Back leads to, because it turns presence on.
+  const prevRoute = useRef<Route | null>(null);
+  const lastTabScreen = useRef<Route | null>(null);
+  if (isTab(route.tab) && route.tab !== 'here') lastTabScreen.current = route;
   const conference = slug && conferences ? (conferences.find((c) => c.slug === slug) ?? null) : null;
   const searchable = conference?.status === 'searchable' ? conference : null;
   const talks = interested.slug === slug ? interested.talks : [];
@@ -122,9 +158,11 @@ export function App() {
 
   const controller = useRef<AbortController | null>(null);
   const timer = useRef<number | undefined>(undefined);
-  const latest = useRef({ input, filters, slug: searchable?.slug ?? null, talks, data });
-  latest.current = { input, filters, slug: searchable?.slug ?? null, talks, data };
+  const latest = useRef({ input, filters, ignored, slug: searchable?.slug ?? null, talks, data });
+  latest.current = { input, filters, ignored, slug: searchable?.slug ?? null, talks, data };
   const searchedKey = useRef('');
+  // The request behind the results on screen, so the ranking drawer can ask for the same search.
+  const dataParams = useRef<{ s: string; q: string; f: SearchFilters; ig: string[] } | null>(null);
 
   const showToast = useCallback((message: string, action?: ToastData['action']) => {
     setToast({ id: Date.now(), message, action });
@@ -149,11 +187,18 @@ export function App() {
 
   useEffect(() => {
     loadList();
+    visit(readRoute());
     // A navigation closes any open sheet, so it never stays over the next screen.
     const onRoute = () => {
+      const next = readRoute();
+      const { duplicate, previous } = visit(next);
+      // Chrome fires popstate and hashchange for one hash navigation, so the second is skipped.
+      if (duplicate) return;
       setSwitcherOpen(false);
       setOpenTalk(null);
-      setRoute(readRoute());
+      setImportOpen(false);
+      prevRoute.current = previous;
+      setRoute(next);
     };
     window.addEventListener('popstate', onRoute);
     window.addEventListener('hashchange', onRoute);
@@ -182,11 +227,16 @@ export function App() {
     searchedKey.current = '';
     // Filters name the old conference's values, so they must not reach the next search.
     latest.current.filters = EMPTY_FILTERS;
+    latest.current.ignored = [];
     setFilters(EMPTY_FILTERS);
+    setSchedFilters(EMPTY_FILTERS);
+    setSchedFacets({ facets: null, total: null });
+    setIgnored([]);
     setData(null);
     setError(null);
     setLoading(false);
     setOpenTalk(null);
+    setImportOpen(false);
     setSheet({ open: false });
   }, [slug]);
 
@@ -223,17 +273,27 @@ export function App() {
   const runSearch = useCallback(async () => {
     window.clearTimeout(timer.current);
     controller.current?.abort();
-    const { input: q, filters: f, slug: s } = latest.current;
+    const { input: q, filters: f, ignored: ig, slug: s } = latest.current;
     if (!s) return;
     const ctrl = new AbortController();
     controller.current = ctrl;
-    searchedKey.current = `${s}|${JSON.stringify(f)}`;
+    searchedKey.current = `${s}|${JSON.stringify(f)}|${ig.join(',')}`;
     setLoading(true);
     try {
-      const res = await search(s, q, f, PAGE_SIZE, ctrl.signal);
+      const res = await search(s, q, f, PAGE_SIZE, ctrl.signal, false, ig);
       if (ctrl.signal.aborted || latest.current.slug !== s) return;
+      dataParams.current = { s, q, f, ig };
       setData(res);
-      setLastQuery(q.trim());
+      // The text the search really ran on: time phrases have left it.
+      setLastQuery((res.search_text ?? q).trim());
+      // A removed phrase that is no longer in the text is forgotten, so typing it again filters
+      // again. Dropping it changes nothing about this search, so no new search is needed.
+      const kept = ig.filter((k) => res.time_phrases?.some((p) => p.key === k));
+      if (kept.length !== ig.length && latest.current.ignored === ig) {
+        latest.current.ignored = kept;
+        searchedKey.current = `${s}|${JSON.stringify(f)}|${kept.join(',')}`;
+        setIgnored(kept);
+      }
       setError(null);
     } catch (err) {
       if (isAbort(err)) return;
@@ -243,9 +303,9 @@ export function App() {
     }
   }, []);
 
-  // Search runs when the Search tab is shown and its conference or filters changed.
+  // Search runs when the Search tab's Search view is shown and its conference or filters changed.
   useEffect(() => {
-    if (tab !== 'search' || !searchable) return;
+    if (tab !== 'search' || searchView !== 'search' || !searchable) return;
     // Offline, the keyword search over the saved schedule runs instead; the next online visit
     // searches again.
     if (!online) {
@@ -254,8 +314,8 @@ export function App() {
       searchedKey.current = '';
       return;
     }
-    if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}`) runSearch();
-  }, [tab, searchable?.slug, filters, online]);
+    if (searchedKey.current !== `${searchable.slug}|${JSON.stringify(filters)}|${ignored.join(',')}`) runSearch();
+  }, [tab, searchView, searchable?.slug, filters, ignored, online]);
 
   const onInput = (v: string) => {
     setInput(v);
@@ -302,6 +362,7 @@ export function App() {
     const added = toInterested(t);
     setInterested(s, [...current, added]);
     followShare(s, [added.talk_id], true);
+    offerInstallOnce();
     showToast('Added to Interested', {
       label: 'Undo',
       onClick: () => {
@@ -317,6 +378,31 @@ export function App() {
     const found =
       latest.current.talks.find((x) => x.talk_id === t) ?? latest.current.data?.results.find((x) => x.talk_id === t);
     if (found) setOpenTalk(found);
+  };
+
+  // Imported talks are added to the device list only. Sharing changes only when the user turned on
+  // "share automatically" themselves, through the same rule as a single mark. The import sheet then
+  // confirms, offers Undo, and offers "View my schedule".
+  const markImported = (found: SearchResult[]): string[] => {
+    const s = latest.current.slug;
+    if (!s) return [];
+    const current = latest.current.talks;
+    const have = new Set(current.map((x) => x.talk_id));
+    const added = found.filter((t) => t.conference === s && !have.has(t.talk_id)).map(toInterested);
+    if (!added.length) return [];
+    const ids = added.map((t) => t.talk_id);
+    setInterested(s, [...current, ...added]);
+    followShare(s, ids, true);
+    offerInstallOnce();
+    return ids;
+  };
+
+  const unmarkImported = (ids: string[]) => {
+    const s = latest.current.slug;
+    if (!s) return;
+    const remove = new Set(ids);
+    setInterested(s, latest.current.talks.filter((x) => !remove.has(x.talk_id)));
+    followShare(s, ids, false);
   };
 
   const clearInterested = () => {
@@ -345,7 +431,7 @@ export function App() {
   };
 
   // Screens that belong to one conference and one moment go back to People on a switch.
-  const perConference = tab === 'settings' || tab === 'inbox' || tab === 'meet' || tab === 'here';
+  const perConference = tab === 'inbox' || tab === 'meet' || tab === 'here';
   const pickConference = (next: string) => {
     setSwitcherOpen(false);
     if (next !== slug) goToConference(next, perConference ? 'people' : tab);
@@ -354,18 +440,44 @@ export function App() {
   // #/here/{zone} is the People tab with presence turned on; once handled, the hash becomes #/people.
   const hereHandled = () => {
     if (readRoute().tab !== 'here') return;
-    history.replaceState(null, '', `${location.pathname}#/people`);
+    history.replaceState(history.state, '', `${location.pathname}#/people`);
     window.dispatchEvent(new Event('caddie:route'));
   };
 
   const interestedIds = new Set(talks.map((t) => t.talk_id));
   const base = slug ? `/e/${encodeURIComponent(slug)}` : '';
-  const isTabScreen = tab !== 'profile' && tab !== 'settings' && tab !== 'inbox' && tab !== 'meet';
+  const isTabScreen = isTab(tab);
   const navTab = tab === 'here' || tab === 'inbox' || tab === 'meet' ? 'people' : tab;
 
+  // Back pops history when the previous screen is the one Back leads to, so the browser's Back
+  // button and this one agree. Otherwise it links there, for a deep link or a reload.
+  const prev = prevRoute.current;
+  const backTo =
+    tab === 'profile'
+      ? { href: '#/settings', pops: prev?.slug === slug && prev?.tab === 'settings' }
+      : {
+          href: lastTabScreen.current?.slug === slug ? tabHash(lastTabScreen.current.tab, lastTabScreen.current.params) : '#/people',
+          pops: prev?.slug === slug && isTab(prev.tab) && prev.tab !== 'here',
+        };
   const leading = !isTabScreen ? (
-    <a class="icon-btn appbar-back" href={tab === 'settings' ? '#/profile' : '#/people'} aria-label="Back">
-      <ArrowLeft size={22} aria-hidden="true" />
+    <a
+      class={tab === 'profile' ? 'appbar-back-labeled' : 'icon-btn appbar-back'}
+      href={backTo.href}
+      aria-label={tab === 'profile' ? 'Back to Settings' : 'Back'}
+      onClick={(e) => {
+        if (!backTo.pops || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        history.back();
+      }}
+    >
+      {tab === 'profile' ? (
+        <>
+          <ChevronLeft size={24} aria-hidden="true" />
+          <span>Settings</span>
+        </>
+      ) : (
+        <ArrowLeft size={22} aria-hidden="true" />
+      )}
     </a>
   ) : null;
 
@@ -407,8 +519,8 @@ export function App() {
         </a>
       )}
       {isTabScreen && (
-        <a class="icon-btn" href="#/profile" aria-label="Your profile">
-          <CircleUserRound size={24} aria-hidden="true" />
+        <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">
+          <Settings size={24} aria-hidden="true" />
         </a>
       )}
     </>
@@ -462,7 +574,7 @@ export function App() {
 
   return (
     <div class="shell">
-      <NavBar tab={navTab} base={base} interestedCount={talks.length} peopleCount={inboxCount} />
+      <NavBar tab={navTab} base={base} interestedCount={talks.length} peopleCount={inboxCount} views={tabViews.current.views} />
       <div class="content">
         <AppBar leading={leading} title={title} actions={actions} />
         <main class="main" id="main">
@@ -470,6 +582,12 @@ export function App() {
             <SettingsScreen
               theme={theme}
               onTheme={setTheme}
+              canImport={!!searchable && online}
+              importNote={!searchable ? 'Open a conference first' : !online ? 'Needs a connection' : null}
+              onImport={() => {
+                setToast(null);
+                setImportOpen(true);
+              }}
               people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /><NudgeSetting conference={searchable} /><NudgeSettings conference={searchable} /></> : null}
             />
           ) : !searchable ? (
@@ -501,25 +619,72 @@ export function App() {
                 <ForYouScreen key={searchable.slug} conference={searchable} interested={talks} onToggleInterested={toggleInterested} />
               )}
               {tab === 'profile' && <ProfileScreen key={searchable.slug} conference={searchable} interested={talks} />}
-              {tab === 'search' && !online && (
+              {tab === 'search' && (
+                <div class="view-switch">
+                  <Segmented
+                    label="Search or browse the schedule"
+                    value={searchView}
+                    onChange={(v) => replaceTabParams('search', v === 'schedule' ? { view: 'schedule', day: params.day } : {})}
+                    options={[
+                      { value: 'search', label: 'Search' },
+                      { value: 'schedule', label: 'Schedule' },
+                    ]}
+                  />
+                </div>
+              )}
+              {tab === 'search' && searchView === 'schedule' && (
+                <FullSchedule
+                  key={searchable.slug}
+                  conference={searchable}
+                  online={online}
+                  filters={schedFilters}
+                  day={params.day ?? null}
+                  onDay={(day) => replaceTabParams('search', { view: 'schedule', day })}
+                  interestedIds={interestedIds}
+                  onToggle={toggleInterested}
+                  onOpen={onOpenTalk}
+                  onFacets={(facets, total) => setSchedFacets({ facets, total })}
+                  filterRow={
+                    <ChipRow
+                      schedule
+                      conference={searchable}
+                      filters={schedFilters}
+                      facets={schedFacets.facets}
+                      nowAvailable={null}
+                      phrases={[]}
+                      onRemovePhrase={() => undefined}
+                      onChange={setSchedFilters}
+                      onOpenSheet={(section) => {
+                        setToast(null);
+                        setSheet({ open: true, section });
+                      }}
+                    />
+                  }
+                />
+              )}
+              {tab === 'search' && searchView === 'search' && !online && (
                 <>
                   <SearchField value={input} onInput={onInput} onSubmit={() => undefined} loading={false} />
                   <OfflineSearch conference={searchable} query={input} interestedIds={interestedIds} onToggle={toggleInterested} />
                 </>
               )}
-              {tab === 'search' && online && (
+              {tab === 'search' && searchView === 'search' && online && (
                 <>
                   <SearchField value={input} onInput={onInput} onSubmit={() => runSearch()} loading={loading} />
                   <ChipRow
                     conference={searchable}
                     filters={filters}
                     facets={data?.facets ?? null}
+                    nowAvailable={data?.happening_now?.available ?? null}
+                    phrases={(data?.time_phrases ?? []).filter((p) => p.applied)}
+                    onRemovePhrase={(key) => setIgnored([...ignored, key])}
                     onChange={setFilters}
                     onOpenSheet={(section) => {
                       setToast(null);
                       setSheet({ open: true, section });
                     }}
                   />
+                  <SuggestionRow suggestions={data?.suggestions ?? []} filters={filters} onChange={setFilters} />
                   <Results
                     conference={searchable}
                     data={data}
@@ -528,9 +693,15 @@ export function App() {
                     error={error}
                     interestedIds={interestedIds}
                     filtersActive={activeFilterCount(filters) > 0}
+                    includeEvents={filters.include_events}
                     onRetry={() => runSearch()}
                     onToggle={toggleInterested}
                     onClearFilters={() => setFilters(EMPTY_FILTERS)}
+                    onExplain={() => {
+                      const p = dataParams.current;
+                      if (!p) return Promise.reject(new Error('no search'));
+                      return search(p.s, p.q, p.f, PAGE_SIZE, new AbortController().signal, true, p.ig);
+                    }}
                   />
                 </>
               )}
@@ -538,7 +709,10 @@ export function App() {
                 <InterestedScreen
                   conference={searchable}
                   interested={talks}
+                  params={params}
+                  onParams={(p) => replaceTabParams('interested', p)}
                   onToggle={toggleInterested}
+                  onOpen={onOpenTalk}
                   onBrowse={() => (location.hash = '#/search')}
                 />
               )}
@@ -551,10 +725,9 @@ export function App() {
           conference={searchable}
           open={sheet.open}
           section={sheet.section}
-          filters={filters}
-          facets={data?.facets ?? null}
-          total={data && !loading ? data.total : null}
-          onChange={setFilters}
+          {...(tab === 'search' && searchView === 'schedule'
+            ? { schedule: true, filters: schedFilters, facets: schedFacets.facets, total: schedFacets.total, onChange: setSchedFilters }
+            : { filters, facets: data?.facets ?? null, total: data && !loading ? data.total : null, onChange: setFilters })}
           onClose={() => setSheet({ open: false })}
         />
       )}
@@ -567,6 +740,24 @@ export function App() {
           onClose={() => setOpenTalk(null)}
         />
       )}
+      {searchable && (
+        <ImportSheet
+          open={importOpen && online}
+          conference={searchable}
+          interestedIds={interestedIds}
+          onClose={() => setImportOpen(false)}
+          onMark={markImported}
+          onUndo={unmarkImported}
+          onViewSchedule={(day) => {
+            setImportOpen(false);
+            location.hash = tabHash('interested', { view: 'day', day });
+          }}
+          onSwitchConference={() => {
+            setImportOpen(false);
+            setSwitcherOpen(true);
+          }}
+        />
+      )}
       <SwitcherSheet
         open={switcherOpen}
         conferences={conferences}
@@ -577,6 +768,7 @@ export function App() {
       />
       <ConfirmDialog data={confirm} onClose={() => setConfirm(null)} />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
+      <InstallCard />
     </div>
   );
 }

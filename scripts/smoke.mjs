@@ -13,6 +13,8 @@
 //                        expired test profile directly, because the API can never create one, and to
 //                        age one test profile's presence, because the API can never set it in the
 //                        past. Without a key those two checks are skipped.
+//   ELASTISEARCH_API_KEY used also to compare index document counts before and after the schedule
+//                        imports (the import must store nothing). Without it that check is skipped.
 //
 // The script creates its own temporary test profiles, each with a random device secret, and
 // deletes them at the end, together with the blocks and meets they made. It never changes the
@@ -91,8 +93,11 @@ const responses = [];
 // Every search result seen, for the evidence check.
 const allResults = [];
 
+const MAX_RATE_WAITS = 8;
+
 async function api(method, path, body, { device, label = '', origin } = {}) {
   let lastError;
+  let rateWaits = 0;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const headers = {};
@@ -106,6 +111,16 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       const text = await res.text();
+      // A local server answers fast enough for the checks to outrun the per-address search limit
+      // (60 per minute), so a 429 waits for its Retry-After and asks again. Only the rate-limit
+      // check rl1 wants a 429, and it calls fetch directly.
+      if (res.status === 429 && rateWaits < MAX_RATE_WAITS) {
+        rateWaits++;
+        const sec = Math.min(15, Math.max(1, Number(res.headers.get('retry-after')) || 1));
+        await new Promise((resolve) => setTimeout(resolve, sec * 1000));
+        attempt--;
+        continue;
+      }
       if (res.status >= 500 && attempt === 0) {
         lastError = new Error(`status ${res.status}`);
         continue;
@@ -212,9 +227,10 @@ for (const [i, { query, title }] of QUERIES.entries()) {
   });
 }
 
-// c. saved_talk_ids is still accepted but no longer filters anything. Ties in semantic ranking
-// can reorder equal scores between two identical requests, so text queries compare totals and
-// the browse listing, which is sorted by time, compares the exact order.
+// c. saved_talk_ids is still accepted but no longer filters anything. Text queries compare totals
+// and the browse listing, which is sorted by time, compares the exact order. (Identical requests
+// return the same order because the server pins every search for a conference to one shard copy;
+// the For you check r8 asserts that.)
 await check('c: saved_talk_ids no longer filters results', async () => {
   if (!firstTopResult) throw new Error('query 1 returned no results');
   const saved = firstTopResult;
@@ -254,6 +270,40 @@ await check('d: no break, housekeeping or ambient item appears', async () => {
   report(leaked.length === 0, 'd: no break, housekeeping or ambient item appears', leaked.length ? leaked.slice(0, 3).join('; ') : `${requests.length} requests, ${nonTalk.size} non-talk items checked`);
 });
 
+// e. The events and showcases toggle: off by default, and when on it adds only kind "ambient" items,
+// never a break or a housekeeping item. The expectation comes from the committed data.
+await check('e1: include_events adds co-located events and showcases, and nothing else', async () => {
+  const docs = readNdjson(PRIMARY);
+  const ambient = new Map(docs.filter((d) => d.kind === 'ambient').map((d) => [d.talk_id, d]));
+  const other = new Map(docs.filter((d) => d.kind === 'break' || d.kind === 'housekeeping').map((d) => [d.talk_id, d]));
+  const track = [...ambient.values()].find((d) => d.track === 'Solutions Showcase')?.track ?? [...ambient.values()][0]?.track;
+  if (!track) throw new Error('no ambient item in the committed data');
+  const off = await search({ query: '', size: 50, filters: { track: [track] } });
+  const on = await search({ query: '', size: 50, filters: { track: [track], include_events: true } });
+  if (off.status !== 200 || on.status !== 200) throw new Error(`status ${off.status} and ${on.status}`);
+  const problems = [];
+  if ((off.json.results ?? []).some((r) => ambient.has(r.talk_id))) problems.push('an event appeared with the toggle off');
+  const shown = (on.json.results ?? []).filter((r) => ambient.has(r.talk_id));
+  if (!shown.length) problems.push('no event appeared with the toggle on');
+  if (shown.some((r) => r.kind !== 'ambient')) problems.push('an event is not marked kind ambient');
+  if ((on.json.results ?? []).some((r) => other.has(r.talk_id))) problems.push('a break or housekeeping item appeared');
+  if ((off.json.results ?? []).some((r) => r.kind !== 'talk')) problems.push('a talk is not marked kind talk');
+  const text = await search({ query: 'solutions showcase and co-located events', size: 50, filters: { include_events: true } });
+  if (text.status !== 200) throw new Error(`status ${text.status}`);
+  if ((text.json.results ?? []).some((r) => other.has(r.talk_id))) problems.push('a break or housekeeping item matched a text query');
+  report(problems.length === 0, 'e1: include_events adds co-located events and showcases, and nothing else', problems.length ? problems.join('; ') : `${shown.length} events in "${track}", ${off.json.total} results off and ${on.json.total} on`);
+});
+
+await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
+  const bad = await search({ query: 'kubernetes', filters: { include_events: 'yes' } });
+  const ambient = new Set(readNdjson(PRIMARY).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
+  const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['kubernetes', 'ebpf'], interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
+  if (recs.status !== 200) throw new Error(`recommendations status ${recs.status}`);
+  const list = recs.json.results ?? recs.json.talks ?? [];
+  const leaked = list.filter((r) => ambient.has(r.talk_id ?? r.talk?.talk_id));
+  report(bad.status === 400 && leaked.length === 0 && list.length > 0, 'e2: include_events must be a boolean, and For you never holds an event', `status ${bad.status}, ${list.length} suggested talks, ${leaked.length} events among them`);
+});
+
 await check('f: an unknown filter value returns 400', async () => {
   const { status } = await search({ query: 'kubernetes', filters: { track: ['No Such Track'] } });
   report(status === 400, 'f: an unknown filter value returns 400', `status ${status}`);
@@ -263,6 +313,144 @@ await check('f2: a search without a conference, or for an unknown one, returns 4
   const none = await api('POST', '/api/search', { query: 'kubernetes' });
   const unknown = await api('POST', '/api/search', { conference: 'no-such-conference-2026', query: 'kubernetes' });
   report(none.status === 400 && unknown.status === 400, 'f2: a search without a conference, or for an unknown one, returns 400', `status ${none.status} and ${unknown.status}`);
+});
+
+// The ranking drawer: "debug": true adds each result's keyword and semantic rank from
+// Elasticsearch, and a normal search carries none of it. The reciprocal rank fusion score the
+// reported ranks imply must never rise down the list, which shows the ranks are the ones fused.
+// The plain and debug result lists are not compared here. The server sends both to the same shard
+// copy, so they come back in the same order, but this check only needs the ranks to be coherent.
+await check('k1: the ranking drawer reports the keyword and semantic ranks that were fused', async () => {
+  const body = { query: 'kubernetes security', size: 15, filters: { hide_sponsor: true } };
+  const plain = await search(body);
+  const debug = await search({ ...body, debug: true });
+  if (plain.status !== 200 || debug.status !== 200) throw new Error(`status ${plain.status} and ${debug.status}`);
+  const problems = [];
+  if ('ranking' in plain.json || (plain.json.results ?? []).some((r) => 'ranking' in r)) problems.push('a normal search carries ranking details');
+  const info = debug.json.ranking;
+  if (!info || info.filters?.hide_sponsor !== true || info.filters?.kind !== 'talk') problems.push('the applied filters are missing');
+  const rrf = (n) => (Number.isInteger(n) && n > 0 ? 1 / (60 + n) : 0);
+  let previous = Infinity;
+  (debug.json.results ?? []).forEach((r, i) => {
+    const g = r.ranking;
+    if (!g || g.rank !== i + 1) return problems.push(`result ${i + 1} has no rank`);
+    if (g.keyword_rank === null && g.semantic_rank === null) problems.push(`"${r.title}" is in neither ranking`);
+    const score = rrf(g.keyword_rank) + rrf(g.semantic_rank);
+    if (score > previous + 1e-9) problems.push(`"${r.title}" at ${g.rank} outscores the talk above it`);
+    previous = score;
+  });
+  const first = debug.json.results?.[0]?.ranking;
+  report(problems.length === 0, 'k1: the ranking drawer reports the keyword and semantic ranks that were fused', problems.length ? problems.slice(0, 3).join('; ') : `top result keyword ${first?.keyword_rank}, semantic ${first?.semantic_rank}`);
+});
+
+await check('k2: debug must be a boolean, and browse mode has no ranking details', async () => {
+  const bad = await search({ query: 'kubernetes', debug: 'yes' });
+  const browse = await search({ query: '', debug: true });
+  const ok = bad.status === 400 && browse.status === 200 && !('ranking' in browse.json);
+  report(ok, 'k2: debug must be a boolean, and browse mode has no ranking details', `status ${bad.status} and ${browse.status}`);
+});
+
+// Time phrases: "tuesday afternoon" leaves the text and becomes two filters. The expectation is
+// computed from the committed data, not from the response: every talk starts on that day at or
+// after 12:00, and the day's lunch from the break items bounds "after lunch".
+const minutesOf = (iso) => Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+await check('m1: "tuesday afternoon" leaves the text, filters the results and can be removed', async () => {
+  const start = confBySlug.get(PRIMARY)?.start_date;
+  const tuesday = ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12'].find((d) => new Date(`${d}T12:00:00Z`).getUTCDay() === 2);
+  if (!start || !tuesday) throw new Error('the primary conference has no Tuesday in the data');
+  const r = await search({ query: 'kubernetes tuesday afternoon', size: 50 });
+  if (r.status !== 200) throw new Error(`status ${r.status}`);
+  const keys = (r.json.time_phrases ?? []).filter((p) => p.applied).map((p) => p.key).sort().join(',');
+  const wrong = (r.json.results ?? []).filter((t) => !t.start.startsWith(tuesday) || minutesOf(t.start) < 720);
+  const off = await search({ query: 'kubernetes tuesday afternoon', size: 50, ignore_phrases: ['tuesday', 'afternoon'] });
+  const offApplied = (off.json.time_phrases ?? []).filter((p) => p.applied).length;
+  const ok = keys === 'afternoon,tuesday' && r.json.search_text === 'kubernetes' && (r.json.results ?? []).length > 0 && wrong.length === 0
+    && off.status === 200 && offApplied === 0 && off.json.total > r.json.total;
+  report(ok, 'm1: "tuesday afternoon" leaves the text, filters the results and can be removed', `phrases ${keys}, text "${r.json.search_text}", ${r.json.total} talks, ${wrong.length} outside the filter, ${off.json.total} with both removed`);
+});
+
+// Happening now: the chip's window is judged by Elasticsearch against its own clock, and the chip is
+// available only on days the conference is running in its own time zone. Both expectations are
+// computed here from the committed data and the local clock, with two minutes of slack for skew.
+const localDayIn = (ms, timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+await check('n1: Happening now is available exactly when the conference has talks today in its own zone', async () => {
+  const problems = [];
+  let checked = 0;
+  for (const slug of [PRIMARY, ...EXTRA.slice(0, 1)]) {
+    const zone = confBySlug.get(slug)?.time_zone;
+    if (!zone) throw new Error(`${slug} has no time zone`);
+    const before = localDayIn(Date.now(), zone);
+    const r = await api('POST', '/api/search', { conference: slug, query: '', size: 1 });
+    const after = localDayIn(Date.now(), zone);
+    if (r.status !== 200) throw new Error(`status ${r.status}`);
+    if (before !== after) continue; // the zone's midnight passed during the request; skip rather than guess
+    const days = new Set(readNdjson(slug).filter((d) => d.kind === 'talk').map((d) => d.day));
+    const expected = days.has(before);
+    checked++;
+    if (r.json.happening_now?.available !== expected) problems.push(`${slug}: expected ${expected} on ${before}, got ${JSON.stringify(r.json.happening_now)}`);
+  }
+  report(problems.length === 0, 'n1: Happening now is available exactly when the conference has talks today in its own zone', problems.length ? problems.join('; ') : `checked ${checked} conferences against the local date in their zones`);
+});
+
+await check('n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', async () => {
+  const slack = 2 * 60_000;
+  const at = Date.now();
+  const r = await search({ query: '', size: 50, filters: { happening_now: true } });
+  const all = await search({ query: '', size: 1 });
+  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
+  if (r.status !== 200 || all.status !== 200) throw new Error(`status ${r.status} and ${all.status}`);
+  const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
+  const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+  const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
+  const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
+  report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
+});
+
+await check('m2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', async () => {
+  const day2 = '2026-11-10';
+  const lunch = readNdjson(PRIMARY).filter((d) => d.kind === 'break' && d.day === day2 && /lunch/i.test(d.title));
+  if (!lunch.length) throw new Error('no lunch break on day 2 in the data');
+  const lunchEnd = Math.max(...lunch.map((d) => d.end_minutes));
+  const r = await search({ query: 'after lunch day 2', size: 50 });
+  if (r.status !== 200) throw new Error(`status ${r.status}`);
+  const wrong = (r.json.results ?? []).filter((t) => !t.start.startsWith(day2) || minutesOf(t.start) < lunchEnd);
+  const unknown = await search({ query: 'day 9 friday', size: 5 });
+  const ok = r.json.search_text === '' && (r.json.results ?? []).length > 0 && wrong.length === 0
+    && unknown.status === 200 && (unknown.json.time_phrases ?? []).length === 0 && unknown.json.search_text === 'day 9 friday';
+  report(ok, 'm2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', `${r.json.total} talks, ${wrong.length} outside the window, lunch ends at minute ${lunchEnd}`);
+});
+
+// Value matching: track, room, speaker and tag names found in the search text come back as
+// suggested chips. They are only suggestions, so the results never change because of them, and
+// they come from the requested conference's own names.
+await check('v1: a track name in the search text is suggested as a chip, never applied, and applying it filters', async () => {
+  const track = 'Platform Engineering';
+  const r = await search({ query: `${track.toLowerCase()} talks`, size: 50 });
+  if (r.status !== 200) throw new Error(`status ${r.status}`);
+  const chip = (r.json.suggestions ?? []).find((s) => s.kind === 'track' && s.value === track);
+  const applied = await search({ query: `${track.toLowerCase()} talks`, size: 50, filters: { track: [track] } });
+  const wrong = (applied.json.results ?? []).filter((t) => t.track !== track);
+  const after = (applied.json.suggestions ?? []).some((s) => s.kind === 'track' && s.value === track);
+  const other = await search({ query: 'pytorch ecosystem', size: 5 });
+  const leaked = (other.json.suggestions ?? []).some((s) => s.value === 'PyTorch Ecosystem');
+  const ok = Boolean(chip) && (r.json.results ?? []).some((t) => t.track !== track) && applied.status === 200 && (applied.json.results ?? []).length > 0
+    && wrong.length === 0 && !after && !leaked;
+  report(ok, 'v1: a track name in the search text is suggested as a chip, never applied, and applying it filters', `${(r.json.suggestions ?? []).length} chips, ${r.json.total} talks before, ${applied.json.total} once applied, ${wrong.length} outside the track`);
+});
+
+await check('v2: a speaker name and a room are suggested as chips and filter the results', async () => {
+  const sample = (await search({ query: '', size: 50 })).json.results?.find((t) => t.speakers?.length && t.room);
+  if (!sample) throw new Error('no talk with a speaker and a room');
+  const name = sample.speakers[0];
+  const r = await search({ query: name, size: 50 });
+  const chip = (r.json.suggestions ?? []).find((s) => s.kind === 'speaker' && s.value === name);
+  const bySpeaker = await search({ query: '', size: 50, filters: { speaker: [name] } });
+  const byRoom = await search({ query: '', size: 50, filters: { room: [sample.room] } });
+  const roomChip = (await search({ query: sample.room.split('|').pop().trim(), size: 5 })).json.suggestions?.find((s) => s.kind === 'room' && s.value === sample.room);
+  const bad = await search({ query: '', filters: { speaker: 'x' } });
+  const ok = Boolean(chip) && bySpeaker.status === 200 && bySpeaker.json.results.length > 0 && bySpeaker.json.results.every((t) => t.speakers.includes(name))
+    && byRoom.status === 200 && byRoom.json.results.length > 0 && byRoom.json.results.every((t) => t.room === sample.room) && Boolean(roomChip) && bad.status === 400;
+  report(ok, 'v2: a speaker name and a room are suggested as chips and filter the results', `speaker chip ${Boolean(chip)}, room chip ${Boolean(roomChip)}, ${bySpeaker.json.total} talks by the speaker, ${byRoom.json.total} in the room`);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -420,6 +608,140 @@ await check('t3: type-ahead and suggestions return topics with talk counts', asy
 });
 
 // ---------------------------------------------------------------------------------------------
+// Import my schedule. Every file here is synthetic, built from public talk titles of the primary
+// conference. The import makes seven requests, under the endpoint's limit of ten a minute. It runs
+// before the people checks, so no smoke write happens while the index doc counts are compared.
+
+// Five talks with a unique, plain ASCII title of at least four words, spread over the schedule.
+function importPicks(slug, n) {
+  const talks = readNdjson(slug).filter((d) => d.kind === 'talk');
+  const seen = new Map();
+  for (const t of talks) seen.set(t.title, (seen.get(t.title) ?? 0) + 1);
+  const pool = talks
+    .filter((t) => seen.get(t.title) === 1 && /^[\x20-\x7e]+$/.test(t.title) && t.title.trim().split(/\s+/).length >= 4)
+    .sort((a, b) => (a.talk_id < b.talk_id ? -1 : 1));
+  const step = Math.max(1, Math.floor(pool.length / n));
+  return pool.filter((_, i) => i % step === 0).slice(0, n);
+}
+
+// A schedule as an attendee might save it: day headers, time ranges, titles, speakers, rooms and
+// calendar links.
+function scheduleText(talks, timeZone) {
+  const day = (iso) => new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(iso));
+  const time = (iso) => new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+  const lines = ['My schedule', ''];
+  for (const t of [...talks].sort((a, b) => Date.parse(a.start) - Date.parse(b.start))) {
+    lines.push(day(t.start), '', `${time(t.start)} – ${time(t.end)}`, t.title, `Speakers: ${t.speakers.join(', ')}`, t.room ?? 'Room 1', 'Add to calendar', '');
+  }
+  return lines.join('\n');
+}
+
+// A minimal one-page PDF (Helvetica, WinAnsi text) with one line per item, for the Tika path.
+function makePdf(lines) {
+  const esc = (s) => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const content = ['BT', '/F1 9 Tf', '40 800 Td', '12 TL', ...lines.map((l) => `(${esc(l)}) Tj T*`), 'ET'].join('\n');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`,
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  objs.forEach((o, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+
+// Document counts of every non-hidden index, except caddie-people, where live attendees may save
+// profiles at any moment (the import's key cannot touch it). Needs ELASTISEARCH_API_KEY.
+// The deployed import key cannot write any index at all; scripts/create-es-keys.mjs checks that.
+async function indexCounts() {
+  const res = await fetch(`${ES_URL}/_cat/indices?format=json&h=index,docs.count&expand_wildcards=open`, {
+    headers: { Authorization: `ApiKey ${process.env.ELASTISEARCH_API_KEY}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`index listing gave ${res.status}`);
+  const rows = await res.json();
+  return new Map(rows.filter((r) => !r.index.startsWith('.') && !r.index.startsWith('caddie-people')).map((r) => [r.index, r['docs.count']]));
+}
+
+const IMPORT_OTHER = EXTRA[0];
+const picks = importPicks(PRIMARY, 5);
+const pickIds = new Set(picks.map((t) => t.talk_id));
+const importBody = scheduleText(picks, confBySlug.get(PRIMARY)?.time_zone ?? 'UTC');
+let countsBefore = null;
+if (process.env.ELASTISEARCH_API_KEY) {
+  try {
+    countsBefore = await indexCounts();
+  } catch (err) {
+    report(false, 'im5: an import adds nothing to any index', err.message);
+  }
+}
+const exactHits = (json) => (json.matched ?? []).filter((m) => pickIds.has(m.talk?.talk_id) && m.confidence === 'exact_title').length;
+
+await check('im1: a text file with 5 real titles gets at least 4 matches at "exact title"', async () => {
+  const { status, json } = await api('POST', '/api/import/schedule', { event: PRIMARY, text: importBody });
+  if (status !== 200) throw new Error(`status ${status}`);
+  const exact = exactHits(json);
+  const foreign = (json.matched ?? []).filter((m) => m.talk?.conference !== PRIMARY).length;
+  report(picks.length === 5 && exact >= 4 && foreign === 0, 'im1: a text file with 5 real titles gets at least 4 matches at "exact title"',
+    `${exact} of ${picks.length} at exact title, ${json.matched?.length ?? 0} matched, ${json.unmatched_count} unmatched, ${json.extracted_chars} characters`);
+});
+
+await check(`im2: the same file against ${IMPORT_OTHER} gets none of the first conference's talks`, async () => {
+  const { status, json } = await api('POST', '/api/import/schedule', { event: IMPORT_OTHER, text: importBody });
+  if (status !== 200) throw new Error(`status ${status}`);
+  const primaryTalks = ownTalks.get(PRIMARY);
+  const crossed = (json.matched ?? []).filter((m) => primaryTalks.has(m.talk?.talk_id) || m.talk?.conference !== IMPORT_OTHER);
+  report(crossed.length === 0, `im2: the same file against ${IMPORT_OTHER} gets none of the first conference's talks`,
+    crossed.length ? `${crossed.length} crossed, for example "${crossed[0].talk?.title}"` : `${json.matched?.length ?? 0} matched, all of ${IMPORT_OTHER}`);
+});
+
+await check('im3: a PDF goes through the attachment processor and finds the same talks', async () => {
+  const pdf = makePdf(importBody.split('\n'));
+  const { status, json } = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'schedule.pdf', mime: 'application/pdf', content_base64: pdf.toString('base64') });
+  if (status !== 200) throw new Error(`status ${status}${json.error ? `: ${json.error}` : ''}`);
+  const exact = exactHits(json);
+  report(exact >= 4, 'im3: a PDF goes through the attachment processor and finds the same talks', `${exact} of ${picks.length} at exact title, ${json.extracted_chars} characters extracted`);
+});
+
+await check('im4: a 6 MB upload gets 413, and unknown keys, binary files and unknown conferences are refused', async () => {
+  const big = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'big.txt', mime: 'text/plain', content_base64: Buffer.alloc(6 * 1024 * 1024, 0x41).toString('base64') });
+  const unknownKey = await api('POST', '/api/import/schedule', { event: PRIMARY, text: 'Kubernetes 101 New Contributor Orientation', store: true });
+  const binary = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'x.png', mime: 'image/png', content_base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x80]).toString('base64') });
+  const unknownEvent = await api('POST', '/api/import/schedule', { event: 'no-such-conference-2026', text: 'Kubernetes 101 New Contributor Orientation' });
+  report(big.status === 413 && unknownKey.status === 400 && binary.status === 415 && unknownEvent.status === 400,
+    'im4: a 6 MB upload gets 413, and unknown keys, binary files and unknown conferences are refused',
+    `6 MB ${big.status}, unknown key ${unknownKey.status}, binary ${binary.status}, unknown conference ${unknownEvent.status}`);
+});
+
+if (!process.env.ELASTISEARCH_API_KEY) {
+  skip('im5: an import adds nothing to any index', 'ELASTISEARCH_API_KEY is not set');
+} else if (countsBefore) {
+  await check('im5: an import adds nothing to any index', async () => {
+    // A write would be searchable after the one-second refresh interval.
+    await new Promise((r) => setTimeout(r, 1500));
+    const after = await indexCounts();
+    const changed = [...new Set([...countsBefore.keys(), ...after.keys()])].filter((i) => countsBefore.get(i) !== after.get(i));
+    const describe = (list) => list.map((i) => `${i}: ${countsBefore.get(i) ?? 'none'} -> ${after.get(i) ?? 'none'}`).join('; ');
+    // The indices the import reads must not change at all, and no new index may appear under their
+    // names. Other sessions and operators share the cluster and may build their own indices during
+    // the run, so a change elsewhere is listed but not judged.
+    const judged = changed.filter((i) => /^caddie-(talks|conferences|topics)/.test(i));
+    const others = changed.filter((i) => !judged.includes(i));
+    report(judged.length === 0, 'im5: an import adds nothing to any index',
+      judged.length ? describe(judged) : `${after.size} indices compared, the talks, conferences and topics indices unchanged${others.length ? `; changed by other writers: ${describe(others)}` : ', and every other index unchanged too'}`);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 // People, circles and talks for you. Every test profile is created here and deleted at the end.
 
 const A = newDevice(); // the requester: chips only, visible, shares for the circle talk
@@ -427,6 +749,7 @@ const B = newDevice(); // can speak to everything A wants to learn, visible
 const C = newDevice(); // can speak to the same, but only shares for the circle talk
 const D = newDevice(); // visible at another conference, with the same topics where possible
 const N = newDevice(); // visible, but never shares for the circle talk
+const E = newDevice(); // shares through the exact writes the Interested screen's auto-share switch sends
 const F = newDevice(); // Find & connect: the person with the specific passage, can speak to LEARN
 const K = newDevice(); // Find & connect: shares only the common topic with A, no text
 const X = newDevice(); // Find & connect: never gets a profile
@@ -499,7 +822,7 @@ try {
   });
 
   await check('p3: a chips-only profile gets people and talk suggestions', async () => {
-    const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: LEARN, speak_topics: [], interests: '', expertise: '', interested_talk_ids: [] }, { label: 'recs' });
+    const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: LEARN, interests: '', interested_talk_ids: [] }, { label: 'recs' });
     const ok = (matchesA?.length ?? 0) > 0 && recs.status === 200 && (recs.json.results ?? []).length > 0;
     report(ok, 'p3: a chips-only profile gets people and talk suggestions', `${matchesA?.length ?? 0} people, ${(recs.json.results ?? []).length} talks`);
   });
@@ -594,6 +917,16 @@ try {
 
   const findMatches = (device, label, extra = {}) => api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], query: FIND_QUERY, ...extra }, { device, label });
   const personIn = (r, who) => (r.json.results ?? []).find((p) => p.display_name === testName(who));
+  // A chips-only person can rank far down a text search on a cluster with many sample profiles,
+  // so this pages through the results (at most eight pages of 20) until it finds them.
+  const findPerson = async (device, label, who, extra = {}) => {
+    for (let from = 0; from < 160; from += 20) {
+      const r = await findMatches(device, label, { ...extra, from });
+      const p = personIn(r, who);
+      if (p || r.status !== 200 || !r.json.has_more) return p ?? null;
+    }
+    return null;
+  };
   let refF = null;
   let refA = null;
 
@@ -650,6 +983,9 @@ try {
 
   await check('q4b: an ask needs both people around', async () => {
     if (!refF) throw new Error('F has no ref');
+    // q4 left A around (its linkedin.com spot line was accepted), so A turns presence off first.
+    const off = await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: A, label: 'A-presence' });
+    if (off.status !== 200) throw new Error(`A presence off gave ${off.status}`);
     const nobody = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
     const on = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: A, label: 'A-presence' });
     if (on.status !== 200) throw new Error(`A presence gave ${on.status}`);
@@ -679,7 +1015,7 @@ try {
     const anyoneView = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
     const fromN = await findMatches(N, 'N-find');
     const f3 = personIn(fromN, 'F');
-    refA = personIn(await findMatches(F, 'F-find', { query: 'eBPF GPU LLM' }), 'A')?.ref ?? null;
+    refA = personIn(await findMatches(F, 'F-find', { query: 'eBPF GPU LLM', when: 'around_now' }), 'A')?.ref ?? null;
     const problems = [];
     if (!f1 || f1.around !== false || f1.zone !== null) problems.push('F not around yet shows around or a zone');
     if (!f2 || f2.around !== true || f2.zone !== ZONE_F) problems.push(`both around: F around ${f2?.around}, zone ${f2?.zone}`);
@@ -748,33 +1084,37 @@ try {
     if (!res.ok || aged.errors) throw new Error(`aging A's presence gave ${res.status}`);
     const r = await findMatches(A, 'A-find');
     const f = personIn(r, 'F');
-    const fromF = personIn(await findMatches(F, 'F-find', { query: 'eBPF GPU LLM' }), 'A');
+    const fromF = await findPerson(F, 'F-find', 'A', { query: 'eBPF GPU LLM' });
     const ok = f && f.around === true && f.zone === null && fromF && fromF.around === false;
     report(Boolean(ok), 'q7: presence expires', ok ? 'an aged presence_until hides the zone and shows A as not around' : `F zone ${f?.zone}, A around ${fromF?.around}`);
   });
 
   await check('q8: block is symmetric and refuses a meet either way with the same body', async () => {
     if (!refF || !refA) throw new Error('refs missing');
+    // q7 aged A's presence away. With A around again, F's around-now view lists A unless the
+    // block hides A, so the check below cannot pass only because A ranked past the first page.
+    const back = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: A, label: 'A-presence' });
+    if (back.status !== 200) throw new Error(`A presence gave ${back.status}`);
     const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
     const fromA = await findMatches(A, 'A-find');
-    const fromF = await findMatches(F, 'F-find', { query: 'eBPF GPU LLM' });
+    const fromF = await findMatches(F, 'F-find', { query: 'eBPF GPU LLM', when: 'around_now' });
     const aToF = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
     const fToA = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: F, label: 'F-meet' });
     const list = await api('GET', `/api/people/blocks?event=${PRIMARY}`, undefined, { device: A, label: 'A-blocks' });
     const un = await api('DELETE', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
-    const back = await findMatches(A, 'A-find');
+    const after = await findMatches(A, 'A-find');
     const problems = [];
     if (blk.status !== 200) problems.push(`block gave ${blk.status}`);
     if (names(fromA.json.results).includes(testName('F'))) problems.push('F still in A\'s results');
     if (names(fromF.json.results).includes(testName('A'))) problems.push('A still in F\'s results');
     if (aToF.status !== 403 || fToA.status !== 403 || aToF.json.error !== 'blocked' || JSON.stringify(aToF.json) !== JSON.stringify(fToA.json)) problems.push(`meets gave ${aToF.status} ${JSON.stringify(aToF.json)} and ${fToA.status} ${JSON.stringify(fToA.json)}`);
     if (!(list.json.refs ?? []).includes(refF) || !(list.json.blocks ?? []).some((b) => b.ref === refF && b.display_name === testName('F'))) problems.push('blocks list lacks F');
-    if (un.status !== 200 || !names(back.json.results).includes(testName('F'))) problems.push('F not back after unblock');
+    if (un.status !== 200 || !names(after.json.results).includes(testName('F'))) problems.push('F not back after unblock');
     report(problems.length === 0, 'q8: block is symmetric and refuses a meet either way with the same body', problems.length ? problems.join('; ') : 'hidden both ways, 403 blocked both ways, listed, unblocked');
   });
 
   await check('q9: delete removes everything', async () => {
-    // q7 aged A's presence away; an ask needs A around again.
+    // An ask needs A around; q8 turned A's presence back on, and this keeps it on.
     const back = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: A, label: 'A-presence' });
     if (back.status !== 200) throw new Error(`A presence gave ${back.status}`);
     const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
@@ -845,6 +1185,47 @@ try {
     report(ok, 'p11: a deleted profile disappears at once', `delete ${del.status}, B ${gone ? 'gone' : 'still there'}; turning both choices off leaves the count at ${count}`);
   });
 
+  await check('p12: the writes behind the auto-share switch are accepted, and a rejection says why', async () => {
+    // The web app sends this body shape for every share, unshare and auto-share write: the same
+    // eight profile keys, "contact_note" as an empty string, and the full list of shared talks.
+    const [t1, t2] = [...ownTalks.get(PRIMARY)].filter((id) => id !== T).slice(0, 2);
+    if (!t1 || !t2) {
+      skip('p12: the writes behind the auto-share switch are accepted, and a rejection says why', 'the conference has fewer than three talks');
+      return;
+    }
+    const body = (shared, over = {}) => ({
+      event: PRIMARY,
+      profile: { display_name: testName('E'), about: '', interests: '', expertise: '', learn_topics: [], speak_topics: [], linkedin_url: null, contact_note: '', ...over },
+      open_to_meet: false,
+      shared_talk_ids: shared,
+    });
+    const put = (b) => api('PUT', '/api/people/profile', b, { device: E, label: 'E-put' });
+    const problems = [];
+    const first = await put(body([t1]));
+    if (first.status === 200) created.push({ device: E, event: PRIMARY });
+    const again = await put(body([t1])); // switching auto-share on re-sends the list that is already shared
+    const marked = await put(body([t1, t2])); // a newly marked talk is shared
+    const unmarked = await put(body([t2])); // an unmarked talk is unshared
+    const steps = [['first share', first, 1], ['same list again', again, 1], ['a marked talk', marked, 2], ['an unmarked talk', unmarked, 1]];
+    for (const [label, r, count] of steps) {
+      if (r.status !== 200) problems.push(`${label} gave ${r.status} ${r.json.error ?? ''}`.trim());
+      else if (r.json.shared_talk_ids?.length !== count || r.json.open_to_meet !== false) problems.push(`${label} echoed the wrong list`);
+    }
+    // A topic the list does not offer is rejected with a message that names the topic field; the web
+    // app reads it, removes the topic from the phone's profile and sends the write again.
+    const retired = await put(body([t2], { learn_topics: ['no-such-topic-xyz'] }));
+    if (retired.status !== 400 || !/^learn_topics contains an unknown topic/.test(retired.json.error ?? '')) problems.push(`an unknown topic gave ${retired.status} ${retired.json.error ?? ''}`.trim());
+    const noName = await put(body([t2], { display_name: '' }));
+    if (noName.status !== 400 || !/^display_name is required/.test(noName.json.error ?? '')) problems.push(`no name gave ${noName.status} ${noName.json.error ?? ''}`.trim());
+    const extraKey = await put(body([t2], { auto_share: true }));
+    if (extraKey.status !== 400 || !/^Unknown key: profile\.auto_share/.test(extraKey.json.error ?? '')) problems.push(`an unknown profile key gave ${extraKey.status}`);
+    const topKey = await put({ ...body([t2]), share_new: true });
+    if (topKey.status !== 400 || !/^Unknown key: share_new/.test(topKey.json.error ?? '')) problems.push(`an unknown body key gave ${topKey.status}`);
+    const off = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: E, label: 'E-delete' });
+    if (off.status !== 200) problems.push(`delete gave ${off.status}`);
+    report(problems.length === 0, 'p12: the writes behind the auto-share switch are accepted, and a rejection says why', problems.length ? problems.join('; ') : 'share, re-send, mark and unmark all 200; unknown topic, missing name and unknown keys 400 with their reasons');
+  });
+
   // ---------------------------------------------------------------------------------------------
   // Talks for you.
 
@@ -883,6 +1264,135 @@ try {
     }
     report(problems.length === 0, 'r2: For you does not cross conferences', problems.length ? problems.slice(0, 3).join('; ') : `${EXTRA.length} conferences checked`);
   });
+
+  // For you is learn-only. The reasons on a suggestion must name only learn topics the request
+  // sent. A user who removes Kubernetes from their profile must never be told a talk matched on
+  // it, and a topic the user can speak to is never a signal and never named.
+  const labelOf = new Map((topicsBySlug.get(PRIMARY) ?? []).map((t) => [t.topic_id, t.label]));
+  const ask = (learn, speak = [], extra = {}) => api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: learn, speak_topics: speak, interests: '', expertise: '', interested_talk_ids: [], size: 50, ...extra }, { label: 'recs' });
+  const whyProblems = (results, learn) => {
+    const learnSet = new Set(learn.map((id) => labelOf.get(id)));
+    const out = [];
+    for (const r of results) {
+      const w = r.why ?? {};
+      if (!(w.learn_topics ?? []).every((l) => learnSet.has(l))) out.push(`"${r.title}" lists a learn topic that was not sent`);
+      if (JSON.stringify(w.topics) !== JSON.stringify(w.learn_topics)) out.push(`"${r.title}" has a why.topics that is not equal to learn_topics`);
+      if ('speak_topics' in w) out.push(`"${r.title}" returns speak_topics in why`);
+    }
+    return out;
+  };
+
+  await check('r3: a request without kubernetes never names kubernetes in why', async () => {
+    if (!labelOf.has('kubernetes') || !labelOf.has('ai') || !labelOf.has('agents')) {
+      skip('r3: a request without kubernetes never names kubernetes in why', 'the conference has no kubernetes, ai or agents topic');
+      return;
+    }
+    const learn = ['ai', 'agents'];
+    const r = await ask(learn);
+    if (r.status !== 200) throw new Error(`status ${r.status}`);
+    const results = r.json.results ?? [];
+    const problems = whyProblems(results, learn);
+    for (const x of results) {
+      const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? [])];
+      if (named.some((l) => /kubernetes/i.test(l))) problems.push(`"${x.title}" names Kubernetes`);
+    }
+    // The check has teeth only when some returned talk really carries the kubernetes topic.
+    const carries = results.some((x) => (x.topics ?? []).some((t) => t.topic_id === 'kubernetes'));
+    if (!carries) problems.push('no returned talk carries the kubernetes topic, so the check proves nothing');
+    const unique = [...new Set(problems)];
+    report(unique.length === 0, 'r3: a request without kubernetes never names kubernetes in why', unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions, none name Kubernetes`);
+  });
+
+  await check('r4: the topics in why are a subset of the learn topics sent, with no speak topics', async () => {
+    const have = (ids) => ids.filter((id) => labelOf.has(id));
+    const cases = [
+      [have(['ai', 'agents']), have(['kubernetes'])],
+      [have(['kubernetes']), have(['ai'])],
+      [have(['ebpf', 'gpu']), have(['llm', 'kubernetes'])],
+      [have(['kubernetes', 'ai']), have(['kubernetes'])],
+      [[...labelOf.keys()].slice(0, 5), [...labelOf.keys()].slice(3, 8)],
+    ].filter(([learn]) => learn.length > 0);
+    const problems = [];
+    let sawLearn = false;
+    for (const [learn, speak] of cases) {
+      const r = await ask(learn, speak);
+      if (r.status !== 200) {
+        problems.push(`status ${r.status}`);
+        continue;
+      }
+      const results = r.json.results ?? [];
+      problems.push(...whyProblems(results, learn));
+      if (results.some((x) => (x.why?.learn_topics ?? []).length > 0)) sawLearn = true;
+    }
+    if (!sawLearn) problems.push('no suggestion named a learn topic, so the check proves nothing');
+    const unique = [...new Set(problems)];
+    report(unique.length === 0, 'r4: the topics in why are a subset of the learn topics sent, with no speak topics', unique.length ? unique.slice(0, 3).join('; ') : `${cases.length} requests checked`);
+  });
+
+  await check('r5: a request with only speak_topics and expertise needs a profile and returns nothing', async () => {
+    const speak = ['kubernetes', 'ai'].filter((id) => labelOf.has(id));
+    const r = await ask([], speak, { expertise: 'I run Kubernetes clusters and teach operators' });
+    const ok = r.status === 200 && r.json.needs_profile === true && (r.json.results ?? []).length === 0;
+    report(ok, 'r5: a request with only speak_topics and expertise needs a profile and returns nothing', `status ${r.status}, needs_profile ${r.json.needs_profile}, ${(r.json.results ?? []).length} results`);
+  });
+
+  await check('r6: speak topics change neither the ranking nor the reasons', async () => {
+    if (!labelOf.has('kubernetes') || !labelOf.has('ai')) {
+      skip('r6: speak topics change neither the ranking nor the reasons', 'the conference has no kubernetes or ai topic');
+      return;
+    }
+    const withSpeak = await ask(['ai'], ['kubernetes'], { expertise: 'Kubernetes operators and controllers', size: 10 });
+    const without = await ask(['ai'], [], { size: 10 });
+    if (withSpeak.status !== 200 || without.status !== 200) throw new Error(`status ${withSpeak.status}/${without.status}`);
+    const a = (withSpeak.json.results ?? []).map((x) => x.talk_id);
+    const b = (without.json.results ?? []).map((x) => x.talk_id);
+    const problems = [];
+    if (!a.length) problems.push('no results');
+    if (JSON.stringify(a) !== JSON.stringify(b)) problems.push('the top results differ when speak_topics is sent');
+    for (const x of withSpeak.json.results ?? []) {
+      const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? [])];
+      if (named.some((l) => /kubernetes/i.test(l)) || 'speak_topics' in (x.why ?? {})) problems.push(`"${x.title}" shows kubernetes in why`);
+    }
+    report(problems.length === 0, 'r6: speak topics change neither the ranking nor the reasons', problems.length ? problems.slice(0, 3).join('; ') : `${a.length} results identical with and without speak_topics`);
+  });
+
+  await check('r7: the learn and problems text alone returns talks with a relevant passage', async () => {
+    const r = await ask([], [], { interests: 'our GPU inference costs are too high', size: 10 });
+    if (r.status !== 200) throw new Error(`status ${r.status}`);
+    const results = r.json.results ?? [];
+    const relevant = /gpu|inference|cost|efficien|scal|latency|throughput|serving|accelerat|resource|utiliz|llm|model/i;
+    const top = results.slice(0, 5);
+    const withPassage = top.filter((x) => x.why?.passage && relevant.test(x.why.passage));
+    const problems = [];
+    if (r.json.needs_profile) problems.push('needs_profile was returned for a request with text');
+    if (results.length === 0) problems.push('no results');
+    if (top.length && withPassage.length < Math.min(3, top.length)) problems.push(`only ${withPassage.length} of the top ${top.length} have a relevant passage`);
+    if (results.some((x) => (x.why?.learn_topics ?? []).length > 0)) problems.push('a topic was named although no topic was sent');
+    report(problems.length === 0, 'r7: the learn and problems text alone returns talks with a relevant passage', problems.length ? problems.join('; ') : `${results.length} talks, first "${results[0].title}"`);
+  });
+
+  // The primary and replica copies of the talks shard hold different numbers of deleted
+  // documents, so they break ties between equal scores differently. The server pins every search
+  // for a conference to one copy (a preference), so the same request must always give the same
+  // order. Many talks share a topic, so the tie is real for a single learn topic.
+  await check('r8: the same For you request made five times returns the same talk order', async () => {
+    const topic = labelOf.has('ai') ? 'ai' : [...labelOf.keys()][0];
+    if (!topic) {
+      skip('r8: the same For you request made five times returns the same talk order', 'the conference has no topics');
+      return;
+    }
+    const orders = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await ask([topic], [], { size: 10 });
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      orders.push((r.json.results ?? []).map((x) => x.talk_id));
+    }
+    const distinct = new Set(orders.map((o) => o.join(',')));
+    const problems = [];
+    if (!orders[0].length) problems.push('no results');
+    if (distinct.size !== 1) problems.push(`${distinct.size} different orders in 5 identical requests`);
+    report(problems.length === 0, 'r8: the same For you request made five times returns the same talk order', problems.length ? problems.join('; ') : `5 requests, one order of ${orders[0].length} talks for "${topic}"`);
+  });
 } catch (err) {
   report(false, 'people checks', err.message);
 } finally {
@@ -899,6 +1409,113 @@ try {
     await res?.body?.cancel();
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The full schedule view.
+
+// sch. The full schedule view lists one day in Elasticsearch's start order, page by page with
+// "from" (browse mode only). The busiest day needs several pages; together they must hold exactly
+// that day's talks, with no duplicates and starts that never go backwards. These checks run after
+// the people checks, so the search requests near the top have left the per-minute search limit.
+await check('sch1: browsing one day pages through only that day\'s talks in start order, with no duplicates', async () => {
+  const docs = new Map(readNdjson(PRIMARY).map((d) => [d.talk_id, d]));
+  const first = await search({ query: '', size: 1 });
+  if (first.status !== 200) throw new Error(`status ${first.status}`);
+  const busiest = [...(first.json.facets?.day ?? [])].sort((a, b) => b.count - a.count)[0];
+  if (!busiest) throw new Error('no day facet values');
+  const day = busiest.value;
+  const expected = [...docs.values()].filter((d) => d.kind === 'talk' && d.day === day).length;
+  const seen = [];
+  let total = null;
+  for (let from = 0; from <= 1000; from += 50) {
+    const r = await search({ query: '', size: 50, from, filters: { day } });
+    if (r.status !== 200) throw new Error(`page from ${from} gave ${r.status}`);
+    total = r.json.total;
+    seen.push(...(r.json.results ?? []));
+    if (!r.json.results?.length || seen.length >= total) break;
+  }
+  const problems = [];
+  const ids = seen.map((r) => r.talk_id);
+  if (new Set(ids).size !== ids.length) problems.push(`${ids.length - new Set(ids).size} duplicates across pages`);
+  if (seen.length !== total || total !== expected) problems.push(`${seen.length} listed, total ${total}, expected ${expected} talks`);
+  for (const r of seen) {
+    const d = docs.get(r.talk_id);
+    if (!d || d.kind !== 'talk' || d.day !== day || r.kind !== 'talk') problems.push(`"${r.title}" is not a talk on ${day}`);
+  }
+  for (let i = 1; i < seen.length; i++) {
+    if (Date.parse(seen[i].start) < Date.parse(seen[i - 1].start)) problems.push(`start goes backwards at position ${i + 1}`);
+  }
+  if (Math.ceil(expected / 50) < 2) problems.push(`the busiest day has only ${expected} talks, so paging was not exercised`);
+  report(problems.length === 0, 'sch1: browsing one day pages through only that day\'s talks in start order, with no duplicates',
+    problems.length ? problems.slice(0, 3).join('; ') : `${day}: ${seen.length} talks in ${Math.ceil(seen.length / 50)} pages`);
+});
+
+await check('sch2: "from" is validated and accepted only in browse mode', async () => {
+  const bad = [
+    { query: 'kubernetes', from: 50 },
+    { query: '', from: -1 },
+    { query: '', from: 1001 },
+    { query: '', from: '50' },
+    { query: '', from: 1.5 },
+  ];
+  const wrong = [];
+  for (const body of bad) {
+    const r = await search({ size: 10, ...body });
+    if (r.status !== 400) wrong.push(`${JSON.stringify(body)} gave ${r.status}`);
+  }
+  const ok = await search({ query: '', size: 10, from: 0 });
+  if (ok.status !== 200) wrong.push(`from 0 gave ${ok.status}`);
+  report(wrong.length === 0, 'sch2: "from" is validated and accepted only in browse mode', wrong.length ? wrong.join('; ') : `${bad.length} bad requests refused`);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Related talks.
+
+await check('rel1: GET /api/related returns up to five other talks of the same conference', async () => {
+  if (!firstTopResult) throw new Error('query 1 returned no results');
+  const self = firstTopResult.talk_id;
+  const { status, json } = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent(self)}`);
+  if (status !== 200) throw new Error(`status ${status}`);
+  const results = json.results ?? [];
+  const ids = results.map((r) => r.talk_id);
+  const ok = results.length >= 1 && results.length <= 5 && !ids.includes(self) && new Set(ids).size === ids.length && results.every((r) => r.conference === PRIMARY && r.title && r.url);
+  report(ok, 'rel1: GET /api/related returns up to five other talks of the same conference', `${results.length} results, the first is "${results[0]?.title ?? ''}"`);
+});
+
+await check('rel2: GET /api/related validates its input', async () => {
+  const good = firstTopResult?.talk_id ?? `${PRIMARY}:1`;
+  const bad = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent('not an id')}`);
+  const extra = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent(good)}&x=1`);
+  const missing = await api('GET', `/api/related?event=${encodeURIComponent(PRIMARY)}&talk_id=${encodeURIComponent(`${PRIMARY}:no-such-talk`)}`);
+  const post = await api('POST', '/api/related', {});
+  report(bad.status === 400 && extra.status === 400 && missing.status === 404 && post.status === 405, 'rel2: GET /api/related validates its input',
+    `bad id ${bad.status}, extra parameter ${extra.status}, unknown talk ${missing.status}, POST ${post.status}`);
+});
+
+// Rate limiting. The burst goes to an unknown /api path, which has a bucket of its own (60 a
+// minute per address), so no other check here is affected.
+
+await check('rl1: a burst of requests gets 429 with Retry-After, and the other endpoints still answer', async () => {
+  const burst = await Promise.all(Array.from({ length: 80 }, () =>
+    fetch(`${BASE_URL}/api/rate-limit-probe`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(async (r) => { await r.arrayBuffer(); return r; })));
+  const limited = burst.filter((r) => r.status === 429);
+  const retryAfter = Number(limited[0]?.headers.get('retry-after'));
+  const health = await fetch(`${BASE_URL}/api/health`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const ok = limited.length >= 1 && burst.every((r) => r.status === 404 || r.status === 429) && Number.isInteger(retryAfter) && retryAfter >= 1 && health.status === 200;
+  report(ok, 'rl1: a burst of requests gets 429 with Retry-After, and the other endpoints still answer',
+    `${limited.length} of ${burst.length} limited, Retry-After ${retryAfter}, health ${health.status}`);
+});
+
+// Install onboarding.
+
+await check('inst1: the manifest makes the app installable and the page links it', async () => {
+  const m = await fetch(`${BASE_URL}/manifest.webmanifest`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const manifest = await m.json();
+  const page = await (await fetch(`${BASE_URL}/`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })).text();
+  const icons = manifest.icons ?? [];
+  const ok = m.status === 200 && manifest.display === 'standalone' && manifest.start_url && icons.some((i) => i.sizes === '192x192') && icons.some((i) => i.sizes === '512x512') && /rel="manifest"/.test(page);
+  report(ok, 'inst1: the manifest makes the app installable and the page links it', `display ${manifest.display}, ${icons.length} icons`);
+});
 
 // ---------------------------------------------------------------------------------------------
 // Checks over every response seen.
@@ -951,7 +1568,8 @@ try {
 }
 
 {
-  // e. The built bundle holds no credential values, credential-shaped strings or scheduling words.
+  // e. The built bundle holds no credential values, credential-shaped strings or scheduling words
+  // ("clash", "conflict", "Build my agenda"); the schedule views only show talks.
   const dist = join(ROOT, 'web', 'dist');
   if (!existsSync(dist)) {
     if (process.env.SMOKE_SKIP_BUNDLE === '1') skip('e: bundle scan', 'web/dist does not exist and SMOKE_SKIP_BUNDLE=1');
@@ -974,8 +1592,12 @@ try {
       for (const { label, bytes } of [...secrets, ...patterns]) {
         if (content.includes(bytes)) hits.push(`${label} in ${file.slice(ROOT.length)}`);
       }
-      if (/\.(js|html)$/.test(file) && /clash|conflict-free|build my agenda|agenda building/i.test(content.toString('utf8'))) hits.push(`scheduling wording in ${file.slice(ROOT.length)}`);
+      if (/\.(js|html)$/.test(file) && /clash|conflict|build my agenda|agenda building/i.test(content.toString('utf8'))) hits.push(`scheduling wording in ${file.slice(ROOT.length)}`);
     }
+    // i. The install card ships in the bundle with its Android and iOS wording.
+    const js = files.filter((f) => f.endsWith('.js')).map((f) => readFileSync(f, 'utf8')).join('\n');
+    const wording = ['beforeinstallprompt', 'Add to Home screen', 'Add to Home Screen', 'caddie.install.offered.v1'].filter((w) => !js.includes(w));
+    report(wording.length === 0, 'inst2: the bundle ships the install card with the Android and iOS wording', wording.length ? `missing ${wording.join(', ')}` : 'all four strings found');
     report(hits.length === 0, 'e: bundle holds no keys, key-shaped strings or scheduling wording', hits.length ? hits.join('; ') : `${files.length} files, ${secrets.length} key values and ${patterns.length} patterns checked`);
   }
 }

@@ -169,6 +169,7 @@ a {
 h1,
 h2,
 h3,
+h4,
 p {
   margin: 0;
 }
@@ -668,6 +669,16 @@ a.conf-row .conf-check {
   display: none;
 }
 
+.suggest-row {
+  padding-top: 0;
+}
+
+.suggest-lead {
+  flex: none;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
 .chip {
   display: inline-flex;
   flex: none;
@@ -726,6 +737,19 @@ a.conf-row .conf-check {
   margin-left: 2px;
 }
 
+.chip.is-disabled:not(.is-active) {
+  border-style: dashed;
+  color: var(--text-2);
+  opacity: 0.65;
+}
+
+.now-note {
+  margin: -4px var(--gutter) 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
 .chip-clear-all {
   flex: none;
   min-height: 44px;
@@ -767,6 +791,25 @@ a.conf-row .conf-check {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+}
+
+.card-event {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: var(--accent-tint);
+  box-shadow: none;
+}
+
+.event-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .card-title {
@@ -889,6 +932,105 @@ mark {
   border-radius: 999px;
 }
 
+.related {
+  margin-top: 8px;
+}
+
+.related summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent-ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.related-note {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.related-list {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.related-list li {
+  display: flex;
+  flex-direction: column;
+}
+
+.related-meta {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* Ranking drawer on search results. */
+.rank-drawer {
+  margin-top: 4px;
+}
+
+.rank-toggle {
+  margin-left: -14px;
+  gap: 6px;
+}
+
+.rank-chevron {
+  transition: transform var(--motion) var(--ease);
+}
+
+.rank-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.rank-panel {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--fill);
+  font-size: 14px;
+}
+
+.rank-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.rank-list dt {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rank-list dd {
+  margin: 2px 0 0;
+  color: var(--text);
+}
+
+.rank-filters {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.rank-note {
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.rank-list + .rank-note {
+  margin-top: 10px;
+}
+
+.rank-panel > .rank-note:first-child {
+  margin-top: 0;
+}
+
 .card-links {
   display: flex;
   flex-wrap: wrap;
@@ -938,6 +1080,20 @@ mark {
   max-width: 320px;
   color: var(--text-2);
   font-size: 15px;
+}
+
+.state-hint {
+  max-width: 320px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.state-hint a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
 .banner {
@@ -1457,12 +1613,71 @@ mark {
 }
 
 .settings-link {
+  border: 0;
+  background: transparent;
   color: var(--accent-ink);
+  text-align: left;
   text-decoration: none;
 }
 
 @media (hover: hover) {
   .settings-link:hover {
+    background: var(--fill);
+  }
+}
+
+.settings-nav {
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+}
+
+.settings-nav:disabled {
+  opacity: 0.55;
+}
+
+@media (hover: hover) {
+  .settings-nav:not(:disabled):hover {
+    background: var(--fill);
+  }
+}
+
+.settings-icon,
+.settings-chevron {
+  flex: none;
+  color: var(--text-2);
+}
+
+.settings-nav-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-hint {
+  color: var(--text-2);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.appbar-back-labeled {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 12px 0 10px;
+  border-radius: 999px;
+  color: var(--accent-ink);
+  font-size: 17px;
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .appbar-back-labeled:hover {
     background: var(--fill);
   }
 }
@@ -1491,7 +1706,7 @@ mark {
 }
 
 .segment {
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 8px;
   border: 0;
   border-radius: 8px;
@@ -1525,5 +1740,77 @@ mark {
     left: 0;
     width: 100%;
     transform: none;
+  }
+}
+
+/* ---------- Install card ---------- */
+
+.install-region {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--nav-h) + var(--safe-bottom) + 76px);
+  z-index: 41;
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--gutter);
+  pointer-events: none;
+}
+
+.install-card {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  padding: 16px 52px 8px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+  animation: rise 200ms var(--ease);
+}
+
+.install-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.install-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.install-body {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.install-steps {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  font-size: 15px;
+}
+
+.install-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+}
+
+.install-later {
+  margin-left: -12px;
+}
+
+@media (min-width: 768px) {
+  .install-region {
+    left: var(--rail-w);
+    bottom: calc(88px + var(--safe-bottom));
+    justify-content: flex-start;
   }
 }

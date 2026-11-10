@@ -140,7 +140,7 @@ export async function nudgeAfterPresence(me, conf) {
     // distance leg never decides specificity (people.mjs), so it cannot create a nudge.
     const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { range: { presence_until: { gt: 'now' } } }], { size: CANDIDATES, blocked, explain: true, origin: locationOf(me) });
     if (!q) return;
-    const [json, topics] = await Promise.all([searchPeople(q.body), topicsOf(conf.slug)]);
+    const [json, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
     const hits = (json.hits?.hits ?? []).filter((h) => {
       const s = h._source ?? {};
       return s.profile_id && isAround(s) && s.presence_zone === zone && !isBroad(h, q.legs, me, topics.common);

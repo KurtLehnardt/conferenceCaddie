@@ -16,11 +16,17 @@
 #
 # Android companion: BLE_NEAR_RSSI is the Bluetooth "a few metres" threshold of server/ble.mjs,
 # applied on the server so it can be tuned at the venue without an app update.
+#
+# The service name comes from the shell's SERVICE (default conference-caddie), so
+# SERVICE=conference-caddie-test npm run deploy deploys a second service for testing without
+# touching the live one.
 set -euo pipefail
 
 PROJECT="project-9205d6eb-366e-4844-b77"
 REGION="us-west1"
-SERVICE="conference-caddie"
+# The Cloud Run service name; SERVICE=conference-caddie-test npm run deploy deploys a second
+# service for testing without touching the live one.
+SERVICE="${SERVICE:-conference-caddie}"
 READ_SECRET="caddie-es-readonly"
 PEOPLE_SECRET="caddie-es-people"
 VAPID_PRIVATE_SECRET="caddie-vapid-private"

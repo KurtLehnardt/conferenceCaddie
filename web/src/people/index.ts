@@ -19,4 +19,5 @@ export { registerPeopleUi } from './ui';
 export { usePresenceWatch } from './presence';
 export { forgetPush } from './push';
 export { useInboxWatch, useInboxCount } from './connect';
+export { useProfileName } from './storage';
 export type { ConferenceLike, InterestedProp, TalkLike } from './types';

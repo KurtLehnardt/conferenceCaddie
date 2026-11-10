@@ -14,10 +14,10 @@ import { revealIn, useNudges } from './nudges';
 import { PersonCard, SampleNote } from './PersonCard';
 import { PresenceControls, StillHereRow } from './PresenceControls';
 import { getPresence, getProfile, getVisibility, setVisibility, usePeopleStore } from './storage';
-import { changeVisibility, getSaveCount } from './sync';
+import { changeVisibility, getSaveCount, getSyncStatus } from './sync';
 import { TalkPeopleControls } from './TalkPeopleControls';
 import type { ConferenceLike, InterestedProp, PersonResult, TalkLike } from './types';
-import { hasEnded, interestedIds, interestedTalks } from './util';
+import { hasEnded, interestedIds, interestedTalks, useVisibleTick } from './util';
 
 export const VISIBILITY_NOTICE =
   'Turning this on stores your profile on our server until the conference ends: your name, about, topics, free text and How to reach me. Other attendees who are also visible at this conference can see it and may be matched with you. People who are not visible see nothing. Turn it off at any time to remove it from the server, or delete your profile.';
@@ -137,7 +137,7 @@ function CreateProfilePrompt() {
       <div>
         <p class="pp-prompt-title">Find people worth meeting</p>
         <p class="pp-prompt-body">
-          Make a short profile: what you've built and what you're trying to figure out next. It stays on this phone
+          Make a short profile: what you've built and what you're trying to learn or figure out next. It stays on this phone
           until you choose to be visible.
         </p>
         <a class="btn btn-primary btn-small pp-prompt-btn" href="#/profile">
@@ -202,7 +202,7 @@ function PeopleSearchBar({
   );
 }
 
-type Page = { results: PersonResult[]; done: boolean };
+type Page = { key: string; results: PersonResult[]; done: boolean };
 
 /**
  * People to meet, or the results of a text search. Pages of 20 are appended as the list is
@@ -223,10 +223,14 @@ function PeopleList({
   groupZone?: string | null;
 }) {
   usePeopleStore();
+  const visibleTick = useVisibleTick();
   const slug = conference.slug;
   const profile = getProfile();
   const vis = getVisibility(slug);
   const saves = getSaveCount();
+  // Matches come from the copy of the profile on the server, so while an edit is still being
+  // written they would describe the old profile; the fetch waits for the write to finish.
+  const saving = getSyncStatus().state === 'saving';
   const ids = useRef<string[]>([]);
   ids.current = interestedIds(interested);
   const idsKey = ids.current.join(',');
@@ -243,7 +247,7 @@ function PeopleList({
   const searching = !!query.trim() || around;
   // Zones come back only while I am around, so the list is fetched again when that changes.
   const meAround = getPresence(slug).on;
-  const key = `${slug}|${query.trim()}|${around}|${meAround}`;
+  const key = `${slug}|${saves}|${idsKey}|${query.trim()}|${around}|${meAround}`;
   const current = useRef(key);
   current.current = key;
 
@@ -256,16 +260,15 @@ function PeopleList({
     });
 
   useEffect(() => {
-    if (!vis.open_to_meet) return;
+    if (!vis.open_to_meet || saving) return;
     const ctl = new AbortController();
     setError(null);
-    setPage(null);
     load(0, ctl.signal)
       .then((r) => {
         if (ctl.signal.aborted) return;
         const results = r.results ?? [];
         loaded.current = key;
-        setPage({ results, done: results.length < MATCH_PAGE });
+        setPage({ key, results, done: results.length < MATCH_PAGE });
       })
       .catch((err) => {
         if (isAbort(err)) return;
@@ -277,13 +280,14 @@ function PeopleList({
         setError(err instanceof PeopleApiError ? err.message : 'People are unavailable right now.');
       });
     return () => ctl.abort();
-  }, [slug, vis.open_to_meet, saves, idsKey, key]);
+  }, [key, vis.open_to_meet, saving, visibleTick]);
 
   // Appends the next page when the end of the list comes into view. The effect depends on the
-  // page only: the "more" flag is for display, so setting it must not abort the fetch.
+  // page only: the "more" flag is for display, so setting it must not abort the fetch. A page
+  // that belongs to an earlier search or profile is never extended.
   useEffect(() => {
     const el = sentinel.current;
-    if (!el || !page || page.done || typeof IntersectionObserver === 'undefined') return;
+    if (!el || !page || page.done || page.key !== current.current || typeof IntersectionObserver === 'undefined') return;
     const ctl = new AbortController();
     const io = new IntersectionObserver((entries) => {
       if (!entries.some((e) => e.isIntersecting)) return;
@@ -295,7 +299,7 @@ function PeopleList({
           if (ctl.signal.aborted || current.current !== startKey) return;
           const next = r.results ?? [];
           const seen = new Set(page.results.map((p) => p.ref));
-          setPage({ results: [...page.results, ...next.filter((p) => !seen.has(p.ref))], done: next.length < MATCH_PAGE });
+          setPage({ key: page.key, results: [...page.results, ...next.filter((p) => !seen.has(p.ref))], done: next.length < MATCH_PAGE });
         })
         .catch((err) => {
           if (!isAbort(err)) setPage({ ...page, done: true });
@@ -307,7 +311,7 @@ function PeopleList({
       io.disconnect();
       ctl.abort();
     };
-  }, [page]);
+  }, [page, key]);
 
   // The Around home view: a quiet refresh of the first page while the tab is visible, so the list
   // follows people as they come and go without a flash. A list the person scrolled further is
@@ -322,7 +326,7 @@ function PeopleList({
         .then((r) => {
           if (ctl.signal.aborted || current.current !== startKey) return;
           const results = r.results ?? [];
-          setPage({ results, done: results.length < MATCH_PAGE });
+          setPage({ key, results, done: results.length < MATCH_PAGE });
         })
         .catch(() => {});
     }, AROUND_REFRESH_MS);
@@ -332,7 +336,7 @@ function PeopleList({
   // Nudges: "See who" (and a tapped Bluetooth "right near you" notification in the Android app)
   // fetches the list again (the person arrived after it loaded) and then lands on their card, in
   // the order the cards are rendered.
-  const shown = useRef<PersonResult[]>([]);
+  const rendered = useRef<PersonResult[]>([]);
   const [revealAt, setRevealAt] = useState(0);
   useEffect(() => {
     if (!around || (!reveal && !bleReveal) || !vis.open_to_meet) return;
@@ -342,7 +346,7 @@ function PeopleList({
         if (ctl.signal.aborted) return;
         const results = r.results ?? [];
         loaded.current = key;
-        setPage({ results, done: results.length < MATCH_PAGE });
+        setPage({ key, results, done: results.length < MATCH_PAGE });
         setRevealAt(Date.now());
       })
       .catch((err) => {
@@ -352,15 +356,18 @@ function PeopleList({
   }, [reveal, bleReveal, key]);
   useEffect(() => {
     if (!revealAt) return;
-    revealIn(slug, list.current, shown.current);
-    revealBleCard(slug, list.current, shown.current);
+    revealIn(slug, list.current, rendered.current);
+    revealBleCard(slug, list.current, rendered.current);
   }, [revealAt]);
 
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
   if (!vis.open_to_meet) return <VisibilityPrompt conference={conference} />;
   if (error) return <p class="pp-error pp-pad">{error}</p>;
-  if (!page) return <p class="pp-hint pp-pad">Finding people…</p>;
-  const results = withoutBlocked(slug, page.results);
+  // The earlier list stays, dimmed, until the one for the current profile and search arrives.
+  const shown = page && page.key.startsWith(`${slug}|`) ? page : null;
+  if (!shown) return <p class="pp-hint pp-pad">Finding people…</p>;
+  const refreshing = saving || shown.key !== key;
+  const results = withoutBlocked(slug, shown.results);
   if (!results.length) {
     return (
       <p class="pp-hint pp-pad">
@@ -371,25 +378,28 @@ function PeopleList({
   // The Around home view groups by zone (server order kept inside each group): my zone first.
   const inZone = groupZone ? results.filter((p) => p.proximity === 'same_zone' || p.zone === groupZone) : [];
   const elsewhere = groupZone ? results.filter((p) => !inZone.includes(p)) : results;
-  shown.current = [...inZone, ...elsewhere];
+  rendered.current = [...inZone, ...elsewhere];
   return (
-    <div class="pp-list" ref={list}>
-      <SampleNote people={results} />
-      {groupZone && (
-        <h3 class="pp-group-title">{inZone.length ? `In ${groupZone}` : `Nobody else in ${groupZone} yet`}</h3>
-      )}
-      {inZone.map((p) => (
-        <PersonCard key={p.ref} person={p} slug={slug} />
-      ))}
-      {groupZone && elsewhere.length > 0 && <h3 class="pp-group-title">Elsewhere at the venue</h3>}
-      {elsewhere.map((p) => (
-        <PersonCard key={p.ref} person={p} slug={slug} />
-      ))}
-      {!page.done && (
-        <div ref={sentinel} class="pp-more-sentinel" aria-hidden={!more}>
-          {more && <p class="pp-hint">Finding more people…</p>}
-        </div>
-      )}
+    <div class="pp-progress-host">
+      <div class={`pp-progress pp-progress-top${refreshing ? ' is-active' : ''}`} aria-hidden="true" />
+      <div class={`pp-list${refreshing ? ' is-refreshing' : ''}`} aria-busy={refreshing} ref={list}>
+        <SampleNote people={results} />
+        {groupZone && (
+          <h3 class="pp-group-title">{inZone.length ? `In ${groupZone}` : `Nobody else in ${groupZone} yet`}</h3>
+        )}
+        {inZone.map((p) => (
+          <PersonCard key={p.ref} person={p} slug={slug} />
+        ))}
+        {groupZone && elsewhere.length > 0 && <h3 class="pp-group-title">Elsewhere at the venue</h3>}
+        {elsewhere.map((p) => (
+          <PersonCard key={p.ref} person={p} slug={slug} />
+        ))}
+        {!shown.done && !refreshing && (
+          <div ref={sentinel} class="pp-more-sentinel" aria-hidden={!more}>
+            {more && <p class="pp-hint">Finding more people…</p>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
