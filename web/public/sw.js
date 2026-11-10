@@ -2,9 +2,9 @@
 //
 // The app registers this file as {base}sw.js?build={id}&api={origin}. The id comes from the hashed
 // name of the app's entry script, so every build has its own caches and a new build replaces this
-// worker. {base} is where the app is served ("/" on Cloud Run, "/conferenceCaddie/" on GitHub
-// Pages) and is read from this worker's scope; {origin} is the API's origin when the API lives on
-// another origin than the app, as on Pages (it is left out when they are the same).
+// worker. {base} is where the app is served ("/" on Cloud Run and on the Cloudflare Worker) and is
+// read from this worker's scope; {origin} is the API's origin when a build puts the API on another
+// origin than the app (VITE_API_BASE; it is left out when they are the same, as in both deployments).
 //
 // - The app shell (index.html, the hashed assets it references, the manifest, the pre-paint theme
 //   script and the icons) is precached at install. Navigations are network-first and fall back to
@@ -29,7 +29,7 @@ const BUILD = (PARAMS.get('build') || 'dev').replace(/[^A-Za-z0-9_-]/g, '').slic
 const PREFIX = 'caddie-';
 const SHELL_CACHE = `${PREFIX}shell-${BUILD}`;
 const DATA_CACHE = `${PREFIX}data-${BUILD}`;
-// The scope is the app's own URL, for example https://host/conferenceCaddie/, and BASE is its path.
+// The scope is the app's own URL, for example https://host/, and BASE is its path.
 const SCOPE = self.registration.scope;
 const BASE = new URL(SCOPE).pathname;
 const INDEX = `${BASE}index.html`;
@@ -170,7 +170,11 @@ async function cacheFirst(request) {
   const cached = await caches.match(request, { cacheName: SHELL_CACHE, ignoreSearch: true });
   if (cached) return cached;
   const res = await fetch(request);
-  if (res.ok) {
+  // A host that answers a missing file with the app's index.html (the Cloudflare Worker's
+  // single-page-application fallback, for example a chunk of an older build) must not have that
+  // page cached under the file's name.
+  const html = (res.headers.get('Content-Type') || '').startsWith('text/html');
+  if (res.ok && !html) {
     const cache = await caches.open(SHELL_CACHE);
     await cache.put(request, res.clone());
   }
@@ -234,7 +238,7 @@ self.addEventListener('push', (event) => {
   const title = typeof payload.title === 'string' && payload.title ? payload.title : 'Conference Caddie';
   const body = typeof payload.body === 'string' ? payload.body : '';
   // The payload url is a path from the site root, such as /e/{slug}#/people?around=1; it is
-  // resolved against the scope, which is the root on Cloud Run and the app's folder on Pages.
+  // resolved against the scope, which is the root in both deployments.
   const path = typeof payload.data?.url === 'string' && payload.data.url.startsWith('/') ? payload.data.url : '/';
   const url = new URL(path.replace(/^\/+/, ''), SCOPE).href;
   const icon = new URL('icons/icon-192.png', SCOPE).href;

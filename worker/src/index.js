@@ -2,6 +2,11 @@
 // slug resolution, admin auth, health and the VAPID key, then exactly one Durable Object request
 // per API call. All ranking, privacy gates and SQL run in the Durable Objects.
 //
+// The same Worker serves the web app as static assets on its own origin ([assets] in
+// wrangler.toml). Static files never reach this code: only /api, /admin and their subpaths do
+// (run_worker_first), so the app's files cost no Worker request and never count in the pace
+// budget, and their headers come from the build's _headers file.
+//
 // Logging: one line per request with the method, a path template, the status and the duration.
 // Never a body, a header value, query text, a profile field, a token or a secret.
 
@@ -175,6 +180,15 @@ async function slugForMeet(env, meetId) {
 
 function allowedOrigins(env) {
   return new Set(String(env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+// An Origin the API accepts: the Worker's own origin, where the web app is served (a browser sends
+// Origin on a same-origin POST, PUT or DELETE too), or one of the development origins in
+// ALLOWED_ORIGINS. A request with no Origin (the native apps, Node, curl) needs no CORS answer and
+// is handled by the callers.
+function originIsAllowed(origin, url, env) {
+  if (!origin) return false;
+  return origin === url.origin || allowedOrigins(env).has(origin);
 }
 
 // Reads the body as text, refusing more than cap bytes (413).
@@ -411,7 +425,7 @@ export default {
     const started = Date.now();
     const url = new URL(request.url);
     const origin = request.headers.get('origin');
-    const originAllowed = Boolean(origin) && allowedOrigins(env).has(origin);
+    const originAllowed = originIsAllowed(origin, url, env);
     const admin = url.pathname.startsWith('/admin/');
     let response;
 

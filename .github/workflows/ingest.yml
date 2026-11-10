@@ -5,7 +5,7 @@
 #
 # Set once in the repository settings:
 #   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it)
-#   variable CADDIE_API_BASE     the Worker's URL, for example https://conference-caddie-api.<subdomain>.workers.dev
+#   variable CADDIE_API_BASE     the Worker's URL (the app's URL too), for example https://conference-caddie.<subdomain>.workers.dev
 #
 # GitHub disables scheduled workflows after 60 days without repository activity. Run this workflow
 # by hand to enable it again. Until both values are set, a scheduled run only logs a notice and

@@ -2,22 +2,25 @@
 //
 // Usage: BASE_URL=http://localhost:8080 node scripts/smoke.mjs
 //
-// It tests two stacks. The Cloud Run server serves the web app and the API from one origin. The free
-// stack serves the web app from GitHub Pages under a base path and the API from a Cloudflare Worker
-// on another origin, so the script separates the two addresses and adds the cross-origin checks.
+// It tests two stacks, each serving the web app and the API from one origin: the Cloud Run server,
+// and the free stack's Cloudflare Worker, which serves the app as static assets. A build whose API
+// is on another origin (the Vite dev server against a local Worker) is still supported: the script
+// keeps the two addresses apart and adds the cross-origin checks.
 //
 // Env:
-//   BASE_URL             the web app, including its base path, for example
-//                        https://kurtlehnardt.github.io/conferenceCaddie. Default http://localhost:8080.
-//   API_BASE             the API origin. Default: the origin of BASE_URL, so the Cloud Run command line
-//                        stays BASE_URL=... node scripts/smoke.mjs. When it differs from BASE_URL's
-//                        origin, the API is taken to be the Worker.
+//   BASE_URL             the web app, including any base path, for example
+//                        https://conference-caddie.<subdomain>.workers.dev. Default http://localhost:8080.
+//   API_BASE             the API origin. Default: the origin of BASE_URL, so the Cloud Run and Worker
+//                        command lines stay BASE_URL=... node scripts/smoke.mjs. When it differs from
+//                        BASE_URL's origin, the API is taken to be the Worker.
 //   SMOKE_API            worker or cloudrun: which API this is. Default: worker when API_BASE differs
-//                        from BASE_URL's origin or an admin token is set, otherwise cloudrun. A local
-//                        Worker on the same origin as BASE_URL needs SMOKE_API=worker (or a token).
-//   SMOKE_ORIGIN         the Origin that browser-like requests send, and that the CORS checks use.
-//                        Default: the origin of BASE_URL. A local Worker allows only the origins in its
-//                        ALLOWED_ORIGINS, so use SMOKE_ORIGIN=http://localhost:5173 against one.
+//                        from BASE_URL's origin or an admin token is set, otherwise cloudrun. The Worker
+//                        without an admin token needs SMOKE_API=worker.
+//   SMOKE_ORIGIN         the Origin that browser-like requests to the Worker send, and that the CORS
+//                        checks use. Default: the origin of BASE_URL. The Worker allows its own origin
+//                        and the development origins in its ALLOWED_ORIGINS.
+//   SMOKE_DIST           the built web app the bundle scan reads, relative to the repository root.
+//                        Default web/dist-worker against the Worker on BASE_URL's origin, else web/dist.
 //   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token (the file's first line is used). With it
 //                        the three Elasticsearch helpers below are replaced by the Worker's test
 //                        fixtures: POST /admin/test/profile (the expired profile),
@@ -27,7 +30,7 @@
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
-//   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when web/dist has not been built.
+//   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when the web app (SMOKE_DIST) has not been built.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
@@ -113,9 +116,13 @@ if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
   process.exit(1);
 }
 const IS_WORKER = API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API || Boolean(ADMIN_TOKEN);
-// A browser sends its Origin on every call to a Worker on another origin, so the run does too. Against
-// Cloud Run no Origin is sent, as before.
-const SEND_ORIGIN = IS_WORKER && (CROSS_ORIGIN_API || Boolean(process.env.SMOKE_ORIGIN));
+// A browser sends its Origin on every call to a Worker on another origin, and on every same-origin
+// POST, PUT and DELETE, so the run sends it on every call to the Worker. Against Cloud Run no Origin
+// is sent, as before.
+const SEND_ORIGIN = IS_WORKER;
+// The Worker serving the web app itself, on BASE_URL's origin (the free stack as deployed).
+const WORKER_SERVES_APP = IS_WORKER && !CROSS_ORIGIN_API;
+const DIST_DIR = process.env.SMOKE_DIST || (WORKER_SERVES_APP ? 'web/dist-worker' : 'web/dist');
 
 // Where the three helpers that reach behind the API get their way in: the Worker's admin fixtures,
 // Elasticsearch (Cloud Run only), or nowhere, in which case the checks that need them are skipped.
@@ -457,7 +464,7 @@ const names = (results) => (results ?? []).map((p) => p.display_name);
 // ---------------------------------------------------------------------------------------------
 // Conferences.
 
-const NOT_WORKER_WHY_EARLY = 'the API is not the Worker (same-origin, no CORS)';
+const NOT_WORKER_WHY_EARLY = 'the API is not the Worker (Cloud Run sends no CORS headers)';
 let conferences = [];
 await check('conf: GET /api/conferences lists the conferences', async () => {
   const { status, json } = await api('GET', '/api/conferences');
@@ -1099,7 +1106,7 @@ await check('im3: a PDF goes through the attachment processor and finds the same
 });
 
 await check('im3b: text the browser extracted from a PDF, sent with its file name and type, finds the same talks', async () => {
-  // The Pages build (VITE_CLIENT_EXTRACT=1) reads a PDF, Word or OpenDocument file in the browser
+  // The Worker build (VITE_CLIENT_EXTRACT=1) reads a PDF, Word or OpenDocument file in the browser
   // and sends { filename, mime: 'text/plain', text }; filename and mime are only format hints.
   const pdf = makePdf(importBody.split('\n'));
   const { status, json } = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'schedule.pdf', mime: 'text/plain', text: extractPdfText(pdf) });
@@ -2216,6 +2223,49 @@ await check('inst1: the manifest makes the app installable and the page links it
   report(problems.length === 0, 'inst1: the manifest makes the app installable and the page links it', problems.length ? problems.join('; ') : `display ${manifest.display}, ${icons.length} icons, sw.js ${sw.status}, deep link ${deep.status}`);
 });
 
+// The Worker's static assets: the app's pages carry the security headers, hashed files are cached
+// for good and the rest is revalidated, the static files never reach the API's meter, and /api and
+// /admin paths are answered by the Worker, never by the app's index.html.
+if (!WORKER_SERVES_APP) {
+  skip('host1: the Worker serves the app with its security and cache headers', IS_WORKER ? 'the web app is on another origin than the Worker' : NOT_WORKER_WHY);
+} else {
+  await check('host1: the Worker serves the app with its security and cache headers', async () => {
+    const problems = [];
+    const cc = (r) => r.headers.get('cache-control') ?? '';
+    const page = await staticPage('/');
+    const deep = await staticPage(`/e/${encodeURIComponent(PRIMARY)}`);
+    for (const [label, r] of [['/', page], [`/e/${PRIMARY}`, deep]]) {
+      const csp = r.headers.get('content-security-policy') ?? '';
+      if (r.status !== 200 || !/text\/html/.test(r.headers.get('content-type') ?? '')) problems.push(`${label} gave ${r.status} ${r.headers.get('content-type')}`);
+      if (!/connect-src 'self'(;|$)/.test(csp) || !/frame-ancestors 'none'/.test(csp) || !/script-src 'self'(;|$)/.test(csp)) problems.push(`${label} has CSP "${csp}"`);
+      if (r.headers.get('x-content-type-options') !== 'nosniff') problems.push(`${label} lacks nosniff`);
+      if (!/max-age=\d+/.test(r.headers.get('strict-transport-security') ?? '')) problems.push(`${label} lacks Strict-Transport-Security`);
+      if (!/no-cache/.test(cc(r))) problems.push(`${label} has Cache-Control "${cc(r)}"`);
+      if (r.headers.has('x-caddie-pace')) problems.push(`${label} went through the API meter`);
+    }
+    for (const path of ['/sw.js', '/manifest.webmanifest']) {
+      const r = await staticPage(path);
+      if (r.status !== 200 || !/no-cache/.test(cc(r))) problems.push(`${path} gave ${r.status} with Cache-Control "${cc(r)}"`);
+    }
+    const asset = /\/assets\/[A-Za-z0-9._-]+\.js/.exec(page.text)?.[0];
+    if (!asset) problems.push('the page names no /assets/ script');
+    else {
+      const r = await staticPage(asset);
+      if (r.status !== 200 || !/javascript/.test(r.headers.get('content-type') ?? '')) problems.push(`${asset} gave ${r.status} ${r.headers.get('content-type')}`);
+      if (!/immutable/.test(cc(r)) || !/max-age=31536000/.test(cc(r))) problems.push(`${asset} has Cache-Control "${cc(r)}"`);
+      if (r.headers.has('x-caddie-pace')) problems.push(`${asset} went through the API meter`);
+    }
+    // A file that no build has: the asset layer may answer with index.html, but never for a year.
+    const missing = await staticPage(`/assets/no-such-file-${crypto.randomBytes(4).toString('hex')}.js`);
+    if (/immutable/.test(cc(missing))) problems.push(`a missing /assets/ file is cached with "${cc(missing)}"`);
+    for (const path of ['/api/no-such-route', '/admin/no-such-route']) {
+      const r = await staticPage(path);
+      if (r.status !== 404 || !/application\/json/.test(r.headers.get('content-type') ?? '')) problems.push(`${path} gave ${r.status} ${r.headers.get('content-type')}, not the Worker's JSON 404`);
+    }
+    report(problems.length === 0, 'host1: the Worker serves the app with its security and cache headers', problems.length ? problems.join('; ') : `CSP and cache headers on /, the deep link, sw.js, the manifest and ${asset}`);
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Checks over every response seen.
 
@@ -2292,10 +2342,10 @@ await check('inst1: the manifest makes the app installable and the page links it
 {
   // e. The built bundle holds no credential values, credential-shaped strings or scheduling words
   // ("clash", "conflict", "Build my agenda"); the schedule views only show talks.
-  const dist = join(ROOT, 'web', 'dist');
+  const dist = join(ROOT, DIST_DIR);
   if (!existsSync(dist)) {
-    if (process.env.SMOKE_SKIP_BUNDLE === '1') skip('e: bundle scan', 'web/dist does not exist and SMOKE_SKIP_BUNDLE=1');
-    else report(false, 'e: bundle scan', 'web/dist does not exist; build it or set SMOKE_SKIP_BUNDLE=1');
+    if (process.env.SMOKE_SKIP_BUNDLE === '1') skip('e: bundle scan', `${DIST_DIR} does not exist and SMOKE_SKIP_BUNDLE=1`);
+    else report(false, 'e: bundle scan', `${DIST_DIR} does not exist; build it or set SMOKE_SKIP_BUNDLE=1`);
   } else {
     const files = [];
     const walk = (dir) => {
