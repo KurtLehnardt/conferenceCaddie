@@ -23,3 +23,6 @@ application_default_credentials.json
 .cache/
 dist-pages/
 tools/bundles/node_modules/
+# The Cloudflare Worker (the free stack) is deployed separately with wrangler; it never goes
+# into the Cloud Run upload or image.
+worker/

@@ -1,6 +1,8 @@
 // Calls to the people, circles, recommendations and topics endpoints of CONTRACT3.
 // The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence,
 // /api/meet/* and /api/push/subscription. This is the only place that reads the device secret.
+import { apiFetch } from '../lib/apiBase';
+import { pausedMessage } from '../lib/pace';
 import { getDevice } from './storage';
 import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
@@ -76,7 +78,7 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
   }
   let res: Response;
   try {
-    res = await fetch(path, { method: init.method ?? 'GET', headers, body: init.body, signal: init.signal });
+    res = await apiFetch(path, { method: init.method ?? 'GET', headers, body: init.body, signal: init.signal });
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
     throw new PeopleApiError(friendly(0), 0);
@@ -95,6 +97,7 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
     } catch {
       // The body is not JSON; the status is enough.
     }
+    if (res.status === 503 && code === 'daily_limit') throw new PeopleApiError(pausedMessage(res.headers.get('Retry-After')), 503, code);
     throw new PeopleApiError((res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status, code, message), res.status, code, count, body);
   }
   return (await res.json()) as T;

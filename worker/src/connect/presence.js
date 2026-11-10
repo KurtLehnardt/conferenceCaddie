@@ -1,0 +1,194 @@
+// "I'm around" presence and the Bluetooth token rotation (PLAN section 1.9, routes 20, 21 and
+// 30), ported from server/connect.mjs and the rotate route of server/ble.mjs.
+//
+//   PUT    /api/presence { event, zone, spot?, location?, until?, ble? }
+//   DELETE /api/presence?event=
+//   POST   /api/presence/ble/rotate { event }
+//
+// Rules this module keeps:
+// - Presence needs a live profile that is visible conference-wide (open_to_meet); otherwise 403
+//   profile_required. The zone must be one of the conference's zones. The spot line passes the
+//   filter (moderation.js); a spot line hidden after reports stays off until an operator unhides it.
+// - Presence ends 60 minutes after it was turned on ('hour'), or at the end of the conference day
+//   in its time zone ('day'), and never after the end of the conference. Turning it on again
+//   while it is on keeps the first `since`.
+// - A position is optional: rounded to 5 decimals, dropped when its accuracy is worse than 200 m,
+//   dropped too when it implies the device moved faster than 7 m/s since its previous fix of the
+//   last ten minutes. It is held in memory only (Store.setLocation), never written to a row and
+//   never returned; only an active meet turns it into a distance and a bearing (meets.js).
+// - The presence row is written only on a real change: presence was off, or the zone, spot line,
+//   mode or Bluetooth flag changed, or the write carries no position (an explicit turn-on, which
+//   restarts the hour). A position-only update, the client's every-30-seconds fix, writes no row.
+// - After a presence row was written and the answer built, the nudge rule runs for this person
+//   (push/nudge.js afterPresence, which never throws). A position-only update cannot change who
+//   is in the same zone, so it does not run the rule.
+// - Turning presence off closes the person's active meets.
+// - Bluetooth: ble: true mints a 22-character token valid 10 minutes (never past the presence),
+//   ble: false clears it, and a write that says nothing leaves it as it was. The rotate route
+//   mints a fresh one while presence is on.
+// - Nothing from a request body, header or row is logged.
+
+import { HttpError, bad, json, readJson } from '../lib/http.js';
+import { dayBounds } from '../lib/time.js';
+import { afterPresence } from '../push/nudge.js';
+import { closeActiveMeetsOf } from './meets.js';
+import { HOUR_MS, iso, profileRequired, writer, line, randomId, distanceM } from './common.js';
+
+const PRESENCE_MS = HOUR_MS;
+const SPOT_MAX = 60;
+const ACCURACY_MAX_M = 200;
+const COORD_DECIMALS = 5;
+// A new fix is checked against the previous one while that is younger than this ...
+const JUMP_WINDOW_MS = 10 * 60_000;
+// ... and dropped when it implies a faster move than this: a brisk run, never walking in a hall.
+const JUMP_MAX_MPS = 7;
+const BLE_TOKEN_MS = 10 * 60_000;
+const BLE_TOKEN_BYTES = 16;
+
+const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until', 'ble']);
+const PRESENCE_MODES = new Set(['hour', 'day']);
+const LOCATION_KEYS = new Set(['lat', 'lon', 'accuracy']);
+const ROTATE_KEYS = new Set(['event']);
+
+// The optional position of a presence write: { lat, lon, accuracy } with accuracy in metres.
+// Returns { lat, lon, accuracy } rounded to 5 decimals and whole metres, or null when there is no
+// position or it is worse than 200 m, in which case the presence is zone-only. A malformed
+// location is 400.
+function parseLocation(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) throw bad('location must be an object or null');
+  for (const k of Object.keys(value)) if (!LOCATION_KEYS.has(k)) throw bad(`Unknown key: location.${k.slice(0, 40)}`);
+  const { lat, lon, accuracy } = value;
+  if (typeof lat !== 'number' || !Number.isFinite(lat) || Math.abs(lat) > 90) throw bad('location.lat must be a latitude');
+  if (typeof lon !== 'number' || !Number.isFinite(lon) || Math.abs(lon) > 180) throw bad('location.lon must be a longitude');
+  if (typeof accuracy !== 'number' || !Number.isFinite(accuracy) || accuracy < 0) throw bad('location.accuracy must be metres');
+  if (accuracy > ACCURACY_MAX_M) return null;
+  const round = (v) => Number(v.toFixed(COORD_DECIMALS));
+  return { lat: round(lat), lon: round(lon), accuracy: Math.round(accuracy) };
+}
+
+// True when a new fix implies the device moved faster than JUMP_MAX_MPS since its previous fix,
+// and that fix is younger than JUMP_WINDOW_MS. Such a fix is not kept: a phone cannot jump across
+// a venue, and a client that claims to is probing. Writes less than a second apart count as a
+// second.
+function implausibleJump(prev, next, nowMs) {
+  if (!prev || !Number.isFinite(prev.lat) || !Number.isFinite(prev.lon) || !Number.isFinite(prev.at)) return false;
+  if (nowMs - prev.at >= JUMP_WINDOW_MS) return false;
+  return distanceM(prev, next) / Math.max(1, (nowMs - prev.at) / 1000) > JUMP_MAX_MPS;
+}
+
+// The token fields for a presence write at nowMs; the token never outlives the presence.
+function mintBleToken(nowMs, presenceUntilMs) {
+  return { ble_token: randomId(BLE_TOKEN_BYTES), ble_token_until_ms: Math.min(nowMs + BLE_TOKEN_MS, presenceUntilMs) };
+}
+
+const bleView = (fields) => ({ token: fields.ble_token, rotate_at: iso(fields.ble_token_until_ms) });
+
+// The caller's live, conference-wide visible profile, else 403 profile_required.
+async function visibleProfile(ctx, device) {
+  const me = await ctx.store.authenticate(device);
+  if (!me || !me.open_to_meet) throw profileRequired();
+  return me;
+}
+
+async function putPresence(ctx, req) {
+  const device = writer(ctx, req);
+  const body = await readJson(req, PRESENCE_KEYS);
+  if (typeof body.zone !== 'string') throw bad('zone must be a string');
+  const zone = body.zone.trim();
+  const { text: spot, pending: spotPending } = line(body.spot, 'spot', SPOT_MAX);
+  const location = parseLocation(body.location);
+  const mode = body.until === undefined || body.until === null ? 'hour' : body.until;
+  if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour' or 'day'");
+  if (body.ble !== undefined && typeof body.ble !== 'boolean') throw bad('ble must be a boolean');
+  const me = await visibleProfile(ctx, device);
+  // From here on nothing awaits, so the read of the current presence and the write that follows
+  // cannot interleave with another request.
+  const store = ctx.store;
+  if (!store.zones().has(zone)) throw bad("zone must be one of the conference's zones");
+  const now = Date.now();
+  const end = Number.isFinite(ctx.conf.visible_until_ms) ? ctx.conf.visible_until_ms : Infinity;
+  // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
+  // the client's zone confirmation does the safeguarding instead. Never past the conference end.
+  const dayUntil = Math.min(dayBounds(now, ctx.conf.time_zone).end, end);
+  const untilMs = mode === 'day' ? dayUntil : Math.min(now + PRESENCE_MS, end);
+  if (untilMs <= now) throw bad('conference has ended');
+
+  const around = store.isAround(me);
+  const cur = around ? me.presence : null;
+  // A spot line hidden after reports stays off until the operator unhides it.
+  const storedSpot = me.spot_hidden ? null : spot;
+  const held = Boolean(storedSpot) && spotPending;
+  // The mode is not stored: a presence whose end is today's end of day was set with 'day'.
+  const curMode = cur ? (cur.until_ms === dayUntil ? 'day' : 'hour') : null;
+  const explicit = body.location === undefined || body.location === null;
+  const bleChange = body.ble === true || (body.ble === false && Boolean(cur?.ble_token));
+  const changed = !cur || explicit || bleChange || cur.zone !== zone || (cur.spot ?? null) !== storedSpot
+    || Boolean(cur.spot_pending) !== held || curMode !== mode;
+
+  let presence = cur;
+  let ble = null;
+  if (changed) {
+    // Turning it on again while it is on extends it; since keeps the first time.
+    const since = cur && Number.isFinite(cur.since_ms) ? cur.since_ms : now;
+    const fields = { zone, spot: storedSpot, spot_pending: held, since_ms: since, until_ms: untilMs };
+    if (body.ble === true) ble = mintBleToken(now, untilMs);
+    if (ble) Object.assign(fields, ble);
+    else if (body.ble === false) Object.assign(fields, { ble_token: null, ble_token_until_ms: null });
+    // A token kept from before never outlives the presence.
+    else if (cur?.ble_token && Number.isFinite(cur.ble_token_until_ms) && cur.ble_token_until_ms > untilMs) fields.ble_token_until_ms = untilMs;
+    else if (!cur) Object.assign(fields, { ble_token: null, ble_token_until_ms: null });
+    presence = store.setPresence(me.profile_id, fields);
+  }
+  // The position, in memory only. A write without a usable position clears the previous one, so
+  // the presence is zone-only again; so does a fix that jumped implausibly far since the last one
+  // (no error: the zone still counts).
+  const prev = cur?.location ?? null;
+  const fix = location && !implausibleJump(prev, location, now) ? { ...location, at: now } : null;
+  store.setLocation(me.profile_id, fix);
+
+  const res = json(200, {
+    ok: true,
+    zone,
+    spot: storedSpot,
+    spot_hidden: me.spot_hidden,
+    until: mode,
+    presence_since: iso(presence.since_ms),
+    presence_until: iso(presence.until_ms),
+    located: fix !== null,
+    ...(body.ble === true && ble ? { ble: bleView(ble) } : {}),
+  });
+  // After the answer: the push nudge for strong matches in this zone (it never throws).
+  if (changed) ctx.waitUntil(new Promise((resolve) => setTimeout(resolve, 0)).then(() => afterPresence(ctx, me)));
+  return res;
+}
+
+async function deletePresence(ctx, req) {
+  const device = writer(ctx, req);
+  const me = await ctx.store.authenticate(device);
+  if (me) {
+    if (me.presence) ctx.store.clearPresence(me.profile_id);
+    else ctx.store.setLocation(me.profile_id, null);
+    // A meet that was active ends when either presence ends.
+    closeActiveMeetsOf(ctx, me.profile_id);
+  }
+  return json(200, { ok: true });
+}
+
+async function rotate(ctx, req) {
+  const device = writer(ctx, req);
+  await readJson(req, ROTATE_KEYS);
+  const me = await visibleProfile(ctx, device);
+  if (!ctx.store.isAround(me)) throw new HttpError(403, { error: 'presence_required' });
+  const fields = mintBleToken(Date.now(), me.presence.until_ms);
+  ctx.store.setPresence(me.profile_id, fields);
+  return json(200, { ok: true, ble: bleView(fields) });
+}
+
+const FAIL = 'People are temporarily unavailable';
+
+export default [
+  { method: 'PUT', path: '/api/presence', bucket: 'write', fail: FAIL, handler: putPresence },
+  { method: 'DELETE', path: '/api/presence', bucket: 'write', fail: FAIL, handler: deletePresence },
+  { method: 'POST', path: '/api/presence/ble/rotate', bucket: 'write', fail: FAIL, handler: rotate },
+];
