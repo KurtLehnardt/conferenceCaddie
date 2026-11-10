@@ -2,6 +2,7 @@ package app.conferencecaddie.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
@@ -10,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.unit.Dp
 
 /** The Theme choice in Settings, as on the web (System, Light, Dark). */
 enum class ThemePreference { System, Light, Dark }
@@ -75,6 +77,8 @@ fun CaddieTheme(preference: ThemePreference = ThemePreference.System, content: @
         LocalCaddieColors provides c,
         LocalCaddieDimens provides dimens,
         LocalCaddieType provides type,
+        // Controls reserve the platform's minimum touch target with minimumInteractiveComponentSize().
+        LocalMinimumInteractiveComponentSize provides PlatformTouchTarget,
     ) {
         MaterialTheme(
             colorScheme = scheme,
@@ -100,3 +104,6 @@ fun CaddieTheme(preference: ThemePreference = ThemePreference.System, content: @
  */
 @Composable
 internal expect fun SystemBarsAppearance(preference: ThemePreference, dark: Boolean)
+
+/** The platform's minimum touch target: 48 dp on Android, 44 pt on iOS. */
+internal expect val PlatformTouchTarget: Dp

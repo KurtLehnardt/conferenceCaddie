@@ -5,7 +5,8 @@
 //   node native/composeApp/scripts/generate-lucide-icons.mjs
 //
 // Every icon the web app imports is listed in WEB_ICONS; NATIVE_ICONS are lucide icons used only by
-// native screens that have no web counterpart (the Server and cache rows of Settings). Lucide is
+// native screens that have no web counterpart (the Server and cache rows of Settings, and the
+// calendar-check glyph of the web app icon, which the wide layout's rail draws). Lucide is
 // ISC-licensed (some icons MIT, from Feather); the licence text is in native/licenses/lucide.txt.
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -24,7 +25,7 @@ const WEB_ICONS = [
   'Search', 'SearchX', 'Settings', 'Share', 'SlidersHorizontal', 'Smartphone', 'Sparkles', 'SquarePlus', 'Star',
   'Trash2', 'TriangleAlert', 'UserRound', 'Users', 'WifiOff', 'X',
 ];
-const NATIVE_ICONS = ['Server', 'HardDrive', 'Scale', 'Link'];
+const NATIVE_ICONS = ['Server', 'HardDrive', 'Scale', 'Link', 'CalendarCheck'];
 
 // The package's barrel names every icon and its aliases (Trash2 is trash.mjs, for example), so the
 // file is looked up there instead of guessing it from the name.

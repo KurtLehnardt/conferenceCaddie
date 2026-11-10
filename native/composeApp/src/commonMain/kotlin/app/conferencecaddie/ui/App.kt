@@ -2,6 +2,25 @@ package app.conferencecaddie.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.key
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import app.conferencecaddie.ui.components.LocalWideLayout
+import app.conferencecaddie.ui.components.NavRail
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,6 +88,11 @@ fun visibleTabs(peopleEnabled: Boolean): List<Tab> = Tab.entries.filter { it != 
  * people features, For you, Search, Interested); Settings as a screen of its own with Back, as on
  * the web; the switcher sheet; the toast; and the confirmation before switching servers.
  *
+ * In a window at least 768 dp wide (a tablet, or a phone in landscape) the shell takes the web's
+ * wide layout: the tabs move to a rail on the left and the app bar and content stay in a column at
+ * most 720 dp wide, centred. Every part stays clear of the system bars, the display cutout and the
+ * keyboard.
+ *
  * The caller owns the data ([state]) and answers [actions]; [content] supplies each tab's screen.
  * [initialTab] opens another tab than the first one, if the backend offers it.
  */
@@ -121,59 +145,76 @@ fun App(
 
     CaddieTheme(state.theme) {
         CompositionLocalProvider(LocalShellNavigator provides navigator) {
-            Column(Modifier.fillMaxSize().background(Caddie.colors.bg)) {
-                val conference = state.selectedConference
-                AppBar(
-                    title = {
-                        if (settingsOpen) {
-                            AppBarTitle(Strings.Settings.TITLE)
-                        } else {
-                            SwitcherButton(
-                                name = conference?.name
-                                    ?: if (state.conferences != null) Strings.AppBar.CHOOSE_CONFERENCE else Strings.APP_NAME,
-                                onClick = { switcherOpen = true },
-                            )
-                        }
-                    },
-                    leading = if (settingsOpen) {
-                        { CaddieIconButton(LucideIcon.ArrowLeft, Strings.AppBar.BACK, { settingsOpen = false }, iconSize = 22.dp) }
-                    } else {
-                        null
-                    },
-                    actions = {
-                        if (!settingsOpen) content.appBarActions?.invoke(selected)
-                        if (!state.online) OfflineBadge()
-                        if (!settingsOpen) CaddieIconButton(LucideIcon.Settings, Strings.AppBar.SETTINGS, { settingsOpen = true })
-                    },
-                )
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    if (settingsOpen) {
-                        SettingsScreen(
-                            state = state,
-                            actions = actions,
-                            onOpenUrl = openUrl,
-                            onServerTyped = { typedServer = it },
-                        )
-                    } else if (conference == null || !conference.searchable) {
-                        Blocker(state, actions, onChoose = { switcherOpen = true }, onOpenUrl = openUrl)
-                    } else {
-                        TabBody(selected, state, content)
-                    }
-                    val toast = state.toast
-                    if (toast != null) {
-                        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)) {
-                            Toast(toast, onDismiss = actions.onDismissToast, onAction = actions.onToastAction)
+            BoxWithConstraints(Modifier.fillMaxSize().background(Caddie.colors.bg)) {
+                val wide = maxWidth >= Caddie.dimens.wideLayoutMinWidth
+                val navItems = tabs.map { tab -> navItem(tab, state) }
+                val navSelected = if (settingsOpen) null else selected
+                val onNavSelect: (Tab) -> Unit = {
+                    settingsOpen = false
+                    selected = it
+                }
+                // The tab bar's height, so the keyboard inset below the content does not count it twice.
+                var navBarHeight by remember { mutableStateOf(0.dp) }
+                val density = LocalDensity.current
+                // One tree for both layouts, so a screen keeps its state when the window changes width.
+                CompositionLocalProvider(LocalWideLayout provides wide) {
+                    Row(Modifier.fillMaxSize()) {
+                        if (wide) NavRail(navItems, navSelected, onNavSelect)
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                // The rail already keeps clear of the cutout on its side.
+                                .then(if (wide) Modifier.consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Start)) else Modifier),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            val column = if (wide) Modifier.widthIn(max = Caddie.dimens.contentMaxWidth) else Modifier
+                            ShellAppBar(state, settingsOpen, selected, content, column, onBack = { settingsOpen = false }, onOpenSettings = { settingsOpen = true }, onOpenSwitcher = { switcherOpen = true })
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .then(column)
+                                    .fillMaxWidth()
+                                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                                    .then(
+                                        if (wide) {
+                                            Modifier.windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
+                                        } else {
+                                            Modifier.consumeWindowInsets(PaddingValues(bottom = navBarHeight))
+                                        },
+                                    ),
+                            ) {
+                                val conference = state.selectedConference
+                                if (settingsOpen) {
+                                    SettingsScreen(
+                                        state = state,
+                                        actions = actions,
+                                        onOpenUrl = openUrl,
+                                        onServerTyped = { typedServer = it },
+                                    )
+                                } else if (conference == null || !conference.searchable) {
+                                    Blocker(state, actions, onChoose = { switcherOpen = true }, onOpenUrl = openUrl)
+                                } else {
+                                    TabBody(selected, state, content)
+                                }
+                                val toast = state.toast
+                                if (toast != null) {
+                                    Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)) {
+                                        Toast(toast, onDismiss = actions.onDismissToast, onAction = actions.onToastAction)
+                                    }
+                                }
+                            }
+                            if (!wide) {
+                                NavBar(
+                                    items = navItems,
+                                    selected = navSelected,
+                                    onSelect = onNavSelect,
+                                    modifier = Modifier.onSizeChanged { navBarHeight = with(density) { it.height.toDp() } },
+                                )
+                            }
                         }
                     }
                 }
-                NavBar(
-                    items = tabs.map { tab -> navItem(tab, state) },
-                    selected = if (settingsOpen) null else selected,
-                    onSelect = {
-                        settingsOpen = false
-                        selected = it
-                    },
-                )
             }
 
             if (switcherOpen) {
@@ -190,24 +231,75 @@ fun App(
                 )
             }
 
-            // A link's server and a typed server get the same confirmation, which names the base.
-            val pending = state.pendingConnect ?: typedServer
+            // A link's server and a typed server get the same confirmation, which names the base. One
+            // shows at a time: a server typed in Settings is answered first (a link cannot arrive
+            // before it, since the confirmation covers Settings), and a link that arrives meanwhile
+            // waits for its turn instead of replacing the question the person is reading.
+            val typed = typedServer
+            val linked = state.pendingConnect
+            val pending = when {
+                typed != null -> PendingServer(typed, fromLink = false)
+                linked != null -> PendingServer(linked, fromLink = true)
+                else -> null
+            }
             if (pending != null) {
-                ConnectConfirmation(
-                    base = pending,
-                    official = pending == state.officialServerBase,
-                    onConfirm = {
-                        typedServer = null
-                        actions.onChangeServer(pending)
-                    },
-                    onDecline = {
-                        if (state.pendingConnect != null) actions.onDeclineConnect()
-                        typedServer = null
-                    },
-                )
+                key(pending) {
+                    ConnectConfirmation(
+                        base = pending.base,
+                        official = pending.base == state.officialServerBase,
+                        onConfirm = {
+                            if (!pending.fromLink) typedServer = null
+                            actions.onChangeServer(pending.base)
+                        },
+                        onDecline = {
+                            if (pending.fromLink) actions.onDeclineConnect() else typedServer = null
+                        },
+                    )
+                }
             }
         }
     }
+}
+
+/** A server waiting for confirmation, and whether it came from a link (else from Settings). */
+private data class PendingServer(val base: String, val fromLink: Boolean)
+
+/** The app bar: the switcher (or "Settings" with Back), the tab's actions, the badge and the gear. */
+@Composable
+private fun ShellAppBar(
+    state: ShellState,
+    settingsOpen: Boolean,
+    selected: Tab,
+    content: TabContent,
+    modifier: Modifier,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenSwitcher: () -> Unit,
+) {
+    AppBar(
+        modifier = modifier,
+        title = {
+            if (settingsOpen) {
+                AppBarTitle(Strings.Settings.TITLE)
+            } else {
+                SwitcherButton(
+                    name = state.selectedConference?.name
+                        ?: if (state.conferences != null) Strings.AppBar.CHOOSE_CONFERENCE else Strings.APP_NAME,
+                    onClick = onOpenSwitcher,
+                )
+            }
+        },
+        leading = if (settingsOpen) {
+            { CaddieIconButton(LucideIcon.ArrowLeft, Strings.AppBar.BACK, onBack, iconSize = 22.dp) }
+        } else {
+            null
+        },
+        actions = {
+            if (!settingsOpen) content.appBarActions?.invoke(selected)
+            if (!state.online) OfflineBadge()
+            if (!settingsOpen) CaddieIconButton(LucideIcon.Settings, Strings.AppBar.SETTINGS, onOpenSettings)
+        },
+    )
 }
 
 private fun navItem(tab: Tab, state: ShellState): NavItem<Tab> = when (tab) {
@@ -267,11 +359,14 @@ fun ForYouPlaceholder(online: Boolean) {
 fun InterestedPlaceholder() {
     val nav = LocalShellNavigator.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        // .screen-head and .screen-title (web/src/components/schedule.css).
         Text(
             Strings.Interested.TITLE,
-            style = Caddie.type.appBarTitle.copy(fontSize = Caddie.type.sheetTitle.fontSize),
+            style = Caddie.type.screenTitle,
             color = Caddie.colors.text,
-            modifier = Modifier.padding(horizontal = Caddie.dimens.gutter, vertical = 8.dp),
+            modifier = Modifier
+                .padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp, bottom = 12.dp)
+                .semantics { heading() },
         )
         StateView(
             icon = LucideIcon.Star,

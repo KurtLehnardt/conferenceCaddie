@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -93,7 +94,10 @@ fun Modifier.caddieClickable(
 
 enum class ButtonVariant { Primary, Tonal, Text, Danger }
 
-/** .btn: a pill button at least 44 dp tall (.btn-primary, -tonal, -text, -danger; .btn-small). */
+/**
+ * .btn: a pill button at least 44 dp tall (.btn-primary, -tonal, -text, -danger; .btn-small). Its
+ * touch target is at least the platform's minimum (48 dp on Android, 44 pt on iOS).
+ */
 @Composable
 fun CaddieButton(
     text: String,
@@ -113,6 +117,7 @@ fun CaddieButton(
     }
     Row(
         modifier
+            .minimumInteractiveComponentSize()
             .alpha(if (enabled) 1f else 0.45f)
             .heightIn(min = Caddie.dimens.minTouch)
             .caddieClickable(Pill, enabled = enabled, onClick = onClick)
@@ -134,7 +139,10 @@ fun CaddieButton(
     }
 }
 
-/** .icon-btn: a 44 dp round button holding one icon, named by [contentDescription]. */
+/**
+ * .icon-btn: a 44 dp round button holding one icon, named by [contentDescription]. Its touch target
+ * is at least the platform's minimum.
+ */
 @Composable
 fun CaddieIconButton(
     icon: LucideIcon,
@@ -147,6 +155,7 @@ fun CaddieIconButton(
 ) {
     Box(
         modifier
+            .minimumInteractiveComponentSize()
             .size(Caddie.dimens.minTouch)
             .caddieClickable(CircleShape, onClick = onClick)
             .semantics { this.contentDescription = contentDescription },
