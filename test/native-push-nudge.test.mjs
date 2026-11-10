@@ -65,7 +65,7 @@ function around(d, { web = false, apns = [], fcm = [] } = {}) {
   if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
   for (const [platform, tokens] of [['apns', apns], ['fcm', fcm]]) {
     for (const token of tokens) {
-      fake.put('caddie-people-push', registrationId(platform, token), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
+      fake.put('caddie-people-push', registrationId(EVENT, platform, token), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
     }
   }
 }
@@ -195,11 +195,11 @@ describe('push nudge with native push', () => {
     }
     assert.equal(fake.pushes.length, 5, 'every registration was tried');
     const store = fake.store('caddie-people-push');
-    assert.equal(store.has(registrationId('apns', goneApns)), false, 'APNs 410: deleted');
-    assert.equal(store.has(registrationId('apns', badApns)), false, 'APNs 400 BadDeviceToken: deleted');
-    assert.equal(store.has(registrationId('fcm', goneFcm)), false, 'FCM 404 UNREGISTERED: deleted');
-    assert.equal(store.has(registrationId('apns', busyApns)), true, 'APNs 429: kept');
-    assert.equal(store.has(registrationId('fcm', keptFcm)), true, 'FCM 503: kept');
+    assert.equal(store.has(registrationId(EVENT, 'apns', goneApns)), false, 'APNs 410: deleted');
+    assert.equal(store.has(registrationId(EVENT, 'apns', badApns)), false, 'APNs 400 BadDeviceToken: deleted');
+    assert.equal(store.has(registrationId(EVENT, 'fcm', goneFcm)), false, 'FCM 404 UNREGISTERED: deleted');
+    assert.equal(store.has(registrationId(EVENT, 'apns', busyApns)), true, 'APNs 429: kept');
+    assert.equal(store.has(registrationId(EVENT, 'fcm', keptFcm)), true, 'FCM 503: kept');
     assert.deepEqual(lines.sort(), ['Native push failed: apns 429 TooManyRequests', 'Native push failed: fcm 503 UNAVAILABLE']);
   });
 });

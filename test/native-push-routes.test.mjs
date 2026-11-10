@@ -56,27 +56,44 @@ function setup() {
 }
 
 describe('PUT /api/push/native', () => {
-  test('stores an APNs token (lowercase, production unless sandbox) and an FCM token under sha256(platform:token)', async () => {
+  test('one token keeps a registration at each conference it is used at', async () => {
+    const { cluster, device } = setup();
+    const OTHER = 'otherconf-2099';
+    cluster.put(INDEX.conferences, OTHER, { slug: OTHER, status: 'searchable', end_date: '2099-12-31', time_zone: 'UTC' });
+    addPerson(cluster, device);
+    cluster.put(INDEX.people, `${OTHER}:${device.profileId}`, { ...cluster.source(INDEX.people, personId(device.profileId)), event_id: OTHER });
+    const token = apnsToken();
+    assert.equal((await put(device, { event: EVENT, platform: 'apns', token })).status, 200);
+    assert.equal((await put(device, { event: OTHER, platform: 'apns', token })).status, 200);
+    assert.equal(cluster.source(INDEX.push, registrationId(EVENT, 'apns', token)).event_id, EVENT);
+    assert.equal(cluster.source(INDEX.push, registrationId(OTHER, 'apns', token)).event_id, OTHER);
+    // Removing it at one conference leaves the other.
+    assert.equal((await del(device, { event: OTHER, platform: 'apns', token })).status, 200);
+    assert.equal(cluster.source(INDEX.push, registrationId(OTHER, 'apns', token)), null);
+    assert.ok(cluster.source(INDEX.push, registrationId(EVENT, 'apns', token)));
+  });
+
+  test('stores an APNs token (lowercase, production unless sandbox) and an FCM token under sha256(event:platform:token)', async () => {
     const { cluster, device } = setup();
     const apns = apnsToken();
     const fcm = fcmToken();
     assert.deepEqual(await put(device, { event: EVENT, platform: 'apns', token: apns.toUpperCase() }), { status: 200, body: { ok: true } });
     assert.deepEqual(await put(device, { event: EVENT, platform: 'fcm', token: fcm }), { status: 200, body: { ok: true } });
-    const a = cluster.source(INDEX.push, registrationId('apns', apns));
+    const a = cluster.source(INDEX.push, registrationId(EVENT, 'apns', apns));
     const { created_at: createdA, ...restA } = a;
     assert.deepEqual(restA, { event_id: EVENT, profile_id: device.profileId, platform: 'apns', token: apns, environment: 'production', expires_at: FUTURE });
     assert.ok(Date.parse(createdA) <= Date.now());
-    const f = cluster.source(INDEX.push, registrationId('fcm', fcm));
+    const f = cluster.source(INDEX.push, registrationId(EVENT, 'fcm', fcm));
     const { created_at: createdF, ...restF } = f;
     assert.deepEqual(restF, { event_id: EVENT, profile_id: device.profileId, platform: 'fcm', token: fcm, expires_at: FUTURE });
-    assert.equal(registrationId('apns', apns), crypto.createHash('sha256').update(`apns:${apns}`).digest('hex'));
+    assert.equal(registrationId(EVENT, 'apns', apns), crypto.createHash('sha256').update(`${EVENT}:apns:${apns}`).digest('hex'));
     const write = cluster.log.find((e) => e.method === 'PUT' && e.path.startsWith(`/${INDEX.push}/_doc/`));
     assert.equal(write.params.get('refresh'), 'wait_for');
 
     // The same token again overwrites its document: here it moves to the sandbox.
     assert.equal((await put(device, { event: EVENT, platform: 'apns', token: apns, environment: 'sandbox' })).status, 200);
     assert.equal(cluster.ids(INDEX.push).length, 2);
-    assert.equal(cluster.source(INDEX.push, registrationId('apns', apns)).environment, 'sandbox');
+    assert.equal(cluster.source(INDEX.push, registrationId(EVENT, 'apns', apns)).environment, 'sandbox');
   });
 
   test('bodies are closed and tokens must have their platform\'s format', async () => {
@@ -139,10 +156,10 @@ describe('DELETE /api/push/native', () => {
     const token = apnsToken();
     assert.equal((await put(device, { event: EVENT, platform: 'apns', token })).status, 200);
     assert.deepEqual(await del(stranger, { event: EVENT, platform: 'apns', token }), { status: 200, body: { ok: true } });
-    assert.ok(cluster.source(INDEX.push, registrationId('apns', token)), "another profile's request changes nothing");
+    assert.ok(cluster.source(INDEX.push, registrationId(EVENT, 'apns', token)), "another profile's request changes nothing");
     assert.deepEqual(await del(device, { event: EVENT, platform: 'fcm', token: fcmToken() }), { status: 200, body: { ok: true } }, 'nothing to remove');
     assert.deepEqual(await del(device, { event: EVENT, platform: 'apns', token: token.toUpperCase() }), { status: 200, body: { ok: true } });
-    assert.equal(cluster.source(INDEX.push, registrationId('apns', token)), null);
+    assert.equal(cluster.source(INDEX.push, registrationId(EVENT, 'apns', token)), null);
   });
 
   test('takes no environment, and checks the token format', async () => {
@@ -173,14 +190,14 @@ describe('registrations go with the profile and the conference, like Web Push su
   test('DELETE /api/people/profile removes them', async () => {
     const { cluster, device, tokens } = await withRegistrations();
     assert.deepEqual(await request(people.handlePeopleApi, 'DELETE', `/api/people/profile?event=${EVENT}`, device), { status: 200, body: { ok: true } });
-    assert.deepEqual(cluster.ids(INDEX.push), [registrationId('apns', tokens.others)]);
+    assert.deepEqual(cluster.ids(INDEX.push), [registrationId(EVENT, 'apns', tokens.others)]);
   });
 
   test('turning visibility and every shared talk off (which deletes the profile) removes them', async () => {
     const { cluster, device, tokens } = await withRegistrations();
     const r = await request(people.handlePeopleApi, 'PUT', '/api/people/profile', device, { event: EVENT, profile: { display_name: 'Test person' }, open_to_meet: false, shared_talk_ids: [] });
     assert.equal(r.status, 200);
-    assert.deepEqual(cluster.ids(INDEX.push), [registrationId('apns', tokens.others)]);
+    assert.deepEqual(cluster.ids(INDEX.push), [registrationId(EVENT, 'apns', tokens.others)]);
   });
 
   test('the purge finishes a pending delete with them', async () => {
@@ -188,17 +205,17 @@ describe('registrations go with the profile and the conference, like Web Push su
     cluster.patch(INDEX.people, personId(device.profileId), HIDDEN_FOR_DELETE);
     await quietly(() => people.finishPendingDeletes());
     assert.equal(cluster.source(INDEX.people, personId(device.profileId)), null);
-    assert.deepEqual(cluster.ids(INDEX.push), [registrationId('apns', tokens.others)]);
+    assert.deepEqual(cluster.ids(INDEX.push), [registrationId(EVENT, 'apns', tokens.others)]);
   });
 
   test('the hourly purge deletes those whose conference has ended', async () => {
     const { cluster, tokens } = await withRegistrations();
     const ended = apnsToken();
-    cluster.put(INDEX.push, registrationId('apns', ended), { event_id: 'old-conf-2020', profile_id: 'x', platform: 'apns', token: ended, environment: 'production', expires_at: PAST });
+    cluster.put(INDEX.push, registrationId(EVENT, 'apns', ended), { event_id: 'old-conf-2020', profile_id: 'x', platform: 'apns', token: ended, environment: 'production', expires_at: PAST });
     await quietly(() => people.purgeExpired());
-    assert.equal(cluster.source(INDEX.push, registrationId('apns', ended)), null);
+    assert.equal(cluster.source(INDEX.push, registrationId(EVENT, 'apns', ended)), null);
     assert.equal(cluster.ids(INDEX.push).length, 4, 'live ones are kept');
-    assert.ok(cluster.source(INDEX.push, registrationId('fcm', tokens.fcm)));
+    assert.ok(cluster.source(INDEX.push, registrationId(EVENT, 'fcm', tokens.fcm)));
   });
 
   test('turning presence off keeps them, as it keeps Web Push subscriptions', async () => {
@@ -217,10 +234,10 @@ test('pushTargetsFor reads subscriptions and registrations back for nudge.mjs, a
   cluster.put(INDEX.push, 'sandbox', { event_id: EVENT, profile_id: other.profileId, platform: 'apns', token: 'ab'.repeat(32), environment: 'sandbox', expires_at: FUTURE });
   const targets = await pushTargetsFor(EVENT, [device.profileId, other.profileId]);
   const byId = Object.fromEntries(targets.map((t) => [t.id, t]));
-  assert.deepEqual(Object.keys(byId).sort(), [subscriptionId('https://push.example.test/sub'), registrationId('apns', tokens.apns), registrationId('fcm', tokens.fcm), registrationId('apns', tokens.others), 'sandbox'].sort());
+  assert.deepEqual(Object.keys(byId).sort(), [subscriptionId('https://push.example.test/sub'), registrationId(EVENT, 'apns', tokens.apns), registrationId(EVENT, 'fcm', tokens.fcm), registrationId(EVENT, 'apns', tokens.others), 'sandbox'].sort());
   assert.deepEqual(byId[subscriptionId('https://push.example.test/sub')].subscription, { endpoint: 'https://push.example.test/sub', keys: { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) } });
-  assert.deepEqual(byId[registrationId('apns', tokens.apns)], { id: registrationId('apns', tokens.apns), profile_id: device.profileId, native: { platform: 'apns', token: tokens.apns, environment: 'production' } });
-  assert.deepEqual(byId[registrationId('fcm', tokens.fcm)].native, { platform: 'fcm', token: tokens.fcm, environment: 'production' });
+  assert.deepEqual(byId[registrationId(EVENT, 'apns', tokens.apns)], { id: registrationId(EVENT, 'apns', tokens.apns), profile_id: device.profileId, native: { platform: 'apns', token: tokens.apns, environment: 'production' } });
+  assert.deepEqual(byId[registrationId(EVENT, 'fcm', tokens.fcm)].native, { platform: 'fcm', token: tokens.fcm, environment: 'production' });
   assert.equal(byId.sandbox.native.environment, 'sandbox');
 });
 

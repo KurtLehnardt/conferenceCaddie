@@ -53,9 +53,11 @@ const profileRequired = () => new HttpError(403, { error: 'profile_required' });
 // The document id of a subscription: the hash of its endpoint, so the endpoint itself is never a
 // path segment and never indexed.
 export const subscriptionId = (endpoint) => crypto.createHash('sha256').update(endpoint, 'utf8').digest('hex');
-// The document id of a native registration: the hash of its platform and token, so the same token
-// registered again overwrites its document. An endpoint is an https URL, so the two never meet.
-export const registrationId = (platform, token) => crypto.createHash('sha256').update(`${platform}:${token}`, 'utf8').digest('hex');
+// The document id of a native registration: the hash of its conference, platform and token, so the
+// same token registered again at that conference overwrites its document, while one app install
+// (which has one token) keeps a registration at every conference it is used at. An endpoint is an
+// https URL, so the two never meet.
+export const registrationId = (event, platform, token) => crypto.createHash('sha256').update(`${event}:${platform}:${token}`, 'utf8').digest('hex');
 
 function writer(req) {
   limit(`people-write:ip:${clientIp(req)}`, LIMITS.writeIp);
@@ -159,7 +161,7 @@ async function putRegistration(req, res) {
   const me = await requireProfile(device, conf.slug);
   const now = Date.now();
   if (Date.parse(conf.visibleUntil) <= now) throw bad('conference has ended');
-  const { status } = await people('PUT', `${idx(PUSH_INDEX)}/_doc/${registrationId(reg.platform, reg.token)}?refresh=wait_for`, {
+  const { status } = await people('PUT', `${idx(PUSH_INDEX)}/_doc/${registrationId(conf.slug, reg.platform, reg.token)}?refresh=wait_for`, {
     event_id: conf.slug,
     profile_id: me.profile_id,
     platform: reg.platform,
@@ -182,7 +184,7 @@ async function deleteRegistration(req, res) {
   // Only the registration's own profile can remove it; anyone else's request changes nothing.
   await deleteWhere(PUSH_INDEX, conf.slug, {
     bool: {
-      filter: [{ ids: { values: [registrationId(reg.platform, reg.token)] } }, { term: { event_id: conf.slug } }, { term: { profile_id: me.profile_id } }],
+      filter: [{ ids: { values: [registrationId(conf.slug, reg.platform, reg.token)] } }, { term: { event_id: conf.slug } }, { term: { profile_id: me.profile_id } }],
     },
   });
   sendJson(res, 200, { ok: true });
