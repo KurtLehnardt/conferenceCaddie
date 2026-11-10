@@ -10,7 +10,10 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.BackendUrl
@@ -74,7 +77,12 @@ class TalkScreensUiTest {
         onNodeWithTag("talk-alpha-conf-2099:1").assertDoesNotExist()
 
         // The track name is suggested; applying it keeps both, and the Track chip shows it.
-        onNodeWithText("${Strings.Search.SUGGESTION_TRACK}: Kubernetes").performClick()
+        try {
+            waitFor(text = "${Strings.Search.SUGGESTION_TRACK}: Kubernetes")
+        } catch (e: Throwable) {
+            throw AssertionError(onRoot(useUnmergedTree = true).printToString(), e)
+        }
+        onNodeWithText("${Strings.Search.SUGGESTION_TRACK}: Kubernetes").performScrollTo().performClick()
         waitUntil(timeoutMillis = 20_000) { onAllNodes(hasText("${Strings.Search.SUGGESTION_TRACK}: Kubernetes")).fetchSemanticsNodes().isEmpty() }
 
         // Removing the phrase stops it filtering, but the text keeps the words.
@@ -116,14 +124,14 @@ class TalkScreensUiTest {
 
         waitFor(tag = "talk-alpha-conf-2099:1")
         // The Has slides chip narrows to the one talk with slides.
-        onNodeWithText(Strings.Chips.HAS_SLIDES).performClick()
+        onNodeWithText(Strings.Chips.HAS_SLIDES).performScrollTo().performClick()
         waitFor(text = Strings.Search.count(1, browse = true, includeEvents = false))
         // The sheet's counts already reflect it, and its button names the total.
-        onNodeWithText(Strings.Chips.FILTERS).performClick()
+        onNodeWithText(Strings.Chips.FILTERS).performScrollTo().performClick()
         waitFor(tag = "filter-sheet")
         waitFor(text = Strings.FilterSheet.show(1, includeEvents = false)).performClick()
         waitUntil(timeoutMillis = 20_000) { onAllNodes(hasTestTag("filter-sheet")).fetchSemanticsNodes().isEmpty() }
-        onNodeWithText(Strings.Chips.CLEAR_ALL).performClick()
+        onNodeWithText(Strings.Chips.CLEAR_ALL).performScrollTo().performClick()
         waitFor(text = Strings.Search.count(3, browse = true, includeEvents = false))
     }
 }

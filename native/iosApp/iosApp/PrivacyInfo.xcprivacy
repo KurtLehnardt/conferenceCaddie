@@ -3,7 +3,10 @@
 <!-- The app's privacy manifest. The required-reason APIs below were found with `nm -u` on the
      Release iosArm64 ComposeApp framework (Kotlin 2.4.21, Compose Multiplatform 1.12.2):
      stat and fstat (Skia's file access and ICU's data file), and mach_absolute_time (Skia's DNG
-     codec timing). No disk-space or user-defaults API is linked. Check again with
+     codec timing). Phase 2a adds lstat (FileTimestamp, the bundle cache's file system calls), and
+     statfs and fstatfs (DiskSpace), which the bundled SQLite calls on the database's file system;
+     E174.1 is the reason that fits a database writing its own files. No user-defaults API is
+     linked. Check again with
      `nm -u ComposeApp.framework/ComposeApp` whenever dependencies change, and fill in
      NSPrivacyCollectedDataTypes when the app starts sending profile data to a backend. -->
 <plist version="1.0">
@@ -30,6 +33,14 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
 			</array>
 		</dict>
 	</array>

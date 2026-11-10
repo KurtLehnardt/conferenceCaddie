@@ -1,19 +1,12 @@
 package app.conferencecaddie.ui.talks
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
@@ -22,7 +15,6 @@ import app.conferencecaddie.ui.components.CaddieSheet
 import app.conferencecaddie.ui.components.NoteText
 import app.conferencecaddie.ui.components.SectionHeading
 import app.conferencecaddie.ui.components.TalkCard
-import app.conferencecaddie.ui.components.caddieClickable
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 
@@ -59,6 +51,12 @@ fun TalkSheet(
             links = cardLinks(talk),
             onOpenLink = onOpenUrl,
             flat = true,
+            modifier = Modifier.testTag("talk-sheet-card"),
+            extra = if (talk.kind == "talk") {
+                { RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, startOpen = true) }
+            } else {
+                null
+            },
         )
         if (talk.speakers.isNotEmpty()) {
             SectionHeading(TalkStrings.SPEAKERS, Modifier.padding(top = 16.dp, bottom = 4.dp))
@@ -72,37 +70,6 @@ fun TalkSheet(
         if (talk.abstract.isNotBlank()) {
             SectionHeading(TalkStrings.ABSTRACT, Modifier.padding(top = 16.dp, bottom = 4.dp))
             Text(talk.abstract, style = Caddie.type.body, color = c.text)
-        }
-        if (talk.kind == "talk") {
-            Text(
-                Strings.Talk.RELATED,
-                style = Caddie.type.cardTitle,
-                color = c.text,
-                modifier = Modifier.padding(top = 20.dp, bottom = 4.dp).semantics { heading() },
-            )
-            if (related.isEmpty()) {
-                NoteText(Strings.Talk.RELATED_NONE)
-            } else {
-                Column(Modifier.testTag("related-talks"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    related.forEach { r ->
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = Caddie.dimens.minTouch)
-                                .caddieClickable(RoundedCornerShape(8.dp)) { onOpenTalk(r) }
-                                .semantics { role = Role.Button }
-                                .padding(vertical = 6.dp),
-                        ) {
-                            Text(r.title, style = Caddie.type.body, color = c.accentInk)
-                            Text(
-                                (if (r.speakers.isNotEmpty()) r.speakers.joinToString(", ") + " · " else "") + whenText(r, bundle.conference),
-                                style = Caddie.type.meta,
-                                color = c.text2,
-                            )
-                        }
-                    }
-                }
-            }
         }
         NoteText(
             TalkStrings.attribution(bundle.attribution.licensor, bundle.attribution.license),

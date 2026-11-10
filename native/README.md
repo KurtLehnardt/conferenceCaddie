@@ -365,8 +365,9 @@ chosen in Settings.
 - iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking, no tracking domains and, for
   now, no collected data. It declares the required-reason APIs that `nm -u` finds in the Release
   device framework: `stat` and `fstat` (FileTimestamp, `C617.1`, from Skia and ICU) and
-  `mach_absolute_time` (SystemBootTime, `35F9.1`, from Skia). No disk-space or user-defaults API is
-  linked, so none is declared. Check again when dependencies change:
+  `mach_absolute_time` (SystemBootTime, `35F9.1`, from Skia). Phase 2a's bundled SQLite and file
+  cache add `lstat` (FileTimestamp) and `statfs` and `fstatfs` (DiskSpace, declared with `E174.1`).
+  No user-defaults API is linked. Check again when dependencies change:
 
   ```sh
   ./gradlew :composeApp:linkReleaseFrameworkIosArm64

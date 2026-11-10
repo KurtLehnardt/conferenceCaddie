@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -56,6 +58,11 @@ fun SearchScreen(
 ) {
     val result = model.result
     val conference = bundle.conference
+    val listState = rememberLazyListState()
+    // A new result starts at the top, where its suggestions and chips are. Without this, the list
+    // keeps its first visible item by key, and a "Did you mean" row that appears above it stays
+    // out of sight.
+    LaunchedEffect(result) { if (result != null) listState.scrollToItem(0) }
     Column(Modifier.fillMaxSize().testTag("search-screen")) {
         SearchField(
             value = model.input,
@@ -65,6 +72,7 @@ fun SearchScreen(
         )
         LazyColumn(
             Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -147,6 +155,7 @@ internal fun TalkResult(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
 ) {
+    val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
     TalkCard(
         title = talk.title,
         whenText = whenText(talk, bundle.conference),
@@ -162,6 +171,11 @@ internal fun TalkResult(
         links = cardLinks(talk),
         onOpenLink = onOpenUrl,
         onClick = { onOpenTalk(talk) },
+        extra = if (talk.kind == "talk") {
+            { RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk) }
+        } else {
+            null
+        },
     )
 }
 
