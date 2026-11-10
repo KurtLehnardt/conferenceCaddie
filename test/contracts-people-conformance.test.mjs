@@ -39,7 +39,7 @@ Object.assign(process.env, {
   ES_RULES_INDEX: 'caddie-people-rules',
   MOD_CLASSIFIER: 'off',
 });
-for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI']) delete process.env[k];
+for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI', 'BLE_MASTER_KEYRING', 'TALKS_BUNDLE_BASE']) delete process.env[k];
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EVENT = 'contracts-conf-2099';
@@ -226,6 +226,7 @@ const { handleBleApi } = await import('../server/ble.mjs');
 const { handleReportApi } = await import('../server/report.mjs');
 const { handlePushApi } = await import('../server/push.mjs');
 const { publicConferences } = await import('../server/conferences.mjs');
+const { handleCapabilities } = await import('../server/capabilities.mjs');
 const { validator } = await import('../contracts/js/schemas.mjs');
 const { formatErrors } = await import('../contracts/js/validate.mjs');
 
@@ -336,10 +337,31 @@ test('profiles: create, update, matches and circles', async () => {
   assert.equal(members.speakers.length, 1);
 });
 
-test('presence with Bluetooth (server-rotate today), rotation and sightings', async () => {
+test('GET /api/capabilities answers a closed-valid capabilities document', async () => {
+  const res = {
+    status: 0, headers: {}, text: '',
+    writeHead(status, h) { this.status = status; this.headers = h ?? {}; },
+    end(chunk) { this.text = chunk === undefined ? '' : String(chunk); },
+  };
+  const req = Readable.from([]);
+  Object.assign(req, { method: 'GET', headers: { host: 'caddie.test' }, socket: { remoteAddress: '10.9.255.1' } });
+  handleCapabilities(req, res);
+  assert.equal(res.status, 200);
+  const doc = JSON.parse(res.text);
+  const result = validator('capabilities.v1')(doc, { closed: true });
+  assert.equal(result.valid, true, formatErrors(result.errors));
+  // Without a master keyring the server is in transition: the legacy tokens, with the mitigations.
+  // This run has no VAPID keys, so no Web Push either.
+  const want = JSON.parse(readFileSync(path.join(ROOT, 'contracts/fixtures/capabilities/tier3-transition.json'), 'utf8'));
+  want.ble.colocation_required = true;
+  want.push.webpush = false;
+  assert.deepEqual(doc, want);
+});
+
+test('presence with Bluetooth (server-rotate without a master keyring), rotation and sightings', async () => {
   const on = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: me, body: { event: EVENT, zone: 'Hall A', spot: null, location: here, until: 'hour', ble: true } }));
-  assert.match(on.ble.token, /^[A-Za-z0-9_-]{22}$/, 'today the server is in server-rotate mode');
-  assert.equal(on.ble_key, undefined, 'ble_key arrives with derived-v1 in Phase 4');
+  assert.match(on.ble.token, /^[A-Za-z0-9_-]{22}$/, 'without a keyring the server is in server-rotate mode');
+  assert.equal(on.ble_key, undefined, 'ble_key comes only from a server with the master keyring (derived-v1)');
   assert.equal(on.located, true);
   const theirs = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: other, body: { event: EVENT, zone: 'Hall A', location: here, ble: true } }));
   conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: third, body: { event: EVENT, zone: 'Expo hall', until: 'day' } }));

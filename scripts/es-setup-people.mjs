@@ -125,8 +125,20 @@ const connectProperties = {
   presence_cell: { type: 'geo_point' },
   presence_located_at: { type: 'date' },
   // The Android companion's Bluetooth token (server/ble.mjs): resolved by exact value, ten minutes.
+  // ble_rotated marks a token the rotate route replaced, which only the old APK calls.
   ble_token: { type: 'keyword' },
   ble_token_until: { type: 'date' },
+  ble_rotated: { type: 'boolean', index: false, doc_values: false },
+  // Bluetooth derived tokens (docs/contracts/ble-tokens.md): the session's nonce and the id of the
+  // master that issued it, and the record of whom Bluetooth answers returned to the device. They
+  // are mapped so that they can never be indexed, searched or aggregated, whatever the index's
+  // dynamic setting: the server reads them with the document and never queries them. Only
+  // ble_caps_until, when the newest entry of the record leaves the rolling hour, is indexed, so the
+  // purge can find the records that have run out.
+  presence_nonce: { type: 'keyword', index: false, doc_values: false },
+  ble_master_id: { type: 'keyword', index: false, doc_values: false },
+  ble_caps: { type: 'object', enabled: false },
+  ble_caps_until: { type: 'date' },
   // The text of a profile save that could not be embedded (server/semantic.mjs paused): kept in the
   // source only, never indexed, never copied to a semantic field, until the owner's next write
   // embeds it and drops these.

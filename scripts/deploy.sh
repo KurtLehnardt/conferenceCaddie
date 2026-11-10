@@ -17,6 +17,12 @@
 # Android companion: BLE_NEAR_RSSI is the Bluetooth "a few metres" threshold of server/ble.mjs,
 # applied on the server so it can be tuned at the venue without an app update.
 #
+# Bluetooth derived tokens: when the secret caddie-ble-master exists (scripts/ble-master.mjs
+# creates and rotates it), its newest enabled version at deploy time is mounted as
+# BLE_MASTER_KEYRING and the server advertises ble.mode derived-v1. Without it the server serves
+# only the legacy server-minted tokens (server-rotate). The keyring is only ever mounted by name
+# and version; this script never reads its value.
+#
 # The service name comes from the shell's SERVICE (default conference-caddie), so
 # SERVICE=conference-caddie-test npm run deploy deploys a second service for testing without
 # touching the live one.
@@ -32,6 +38,7 @@ PEOPLE_SECRET="caddie-es-people"
 VAPID_PRIVATE_SECRET="caddie-vapid-private"
 VAPID_PUBLIC_SECRET="caddie-vapid-public"
 GITHUB_SECRET="caddie-github-token"
+BLE_MASTER_SECRET="caddie-ble-master"
 BLE_NEAR_RSSI="${BLE_NEAR_RSSI:--75}"
 VAPID_SUBJECT="${VAPID_SUBJECT:-https://github.com/KurtLehnardt/conferenceCaddie}"
 ES_URL="https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443"
@@ -91,6 +98,26 @@ if gcloud secrets describe "$GITHUB_SECRET" --project "$PROJECT" --quiet >/dev/n
   RUNTIME_SECRETS+=("$GITHUB_SECRET")
 else
   echo "No $GITHUB_SECRET secret: the GitHub import runs unauthenticated (60 requests an hour)." >&2
+fi
+
+# The Bluetooth master keyring turns on derived tokens; the legacy tokens are served either way.
+# It is pinned to the newest enabled version now, not mounted as "latest": Cloud Run resolves
+# "latest" whenever an instance starts, so an instance started by autoscaling after a keyring
+# change would hold another keyring than its siblings. Pinned, a keyring change reaches the
+# instances only with a deploy, which is what the rotation steps of scripts/ble-master.mjs rely
+# on (it reads the pinned version back from the service). Only the versions' metadata is read
+# here, never a payload.
+if gcloud secrets describe "$BLE_MASTER_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
+  BLE_MASTER_VERSION="$(gcloud secrets versions list "$BLE_MASTER_SECRET" --project "$PROJECT" --filter=state:enabled --sort-by=~createTime --limit=1 --format='value(name)')"
+  BLE_MASTER_VERSION="${BLE_MASTER_VERSION##*/}"
+  if ! [[ "$BLE_MASTER_VERSION" =~ ^[0-9]+$ ]]; then
+    echo "The secret $BLE_MASTER_SECRET has no enabled version; run node scripts/ble-master.mjs --init first." >&2
+    exit 1
+  fi
+  SECRETS="$SECRETS,BLE_MASTER_KEYRING=$BLE_MASTER_SECRET:$BLE_MASTER_VERSION"
+  RUNTIME_SECRETS+=("$BLE_MASTER_SECRET")
+else
+  echo "No $BLE_MASTER_SECRET secret: deploying with Bluetooth in the legacy server-rotate mode (node scripts/ble-master.mjs --init creates it)." >&2
 fi
 
 # The runtime service account may read these secrets and nothing else in Secret Manager.

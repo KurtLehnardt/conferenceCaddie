@@ -229,7 +229,7 @@ export class FakeES {
     if (index === INDEX.people) {
       if (op === '_doc' && method === 'GET') return 'get';
       if (op === '_doc' && method === 'DELETE') return 'delete-doc';
-      if (op === '_search' && params.get('seq_no_primary_term') === 'true') return 'search:pending';
+      if (op === '_search' && params.get('seq_no_primary_term') === 'true') return String(body ?? '').includes('ble_caps_until') ? 'search:caps' : 'search:pending';
       if (op === '_bulk') {
         const [action, payload] = String(body).split('\n').filter(Boolean).map((l) => JSON.parse(l));
         if (action.update && payload?.doc?.open_to_meet === false && Array.isArray(payload.doc.shared_talk_ids) && !payload.doc.shared_talk_ids.length) return 'hide';
@@ -557,6 +557,9 @@ export const HIDDEN_FOR_DELETE = {
   presence_located_at: null,
   ble_token: null,
   ble_token_until: null,
+  ble_rotated: null,
+  presence_nonce: null,
+  ble_master_id: null,
 };
 
 // The documents that connect one person to others: two meets, a push subscription and a nudge

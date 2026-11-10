@@ -16,6 +16,7 @@ import {
 
 const { handleConnectApi } = await import('../server/connect.mjs');
 const { handleBleApi } = await import('../server/ble.mjs');
+const { handlePeopleApi } = await import('../server/people.mjs');
 
 before(() => bootPurgeDone());
 
@@ -90,6 +91,40 @@ for (const [route, { send, field }] of Object.entries(ROUTES)) {
     });
   });
 }
+
+describe('PUT /api/people/profile', () => {
+  // A save that changes the text, so the whole document is written again from what was read.
+  const save = (device) => request(handlePeopleApi, 'PUT', '/api/people/profile', device, {
+    event: EVENT,
+    profile: { display_name: 'Test person', about: 'A new about line', interests: '', expertise: '', learn_topics: [], speak_topics: [], linkedin_url: null, contact_note: null },
+    open_to_meet: true,
+    shared_talk_ids: [],
+  });
+  const caps = () => ({ ble_caps: [{ ref: '0123456789abcdef', at: Date.now(), w: 1 }], ble_caps_until: new Date(Date.now() + 3600_000).toISOString() });
+
+  test('a save that meets another write to the profile reads it again and keeps what that write stored', async () => {
+    const { device, cluster, id } = setup();
+    const written = caps();
+    // The Bluetooth caps record of a sightings answer lands between the save's read and its write.
+    cluster.after('get', 1, (c) => c.patch(INDEX.people, id, written));
+    const { result } = await quietly(() => save(device));
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.deepEqual(cluster.tags().filter((t) => t === 'get' || t === 'bulk:people'), ['get', 'bulk:people', 'get', 'bulk:people']);
+    const p = cluster.source(INDEX.people, id);
+    assert.equal(p.about, 'A new about line');
+    assert.deepEqual(p.ble_caps, written.ble_caps, 'the record the other write stored is carried over');
+    assert.equal(p.ble_caps_until, written.ble_caps_until);
+  });
+
+  test('a save that conflicts twice answers 409', async () => {
+    const { device, cluster, id } = setup();
+    cluster.after('get', 1, (c) => c.patch(INDEX.people, id, caps()));
+    cluster.after('get', 2, (c) => c.patch(INDEX.people, id, caps()));
+    const { result } = await quietly(() => save(device));
+    assert.equal(result.status, 409);
+    assert.deepEqual(result.body, { error: 'The profile changed at the same time; try again' });
+  });
+});
 
 describe('DELETE /api/presence', () => {
   const clear = (device) => request(handleConnectApi, 'DELETE', `/api/presence?event=${EVENT}`, device);

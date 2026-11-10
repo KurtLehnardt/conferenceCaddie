@@ -53,10 +53,10 @@ import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 import { reportCountsFor, HIDE_AT } from './report.mjs';
-import { PRESENCE_OFF, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds } from './people-shared.mjs';
+import { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds } from './people-shared.mjs';
 
 // Re-exported, so the other server modules and the scripts that import them from here keep working.
-export { PRESENCE_OFF, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds };
+export { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds };
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
@@ -242,6 +242,25 @@ export async function purgeExpired() {
     }
   } catch (err) {
     console.error(`Clearing expired presence failed: ${err.message}`);
+  }
+  // Bluetooth caps records whose newest entry has left the rolling hour (ble.mjs). Each clear is
+  // guarded by the sequence number the search returned, so a record that a sightings answer wrote
+  // after the search is kept; the next run finds it again once it has run out.
+  try {
+    const { json } = await people('POST', withPreference(`${idx(PEOPLE_INDEX)}/_search?seq_no_primary_term=true`, PEOPLE_PURGE_PREFERENCE), {
+      size: PURGE_PRESENCE_PAGE,
+      _source: false,
+      query: EXPIRED_CAPS_QUERY,
+    });
+    const hits = (json.hits?.hits ?? []).filter((h) => Number.isInteger(h._seq_no) && Number.isInteger(h._primary_term));
+    if (hits.length) {
+      const body = hits.map((h) => `${JSON.stringify({ update: { _id: h._id, if_seq_no: h._seq_no, if_primary_term: h._primary_term } })}\n${JSON.stringify({ doc: BLE_CAPS_OFF })}\n`).join('');
+      const { json: result } = await people('POST', `${idx(PEOPLE_INDEX)}/_bulk`, body, { ndjson: true });
+      const cleared = (result.items ?? []).filter((i) => i.update?.status >= 200 && i.update?.status <= 299).length;
+      if (cleared) console.log(`Cleared ${cleared} run-out Bluetooth caps records.`);
+    }
+  } catch (err) {
+    console.error(`Clearing run-out Bluetooth caps records failed: ${err.message}`);
   }
   try {
     const { json } = await people('POST', `${idx(MEETS_INDEX)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
@@ -557,8 +576,11 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // People documents (people key).
 
 const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy', 'presence_cell', 'presence_located_at'];
-// The Bluetooth token of ble.mjs: the owner's own document carries it; it is never read for others.
-const BLE_FIELDS = ['ble_token', 'ble_token_until'];
+// The Bluetooth session of ble.mjs (the legacy token and whether it was rotated, the derived-token
+// nonce and the id of its master) and the record of whom Bluetooth answers returned (ble_caps and
+// ble_caps_until). The owner's own document carries them; they are never returned, and only ble.mjs
+// reads them on another person's document, to check a sighted token against the store.
+const BLE_FIELDS = ['ble_token', 'ble_token_until', 'ble_rotated', 'presence_nonce', 'ble_master_id', 'ble_caps', 'ble_caps_until'];
 const OWN_FIELDS = ['secret_hash', 'text_hash', 'text_pending', 'sample', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
 const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
@@ -657,17 +679,18 @@ export function proximityBand(me, them) {
 // One bulk action on the people index with refresh=wait_for. Returns the item's { status, error }:
 // the item status (500 when the answer has none) and its Elasticsearch error object, if any, which
 // is read for its types only (esErrorInfo) and never logged.
-async function bulkItem(action, doc) {
+async function bulkItem(action, doc, { refresh = true } = {}) {
   const body = `${JSON.stringify(action)}\n${JSON.stringify(doc)}\n`;
-  const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
+  const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_bulk${refresh ? '?refresh=wait_for' : ''}`, body, { ndjson: true });
   const item = json.items?.[0] ?? {};
   const result = Object.values(item)[0] ?? {};
   return { status: result.status ?? 500, error: result.error };
 }
 
-// One bulk action on the people index with refresh=wait_for. Returns the item status.
-export async function bulkOne(action, doc) {
-  return (await bulkItem(action, doc)).status;
+// One bulk action on the people index, with refresh=wait_for unless refresh is false. Returns the
+// item status.
+export async function bulkOne(action, doc, { refresh = true } = {}) {
+  return (await bulkItem(action, doc, { refresh })).status;
 }
 
 // Deletes one people document and returns the status (404 when it was already gone). With a
@@ -1167,6 +1190,8 @@ export async function authenticated(device, slug) {
 }
 
 const OWN_UPDATE_ATTEMPTS = 2;
+// A profile save that lost to another write of the same document is read and built again once.
+const PROFILE_WRITE_ATTEMPTS = 2;
 
 // A Bulk partial update of the requester's own document that applies only while the document is
 // still the one authenticated() read (if_seq_no and if_primary_term). build(me) gets the result of
@@ -1176,13 +1201,17 @@ const OWN_UPDATE_ATTEMPTS = 2;
 // write, it is read and built again once; so a write that read the profile before a delete hid
 // it can never put presence or a Bluetooth token back on the hidden document: the second read
 // finds no profile. A second conflict answers 409, and a document gone again by the second write
-// answers 403 profile_required. Resolves to { me, ...what build returned }.
-export async function updateOwnProfile(device, slug, build) {
+// answers 403 profile_required. Resolves to { me, ...what build returned }. A caller that has just
+// read the profile with authenticated() may pass it as `current`, which the first attempt then
+// uses instead of reading it again; a conflict still reads it afresh. refresh: false skips
+// refresh=wait_for, for a write that nothing searches for at once (the guard itself reads the
+// document with a realtime GET).
+export async function updateOwnProfile(device, slug, build, { current = null, refresh = true } = {}) {
   for (let attempt = 1; ; attempt++) {
-    const me = await authenticated(device, slug);
+    const me = attempt === 1 && current ? current : await authenticated(device, slug);
     const write = await build(me);
     const action = { update: { _id: docId(slug, me.profile_id), if_seq_no: me._seq_no, if_primary_term: me._primary_term } };
-    const status = await bulkOne(action, { doc: write.doc });
+    const status = await bulkOne(action, { doc: write.doc }, { refresh });
     if (status >= 200 && status <= 299) return { me, ...write };
     if ((status === 409 || status === 404) && attempt < OWN_UPDATE_ATTEMPTS) continue;
     if (status === 409) throw new HttpError(409, { error: 'The profile changed at the same time; try again' });
@@ -1284,78 +1313,58 @@ async function putProfile(req, res) {
 
   const body = await jsonBody(req, PUT_KEYS);
   if (typeof body.open_to_meet !== 'boolean') throw bad('open_to_meet must be a boolean');
-  const profile = validateProfile(body.profile);
+  const input = validateProfile(body.profile);
   const shared = idList(body.shared_talk_ids, 'shared_talk_ids', 50, TALK_ID_RE);
   const conf = await conferenceFor(body.event);
   const id = docId(conf.slug, device.profileId);
 
-  const own = await ownDoc(conf.slug, device.profileId);
-  if (own.found && !secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
+  for (let attempt = 1; ; attempt++) {
+    const own = await ownDoc(conf.slug, device.profileId);
+    const profile = { ...input };
+    if (own.found && !secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
 
-  // Both visibility choices off: the document must not exist, nor anything that connected it.
-  if (!body.open_to_meet && !shared.length) {
-    if (own.found) await deleteProfileAndConnections(conf.slug, device.profileId);
-    sendJson(res, 200, { ok: true, open_to_meet: false, shared_talk_ids: [] });
-    return;
-  }
+    // Both visibility choices off: the document must not exist, nor anything that connected it.
+    if (!body.open_to_meet && !shared.length) {
+      if (own.found) await deleteProfileAndConnections(conf.slug, device.profileId);
+      sendJson(res, 200, { ok: true, open_to_meet: false, shared_talk_ids: [] });
+      return;
+    }
 
-  if (Date.parse(conf.visibleUntil) <= Date.now()) throw bad('conference has ended');
-  profile.learn_topics = await checkTopics(conf.slug, profile.learn_topics, 'learn_topics', own.found ? own.source.learn_topics ?? [] : []);
-  profile.speak_topics = await checkTopics(conf.slug, profile.speak_topics, 'speak_topics', own.found ? own.source.speak_topics ?? [] : []);
-  await checkSharedTalks(conf.slug, shared);
+    if (Date.parse(conf.visibleUntil) <= Date.now()) throw bad('conference has ended');
+    profile.learn_topics = await checkTopics(conf.slug, profile.learn_topics, 'learn_topics', own.found ? own.source.learn_topics ?? [] : []);
+    profile.speak_topics = await checkTopics(conf.slug, profile.speak_topics, 'speak_topics', own.found ? own.source.speak_topics ?? [] : []);
+    await checkSharedTalks(conf.slug, shared);
 
-  const hash = textHash(profile);
-  const common = {
-    ref: refFor(conf.slug, device.profileId),
-    display_name: profile.display_name,
-    learn_topics: profile.learn_topics,
-    speak_topics: profile.speak_topics,
-    open_to_meet: body.open_to_meet,
-    shared_talk_ids: shared,
-    visible_until: conf.visibleUntil,
-    updated_at: new Date().toISOString(),
-    linkedin_url: profile.linkedin_url,
-    contact_note: profile.contact_note,
-  };
-  // Presence needs conference-wide visibility, so turning that off clears it. Otherwise a full
-  // reindex carries the stored presence over and a partial update leaves it alone.
-  const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : { ...PRESENCE_OFF };
-  if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
-  // The report flags live on the document too, and a create or a full reindex writes them from the
-  // stored flags and the reports on file (reportFlags), so neither unhides silently, not even after
-  // the owner deleted the document. A partial update leaves them as they are.
-  const partial = own.found && own.source.text_hash === hash;
-  const flags = partial ? null : await reportFlags(conf.slug, common.ref, own);
-  if (flags?.spot_hidden) presence.presence_spot = null;
+    const hash = textHash(profile);
+    const common = {
+      ref: refFor(conf.slug, device.profileId),
+      display_name: profile.display_name,
+      learn_topics: profile.learn_topics,
+      speak_topics: profile.speak_topics,
+      open_to_meet: body.open_to_meet,
+      shared_talk_ids: shared,
+      visible_until: conf.visibleUntil,
+      updated_at: new Date().toISOString(),
+      linkedin_url: profile.linkedin_url,
+      contact_note: profile.contact_note,
+    };
+    // Presence needs conference-wide visibility, so turning that off clears it. Otherwise a full
+    // reindex carries the stored presence over and a partial update leaves it alone.
+    const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : { ...PRESENCE_OFF };
+    if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
+    // The report flags live on the document too, and a create or a full reindex writes them from the
+    // stored flags and the reports on file (reportFlags), so neither unhides silently, not even after
+    // the owner deleted the document. A partial update leaves them as they are.
+    const partial = own.found && own.source.text_hash === hash;
+    const flags = partial ? null : await reportFlags(conf.slug, common.ref, own);
+    if (flags?.spot_hidden) presence.presence_spot = null;
 
-  let status;
-  let degraded = false;
-  if (!own.found) {
-    // op_type create: an existing document can never be taken over by a new device.
-    ({ status, degraded } = await writeProfileDoc(
-      { create: { _id: id } },
-      {
-        event_id: conf.slug,
-        profile_id: device.profileId,
-        about: profile.about,
-        interests: profile.interests,
-        expertise: profile.expertise,
-        sample: false,
-        secret_hash: hashSecret(device.secret),
-        text_hash: hash,
-        ...flags,
-        ...common,
-      },
-    ));
-    if (status === 409) throw forbidden();
-  } else {
-    const guard = { _id: id, if_seq_no: own.seqNo, if_primary_term: own.primaryTerm };
-    if (partial) {
-      // Text unchanged: a Bulk partial update without the text fields reuses the embeddings.
-      status = await bulkOne({ update: guard }, { doc: common });
-    } else {
+    let status;
+    let degraded = false;
+    if (!own.found) {
+      // op_type create: an existing document can never be taken over by a new device.
       ({ status, degraded } = await writeProfileDoc(
-        { index: guard },
+        { create: { _id: id } },
         {
           event_id: conf.slug,
           profile_id: device.profileId,
@@ -1363,25 +1372,52 @@ async function putProfile(req, res) {
           interests: profile.interests,
           expertise: profile.expertise,
           sample: false,
-          secret_hash: own.source.secret_hash,
+          secret_hash: hashSecret(device.secret),
           text_hash: hash,
-          ...presence,
           ...flags,
           ...common,
         },
       ));
+      if (status === 409) throw forbidden();
+    } else {
+      const guard = { _id: id, if_seq_no: own.seqNo, if_primary_term: own.primaryTerm };
+      if (partial) {
+        // Text unchanged: a Bulk partial update without the text fields reuses the embeddings.
+        status = await bulkOne({ update: guard }, { doc: common });
+      } else {
+        ({ status, degraded } = await writeProfileDoc(
+          { index: guard },
+          {
+            event_id: conf.slug,
+            profile_id: device.profileId,
+            about: profile.about,
+            interests: profile.interests,
+            expertise: profile.expertise,
+            sample: false,
+            secret_hash: own.source.secret_hash,
+            text_hash: hash,
+            ...presence,
+            ...flags,
+            ...common,
+          },
+        ));
+      }
+      // Another write to the document won (a presence write, or the Bluetooth caps record of a
+      // sightings answer): read it again and build the write from what is stored now, once.
+      if (status === 409 && attempt < PROFILE_WRITE_ATTEMPTS) continue;
+      if (status === 409) throw new HttpError(409, { error: 'The profile changed at the same time; try again' });
     }
-    if (status === 409) throw new HttpError(409, { error: 'The profile changed at the same time; try again' });
+    if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
+    sendJson(res, 200, {
+      ok: true,
+      open_to_meet: body.open_to_meet,
+      shared_talk_ids: shared,
+      hidden_for_owner: flags ? flags.hidden : own.source.hidden === true,
+      // Present only when the text could not be embedded and was left off the document for now.
+      ...(degraded ? { degraded: { semantic: true } } : {}),
+    });
+    return;
   }
-  if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, {
-    ok: true,
-    open_to_meet: body.open_to_meet,
-    shared_talk_ids: shared,
-    hidden_for_owner: flags ? flags.hidden : own.source.hidden === true,
-    // Present only when the text could not be embedded and was left off the document for now.
-    ...(degraded ? { degraded: { semantic: true } } : {}),
-  });
 }
 
 async function deleteProfile(req, res, url) {

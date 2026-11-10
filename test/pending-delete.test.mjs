@@ -164,6 +164,35 @@ describe('the hourly purge (server/people.mjs)', () => {
   });
 });
 
+describe('the hourly purge of Bluetooth caps records (server/people.mjs)', () => {
+  const caps = (at) => ({ ble_caps: [{ ref: '0123456789abcdef', at, w: 1 }], ble_caps_until: new Date(at + 3600_000).toISOString() });
+
+  test('clears a record whose newest entry is more than an hour old, with a guarded update, and keeps a recent one', async () => {
+    const cluster = useCluster(new FakeES());
+    const [old, recent] = [newDevice(), newDevice()];
+    addPerson(cluster, old, caps(Date.now() - 2 * 3600_000));
+    addPerson(cluster, recent, caps(Date.now() - 60_000));
+    await quietly(() => people.purgeExpired());
+    const cleared = cluster.source(INDEX.people, personId(old.profileId));
+    assert.equal(cleared.ble_caps, null);
+    assert.equal(cleared.ble_caps_until, null);
+    assert.equal(cleared.display_name, 'Test person', 'only the record is cleared');
+    assert.equal(cluster.source(INDEX.people, personId(recent.profileId)).ble_caps.length, 1, 'a recent record is kept');
+    const [action] = cluster.calls('update').map((c) => JSON.parse(c.body.split('\n')[0]).update);
+    assert.ok(Number.isInteger(action.if_seq_no) && Number.isInteger(action.if_primary_term), 'the clear is guarded');
+  });
+
+  test('keeps a record that a sightings answer wrote after the search found it', async () => {
+    const cluster = useCluster(new FakeES());
+    const device = newDevice();
+    addPerson(cluster, device, caps(Date.now() - 2 * 3600_000));
+    const fresh = caps(Date.now());
+    cluster.after('search:caps', 1, (c) => c.patch(INDEX.people, personId(device.profileId), fresh));
+    await quietly(() => people.purgeExpired());
+    assert.deepEqual(cluster.source(INDEX.people, personId(device.profileId)).ble_caps, fresh.ble_caps);
+  });
+});
+
 describe('a pending delete is treated as gone', () => {
   test('its owner gets profile_required from the routes that need a profile', async () => {
     const { pending } = setup();
@@ -207,13 +236,17 @@ describe('npm run people:purge (scripts/purge-expired-people.mjs)', () => {
     cluster.put(INDEX.blocks, 'ended', { event_id: EVENT, blocker_id: 'a', blocked_id: 'b', blocked_ref: 'ffffffffffffffff', created_at: PAST, expires_at: PAST });
     cluster.put(INDEX.blocks, 'legacy', { event_id: EVENT, blocker_id: 'c', blocked_id: 'd', blocked_ref: 'ffffffffffffffff', created_at: PAST });
     const lapsed = newDevice();
-    addPerson(cluster, lapsed, { display_name: 'Lapsed', presence_spot_pending: true, presence_until: PAST, ble_token_until: PAST });
+    const caps = [{ ref: '0123456789abcdef', at: Date.now() - 60_000, w: 1 }];
+    addPerson(cluster, lapsed, { display_name: 'Lapsed', presence_spot_pending: true, presence_until: PAST, ble_token_until: PAST, presence_nonce: 'AAECAwQFBgcICQoLDA0ODw', ble_master_id: 'm1', ble_caps: caps });
     const before = seqs();
     const out = await runScript(cluster, 'purge-expired-people.mjs');
     const lapsedDoc = cluster.source(INDEX.people, personId(lapsed.profileId));
     for (const [field, value] of Object.entries(HIDDEN_FOR_DELETE)) {
       if (field.startsWith('presence_') || field.startsWith('ble_')) assert.equal(lapsedDoc[field], value, `${field} is cleared with run-out presence`);
     }
+    assert.equal(lapsedDoc.presence_nonce, null, 'the derived-token nonce is cleared with run-out presence');
+    assert.equal(lapsedDoc.ble_master_id, null, 'and so is the id of its master');
+    assert.deepEqual(lapsedDoc.ble_caps, caps, 'the caps record outlives the presence session');
     assert.match(out, /Finished 1 pending profile deletes\./);
     assertFinished(cluster, pending, ids);
     assert.deepEqual(seqs(), before, 'the visible and the circle-only profiles are untouched');
@@ -221,6 +254,20 @@ describe('npm run people:purge (scripts/purge-expired-people.mjs)', () => {
     assert.ok(cluster.source(INDEX.blocks, 'legacy'));
     const del = cluster.calls('delete-doc')[0];
     assert.ok(del.params.has('if_seq_no') && del.params.has('if_primary_term'), 'the document delete is guarded');
+  });
+
+  test('clears Bluetooth caps records whose newest entry is more than an hour old, and keeps recent ones', async () => {
+    const cluster = useCluster(new FakeES());
+    const [old, recent] = [newDevice(), newDevice()];
+    const caps = (at) => ({ ble_caps: [{ ref: '0123456789abcdef', at, w: 1 }], ble_caps_until: new Date(at + 3600_000).toISOString() });
+    addPerson(cluster, old, caps(Date.now() - 2 * 3600_000));
+    addPerson(cluster, recent, caps(Date.now() - 60_000));
+    const out = await runScript(cluster, 'purge-expired-people.mjs');
+    assert.match(out, /Cleared 1 run-out Bluetooth caps records\./);
+    const cleared = cluster.source(INDEX.people, personId(old.profileId));
+    assert.equal(cleared.ble_caps, null);
+    assert.equal(cleared.ble_caps_until, null);
+    assert.equal(cluster.source(INDEX.people, personId(recent.profileId)).ble_caps.length, 1);
   });
 
   test('does not touch a profile whose owner made it visible again after the script found it', async () => {
@@ -256,6 +303,13 @@ describe('npm run people:setup (scripts/es-setup-people.mjs) on an existing bloc
     const env = { ES_PEOPLE_API_KEY: '', ELASTISEARCH_API_KEY: 'test-admin-key' };
     const out = await runScript(cluster, 'es-setup-people.mjs', args, env);
     assert.ok(cluster.mappings.some((m) => m.index === INDEX.blocks && m.properties.expires_at?.type === 'date'), 'expires_at is mapped');
+    // The Bluetooth fields: never indexed, searchable or aggregatable, except the date the purge
+    // finds run-out caps records by.
+    const peopleMapping = cluster.mappings.find((m) => m.index === INDEX.people)?.properties ?? {};
+    for (const f of ['presence_nonce', 'ble_master_id']) assert.deepEqual(peopleMapping[f], { type: 'keyword', index: false, doc_values: false }, f);
+    assert.deepEqual(peopleMapping.ble_rotated, { type: 'boolean', index: false, doc_values: false });
+    assert.deepEqual(peopleMapping.ble_caps, { type: 'object', enabled: false });
+    assert.deepEqual(peopleMapping.ble_caps_until, { type: 'date' });
     const updates = cluster.updates.filter((u) => u.index === INDEX.blocks);
     assert.equal(updates[0].body.script, undefined, 'the first update re-indexes blocks as they are');
     assert.equal(cluster.source(INDEX.blocks, 'old').expires_at, FUTURE, 'an older block gets the end of its conference');
@@ -273,8 +327,11 @@ describe('npm run people:export (scripts/export-people.mjs)', () => {
     const slug = `export-test-${crypto.randomBytes(4).toString('hex')}`;
     const cluster = useCluster(new FakeES());
     const [visible, circle, pending] = [newDevice(), newDevice(), newDevice()];
-    addPerson(cluster, visible, { event_id: slug, display_name: 'Visible' });
-    addPerson(cluster, circle, { event_id: slug, display_name: 'Circle only', open_to_meet: false });
+    // The derived-token session and the caps record would let the key be rebuilt with the master
+    // secret, or tell whom Bluetooth returned; none of it is exported (docs/contracts/ble-tokens.md).
+    const bluetooth = { presence_nonce: 'AAECAwQFBgcICQoLDA0ODw', ble_master_id: 'm1', ble_caps: [{ ref: '0123456789abcdef', at: Date.now(), w: 1 }] };
+    addPerson(cluster, visible, { event_id: slug, display_name: 'Visible', ...bluetooth });
+    addPerson(cluster, circle, { event_id: slug, display_name: 'Circle only', open_to_meet: false, ...bluetooth });
     addPerson(cluster, pending, { event_id: slug, display_name: 'Pending', ...HIDDEN_FOR_DELETE });
     const dir = path.join(ROOT, 'data', 'exports');
     const file = path.join(dir, `people-${slug}.ndjson`);
@@ -286,7 +343,10 @@ describe('npm run people:export (scripts/export-people.mjs)', () => {
       assert.deepEqual(rows.map((r) => r.display_name).sort(), ['Circle only', 'Visible']);
       for (const row of rows) {
         for (const key of Object.keys(row)) assert.ok(!/^(secret_hash|text_hash|presence_|ble_)/.test(key), `${key} is not exported`);
+        for (const key of ['presence_nonce', 'ble_master_id', 'ble_caps', 'ble_token', 'ble_token_until']) assert.equal(key in row, false, `${key} is not exported`);
       }
+      const excludes = cluster.calls('search:people')[0]?.body?._source?.excludes ?? [];
+      for (const key of ['presence_nonce', 'ble_master_id', 'ble_caps']) assert.ok(excludes.includes(key), `the export names ${key} among its exclusions`);
     } finally {
       fs.rmSync(file, { force: true });
       if (!dirExisted) fs.rmSync(dir, { recursive: true, force: true });

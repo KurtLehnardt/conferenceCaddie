@@ -8,12 +8,17 @@
 //      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), ES_PEOPLE_PUSH_INDEX (default
 //      caddie-people-push), ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges), REF_SALT
 //      (optional), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (secret) and VAPID_SUBJECT for push nudges,
-//      BLE_NEAR_RSSI (default -75, the Bluetooth "a few metres" threshold of ble.mjs), and the
-//      filter's ES_RULES_INDEX and MOD_* (moderation.mjs).
+//      BLE_NEAR_RSSI (default -75, the Bluetooth "a few metres" threshold of ble.mjs),
+//      BLE_MASTER_KEYRING (secret; the master keyring of Bluetooth derived tokens, ble-config.mjs),
+//      TALKS_BUNDLE_BASE (the talk bundles' base URL in GET /api/capabilities, capabilities.mjs),
+//      and the filter's ES_RULES_INDEX and MOD_* (moderation.mjs).
 //
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
 
+// First, so that an unusable BLE_MASTER_KEYRING or TALKS_BUNDLE_BASE stops the server before any
+// other module runs (people.mjs starts its purge when it is imported).
+import { handleCapabilities } from './capabilities.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -275,6 +280,10 @@ const server = http.createServer((req, res) => {
     }
     if (!withinLimit(req, res, 'health', HEALTH_PER_MIN)) return;
     sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (pathname === '/api/capabilities') {
+    handleCapabilities(req, res);
     return;
   }
   if (pathname === '/api/search') {

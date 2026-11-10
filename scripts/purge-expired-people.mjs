@@ -1,5 +1,6 @@
 // Finishes profile deletes that hid a profile and then failed, deletes every people profile whose
-// conference has ended, in every conference, clears presence that has run out, deletes meets that
+// conference has ended, in every conference, clears presence that has run out and Bluetooth caps
+// records whose newest entry is more than an hour old, deletes meets that
 // have run out (a declined one once its day is over), scrubs declined meets that have run out,
 // and deletes push subscriptions, nudge records and blocks whose conference has ended.
 //
@@ -15,7 +16,7 @@
 // without expires_at is never deleted here (npm run people:setup gives one to every block of a
 // conference it can find).
 
-import { PRESENCE_OFF, PENDING_DELETE_QUERY, isPendingDelete } from '../server/people-shared.mjs';
+import { PRESENCE_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete } from '../server/people-shared.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -146,6 +147,26 @@ for (;;) {
   if (ok < ids.length) break;
 }
 console.log(`Cleared ${cleared} expired presence entries.`);
+
+// Bluetooth caps records (server/ble.mjs) whose newest entry has left the rolling hour: they no
+// longer count for anything. Each clear is guarded by the sequence number the search returned, so
+// a record that a sightings answer wrote meanwhile is kept, as the server's hourly purge does.
+let capsCleared = 0;
+for (;;) {
+  const found = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_search?seq_no_primary_term=true`, {
+    size: PRESENCE_PAGE,
+    _source: false,
+    query: EXPIRED_CAPS_QUERY,
+  });
+  const hits = (found.hits?.hits ?? []).filter((h) => Number.isInteger(h._seq_no) && Number.isInteger(h._primary_term));
+  if (!hits.length) break;
+  const body = hits.map((h) => `${JSON.stringify({ update: { _id: h._id, if_seq_no: h._seq_no, if_primary_term: h._primary_term } })}\n${JSON.stringify({ doc: BLE_CAPS_OFF })}\n`).join('');
+  const res = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, body, true);
+  const ok = (res.items ?? []).filter((i) => i.update?.status >= 200 && i.update?.status < 300).length;
+  capsCleared += ok;
+  if (ok < hits.length) break;
+}
+console.log(`Cleared ${capsCleared} run-out Bluetooth caps records.`);
 
 // A declined meet is the evidence for the daily "Not now" pause, so it is kept until its day is
 // over (two days after ended_at, which covers a 25-hour day). These queries and the script are
