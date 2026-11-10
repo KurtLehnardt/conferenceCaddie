@@ -9,6 +9,8 @@
 //      caddie-people-push), ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges), REF_SALT
 //      (optional), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (secret) and VAPID_SUBJECT for push nudges,
 //      BLE_NEAR_RSSI (default -75, the Bluetooth "a few metres" threshold of ble.mjs),
+//      PEOPLE_SEMANTIC_MIN_SIMILARITY, PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY and
+//      PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY (the semantic people floors of people.mjs, logged at start),
 //      BLE_MASTER_KEYRING (secret; the master keyring of Bluetooth derived tokens, ble-config.mjs),
 //      TALKS_BUNDLE_BASE (the talk bundles' base URL in GET /api/capabilities, capabilities.mjs),
 //      and the filter's ES_RULES_INDEX and MOD_* (moderation.mjs).
@@ -24,7 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validate, search, BadRequest, UpstreamError } from './search.mjs';
 import { publicConferences } from './conferences.mjs';
-import { handlePeopleApi } from './people.mjs';
+import { handlePeopleApi, semanticFloorsLine } from './people.mjs';
 import { handleConnectApi } from './connect.mjs';
 import { handleBleApi } from './ble.mjs';
 import { handleReportApi } from './report.mjs';
@@ -79,6 +81,7 @@ const MIME = {
 };
 
 if (!process.env.ES_API_KEY) console.warn('ES_API_KEY is not set; searches will fail.');
+console.log(semanticFloorsLine());
 
 function sendJson(res, status, obj, extraHeaders = {}) {
   const body = JSON.stringify(obj);

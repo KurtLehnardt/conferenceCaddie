@@ -5,30 +5,40 @@
 //
 // A live diagnosis on 2026-11-10 found two faults on the tier 3 server. matchedLegs read the top
 // level of the explanation as one detail per retriever, but Elasticsearch 9.5 puts the rrf node one
-// level down, next to the rrf filter's required clause, so the top level always has two details.
+// level down, next to the filter that keeps nested chunk documents out of the hits, so the top
+// level always has two details.
 // With two legs and the topics leg first, every hit then looked found by topics alone and a person
 // found only by their text was dropped as broad; with three legs or more no hit's legs could be
 // read and the rule was off, so generic matches were shown, pushed and listed. And the semantic
 // legs had no similarity floor, so with the E5 model every profile joined every semantic leg.
 // The tests check that
 // - matchedLegs reads the legs from the captured explanation, from the rrf node at the top (the
-//   older shape) and down to three levels below it, and gives null for anything else;
+//   older shape) and down to three levels below it, and gives null for anything else, including
+//   a detail that names another retriever than the leg at its position;
 // - with chips and text (two legs, topics first) a person found only by the text leg is kept, and
 //   with three legs a person who shares only a common topic is dropped, in matches, in the push
 //   nudge and in Bluetooth sightings alike;
 // - when the legs are unknown (the cluster refused the explanation), matches keep every hit while
-//   the nudge and the sightings keep only those who share a topic outside the common ones;
-// - every semantic leg carries the similarity floor, a profile under it joins no semantic leg,
-//   and PEOPLE_SEMANTIC_MIN_SIMILARITY is read as documented.
+//   the nudge and the sightings keep only those who share a topic outside the common ones,
+//   and that both fallbacks are logged, rarely and without any person's data;
+// - each path carries its similarity floor (a search 0.82, matches 0.84, the nudge and the
+//   sightings 0.87), a profile under it joins no semantic leg, and the floor variables are read as
+//   documented, "off" sending no similarity at all;
+// - a semantic chunk is evidence only when the semantic leg on that field found the person;
+// - the distance leg counts neither for nor against specificity.
 
-import { test, describe } from 'node:test';
+import { test, describe, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { fake, EVENT, FUTURE, newDevice, hashOf, request, esError } from './lib/fake-es.mjs';
-import { CAPTURED } from './lib/rrf-explanation.mjs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { fake, EVENT, FUTURE, newDevice, hashOf, request, esError, advanceClock } from './lib/fake-es.mjs';
+import { CAPTURED, rrfExplanation } from './lib/rrf-explanation.mjs';
 
 delete process.env.BLE_MASTER_KEYRING;
-delete process.env.PEOPLE_SEMANTIC_MIN_SIMILARITY;
+for (const k of ['PEOPLE_SEMANTIC_MIN_SIMILARITY', 'PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY', 'PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY']) delete process.env[k];
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // Read from the module object, so that on a server without these exports the tests that use them
 // fail one by one instead of the whole file failing to load.
@@ -125,6 +135,12 @@ describe('matchedLegs reads the rrf node wherever Elasticsearch puts it', () => 
     assert.equal(people.matchedLegs({ _explanation: CAPTURED }, ['topics', 'text', 'text', 'text']), null);
   });
 
+  test('null when a detail names another retriever than the leg at its position', () => {
+    assert.equal(people.matchedLegs({ _explanation: CAPTURED }, ['text', 'topics', 'text']), null);
+    assert.equal(people.matchedLegs({ _explanation: rrfExplanation([1, 2], ['text-2', 'topics-1']) }, ['topics', 'text']), null);
+    assert.deepEqual(people.matchedLegs({ _explanation: rrfExplanation([1, 0], ['topics-1', 'text-2']) }, ['topics', 'text']), [0]);
+  });
+
   test('isBroad: unknown legs keep the hit with "specific" and judge it by its topics by default', () => {
     const me = { learn_topics: ['kubernetes', 'ebpf'] };
     const common = new Set(['kubernetes']);
@@ -168,6 +184,28 @@ describe('when the cluster refuses the explanation', () => {
   const refuse = (c) => (c.index === PEOPLE && c.op === '_search' && c.body?.retriever && c.body.explain ? esError(400, 'illegal_argument_exception', 'explain refused') : undefined);
   const requester = REQUESTERS['three legs'];
 
+  test('the fallbacks are logged with the conference and the number of legs only, at most once in ten minutes', async () => {
+    const lines = [];
+    const spy = mock.method(console, 'warn', (...args) => lines.push(args.join(' ')));
+    try {
+      advanceClock(11 * 60_000);
+      let s = scene(requester);
+      fake.inject = refuse;
+      await matchNames(s);
+      await nudgedNames(s);
+      s = scene(requester);
+      fake.explanation = () => ({ value: 1, description: 'sum of:', details: [] });
+      await matchNames(s);
+      await sightedNames(s);
+    } finally {
+      spy.mock.restore();
+    }
+    assert.deepEqual(lines, [
+      `People search for ${EVENT}: the cluster refused the explanation of a 3-leg query, so the specificity rule falls back (isBroad).`,
+      `People search for ${EVENT}: the explanation of a 3-leg query was not recognised, so the specificity rule falls back (isBroad).`,
+    ]);
+  });
+
   test('matches keep every hit', async () => {
     const s = scene(requester);
     fake.inject = refuse;
@@ -185,41 +223,142 @@ describe('when the cluster refuses the explanation', () => {
   });
 });
 
-describe('the semantic floor', () => {
-  test('every semantic leg of matches, a text search, the nudge and the sightings carries similarity 0.84', async () => {
+describe('the semantic floors', () => {
+  test('a search uses 0.82, matches without a query 0.84, and the nudge and the sightings 0.87', async () => {
     const s = scene({ ...REQUESTERS['three legs'], expertise: 'eBPF load balancers' });
-    await matchNames(s);
-    await matchNames(s, { query: 'kernel tracing' });
-    await nudgedNames(s);
-    await sightedNames(s);
-    const knns = fake.peopleSearches().flatMap((c) => retrieversOf(c).map((r) => r.query.knn).filter(Boolean));
-    // Two in matches (interests and expertise), three in the search (the query twice, expertise),
-    // two in the nudge and two in the sightings.
-    assert.equal(knns.length, 9);
-    for (const k of knns) assert.equal(k.similarity, 0.84, k.field);
+    const floors = async (fn) => {
+      fake.calls.length = 0;
+      await fn();
+      return [...new Set(fake.peopleSearches().flatMap((c) => retrieversOf(c).map((r) => r.query.knn).filter(Boolean)).map((k) => k.similarity))];
+    };
+    assert.deepEqual(people.SEMANTIC_FLOORS, { search: 0.82, profile: 0.84, push: 0.87 });
+    assert.deepEqual(await floors(() => matchNames(s)), [0.84]);
+    assert.deepEqual(await floors(() => matchNames(s, { when: 'around_now' })), [0.84]);
+    assert.deepEqual(await floors(() => matchNames(s, { query: 'kernel tracing' })), [0.82]);
+    assert.deepEqual(await floors(() => nudgedNames(s)), [0.87]);
+    assert.deepEqual(await floors(() => sightedNames(s)), [0.87]);
+    assert.equal(people.semanticFloorsLine(), 'semantic people floors: search 0.82, matches 0.84, nudge and Bluetooth 0.87');
   });
 
   test('a profile under the floor joins no semantic leg, so sharing a common topic leaves it broad', async () => {
     const s = scene(REQUESTERS['two legs (chips and text)']);
     person('Unrelated', { expertise: 'Sourdough baking and laminated pastry', speak_topics: ['kubernetes'] });
-    s.nameOf.set([...fake.store(PEOPLE).values()].at(-1).source.profile_id, 'Unrelated');
     // The stand-in's cosine: 0.9 for kernel tracing text, 0.8 (the E5 level of unrelated text)
     // for the rest.
     fake.cosine = (_q, passage) => (/kernel|ebpf/i.test(passage) ? 0.9 : 0.8);
     assert.deepEqual(await matchNames(s), ['Rare Topic', 'Text Only']);
     fake.cosine = (_q, passage) => (/kernel|ebpf/i.test(passage) ? 0.9 : 0.84);
-    assert.deepEqual(await matchNames(s), ['Rare Topic', 'Text Only', 'Unrelated'], 'at the floor it is kept');
+    assert.deepEqual(await matchNames(s), ['Rare Topic', 'Text Only', 'Unrelated'], 'at the matches floor it is kept');
   });
 
-  test('PEOPLE_SEMANTIC_MIN_SIMILARITY: unset, empty or not a number is 0.84, "off" is no floor, others are clamped to -1..1', () => {
-    const parse = people.semanticMinSimilarity;
-    assert.equal(people.SEMANTIC_MIN_SIMILARITY, 0.84);
-    for (const v of [undefined, null, '', '  ', 'abc']) assert.equal(parse(v), 0.84, String(v));
-    assert.equal(parse(' 0.9 '), 0.9);
-    assert.equal(parse('0'), 0);
-    assert.equal(parse('off'), null);
-    assert.equal(parse('OFF'), null);
-    assert.equal(parse('2'), 1);
-    assert.equal(parse('-3'), -1);
+  test('a text match between the matches floor and the push floor is shown in matches but neither nudged nor sighted', async () => {
+    const s = scene(REQUESTERS['two legs (chips and text)']);
+    fake.cosine = (_q, passage) => (/kernel/i.test(passage) ? 0.85 : 0.8);
+    assert.deepEqual(await matchNames(s), ['Rare Topic', 'Text Only']);
+    assert.deepEqual(await nudgedNames(s), ['Rare Topic']);
+    assert.deepEqual(await sightedNames(s), ['Rare Topic']);
+  });
+
+  test('floorFrom: unset or empty is the default, "off", "none" and "false" are no floor, and other values warn', () => {
+    const { floorFrom } = people;
+    for (const v of [undefined, null, '', '  ']) assert.deepEqual(floorFrom(v, 0.84), { floor: 0.84, warning: null }, String(v));
+    for (const v of ['off', 'OFF', ' none ', 'false']) assert.deepEqual(floorFrom(v, 0.84), { floor: null, warning: null }, v);
+    assert.deepEqual(floorFrom(' 0.9 ', 0.84), { floor: 0.9, warning: null });
+    assert.deepEqual(floorFrom('0', 0.84), { floor: 0, warning: null });
+    assert.deepEqual(floorFrom('abc', 0.84), { floor: 0.84, warning: 'is not a number or "off", so 0.84 applies' });
+    assert.deepEqual(floorFrom('2', 0.84), { floor: 1, warning: 'is outside -1..1, so 1 applies' });
+    assert.deepEqual(floorFrom('-3', 0.84), { floor: -1, warning: 'is outside -1..1, so -1 applies' });
+  });
+
+  test('set through the environment: "off" sends no similarity at all, and an unusable value warns without quoting it', () => {
+    const script = `
+      const m = await import('./server/people.mjs');
+      const me = { event_id: 'testconf-2099', profile_id: 'me', interests: 'kernel tracing', expertise: 'eBPF' };
+      const knns = (q) => q.body.retriever.rrf.retrievers.map((r) => r.standard.query.knn).filter(Boolean);
+      const search = knns(m.peopleQuery(me, [], { size: 5, query: 'kernel tracing' }));
+      const push = knns(m.peopleQuery(me, [], { size: 5, floor: m.SEMANTIC_FLOORS.push }));
+      console.log(JSON.stringify({ floors: m.SEMANTIC_FLOORS, line: m.semanticFloorsLine(), search: search.map((k) => 'similarity' in k), push: push.map((k) => k.similarity) }));`;
+    const r = spawnSync(process.execPath, ['--import', './test/lib/fake-es.mjs', '--input-type=module', '-e', script], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, PEOPLE_SEMANTIC_MIN_SIMILARITY: 'off', PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY: 'zqv-not-a-number', PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY: '2' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout.trim().split('\n').at(-1));
+    assert.deepEqual(out.floors, { search: null, profile: 0.84, push: 1 });
+    assert.equal(out.line, 'semantic people floors: search off, matches 0.84, nudge and Bluetooth 1');
+    assert.deepEqual(out.search, [false, false, false], 'no similarity key on any semantic leg of a search');
+    assert.deepEqual(out.push, [1, 1]);
+    assert.match(r.stderr, /PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY is not a number or "off", so 0\.84 applies\./);
+    assert.match(r.stderr, /PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY is outside -1\.\.1, so 1 applies\./);
+    assert.ok(!r.stderr.includes('zqv-not-a-number'), 'the value is not quoted');
+  });
+});
+
+describe('evidence comes only from a semantic leg that found the person', () => {
+  // Rare Chunk is found by its rare topic only (its text is under every floor), so the semantic
+  // highlight on its expertise, which Elasticsearch returns anyway, is not evidence. Text Chunk is
+  // found by the text leg, so its chunk (the stand-in's last sentence) is.
+  const setup = () => {
+    const s = scene(REQUESTERS['two legs (chips and text)']);
+    s.others.push(person('Rare Chunk', { speak_topics: ['ebpf'], expertise: 'Runs Kubernetes operators at scale. Bakes sourdough on weekends.' }));
+    s.others.push(person('Text Chunk', { expertise: 'Ran storage for a bank. Built kernel tracing tools with eBPF.' }));
+    s.nameOf = new Map(s.others.map((d) => [d.profileId, d.name]));
+    fake.cosine = (_q, passage) => (/kernel/i.test(passage) ? 0.9 : 0.8);
+    return s;
+  };
+  const evidenceIn = (list, name) => list.find((p) => p.display_name === name)?.evidence;
+
+  test('matches', async () => {
+    const s = setup();
+    const r = await request(handlePeopleApi, 'POST', '/api/people/matches', s.me, { event: EVENT, interested_talk_ids: [] });
+    assert.equal(evidenceIn(r.body.results, 'Rare Chunk'), 'Runs Kubernetes operators at scale. Bakes sourdough on weekends');
+    assert.equal(evidenceIn(r.body.results, 'Text Chunk'), 'Built kernel tracing tools with eBPF');
+  });
+
+  test('Bluetooth sightings', async () => {
+    const s = setup();
+    const r = await request(handleBleApi, 'POST', '/api/presence/sightings', s.me, { event: EVENT, sightings: s.others.map((d) => ({ token: d.token, rssi: -50 })) });
+    assert.equal(evidenceIn(r.body.nearby, 'Rare Chunk'), 'Runs Kubernetes operators at scale. Bakes sourdough on weekends');
+    assert.equal(evidenceIn(r.body.nearby, 'Text Chunk'), 'Built kernel tracing tools with eBPF');
+  });
+
+  test('the push nudge', async () => {
+    const s = setup();
+    // Only the two people under test, since a person receives at most three pushes an hour.
+    for (const d of s.others.splice(0, 4)) fake.store(PEOPLE).delete(`${EVENT}:${d.profileId}`);
+    for (const d of [s.me, ...s.others]) {
+      fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+    }
+    await nudgedNames(s);
+    const bodies = fake.pushes.filter((p) => p.endpoint === `https://push.example.test/${s.me.profileId}`).map((p) => p.payload.body);
+    assert.ok(bodies.includes("Someone who's worked on Runs Kubernetes operators at scale. Bakes sourdough on weekends is in Hall A right now"), JSON.stringify(bodies));
+    assert.ok(bodies.includes("Someone who's worked on Built kernel tracing tools with eBPF is in Hall A right now"), JSON.stringify(bodies));
+    assert.ok(!bodies.some((b) => b.includes('Someone who\'s worked on Bakes sourdough')), 'the unrelated chunk is never quoted');
+  });
+});
+
+describe('the distance leg counts neither way', () => {
+  const legs = ['topics', 'text', 'distance'];
+  const names = ['topics-1', 'text-2', 'distance-3'];
+  const me = { learn_topics: ['kubernetes', 'ebpf'] };
+  const common = new Set(['kubernetes']);
+  const hit = (ranks, speak) => ({ _explanation: rrfExplanation(ranks, names), _source: { speak_topics: speak } });
+
+  test('isBroad over a captured-shape explanation with a distance leg', () => {
+    assert.equal(isBroad(hit([1, 0, 2], ['kubernetes']), legs, me, common), true, 'a common topic and nearby is broad');
+    assert.equal(isBroad(hit([0, 0, 1], []), legs, me, common), true, 'nearby alone is broad');
+    assert.equal(isBroad(hit([0, 3, 1], []), legs, me, common), false, 'text and nearby is specific');
+    assert.equal(isBroad(hit([2, 0, 1], ['ebpf']), legs, me, common), false, 'a rare topic and nearby is specific');
+  });
+
+  test('around now and the nudge with a position: nearby people who share only a common topic are broad and never nudged', async () => {
+    const cell = { lat: 39.743, lon: -104.995 };
+    const s = scene(REQUESTERS['three legs']);
+    for (const d of [s.me, ...s.others]) fake.put(PEOPLE, `${EVENT}:${d.profileId}`, { ...fake.doc(PEOPLE, `${EVENT}:${d.profileId}`), presence_cell: cell });
+    const r = await request(handlePeopleApi, 'POST', '/api/people/matches', s.me, { event: EVENT, interested_talk_ids: [], when: 'around_now' });
+    assert.deepEqual(retrieversOf(fake.peopleSearches().at(-1)).map((x) => x._name), ['topics-1', 'topics-2', 'text-3', 'distance-4']);
+    assert.deepEqual(Object.fromEntries(r.body.results.map((p) => [p.display_name, p.broad])), { 'Text Only': false, 'Rare Topic': false, 'Common Topic': true, 'Common Learner': true });
+    assert.deepEqual(await nudgedNames(s), ['Rare Topic', 'Text Only']);
   });
 });

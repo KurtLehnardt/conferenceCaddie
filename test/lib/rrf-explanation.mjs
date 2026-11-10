@@ -6,8 +6,10 @@
 // searches over the sample profiles, built the way server/people.mjs builds a people query. The
 // people index has nested fields (the semantic_text chunks), so the top of the explanation is not
 // the rrf node: it is a "sum of:" whose two details are the rrf node, with one detail per
-// retriever, and the required clause of the rrf filter. The top level therefore has two details
-// whatever the number of retrievers. CAPTURED is one such explanation, verbatim except that the
+// retriever, and the filter that keeps nested chunk documents out of the hits
+// ("FieldExistsQuery [field=_primary_term]", a field only top-level documents have), which
+// Elasticsearch adds as a required clause. The top level therefore has two details whatever the
+// number of retrievers. CAPTURED is one such explanation, verbatim except that the
 // explanations of the retrievers' own queries, under each found leg, are cut to their first line.
 
 const RANK_CONSTANT = 60;

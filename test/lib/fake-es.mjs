@@ -12,7 +12,10 @@
 // A knn query matches every document whose source field has text, at a cosine of 1, unless a
 // test sets `fake.cosine(modelText, passage)`; a knn `similarity` then keeps only the documents
 // at or above it, as Elasticsearch does. With `explain: true` an rrf search explains each hit in
-// the shape Elasticsearch 9.5.6 returns on the people index (test/lib/rrf-explanation.mjs).
+// the shape Elasticsearch 9.5.6 returns on the people index (test/lib/rrf-explanation.mjs), or
+// with `fake.explanation(ranks, names)` when a test sets it. A highlight asked for on a
+// semantic_text field comes back for every hit whose source field has text, whether or not the
+// semantic leg found it, as on 9.5.6; its chunk is the field's last sentence.
 
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -92,6 +95,7 @@ export const fake = {
   pushes: [], // { endpoint, payload }
   inject: null, // (call) => Response | undefined
   cosine: null, // (modelText, passage) => the cosine a knn query sees; null for 1 everywhere
+  explanation: null, // (ranks, names) => the explanation of an rrf hit; null for rrfExplanation
   seq: 1,
   store(name) {
     if (!this.indices.has(name)) this.indices.set(name, new Map());
@@ -110,6 +114,7 @@ export const fake = {
     this.pushes.length = 0;
     this.inject = null;
     this.cosine = null;
+    this.explanation = null;
     this.put('caddie-conferences', EVENT, { slug: EVENT, status: 'searchable', end_date: '2099-12-31', time_zone: 'UTC' });
     for (const [i, t] of ['kubernetes', 'ai', 'cloud', 'security', 'observability', 'platform', 'gitops', 'networking', 'storage', 'wasm', 'ebpf', 'gpu', 'postgres'].entries()) {
       this.put('caddie-topics', `${EVENT}:${t}`, { conference: EVENT, topic_id: t, label: t, talk_count: 100 - i });
@@ -144,8 +149,14 @@ function search(name, body) {
   const from = body.from ?? 0;
   const page = hits.slice(from, from + (body.size ?? 10)).map(([id, d]) => {
     const hit = { _id: id, _source: pick(d.source, body._source), _seq_no: d.seq, _primary_term: 1 };
-    if (body.explain && legs && body.retriever.rrf) hit._explanation = rrfExplanation(ranksOf.map((m) => m.get(id) ?? 0), names);
+    if (body.explain && legs && body.retriever.rrf) hit._explanation = (fake.explanation ?? rrfExplanation)(ranksOf.map((m) => m.get(id) ?? 0), names);
     else if (body.explain && legs) hit._explanation = { value: 1, description: 'sum of:', details: [] };
+    const highlight = {};
+    for (const f of Object.keys(body.highlight?.fields ?? {})) {
+      const text = SEMANTIC_BASE[f] ? d.source[SEMANTIC_BASE[f]] : undefined;
+      if (text) highlight[f] = [String(text).split(/(?<=\.)\s+/).filter(Boolean).at(-1)];
+    }
+    if (Object.keys(highlight).length) hit.highlight = highlight;
     return hit;
   });
   const res = { hits: { total: { value: hits.length }, hits: page } };

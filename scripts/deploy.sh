@@ -17,6 +17,13 @@
 # Android companion: BLE_NEAR_RSSI is the Bluetooth "a few metres" threshold of server/ble.mjs,
 # applied on the server so it can be tuned at the venue without an app update.
 #
+# People matching: PEOPLE_SEMANTIC_MIN_SIMILARITY (searches with a query),
+# PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY (matches without a query, circle members) and
+# PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY (the push nudge, Bluetooth sightings) set the lowest cosine a
+# semantic people leg keeps (server/people.mjs, SEMANTIC_FLOORS). Each is passed through from the
+# environment of this script; empty means the server's default (0.82, 0.84 and 0.87), and "off"
+# turns that floor off.
+#
 # Bluetooth derived tokens: when the secret caddie-ble-master exists (scripts/ble-master.mjs
 # creates and rotates it), its newest enabled version at deploy time is mounted as
 # BLE_MASTER_KEYRING and the server advertises ble.mode derived-v1. Without it the server serves
@@ -40,6 +47,9 @@ VAPID_PUBLIC_SECRET="caddie-vapid-public"
 GITHUB_SECRET="caddie-github-token"
 BLE_MASTER_SECRET="caddie-ble-master"
 BLE_NEAR_RSSI="${BLE_NEAR_RSSI:--75}"
+PEOPLE_SEMANTIC_MIN_SIMILARITY="${PEOPLE_SEMANTIC_MIN_SIMILARITY:-}"
+PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY:-}"
+PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY:-}"
 VAPID_SUBJECT="${VAPID_SUBJECT:-https://github.com/KurtLehnardt/conferenceCaddie}"
 ES_URL="https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443"
 ES_INDEX="caddie-talks"
@@ -73,7 +83,7 @@ cd "$(dirname "$0")/.."
 # The runtime identity is always the dedicated caddie-runtime service account. It holds no project-level roles.
 RUNTIME_SA="caddie-runtime@$PROJECT.iam.gserviceaccount.com"
 
-ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI"
+ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI,PEOPLE_SEMANTIC_MIN_SIMILARITY=$PEOPLE_SEMANTIC_MIN_SIMILARITY,PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY,PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY"
 SECRETS="ES_API_KEY=$READ_SECRET:latest,ES_PEOPLE_API_KEY=$PEOPLE_SECRET:latest"
 RUNTIME_SECRETS=("$READ_SECRET" "$PEOPLE_SECRET")
 
