@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.ui.App
 import app.conferencecaddie.ui.theme.ThemePreference
@@ -21,7 +22,9 @@ object BuildDefaults {
  * Launch options for debug builds, so screenshots and manual checks can open a given screen without
  * tapping through the app: `-caddie.tab Search`, `-caddie.open settings|switcher`,
  * `-caddie.theme light|dark`, `-caddie.connect <base>` and `-caddie.gallery 1` (iOS launch arguments; Android intent
- * extras of the same names). Release builds ignore them.
+ * extras of the same names). Release builds ignore them. `caddie.connect` goes through the same
+ * BackendUrl rules as a `caddie://connect` link (https only, normalised), so it can only ask the
+ * question a real link could.
  */
 data class DebugLaunch(
     val tab: Tab? = null,
@@ -37,7 +40,7 @@ data class DebugLaunch(
             tab = get("caddie.tab")?.let { name -> Tab.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } },
             open = get("caddie.open")?.lowercase()?.takeIf { it == "settings" || it == "switcher" },
             theme = get("caddie.theme")?.let { name -> ThemePreference.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } },
-            connect = get("caddie.connect"),
+            connect = get("caddie.connect")?.let(::linkBase),
             gallery = get("caddie.gallery") == "1",
         )
     }
@@ -52,11 +55,11 @@ data class DebugLaunch(
  */
 @Composable
 fun StandaloneShell(isDebugBuild: Boolean, launch: DebugLaunch = DebugLaunch()) {
-    val options = if (isDebugBuild) launch else DebugLaunch()
+    val options = launchOptions(isDebugBuild, launch)
     var theme by rememberSaveable { mutableStateOf(options.theme ?: ThemePreference.System) }
     var server by rememberSaveable { mutableStateOf(BuildDefaults.OFFICIAL_SERVER) }
     var conference by rememberSaveable { mutableStateOf(if (isDebugBuild) SampleData.CONFERENCES.first().id else null) }
-    var pending by rememberSaveable { mutableStateOf(options.connect) }
+    var pending by rememberSaveable { mutableStateOf(options.connect?.let(::linkBase)) }
     var opened by rememberSaveable { mutableStateOf(options.open == null) }
     App(
         state = ShellState(
@@ -74,7 +77,7 @@ fun StandaloneShell(isDebugBuild: Boolean, launch: DebugLaunch = DebugLaunch()) 
             onSelectConference = { conference = it },
             onChangeServer = {
                 server = it
-                pending = null
+                pending = pendingAfterSwitch(pending, it)
             },
             onDeclineConnect = { pending = null },
             onThemeChange = { theme = it },
@@ -90,6 +93,15 @@ fun StandaloneShell(isDebugBuild: Boolean, launch: DebugLaunch = DebugLaunch()) 
         initialTab = options.tab,
     )
 }
+
+/**
+ * The base a `caddie://connect` link would ask about for [url], or null when the link would be
+ * refused: links never get the debug exception for plain http to a local server.
+ */
+internal fun linkBase(url: String): String? = (BackendUrl.normalise(url, allowLocalHttp = false) as? BackendUrl.Valid)?.base
+
+/** The launch options a build honours: all of [launch] in a debug build, none in a release build. */
+internal fun launchOptions(isDebugBuild: Boolean, launch: DebugLaunch): DebugLaunch = if (isDebugBuild) launch else DebugLaunch()
 
 // Opens Settings or the switcher once, from inside the shell where the navigator lives.
 @Composable

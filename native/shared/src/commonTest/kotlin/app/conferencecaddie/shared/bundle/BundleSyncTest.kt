@@ -16,6 +16,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.files.SystemTemporaryDirectory
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 class BundleSyncTest {
     private val base = "https://caddie.example"
@@ -97,9 +99,8 @@ class BundleSyncTest {
         // A new entry whose files fail verification.
         val bad = Fixtures.files.getValue("vectors.i8").copyOf().also { it[0] = 1 }
         val badHash = "b".repeat(64)
-        val raw = kotlinx.serialization.json.JsonObject(
-            Fixtures.entry + ("content_hash" to kotlinx.serialization.json.JsonPrimitive(badHash)) +
-                ("path" to kotlinx.serialization.json.JsonPrimitive("${Fixtures.SLUG}/bbbbbbbbbbbbbbbb/")),
+        val raw = JsonObject(
+            Fixtures.entry + ("content_hash" to JsonPrimitive(badHash)) + ("path" to JsonPrimitive("${Fixtures.SLUG}/bbbbbbbbbbbbbbbb/")),
         )
         val badEntry = BundleEntry.read(raw)!!
         http.routes["$bundleBase${badEntry.path}bundle.json"] = FakeHttp.bytes(200, Fixtures.files.getValue("bundle.json"))
@@ -121,6 +122,65 @@ class BundleSyncTest {
         val offline = assertIs<BundleSync.InstallResult.Failed>(sync.install(base, scope, bundleBase, Fixtures.SLUG, entry))
         assertNull(offline.kept)
         assertNull(database.installedBundle(scope))
+    }
+
+    // The fixture bundle with one vector byte changed: a second valid bundle of the same conference.
+    private fun secondBundle(): Pair<BundleEntry, Map<String, ByteArray>> {
+        val vectors = Fixtures.files.getValue("vectors.i8").copyOf().also { it[1] = if (it[1] == 0.toByte()) 1 else 0 }
+        val files = mapOf("bundle.json" to Fixtures.files.getValue("bundle.json"), "vectors.i8" to vectors)
+        val hash = BundleVerifier.contentHash(files)
+        val meta = JsonObject(
+            files.mapValues { (_, bytes) ->
+                JsonObject(mapOf("bytes" to JsonPrimitive(bytes.size), "sha256" to JsonPrimitive(Sha256.hex(bytes))))
+            },
+        )
+        val raw = JsonObject(
+            Fixtures.entry + ("content_hash" to JsonPrimitive(hash)) + ("path" to JsonPrimitive("${Fixtures.SLUG}/${hash.substring(0, 16)}/")) +
+                ("files" to meta),
+        )
+        val e = BundleEntry.read(raw)!!
+        files.forEach { (name, bytes) -> http.routes["$bundleBase${e.path}$name"] = FakeHttp.bytes(200, bytes) }
+        return e to files
+    }
+
+    @Test
+    fun anUpdateReplacesTheBundleAndDeletesOnlyTheOldFiles() = runTest {
+        sync.install(base, scope, bundleBase, Fixtures.SLUG, entry)
+        // Another conference of the same backend has its own bundle, which must survive.
+        val other = BundleSync.scope(base, "other-2099")
+        val otherHash = "c".repeat(64)
+        val bundle = TalkBundle.decode(Fixtures.HASH, Fixtures.files.getValue("bundle.json"))!!
+        files.write(base, otherHash, Fixtures.files)
+        database.install(other, bundle.copy(contentHash = otherHash), 1)
+
+        val (next, _) = secondBundle()
+        val r = assertIs<BundleSync.InstallResult.Installed>(sync.install(base, scope, bundleBase, Fixtures.SLUG, next))
+        assertTrue(r.updated)
+        assertEquals(next.contentHash, r.bundle.contentHash)
+        assertEquals(next.contentHash, database.installedBundle(scope))
+        assertNotNull(files.read(base, next.contentHash))
+        assertNull(files.read(base, Fixtures.HASH), "the replaced bundle's files are deleted")
+        assertNotNull(files.read(base, otherHash), "another conference's files stay")
+        assertEquals(next.contentHash, sync.installed(base, scope)?.contentHash)
+    }
+
+    @Test
+    fun anInstalledBundleWhoseFilesAreGoneIsDownloadedAgain() = runTest {
+        sync.install(base, scope, bundleBase, Fixtures.SLUG, entry)
+        files.clear()
+        assertNull(sync.installed(base, scope), "the database row alone is not a usable bundle")
+        val calls = http.calls.size
+        val r = assertIs<BundleSync.InstallResult.Installed>(sync.install(base, scope, bundleBase, Fixtures.SLUG, entry))
+        assertTrue(r.updated)
+        assertTrue(http.calls.size > calls)
+        assertNotNull(files.read(base, Fixtures.HASH))
+    }
+
+    @Test
+    fun aFileLargerThanListedIsInvalidNotOffline() = runTest {
+        http.routes["${dir}vectors.i8"] = FakeHttp.bytes(200, ByteArray(5000))
+        val r = assertIs<BundleSync.InstallResult.Failed>(sync.install(base, scope, bundleBase, Fixtures.SLUG, entry))
+        assertEquals(listOf("vectors.i8: larger than the index says"), r.problems)
     }
 
     @Test

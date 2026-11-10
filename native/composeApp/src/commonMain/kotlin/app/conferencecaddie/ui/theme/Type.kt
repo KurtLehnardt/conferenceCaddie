@@ -50,6 +50,8 @@ data class CaddieType(
     val stateTitle: TextStyle = style(17, FontWeight.SemiBold, 1.45f),
     /** .state-body and .dialog-body. */
     val stateBody: TextStyle = style(15),
+    /** .screen-title: a screen's own title under the app bar, such as "My schedule". */
+    val screenTitle: TextStyle = style(20, FontWeight.Bold),
     /** .sheet-header h2 and .dialog-title. */
     val sheetTitle: TextStyle = style(20, FontWeight.Bold, 1.3f),
     /** body text, .settings-row. */

@@ -2,6 +2,7 @@ package app.conferencecaddie.ui.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -37,29 +38,36 @@ fun ConnectConfirmation(base: String, official: Boolean, onConfirm: () -> Unit, 
         onConfirm = onConfirm,
         onDismiss = onDecline,
         destructive = false,
+        // No tap on the scrim answers this question; Cancel, Switch and the system Back do.
         dismissOnScrim = false,
         testTag = "connect-confirmation",
     ) {
-        Text(
-            Strings.Connect.prompt(base),
-            style = Caddie.type.stateBody,
-            color = Caddie.colors.text,
-            modifier = Modifier.padding(top = 8.dp).testTag("connect-prompt"),
-        )
-        if (!official) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp)
-                    .background(Caddie.colors.dangerTint, RoundedCornerShape(Caddie.dimens.radius))
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                LucideImage(LucideIcon.TriangleAlert, null, size = 18.dp, tint = Caddie.colors.danger)
-                Text(Strings.Connect.NOT_OFFICIAL, style = Caddie.type.meta, color = Caddie.colors.danger)
-            }
-        }
-        Text(Strings.Connect.KEPT, style = Caddie.type.meta, color = Caddie.colors.text2, modifier = Modifier.padding(top = 12.dp))
+        ConnectDetails(base, official)
     }
+}
+
+/** The confirmation's question, the warning for a server that is not the official one, and the note. */
+@Composable
+internal fun ColumnScope.ConnectDetails(base: String, official: Boolean) {
+    Text(
+        Strings.Connect.prompt(base),
+        style = Caddie.type.stateBody,
+        color = Caddie.colors.text,
+        modifier = Modifier.padding(top = 8.dp).testTag("connect-prompt"),
+    )
+    if (!official) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp)
+                .background(Caddie.colors.dangerTint, RoundedCornerShape(Caddie.dimens.radius))
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            LucideImage(LucideIcon.TriangleAlert, null, size = 18.dp, tint = Caddie.colors.danger)
+            Text(Strings.Connect.NOT_OFFICIAL, style = Caddie.type.meta, color = Caddie.colors.danger)
+        }
+    }
+    Text(Strings.Connect.KEPT, style = Caddie.type.meta, color = Caddie.colors.text2, modifier = Modifier.padding(top = 12.dp))
 }

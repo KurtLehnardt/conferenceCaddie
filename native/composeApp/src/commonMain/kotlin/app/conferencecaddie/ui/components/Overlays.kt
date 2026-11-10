@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -46,7 +48,8 @@ import app.conferencecaddie.ui.theme.Caddie
 /**
  * .sheet: a bottom sheet with the web's handle, a header with [title] and a close button named
  * [closeLabel], a scrolling body, and an optional [footer] row above a hairline (the Filters sheet's
- * "Clear all" and "Show 12 talks").
+ * "Clear all" and "Show 12 talks"). With [scrollable] false the body does not scroll itself, for
+ * content that scrolls on its own, such as a LazyColumn.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +59,7 @@ fun CaddieSheet(
     modifier: Modifier = Modifier,
     closeLabel: String = Strings.Common.CLOSE,
     footer: (@Composable RowScope.() -> Unit)? = null,
+    scrollable: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Caddie.colors
@@ -88,7 +92,10 @@ fun CaddieSheet(
                 CaddieIconButton(LucideIcon.X, closeLabel, onClose, iconSize = 22.dp)
             }
             Column(
-                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = d.gutter),
+                Modifier
+                    .weight(1f, fill = false)
+                    .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                    .padding(horizontal = d.gutter),
                 content = content,
             )
             if (footer != null) {
@@ -122,33 +129,61 @@ fun ConfirmDialog(
     testTag: String = "confirm-dialog",
     content: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(dismissOnClickOutside = dismissOnScrim)) {
+        ConfirmDialogCard(title, body, confirmLabel, onConfirm, onDismiss, destructive, Modifier.testTag(testTag), content)
+    }
+}
+
+/**
+ * The card of [ConfirmDialog]. The title, body and [content] scroll when they do not fit (a long
+ * text at a large font size, or a phone in landscape), so the buttons under them always stay on
+ * screen; the buttons wrap onto two lines when they do not fit side by side.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ConfirmDialogCard(
+    title: String,
+    body: String?,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    destructive: Boolean,
+    modifier: Modifier = Modifier,
+    content: (@Composable ColumnScope.() -> Unit)? = null,
+) {
     val c = Caddie.colors
     val shape = RoundedCornerShape(Caddie.dimens.dialogRadius)
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(dismissOnClickOutside = dismissOnScrim)) {
+    Column(
+        modifier
+            .widthIn(max = 400.dp)
+            .fillMaxWidth()
+            .shadow(8.dp, shape, ambientColor = c.shadowLg, spotColor = c.shadowLg)
+            .background(c.surfaceRaised, shape)
+            .padding(top = 24.dp, bottom = 16.dp)
+            .semantics { paneTitle = title },
+    ) {
         Column(
             Modifier
-                .testTag(testTag)
-                .widthIn(max = 400.dp)
-                .fillMaxWidth()
-                .shadow(8.dp, shape, ambientColor = c.shadowLg, spotColor = c.shadowLg)
-                .background(c.surfaceRaised, shape)
-                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 16.dp)
-                .semantics { paneTitle = title },
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .testTag("dialog-body"),
         ) {
             Text(title, style = Caddie.type.sheetTitle, color = c.text, modifier = Modifier.semantics { heading() })
             if (body != null) Text(body, style = Caddie.type.stateBody, color = c.text2, modifier = Modifier.padding(top = 8.dp))
             content?.invoke(this)
-            Row(
-                Modifier.fillMaxWidth().padding(top = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-            ) {
-                CaddieButton(Strings.Common.CANCEL, onDismiss, variant = ButtonVariant.Text)
-                CaddieButton(
-                    confirmLabel,
-                    onClick = onConfirm,
-                    variant = if (destructive) ButtonVariant.Danger else ButtonVariant.Primary,
-                )
-            }
+        }
+        FlowRow(
+            Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CaddieButton(Strings.Common.CANCEL, onDismiss, variant = ButtonVariant.Text)
+            CaddieButton(
+                confirmLabel,
+                onClick = onConfirm,
+                variant = if (destructive) ButtonVariant.Danger else ButtonVariant.Primary,
+            )
         }
     }
 }

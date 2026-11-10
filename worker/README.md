@@ -169,9 +169,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 
    The Pages workflow publishes only the talk bundles (docs/BUNDLES.md), `conferences.json`, the
    tier 1 `capabilities.json` and a landing page with no script that links to `CADDIE_APP_URL`. It
-   skips with a notice while `CADDIE_API_BASE` is empty, and a manual run fails then. The weekly
-   talk ingest (`.github/workflows/ingest.yml`) uses `CADDIE_API_BASE` and the
-   `CADDIE_ADMIN_TOKEN` repository secret; start it by hand with `gh workflow run ingest.yml`.
+   does not need the Worker and runs on every push to the data or the bundle builder, so the native
+   apps can fetch the bundles before the Worker is deployed. The weekly talk ingest
+   (`.github/workflows/ingest.yml`) uses `CADDIE_API_BASE` and the `CADDIE_ADMIN_TOKEN` repository
+   secret; start it by hand with `gh workflow run ingest.yml`.
 
 5. **Run the smoke** against the live Worker (next section).
 

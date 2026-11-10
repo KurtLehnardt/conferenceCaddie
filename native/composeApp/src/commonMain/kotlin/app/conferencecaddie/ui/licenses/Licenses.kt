@@ -1,9 +1,13 @@
 package app.conferencecaddie.ui.licenses
 
+/** One titled block of the licences screen. */
+data class LicenceSection(val title: String, val body: String)
+
 /**
- * The licence text the apps show in Settings for the lucide icons (ISC, and MIT for the icons that
- * came from Feather), whose notices must travel with every copy. It is the text of
- * native/licenses/lucide.txt; update both together when the icons are regenerated.
+ * The licences the apps show in Settings under "Open-source licences": the app's own, the lucide
+ * icons' ([LUCIDE]: ISC, and MIT for the icons that came from Feather; the text of
+ * native/licenses/lucide.txt, to be updated together with it), and every third-party licence in
+ * [ThirdPartyNotices], whose notices must travel with every copy.
  */
 object Licenses {
     const val LUCIDE = """ISC License
@@ -50,11 +54,33 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE."""
 
+    /** Joins a text's hard line breaks (and the indentation after them) so its paragraphs wrap to the screen. */
+    private fun unwrap(text: String): String = text.replace(Regex("(?<!\n)\n(?!\n)[ \t]*"), " ")
+
+    /** The modules a licence covers, grouped by the platforms that ship them, as the lines shown above its text. */
+    private fun moduleLines(notice: ThirdPartyNotices.Notice): String {
+        val both = notice.android.filter { it in notice.ios }
+        val androidOnly = notice.android.filter { it !in notice.ios }
+        val iosOnly = notice.ios.filter { it !in notice.android }
+        return listOf("Android and iOS" to both, "Android only" to androidOnly, "iOS only" to iosOnly)
+            .filter { (_, modules) -> modules.isNotEmpty() }
+            .joinToString("\n\n") { (platforms, modules) ->
+                "$platforms:\n" + modules.joinToString("\n") { "${it.coordinate} ${it.version}" }
+            }
+    }
+
     /**
-     * What Settings shows: a line about the app, then the lucide licence with its hard line breaks
-     * joined, so the paragraphs wrap to the screen.
+     * What the licences screen shows: the app's own licence, the lucide icons, then every third-party
+     * licence with the modules it covers on each platform and its full text.
      */
-    val TEXT: String = "Conference Caddie is open source under the Apache License 2.0, as are the Kotlin, Compose and " +
-        "AndroidX libraries it is built with. Its icons are from Lucide (lucide.dev), used under the licence below.\n\n" +
-        LUCIDE.replace(Regex("(?<!\n)\n(?!\n)"), " ")
+    val SECTIONS: List<LicenceSection> = listOf(
+        LicenceSection(
+            "Conference Caddie",
+            "Conference Caddie is open source under the Apache License 2.0. The libraries and components it is " +
+                "built with are listed below with their licences.",
+        ),
+        LicenceSection("Lucide icons", unwrap(LUCIDE)),
+    ) + ThirdPartyNotices.NOTICES.map { notice ->
+        LicenceSection(notice.title, moduleLines(notice) + "\n\n" + unwrap(notice.text))
+    }
 }

@@ -36,7 +36,7 @@ object BundleVerifier {
             val bytes = files.getValue(name)
             sb.append(name).append('\t').append(Sha256.hex(bytes)).append('\t').append(bytes.size).append('\n')
         }
-        return Sha256.hex(sb.toString().encodeToByteArray())
+        return Sha256.hex(Sha256.utf8(sb.toString()))
     }
 
     /** `sha256(title + "\n" + abstract)` in hex, the talk's text_hash. */

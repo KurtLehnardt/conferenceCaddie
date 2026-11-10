@@ -30,7 +30,9 @@ import kotlin.test.Test
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
+import kotlinx.coroutines.test.runTest
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.files.SystemTemporaryDirectory
@@ -50,8 +52,9 @@ class TalkScreensUiTest {
     }
 
     @AfterTest
-    fun cleanUp() {
-        scope.cancel()
+    fun cleanUp() = runTest {
+        // Every job must have stopped before the database closes.
+        scope.coroutineContext.job.cancelAndJoin()
         files.clear()
         SystemFileSystem.delete(Path(root, "bundles"), mustExist = false)
         SystemFileSystem.delete(root, mustExist = false)

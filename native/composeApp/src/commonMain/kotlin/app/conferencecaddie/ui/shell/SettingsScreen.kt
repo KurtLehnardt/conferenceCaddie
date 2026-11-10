@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -38,7 +40,7 @@ import app.conferencecaddie.ui.components.SettingsRow
 import app.conferencecaddie.ui.components.SettingsTextRow
 import app.conferencecaddie.ui.components.SettingsValueRow
 import app.conferencecaddie.ui.icons.LucideIcon
-import app.conferencecaddie.ui.licenses.Licenses
+import app.conferencecaddie.ui.licenses.LicenceSections
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.ThemePreference
@@ -61,6 +63,9 @@ fun SettingsScreen(
     Column(
         Modifier
             .fillMaxSize()
+            // The keyboard must not cover the Server URL field: the scrolling area ends above it,
+            // and the focused field scrolls into view.
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = Caddie.dimens.gutter)
             .padding(bottom = 16.dp)
@@ -106,8 +111,8 @@ fun SettingsScreen(
     }
 
     if (licensesOpen) {
-        CaddieSheet(title = Strings.Settings.LICENSES_TITLE, onClose = { licensesOpen = false }) {
-            Text(Licenses.TEXT, style = Caddie.type.note, color = Caddie.colors.text2, modifier = Modifier.padding(bottom = 16.dp))
+        CaddieSheet(title = Strings.Settings.LICENSES_TITLE, onClose = { licensesOpen = false }, scrollable = false) {
+            LicenceSections()
         }
     }
     if (clearOpen) {
@@ -129,10 +134,14 @@ private fun ServerGroup(state: ShellState, actions: ShellActions, onServerTyped:
     var draft by rememberSaveable(state.serverBase) { mutableStateOf(state.serverBase) }
     var error by remember(state.serverBase) { mutableStateOf<String?>(null) }
     val c = Caddie.colors
+    val focusManager = LocalFocusManager.current
     val save = {
         when (val result = BackendUrl.normalise(draft, allowLocalHttp = state.isDebugBuild)) {
             is BackendUrl.Valid -> {
                 draft = result.base
+                // The keyboard goes away before the confirmation opens, so the question is asked on
+                // a settled screen; a refused address keeps it, so the person can correct it.
+                focusManager.clearFocus()
                 if (result.base != state.serverBase) onServerTyped(result.base)
             }
             is BackendUrl.Invalid -> error = result.reason.message(state.isDebugBuild)

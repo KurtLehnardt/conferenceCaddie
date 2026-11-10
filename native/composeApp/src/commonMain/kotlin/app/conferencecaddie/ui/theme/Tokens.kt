@@ -123,9 +123,16 @@ data class CaddieDimens(
     val gutter: Dp = 16.dp,
     /** --radius: cards, the search field, banners and toasts. */
     val radius: Dp = 12.dp,
-    /** The smallest tap target the web gives any control. */
+    /**
+     * The smallest visible height the web gives a control (buttons, icon buttons, links). The touch
+     * target can be larger: [CaddieTheme] sets Material's minimum interactive size to the
+     * platform's guideline (48 dp on Android, 44 pt on iOS), and controls reserve it with
+     * minimumInteractiveComponentSize().
+     */
     val minTouch: Dp = 44.dp,
+    /** .chip: the visible pill; it grows with large text, and its touch target is the platform's. */
     val chipHeight: Dp = 36.dp,
+    /** .search-field: the field's height at the default text size; it grows with large text. */
     val searchFieldHeight: Dp = 48.dp,
     /** The selected tab's pill behind its icon (.nav-icon). */
     val navPillWidth: Dp = 56.dp,
@@ -139,7 +146,19 @@ data class CaddieDimens(
     /** .segmented and its segments. */
     val segmentedRadius: Dp = 10.dp,
     val segmentRadius: Dp = 8.dp,
+    /** --rail-w: the side navigation rail of the wide layout. */
+    val railWidth: Dp = 88.dp,
+    /** The wide layout's content column (.content > * { max-width: 720px }). */
+    val contentMaxWidth: Dp = 720.dp,
+    /** The window width from which the wide layout applies (@media (min-width: 768px)). */
+    val wideLayoutMinWidth: Dp = 768.dp,
 )
+
+/**
+ * The accent blue of the web app's icon (web/public/icons), which the wide layout's rail shows at
+ * its top in both themes, as the web does.
+ */
+val BrandBlue = Color(0xFF2457D6)
 
 /** --motion: the duration of every state transition, in milliseconds. */
 const val MOTION_MS = 180

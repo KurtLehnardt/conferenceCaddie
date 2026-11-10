@@ -57,10 +57,16 @@ kotlin {
             implementation(libs.compose.components.resources)
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+            implementation(libs.androidx.lifecycle.viewmodelCompose)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutines.test)
             implementation(libs.compose.uiTest)
+        }
+        // The iOS UI tests send the system Back through a navigation event dispatcher of their own.
+        iosTest.dependencies {
+            implementation(libs.jetbrains.navigationevent.compose)
         }
         getByName("androidDeviceTest").dependencies {
             implementation(libs.androidx.test.core)
