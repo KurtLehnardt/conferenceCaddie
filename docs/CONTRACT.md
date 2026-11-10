@@ -7,7 +7,7 @@ This file pins the decisions that every task builds against. A task may add to i
 - Elasticsearch 9.5.6 runs on Elastic Cloud Hosted (GCP us-west1) at `https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443`. The URL is not a secret.
 - The admin credential is in env var `ELASTISEARCH_API_KEY`, already encoded, sent as `Authorization: ApiKey $ELASTISEARCH_API_KEY`. It is never deployed.
 - An API key cannot create a derived API key that has privileges. Scoped keys are minted by creating a role and a native user, authenticating as that user, and minting the API key as that user. The password is generated in-process and never printed or stored.
-- The only model the app uses is the embedding model behind `semantic_text` (the cluster default, `.jina-embeddings-v5-text-small`). **Never call a chat, completion or rerank endpoint.** The Elastic trial limits model usage, so unchanged documents are never re-embedded.
+- The only model the app uses is the embedding model behind `semantic_text`: the inference endpoint `caddie-e5-small`, the multilingual E5 small model deployed on the cluster's own ML node (it replaced the trial-limited cluster default, `.jina-embeddings-v5-text-small`, on 2026-11-09). **Never call a chat, completion or rerank endpoint.** Unchanged documents are still never re-embedded.
 - Schedule data comes from the Linux Foundation events list and each event's Sessionize feed, fetched only by the ingestion CLI on an operator's machine. Raw responses are committed under `data/raw/`. The deployed app never calls a feed.
 - Google Cloud project id is `project-9205d6eb-366e-4844-b77` and the region is `us-west1`.
 
@@ -109,7 +109,7 @@ Every index is versioned behind an alias. The server reads alias names from env:
 | `category_mapping` | `{ track_group, level_group, tag_groups, hidden_groups, slides_question }`, names copied from the feed. |
 | `counts` | `{ sessions, talk, ambient, break, housekeeping, with_slides, sponsor }`. |
 
-### Talks: `caddie-talks-v2` behind `caddie-talks`
+### Talks: `caddie-talks-v3` behind `caddie-talks`
 
 `_id` is `talk_id` = `{conference}:{session_id}`. One document per feed session of every kind. Mapping (`dynamic: false`):
 
@@ -118,7 +118,7 @@ Every index is versioned behind an alias. The server reads alias names from env:
 | `talk_id`, `conference`, `kind`, `room`, `track`, `level`, `tag_keys`, `day`, `topics` | keyword | |
 | `session_id`, `slides_url`, `url`, `content_hash`, `text_hash` | keyword, `index: false` | `session_id` is never returned by the API. |
 | `title`, `abstract` | text (english), `copy_to: semantic` | Trimmed, CRLF to LF, null description to `""`. |
-| `semantic` | `semantic_text`, default endpoint | |
+| `semantic` | `semantic_text`, `inference_id: caddie-e5-small` | |
 | `speakers` | text | Resolved names, in session order. |
 | `speaker_taglines` | text (english) | |
 | `tags` | object, `enabled: false` | `[{ group, value }]` for every item in every non-track, non-level, non-hidden group. `tag_keys` is `group + "\u001f" + value`. |
@@ -143,7 +143,7 @@ Every index is versioned behind an alias. The server reads alias names from env:
 - `data/topics/{slug}.json` is `{ "rename": { id: label }, "merge": { alias_id: canonical_id }, "remove": [id] }`. A fix-up never adds a topic.
 - The command replaces the conference's topic documents only when they differ, and updates `topics` on talks only where the value changed. The ingestion CLI runs it after every successful event.
 
-### People: `caddie-people-v1` behind `caddie-people`
+### People: `caddie-people-v2` behind `caddie-people`
 
 `_id` is `{event_id}:{profile_id}`. Mapping (`dynamic: false`):
 
@@ -151,7 +151,7 @@ Every index is versioned behind an alias. The server reads alias names from env:
 |---|---|
 | `event_id`, `profile_id`, `learn_topics`, `speak_topics`, `shared_talk_ids` | keyword |
 | `display_name` | text with a `keyword` subfield |
-| `about`, `interests`, `expertise` | text, each `copy_to` `about_semantic`, `interests_semantic` or `expertise_semantic` (`semantic_text`, default endpoint) |
+| `about`, `interests`, `expertise` | text, each `copy_to` `about_semantic`, `interests_semantic` or `expertise_semantic` (`semantic_text`, `inference_id: caddie-e5-small`) |
 | `open_to_meet`, `sample` | boolean |
 | `visible_until`, `updated_at` | date |
 | `linkedin_url`, `contact_note`, `secret_hash`, `text_hash` | keyword, `index: false` |
