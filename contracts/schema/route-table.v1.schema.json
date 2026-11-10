@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/route-table.v1.schema.json",
+  "title": "Route table of an API contract, v1",
+  "description": "The machine-readable list of routes in contracts/routes/*.json: method, path, authentication, the $defs of the API schema that describe the request and response bodies, the rate-limit bucket and the error responses a route can give besides the common ones.",
+  "type": "object",
+  "required": ["api", "version", "schema", "common_errors", "limits", "routes"],
+  "properties": {
+    "api": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "schema": { "description": "The $id of the schema whose $defs the routes name.", "type": "string", "format": "uri" },
+    "common_errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ErrorSpec" }
+    },
+    "limits": {
+      "description": "Rate-limit buckets by name. Each limit is { per, window_s, key }.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": ["per", "window_s", "key"],
+          "properties": {
+            "per": { "type": "integer", "minimum": 1 },
+            "window_s": { "type": "integer", "minimum": 1 },
+            "key": { "enum": ["device", "ip"] }
+          }
+        }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "method", "path", "status", "auth", "query", "request", "response", "limits", "errors", "summary"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]*$" },
+          "method": { "enum": ["GET", "PUT", "POST", "DELETE"] },
+          "path": { "description": "{meet_id} stands for a path segment.", "type": "string", "pattern": "^/api/[a-z0-9/_{}-]+$" },
+          "status": {
+            "description": "frozen: today's behaviour, unchanged. legacy: served for old clients, not used by new ones. new: added by these contracts, implemented in a later phase.",
+            "enum": ["frozen", "legacy", "new"]
+          },
+          "auth": { "description": "device: needs X-Caddie-Device. none: public.", "enum": ["device", "none"] },
+          "query": { "type": "array", "items": { "enum": ["event"] } },
+          "request": { "description": "Name of the request body's $defs entry, or null for no body.", "type": ["string", "null"] },
+          "response": { "description": "Name of the 200 body's $defs entry.", "type": "string" },
+          "limits": { "type": "array", "items": { "type": "string" } },
+          "errors": { "type": "array", "items": { "$ref": "#/$defs/ErrorSpec" } },
+          "capability": { "description": "The capabilities flag that must be on for a client to call the route.", "type": "string" },
+          "summary": { "type": "string" },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ErrorSpec": {
+      "type": "object",
+      "required": ["status", "error"],
+      "properties": {
+        "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+        "error": { "description": "The stable error code, or \"*\" when the body's error is a human-readable message.", "type": "string" },
+        "extra": { "description": "Other keys the error body carries.", "type": "array", "items": { "type": "string" } },
+        "headers": { "type": "array", "items": { "type": "string" } },
+        "when": { "type": "string" }
+      }
+    }
+  }
+}

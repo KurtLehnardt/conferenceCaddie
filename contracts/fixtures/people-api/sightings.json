@@ -1,0 +1,105 @@
+{
+  "route": "sightings",
+  "examples": [
+    {
+      "name": "one strong match nearby (derived-v1: the answer names the requester's current key)",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "sightings": [
+            {
+              "token": "OkEQ7S2_2qoosZUeyoTaGQ",
+              "rssi": -62
+            },
+            {
+              "token": "tU5Bdzp6-mESMDcuimPGrw",
+              "rssi": -88
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nearby": [
+            {
+              "ref": "3f2a9c0d1e4b5a68",
+              "display_name": "Sample Person",
+              "evidence": "Built <mark>eBPF</mark> load balancing for 40 clusters.",
+              "speak_topics": [
+                {
+                  "topic_id": "ebpf",
+                  "label": "eBPF"
+                }
+              ],
+              "zone": "Hallway"
+            }
+          ],
+          "ble_key_id": "0mzTMJg1DCU"
+        }
+      }
+    },
+    {
+      "name": "nobody resolves",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "sightings": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nearby": []
+        }
+      }
+    },
+    {
+      "name": "the requester is not broadcasting",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "sightings": [
+            {
+              "token": "OkEQ7S2_2qoosZUeyoTaGQ",
+              "rssi": -62
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "ble_required"
+        }
+      }
+    },
+    {
+      "name": "derived-v1: the session was issued under a retired master, so the device must get a new key",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "sightings": []
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "ble_rekey"
+        }
+      }
+    }
+  ]
+}

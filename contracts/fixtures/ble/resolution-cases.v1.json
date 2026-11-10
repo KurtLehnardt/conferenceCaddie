@@ -1,0 +1,372 @@
+{
+  "description": "Server-side resolution of sightings reports under derived-v1 (docs/contracts/ble-tokens.md, Resolution). masters is the keyring, master id -> secret (hex); people is the store at request time, one stored session each (presence_nonce base64url, the id of the master that issued it, presence_until, zone and the centre of its ~100 m cell; co-location accepts the same cell or one of its eight neighbours). For each case: drop the masters in retired_masters, build the token table from table_people (a stale cached table) or else people, apply current_overrides to the store, then resolve with near_rssi, the requester, the co-location rule (on unless colocation_required is false) and the server clock. The keys of the first two people are the key_derivation cases of golden-vectors.v1.json.",
+  "near_rssi": -75,
+  "window_s": 600,
+  "masters": {
+    "m1": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "m0": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+  },
+  "requester": {
+    "profile_id": "cmVxdWVzdGVyLWZpeHR1cmU",
+    "zone": "Hall A",
+    "cell": {
+      "lat": 40.76752,
+      "lon": -111.89036
+    }
+  },
+  "people": [
+    {
+      "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+      "presence_nonce": "8PHy8_T19vf4-fr7_P3-_w",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hall A",
+      "cell": null
+    },
+    {
+      "profile_id": "_____________________w",
+      "presence_nonce": "AAECAwQFBgcICQoLDA0ODw",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Expo hall",
+      "cell": {
+        "lat": 40.76752,
+        "lon": -111.89036
+      }
+    },
+    {
+      "profile_id": "AQIDBAUGBwgJCgsMDQ4PEA",
+      "presence_nonce": "IiIiIiIiIiIiIiIiIiIiIg",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hallway",
+      "cell": null
+    },
+    {
+      "profile_id": "EBESExQVFhcYGRobHB0eHw",
+      "presence_nonce": "MzMzMzMzMzMzMzMzMzMzMw",
+      "ble_master_id": "m0",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hall A",
+      "cell": null
+    },
+    {
+      "profile_id": "cmVxdWVzdGVyLWZpeHR1cmU",
+      "presence_nonce": "RERERERERERERERERERERA",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hall A",
+      "cell": {
+        "lat": 40.76752,
+        "lon": -111.89036
+      }
+    },
+    {
+      "profile_id": "ICEiIyQlJicoKSorLC0uLw",
+      "presence_nonce": "VVVVVVVVVVVVVVVVVVVVVQ",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hallway",
+      "cell": {
+        "lat": 40.76852,
+        "lon": -111.89036
+      }
+    },
+    {
+      "profile_id": "MDEyMzQ1Njc4OTo7PD0-Pw",
+      "presence_nonce": "ZmZmZmZmZmZmZmZmZmZmZg",
+      "ble_master_id": "m1",
+      "presence_until": "2026-11-10T13:00:00Z",
+      "zone": "Hallway",
+      "cell": {
+        "lat": 40.76952,
+        "lon": -111.89036
+      }
+    }
+  ],
+  "cases": [
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "current window, same zone",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -60
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -60
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "previous window (late report or slow advertiser clock), same ~100 m cell",
+      "sightings": [
+        {
+          "token": "p56T4ZNatlOM6xvdhLbvlg",
+          "rssi": -70
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "_____________________w",
+          "rssi": -70
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "next window (fast advertiser clock)",
+      "sightings": [
+        {
+          "token": "70PcspH3xzi41cwcGyx-5g",
+          "rssi": -65
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -65
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "two windows back does not resolve",
+      "sightings": [
+        {
+          "token": "kq5X_jcWuo_H6KZsYEKXmw",
+          "rssi": -50
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "two windows ahead does not resolve",
+      "sightings": [
+        {
+          "token": "gCQKhg1jKhapAGcVuzp9tQ",
+          "rssi": -50
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "weaker than near_rssi is dropped before resolving",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -80
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "strongest sighting per token counts",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -80
+        },
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -72
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -72
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "unknown token resolves to nobody",
+      "sightings": [
+        {
+          "token": "AAAAAAAAAAAAAAAAAAAAAA",
+          "rssi": -40
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "a cached table entry from a replaced nonce does not resolve",
+      "table_people": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "presence_nonce": "EREREREREREREREREREREQ",
+          "ble_master_id": "m1",
+          "presence_until": "2026-11-10T13:00:00Z",
+          "zone": "Hall A",
+          "cell": null
+        }
+      ],
+      "sightings": [
+        {
+          "token": "__K81XT3xUp3Po3Wx0ejpQ",
+          "rssi": -55
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "a cached table entry whose presence has ended does not resolve",
+      "current_overrides": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "presence_until": "2026-11-10T12:00:00Z"
+        }
+      ],
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -55
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "not co-located (another zone, no shared cell) does not resolve",
+      "sightings": [
+        {
+          "token": "RtIfJWVlHNR77SIze9cdmw",
+          "rssi": -50
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "with the co-location rule off, the same token resolves",
+      "colocation_required": false,
+      "sightings": [
+        {
+          "token": "RtIfJWVlHNR77SIze9cdmw",
+          "rssi": -50
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AQIDBAUGBwgJCgsMDQ4PEA",
+          "rssi": -50
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "a session under a retired master does not resolve",
+      "retired_masters": [
+        "m0"
+      ],
+      "sightings": [
+        {
+          "token": "1LSrljySgJeXMq6W8HBFSw",
+          "rssi": -50
+        }
+      ],
+      "expected": []
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "the same session while its master is held resolves",
+      "sightings": [
+        {
+          "token": "1LSrljySgJeXMq6W8HBFSw",
+          "rssi": -50
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "EBESExQVFhcYGRobHB0eHw",
+          "rssi": -50
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "the requester's own token is left out",
+      "sightings": [
+        {
+          "token": "pB-7mCUFNLidZIFvif5rAQ",
+          "rssi": -40
+        },
+        {
+          "token": "VqOlyrpkFVyNjTcqh58ZBQ",
+          "rssi": -74
+        },
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -66
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -66
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312600",
+      "name": "at the window boundary the server accepts the old and the new token",
+      "sightings": [
+        {
+          "token": "fIibHhzuk40wa6xp7cybXw",
+          "rssi": -60
+        },
+        {
+          "token": "zEh80vz2Qc19IkeaTg7DhA",
+          "rssi": -61
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "AAECAwQFBgcICQoLDA0ODw",
+          "rssi": -60
+        },
+        {
+          "profile_id": "_____________________w",
+          "rssi": -61
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "a neighbouring ~100 m cell counts as co-located (position jitter)",
+      "sightings": [
+        {
+          "token": "45d_AgRD2LW59ivGdK6lyQ",
+          "rssi": -58
+        }
+      ],
+      "expected": [
+        {
+          "profile_id": "ICEiIyQlJicoKSorLC0uLw",
+          "rssi": -58
+        }
+      ]
+    },
+    {
+      "server_unix_seconds": "1794312300",
+      "name": "two cells away is not co-located",
+      "sightings": [
+        {
+          "token": "JIc6IjmLfXiYVJUH-bNMiQ",
+          "rssi": -58
+        }
+      ],
+      "expected": []
+    }
+  ]
+}

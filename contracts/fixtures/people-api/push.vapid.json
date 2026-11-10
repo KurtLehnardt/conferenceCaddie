@@ -1,0 +1,28 @@
+{
+  "route": "push.vapid",
+  "examples": [
+    {
+      "name": "configured",
+      "request": {},
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "public, max-age=3600"
+        },
+        "body": {
+          "publicKey": "BFakeVapidPublicKeyForContractFixturesOnly_000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "not configured",
+      "request": {},
+      "response": {
+        "status": 200,
+        "body": {
+          "publicKey": null
+        }
+      }
+    }
+  ]
+}

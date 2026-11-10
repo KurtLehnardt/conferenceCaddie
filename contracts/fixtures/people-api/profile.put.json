@@ -1,0 +1,141 @@
+{
+  "route": "profile.put",
+  "examples": [
+    {
+      "name": "create a visible profile that shares one talk",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "profile": {
+            "display_name": "Test Attendee",
+            "about": "SRE at a bank.",
+            "interests": "How to run eBPF safely in production.",
+            "expertise": "Ran Kubernetes upgrades for 200 clusters.",
+            "learn_topics": [
+              "ebpf"
+            ],
+            "speak_topics": [
+              "kubernetes"
+            ],
+            "linkedin_url": null,
+            "contact_note": null
+          },
+          "open_to_meet": true,
+          "shared_talk_ids": [
+            "kubecon-cloudnativecon-north-america-2026:1371070"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "open_to_meet": true,
+          "shared_talk_ids": [
+            "kubecon-cloudnativecon-north-america-2026:1371070"
+          ],
+          "hidden_for_owner": false
+        }
+      }
+    },
+    {
+      "name": "saved while embeddings are unavailable",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "profile": {
+            "display_name": "Test Attendee",
+            "about": "SRE at a bank."
+          },
+          "open_to_meet": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "open_to_meet": true,
+          "shared_talk_ids": [],
+          "hidden_for_owner": false,
+          "degraded": {
+            "semantic": true
+          }
+        }
+      }
+    },
+    {
+      "name": "both choices off deletes the profile",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "profile": {
+            "display_name": "Test Attendee"
+          },
+          "open_to_meet": false,
+          "shared_talk_ids": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "open_to_meet": false,
+          "shared_talk_ids": []
+        }
+      }
+    },
+    {
+      "name": "an unknown key is refused",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "profile": {
+            "display_name": "Test Attendee"
+          },
+          "open_to_meet": true,
+          "avatar": "x"
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "Unknown key: avatar"
+        }
+      },
+      "invalid_request": true
+    },
+    {
+      "name": "a wrong secret",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "profile": {
+            "display_name": "Test Attendee"
+          },
+          "open_to_meet": true
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "forbidden"
+        }
+      }
+    }
+  ]
+}

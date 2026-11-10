@@ -1,0 +1,98 @@
+{
+  "route": "circles.members",
+  "examples": [
+    {
+      "name": "members of a circle I share",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "talk_id": "kubecon-cloudnativecon-north-america-2026:1371070"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "talk": {
+            "title": "Cloud Native With a Chance of Tokens",
+            "start": "2026-11-10T11:00:00-07:00",
+            "end": "2026-11-10T11:15:00-07:00",
+            "url": "https://example.org/session/1371070"
+          },
+          "speakers": [
+            {
+              "name": "Speaker Example",
+              "tagline": null,
+              "links": [
+                {
+                  "title": "Website",
+                  "url": "https://example.org/speaker"
+                }
+              ]
+            }
+          ],
+          "count": 4,
+          "members": [
+            {
+              "ref": "3f2a9c0d1e4b5a68",
+              "display_name": "Sample Person",
+              "about": "Platform engineer working on multi-cluster networking.",
+              "sample": true,
+              "learn_topics": [
+                {
+                  "topic_id": "ai-agents",
+                  "label": "AI Agents"
+                }
+              ],
+              "speak_topics": [
+                {
+                  "topic_id": "cilium",
+                  "label": "Cilium"
+                },
+                {
+                  "topic_id": "ebpf",
+                  "label": "eBPF"
+                }
+              ],
+              "reasons": [
+                "They've worked on <mark>eBPF</mark> load balancing at scale.",
+                "They can speak to Cilium and eBPF, which you want to learn about."
+              ],
+              "opener": "They've worked on <mark>eBPF</mark> load balancing at scale.",
+              "contact": {
+                "linkedin_url": null,
+                "contact_note": "Find me at the Cilium booth."
+              },
+              "evidence": "Built <mark>eBPF</mark> load balancing for 40 clusters.",
+              "around": false,
+              "zone": null,
+              "proximity": null,
+              "broad": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "not sharing for that talk",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "talk_id": "kubecon-cloudnativecon-north-america-2026:1371070"
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "share_required",
+          "count": 4
+        }
+      }
+    }
+  ]
+}

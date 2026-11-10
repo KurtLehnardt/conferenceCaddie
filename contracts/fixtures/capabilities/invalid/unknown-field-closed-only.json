@@ -1,0 +1,9 @@
+{
+  "api_version": 1,
+  "tier": "demo",
+  "talks": { "bundle_base": "https://kurtlehnardt.github.io/conferenceCaddie/bundles/", "server_search": false },
+  "people": { "enabled": false },
+  "ble": { "mode": "none" },
+  "push": { "apns": false, "fcm": false, "webpush": false, "web_push": false },
+  "imports": { "github": "device", "schedule": "device" }
+}

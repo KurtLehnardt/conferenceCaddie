@@ -1,0 +1,35 @@
+{
+  "api_version": 1,
+  "tier": "paid",
+  "talks": {
+    "bundle_base": "https://kurtlehnardt.github.io/conferenceCaddie/bundles/",
+    "server_search": true
+  },
+  "people": {
+    "enabled": true,
+    "semantic": "server",
+    "presence": true,
+    "gps_bands": true,
+    "meets": true,
+    "circles": true,
+    "reports": true,
+    "live": "poll"
+  },
+  "ble": {
+    "mode": "derived-v1",
+    "service_uuid": "e52c391c-b926-4856-9a38-d46c3c10c733",
+    "near_rssi": -75,
+    "window_s": 600,
+    "sightings_min_interval_s": 10,
+    "colocation_required": true
+  },
+  "push": {
+    "apns": true,
+    "fcm": true,
+    "webpush": true
+  },
+  "imports": {
+    "github": "server",
+    "schedule": "server"
+  }
+}

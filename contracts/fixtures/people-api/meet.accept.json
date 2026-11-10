@@ -1,0 +1,69 @@
+{
+  "route": "meet.accept",
+  "examples": [
+    {
+      "name": "accept",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "path_params": {
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw"
+        },
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw",
+          "state": "active",
+          "requested_by_me": false,
+          "same_zone": true,
+          "topic": {
+            "topic_id": "ebpf",
+            "label": "eBPF"
+          },
+          "topic_label": "eBPF",
+          "note": "I'm in Hallway too — want to talk shop?",
+          "created_at": "2026-11-10T17:02:00.000Z",
+          "active_since": "2026-11-10T17:04:00.000Z",
+          "active_until": "2026-11-10T17:24:00.000Z",
+          "expires_at": "2026-11-10T17:24:00.000Z",
+          "rendezvous": "Hallway",
+          "mine": {
+            "spot_me": null,
+            "around": true
+          },
+          "other": {
+            "ref": "3f2a9c0d1e4b5a68",
+            "display_name": "Sample Person",
+            "about": "Platform engineer working on multi-cluster networking.",
+            "around": true,
+            "zone": "Hallway",
+            "spot": "Green jacket, by the coffee",
+            "spot_me": "Holding a Cilium sticker"
+          }
+        }
+      }
+    },
+    {
+      "name": "already active",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "path_params": {
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw"
+        }
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "error": "state",
+          "state": "active"
+        }
+      }
+    }
+  ]
+}
