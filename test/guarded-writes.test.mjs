@@ -22,17 +22,18 @@ before(() => bootPurgeDone());
 const presence = (device) => request(handleConnectApi, 'PUT', '/api/presence', device, { event: EVENT, zone: 'Hallway', spot: '' });
 const rotate = (device) => request(handleBleApi, 'POST', '/api/presence/ble/rotate', device, { event: EVENT });
 
+// The person is around in the Expo hall, so a presence write (to the Hallway) changes presence_zone.
 function setup() {
   const device = newDevice();
   const cluster = useCluster(new FakeES());
-  addPerson(cluster, device);
+  addPerson(cluster, device, { presence_zone: 'Expo hall' });
   return { device, cluster, id: personId(device.profileId) };
 }
 
 const updateAction = (call) => JSON.parse(call.body.split('\n')[0]).update;
 
 const ROUTES = {
-  'PUT /api/presence': { send: presence, field: 'presence_until' },
+  'PUT /api/presence': { send: presence, field: 'presence_zone' },
   'POST /api/presence/ble/rotate': { send: rotate, field: 'ble_token' },
 };
 
