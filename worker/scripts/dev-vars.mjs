@@ -4,7 +4,10 @@
 // --real-ai is given. An existing file is kept unless --force is given, so the admin token stays
 // stable between runs. The file is created with mode 0600. Only names are printed, never values.
 //
-// Usage: node scripts/dev-vars.mjs [--force] [--real-ai] [--set NAME=VALUE ...]
+// Usage: node scripts/dev-vars.mjs [--force] [--real-ai] [--ble] [--set NAME=VALUE ...]
+//   --ble adds a development-only Bluetooth master keyring (BLE_MASTER_KEYRING, one random
+//   32-byte master with id "dev"), so presence with ble: true returns derived-v1 keys
+//   (src/lib/ble.js). Without it the local Worker serves the legacy server-minted tokens only.
 //   --set adds or overrides one plain variable (for example DAILY_REQUEST_BUDGET=10) in the file.
 //   --real-ai removes EMBED_FAKE and sets EMBED_PROXY=http://127.0.0.1:8786 (unless already set).
 //   `wrangler dev --local` cannot reach Workers AI, and a remote dev session cannot be
@@ -19,6 +22,7 @@ const file = join(dirname(fileURLToPath(import.meta.url)), '..', '.dev.vars');
 const args = process.argv.slice(2);
 const force = args.includes('--force');
 const realAi = args.includes('--real-ai');
+const ble = args.includes('--ble');
 const sets = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--set' && args[i + 1]) sets.push(args[++i]);
@@ -67,6 +71,10 @@ if (realAi) {
     vars.set('EMBED_FAKE', '1');
     created.push('EMBED_FAKE');
   }
+}
+if (ble && !vars.has('BLE_MASTER_KEYRING')) {
+  vars.set('BLE_MASTER_KEYRING', JSON.stringify({ current: 'dev', keys: { dev: b64url(crypto.getRandomValues(new Uint8Array(32))) } }));
+  created.push('BLE_MASTER_KEYRING');
 }
 for (const s of sets) {
   const eq = s.indexOf('=');

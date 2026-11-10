@@ -2,8 +2,9 @@
 // talks in a personal schedule an attendee exported from anywhere, so the app can offer to mark
 // them as Interested on the device.
 //
-// Body: { event, text } for pasted or browser-extracted text, or { event, filename?, mime?,
-// content_base64 } for an iCalendar, CSV, JSON or plain-text file. The Worker accepts text only:
+// Body: { event, text, filename?, mime? } for pasted or browser-extracted text (filename and mime
+// are format hints only), or { event, filename?, mime?, content_base64 } for an iCalendar, CSV,
+// JSON or plain-text file. The Worker accepts text only:
 // a PDF, Word, OpenDocument or RTF file gets 415 { error: 'extract_in_browser' }, because the
 // free stack's web app extracts their text in the browser and sends it as text. Anything that is
 // neither a document nor UTF-8 text gets 415 with the server's "not supported" message.
@@ -66,7 +67,9 @@ export function validate(body) {
   const hasFile = body.content_base64 !== undefined;
   const hasText = body.text !== undefined;
   if (hasFile === hasText) throw bad('Send either content_base64 or text');
-  if (hasText && (body.filename !== undefined || body.mime !== undefined)) throw bad('filename and mime go with content_base64 only');
+  // With text, filename and mime are hints only (the format of the text: a .csv name or a text/csv
+  // type reads it as CSV). The web app's Pages build extracts a PDF, Word or OpenDocument file in
+  // the browser and sends { filename, mime: 'text/plain', text }, so the pair must be accepted.
   if (body.filename !== undefined && (typeof body.filename !== 'string' || body.filename.length > 255)) throw bad('filename must be a string of at most 255 characters');
   if (body.mime !== undefined && (typeof body.mime !== 'string' || body.mime.length > 127)) throw bad('mime must be a string of at most 127 characters');
   let bytes = null;

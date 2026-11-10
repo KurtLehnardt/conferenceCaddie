@@ -23,7 +23,9 @@
 import { HttpError, bad, json, readJson, text, idList, isPlainObject, TALK_ID_RE, TOPIC_ID_RE, LINKEDIN_RE, REF_RE, MEET_ID_RE } from '../lib/http.js';
 import { requireDevice, refFor } from '../lib/device.js';
 import { rankPeople } from './rank.js';
-import { toPerson } from './view.js';
+import { toPerson, cellOf } from './view.js';
+import { applyCaps, RESOLVE_CAPS } from '../../../contracts/js/ble-token.mjs';
+import { bleConfig, derivedSession, keyOfSession, keyId, tableFor, resolveTokens } from '../lib/ble.js';
 import {
   LIMITS, writer, reader, requireProfile, liveByRef, ownRow, notFound, profileRequired, visibilityRequired,
 } from './common.js';
@@ -262,13 +264,23 @@ async function members(ctx, req) {
 
 // ---------------------------------------------------------------------------------------------
 // Blocks. A block is symmetric and silent: both people vanish from each other's matches, circles
-// and meets, and a meet in either direction gets the same 403 { error: "blocked" } (T4).
+// and meets, and a meet in either direction gets the same 403 { error: "blocked" } (T4). It belongs
+// to the blocker and lasts until the blocker lifts it, deletes their own profile, or it runs out
+// (blockExpiry); the blocked person deleting and re-creating their profile does not lift it.
 
 const BLOCK_KEYS = new Set(['event', 'ref']);
 
 function refOf(body) {
   if (typeof body.ref !== 'string' || !REF_RE.test(body.ref)) throw bad('ref must be a result reference');
   return body.ref;
+}
+
+// When the purge may delete a block: the latest of the conference's end and the visible_until of
+// the two profiles, so a block never runs out while either of them can still be found
+// (blockExpiry in server/connect.mjs).
+function blockExpiry(ctx, me, them) {
+  const ends = [ctx.conf?.visible_until_ms, me.visible_until_ms, them.visible_until_ms].filter(Number.isFinite);
+  return ends.length ? Math.max(...ends) : me.visible_until_ms;
 }
 
 async function block(ctx, req) {
@@ -281,7 +293,7 @@ async function block(ctx, req) {
   if (!them) throw notFound();
   const now = Date.now();
   ctx.transactionSync(() => {
-    ctx.store.addBlock(me.profile_id, them.profile_id);
+    ctx.store.addBlock(me.profile_id, them.profile_id, them.ref, blockExpiry(ctx, me, them));
     // An open meet between the two ends: as a cancellation when the blocker asked, as a decline
     // when the blocker was asked. Its note, meeting point and spot-me lines go with it.
     ctx.sql.exec(
@@ -300,7 +312,7 @@ async function unblock(ctx, req) {
   const body = await readJson(req, BLOCK_KEYS);
   const ref = refOf(body);
   const me = await requireProfile(ctx, device);
-  ctx.store.removeBlockByRef(me.profile_id, ref);
+  await ctx.store.removeBlockByRef(me.profile_id, ref);
   return json(200, { ok: true });
 }
 
@@ -308,9 +320,12 @@ async function blocks(ctx, req) {
   const device = reader(ctx, req);
   const me = await requireProfile(ctx, device);
   const rows = [];
+  // A block outlives the blocked profile; once that profile is gone or has expired, its row keeps
+  // the ref (so it can still be lifted) with display_name null.
   for (const r of ctx.store.blocksBy(me.profile_id)) {
     const p = ctx.store.person(r.profile_id);
-    rows.push({ ref: p?.ref ?? (await refFor(ctx.env, ctx.slug, r.profile_id)), display_name: p?.display_name ?? null, created_at: iso(r.created_at_ms) });
+    const live = p && ctx.store.isLive(p) ? p : null;
+    rows.push({ ref: r.ref ?? (await refFor(ctx.env, ctx.slug, r.profile_id)), display_name: live?.display_name ?? null, created_at: iso(r.created_at_ms) });
   }
   return json(200, { refs: rows.map((r) => r.ref), blocks: rows });
 }
@@ -387,7 +402,26 @@ async function report(ctx, req) {
 
 // ---------------------------------------------------------------------------------------------
 // Bluetooth sightings: who, among the tokens this phone heard, is a strong match standing right
-// here. Nothing is stored or logged; the answer carries only what a match card shows.
+// here (docs/contracts/ble-tokens.md, Resolution on the server; the tier 3 server's port is
+// server/ble.mjs on the feat/tier3-capabilities-ble branch). Both kinds of token resolve through
+// the same steps, and every Phase 4 mitigation applies to both, whichever mode the Worker
+// advertises:
+//   1. the strongest RSSI per token, dropping those under ble.near_rssi;
+//   2. derived tokens through the conference's token table (windows w - 1, w and w + 1), cached in
+//      this object per window and rebuilt on a token it cannot find once older than 30 seconds; a
+//      token not in the table is tried as a legacy token;
+//   3. every hit checked against the store: a derived hit only while the stored nonce still has the
+//      table's tag and its master is held, a legacy hit only while its token is live, and both only
+//      while the person is around, live, open to meet, not hidden and not the requester;
+//   4. co-location: the same zone, or the same or a neighbouring ~100 m cell (3 x 3 cells);
+//   5. blocks in either direction, then the matches ranking restricted to these people, keeping
+//      the strong (not broad) matches (rankPeople);
+//   6. the caps on the final answer, at most 10 new people per token window and 30 per rolling
+//      hour for one device, recorded in this object's SQLite (ble_caps), and a zone only for people
+//      in the requester's own zone.
+// Nothing about a sighting is stored or logged; the caps record names only people the device was
+// answered with. The answer carries only what a match card shows, plus the requester's own
+// ble_key_id in derived-v1.
 
 const SIGHTINGS_KEYS = new Set(['event', 'sightings']);
 const SIGHTING_KEYS = new Set(['token', 'rssi']);
@@ -406,10 +440,7 @@ function parseSightings(value) {
   return heard;
 }
 
-const nearRssi = (env) => {
-  const v = Number(env?.BLE_NEAR_RSSI);
-  return env?.BLE_NEAR_RSSI !== undefined && env?.BLE_NEAR_RSSI !== '' && Number.isFinite(v) ? v : -75;
-};
+const hasLiveToken = (p, now) => Boolean(p.presence?.ble_token) && p.presence.ble_token_until_ms > now;
 
 async function sightings(ctx, req) {
   ctx.limit(`ble-sightings:ip:${ctx.ip}`, SIGHTINGS_PER_MINUTE_IP);
@@ -418,30 +449,69 @@ async function sightings(ctx, req) {
   const body = await readJson(req, SIGHTINGS_KEYS);
   const heard = parseSightings(body.sightings);
   const store = ctx.store;
+  const config = bleConfig(ctx.env);
   const me = await store.authenticate(device);
   if (!me || !me.open_to_meet) throw profileRequired();
   const now = Date.now();
-  // Only a phone that is itself around and broadcasting a live token may ask who is near it.
-  if (!store.isAround(me) || !(me.presence.ble_token && me.presence.ble_token_until_ms > now)) throw new HttpError(403, { error: 'ble_required' });
 
-  const threshold = nearRssi(ctx.env);
-  const near = new Set([...heard].filter(([, rssi]) => rssi >= threshold).map(([token]) => token));
-  if (!near.size) return json(200, { nearby: [] });
-  // Tokens to people: live tokens of people who are around and visible conference-wide.
-  // rankPeople then applies the remaining gates (not hidden, not blocked, not the caller).
-  const ids = [];
+  // Only a phone that is itself around with a live Bluetooth session may ask who is near it: a
+  // derived session whose master is held, or a live legacy token. A derived session under a
+  // retired master asks the device for a new key (403 ble_rekey), unless the session is an old
+  // app's: its legacy token is live and was rotated, which only the old APK does, and the old APK
+  // does not know ble_rekey. A new app never rotates, so it is asked to re-key at once.
+  const session = config.keyring ? derivedSession(me) : null;
+  const myKey = keyOfSession(config, session);
+  const legacyLive = hasLiveToken(me, now);
+  if (!store.isAround(me)) throw new HttpError(403, { error: 'ble_required' });
+  if (session && !myKey && !(legacyLive && me.presence.ble_rotated)) throw new HttpError(403, { error: 'ble_rekey' });
+  if (!myKey && !legacyLive) throw new HttpError(403, { error: 'ble_required' });
+  const answer = (nearby) => json(200, myKey ? { nearby, ble_key_id: keyId(myKey) } : { nearby });
+
+  if (![...heard.values()].some((rssi) => rssi >= config.nearRssi)) return answer([]);
+
+  // Steps 1 to 4 (lib/ble.js resolveTokens): the threshold, the token table (rebuilt once on a
+  // token it cannot find, when older than 30 seconds) and the legacy tokens, the store, and
+  // co-location. Only people who are live, open to meet, not hidden and around can resolve.
+  const current = new Map();
   for (const p of store.people()) {
-    const pr = p.presence;
-    if (pr?.ble_token && near.has(pr.ble_token) && pr.ble_token_until_ms > now && store.isAround(p) && p.open_to_meet) ids.push(p.profile_id);
+    if (p.profile_id === me.profile_id || !p.open_to_meet || p.hidden || !store.isAround(p)) continue;
+    current.set(p.profile_id, {
+      session: derivedSession(p),
+      ble_token: p.presence.ble_token,
+      ble_token_until_ms: p.presence.ble_token_until_ms,
+      presence_until_ms: p.presence.until_ms,
+      zone: p.presence.zone ?? null,
+      cell: cellOf(store, p),
+    });
   }
-  if (!ids.length) return json(200, { nearby: [] });
+  let table = null;
+  if (config.keyring) {
+    const sessions = () => store.people().filter((p) => p.open_to_meet && !p.hidden && store.isAround(p)).map(derivedSession).filter(Boolean);
+    table = tableFor(store, config, sessions, now);
+    if ([...heard.keys()].some((token) => !table.has(token))) table = tableFor(store, config, sessions, now, { refresh: true });
+  }
+  const requester = { profile_id: me.profile_id, zone: me.presence.zone ?? null, cell: cellOf(store, me) };
+  const ids = resolveTokens(config, { heard, table, current, requester, nowMs: now }).map((h) => h.id);
+  if (!ids.length) return answer([]);
+
+  // 5. Blocks, hidden people and the caller are left out by rankPeople; strong matches only.
   const { hits } = await rankPeople(ctx, me, { onlyIds: ids, size: ids.length });
   const { labels } = store.topics();
+  // 6. The zone only within the requester's own zone, then the caps on this final list.
   const nearby = hits.filter((h) => !h.broad).map((h) => {
     const p = toPerson(ctx, h, me, labels, new Map(), null);
-    return { ref: p.ref, display_name: p.display_name, evidence: p.evidence, speak_topics: p.speak_topics, zone: p.zone };
+    const zone = p.zone !== null && p.zone === me.presence.zone ? p.zone : null;
+    return { ref: p.ref, display_name: p.display_name, evidence: p.evidence, speak_topics: p.speak_topics, zone };
   });
-  return json(200, { nearby });
+  if (!nearby.length) return answer([]);
+  // Read, applied and written with no await in between, at the time of the read: the object runs
+  // one request at a time between awaits, so concurrent reports of one device cannot overrun the caps.
+  const t = Date.now();
+  const before = store.bleCaps(me.profile_id, t);
+  const { kept, state } = applyCaps(nearby, before, { nowMs: t, caps: RESOLVE_CAPS });
+  const added = state.entries.slice(before.entries.length);
+  if (added.length) store.addBleCaps(me.profile_id, added, t);
+  return answer(kept);
 }
 
 // ---------------------------------------------------------------------------------------------
