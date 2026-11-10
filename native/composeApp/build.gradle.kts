@@ -64,6 +64,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.compose.uiTest)
         }
+        // The iOS UI tests send the system Back through a navigation event dispatcher of their own.
+        iosTest.dependencies {
+            implementation(libs.jetbrains.navigationevent.compose)
+        }
         getByName("androidDeviceTest").dependencies {
             implementation(libs.androidx.test.core)
             implementation(libs.androidx.test.runner)

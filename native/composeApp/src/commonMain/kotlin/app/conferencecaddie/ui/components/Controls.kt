@@ -31,8 +31,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,7 +43,13 @@ import app.conferencecaddie.ui.theme.MOTION_MS
 /** One choice of a [Segmented] control. */
 data class SegmentOption<T>(val value: T, val label: String)
 
-/** .segmented: a radio group drawn as one rounded track with the chosen segment raised. */
+/**
+ * .segmented: a radio group drawn as one rounded track with the chosen segment raised. Screen
+ * readers move through its segments as one group. [label] is the group's name (the web's
+ * aria-label). It is not set on the track: a description on a container is read instead of, or on
+ * top of, the segments, so callers show the name as text next to the control when the segments'
+ * own labels do not explain the choice (Settings shows "Theme" above it).
+ */
 @Composable
 fun <T> Segmented(
     options: List<SegmentOption<T>>,
@@ -60,7 +66,7 @@ fun <T> Segmented(
             .background(c.fill, RoundedCornerShape(d.segmentedRadius))
             .padding(2.dp)
             .selectableGroup()
-            .semantics { contentDescription = label },
+            .semantics { isTraversalGroup = true },
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         options.forEach { option ->
@@ -251,12 +257,16 @@ fun SettingsLinkRow(label: String, icon: LucideIcon, onClick: () -> Unit, first:
     }
 }
 
-/** A label and a value on the right (.settings-value), such as "Version". */
+/**
+ * A label and a value on the right (.settings-value), such as "Version". Each gets half the row and
+ * wraps within it, so a long value (a server address, a large font size) cannot push the label off
+ * the screen.
+ */
 @Composable
 fun SettingsValueRow(label: String, value: String, first: Boolean = false) {
     SettingsRow(first = first) {
         Text(label, style = Caddie.type.body, color = Caddie.colors.text, modifier = Modifier.weight(1f))
-        Text(value, style = Caddie.type.body, color = Caddie.colors.text2, textAlign = TextAlign.End)
+        Text(value, style = Caddie.type.body, color = Caddie.colors.text2, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
     }
 }
 

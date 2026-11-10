@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,7 +39,7 @@ import app.conferencecaddie.ui.components.SettingsRow
 import app.conferencecaddie.ui.components.SettingsTextRow
 import app.conferencecaddie.ui.components.SettingsValueRow
 import app.conferencecaddie.ui.icons.LucideIcon
-import app.conferencecaddie.ui.licenses.Licenses
+import app.conferencecaddie.ui.licenses.LicenceSections
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.ThemePreference
@@ -61,6 +62,9 @@ fun SettingsScreen(
     Column(
         Modifier
             .fillMaxSize()
+            // The keyboard must not cover the Server URL field: the scrolling area ends above it,
+            // and the focused field scrolls into view.
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = Caddie.dimens.gutter)
             .padding(bottom = 16.dp)
@@ -107,7 +111,7 @@ fun SettingsScreen(
 
     if (licensesOpen) {
         CaddieSheet(title = Strings.Settings.LICENSES_TITLE, onClose = { licensesOpen = false }) {
-            Text(Licenses.TEXT, style = Caddie.type.note, color = Caddie.colors.text2, modifier = Modifier.padding(bottom = 16.dp))
+            LicenceSections()
         }
     }
     if (clearOpen) {

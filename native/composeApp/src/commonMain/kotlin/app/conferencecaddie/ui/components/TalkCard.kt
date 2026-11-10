@@ -2,6 +2,7 @@ package app.conferencecaddie.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -11,15 +12,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -27,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.icons.LucideIcon
+import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 
@@ -42,7 +49,8 @@ data class CardLink(val label: String, val icon: LucideIcon, val url: String)
  * - [interested] and [onToggleInterested] for the "I'm interested" button, which reads "I was there /
  *   wanted to be" once [ended];
  * - [isEvent] draws the dashed card of a co-located event or showcase, which has no interest button;
- * - [links] at the bottom, opened through [onOpenLink]; [onClick] makes the whole card open the talk;
+ * - [links] at the bottom, opened through [onOpenLink]; only http(s) links are shown, so
+ *   [onOpenLink] never receives another scheme; [onClick] makes the whole card open the talk;
  * - [extra] is drawn under the actions (related talks, for example).
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -125,9 +133,11 @@ fun TalkCard(
             Row(Modifier.padding(top = 12.dp)) { InterestedToggle(interested, ended, onToggleInterested) }
         }
         extra?.invoke(this)
-        if (links.isNotEmpty()) {
+        // A link the apps would not open (any scheme but http and https) is not shown at all.
+        val webLinks = links.filter { isWebLink(it.url) }
+        if (webLinks.isNotEmpty()) {
             FlowRow(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                links.forEach { LinkButton(it.label, it.icon) { onOpenLink(it.url) } }
+                webLinks.forEach { link -> LinkButton(link.label, link.icon) { if (isWebLink(link.url)) onOpenLink(link.url) } }
             }
         }
     }
@@ -153,16 +163,22 @@ fun Tag(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** .interest-btn: the "I'm interested" toggle, with a star that fills when on. */
+/**
+ * .interest-btn: the "I'm interested" toggle, with a star that fills when on. Screen readers hear a
+ * checkbox that is checked or not (the web's aria-pressed).
+ */
 @Composable
 fun InterestedToggle(on: Boolean, ended: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     val c = Caddie.colors
     val label = if (ended) Strings.Talk.WAS_THERE else Strings.Talk.INTERESTED
+    val interaction = remember { MutableInteractionSource() }
     Row(
         modifier
+            .minimumInteractiveComponentSize()
             .heightIn(min = Caddie.dimens.minTouch)
-            .caddieClickable(Pill, onClick = onToggle)
-            .semantics { stateDescription = if (on) "Selected" else "Not selected" }
+            .focusRing(interaction, Pill)
+            .clip(Pill)
+            .toggleable(value = on, interactionSource = interaction, indication = ripple(), role = Role.Checkbox, onValueChange = { onToggle() })
             .background(if (on) c.accentTint else androidx.compose.ui.graphics.Color.Transparent, Pill)
             .then(if (on) Modifier else Modifier.border(1.dp, c.borderStrong, Pill))
             .padding(start = 12.dp, end = 16.dp),
@@ -174,11 +190,17 @@ fun InterestedToggle(on: Boolean, ended: Boolean, onToggle: () -> Unit, modifier
     }
 }
 
-/** .link: an accent text link with an icon, at least 44 dp tall. */
+/**
+ * .link: an accent text link with an icon, at least 44 dp tall, with the platform's minimum touch
+ * target. It runs [onClick]; a caller that opens a URL with it checks the URL first (see [TalkCard]).
+ */
 @Composable
 fun LinkButton(text: String, icon: LucideIcon?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Row(
-        modifier.heightIn(min = Caddie.dimens.minTouch).caddieClickable(RoundedCornerShape(6.dp), role = androidx.compose.ui.semantics.Role.Button, onClick = onClick),
+        modifier
+            .minimumInteractiveComponentSize()
+            .heightIn(min = Caddie.dimens.minTouch)
+            .caddieClickable(RoundedCornerShape(6.dp), role = Role.Button, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {

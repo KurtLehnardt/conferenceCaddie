@@ -165,9 +165,11 @@ fun CaddieApp(
             onRetryConferences = { core.refresh(force = true) },
             onChangeServer = { base ->
                 // A server from a link or QR code never gets the debug builds' local http exception;
-                // only one typed in Settings does.
-                val fromLink = pendingConnect != null
-                onConnectHandled()
+                // only one typed in Settings does. A link's base is always https, so a typed http
+                // base is never taken for it. The shell asks about a typed server before a pending
+                // link, so a link still waits after a typed server is confirmed.
+                val fromLink = base == pendingConnect
+                if (fromLink) onConnectHandled()
                 if (base == Defaults.BACKEND) {
                     core.setBackend(null)
                 } else {

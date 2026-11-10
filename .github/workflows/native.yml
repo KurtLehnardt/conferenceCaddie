@@ -122,7 +122,8 @@ jobs:
   # project code: no checkout, no Gradle, no npm. It uses the runner image's Android build tools.
   android-sign:
     name: Sign the release APK
-    needs: android
+    # The UI tests and the release smoke test on the emulator must pass before anything is signed.
+    needs: [android, android-device-tests]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.android.outputs.release_apk != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -194,9 +195,10 @@ jobs:
           path: ${{ env.APK }}
           retention-days: 30
 
-  # The Compose UI tests (composeApp/src/commonTest, run as Android device tests) and the
-  # instrumented smoke test of the app (androidApp/src/androidTest) on an Android emulator. No
-  # secrets; pull requests and main.
+  # The Compose UI tests (composeApp/src/commonTest, run as Android device tests), the
+  # instrumented smoke test of the app (androidApp/src/androidTest) and a smoke test of the R8
+  # release build (scripts/release-smoke.sh) on an Android emulator. No secrets; pull requests and
+  # main. The release build here is signed with the runner's debug key, so the emulator accepts it.
   android-device-tests:
     name: UI tests on an Android emulator
     runs-on: ubuntu-latest
@@ -227,19 +229,57 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # Builds the test APKs before the emulator starts, so its boot time is not spent on Gradle.
-      - name: Build the test APKs
-        run: ./gradlew :composeApp:assembleAndroidDeviceTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
+      # Builds the test APKs and the release APK before the emulator starts, so its boot time is not
+      # spent on Gradle.
+      - name: Build the test APKs and the release APK
+        run: ./gradlew :composeApp:assembleAndroidDeviceTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease
 
-      - name: Run the UI tests on an emulator
+      # The emulator's booted state is cached as a snapshot, so most runs skip the cold boot. The
+      # cache is keyed on the emulator settings; pull requests only read it, main writes it.
+      - name: Restore the emulator snapshot
+        id: avd
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ runner.os }}-api34-x86_64-default-v1
+
+      - name: Create the emulator snapshot
+        if: steps.avd.outputs.cache-hit != 'true'
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
           arch: x86_64
           target: default
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          working-directory: native
+          script: echo "The emulator snapshot is ready."
+
+      - name: Save the emulator snapshot
+        if: github.ref == 'refs/heads/main' && steps.avd.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: ${{ steps.avd.outputs.cache-primary-key }}
+
+      - name: Run the UI tests and the release smoke test on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: native
-          script: ./gradlew :composeApp:connectedAndroidDeviceTest :androidApp:connectedDebugAndroidTest
+          script: |
+            ./gradlew :composeApp:connectedAndroidDeviceTest :androidApp:connectedDebugAndroidTest
+            bash scripts/release-smoke.sh
 
       - name: Keep the test reports
         if: failure()
@@ -287,6 +327,12 @@ jobs:
       # The Compose UI tests of composeApp/src/commonTest, on the iOS simulator.
       - name: UI tests on the iOS simulator
         run: ./gradlew :composeApp:iosSimulatorArm64Test
+
+      # The licences shown in Settings must list every library both apps ship. The check needs the
+      # iOS dependency graph, so it runs here on macOS; it fails on a new dependency until its
+      # licence is in the script's table and the notices are regenerated.
+      - name: Check the third-party notices
+        run: python3 scripts/third-party-notices.py --check
 
       # The device framework in Release, as an archive would build it.
       - name: Link the Release framework for devices
