@@ -245,8 +245,16 @@ export function onInterestedChanged(slug: string, talkIds: string[], marked: boo
 
 let timer: number | undefined;
 
-/** Debounces profile edits, then writes them to every conference that holds a document. */
-export function scheduleProfileSync(): void {
+/** The server's answer to a visible write at a conference that has ended or is gone. */
+const closed = (err: unknown) => err instanceof PeopleApiError && err.status === 400 && /^conference (has ended|is not available)/.test(err.code ?? '');
+
+/**
+ * Debounces profile edits, then writes them to every conference that holds a document: the one
+ * on screen (`current`) first, then each of the others on its own, so one failure cannot hold
+ * the rest up. A conference that has ended takes no visible writes any more, so its visibility is
+ * turned off on the device and later edits skip it; that is reported only when it is `current`.
+ */
+export function scheduleProfileSync(current?: string): void {
   window.clearTimeout(timer);
   const slugs = slugsOnServer();
   if (!slugs.length) return;
@@ -258,15 +266,20 @@ export function scheduleProfileSync(): void {
       setStatus({ state: 'error', message: problem ?? undefined });
       return;
     }
-    try {
-      for (const slug of slugsOnServer()) {
+    let failure: string | null = null;
+    for (const slug of slugsOnServer().sort((a, b) => Number(b === current) - Number(a === current))) {
+      try {
         const res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
         // The server says whether this profile is hidden after reports; the profile screen shows it.
         if ((res.hidden_for_owner === true) !== getVisibility(slug).hidden_for_owner) setVisibility(slug, { hidden_for_owner: res.hidden_for_owner === true });
+      } catch (err) {
+        if (closed(err)) {
+          setVisibility(slug, { on_server: false, open_to_meet: false, shared_talk_ids: [] });
+          if (slug !== current) continue;
+        }
+        failure ??= messageFor(err);
       }
-      setStatus({ state: 'saved' });
-    } catch (err) {
-      setStatus({ state: 'error', message: messageFor(err) });
     }
+    setStatus(failure ? { state: 'error', message: failure } : { state: 'saved' });
   }, 1000);
 }
