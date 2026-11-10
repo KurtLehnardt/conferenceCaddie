@@ -196,6 +196,17 @@ export function useNudges(slug: string): { nudge: Nudge | null; reveal: string |
 
 let inflight: AbortController | null = null;
 
+/** Drops the banner, the reveal request and the in-memory records, for "Delete my profile". */
+export function resetNudges(): void {
+  inflight?.abort();
+  inflight = null;
+  current = null;
+  reveal = null;
+  settingMem.clear();
+  nudgedMem.clear();
+  notify();
+}
+
 /**
  * One `around_now` request on each poll tick while presence is on and nudges are wanted. The
  * first specific match in my zone that has not been nudged today becomes the banner. Errors are

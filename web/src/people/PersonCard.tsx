@@ -7,9 +7,9 @@ import { useEffect, useState } from 'preact/hooks';
 import { Bell, BellOff, ExternalLink, Hand, MapPin, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
 import { requestMeet } from './api';
-import { AskSheet, isMeetOpen, plainText, problem } from './AskSheet';
+import { AskSheet, plainText, problem } from './AskSheet';
 import { BroadLine, broadReason } from './BroadLine';
-import { blockWithConfirm, noteSentRequest, outgoingTo, rememberPerson, requestTo } from './connect';
+import { blockWithConfirm, noteSentRequest, openMeetId, outgoingTo, rememberPerson, requestTo } from './connect';
 import { ReportSheet } from './ReportSheet';
 import { getPresence, usePeopleStore } from './storage';
 import type { PersonResult, TopicRef } from './types';
@@ -85,7 +85,9 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
       noteSentRequest(slug, person.ref, res.meet_id);
       toast(WAVED_COPY);
     } catch (err) {
-      if (isMeetOpen(err)) noteSentRequest(slug, person.ref, `pending:${person.ref}`);
+      // The meet already open between us, as the server names it; the next poll drops it once it is over.
+      const open = openMeetId(err);
+      if (open) noteSentRequest(slug, person.ref, open);
       toast(problem(err));
     }
     setWaving(false);
