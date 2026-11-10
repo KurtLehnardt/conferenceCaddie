@@ -1,26 +1,36 @@
-// Web Push subscriptions: the channel that makes the pocket case work.
+// Web Push subscriptions and native push registrations: the channels that make the pocket case
+// work.
 //
 //   GET    /api/push/vapid                 { publicKey }  (no device header)
 //   PUT    /api/push/subscription          { event, subscription: { endpoint, keys: { p256dh, auth } } }
 //   DELETE /api/push/subscription          { event, endpoint }
+//   PUT    /api/push/native                { event, platform: 'apns' | 'fcm', token, environment? }
+//   DELETE /api/push/native                { event, platform, token }
 //
-// Env: as people.mjs; ES_PEOPLE_PUSH_INDEX (default caddie-people-push) holds the subscriptions;
-// VAPID_PUBLIC_KEY (not a secret) is what GET /api/push/vapid returns. The private key and the
-// sending itself live in nudge.mjs.
+// Env: as people.mjs; ES_PEOPLE_PUSH_INDEX (default caddie-people-push) holds the subscriptions
+// and the registrations; VAPID_PUBLIC_KEY (not a secret) is what GET /api/push/vapid returns. The
+// private key and the Web Push sending live in nudge.mjs; the APNs and FCM settings and sending
+// in native-push.mjs.
 //
 // Rules this module keeps:
-// - The two subscription routes need the device header and a live profile of the requester at
-//   that conference (403 profile_required otherwise), like every Find & connect write.
+// - The subscription and registration routes need the device header and a live profile of the
+//   requester at that conference (403 profile_required otherwise), like every Find & connect write.
 // - A subscription document is keyed by sha256(endpoint), so the same browser subscribing twice
-//   writes one document, and a subscription can be removed by its endpoint alone. It carries the
-//   conference and the profile_id, and expires with the conference (expires_at = visible_until);
-//   the purge deletes it then, and deleteConnections deletes it with the profile.
-// - The endpoint and the two keys are stored unindexed and never returned to anyone. They leave
-//   the server only inside the push request to the browser's own push service.
+//   writes one document, and a subscription can be removed by its endpoint alone. A native
+//   registration is keyed by sha256(platform:token) in the same way. Both carry the conference and
+//   the profile_id, and expire with the conference (expires_at = visible_until); the purge deletes
+//   them then, and deleteConnections deletes them with the profile.
+// - The endpoint, the two keys and a native token are stored unindexed and never returned to
+//   anyone. The index is dynamic: false and does not map platform, token or environment, so a
+//   registration is kept in _source only and needed no mapping change. They leave the server only
+//   inside the push request to the browser's push service, to APNs or to FCM.
+// - A native registration for a platform this server does not push to (push.apns or push.fcm
+//   false) is refused with 404 push_unavailable and nothing is stored. Removing one always works.
 // - Nothing from a request body or header is logged.
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
+import { NATIVE_PUSH, nativeTokenOf } from './native-push.mjs';
 import {
   people, idx, PUSH_INDEX, LIMITS,
   HttpError, UpstreamError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
@@ -33,6 +43,9 @@ const SUBSCRIPTION_KEYS = new Set(['event', 'subscription']);
 const SUBSCRIPTION_FIELDS = new Set(['endpoint', 'keys', 'expirationTime']);
 const KEYS_FIELDS = new Set(['p256dh', 'auth']);
 const DELETE_KEYS = new Set(['event', 'endpoint']);
+const NATIVE_KEYS = new Set(['event', 'platform', 'token', 'environment']);
+const NATIVE_DELETE_KEYS = new Set(['event', 'platform', 'token']);
+const ENVIRONMENTS = new Set(['production', 'sandbox']);
 
 const iso = (ms) => new Date(ms).toISOString();
 const profileRequired = () => new HttpError(403, { error: 'profile_required' });
@@ -40,6 +53,9 @@ const profileRequired = () => new HttpError(403, { error: 'profile_required' });
 // The document id of a subscription: the hash of its endpoint, so the endpoint itself is never a
 // path segment and never indexed.
 export const subscriptionId = (endpoint) => crypto.createHash('sha256').update(endpoint, 'utf8').digest('hex');
+// The document id of a native registration: the hash of its platform and token, so the same token
+// registered again overwrites its document. An endpoint is an https URL, so the two never meet.
+export const registrationId = (platform, token) => crypto.createHash('sha256').update(`${platform}:${token}`, 'utf8').digest('hex');
 
 function writer(req) {
   limit(`people-write:ip:${clientIp(req)}`, LIMITS.writeIp);
@@ -72,6 +88,24 @@ function subscriptionOf(value) {
   if (typeof p256dh !== 'string' || !KEY_RE.test(p256dh)) throw bad('subscription.keys.p256dh must be a base64url key');
   if (typeof auth !== 'string' || !KEY_RE.test(auth)) throw bad('subscription.keys.auth must be a base64url secret');
   return { endpoint, p256dh, auth };
+}
+
+// Validates { platform, token } and, for a registration, environment: 'production' (the default)
+// or 'sandbox' for an APNs token of a development build; FCM takes none. An APNs token is
+// lowercased.
+function registrationOf(body, { environment = false } = {}) {
+  const { platform } = body;
+  if (platform !== 'apns' && platform !== 'fcm') throw bad('platform must be apns or fcm');
+  const token = nativeTokenOf(platform, body.token);
+  if (!token) throw bad(platform === 'apns' ? 'token must be an APNs device token in hex' : 'token must be an FCM registration token');
+  if (!environment) return { platform, token };
+  if (platform === 'fcm') {
+    if (body.environment !== undefined) throw bad('environment is only for apns');
+    return { platform, token };
+  }
+  const env = body.environment === undefined ? 'production' : body.environment;
+  if (!ENVIRONMENTS.has(env)) throw bad('environment must be production or sandbox');
+  return { platform, token, environment: env };
 }
 
 async function requireProfile(device, slug) {
@@ -116,6 +150,44 @@ async function deleteSubscription(req, res) {
   sendJson(res, 200, { ok: true });
 }
 
+async function putRegistration(req, res) {
+  const device = writer(req);
+  const body = await jsonBody(req, NATIVE_KEYS);
+  const reg = registrationOf(body, { environment: true });
+  if (!NATIVE_PUSH[reg.platform]) throw new HttpError(404, { error: 'push_unavailable' });
+  const conf = await conferenceFor(body.event);
+  const me = await requireProfile(device, conf.slug);
+  const now = Date.now();
+  if (Date.parse(conf.visibleUntil) <= now) throw bad('conference has ended');
+  const { status } = await people('PUT', `${idx(PUSH_INDEX)}/_doc/${registrationId(reg.platform, reg.token)}?refresh=wait_for`, {
+    event_id: conf.slug,
+    profile_id: me.profile_id,
+    platform: reg.platform,
+    token: reg.token,
+    ...(reg.environment ? { environment: reg.environment } : {}),
+    created_at: iso(now),
+    expires_at: conf.visibleUntil,
+  });
+  if (status < 200 || status > 299) throw new UpstreamError(`status ${status}`);
+  sendJson(res, 200, { ok: true });
+}
+
+// Works whether or not the platform is configured, so a device can always remove its token.
+async function deleteRegistration(req, res) {
+  const device = writer(req);
+  const body = await jsonBody(req, NATIVE_DELETE_KEYS);
+  const reg = registrationOf(body);
+  const conf = await conferenceFor(body.event);
+  const me = await requireProfile(device, conf.slug);
+  // Only the registration's own profile can remove it; anyone else's request changes nothing.
+  await deleteWhere(PUSH_INDEX, conf.slug, {
+    bool: {
+      filter: [{ ids: { values: [registrationId(reg.platform, reg.token)] } }, { term: { event_id: conf.slug } }, { term: { profile_id: me.profile_id } }],
+    },
+  });
+  sendJson(res, 200, { ok: true });
+}
+
 // The public VAPID key the browser subscribes with. Null when push is not configured, so the app
 // hides the switch.
 async function vapid(req, res) {
@@ -124,27 +196,33 @@ async function vapid(req, res) {
   sendJson(res, 200, { publicKey: key }, { 'Cache-Control': 'public, max-age=3600' });
 }
 
-// Every live subscription of these people at one conference, as
-// [{ id, profile_id, subscription: { endpoint, keys: { p256dh, auth } } }]. Used by nudge.mjs.
-export async function subscriptionsFor(eventId, profileIds) {
+// Every live Web Push subscription and native registration of these people at one conference,
+// as [{ id, profile_id, subscription: { endpoint, keys: { p256dh, auth } } }] for a subscription
+// and [{ id, profile_id, native: { platform, token, environment } }] for a registration. Used by
+// nudge.mjs.
+export async function pushTargetsFor(eventId, profileIds) {
   const ids = [...new Set(profileIds)].filter(Boolean);
   if (!ids.length) return [];
   const { json } = await people('POST', `${idx(PUSH_INDEX)}/_search?ignore_unavailable=true`, {
     size: 100,
-    _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth'],
+    _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth', 'platform', 'token', 'environment'],
     query: { bool: { filter: [{ term: { event_id: eventId } }, { terms: { profile_id: ids } }, { range: { expires_at: { gt: 'now' } } }] } },
   });
-  return (json.hits?.hits ?? [])
-    .map((h) => ({ id: h._id, source: h._source ?? {} }))
-    .filter(({ source }) => source.profile_id && source.endpoint && source.keys_p256dh && source.keys_auth)
-    .map(({ id, source }) => ({
-      id,
-      profile_id: source.profile_id,
-      subscription: { endpoint: source.endpoint, keys: { p256dh: source.keys_p256dh, auth: source.keys_auth } },
-    }));
+  return (json.hits?.hits ?? []).flatMap((h) => {
+    const source = h._source ?? {};
+    if (!source.profile_id) return [];
+    if (source.endpoint && source.keys_p256dh && source.keys_auth) {
+      return [{ id: h._id, profile_id: source.profile_id, subscription: { endpoint: source.endpoint, keys: { p256dh: source.keys_p256dh, auth: source.keys_auth } } }];
+    }
+    const token = nativeTokenOf(source.platform, source.token);
+    if (!token) return [];
+    const environment = source.platform === 'apns' && source.environment === 'sandbox' ? 'sandbox' : 'production';
+    return [{ id: h._id, profile_id: source.profile_id, native: { platform: source.platform, token, environment } }];
+  });
 }
 
-// Removes a subscription the push service said is gone (404 or 410).
+// Removes a subscription the push service said is gone (404 or 410), or a native registration
+// APNs or FCM said is gone.
 export async function deleteSubscriptionById(id) {
   await people('DELETE', `${idx(PUSH_INDEX)}/_doc/${encodeURIComponent(id)}`, undefined, { okStatuses: [404] });
 }
@@ -152,6 +230,7 @@ export async function deleteSubscriptionById(id) {
 const ROUTES = {
   '/api/push/vapid': { GET: vapid },
   '/api/push/subscription': { PUT: putSubscription, DELETE: deleteSubscription },
+  '/api/push/native': { PUT: putRegistration, DELETE: deleteRegistration },
 };
 
 // Handles the push routes. Resolves to true when the request was handled.

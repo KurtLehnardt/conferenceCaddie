@@ -1,20 +1,23 @@
 // GET /api/capabilities on the tier 3 server (server/capabilities.mjs): the document it computes
 // from its configuration, checked against the capabilities fixtures and the schema in producer
 // (closed) mode; the route's headers; the Bluetooth settings it advertises (server/ble-config.mjs);
-// and the server refusing to start with an unusable master keyring or bundle base.
+// the native push flags (server/native-push.mjs); and the server refusing to start with an
+// unusable master keyring or bundle base.
 //
-// Run with `npm test`. Nothing reaches the network; the keys below are the fake fixed ones of
-// contracts/fixtures/ble.
+// Run with `npm test`. Nothing reaches the network; the Bluetooth keys below are the fake fixed
+// ones of contracts/fixtures/ble, and the APNs and FCM keys are generated for this run.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-for (const k of ['BLE_MASTER_KEYRING', 'BLE_NEAR_RSSI', 'TALKS_BUNDLE_BASE', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT']) delete process.env[k];
+const NATIVE_SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_SERVICE_ACCOUNT_JSON', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
+for (const k of ['BLE_MASTER_KEYRING', 'BLE_NEAR_RSSI', 'TALKS_BUNDLE_BASE', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', ...NATIVE_SETTINGS]) delete process.env[k];
 
 const { capabilitiesDocument, bundleBaseFrom, webPushConfigured, handleCapabilities, CAPABILITIES, DEFAULT_BUNDLE_BASE } = await import('../server/capabilities.mjs');
 const { nearRssiFrom, keyringFrom } = await import('../server/ble-config.mjs');
@@ -46,6 +49,17 @@ test('with the master keyring and VAPID: the tier3-paid fixture, without native 
   assert.deepEqual(effectiveCapabilities(doc), doc, 'a complete document is its own effective feature set');
 });
 
+test('with the keyring, VAPID, an APNs key and an FCM service account: exactly the tier3-paid fixture', () => {
+  const doc = capabilitiesDocument(config({ apns: true, fcm: true }));
+  assertValid(doc);
+  assert.deepEqual(doc, fixture('tier3-paid.json'));
+  for (const [apns, fcm] of [[true, false], [false, true]]) {
+    const one = capabilitiesDocument(config({ apns, fcm }));
+    assertValid(one);
+    assert.deepEqual(one.push, { apns, fcm, webpush: true });
+  }
+});
+
 test('without the keyring: the tier3-transition fixture, with the mitigations advertised', () => {
   const doc = capabilitiesDocument(config({ bleMode: 'server-rotate' }));
   assertValid(doc);
@@ -68,10 +82,10 @@ test('Web Push is advertised only when all three VAPID settings are present', ()
   assert.deepEqual(doc.push, { apns: false, fcm: false, webpush: false });
 });
 
-test('this process (no keyring, no VAPID): server-rotate, no Web Push, the default bundle base', () => {
+test('this process (no keyring, no VAPID, no APNs or FCM settings): server-rotate, no push at all, the default bundle base', () => {
   assertValid(CAPABILITIES);
   assert.equal(CAPABILITIES.ble.mode, 'server-rotate');
-  assert.equal(CAPABILITIES.push.webpush, false);
+  assert.deepEqual(CAPABILITIES.push, { apns: false, fcm: false, webpush: false });
   assert.equal(CAPABILITIES.talks.bundle_base, 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/');
   assert.equal(CAPABILITIES.ble.service_uuid, SERVICE_UUID);
   assert.match(readFileSync(path.join(ROOT, 'server/ble.mjs'), 'utf8'), new RegExp(`BLE_SERVICE_UUID = '${SERVICE_UUID}'`), 'server/ble.mjs uses the contract UUID');
@@ -196,6 +210,45 @@ function start(env) {
     timeout: 30_000,
   });
 }
+
+// The push flags the server computes at start for an environment, read in a child process so each
+// configuration is a fresh import. Returns { push, output }.
+function pushFlags(env) {
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(path.join(ROOT, 'server/capabilities.mjs'))}); console.log(JSON.stringify(m.CAPABILITIES.push));`], {
+    env: { PATH: process.env.PATH, ...env },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const lines = r.stdout.trim().split('\n');
+  return { push: JSON.parse(lines.at(-1)), output: `${r.stdout}${r.stderr}` };
+}
+
+test('push.apns and push.fcm follow the APNs and FCM settings, and a broken one stays off without quoting it', () => {
+  const p8 = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const rsaPem = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const apns = { APNS_KEY_ID: 'ABCDE12345', APNS_TEAM_ID: 'TEAM123456', APNS_KEY_P8: p8 };
+  const fcm = { FCM_SERVICE_ACCOUNT_JSON: JSON.stringify({ type: 'service_account', project_id: 'caddie-test-project', private_key: rsaPem, client_email: 'push@caddie-test-project.iam.gserviceaccount.com' }) };
+  const vapid = { VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 's', VAPID_SUBJECT: 'mailto:x@example.org' };
+
+  const none = pushFlags({});
+  assert.deepEqual(none.push, { apns: false, fcm: false, webpush: false }, 'no new secrets: what the live server answers today');
+  assert.doesNotMatch(none.output, /push is off/, 'nothing set is not a problem');
+  assert.deepEqual(pushFlags(vapid).push, { apns: false, fcm: false, webpush: true });
+  assert.deepEqual(pushFlags(apns).push, { apns: true, fcm: false, webpush: false });
+  assert.deepEqual(pushFlags(fcm).push, { apns: false, fcm: true, webpush: false });
+  assert.deepEqual(pushFlags({ ...apns, ...fcm, ...vapid }).push, { apns: true, fcm: true, webpush: true });
+
+  const broken = pushFlags({ ...apns, APNS_KEY_P8: p8.slice(0, 100), FCM_SERVICE_ACCOUNT_JSON: fcm.FCM_SERVICE_ACCOUNT_JSON.slice(0, 200) });
+  assert.deepEqual(broken.push, { apns: false, fcm: false, webpush: false });
+  assert.match(broken.output, /APNs push is off: APNS_KEY_P8 is not the text of a \.p8 key/);
+  assert.match(broken.output, /FCM push is off: FCM_SERVICE_ACCOUNT_JSON is not JSON/);
+  for (const secret of [p8, rsaPem]) {
+    for (const line of secret.split('\n').filter((l) => l.length > 20 && !l.startsWith('-----'))) {
+      assert.ok(!broken.output.includes(line.slice(0, 20)), 'the output never quotes a key');
+    }
+  }
+});
 
 test('the server refuses to start when the current key id is not in the keyring, or the keyring is unusable', () => {
   for (const text of [keyringText('m2'), `{"current":"m1","keys":{"m1":"${FAKE_MASTER}"`, keyringText('m1', { m1: FAKE_MASTER.slice(0, 30) })]) {

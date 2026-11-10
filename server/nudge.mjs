@@ -1,10 +1,12 @@
 // The server-side nudge: "Someone who's worked on {evidence} is in {zone} right now", sent as a
-// Web Push to both people of a strong match who are in the same zone.
+// Web Push, and through APNs or FCM to the official apps, to both people of a strong match who
+// are in the same zone.
 //
 // Env: as people.mjs; ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges) records every nudge
 // sent; VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (Secret Manager caddie-vapid-private) and
-// VAPID_SUBJECT (mailto: or https:) sign the pushes. PUSH_TRANSPORT=stub (tests only) replaces
-// web-push with a recorder at PUSH_STUB_URL.
+// VAPID_SUBJECT (mailto: or https:) sign the Web Pushes; the APNs and FCM settings are read by
+// native-push.mjs. PUSH_TRANSPORT=stub (tests only) replaces web-push, APNs and FCM with a
+// recorder at PUSH_STUB_URL.
 //
 // Rules this module keeps:
 // - It runs after a presence write has been answered (connect.mjs calls nudgeAfterPresence and
@@ -18,6 +20,9 @@
 //   {event}:{day}:{min_profile_id}:{max_profile_id}, written with op_type create, so the write
 //   itself is the dedupe and two instances cannot both send. At most 3 pushes per receiver per
 //   hour, counted from the records' receivers field. Records expire with the conference.
+// - The channels share both limits. A receiver is anyone with a Web Push subscription or a native
+//   registration on a channel this server sends on, and one nudge to a receiver is one push to
+//   each of their subscriptions and registrations, counted once against the hourly limit.
 // - The push names nobody: the title is "Conference Caddie", the body is the sentence above with
 //   the other person's matched passage (<mark> stripped, about 80 characters, else their first
 //   speak topic), the data is the app URL. No name, no distance, no ref, no profile_id, and never
@@ -26,13 +31,15 @@
 //   trigger the rule stops before any query, and as the other person the query leaves them out
 //   (peopleQuery drops hidden documents; sample ones are filtered here). So a hidden profile's
 //   text never reaches anyone through a push, and no sample profile can push a real attendee.
-// - A subscription the push service reports gone (404 or 410) is deleted.
+// - A subscription the push service reports gone (404 or 410) is deleted, and so is a native
+//   registration that APNs or FCM reports gone (native-push.mjs says when).
 
 import {
   people, idx, NUDGES_INDEX, UpstreamError,
   peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf, SEMANTIC_FLOORS,
 } from './people.mjs';
-import { subscriptionsFor, deleteSubscriptionById } from './push.mjs';
+import { pushTargetsFor, deleteSubscriptionById } from './push.mjs';
+import { NATIVE_PUSH } from './native-push.mjs';
 
 const CANDIDATES = 20;
 const EVIDENCE_MAX = 80;
@@ -45,7 +52,8 @@ const iso = (ms) => new Date(ms).toISOString();
 
 // ---------------------------------------------------------------------------------------------
 // Transport. web-push is loaded on first use, so a server without the dependency or the keys
-// still serves everything else and says once why nudges are off.
+// still serves everything else and says once why Web Push nudges are off. Native pushes go
+// through native-push.mjs, which says at start why a native channel is off.
 
 let transportPromise = null;
 
@@ -74,7 +82,7 @@ async function loadTransport() {
 function transport() {
   if (!transportPromise) {
     transportPromise = loadTransport().catch((err) => {
-      console.error(`Nudges are off: ${err.message}`);
+      console.error(`Web Push nudges are off: ${err.message}`);
       return null;
     });
   }
@@ -111,12 +119,20 @@ async function recentCount(eventId, profileId, nowMs) {
   return json.count ?? 0;
 }
 
-// Sends one payload to every subscription of one person. A subscription the push service reports
-// gone (404 or 410) is deleted; the ids of those are returned so the caller stops using them.
+// Sends one payload to every subscription and native registration of one person. A
+// subscription the push service reports gone (404 or 410), or a registration APNs or FCM reports
+// gone, is deleted; the ids of those are returned so the caller stops using them.
 async function pushTo(send, subs, payload) {
   const data = JSON.stringify(payload);
   const gone = [];
   for (const s of subs) {
+    if (s.native) {
+      if ((await NATIVE_PUSH.send(s.native, payload, { ttl: TTL_SECONDS })) === 'gone') {
+        gone.push(s.id);
+        await deleteSubscriptionById(s.id).catch(() => undefined);
+      }
+      continue;
+    }
     try {
       await send(s.subscription, data, { TTL: TTL_SECONDS, urgency: 'normal' });
     } catch (err) {
@@ -140,7 +156,7 @@ export async function nudgeAfterPresence(me, conf) {
     if (!zone || !isAround(me)) return;
     if (me.hidden === true || me.sample === true) return;
     const send = await transport();
-    if (!send) return;
+    if (!send && !NATIVE_PUSH.apns && !NATIVE_PUSH.fcm) return;
     const blocked = await blockedIds(conf.slug, me.profile_id);
     // The same query the Around view runs, distance leg included when I sent a position; the
     // distance leg never decides specificity (people.mjs), so it cannot create a nudge. The
@@ -162,7 +178,9 @@ export async function nudgeAfterPresence(me, conf) {
     const url = `/e/${encodeURIComponent(conf.slug)}#/people?around=1`;
     // What the other person hears about me: my own words, the same fallback evidenceFor uses.
     const myPassage = passageOf(me.expertise || me.about || null, me, topics.labels);
-    let subs = await subscriptionsFor(conf.slug, [me.profile_id, ...hits.map((h) => h._source.profile_id)]);
+    // Only the subscriptions and registrations of a channel this server sends on.
+    const usable = (s) => (s.native ? NATIVE_PUSH[s.native.platform] === true : Boolean(send));
+    let subs = (await pushTargetsFor(conf.slug, [me.profile_id, ...hits.map((h) => h._source.profile_id)])).filter(usable);
     const subsOf = (id) => subs.filter((s) => s.profile_id === id);
     const drop = (gone) => {
       if (gone.length) subs = subs.filter((s) => !gone.includes(s.id));
@@ -176,8 +194,9 @@ export async function nudgeAfterPresence(me, conf) {
     for (const h of hits) {
       const them = h._source;
       const theirPassage = passageOf(evidenceFor(h), them, topics.labels);
-      // Who gets a push: whoever has a subscription and is under the hourly limit. The record
-      // is written either way, so the pair is nudged once a day whatever their subscriptions.
+      // Who gets a push: whoever has a subscription or a registration and is under the hourly
+      // limit. The record is written either way, so the pair is nudged once a day whatever their
+      // subscriptions.
       const receivers = [];
       if (theirPassage && subsOf(me.profile_id).length && (await underLimit(me.profile_id))) receivers.push(me.profile_id);
       if (myPassage && subsOf(them.profile_id).length && (await underLimit(them.profile_id))) receivers.push(them.profile_id);

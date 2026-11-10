@@ -10,6 +10,17 @@
 # secret) and VAPID_SUBJECT is set from the shell's VAPID_SUBJECT (a mailto: address) or the
 # repository URL. Without the secret the app deploys with nudges off.
 #
+# Native push (official deployment only): when the secret caddie-apns-key exists (the .p8 key
+# file Apple issued), its newest enabled version at deploy time is mounted as APNS_KEY_P8, and the
+# key id and team id are read from caddie-apns-ids ("<key id> <team id>", not secret) into the env
+# vars APNS_KEY_ID and APNS_TEAM_ID; APNS_BUNDLE_ID comes from the shell (default
+# app.conferencecaddie). The key is pinned like the Bluetooth keyring, because the ids are read
+# here: a key version added later reaches the instances only with a deploy that reads its ids too.
+# When the secret caddie-fcm-service-account exists (the JSON key of a service account of the
+# app's Firebase project), it is mounted as FCM_SERVICE_ACCOUNT_JSON; it names its own project, so
+# "latest" is safe. Without them the app deploys with push.apns and push.fcm false. A third-party
+# operator never creates either secret. This script never reads either key's value.
+#
 # GitHub import: when the secret caddie-github-token exists (a read-only public-scope token, see
 # docs/CONTRACT.md), it is mounted as GITHUB_TOKEN; without it the server calls GitHub
 # unauthenticated at 60 requests an hour.
@@ -45,6 +56,10 @@ PEOPLE_SECRET="caddie-es-people"
 VAPID_PRIVATE_SECRET="caddie-vapid-private"
 VAPID_PUBLIC_SECRET="caddie-vapid-public"
 GITHUB_SECRET="caddie-github-token"
+APNS_KEY_SECRET="caddie-apns-key"
+APNS_IDS_SECRET="caddie-apns-ids"
+FCM_SECRET="caddie-fcm-service-account"
+APNS_BUNDLE_ID="${APNS_BUNDLE_ID:-app.conferencecaddie}"
 BLE_MASTER_SECRET="caddie-ble-master"
 BLE_NEAR_RSSI="${BLE_NEAR_RSSI:--75}"
 PEOPLE_SEMANTIC_MIN_SIMILARITY="${PEOPLE_SEMANTIC_MIN_SIMILARITY:-}"
@@ -100,6 +115,38 @@ if gcloud secrets describe "$VAPID_PRIVATE_SECRET" --project "$PROJECT" --quiet 
   RUNTIME_SECRETS+=("$VAPID_PRIVATE_SECRET")
 else
   echo "No $VAPID_PRIVATE_SECRET secret: deploying with push nudges off (node scripts/vapid-keys.mjs creates it)." >&2
+fi
+
+# Native push to the official apps. The key is mounted by name and version only; the ids are not
+# secret and become plain env vars.
+if gcloud secrets describe "$APNS_KEY_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
+  APNS_KEY_VERSION="$(gcloud secrets versions list "$APNS_KEY_SECRET" --project "$PROJECT" --filter=state:enabled --sort-by=~createTime --limit=1 --format='value(name)')"
+  APNS_KEY_VERSION="${APNS_KEY_VERSION##*/}"
+  if ! [[ "$APNS_KEY_VERSION" =~ ^[0-9]+$ ]]; then
+    echo "The secret $APNS_KEY_SECRET has no enabled version; see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
+    exit 1
+  fi
+  APNS_IDS="$(gcloud secrets versions access latest --secret "$APNS_IDS_SECRET" --project "$PROJECT" || true)"
+  read -r APNS_KEY_ID APNS_TEAM_ID APNS_EXTRA <<< "$APNS_IDS" || true
+  if ! [[ "${APNS_KEY_ID:-}" =~ ^[A-Z0-9]{10}$ && "${APNS_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ && -z "${APNS_EXTRA:-}" ]]; then
+    echo "The secret $APNS_IDS_SECRET must hold \"<key id> <team id>\" (10 characters each); see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
+    exit 1
+  fi
+  if ! [[ "$APNS_BUNDLE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+    echo "APNS_BUNDLE_ID must be a bundle id." >&2
+    exit 1
+  fi
+  ENV_VARS="$ENV_VARS,APNS_KEY_ID=$APNS_KEY_ID,APNS_TEAM_ID=$APNS_TEAM_ID,APNS_BUNDLE_ID=$APNS_BUNDLE_ID"
+  SECRETS="$SECRETS,APNS_KEY_P8=$APNS_KEY_SECRET:$APNS_KEY_VERSION"
+  RUNTIME_SECRETS+=("$APNS_KEY_SECRET")
+else
+  echo "No $APNS_KEY_SECRET secret: deploying without APNs push (push.apns false)." >&2
+fi
+if gcloud secrets describe "$FCM_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
+  SECRETS="$SECRETS,FCM_SERVICE_ACCOUNT_JSON=$FCM_SECRET:latest"
+  RUNTIME_SECRETS+=("$FCM_SECRET")
+else
+  echo "No $FCM_SECRET secret: deploying without FCM push (push.fcm false)." >&2
 fi
 
 # The optional GitHub token raises the import's rate limit; the server works without it.

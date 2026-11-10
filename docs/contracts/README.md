@@ -6,7 +6,7 @@ These four contracts are the plug between the native apps and every deployment t
 |---|---|---|---|---|
 | Capabilities v1 | [capabilities.md](capabilities.md) | `contracts/schema/capabilities.v1.schema.json` | `contracts/fixtures/capabilities/` | `contracts/js/capabilities.mjs` |
 | Talk bundle v1 | [talk-bundle.md](talk-bundle.md) | `contracts/schema/talk-bundle.v1.schema.json`, `contracts/schema/conferences-index.v1.schema.json`, `contracts/schema/embedding-reference.v1.schema.json` | `contracts/fixtures/bundle/` (built from `contracts/fixtures/bundle-inputs/`), `contracts/fixtures/embedding/reference.v1.json` | `contracts/js/bundle.mjs`, `contracts/js/canonical-json.mjs` |
-| People API v1 | [people-api.md](people-api.md) | `contracts/schema/people-api.v1.schema.json`, route table `contracts/routes/people-api.v1.json` | `contracts/fixtures/people-api/` | today's `server/` (all 24 routes checked by `test/contracts-people-conformance.test.mjs`) |
+| People API v1 | [people-api.md](people-api.md) | `contracts/schema/people-api.v1.schema.json`, route table `contracts/routes/people-api.v1.json` | `contracts/fixtures/people-api/` | today's `server/` (all 26 routes checked by `test/contracts-people-conformance.test.mjs`) |
 | Bluetooth derived tokens v1 | [ble-tokens.md](ble-tokens.md) | `contracts/schema/ble-fixtures.v1.schema.json` (the vector files) | `contracts/fixtures/ble/` | `contracts/js/ble-token.mjs` |
 
 `contracts/fixtures/topics-live/` holds the live topic lists of the four searchable conferences, a snapshot taken on 2026-11-10 through the public `GET /api/topics?event={slug}`. They are not a contract: they are the reference that the Phase 1 Node port of the topics builder is diffed against before Elasticsearch is decommissioned.

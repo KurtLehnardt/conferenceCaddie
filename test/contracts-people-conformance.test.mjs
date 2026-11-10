@@ -8,12 +8,15 @@
 // range, ids, exists, match_all, and the filter of a retriever) and terms aggregations. Scoring
 // clauses (knn, multi_match, distance_feature) match everything, so ranking is not under test
 // here, only shapes; with `explain: true` an rrf search explains every hit as found by every
-// retriever, in the shape Elasticsearch 9.5.6 returns (test/lib/rrf-explanation.mjs). All 24
+// retriever, in the shape Elasticsearch 9.5.6 returns (test/lib/rrf-explanation.mjs). All 26
 // routes run, and every list the schema describes comes back non-empty at least once, so Person,
 // MeetView, the inbox items, circle members and the rest are checked against real handler output.
 //
 // Nothing here reaches the network: fetch is replaced before the server modules are imported and
 // a call to any other host fails the test. The keys, URL and device credentials are dummy values.
+// The APNs channel is configured with a key generated for this run, so the optional native push
+// routes answer 200 for apns, and FCM is left off, so they answer 404 push_unavailable for fcm;
+// PUSH_TRANSPORT=stub without PUSH_STUB_URL makes every push a nudge might attempt fail locally.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,7 +44,13 @@ Object.assign(process.env, {
   ES_RULES_INDEX: 'caddie-people-rules',
   MOD_CLASSIFIER: 'off',
 });
-for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI', 'BLE_MASTER_KEYRING', 'TALKS_BUNDLE_BASE']) delete process.env[k];
+for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI', 'BLE_MASTER_KEYRING', 'TALKS_BUNDLE_BASE', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_SERVICE_ACCOUNT_JSON', 'FCM_PROJECT_ID', 'PUSH_STUB_URL']) delete process.env[k];
+Object.assign(process.env, {
+  PUSH_TRANSPORT: 'stub',
+  APNS_KEY_ID: 'TESTKEY001',
+  APNS_TEAM_ID: 'TESTTEAM01',
+  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+});
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EVENT = 'contracts-conf-2099';
@@ -357,10 +366,11 @@ test('GET /api/capabilities answers a closed-valid capabilities document', async
   const result = validator('capabilities.v1')(doc, { closed: true });
   assert.equal(result.valid, true, formatErrors(result.errors));
   // Without a master keyring the server is in transition: the legacy tokens, with the mitigations.
-  // This run has no VAPID keys, so no Web Push either.
+  // This run has no VAPID keys, so no Web Push either, and an APNs key but no FCM service account.
   const want = JSON.parse(readFileSync(path.join(ROOT, 'contracts/fixtures/capabilities/tier3-transition.json'), 'utf8'));
   want.ble.colocation_required = true;
   want.push.webpush = false;
+  want.push.apns = true;
   assert.deepEqual(doc, want);
 });
 
@@ -464,6 +474,20 @@ test('reports, blocks and push subscriptions', async () => {
   assert.equal(store('caddie-people-push').size, 1);
   conforms('DELETE', '/api/push/subscription', await call('DELETE', '/api/push/subscription', { device: me, body: { event: EVENT, endpoint: subscription.endpoint } }));
   assert.equal(store('caddie-people-push').size, 0);
+
+  // The optional native push routes: APNs is configured in this run, FCM is not.
+  const apns = crypto.randomBytes(32).toString('hex');
+  const fcm = `${crypto.randomBytes(8).toString('base64url')}:APA91b${crypto.randomBytes(100).toString('base64url')}`;
+  conforms('PUT', '/api/push/native', await call('PUT', '/api/push/native', { device: other, body: { event: EVENT, platform: 'apns', token: apns } }));
+  conforms('PUT', '/api/push/native', await call('PUT', '/api/push/native', { device: other, body: { event: EVENT, platform: 'apns', token: apns.toUpperCase(), environment: 'sandbox' } }));
+  assert.equal(store('caddie-people-push').size, 1, 'the same token in either case is one registration');
+  assert.equal([...store('caddie-people-push').values()][0].source.environment, 'sandbox');
+  assert.deepEqual(conforms('PUT', '/api/push/native', await call('PUT', '/api/push/native', { device: other, body: { event: EVENT, platform: 'fcm', token: fcm } }), 404), { error: 'push_unavailable' });
+  conforms('PUT', '/api/push/native', await call('PUT', '/api/push/native', { device: other, body: { event: EVENT, platform: 'apns', token: 'abc' } }), 400);
+  conforms('DELETE', '/api/push/native', await call('DELETE', '/api/push/native', { device: other, body: { event: EVENT, platform: 'fcm', token: fcm } }));
+  assert.equal(store('caddie-people-push').size, 1);
+  conforms('DELETE', '/api/push/native', await call('DELETE', '/api/push/native', { device: other, body: { event: EVENT, platform: 'apns', token: apns } }));
+  assert.equal(store('caddie-people-push').size, 0);
 });
 
 test('error envelopes and status codes are the frozen ones', async () => {
@@ -499,10 +523,10 @@ test('ending presence and deleting the profile', async () => {
   conforms('DELETE', '/api/people/profile', await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: leaver }));
 });
 
-test('all 24 routes answered 200 at least once and were validated', (t) => {
+test('all 26 routes answered 200 at least once and were validated', (t) => {
   const all = table.routes.map((r) => r.id);
-  assert.equal(all.length, 24);
+  assert.equal(all.length, 26);
   assert.deepEqual(all.filter((id) => !covered.has(id)), []);
   t.diagnostic(`request bodies checked against their schema: ${requestChecks}`);
-  assert.ok(requestChecks >= 32, `only ${requestChecks} request bodies were checked`);
+  assert.ok(requestChecks >= 36, `only ${requestChecks} request bodies were checked`);
 });

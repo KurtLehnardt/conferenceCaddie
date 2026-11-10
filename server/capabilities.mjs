@@ -10,13 +10,18 @@
 //   BLE_MASTER_KEYRING and BLE_NEAR_RSSI, through server/ble-config.mjs (ble.mode and near_rssi).
 //   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT: push.webpush is true only when all
 //                      three are set, which is when nudge.mjs can send.
+//   APNS_* and FCM_*, through server/native-push.mjs: push.apns is true only when the APNs key,
+//                      its key id and the team id are all set and usable, and push.fcm only when
+//                      the FCM service account is, which is when nudge.mjs can send through them.
 //
 // Tier 3 serves every People API v1 route with server-side ranking and polling, the talk search
-// routes and both server imports. It holds no APNs or FCM key, so push.apns and push.fcm are false.
+// routes and both server imports. Only the official deployment holds the APNs key and the FCM
+// service account, so on every other tier 3 server push.apns and push.fcm are false.
 
 import { take, clientIp } from './ratelimit.mjs';
 import { SERVICE_UUID, WINDOW_S } from '../contracts/js/ble-token.mjs';
 import { BLE_MODE, NEAR_RSSI, SIGHTINGS_MIN_INTERVAL_S, COLOCATION_REQUIRED } from './ble-config.mjs';
+import { NATIVE_PUSH } from './native-push.mjs';
 
 export const DEFAULT_BUNDLE_BASE = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
 // The pattern of talks.bundle_base in contracts/schema/capabilities.v1.schema.json.
@@ -48,9 +53,10 @@ export const webPushConfigured = (env) => Boolean(env.VAPID_PUBLIC_KEY && env.VA
 
 /**
  * The capabilities document of this tier 3 server for a configuration:
- * { bleMode: 'derived-v1' | 'server-rotate', nearRssi, webpush, bundleBase }.
+ * { bleMode: 'derived-v1' | 'server-rotate', nearRssi, webpush, apns, fcm, bundleBase }, where
+ * apns and fcm default to false.
  */
-export function capabilitiesDocument({ bleMode, nearRssi, webpush, bundleBase }) {
+export function capabilitiesDocument({ bleMode, nearRssi, webpush, apns = false, fcm = false, bundleBase }) {
   return {
     api_version: 1,
     tier: 'paid',
@@ -64,7 +70,7 @@ export function capabilitiesDocument({ bleMode, nearRssi, webpush, bundleBase })
       sightings_min_interval_s: SIGHTINGS_MIN_INTERVAL_S,
       colocation_required: COLOCATION_REQUIRED,
     },
-    push: { apns: false, fcm: false, webpush },
+    push: { apns, fcm, webpush },
     imports: { github: 'server', schedule: 'server' },
   };
 }
@@ -74,6 +80,8 @@ export const CAPABILITIES = Object.freeze(capabilitiesDocument({
   bleMode: BLE_MODE,
   nearRssi: NEAR_RSSI,
   webpush: webPushConfigured(process.env),
+  apns: NATIVE_PUSH.apns,
+  fcm: NATIVE_PUSH.fcm,
   bundleBase: bundleBaseFrom(process.env.TALKS_BUNDLE_BASE),
 }));
 const BODY = JSON.stringify(CAPABILITIES);

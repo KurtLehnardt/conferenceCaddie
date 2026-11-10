@@ -12,7 +12,9 @@
 //
 // The subscription's endpoint and keys are keyword fields with index: false, so they are stored
 // and never searchable; a subscription is found by its _id (sha256 of the endpoint) or by
-// profile_id. Both indices use dynamic: false.
+// profile_id. Both indices use dynamic: false. The native push registrations of server/push.mjs
+// share the push index: their platform, token and environment are not mapped, so dynamic: false
+// keeps them in _source only, and they needed no mapping change.
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;

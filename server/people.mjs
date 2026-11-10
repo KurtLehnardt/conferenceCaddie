@@ -10,7 +10,8 @@
 //   ES_CONFERENCES_INDEX  default caddie-conferences.
 //   ES_PEOPLE_BLOCKS_INDEX default caddie-people-blocks (who blocked whom).
 //   ES_PEOPLE_MEETS_INDEX default caddie-people-meets (ask to talk shop).
-//   ES_PEOPLE_PUSH_INDEX  default caddie-people-push (Web Push subscriptions, push.mjs).
+//   ES_PEOPLE_PUSH_INDEX  default caddie-people-push (Web Push subscriptions and native push
+//                         registrations, push.mjs).
 //   ES_PEOPLE_NUDGES_INDEX default caddie-people-nudges (nudges sent, nudge.mjs).
 //   REF_SALT              optional salt for the opaque result reference.
 //   PEOPLE_SEMANTIC_MIN_SIMILARITY, PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY and
