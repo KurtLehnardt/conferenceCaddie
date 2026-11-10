@@ -4,14 +4,18 @@
 import { getDevice } from './storage';
 import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
+// The fields are assigned by hand rather than as constructor parameter properties, so Node can run
+// this file by stripping its types (web/test does).
 export class PeopleApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public code: string | null = null,
-    public count: number | null = null,
-  ) {
+  status: number;
+  code: string | null;
+  count: number | null;
+
+  constructor(message: string, status: number, code: string | null = null, count: number | null = null) {
     super(message);
+    this.status = status;
+    this.code = code;
+    this.count = count;
   }
 }
 

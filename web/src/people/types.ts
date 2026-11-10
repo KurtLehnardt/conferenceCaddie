@@ -217,6 +217,15 @@ export interface Visibility {
   hidden_for_owner: boolean;
 }
 
+/**
+ * A profile delete for one conference that the server has not confirmed yet. While it is set, the
+ * device sends no profile write for that conference, and the delete is tried again.
+ */
+export interface DeletePending {
+  /** True when the delete is part of "Delete my profile", so the device's data goes once it is done. */
+  wipe: boolean;
+}
+
 /** Report: what a report is about and why. */
 export type ReportKind = 'profile' | 'meet' | 'spot';
 export type ReportReason = 'harassment' | 'hate' | 'sexual' | 'spam' | 'other';

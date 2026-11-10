@@ -2,7 +2,7 @@
 // and the per-conference visibility choices. Every write notifies subscribers so
 // all mounted people components stay in step.
 import { useEffect, useState } from 'preact/hooks';
-import type { BlockedPerson, Device, MetPerson, Presence, Profile, PushState, TopicRef, Visibility } from './types';
+import type { BlockedPerson, DeletePending, Device, MetPerson, Presence, Profile, PushState, TopicRef, Visibility } from './types';
 
 const DEVICE_KEY = 'caddie.device.v1';
 const PROFILE_KEY = 'caddie.profile.v1';
@@ -11,6 +11,7 @@ const PRESENCE_PREFIX = 'caddie.presence.v1.';
 const PUSH_PREFIX = 'caddie.push.v1.';
 const BLOCKS_PREFIX = 'caddie.blocks.v1.';
 const MET_PREFIX = 'caddie.met.v1.';
+const DELETE_PENDING_PREFIX = 'caddie.delete-pending.v1.';
 
 const listeners = new Set<() => void>();
 let version = 0;
@@ -189,6 +190,44 @@ export function slugsOnServer(): string[] {
       if (!key?.startsWith(VIS_PREFIX)) continue;
       const slug = key.slice(VIS_PREFIX.length);
       if (getVisibility(slug).on_server) out.add(slug);
+    }
+  } catch {
+    // Fall back to the in-memory list.
+  }
+  return [...out];
+}
+
+/* ---------- Deletes the server has not confirmed ---------- */
+
+const deletePendingMem = new Map<string, DeletePending | null>();
+
+/** The unfinished profile delete for one conference, or null when there is none. */
+export function getDeletePending(slug: string): DeletePending | null {
+  if (!deletePendingMem.has(slug)) {
+    const raw = read<Partial<DeletePending>>(DELETE_PENDING_PREFIX + slug);
+    deletePendingMem.set(slug, raw && typeof raw === 'object' ? { wipe: raw.wipe === true } : null);
+  }
+  return deletePendingMem.get(slug) ?? null;
+}
+
+/** Marks a profile delete for one conference as unfinished, or clears the mark with null. */
+export function setDeletePending(slug: string, value: DeletePending | null): void {
+  deletePendingMem.set(slug, value);
+  if (value) write(DELETE_PENDING_PREFIX + slug, value);
+  else remove(DELETE_PENDING_PREFIX + slug);
+  notify();
+}
+
+/** The conferences with an unfinished profile delete. */
+export function slugsDeletePending(): string[] {
+  const out = new Set<string>();
+  for (const [slug, d] of deletePendingMem) if (d) out.add(slug);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(DELETE_PENDING_PREFIX)) continue;
+      const slug = key.slice(DELETE_PENDING_PREFIX.length);
+      if (getDeletePending(slug)) out.add(slug);
     }
   } catch {
     // Fall back to the in-memory list.
@@ -376,16 +415,24 @@ export function removeMet(slug: string, index: number): void {
 }
 
 /**
- * Removes the profile, the device identity and every visibility, presence, push and block record
- * from the device. The "People I met" list is the user's own notes and stays, like the Interested
- * list.
+ * Removes the profile, the device identity and every visibility, presence, push, block and
+ * unfinished-delete record from the device. The "People I met" list is the user's own notes and
+ * stays, like the Interested list. Callers run this only once the server has confirmed every
+ * delete: without the device identity, nothing left on the server could be deleted from here.
  */
 export function clearAllPeopleData(): void {
   const keys: string[] = [DEVICE_KEY, PROFILE_KEY];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith(VIS_PREFIX) || key?.startsWith(PRESENCE_PREFIX) || key?.startsWith(PUSH_PREFIX) || key?.startsWith(BLOCKS_PREFIX)) keys.push(key);
+      if (
+        key?.startsWith(VIS_PREFIX) ||
+        key?.startsWith(PRESENCE_PREFIX) ||
+        key?.startsWith(PUSH_PREFIX) ||
+        key?.startsWith(BLOCKS_PREFIX) ||
+        key?.startsWith(DELETE_PENDING_PREFIX)
+      )
+        keys.push(key);
     }
   } catch {
     // Nothing to enumerate.
@@ -397,6 +444,7 @@ export function clearAllPeopleData(): void {
   presenceMem.clear();
   pushMem.clear();
   blocksMem.clear();
+  deletePendingMem.clear();
   notify();
 }
 
@@ -411,12 +459,15 @@ if (typeof window !== 'undefined') {
       profileMem = undefined;
       deviceMem = undefined;
       visMem.clear();
+      deletePendingMem.clear();
     } else if (key === PROFILE_KEY) {
       profileMem = undefined;
     } else if (key === DEVICE_KEY) {
       deviceMem = undefined;
     } else if (key.startsWith(VIS_PREFIX)) {
       visMem.delete(key.slice(VIS_PREFIX.length));
+    } else if (key.startsWith(DELETE_PENDING_PREFIX)) {
+      deletePendingMem.delete(key.slice(DELETE_PENDING_PREFIX.length));
     } else {
       return;
     }

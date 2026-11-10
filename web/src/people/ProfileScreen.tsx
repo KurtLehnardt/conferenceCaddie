@@ -1,22 +1,30 @@
 // The profile editor. The profile lives on this device and reaches the server only
 // while the user is visible conference-wide or shares for a talk.
 import { useState } from 'preact/hooks';
-import { EyeOff, Trash2 } from 'lucide-preact';
-import { deleteProfile, PeopleApiError } from './api';
-import { forgetPush } from './push';
+import { EyeOff, Trash2, TriangleAlert } from 'lucide-preact';
 import { ImportGitHub, mergeGithubImport } from './ImportGitHub';
 import { VISIBILITY_NOTICE } from './PeopleScreen';
 import {
-  clearAllPeopleData,
   EMPTY_PROFILE,
+  getDeletePending,
   getProfile,
   getVisibility,
   setProfile,
-  slugsOnServer,
+  slugsDeletePending,
   topicsFor,
   usePeopleStore,
 } from './storage';
-import { changeVisibility, getSyncStatus, LINKEDIN_RE, scheduleProfileSync, unshareAll } from './sync';
+import {
+  changeVisibility,
+  DELETED_MESSAGE,
+  deleteMyProfile,
+  finishPendingDeletes,
+  getPendingDeleteDetail,
+  getSyncStatus,
+  LINKEDIN_RE,
+  scheduleProfileSync,
+  unshareAll,
+} from './sync';
 import { TopicPicker } from './TopicPicker';
 import type { ConferenceLike, InterestedProp, Profile, TopicRef } from './types';
 import { interestedIds } from './util';
@@ -82,6 +90,42 @@ function SaveStatus() {
   return null;
 }
 
+/** Under the heading of the notice for a delete the server has not confirmed yet. */
+export const PENDING_DELETE_COPY =
+  'It may already be hidden from other attendees. The app will not share it again while the delete is unfinished, and it tries again each time it opens or comes back online.';
+
+/** Shown while a profile delete has not been confirmed by the server, with a way to try again. */
+function PendingDelete() {
+  const [busy, setBusy] = useState(false);
+  const pending = slugsDeletePending();
+  if (!pending.length) return null;
+  // Part of "Delete my profile": trying again runs the whole delete, so the device's data goes too.
+  const wipe = pending.some((s) => getDeletePending(s)?.wipe === true);
+  const detail = getPendingDeleteDetail();
+  const retry = async () => {
+    setBusy(true);
+    await (wipe ? deleteMyProfile() : finishPendingDeletes());
+    setBusy(false);
+  };
+  return (
+    <div class="pp-banner" role="status">
+      <div class="pp-banner-row">
+        <TriangleAlert size={20} aria-hidden="true" class="pp-banner-icon" />
+        <p class="pp-banner-text">
+          <strong>{wipe ? 'Deleting your profile has not finished.' : 'Removing your profile from a conference has not finished.'}</strong>{' '}
+          {PENDING_DELETE_COPY}
+        </p>
+      </div>
+      {detail && <p class="pp-error pp-banner-actions">{detail}</p>}
+      <div class="pp-banner-actions">
+        <button type="button" class="btn btn-tonal btn-small" disabled={busy} onClick={retry}>
+          {busy ? 'Trying again…' : 'Try again'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ProfileScreen({ conference, interested }: { conference: ConferenceLike; interested: InterestedProp }) {
   usePeopleStore();
   const slug = conference.slug;
@@ -122,34 +166,21 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
     setVisBusy(false);
   };
 
+  // The device's data goes only once the server has confirmed the delete for every conference. On
+  // a failure the confirmation stays open, so the same button tries again.
   const removeEverything = async () => {
     setDeleting(true);
     setDeleteMessage(null);
-    try {
-      for (const s of slugsOnServer()) {
-        try {
-          await deleteProfile(s);
-        } catch (err) {
-          // A missing document is already gone.
-          if (!(err instanceof PeopleApiError && err.status === 404)) throw err;
-        }
-      }
-      // The server deleted the push subscriptions with the profile; the browser's own goes too.
-      await forgetPush();
-      clearAllPeopleData();
-      setConfirmDelete(false);
-      setDeleteMessage('Your profile was deleted from this phone and from our server.');
-    } catch (err) {
-      setDeleteMessage(
-        `${err instanceof PeopleApiError ? err.message : 'Could not delete right now.'} Your profile may be partly deleted. Try again to finish.`,
-      );
-    }
+    const message = await deleteMyProfile();
+    if (message === null) setConfirmDelete(false);
+    setDeleteMessage(message ?? DELETED_MESSAGE);
     setDeleting(false);
   };
 
   return (
     <div class="pp-screen pp-profile">
       <SaveStatus />
+      <PendingDelete />
       {vis.hidden_for_owner && (
         <div class="pp-banner pp-hidden-banner" role="status">
           <div class="pp-banner-row">

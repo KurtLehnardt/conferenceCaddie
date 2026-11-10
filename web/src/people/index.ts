@@ -13,7 +13,7 @@ export { MeetScreen } from './MeetScreen';
 export { BlockedPeople, NudgeSettings, PeopleIMet, PeopleIWatch } from './SettingsPeople';
 export { getWatches, isWatched, toggleWatch, removeWatch } from './watch';
 export { NudgeSetting } from './NudgeBanner';
-export { onInterestedChanged } from './sync';
+export { onInterestedChanged, startDeleteRetries } from './sync';
 export { importProfile } from './import';
 export { registerPeopleUi } from './ui';
 export { usePresenceWatch } from './presence';
