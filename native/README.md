@@ -125,7 +125,8 @@ the rest), each listed with its version and platform, and the native code that S
 iOS app (Skia, HarfBuzz, ICU, libpng, libjpeg-turbo, libwebp, zlib, Expat, Wuffs and the Adobe DNG
 SDK). `scripts/third-party-notices.py` generates that list from the Android release classpath and
 the iOS klibs; run it after changing dependencies. It fails on a dependency whose group is not in
-its licence table, or on a new Skiko version, until someone has checked the licence.
+its licence table, on a new artifact in the broad AndroidX, `org.jetbrains` and kotlinx groups, or on
+a new Skiko version, until someone has checked the licence.
 
 The app icons and the iOS launch image come from `web/public/icons` through
 `scripts/generate-app-icons.py` (Pillow). Both apps open on the web's page colour, light or dark.

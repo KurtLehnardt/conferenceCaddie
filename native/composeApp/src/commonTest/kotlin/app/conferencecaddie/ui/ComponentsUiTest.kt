@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
@@ -129,9 +130,12 @@ class ComponentsUiTest {
     fun aToastDismissesThroughTheLatestCallback() = runComposeUiTest {
         val dismissedBy = mutableListOf<String>()
         var owner by mutableStateOf("first")
+        // The device's accessibility settings may ask for longer than the web's five seconds.
+        var timeout = 5_000L
         mainClock.autoAdvance = false
         setContent {
             val current = owner
+            timeout = LocalAccessibilityManager.current?.calculateRecommendedTimeoutMillis(5_000, containsText = true) ?: 5_000L
             CaddieTheme { Toast(ToastData(1, "Saved"), onDismiss = { dismissedBy += current }, onAction = {}) }
         }
         mainClock.advanceTimeBy(1_000)
@@ -139,7 +143,7 @@ class ComponentsUiTest {
 
         // The caller recomposes with a new callback while the toast is showing.
         owner = "second"
-        mainClock.advanceTimeBy(5_000)
+        mainClock.advanceTimeBy(timeout)
         assertEquals(listOf("second"), dismissedBy)
         assertTrue(dismissedBy.none { it == "first" })
     }

@@ -17,21 +17,39 @@ ADB="${ADB:-adb}"
 
 fail() {
   echo "::error title=Release smoke test::$1"
-  "$ADB" logcat -d -b crash,main -t 200 | grep -E "AndroidRuntime|$PKG" | tail -n 60 || true
+  local log
+  log=$("$ADB" logcat -d -b crash,main -t 200) || true
+  grep -E "AndroidRuntime|$PKG" <<<"$log" | tail -n 60 || true
   exit 1
 }
 
-# Prints the bounds centre ("x y") of the first node whose attribute $1 equals $2, from a UI dump.
-centre_of() {
+# The current screen's UI dump. It is captured whole before anything greps it: with pipefail, a
+# grep -q that stops reading early would make the producer fail with SIGPIPE.
+ui_dump() {
   "$ADB" shell uiautomator dump /sdcard/caddie-ui.xml >/dev/null
-  "$ADB" shell cat /sdcard/caddie-ui.xml | tr '>' '\n' | grep -F "$1=\"$2\"" | head -n 1 |
-    sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' |
+  "$ADB" shell cat /sdcard/caddie-ui.xml
+}
+
+# Prints the bounds centre ("x y") of the first node whose attribute $1 equals $2, or nothing.
+centre_of() {
+  local xml line
+  xml=$(ui_dump)
+  line=$(tr '>' '\n' <<<"$xml" | grep -F "$1=\"$2\"") || return 0
+  line=${line%%$'\n'*}
+  sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' <<<"$line" |
     awk '{ printf "%d %d\n", ($1 + $3) / 2, ($2 + $4) / 2 }'
 }
 
 screen_has() {
-  "$ADB" shell uiautomator dump /sdcard/caddie-ui.xml >/dev/null
-  "$ADB" shell cat /sdcard/caddie-ui.xml | grep -qF "$1"
+  local xml
+  xml=$(ui_dump)
+  grep -qF "$1" <<<"$xml"
+}
+
+app_running() {
+  local pid
+  pid=$("$ADB" shell pidof "$PKG" | tr -d '\r') || true
+  [ -n "$pid" ]
 }
 
 [ -f "$APK" ] || fail "No release APK at $APK."
@@ -41,21 +59,26 @@ screen_has() {
 
 "$ADB" shell am start -W -n "$PKG/.MainActivity" >/dev/null
 sleep 5
-[ -n "$("$ADB" shell pidof "$PKG" | tr -d '\r')" ] || fail "The release build is not running five seconds after it started."
+app_running || fail "The release build is not running five seconds after it started."
 screen_has 'text="Search"' || fail "The release build does not show the tab bar."
 
-gear=$(centre_of content-desc Settings)
+gear=$(centre_of content-desc Settings) || true
 [ -n "$gear" ] || fail "The release build shows no Settings gear."
 # shellcheck disable=SC2086
 "$ADB" shell input tap $gear
 sleep 2
+# "APPEARANCE" is the first group heading of Settings, and nothing else shows it.
 screen_has 'text="APPEARANCE"' || fail "The Settings gear did not open Settings in the release build."
 "$ADB" shell input keyevent KEYCODE_BACK
 sleep 2
-screen_has 'text="Search"' || fail "Back did not leave Settings in the release build."
+if screen_has 'text="APPEARANCE"'; then
+  fail "Back did not leave Settings in the release build."
+fi
+screen_has 'text="Search"' || fail "The release build does not show the tab bar after Back."
 
-[ -n "$("$ADB" shell pidof "$PKG" | tr -d '\r')" ] || fail "The release build stopped."
-if "$ADB" logcat -d -b crash | grep -qF "$PKG"; then
+app_running || fail "The release build stopped."
+crashes=$("$ADB" logcat -d -b crash) || true
+if grep -qF "$PKG" <<<"$crashes"; then
   fail "The release build crashed."
 fi
-echo "Release smoke test passed: the R8 release build starts, shows the shell and opens Settings."
+echo "Release smoke test passed: the R8 release build starts, shows the shell, and opens and leaves Settings."

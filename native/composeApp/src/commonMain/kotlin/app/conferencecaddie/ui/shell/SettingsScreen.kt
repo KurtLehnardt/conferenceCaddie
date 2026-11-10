@@ -111,7 +111,7 @@ fun SettingsScreen(
     }
 
     if (licensesOpen) {
-        CaddieSheet(title = Strings.Settings.LICENSES_TITLE, onClose = { licensesOpen = false }) {
+        CaddieSheet(title = Strings.Settings.LICENSES_TITLE, onClose = { licensesOpen = false }, scrollable = false) {
             LicenceSections()
         }
     }

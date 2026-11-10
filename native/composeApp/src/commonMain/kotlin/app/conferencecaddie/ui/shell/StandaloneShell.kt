@@ -77,7 +77,7 @@ fun StandaloneShell(isDebugBuild: Boolean, launch: DebugLaunch = DebugLaunch()) 
             onSelectConference = { conference = it },
             onChangeServer = {
                 server = it
-                pending = null
+                pending = pendingAfterSwitch(pending, it)
             },
             onDeclineConnect = { pending = null },
             onThemeChange = { theme = it },

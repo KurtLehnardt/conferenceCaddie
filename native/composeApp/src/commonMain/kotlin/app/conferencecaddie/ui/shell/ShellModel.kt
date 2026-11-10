@@ -69,7 +69,12 @@ data class ShellState(
 class ShellActions(
     val onSelectConference: (String) -> Unit = {},
     val onRetryConferences: () -> Unit = {},
-    /** The person confirmed switching to [base] (a normalised backend base). */
+    /**
+     * The person confirmed switching to [base] (a normalised backend base), from Settings or from
+     * a link; the same callback serves both. The caller clears [ShellState.pendingConnect] only
+     * when it equals [base] (see [pendingAfterSwitch]): a link that arrived while a typed server
+     * was being confirmed stays pending, and the shell asks about it next.
+     */
     val onChangeServer: (base: String) -> Unit = {},
     /** The person declined the server named in [ShellState.pendingConnect]. */
     val onDeclineConnect: () -> Unit = {},
@@ -109,6 +114,13 @@ val LocalShellNavigator = staticCompositionLocalOf<ShellNavigator> {
         override fun openSwitcher() = Unit
     }
 }
+
+/**
+ * What [ShellState.pendingConnect] becomes once the person confirmed switching to [base]: cleared
+ * when it was that server's link, kept when it is another one (a link that arrived while a server
+ * typed in Settings was being confirmed).
+ */
+fun pendingAfterSwitch(pending: String?, base: String): String? = pending?.takeIf { it != base }
 
 /** True for the only kinds of link the apps open: http and https, in any letter case. */
 fun isWebLink(url: String): Boolean = Regex("^[Hh][Tt][Tt][Pp][Ss]?://").containsMatchIn(url)

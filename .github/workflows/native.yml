@@ -231,7 +231,14 @@ jobs:
         run: ./gradlew :composeApp:assembleAndroidDeviceTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease
 
       # The emulator's booted state is cached as a snapshot, so most runs skip the cold boot. The
-      # cache is keyed on the emulator settings; pull requests only read it, main writes it.
+      # cache is keyed on the emulator settings and the month: the emulator and its system image
+      # update without notice, and a snapshot they no longer accept is then rebuilt within a month.
+      # Pull requests only read the cache; main writes it.
+      - name: Name the emulator snapshot
+        id: avd_key
+        working-directory: .
+        run: echo "key=avd-${RUNNER_OS}-api34-x86_64-default-v1-$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
       - name: Restore the emulator snapshot
         id: avd
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -239,7 +246,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ runner.os }}-api34-x86_64-default-v1
+          key: ${{ steps.avd_key.outputs.key }}
 
       - name: Create the emulator snapshot
         if: steps.avd.outputs.cache-hit != 'true'
