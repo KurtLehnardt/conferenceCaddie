@@ -45,8 +45,12 @@ export function readStoplist(text) {
 // Han and Hiragana characters are tokens of their own, a run of Katakana is one token, and a script
 // change ends a token, as in the Elasticsearch standard tokenizer (Unicode word segmentation).
 const CJK = '\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\u30FC\\uFF70';
-const WORD_CHAR = `(?:(?![${CJK}])[\\p{L}\\p{N}_])`;
-const TOKEN_RE = new RegExp(`${WORD_CHAR}+(?:['.:]${WORD_CHAR}+)*|[\\p{Script=Katakana}\\u30FC\\uFF70]+|[\\p{Script=Han}\\p{Script=Hiragana}]`, 'gu');
+// A word character carries its combining marks and joiners (Devanagari vowel signs, a decomposed
+// e + U+0301), so they never split a word. An apostrophe or a full stop joins letters or digits; a
+// colon joins letters only, so "10:30am" is two tokens.
+const WORD_CHAR = `(?:(?![${CJK}])[\\p{L}\\p{N}_][\\p{M}\\u200D]*)`;
+const JOIN = `(?:['.]|(?<=[\\p{L}\\p{M}]):(?=[\\p{L}]))`;
+const TOKEN_RE = new RegExp(`${WORD_CHAR}+(?:${JOIN}${WORD_CHAR}+)*|[\\p{Script=Katakana}\\u30FC\\uFF70]+|[\\p{Script=Han}\\p{Script=Hiragana}]`, 'gu');
 
 /**
  * The analysed terms of one title: [{ term, start, end }] for unigrams and for bigrams of

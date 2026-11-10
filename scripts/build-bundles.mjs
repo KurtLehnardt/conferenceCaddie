@@ -12,16 +12,18 @@
 //                      (default https://kurtlehnardt.github.io/conferenceCaddie/bundles/)
 //   --offline          never use the network (no model download, no --reuse-from URL); fail when the
 //                      pinned model files are not in the model directory
+//   --no-model-download  fail when the pinned model files are not in the model directory instead of
+//                      downloading them; reuse from a URL is still allowed
 //   --check            rebuild in memory and compare with the files already under --out; exit 1 on any
 //                      difference (conferences.json is compared without its generated_at, and with
 //                      --only only for the conferences rebuilt). Vector reuse is off unless --reuse-from
 //                      is given explicitly, so that --check tests the embedder itself.
 //   --reuse-from <x>   bundles to take int8 rows from instead of embedding again: an https bundle base
 //                      URL ending in "/", or a local directory (a bundle base, or a site root holding
-//                      bundles/). "none" turns it off. Default
-//                      https://kurtlehnardt.github.io/conferenceCaddie/bundles/ (off for --check). A
-//                      row is reused only when the previous build used the identical embedding identity
-//                      (bundles/build-info.json) and the text hash of the talk is the same.
+//                      bundles/). "none" turns it off. Default: the --base-url bundles (off for --check).
+//                      A row is reused only when the previous build used the identical embedding
+//                      identity (bundles/build-info.json), the text hash of the talk is the same, and
+//                      a sample of the rows equals a fresh embedding (REUSE_MIN_COSINE).
 //   --smoke            after building, embed the a-check queries of scripts/smoke.mjs and print where
 //                      each expected KubeCon talk lands in the int8 cosine ranking (informational)
 // Env: CADDIE_MODEL_CACHE (model directory, resolved against the repository root, default .cache/model),
@@ -42,7 +44,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
-  buildBundle, verifyBundle, passageText, textHash, decodeVectors, cosine, sha256hex, VECTOR_KINDS, INDEX_VERSION, BUNDLE_FILE, VECTOR_FILE,
+  buildBundle, verifyBundle, readConferenceIndex, passageText, textHash, decodeVectors, quantizeRow, cosine, normalizeKey, sha256hex,
+  VECTOR_KINDS, INDEX_VERSION, BUNDLE_VERSION, BUNDLE_FILE, BUNDLE_FILES, VECTOR_FILE, QUANTIZATION, MODEL, DIMS,
 } from '../contracts/js/bundle.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { formatErrors } from '../contracts/js/validate.mjs';
@@ -67,6 +70,13 @@ export const ATTRIBUTION = Object.freeze({
 export const TAGLINE_MAX = 100;
 export const EMAIL_REDACTION = '[email removed]';
 export const BUILD_INFO_FILE = 'build-info.json';
+const BUNDLE_SCHEMA = `talk-bundle.v${BUNDLE_VERSION}`;
+const INDEX_SCHEMA = `conferences-index.v${INDEX_VERSION}`;
+// How many published rows per conference are re-embedded to check that a reuse source is honest, the
+// lowest cosine accepted between a published row and a fresh one, and the most bytes read per file.
+export const REUSE_SAMPLE = 8;
+export const REUSE_MIN_COSINE = 0.999;
+export const REUSE_MAX_BYTES = { index: 5_000_000, info: 100_000, 'bundle.json': 20_000_000, 'vectors.i8': 5_000_000 };
 
 export class UsageError extends Error {}
 
@@ -75,7 +85,7 @@ export class UsageError extends Error {}
 /** Parses the command line. Throws UsageError with a one-line reason. */
 export function parseArgs(argv) {
   const opts = {
-    out: DEFAULT_OUT, only: null, baseUrl: DEFAULT_BASE_URL, offline: false, check: false, smoke: false,
+    out: DEFAULT_OUT, only: null, baseUrl: DEFAULT_BASE_URL, offline: false, noModelDownload: false, check: false, smoke: false,
     reuseFrom: undefined, publisherName: PUBLISHER.name, takedown: PUBLISHER.takedown,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -94,6 +104,7 @@ export function parseArgs(argv) {
     else if (a === '--publisher-name') opts.publisherName = value();
     else if (a === '--takedown') opts.takedown = value();
     else if (a === '--offline') opts.offline = true;
+    else if (a === '--no-model-download') opts.noModelDownload = true;
     else if (a === '--check') opts.check = true;
     else if (a === '--smoke') opts.smoke = true;
     else throw new UsageError(`Unknown argument: ${a}`);
@@ -109,11 +120,11 @@ export function parseArgs(argv) {
   return opts;
 }
 
-/** The reuse source in effect: an explicit --reuse-from, else the published demo (but not for --check, and not offline). */
+/** The reuse source in effect: an explicit --reuse-from, else the bundle base this build publishes to (but not for --check). */
 export function effectiveReuseFrom(opts) {
   if (opts.reuseFrom === 'none') return null;
   if (opts.reuseFrom !== undefined) return opts.reuseFrom;
-  return opts.check ? null : DEFAULT_BASE_URL;
+  return opts.check ? null : opts.baseUrl;
 }
 
 // ---------- Inputs ----------
@@ -142,7 +153,8 @@ export function publicConference(doc) {
   };
 }
 
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+// A domain must end in a letters-only label, so package pins (lodash@4.17.21, actions/checkout@v4.1.1) stay.
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9-])/g;
 /** Replaces every email address in a text with "[email removed]". */
 export const redactEmails = (text) => String(text ?? '').replace(EMAIL_RE, EMAIL_REDACTION);
 
@@ -157,7 +169,7 @@ export function shortTagline(tagline) {
   if (!t) return null;
   const chars = [...t];
   if (chars.length > TAGLINE_MAX) t = `${chars.slice(0, TAGLINE_MAX - 1).join('').trimEnd()}…`;
-  return t;
+  return redactEmails(t);
 }
 
 /**
@@ -170,7 +182,16 @@ export function shortTagline(tagline) {
 export function alignedTaglines(raw) {
   const speakers = raw.speakers ?? [];
   const profiles = raw.speaker_profiles;
-  if (Array.isArray(profiles) && profiles.length === speakers.length) return profiles.map((p) => (typeof p?.tagline === 'string' && p.tagline ? p.tagline : null));
+  const tag = (p) => (typeof p?.tagline === 'string' && p.tagline ? p.tagline : null);
+  if (Array.isArray(profiles) && profiles.length === speakers.length) {
+    // Profiles that carry names must carry the speaker's name at the same index; a profile in the
+    // wrong place is looked up by name, and a speaker with no profile of that name gets null.
+    return profiles.map((p, i) => {
+      if (typeof p?.name !== 'string' || p.name === speakers[i]) return tag(p);
+      const byName = profiles.filter((q) => q?.name === speakers[i]);
+      return byName.length === 1 ? tag(byName[0]) : null;
+    });
+  }
   const taglines = raw.speaker_taglines;
   if (Array.isArray(taglines) && taglines.length === speakers.length) return taglines.map((t) => (typeof t === 'string' && t ? t : null));
   return speakers.map(() => null);
@@ -187,6 +208,7 @@ export function trimTalk(raw) {
   const taglines = alignedTaglines({ ...raw, speakers }).map(shortTagline);
   return {
     ...raw,
+    title: redactEmails(raw.title),
     abstract: redactEmails(raw.abstract),
     speakers,
     speaker_taglines: taglines,
@@ -195,8 +217,15 @@ export function trimTalk(raw) {
   };
 }
 
-/** The takedown list: [{ slug, talk_id?, speaker?, reason, date }]. A missing file is an empty list; a malformed one is an error. */
-export function loadTakedowns(file) {
+const TAKEDOWN_KEYS = new Set(['slug', 'talk_id', 'speaker', 'reason', 'date']);
+
+/**
+ * The takedown list: [{ slug, talk_id?, speaker?, reason, date }]. A missing file is an empty list; a
+ * malformed one is an error, including an unknown key, a date that is not a real calendar day, and
+ * (when `dataDir` is given) a slug that is not a conference folder, so a typo can never silently
+ * leave content published.
+ */
+export function loadTakedowns(file, { dataDir = null } = {}) {
   if (!existsSync(file)) return [];
   let list;
   try {
@@ -207,54 +236,50 @@ export function loadTakedowns(file) {
   if (!Array.isArray(list)) throw new Error(`${file}: must be a JSON array.`);
   list.forEach((e, i) => {
     const bad = (why) => new Error(`${file}[${i}]: ${why}`);
-    if (!e || typeof e !== 'object') throw bad('must be an object');
+    if (!e || typeof e !== 'object' || Array.isArray(e)) throw bad('must be an object');
+    for (const k of Object.keys(e)) if (!TAKEDOWN_KEYS.has(k)) throw bad(`unknown key "${k}"`);
     if (typeof e.slug !== 'string' || !e.slug) throw bad('slug is required');
+    if (dataDir && !existsSync(path.join(dataDir, e.slug, 'conference.json'))) throw bad(`"${e.slug}" is not a conference folder under data/`);
     if (typeof e.reason !== 'string' || !e.reason) throw bad('reason is required');
-    if (typeof e.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(e.date)) throw bad('date must be YYYY-MM-DD');
+    if (typeof e.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(e.date) || Number.isNaN(Date.parse(e.date)) || new Date(`${e.date}T00:00:00Z`).toISOString().slice(0, 10) !== e.date) throw bad('date must be a real day, YYYY-MM-DD');
     if (e.talk_id === undefined && e.speaker === undefined) throw bad('talk_id or speaker is required');
     if (e.talk_id !== undefined && (typeof e.talk_id !== 'string' || !e.talk_id.startsWith(`${e.slug}:`))) throw bad('talk_id must be a string starting with "<slug>:"');
-    if (e.speaker !== undefined && (typeof e.speaker !== 'string' || !e.speaker.trim())) throw bad('speaker must be a non-empty string');
+    if (e.speaker !== undefined && (typeof e.speaker !== 'string' || !normalizeKey(e.speaker))) throw bad('speaker must be a non-empty name');
   });
   return list;
 }
 
 /**
  * Applies the takedowns of one conference to its raw talks. An entry with only talk_id drops that
- * talk. An entry with a speaker removes that name and its tagline from the talk named by talk_id, or
- * from every talk of the conference when there is none. Returns { talks, notes } where notes lists
- * entries that matched nothing.
+ * talk. An entry with a speaker removes that name (compared with normalizeKey, so case, accents and
+ * punctuation do not matter) and its tagline from the talk named by talk_id, or from every talk of the
+ * conference when there is none. An entry that matches nothing is an error: the content it was meant to
+ * remove may still be published under another spelling. Returns { talks }.
  */
 export function applyTakedowns(slug, talks, takedowns) {
-  const mine = takedowns.filter((e) => e.slug === slug);
   let out = talks.map((t) => ({ ...t }));
-  const notes = [];
-  for (const e of mine) {
+  for (const e of takedowns.filter((x) => x.slug === slug)) {
     let hit = 0;
     if (e.speaker === undefined) {
       const before = out.length;
       out = out.filter((t) => t.talk_id !== e.talk_id);
       hit = before - out.length;
     } else {
-      const name = e.speaker.trim();
+      const key = normalizeKey(e.speaker);
       out = out.map((t) => {
         if (e.talk_id !== undefined && t.talk_id !== e.talk_id) return t;
         const speakers = t.speakers ?? [];
-        if (!speakers.includes(name)) return t;
-        const taglines = alignedTaglines(t);
-        const keep = speakers.map((s) => s !== name);
+        const keep = speakers.map((s) => normalizeKey(s) !== key);
+        if (keep.every(Boolean)) return t;
         hit++;
-        return {
-          ...t,
-          speakers: speakers.filter((_, i) => keep[i]),
-          speaker_taglines: taglines.filter((_, i) => keep[i]),
-          // The aligned stubs carry the taglines on; links and bios were never published.
-          speaker_profiles: speakers.filter((_, i) => keep[i]).map((s, j) => ({ name: s, tagline: taglines.filter((_, i) => keep[i])[j] })),
-        };
+        const taglines = alignedTaglines(t).filter((_, i) => keep[i]);
+        const names = speakers.filter((_, i) => keep[i]);
+        return { ...t, speakers: names, speaker_taglines: taglines, speaker_profiles: names.map((name, j) => ({ name, tagline: taglines[j] })) };
       });
     }
-    if (!hit) notes.push(`takedown for ${slug} (${e.talk_id ?? ''}${e.speaker ? ` ${e.speaker}` : ''}) matched nothing`);
+    if (!hit) throw new Error(`takedown for ${slug} (${e.talk_id ?? ''}${e.speaker ? ` speaker ${JSON.stringify(e.speaker)}` : ''}) matched nothing in the data; fix the entry or the data before publishing`);
   }
-  return { talks: out, notes };
+  return { talks: out };
 }
 
 /** The searchable conferences under dataDir, sorted by slug: [{ conference, talks }] with raw talks. */
@@ -282,22 +307,42 @@ export function loadSearchable(dataDir, only = null) {
 // ---------- Vector reuse ----------
 
 const isUrl = (s) => /^https:\/\//.test(s);
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
+
+// Reads at most `cap` bytes of a fetch response; a longer body is an error, not a truncation.
+async function readCapped(res, cap) {
+  const declared = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > cap) throw new Error(`body of ${declared} bytes exceeds the ${cap} byte cap`);
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of res.body) {
+    total += chunk.length;
+    if (total > cap) throw new Error(`body exceeds the ${cap} byte cap`);
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
 
 /**
  * Takes the int8 rows of the bundles published at `source` (an https bundle base or a local
  * directory) so that unchanged texts need not be embedded again, and the content hashes stay stable
- * whatever CPU the runner has. A row is reused only when
+ * whatever CPU the runner has. The source is not trusted: a row is reused only when
  *   - the previous build's build-info.json names exactly the current embedding identity (model,
- *     revision, file hashes, settings), and
- *   - the bundle verifies against its index entry (sizes, SHA-256, content hash, text hashes), and
- *   - the talk's text hash (the SHA-256 of the published embedding text, title + "\n" + abstract) is
- *     the same.
+ *     revision, file hashes, settings, bundle version, quantisation), and
+ *   - the entry's path is exactly "{slug}/{content_hash[0:16]}/", only the two bundle files are read,
+ *     over a connection that does not follow redirects and with a byte cap per file, and
+ *   - the bundle verifies against its entry (sizes, SHA-256, content hash, text hashes) and states the
+ *     current bundle version, model, dimensions and quantisation, and
+ *   - a fixed sample of its rows (REUSE_SAMPLE per conference, spread evenly) equals a fresh embedding
+ *     of the same text, as quantised, to a cosine of at least REUSE_MIN_COSINE. Hashes alone prove
+ *     nothing about what a publisher put in the vectors; one bad sampled row discards the whole source.
+ *   - the talk's text hash (SHA-256 of the published embedding text) is the same.
  * Any failure to read the source means nothing is reused; it is logged and never fatal.
  * Returns { rows: Map(text_hash -> Int8Array), note }.
  */
-export async function loadReusableRows({ source, identity, offline = false, fetchFn = globalThis.fetch, log = () => {} }) {
-  const none = (note) => {
-    log(`reuse: ${note}; every text is embedded`);
+export async function loadReusableRows({ source, identity, embedder, offline = false, fetchFn = globalThis.fetch, log = () => {} }) {
+  const none = (note, loud = false) => {
+    log(`${loud ? 'REUSE REJECTED' : 'reuse'}: ${note}; every text is embedded`);
     return { rows: new Map(), note };
   };
   if (!source) return { rows: new Map(), note: 'reuse is off' };
@@ -305,43 +350,69 @@ export async function loadReusableRows({ source, identity, offline = false, fetc
   let readFile;
   if (isUrl(source)) {
     if (offline) return none(`--offline forbids fetching ${source}`);
-    readFile = async (rel) => {
-      const res = await fetchFn(new URL(rel, source), { signal: AbortSignal.timeout(60_000) });
-      if (!res.ok) throw new Error(`${new URL(rel, source)}: HTTP ${res.status}`);
-      return Buffer.from(await res.arrayBuffer());
+    const origin = new URL(source).origin;
+    readFile = async (rel, cap) => {
+      const url = new URL(rel, source);
+      if (url.origin !== origin || !url.pathname.startsWith(new URL(source).pathname)) throw new Error(`${rel} leaves the source`);
+      const res = await fetchFn(url, { redirect: 'error', signal: AbortSignal.timeout(120_000) });
+      if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+      return readCapped(res, cap);
     };
   } else {
     let base = path.resolve(source);
     if (existsSync(path.join(base, 'bundles', 'conferences.json'))) base = path.join(base, 'bundles'); // a site root: its own conferences.json is only a copy
-    readFile = async (rel) => readFileSync(path.join(base, rel));
+    readFile = async (rel, cap) => {
+      const file = path.resolve(base, rel);
+      if (!file.startsWith(`${base}${path.sep}`)) throw new Error(`${rel} leaves the source`);
+      const bytes = readFileSync(file);
+      if (bytes.length > cap) throw new Error(`${rel} exceeds the ${cap} byte cap`);
+      return bytes;
+    };
   }
   try {
-    const info = JSON.parse((await readFile(BUILD_INFO_FILE)).toString('utf8'));
+    const info = JSON.parse((await readFile(BUILD_INFO_FILE, REUSE_MAX_BYTES.info)).toString('utf8'));
     if (JSON.stringify(info.embedding) !== JSON.stringify(identity)) return none('the previous build used a different embedding identity');
-    const index = JSON.parse((await readFile('conferences.json')).toString('utf8'));
+    const index = readConferenceIndex(JSON.parse((await readFile('conferences.json', REUSE_MAX_BYTES.index)).toString('utf8')));
+    if (!index.ok) return none(`conferences.json is not a usable index (${index.reason})`);
     const rows = new Map();
-    for (const c of index.conferences ?? []) {
-      const entry = c.bundle;
-      if (!entry) continue;
+    const usable = index.conferences.filter((c) => c.bundle_status === 'ok').sort((x, y) => (x.conference.slug < y.conference.slug ? -1 : 1));
+    for (const { conference, bundle: entry } of usable) {
+      const slug = conference.slug;
       try {
+        if (!SLUG_RE.test(slug) || entry.path !== `${slug}/${entry.content_hash.slice(0, 16)}/`) throw new Error('the entry path is not {slug}/{content_hash[0:16]}/');
         const files = {};
-        for (const name of Object.keys(entry.files)) files[name] = await readFile(`${entry.path}${name}`);
-        const problems = verifyBundle(entry, files);
-        if (problems.length) {
-          log(`reuse: ${c.slug} does not verify (${problems[0]}); skipped`);
-          continue;
+        for (const name of BUNDLE_FILES) {
+          const meta = entry.files?.[name];
+          if (!meta || !Number.isInteger(meta.bytes) || meta.bytes > REUSE_MAX_BYTES[name]) throw new Error(`${name} is missing or too large`);
+          files[name] = await readFile(`${entry.path}${name}`, REUSE_MAX_BYTES[name]);
         }
+        const problems = verifyBundle(entry, files);
+        if (problems.length) throw new Error(`does not verify (${problems[0]})`);
         const bundle = JSON.parse(files[BUNDLE_FILE].toString('utf8'));
-        const vecs = decodeVectors(files[VECTOR_FILE], bundle.vectors.dims);
+        const v = bundle.vectors;
+        if (bundle.bundle_version !== BUNDLE_VERSION || v.quantization !== QUANTIZATION || v.dtype !== 'int8' || v.dims !== DIMS || bundle.model?.id !== MODEL.id) {
+          throw new Error('bundle version, quantisation, dimensions or model differ from the current ones');
+        }
+        const vecs = decodeVectors(files[VECTOR_FILE], v.dims);
         const byId = new Map(bundle.talks.map((t) => [t.talk_id, t]));
-        bundle.vectors.rows.forEach((id, i) => {
+        // The sample check: re-embed evenly spread rows and compare.
+        const n = v.rows.length;
+        const picks = n <= REUSE_SAMPLE ? [...v.rows.keys()] : Array.from({ length: REUSE_SAMPLE }, (_, i) => Math.floor((i * n) / REUSE_SAMPLE));
+        const fresh = await embedder.embedDocuments(picks.map((i) => passageText(byId.get(v.rows[i]))));
+        picks.forEach((i, k) => {
+          const c = cosine(vecs[i], quantizeRow(fresh[k]));
+          if (!(c >= REUSE_MIN_COSINE)) throw Object.assign(new Error(`sampled row ${v.rows[i]} has cosine ${c.toFixed(4)} to a fresh embedding, below ${REUSE_MIN_COSINE}`), { poisoned: true });
+        });
+        v.rows.forEach((id, i) => {
           const hash = byId.get(id)?.text_hash;
           if (hash && !rows.has(hash)) rows.set(hash, Int8Array.from(vecs[i]));
         });
       } catch (err) {
-        log(`reuse: ${c.slug}: ${err.message}; skipped`);
+        if (err.poisoned) return none(`${slug}: ${err.message}. The whole source is discarded`, true);
+        log(`reuse: ${slug}: ${err.message}; skipped`);
       }
     }
+    log(`reuse: sample check passed; ${rows.size} rows available from ${source}`);
     return { rows, note: `${rows.size} rows available from ${source}` };
   } catch (err) {
     return none(`could not read ${source} (${err.message})`);
@@ -425,7 +496,7 @@ function checkSchema(name, value, what) {
 export function validateBuilt(built) {
   const problems = verifyBundle(built.entry, built.files, { producer: true });
   if (problems.length) throw new Error(`${built.entry.path}: ${problems.join('; ')}`);
-  checkSchema('talk-bundle.v1', JSON.parse(built.files[BUNDLE_FILE].toString('utf8')), `${built.entry.path}${BUNDLE_FILE}`);
+  checkSchema(BUNDLE_SCHEMA, JSON.parse(built.files[BUNDLE_FILE].toString('utf8')), `${built.entry.path}${BUNDLE_FILE}`);
 }
 
 /**
@@ -435,7 +506,7 @@ export function validateBuilt(built) {
 export async function buildAll({ sources, dataDir, embedder, baseUrl, publisher, attribution = ATTRIBUTION, generatedAt, reuse = new Map(), log = () => {} }) {
   const stoplistText = readFileSync(path.join(ROOT, 'config', 'topic-stoplist.txt'), 'utf8');
   if (sources.length === 0) throw new Error('No searchable conference found.');
-  const takedowns = loadTakedowns(path.join(dataDir, 'takedowns.json'));
+  const takedowns = loadTakedowns(path.join(dataDir, 'takedowns.json'), { dataDir });
   const bundles = [];
   const entries = new Map();
   const conferences = [];
@@ -444,8 +515,7 @@ export async function buildAll({ sources, dataDir, embedder, baseUrl, publisher,
     const started = Date.now();
     const kindTalks = rawTalks.filter((t) => t.kind === 'talk').length;
     if (kindTalks !== conference.talk_count) throw new Error(`${conference.slug}: conference.json counts ${conference.talk_count} talks, talks.ndjson has ${kindTalks}.`);
-    const { talks, notes } = applyTakedowns(conference.slug, rawTalks, takedowns);
-    for (const n of notes) log(n);
+    const { talks } = applyTakedowns(conference.slug, rawTalks, takedowns);
     const mine = takedowns.filter((e) => e.slug === conference.slug).length;
     if (mine) log(`${conference.slug}: ${mine} takedown entr${mine === 1 ? 'y' : 'ies'} applied`);
     const publicConf = { ...conference, talk_count: talks.filter((t) => t.kind === 'talk').length };
@@ -468,7 +538,7 @@ export async function buildAll({ sources, dataDir, embedder, baseUrl, publisher,
     log(`${conference.slug}: ${built.entry.talk_count} talks, ${built.entry.vector_count} vectors (${built.stats.reused} reused, ${built.stats.embedded} embedded), ${ms} ms`);
   }
   const index = buildIndex({ conferences, entries, publisher, generatedAt });
-  checkSchema('conferences-index.v1', index, 'conferences.json');
+  checkSchema(INDEX_SCHEMA, index, 'conferences.json');
   const capabilities = buildCapabilities(baseUrl);
   checkSchema('capabilities.v1', capabilities, 'capabilities.json');
   const indexBytes = serializeIndex(index);
@@ -553,13 +623,13 @@ export async function run(opts, { embedder = null, dataDir = path.join(ROOT, 'da
   if (!model) {
     const { createEmbedder } = await import('./lib/embedder.mjs');
     const t = Date.now();
-    model = await createEmbedder({ offline: opts.offline, log });
+    model = await createEmbedder({ noDownload: opts.offline || opts.noModelDownload, log });
     log(`model ${model.info.onnx}@${model.info.revision.slice(0, 8)} verified and loaded in ${Date.now() - t} ms (${model.info.dir})`);
   }
   const epoch = process.env.SOURCE_DATE_EPOCH;
   const generatedAt = (epoch && /^\d+$/.test(epoch) ? new Date(Number(epoch) * 1000) : now()).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const publisher = { name: opts.publisherName, takedown: opts.takedown };
-  const { rows: reuse } = await loadReusableRows({ source: effectiveReuseFrom(opts), identity: model.identity, offline: opts.offline, fetchFn, log });
+  const { rows: reuse } = await loadReusableRows({ source: effectiveReuseFrom(opts), identity: model.identity, embedder: model, offline: opts.offline, fetchFn, log });
   const result = await buildAll({ sources, dataDir, embedder: model, baseUrl: opts.baseUrl, publisher, generatedAt, reuse, log });
   const reused = result.bundles.reduce((s, b) => s + b.stats.reused, 0);
   const embedded = result.bundles.reduce((s, b) => s + b.stats.embedded, 0);
@@ -605,7 +675,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   } catch (err) {
     if (!(err instanceof UsageError)) throw err;
     console.error(err.message);
-    console.error('Usage: node scripts/build-bundles.mjs [--out dir] [--only slug,...] [--base-url url] [--offline] [--check] [--smoke] [--reuse-from url|dir|none]');
+    console.error('Usage: node scripts/build-bundles.mjs [--out dir] [--only slug,...] [--base-url url] [--offline] [--no-model-download] [--check] [--smoke] [--reuse-from url|dir|none]');
     process.exit(2);
   }
   try {

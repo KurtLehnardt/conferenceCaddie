@@ -27,7 +27,7 @@ import { Readable } from 'node:stream';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { MODEL, DIMS, QUERY_INSTRUCTION, queryText } from '../../contracts/js/bundle.mjs';
+import { MODEL, DIMS, QUERY_INSTRUCTION, BUNDLE_VERSION, QUANTIZATION, queryText } from '../../contracts/js/bundle.mjs';
 
 export { DIMS, QUERY_INSTRUCTION };
 export const MODEL_ID = MODEL.id;
@@ -50,6 +50,8 @@ export const defaultCacheDir = () => path.resolve(REPO_ROOT, process.env.CADDIE_
 /** Names what the vectors depend on; a reused vector is valid only under an identical identity. */
 export function embeddingIdentity() {
   return {
+    bundle_version: BUNDLE_VERSION,
+    quantization: QUANTIZATION,
     model: MODEL.id,
     onnx: MODEL.onnx,
     revision: ONNX_REVISION,
@@ -63,6 +65,7 @@ export function embeddingIdentity() {
   };
 }
 
+const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const sha256File = (file) => crypto.createHash('sha256').update(readFileSync(file)).digest('hex');
 
 function verifyFile(file, meta) {
@@ -73,32 +76,37 @@ function verifyFile(file, meta) {
 }
 
 async function download(url, target) {
-  const res = await fetch(url, { redirect: 'follow' });
-  if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
-  mkdirSync(path.dirname(target), { recursive: true });
   const tmp = `${target}.part`;
-  await streamPipeline(Readable.fromWeb(res.body), createWriteStream(tmp));
-  renameSync(tmp, target);
+  try {
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
+    mkdirSync(path.dirname(target), { recursive: true });
+    await streamPipeline(Readable.fromWeb(res.body), createWriteStream(tmp), { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 /**
- * Makes sure the four pinned files are in `dir` and match their SHA-256. With offline set nothing is
- * downloaded and a missing file is an error. A file that is present but wrong is deleted and, unless
- * offline, fetched again once; a file that is still wrong fails the build.
+ * Makes sure the four pinned files are in `dir` and match their SHA-256. With noDownload set nothing
+ * is downloaded and a missing or wrong file is an error. A file that is present but wrong is deleted and, unless
+ * noDownload, fetched again once; a file that is still wrong fails the build.
  */
-export async function ensureModelFiles(dir, { offline = false, log = () => {} } = {}) {
+export async function ensureModelFiles(dir, { noDownload = false, log = () => {} } = {}) {
   for (const [name, meta] of Object.entries(MODEL_FILES)) {
     const file = path.join(dir, name);
     let problem = verifyFile(file, meta);
     if (problem && existsSync(file)) rmSync(file);
-    if (problem && offline) throw new Error(`--offline: ${name} is not in the model directory ${dir} (${problem})`);
+    if (problem && noDownload) throw new Error(`downloads are off: ${name} is not in the model directory ${dir} (${problem})`);
     if (problem) {
       log(`fetching ${name} from ${ONNX_ID}@${ONNX_REVISION.slice(0, 8)}`);
       await download(modelUrl(name), file);
       problem = verifyFile(file, meta);
       if (problem) {
         rmSync(file, { force: true });
-        throw new Error(`${name} fetched from ${modelUrl(name)} does not match its pinned SHA-256 (${problem}); refusing to use it`);
+        throw new Error(`${name} fetched from ${modelUrl(name)} failed verification against its pinned SHA-256 (${problem}) and was deleted`);
       }
     }
   }
@@ -127,14 +135,14 @@ function assertContract() {
 /**
  * Loads the model. Options:
  *   cacheDir  where the pinned model files are kept (default defaultCacheDir())
- *   offline   never touch the network; fails when a pinned file is not in cacheDir
+ *   noDownload  never fetch the model; fails when a pinned file is not in cacheDir
  * Returns { embedDocuments(texts), embedQueries(texts), info }. Each embed call returns an array of
  * Float32Array(384) rows, L2-normalised, in the order of the texts.
  */
-export async function createEmbedder({ cacheDir = defaultCacheDir(), offline = false, log = () => {} } = {}) {
+export async function createEmbedder({ cacheDir = defaultCacheDir(), noDownload = false, log = () => {} } = {}) {
   assertContract();
   const dir = path.resolve(cacheDir, ONNX_REVISION);
-  await ensureModelFiles(dir, { offline, log });
+  await ensureModelFiles(dir, { noDownload, log });
   const { pipeline, env } = await loadTransformers();
   // Nothing may be fetched: the model is a local directory, and the library's own cache is off.
   env.allowRemoteModels = false;

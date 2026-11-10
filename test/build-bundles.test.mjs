@@ -8,16 +8,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync, readdirSync, existsSync, cpSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync, readdirSync, existsSync, cpSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verifyBundle, passageText, bundleTalk, DIMS, MODEL, QUERY_INSTRUCTION } from '../contracts/js/bundle.mjs';
+import { verifyBundle, passageText, bundleTalk, contentHash, sha256hex, DIMS, MODEL, QUERY_INSTRUCTION } from '../contracts/js/bundle.mjs';
 import { denseVectors, GENERATED_AT, FIXTURES, BUNDLE_OUT } from '../contracts/js/fixtures.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import {
   parseArgs, effectiveReuseFrom, UsageError, trimTalk, alignedTaglines, shortTagline, redactEmails, publicConference, buildConferenceBundle, buildIndex, serializeIndex,
-  buildCapabilities, loadSearchable, loadTakedowns, applyTakedowns, loadReusableRows, run, checkOutput, readSmokeQueries, DEFAULT_BASE_URL, DEFAULT_OUT, ATTRIBUTION, TAGLINE_MAX,
+  buildCapabilities, loadSearchable, loadTakedowns, applyTakedowns, loadReusableRows, run, checkOutput, readSmokeQueries, DEFAULT_BASE_URL, DEFAULT_OUT, ATTRIBUTION, TAGLINE_MAX, REUSE_SAMPLE, REUSE_MAX_BYTES,
 } from '../scripts/build-bundles.mjs';
 import { buildTopics, readFixups, analyse, topicIdOf, TOPIC_ID } from '../scripts/lib/topics.mjs';
 import {
@@ -93,7 +93,9 @@ test('parseArgs: defaults, every flag, and refusals', () => {
   const d = parseArgs([]);
   assert.equal(d.out, DEFAULT_OUT);
   assert.equal(d.baseUrl, DEFAULT_BASE_URL);
-  assert.deepEqual([d.only, d.offline, d.check, d.smoke, d.reuseFrom], [null, false, false, false, undefined]);
+  assert.deepEqual([d.only, d.offline, d.noModelDownload, d.check, d.smoke, d.reuseFrom], [null, false, false, false, false, undefined]);
+  assert.equal(parseArgs(['--no-model-download']).noModelDownload, true);
+  assert.equal(parseArgs(['--no-model-download']).offline, false, 'the two flags are separate');
   const o = parseArgs(['--out', 'x', '--only', 'a-1, b-2', '--base-url', 'https://e.org/b/', '--offline', '--check', '--smoke', '--takedown', 'mailto:t@e.org', '--reuse-from', 'none']);
   assert.deepEqual([o.out, o.only, o.baseUrl, o.offline, o.check, o.smoke, o.takedown, o.reuseFrom], ['x', ['a-1', 'b-2'], 'https://e.org/b/', true, true, true, 'mailto:t@e.org', 'none']);
   for (const bad of [
@@ -105,8 +107,9 @@ test('parseArgs: defaults, every flag, and refusals', () => {
   assert.equal(DEFAULT_BASE_URL, 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/');
 });
 
-test('reuse source: the published demo by default, off for --check and for "none", explicit wins', () => {
+test('reuse source: this build\'s bundle base by default, off for --check and for "none", explicit wins', () => {
   assert.equal(effectiveReuseFrom(parseArgs([])), DEFAULT_BASE_URL);
+  assert.equal(effectiveReuseFrom(parseArgs(['--base-url', 'https://e.org/x/'])), 'https://e.org/x/');
   assert.equal(effectiveReuseFrom(parseArgs(['--check'])), null);
   assert.equal(effectiveReuseFrom(parseArgs(['--reuse-from', 'none'])), null);
   assert.equal(effectiveReuseFrom(parseArgs(['--check', '--reuse-from', 'dist-pages'])), 'dist-pages');
@@ -141,22 +144,38 @@ test('speaker taglines are aligned with speakers, shortened, and never guessed',
 
 test('trimTalk and the contract builder keep names and taglines only: no profiles, links, bios or internal fields', () => {
   const raw = readJson(path.join(INPUTS, SLUG, 'talks.json')).find((t) => t.speaker_profiles?.length);
-  const talk = bundleTalk(trimTalk({ ...raw, bio: 'long bio', content_hash: 'x', ingested_at: 't', tag_keys: ['k'] }));
+  const talk = bundleTalk(trimTalk({ ...raw, bio: 'long bio', photo: 'https://e.org/p.jpg', content_hash: 'x', ingested_at: 't', tag_keys: ['k'] }));
   assert.equal('speaker_profiles' in talk, false);
-  for (const f of ['bio', 'content_hash', 'ingested_at', 'tag_keys', 'session_id', 'conference']) assert.equal(f in talk, false, f);
+  for (const f of ['bio', 'photo', 'content_hash', 'ingested_at', 'tag_keys', 'session_id', 'conference']) assert.equal(f in talk, false, f);
   assert.deepEqual(talk.speakers, raw.speakers);
   assert.equal(talk.speaker_taglines.length, talk.speakers.length);
   assert.ok(talk.speaker_taglines.includes(null));
   assert.doesNotMatch(JSON.stringify(talk), /https:\/\/example\.org\/ada/);
 });
 
-test('redactEmails replaces every address and nothing else', () => {
+test('redactEmails replaces every address and nothing else, package pins included', () => {
   assert.equal(redactEmails('Mail jane.doe+x@example.co.uk or bob@e.org today. Not @handle or a@b.'), 'Mail [email removed] or [email removed] today. Not @handle or a@b.');
   assert.equal(redactEmails(null), '');
+  for (const keep of ['lodash@4.17.21', 'react@18.2.0', 'uses actions/checkout@v4.1.1 in CI', 'pin foo@1.2.3-beta.4']) assert.equal(redactEmails(keep), keep);
+  assert.equal(redactEmails('write to me@x.io.'), 'write to [email removed].');
+});
+
+test('titles, abstracts and taglines are redacted before publishing', () => {
+  const t = bundleTalk(trimTalk({ talk_id: 'x:1', kind: 'talk', title: 'Mail a@b.org', abstract: 'Ask c@d.org', speakers: ['S'], speaker_taglines: ['Dev, e@f.org'], speaker_profiles: [{ name: 'S', tagline: 'Dev, e@f.org' }] }));
+  assert.doesNotMatch(JSON.stringify(t), /@[a-z]+\.org/);
+  assert.match(t.speaker_taglines[0], /\[email removed\]/);
+});
+
+test('profiles in the wrong place are matched by name, or give null', () => {
+  const swapped = { speakers: ['A', 'B'], speaker_profiles: [{ name: 'B', tagline: 'tb' }, { name: 'A', tagline: 'ta' }] };
+  assert.deepEqual(alignedTaglines(swapped), ['ta', 'tb']);
+  assert.deepEqual(alignedTaglines({ speakers: ['A', 'B'], speaker_profiles: [{ name: 'A', tagline: 'ta' }, { name: 'Z', tagline: 'tz' }] }), ['ta', null]);
+  assert.deepEqual(alignedTaglines({ speakers: ['A', 'A'], speaker_profiles: [{ name: 'Q', tagline: 'x' }, { name: 'Q', tagline: 'y' }] }), [null, null]);
 });
 
 test('on the real data every bundle talk has one tagline per speaker, links never appear, emails and long taglines are gone', async () => {
   let checked = 0;
+  let allLinks = 0;
   for (const slug of SEARCHABLE) {
     const [c] = loadSearchable(DATA, [slug]);
     const published = c.talks.map((t) => bundleTalk(trimTalk(t)));
@@ -167,11 +186,14 @@ test('on the real data every bundle talk has one tagline per speaker, links neve
       checked++;
     }
     const links = c.talks.flatMap((t) => (t.speaker_profiles ?? []).flatMap((p) => (p.links ?? []).map((l) => l.url)));
+    allLinks += links.length;
     const text = JSON.stringify(published);
     assert.deepEqual(links.filter((u) => text.includes(u)), [], `${slug}: a speaker link reached the bundle`);
+    assert.doesNotMatch(text, /"(photo|image|avatar|profilePicture)"/i);
     assert.ok(!text.includes('speaker_profiles'));
   }
   assert.ok(checked > 500);
+  assert.ok(allLinks > 0, 'the inputs do have speaker links, so the check above means something');
   const kube = loadSearchable(DATA, ['kubecon-cloudnativecon-north-america-2026'])[0].talks;
   const t = bundleTalk(trimTalk(kube.find((x) => x.talk_id.endsWith(':1289969'))));
   assert.deepEqual(t.speakers, ['Jorge Castro', 'Katherine Druckman']);
@@ -253,6 +275,16 @@ test('the topic analyser splits Han and Hiragana per character, keeps a katakana
   assert.deepEqual(terms('スケジューラー と モデル'), ['スケジューラー', 'モデル'], 'a hiragana particle between katakana words is a token of its own, so no bigram spans it');
 });
 
+test('the topic analyser keeps combining marks in a word and joins a colon only between letters', () => {
+  const terms = (title) => analyse(title, new Set()).map((t) => t.term);
+  assert.deepEqual(terms('कुबेरनेट्स सुरक्षा').slice(0, 2), ['कुबेरनेट्स', 'सुरक्षा'], 'Devanagari vowel signs do not split a word');
+  assert.deepEqual(terms('Cafe\u0301 routing').slice(0, 2), ['cafe\u0301', 'routing'], 'a decomposed e with an accent is one word');
+  const t = terms('Meet at 10:30am');
+  assert.ok(t.includes('30am') && !t.some((x) => x.includes('10:30')), '10:30am is split at the colon');
+  assert.ok(terms('ab:cd').includes('ab:cd'), 'a colon between letters joins');
+  assert.equal(topicIdOf('cafe\u0301'), 'cafe');
+});
+
 test('the embedder pins its model: constants equal the contract, revision-only URLs, SHA-256 for every file', async () => {
   assert.equal(MODEL_ID, MODEL.id);
   assert.equal(ONNX_ID, MODEL.onnx);
@@ -270,6 +302,8 @@ test('the embedder pins its model: constants equal the contract, revision-only U
   }
   const id = embeddingIdentity();
   assert.equal(id.revision, ONNX_REVISION);
+  assert.equal(id.bundle_version, 1);
+  assert.equal(id.quantization, 'int8-symmetric-row-maxabs');
   assert.deepEqual(Object.keys(id.files).sort(), Object.keys(MODEL_FILES).sort());
   // Offline with nothing cached: fails closed, touching no network.
   const dir = mkdtempSync(path.join(tmpdir(), 'caddie-model-'));
@@ -277,10 +311,10 @@ test('the embedder pins its model: constants equal the contract, revision-only U
     const realFetch = globalThis.fetch;
     globalThis.fetch = () => { throw new Error('the network must not be used'); };
     try {
-      await assert.rejects(ensureModelFiles(dir, { offline: true }), /--offline: .* is not in the model directory/);
+      await assert.rejects(ensureModelFiles(dir, { noDownload: true }), /downloads are off: .* is not in the model directory/);
       // A present file with the wrong bytes is deleted and refused, offline or not.
       writeFileSync(path.join(dir, 'config.json'), 'tampered');
-      await assert.rejects(ensureModelFiles(dir, { offline: true }), /not in the model directory/);
+      await assert.rejects(ensureModelFiles(dir, { noDownload: true }), /not in the model directory/);
       assert.ok(!existsSync(path.join(dir, 'config.json')), 'the bad file was removed');
     } finally {
       globalThis.fetch = realFetch;
@@ -395,7 +429,7 @@ test('takedowns drop a talk or a speaker, adjust the talk count, and are validat
   writeFileSync(path.join(dataDir, 'takedowns.json'), JSON.stringify([
     { slug: SLUG, talk_id: dropTalk.talk_id, reason: 'speaker request', date: '2026-11-10' },
     { slug: SLUG, speaker: gone, reason: 'speaker request', date: '2026-11-10' },
-    { slug: 'another-conference-2099', talk_id: 'another-conference-2099:1', reason: 'unrelated', date: '2026-11-10' },
+    { slug: 'caddie-unavailable-2099', talk_id: 'caddie-unavailable-2099:1', reason: 'a conference that is not being built', date: '2026-11-10' },
   ]));
   const out = path.join(root, 'out');
   const res = await run(parseArgs(['--out', out, '--reuse-from', 'none']), { embedder: hashEmbedder(), dataDir, log: () => {}, now: () => new Date('2026-11-10T00:00:00Z') });
@@ -411,14 +445,25 @@ test('takedowns drop a talk or a speaker, adjust the talk count, and are validat
   assert.equal(entry.talk_count, talks.filter((x) => x.kind === 'talk').length - 1);
   assert.deepEqual(verifyBundle(entry, files, { producer: true }), []);
 
-  // The unit: entries that match nothing are reported, and bad entries are refused.
-  const { notes } = applyTakedowns(SLUG, talks, [{ slug: SLUG, speaker: 'Nobody Here', reason: 'r', date: '2026-01-01' }]);
-  assert.equal(notes.length, 1);
+  // Fail closed: an entry that matches nothing, names no conference folder, has an unknown key or a
+  // date that is not a real day stops the build.
+  assert.throws(() => applyTakedowns(SLUG, talks, [{ slug: SLUG, speaker: 'Nobody Here', reason: 'r', date: '2026-01-01' }]), /matched nothing/);
+  assert.throws(() => applyTakedowns(SLUG, talks, [{ slug: SLUG, talk_id: `${SLUG}:nope`, reason: 'r', date: '2026-01-01' }]), /matched nothing/);
+  // Names compare with normalizeKey: case, accents and punctuation do not matter.
+  const loose = applyTakedowns(SLUG, talks, [{ slug: SLUG, speaker: `  ${gone.toUpperCase()}. `, reason: 'r', date: '2026-01-01' }]).talks;
+  assert.ok(!loose.some((x) => x.speakers.includes(gone)));
   const bad = path.join(root, 'bad.json');
-  for (const doc of ['{}', '[{"slug":"a","reason":"r","date":"2026-01-01"}]', '[{"slug":"a","talk_id":"b:1","reason":"r","date":"2026-01-01"}]', '[{"slug":"a","speaker":"x","reason":"r","date":"yesterday"}]', 'nope']) {
+  const base = { slug: SLUG, speaker: 'x', reason: 'r', date: '2026-01-01' };
+  for (const doc of [
+    '{}', '[{"slug":"a","reason":"r","date":"2026-01-01"}]', JSON.stringify([{ ...base, talk_id: 'b:1' }]), JSON.stringify([{ ...base, date: 'yesterday' }]),
+    JSON.stringify([{ ...base, date: '2026-02-30' }]), JSON.stringify([{ ...base, extra: 1 }]), JSON.stringify([{ ...base, slug: 'no-such-conference-2099' }]), 'nope',
+  ]) {
     writeFileSync(bad, doc);
-    assert.throws(() => loadTakedowns(bad), doc);
+    assert.throws(() => loadTakedowns(bad, { dataDir }), doc);
   }
+  // An entry for a conference that is being built but matches nothing fails the whole run.
+  writeFileSync(path.join(dataDir, 'takedowns.json'), JSON.stringify([{ ...base, speaker: 'Nobody Here' }]));
+  await assert.rejects(run(parseArgs(['--out', path.join(root, 'out-fail'), '--reuse-from', 'none']), { embedder: hashEmbedder(), dataDir, log: () => {} }), /matched nothing/);
   assert.deepEqual(loadTakedowns(path.join(root, 'missing.json')), []);
 }));
 
@@ -437,7 +482,7 @@ test('vector reuse: unchanged texts are not embedded again, and a changed identi
   // Second run, reusing the first output (a site root holding bundles/): nothing is embedded, bytes are identical.
   const second = hashEmbedder();
   const r2 = await run(parseArgs(['--out', out2, '--reuse-from', out1]), deps(second));
-  assert.equal(second.texts, 0, lines.join('\n'));
+  assert.ok(second.texts <= REUSE_SAMPLE, `only the sample check embeds: ${lines.join('\n')}`);
   assert.equal(r2.reused, embeddedFirst);
   assert.deepEqual(readBundleOf(out2).files, readBundleOf(out1).files);
 
@@ -463,6 +508,109 @@ test('vector reuse: unchanged texts are not embedded again, and a changed identi
   assert.ok(lines.some((m) => /could not read https:\/\/kurtlehnardt\.github\.io/.test(m)));
 
   // --offline never fetches a URL source.
-  const rows = await loadReusableRows({ source: DEFAULT_BASE_URL, identity: { stub: 1 }, offline: true, fetchFn: () => { throw new Error('no network'); }, log: () => {} });
+  const rows = await loadReusableRows({ source: DEFAULT_BASE_URL, identity: { stub: 1 }, embedder: hashEmbedder(), offline: true, fetchFn: () => { throw new Error('no network'); }, log: () => {} });
   assert.equal(rows.rows.size, 0);
+}));
+
+// Rewrites the vectors of a published bundle and fixes every hash, size and path so that it still verifies.
+function forgeVectors(out, slug, makeVectors) {
+  const { index, entry, dir } = readBundleOf(out);
+  const vectors = makeVectors(readFileSync(path.join(dir, 'vectors.i8')));
+  const files = { 'bundle.json': readFileSync(path.join(dir, 'bundle.json')), 'vectors.i8': vectors };
+  const hash = contentHash(files);
+  const newPath = `${slug}/${hash.slice(0, 16)}/`;
+  mkdirSync(path.join(out, 'bundles', newPath), { recursive: true });
+  for (const [n, b] of Object.entries(files)) writeFileSync(path.join(out, 'bundles', newPath, n), b);
+  entry.content_hash = hash;
+  entry.path = newPath;
+  entry.files = Object.fromEntries(Object.entries(files).map(([n, b]) => [n, { bytes: b.length, sha256: sha256hex(b) }]));
+  const bytes = Buffer.from(`${JSON.stringify(index, null, 2)}\n`);
+  writeFileSync(path.join(out, 'bundles/conferences.json'), bytes);
+  writeFileSync(path.join(out, 'conferences.json'), bytes);
+}
+
+test('vector reuse does not trust a source: poisoned rows with valid hashes are rejected by the sample check', async () => withTemp(async (root) => {
+  const dataDir = fixtureDataDir(root);
+  const lines = [];
+  const deps = (embedder) => ({ embedder, dataDir, log: (m) => lines.push(m), now: () => new Date('2026-11-10T00:00:00Z') });
+  const out1 = path.join(root, 'out1');
+  const first = hashEmbedder();
+  await run(parseArgs(['--out', out1, '--reuse-from', 'none']), deps(first));
+  const total = first.texts;
+  // Every row becomes row 0, and the entry, content hash and path are recomputed: verifyBundle passes.
+  forgeVectors(out1, SLUG, (v) => Buffer.concat(Array.from({ length: v.length / DIMS }, () => v.subarray(0, DIMS))));
+  const forged = readBundleOf(out1);
+  assert.deepEqual(verifyBundle(forged.entry, forged.files), [], 'the forgery is internally consistent');
+  const next = hashEmbedder();
+  const r = await run(parseArgs(['--out', path.join(root, 'out2'), '--reuse-from', out1]), deps(next));
+  assert.ok(r.ok);
+  assert.ok(next.texts >= total, 'everything is embedded fresh after the rejection');
+  assert.equal(r.reused, 0, 'nothing is taken from the poisoned source');
+  assert.ok(lines.some((m) => /REUSE REJECTED.*below 0\.999/.test(m)), lines.join('\n'));
+  // The output is what an honest build gives.
+  const honest = path.join(root, 'out3');
+  await run(parseArgs(['--out', honest, '--reuse-from', 'none']), deps(hashEmbedder()));
+  assert.deepEqual(readBundleOf(path.join(root, 'out2')).files, readBundleOf(honest).files);
+}));
+
+test('vector reuse reads only what the entry allows, without redirects, within the byte cap', async () => withTemp(async (root) => {
+  const dataDir = fixtureDataDir(root);
+  const out1 = path.join(root, 'out1');
+  await run(parseArgs(['--out', out1, '--reuse-from', 'none']), { embedder: hashEmbedder(), dataDir, log: () => {}, now: () => new Date('2026-11-10T00:00:00Z') });
+  const site = 'https://e.org/b/';
+  const serve = (override = {}) => {
+    const seen = [];
+    const fetchFn = async (url, init) => {
+      seen.push({ url: String(url), redirect: init?.redirect });
+      const rel = String(url).slice(site.length);
+      const file = path.join(out1, 'bundles', rel);
+      if (override[rel]) return override[rel];
+      if (!existsSync(file)) return new Response('no', { status: 404 });
+      return new Response(readFileSync(file));
+    };
+    return { fetchFn, seen };
+  };
+  const load = (fetchFn, log = () => {}) => loadReusableRows({ source: site, identity: { stub: 1 }, embedder: hashEmbedder(), fetchFn, log });
+  const ok = serve();
+  const good = await load(ok.fetchFn);
+  assert.ok(good.rows.size > 0);
+  assert.ok(ok.seen.every((x) => x.redirect === 'error'), 'redirects are refused');
+  assert.deepEqual(ok.seen.map((x) => x.url.slice(site.length)).filter((u) => u.includes('/')).map((u) => u.split('/').pop()).sort(), ['bundle.json', 'vectors.i8'], 'only the two bundle files are read from a bundle directory');
+
+  // An oversized body is refused (declared length).
+  const big = serve({ 'build-info.json': new Response('{}', { headers: { 'content-length': String(REUSE_MAX_BYTES.info + 1) } }) });
+  assert.equal((await load(big.fetchFn)).rows.size, 0);
+
+  // An entry whose path is not {slug}/{hash16}/ is never read.
+  const index = readJson(path.join(out1, 'bundles/conferences.json'));
+  index.conferences[0].bundle.path = `${SLUG}/0000000000000000/`;
+  const evil = serve({ 'conferences.json': new Response(JSON.stringify(index)) });
+  const log = [];
+  const r = await load(evil.fetchFn, (m) => log.push(m));
+  assert.equal(r.rows.size, 0);
+  assert.ok(!evil.seen.some((x) => x.url.includes('0000000000000000')));
+  assert.ok(log.some((m) => /entry path/.test(m)));
+  assert.ok(REUSE_SAMPLE >= 1);
+}));
+
+test('vector reuse refuses a bundle with another quantisation or bundle version', async () => withTemp(async (root) => {
+  const dataDir = fixtureDataDir(root);
+  const out1 = path.join(root, 'out1');
+  await run(parseArgs(['--out', out1, '--reuse-from', 'none']), { embedder: hashEmbedder(), dataDir, log: () => {}, now: () => new Date('2026-11-10T00:00:00Z') });
+  const { dir, entry, index } = readBundleOf(out1);
+  const doc = JSON.parse(readFileSync(path.join(dir, 'bundle.json'), 'utf8'));
+  doc.vectors.quantization = 'something-else';
+  const bytes = Buffer.from(JSON.stringify(doc));
+  const vec = readFileSync(path.join(dir, 'vectors.i8'));
+  const hash = contentHash({ 'bundle.json': bytes, 'vectors.i8': vec });
+  const newPath = `${SLUG}/${hash.slice(0, 16)}/`;
+  mkdirSync(path.join(out1, 'bundles', newPath), { recursive: true });
+  writeFileSync(path.join(out1, 'bundles', newPath, 'bundle.json'), bytes);
+  writeFileSync(path.join(out1, 'bundles', newPath, 'vectors.i8'), vec);
+  Object.assign(entry, { content_hash: hash, path: newPath, files: { 'bundle.json': { bytes: bytes.length, sha256: sha256hex(bytes) }, 'vectors.i8': { bytes: vec.length, sha256: sha256hex(vec) } } });
+  writeFileSync(path.join(out1, 'bundles/conferences.json'), `${JSON.stringify(index, null, 2)}\n`);
+  const log = [];
+  const r = await loadReusableRows({ source: out1, identity: { stub: 1 }, embedder: hashEmbedder(), log: (m) => log.push(m) });
+  assert.equal(r.rows.size, 0);
+  assert.ok(log.some((m) => /differ from the current ones|does not verify/.test(m)), log.join('\n'));
 }));
