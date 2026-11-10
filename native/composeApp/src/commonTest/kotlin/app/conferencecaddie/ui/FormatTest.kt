@@ -46,6 +46,18 @@ class FormatTest {
     }
 
     @Test
+    fun storageSizesRoundAndChangeUnitAtTheRightPlace() {
+        assertEquals("999 bytes", Strings.Settings.bytes(999))
+        assertEquals("1 KB", Strings.Settings.bytes(1_000))
+        assertEquals("999 KB", Strings.Settings.bytes(999_499))
+        assertEquals("1.0 MB", Strings.Settings.bytes(999_500))
+        assertEquals("1.0 MB", Strings.Settings.bytes(1_049_999))
+        assertEquals("1.1 MB", Strings.Settings.bytes(1_050_000))
+        assertEquals("1.5 MB", Strings.Settings.bytes(1_482_323))
+        assertEquals("10.0 MB", Strings.Settings.bytes(9_999_999))
+    }
+
+    @Test
     fun onlyHttpLinksAreOpened() {
         assertTrue(isWebLink("https://example.org/"))
         assertTrue(isWebLink("Https://example.org/"))
