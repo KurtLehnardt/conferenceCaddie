@@ -63,6 +63,20 @@ npx wrangler dev --local --port 8787
   ```
 
   Then load data with the migration script below, pointing `--api` at `http://localhost:8787`.
+- Without the backup (which holds personal data and should not be loaded on a laptop), load the
+  committed talk data instead. Leave out `--event`, so every conference document is pushed: the
+  smoke's check `u` needs the conferences that are not searchable. The test profiles the smoke
+  needs are created by the smoke itself.
+
+  ```sh
+  node worker/ingest/push-ingest.mjs --api http://localhost:8787
+  ```
+
+- To serve the web app from a port that `wrangler.toml` does not list, add that origin to the
+  local allow-list, for example
+  `node scripts/dev-vars.mjs --set ALLOWED_ORIGINS=http://127.0.0.1:8792,http://localhost:4173`,
+  and run the smoke with `SMOKE_ORIGIN` set to the same origin. Values in `.dev.vars` override
+  `[vars]` only in local runs.
 
 ## Deploy order
 
