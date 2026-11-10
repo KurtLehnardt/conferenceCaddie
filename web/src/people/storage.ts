@@ -2,7 +2,7 @@
 // and the per-conference visibility choices. Every write notifies subscribers so
 // all mounted people components stay in step.
 import { useEffect, useState } from 'preact/hooks';
-import type { BlockedPerson, Device, MetPerson, Presence, Profile, PushState, TopicRef, Visibility } from './types';
+import type { BlockedPerson, DeleteFailure, DeleteRetry, Device, MetPerson, Presence, Profile, PushState, TopicRef, Visibility } from './types';
 
 const DEVICE_KEY = 'caddie.device.v1';
 const PROFILE_KEY = 'caddie.profile.v1';
@@ -11,6 +11,8 @@ const PRESENCE_PREFIX = 'caddie.presence.v1.';
 const PUSH_PREFIX = 'caddie.push.v1.';
 const BLOCKS_PREFIX = 'caddie.blocks.v1.';
 const MET_PREFIX = 'caddie.met.v1.';
+const DELETE_PENDING_PREFIX = 'caddie.delete-pending.v1.';
+const DELETE_ALL_KEY = 'caddie.delete-all.v1';
 
 const listeners = new Set<() => void>();
 let version = 0;
@@ -29,19 +31,26 @@ function read<T>(key: string): T | null {
   }
 }
 
+// Keys whose last write did not reach storage, so storage does not hold their current value.
+const unsaved = new Set<string>();
+
 function write(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    unsaved.delete(key);
   } catch {
     // Storage may be full or blocked; the in-memory state still applies for this visit.
+    unsaved.add(key);
   }
 }
 
 function remove(key: string): void {
   try {
     localStorage.removeItem(key);
+    unsaved.delete(key);
   } catch {
     // Nothing else to do when storage is blocked.
+    unsaved.add(key);
   }
 }
 
@@ -68,6 +77,32 @@ export function getDevice(): Device | null {
     deviceMem = d && typeof d.profile_id === 'string' && typeof d.secret === 'string' ? d : null;
   }
   return deviceMem;
+}
+
+/**
+ * True when another tab removed this device's identity (after "Delete my profile") or replaced it
+ * since this tab read it. The cached copies are dropped then, so this tab reads what is stored now.
+ */
+export function deviceRemovedElsewhere(): boolean {
+  if (!deviceMem || unsaved.has(DEVICE_KEY)) return false;
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(DEVICE_KEY);
+  } catch {
+    return false;
+  }
+  let stored: Partial<Device> | null = null;
+  try {
+    stored = raw === null ? null : (JSON.parse(raw) as Partial<Device>);
+  } catch {
+    // An unreadable identity counts as replaced.
+  }
+  if (stored?.profile_id === deviceMem.profile_id) return false;
+  deviceMem = undefined;
+  profileMem = undefined;
+  visMem.clear();
+  notify();
+  return true;
 }
 
 /** Returns the device identity, creating it on first opt-in. */
@@ -146,29 +181,59 @@ const EMPTY_VIS: Visibility = {
   open_to_meet: false,
   shared_talk_ids: [],
   on_server: false,
+  maybe_on_server: false,
   share_notice_seen: false,
   banner_seen: [],
   share_new: false,
   hidden_for_owner: false,
 };
 
+function parseVisibility(raw: Partial<Visibility>): Visibility {
+  const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i): i is string => typeof i === 'string') : []);
+  return {
+    open_to_meet: raw.open_to_meet === true,
+    shared_talk_ids: ids(raw.shared_talk_ids).slice(0, 50),
+    on_server: raw.on_server === true,
+    maybe_on_server: raw.maybe_on_server === true,
+    share_notice_seen: raw.share_notice_seen === true,
+    banner_seen: ids(raw.banner_seen).slice(-200),
+    share_new: raw.share_new === true,
+    hidden_for_owner: raw.hidden_for_owner === true,
+  };
+}
+
 export function getVisibility(slug: string): Visibility {
   let v = visMem.get(slug);
   if (!v) {
-    const raw = read<Partial<Visibility>>(VIS_PREFIX + slug) ?? {};
-    const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i): i is string => typeof i === 'string') : []);
-    v = {
-      open_to_meet: raw.open_to_meet === true,
-      shared_talk_ids: ids(raw.shared_talk_ids).slice(0, 50),
-      on_server: raw.on_server === true,
-      share_notice_seen: raw.share_notice_seen === true,
-      banner_seen: ids(raw.banner_seen).slice(-200),
-      share_new: raw.share_new === true,
-      hidden_for_owner: raw.hidden_for_owner === true,
-    };
+    v = parseVisibility(read<Partial<Visibility>>(VIS_PREFIX + slug) ?? {});
     visMem.set(slug, v);
   }
   return v ?? EMPTY_VIS;
+}
+
+/**
+ * The visibility of one conference as storage holds it now, not as this tab cached it: another
+ * tab may have changed it a moment ago and its storage event may not have arrived yet. Writes that
+ * could make a profile visible read it this way, under the shared write lock.
+ */
+export function getVisibilityFresh(slug: string): Visibility {
+  const key = VIS_PREFIX + slug;
+  if (unsaved.has(key)) return getVisibility(slug);
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(key);
+  } catch {
+    return getVisibility(slug);
+  }
+  let parsed: Partial<Visibility> = {};
+  try {
+    parsed = raw ? (JSON.parse(raw) as Partial<Visibility>) : {};
+  } catch {
+    // Unreadable: as good as empty.
+  }
+  const v = parseVisibility(parsed && typeof parsed === 'object' ? parsed : {});
+  visMem.set(slug, v);
+  return v;
 }
 
 export function setVisibility(slug: string, patch: Partial<Visibility>): Visibility {
@@ -179,21 +244,147 @@ export function setVisibility(slug: string, patch: Partial<Visibility>): Visibil
   return next;
 }
 
-/** Slugs whose visibility state says the server may hold a document. */
-export function slugsOnServer(): string[] {
+function slugsWhere(test: (v: Visibility) => boolean): string[] {
   const out = new Set<string>();
-  for (const [slug, v] of visMem) if (v.on_server) out.add(slug);
+  for (const [slug, v] of visMem) if (test(v)) out.add(slug);
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key?.startsWith(VIS_PREFIX)) continue;
       const slug = key.slice(VIS_PREFIX.length);
-      if (getVisibility(slug).on_server) out.add(slug);
+      if (test(getVisibility(slug))) out.add(slug);
     }
   } catch {
     // Fall back to the in-memory list.
   }
   return [...out];
+}
+
+/** Slugs whose visibility state says the server holds a document. */
+export function slugsOnServer(): string[] {
+  return slugsWhere((v) => v.on_server);
+}
+
+/** Slugs where the server holds a document, or may hold one because a first write went unanswered. */
+export function slugsMaybeOnServer(): string[] {
+  return slugsWhere((v) => v.on_server || v.maybe_on_server);
+}
+
+/* ---------- Deletes the server has not confirmed ---------- */
+
+// These records are read from storage every time instead of being cached, so a tab sees at once
+// what another tab wrote. The in-memory copy stands in only where storage does not hold the value.
+const retryMem = new Map<string, DeleteRetry | null>();
+const FAILURES: DeleteFailure[] = ['partial', 'offline', 'rate', 'forbidden', 'bad'];
+
+// No automatic attempt waits longer than this; a stored time further ahead is corrupt or from a
+// clock that has since been set back.
+const LONGEST_WAIT_MS = 60 * 60_000;
+
+function parseRetry(raw: string | null): DeleteRetry | null {
+  if (raw === null) return null;
+  try {
+    const r = JSON.parse(raw) as Partial<DeleteRetry> | null;
+    if (!r || typeof r !== 'object') return null;
+    const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : 0);
+    const now = Date.now();
+    return {
+      attempts: n(r.attempts),
+      next_at: Math.min(n(r.next_at), now + LONGEST_WAIT_MS),
+      forbidden: n(r.forbidden),
+      last: FAILURES.includes(r.last as DeleteFailure) ? (r.last as DeleteFailure) : null,
+      since: Math.min(n(r.since) || now, now),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readRetry(key: string): DeleteRetry | null {
+  if (!unsaved.has(key)) {
+    try {
+      return parseRetry(localStorage.getItem(key));
+    } catch {
+      // Storage is blocked; the in-memory copy is all there is.
+    }
+  }
+  return retryMem.get(key) ?? null;
+}
+
+function writeRetry(key: string, value: DeleteRetry | null): void {
+  retryMem.set(key, value);
+  if (value) write(key, value);
+  else remove(key);
+  notify();
+}
+
+/** A fresh record, for a delete that is about to be sent for the first time. */
+export function newRetry(): DeleteRetry {
+  return { attempts: 0, next_at: 0, forbidden: 0, last: null, since: Date.now() };
+}
+
+/** The unfinished profile delete for one conference, or null when there is none. */
+export function getDeletePending(slug: string): DeleteRetry | null {
+  return readRetry(DELETE_PENDING_PREFIX + slug);
+}
+
+/** Marks a profile delete for one conference as unfinished, or clears the mark with null. */
+export function setDeletePending(slug: string, value: DeleteRetry | null): void {
+  writeRetry(DELETE_PENDING_PREFIX + slug, value);
+}
+
+/**
+ * Changes the stored mark for one conference, only if it is still stored: a mark that another tab
+ * has removed in the meantime is not written back. Returns whether it was there.
+ */
+export function updateDeletePending(slug: string, patch: Partial<DeleteRetry>): boolean {
+  const current = getDeletePending(slug);
+  if (current) setDeletePending(slug, { ...current, ...patch });
+  return current !== null;
+}
+
+/** The conferences with an unfinished profile delete. */
+export function slugsDeletePending(): string[] {
+  const out = new Set<string>();
+  for (const [key, d] of retryMem) if (d && unsaved.has(key) && key.startsWith(DELETE_PENDING_PREFIX)) out.add(key.slice(DELETE_PENDING_PREFIX.length));
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(DELETE_PENDING_PREFIX) && !unsaved.has(key)) out.add(key.slice(DELETE_PENDING_PREFIX.length));
+    }
+  } catch {
+    for (const [key, d] of retryMem) if (d && key.startsWith(DELETE_PENDING_PREFIX)) out.add(key.slice(DELETE_PENDING_PREFIX.length));
+  }
+  return [...out];
+}
+
+/**
+ * "Delete my profile" when it has not finished: stored before the first request and removed only
+ * when the device's people data goes, so the device cannot forget the user asked for it.
+ */
+export function getDeleteAll(): DeleteRetry | null {
+  return readRetry(DELETE_ALL_KEY);
+}
+
+export function setDeleteAll(value: DeleteRetry | null): void {
+  writeRetry(DELETE_ALL_KEY, value);
+}
+
+/**
+ * True while a delete covers this conference: "Delete my profile" is unfinished, or the delete of
+ * this conference's copy is. Nothing that could make the device visible again is sent then: no
+ * profile write, presence, Bluetooth token, push subscription or ask. Read from storage, so
+ * another tab's delete counts at once.
+ */
+export function deleteCovers(slug: string): boolean {
+  return getDeleteAll() !== null || getDeletePending(slug) !== null;
+}
+
+/** Changes the stored "Delete my profile" record, only if it is still stored. */
+export function updateDeleteAll(patch: Partial<DeleteRetry>): boolean {
+  const current = getDeleteAll();
+  if (current) setDeleteAll({ ...current, ...patch });
+  return current !== null;
 }
 
 /* ---------- Find & connect: presence, blocks, people I met ---------- */
@@ -386,15 +577,18 @@ const CLEARED_PREFIXES = [
   'caddie.nudged.v1.',
   'caddie.nudges.v1.',
   'caddie.ble.v1.',
+  DELETE_PENDING_PREFIX,
 ];
 
 /**
  * Removes the profile, the device identity and every visibility, presence, push, block, watch,
- * nudge and Bluetooth record from the device. The "People I met" list is the user's own notes and
- * stays, like the Interested list.
+ * nudge, Bluetooth and unfinished-delete record (the "Delete my profile" one included) from the
+ * device. The "People I met" list is the user's own notes and stays, like the Interested list.
+ * Callers run this only once the server has confirmed every delete: without the device identity,
+ * nothing left on the server could be deleted from here.
  */
 export function clearAllPeopleData(): void {
-  const keys: string[] = [DEVICE_KEY, PROFILE_KEY];
+  const keys: string[] = [DEVICE_KEY, PROFILE_KEY, DELETE_ALL_KEY];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -410,6 +604,7 @@ export function clearAllPeopleData(): void {
   presenceMem.clear();
   pushMem.clear();
   blocksMem.clear();
+  retryMem.clear();
   notify();
 }
 
@@ -460,6 +655,8 @@ if (typeof window !== 'undefined') {
       blocksMem.delete(key.slice(BLOCKS_PREFIX.length));
     } else if (key.startsWith(MET_PREFIX)) {
       metMem.delete(key.slice(MET_PREFIX.length));
+    } else if (key.startsWith(DELETE_PENDING_PREFIX) || key === DELETE_ALL_KEY) {
+      // Read from storage every time; the screens only need to render again.
     } else {
       return;
     }
