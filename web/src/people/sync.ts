@@ -16,7 +16,8 @@
 // deletes are tried again at start-up, when the app comes back to the foreground or back online,
 // and on a timer that waits longer after each failure. Only one tab retries at a time.
 import { deleteProfile, fetchTopics, PeopleApiError, putProfile, type ProfileBody } from './api';
-import { forgetPush } from './push';
+import { presenceEndedOnServer } from './presence';
+import { forgetPush, pushDeletedOnServer } from './push';
 import {
   clearAllPeopleData,
   deviceRemovedElsewhere,
@@ -228,6 +229,8 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>,
       maybe_on_server: false,
       hidden_for_owner: res.hidden_for_owner === true,
     });
+    // Presence needs conference-wide visibility; the server cleared it with that.
+    if (!res.open_to_meet) presenceEndedOnServer(slug);
     setStatus({ state: 'saved' });
     return null;
   } catch (err) {
@@ -322,8 +325,17 @@ export function onInterestedChanged(slug: string, talkIds: string[], marked: boo
   return marked ? serial(async () => (await shareNow(slug, talkIds, true)).message) : unshareTalks(slug, talkIds, true);
 }
 
-/** Debounces profile edits, then writes them to every conference that holds a document. */
-export function scheduleProfileSync(): void {
+/** The server's answer to a visible write at a conference that has ended or is gone. */
+const closed = (err: unknown) => err instanceof PeopleApiError && err.status === 400 && /^conference (has ended|is not available)/.test(err.code ?? '');
+
+/**
+ * Debounces profile edits, then writes them to every conference that holds a document: the one
+ * on screen (`current`) first, then each of the others on its own, so one failure cannot hold
+ * the rest up. A conference that has ended takes no visible writes any more, so its visibility is
+ * turned off on the device and later edits skip it; that is reported only when it is `current`.
+ * A conference that a delete covers gets no write; see the top of this file.
+ */
+export function scheduleProfileSync(current?: string): void {
   window.clearTimeout(timer);
   timer = undefined;
   // A conference that a delete covers never gets the edit; see the top of this file.
@@ -343,34 +355,36 @@ export function scheduleProfileSync(): void {
       setStatus({ state: 'error', message: problem ?? undefined });
       return;
     }
+    let failure: string | null = null;
     let sent = 0;
-    try {
-      for (const slug of slugsOnServer()) {
-        if (writesBlocked(slug)) continue;
-        if (heldNow(slug)) {
-          syncDeferred = true;
-          continue;
-        }
-        let res;
-        try {
-          res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
-        } catch (err) {
-          // A delete started while this write waited its turn; the edit goes once it is over.
-          if (!(err instanceof WritesHeldError)) throw err;
-          syncDeferred = true;
-          continue;
-        }
+    for (const slug of slugsOnServer().sort((a, b) => Number(b === current) - Number(a === current))) {
+      if (writesBlocked(slug)) continue;
+      if (heldNow(slug)) {
+        syncDeferred = true;
+        continue;
+      }
+      try {
+        const res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
         sent++;
         // The server says whether this profile is hidden after reports; the profile screen shows it.
         if ((res.hidden_for_owner === true) !== getVisibility(slug).hidden_for_owner) setVisibility(slug, { hidden_for_owner: res.hidden_for_owner === true });
+      } catch (err) {
+        // A delete started while this write waited its turn; the edit goes once it is over.
+        if (err instanceof WritesHeldError) {
+          syncDeferred = true;
+          continue;
+        }
+        if (closed(err)) {
+          setVisibility(slug, { on_server: false, open_to_meet: false, shared_talk_ids: [] });
+          if (slug !== current) continue;
+        }
+        failure ??= messageFor(err);
       }
-      setStatus({ state: sent ? 'saved' : 'idle' });
-    } catch (err) {
-      setStatus({ state: 'error', message: messageFor(err) });
     }
+    setStatus(failure ? { state: 'error', message: failure } : { state: sent ? 'saved' : 'idle' });
     if (syncDeferred && !holds.size) {
       syncDeferred = false;
-      scheduleProfileSync();
+      scheduleProfileSync(current);
     }
   }, 1000);
 }
@@ -689,15 +703,32 @@ async function deleteOnServer(slug: string, certain: boolean): Promise<'deleted'
   // on_server goes first: if the app stops between the two writes, the mark is still there and the
   // next attempt only repeats a delete that is done.
   setVisibility(slug, { on_server: false, maybe_on_server: false, hidden_for_owner: false });
+  // The server deleted the document with its presence and push subscription.
+  presenceEndedOnServer(slug);
+  pushDeletedOnServer(slug);
   if (certain) setDeletePending(slug, null);
   else updateDeletePending(slug, { next_at: Date.now() + RETRY_FIRST_MS, last: null });
   return 'deleted';
+}
+
+// Stops what runs in memory for the people features: the position watch and presence timers, the
+// Bluetooth scan, the inbox poll's state, the nudges and the watch list. Those modules pull in the
+// native bridge, so people/index.ts registers this instead of sync.ts importing them; that keeps
+// sync.ts runnable under node --test.
+let resetRuntime: () => Promise<void> = async () => undefined;
+
+/** Sets what "Delete my profile" stops in memory before it clears the device's stored data. */
+export function registerRuntimeReset(fn: () => Promise<void>): void {
+  resetRuntime = fn;
 }
 
 /** Removes the people data from the device. Only for after the server confirmed every delete. */
 async function wipeDevice(): Promise<void> {
   // The server deleted the push subscriptions with the profile; the browser's own goes too.
   await forgetPush();
+  // The server cleared presence, meets and the Bluetooth token with the profile, so everything
+  // that follows them on the device stops too.
+  await resetRuntime();
   clearAllPeopleData();
   window.clearTimeout(retryTimer);
   retryTimer = undefined;

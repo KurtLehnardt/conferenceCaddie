@@ -177,7 +177,7 @@ export function ProfileScreen({ conference, interested }: { conference: Conferen
 
   const update = (patch: Partial<Profile>) => {
     setProfile({ ...(getProfile() ?? EMPTY_PROFILE), ...patch });
-    scheduleProfileSync();
+    scheduleProfileSync(slug);
   };
 
   const setTopics = (which: 'learn' | 'speak', next: TopicRef[]) => {

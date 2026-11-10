@@ -10,16 +10,32 @@ export class PeopleApiError extends Error {
   status: number;
   code: string | null;
   count: number | null;
+  /** The server's JSON error body, for the fields a caller needs (a 409's meet_id, a 410's state). */
+  body: Record<string, unknown> | null;
   /** Seconds the server asked the client to wait (Retry-After), or null. */
   retryAfter: number | null;
 
-  constructor(message: string, status: number, code: string | null = null, count: number | null = null, retryAfter: number | null = null) {
+  constructor(
+    message: string,
+    status: number,
+    code: string | null = null,
+    count: number | null = null,
+    body: Record<string, unknown> | null = null,
+    retryAfter: number | null = null,
+  ) {
     super(message);
     this.status = status;
     this.code = code;
     this.count = count;
+    this.body = body;
     this.retryAfter = retryAfter;
   }
+}
+
+/** A string field of the error body, or null. */
+export function errorField(err: unknown, key: string): string | null {
+  const v = err instanceof PeopleApiError ? err.body?.[key] : undefined;
+  return typeof v === 'string' ? v : null;
 }
 
 /** The server's own wording for a text field that the filter held back. */
@@ -84,8 +100,10 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
     let code: string | null = null;
     let count: number | null = null;
     let message: string | null = null;
+    let body: Record<string, unknown> | null = null;
     try {
-      const body = await res.json();
+      const json = await res.json();
+      body = json && typeof json === 'object' && !Array.isArray(json) ? (json as Record<string, unknown>) : null;
       code = typeof body?.error === 'string' ? body.error : null;
       count = typeof body?.count === 'number' ? body.count : null;
       message = typeof body?.message === 'string' ? body.message.slice(0, 200) : null;
@@ -94,7 +112,14 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
     }
     const wait = res.headers.get('Retry-After');
     const retryAfter = wait && /^\d{1,6}$/.test(wait.trim()) ? Number(wait.trim()) : null;
-    throw new PeopleApiError((res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status, code, message), res.status, code, count, retryAfter);
+    throw new PeopleApiError(
+      (res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status, code, message),
+      res.status,
+      code,
+      count,
+      body,
+      retryAfter,
+    );
   }
   return (await res.json()) as T;
 }

@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowUp, Check, MapPin, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
-import { fetchMeet, isAbort, meetAction, PeopleApiError, putMeetDetails } from './api';
+import { errorField, fetchMeet, isAbort, meetAction, PeopleApiError, putMeetDetails } from './api';
 import { personForMeet, refreshInbox } from './connect';
 import { useZones } from './presence';
 import { ZoneSelect } from './PresenceControls';
@@ -133,11 +133,16 @@ export function MeetScreen({
   const [reporting, setReporting] = useState<ReportTarget | null>(null);
   const seededSpot = useRef(false);
   const stop = useRef(false);
+  // The last open meet this screen showed, for the found view when the other person ends it.
+  const lastLive = useRef<MeetDetail | null>(null);
+
+  const foundView = (d: MeetDetail): View => ({ kind: 'found', name: d.other.display_name, about: d.other.about ?? personForMeet(meetId)?.about ?? null });
 
   const load = async (signal?: AbortSignal) => {
     try {
       const d = await fetchMeet(meetId, signal);
       if (signal?.aborted || stop.current) return;
+      lastLive.current = d;
       setView({ kind: 'live', detail: d });
       if (!seededSpot.current && d.mine?.spot_me) {
         seededSpot.current = true;
@@ -145,12 +150,21 @@ export function MeetScreen({
       }
       if (d.rendezvous) setRendezvous(d.rendezvous);
       // The other side ended it, or it ran out.
-      if (d.state === 'found') setView({ kind: 'found', name: d.other.display_name, about: d.other.about ?? personForMeet(meetId)?.about ?? null });
+      if (d.state === 'found') setView(foundView(d));
       else if (d.state === 'cancelled' || d.state === 'declined' || d.state === 'expired') {
         setView({ kind: 'error', message: d.state === 'declined' ? 'They said not now.' : 'This meet-up is over.', over: true });
       }
     } catch (err) {
       if (isAbort(err) || stop.current) return;
+      // A meet this screen was showing ended on the other phone: 410 says how. They tapped "We
+      // found each other", so this side gets the found view too; or they cancelled it.
+      const ended = err instanceof PeopleApiError && err.status === 410 ? errorField(err, 'state') : null;
+      const live = lastLive.current;
+      if (live && (ended === 'found' || ended === 'cancelled')) {
+        end();
+        setView(ended === 'found' ? foundView(live) : { kind: 'error', message: `${live.other.display_name || 'They'} cancelled the meet-up.`, over: true });
+        return;
+      }
       setView((v) => (v.kind === 'live' && !(err instanceof PeopleApiError && err.status >= 400 && err.status < 500) ? v : { kind: 'error', ...problem(err) }));
     }
   };
@@ -183,12 +197,12 @@ export function MeetScreen({
     try {
       await meetAction(meetId, 'found');
       end();
-      setView({ kind: 'found', name: view.detail.other.display_name, about: view.detail.other.about ?? personForMeet(meetId)?.about ?? null });
+      setView(foundView(view.detail));
     } catch (err) {
       const p = problem(err);
       if (p.over) {
         end();
-        setView({ kind: 'found', name: view.detail.other.display_name, about: view.detail.other.about ?? personForMeet(meetId)?.about ?? null });
+        setView(foundView(view.detail));
       } else toast(p.message);
     }
     setBusy(false);
