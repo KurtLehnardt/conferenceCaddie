@@ -91,6 +91,12 @@ node scripts/build-facets.mjs [<slug> ...]  # rebuild the track, room, speaker a
 
 Re-running is safe: unchanged talks are not re-embedded. Events on other platforms, or with no published schedule, appear in the switcher as "Schedule not available here yet". Per-conference topic fix-ups (rename, merge, remove) live in `data/topics/{slug}.json`; the shared stoplist is `config/topic-stoplist.txt`.
 
-For the API and index shapes, see [docs/CONTRACT.md](docs/CONTRACT.md). Design choices are recorded in [DECISIONS.md](DECISIONS.md).
+For the API and index shapes, see [docs/CONTRACT.md](docs/CONTRACT.md). Design choices are recorded in [DECISIONS.md](DECISIONS.md). The plan for native Android and iOS apps, with deployment tiers that cost nothing to run, is in [docs/NATIVE_PLAN.md](docs/NATIVE_PLAN.md).
 
 The app began as an entry in the Elasticsearch "Find the Right Talk" track at a hackathon during KubeCon + CloudNativeCon North America 2026.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
+
+The license covers the code and documentation written in this repository. It does not cover the schedule snapshots: `data/raw/**`, the talk and speaker text in `data/*/talks.ndjson`, and any other copied schedule content under `data/` are snapshots of public conference schedules, copyright their owners. Linux Foundation site content is available under CC BY 3.0 (https://www.linuxfoundation.org/legal/terms); session and speaker content is copyright the speakers and organizers. See [NOTICE](NOTICE) for these and for the third-party files `config/moderation-words.json` and `data/windows-zones.json`.

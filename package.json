@@ -1,6 +1,7 @@
 {
   "name": "conference-caddie",
   "version": "0.2.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "Mobile-first web app that helps attendees of Linux Foundation conferences find people to talk to and talks they would like, with Elasticsearch hybrid search",
