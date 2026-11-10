@@ -61,7 +61,7 @@ fun TalkSheet(
             flat = true,
         )
         if (talk.speakers.isNotEmpty()) {
-            SectionHeading(Strings.Talk.SPEAKERS, Modifier.padding(top = 16.dp, bottom = 4.dp))
+            SectionHeading(TalkStrings.SPEAKERS, Modifier.padding(top = 16.dp, bottom = 4.dp))
             talk.speakers.forEachIndexed { i, name ->
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Text(name, style = Caddie.type.body, color = c.text)
@@ -70,7 +70,7 @@ fun TalkSheet(
             }
         }
         if (talk.abstract.isNotBlank()) {
-            SectionHeading(Strings.Talk.ABSTRACT, Modifier.padding(top = 16.dp, bottom = 4.dp))
+            SectionHeading(TalkStrings.ABSTRACT, Modifier.padding(top = 16.dp, bottom = 4.dp))
             Text(talk.abstract, style = Caddie.type.body, color = c.text)
         }
         if (talk.kind == "talk") {
@@ -105,7 +105,7 @@ fun TalkSheet(
             }
         }
         NoteText(
-            Strings.Talk.attribution(bundle.attribution.licensor, bundle.attribution.license),
+            TalkStrings.attribution(bundle.attribution.licensor, bundle.attribution.license),
             Modifier.padding(top = 20.dp, bottom = 16.dp),
         )
     }

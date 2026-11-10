@@ -72,7 +72,7 @@ fun SearchScreen(
                 item("suggestions") {
                     ChipRow(lead = Strings.Search.DID_YOU_MEAN) {
                         result.suggestions.forEach { s ->
-                            SuggestionChip(suggestionKind(s.kind), s.label) { model.apply(s) }
+                            SuggestionChip(suggestionKind(s.kind), s.label, onClick = { model.apply(s) })
                         }
                     }
                 }
@@ -130,7 +130,7 @@ fun SearchScreen(
             bundle = bundle,
             filters = model.filters,
             result = result,
-            onChange = model::setFilters,
+            onChange = model::updateFilters,
             onClose = { model.sheet = null },
         )
     }
@@ -202,10 +202,10 @@ private fun FilterChips(model: SearchModel, bundle: TalkBundle, result: SearchRe
     val f = model.filters
     val conference = bundle.conference
     val nowOff = result != null && !result.happeningNowAvailable
-    val set = model::setFilters
+    val set = model::updateFilters
     ChipRow(Modifier.fillMaxWidth().testTag("chip-row")) {
         result?.timePhrases?.filter { it.applied }?.forEach { p ->
-            TimePhraseChip(p.label, p.days.singleOrNull()?.let { TalkTime.day(it) }) { model.removePhrase(p.key) }
+            TimePhraseChip(p.label, p.days.singleOrNull()?.let { TalkTime.day(it) }, onRemove = { model.removePhrase(p.key) })
         }
         FiltersChip(model.activeFilterCount, onClick = { model.sheet = "" })
         CaddieChip(

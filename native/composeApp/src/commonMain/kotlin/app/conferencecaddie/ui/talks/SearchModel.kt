@@ -68,18 +68,18 @@ class SearchModel(
 
     fun submit() = search(debounce = false)
 
-    fun setFilters(next: SearchRequest) {
+    fun updateFilters(next: SearchRequest) {
         filters = next.copy(query = "")
         search(debounce = false)
     }
 
     /** Removes a time phrase's chip: the phrase stays in the text but stops filtering. */
-    fun removePhrase(key: String) = setFilters(filters.copy(ignorePhrases = filters.ignorePhrases + key))
+    fun removePhrase(key: String) = updateFilters(filters.copy(ignorePhrases = filters.ignorePhrases + key))
 
-    fun clearFilters() = setFilters(SearchRequest(ignorePhrases = filters.ignorePhrases))
+    fun clearFilters() = updateFilters(SearchRequest(ignorePhrases = filters.ignorePhrases))
 
     /** Applies a "Did you mean" suggestion as a filter. */
-    fun apply(s: Suggestions.Suggestion) = setFilters(
+    fun apply(s: Suggestions.Suggestion) = updateFilters(
         when (s.kind) {
             "track" -> filters.copy(tracks = filters.tracks + s.value)
             "room" -> filters.copy(rooms = filters.rooms + s.value)

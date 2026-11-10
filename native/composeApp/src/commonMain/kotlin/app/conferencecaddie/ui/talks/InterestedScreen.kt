@@ -17,7 +17,7 @@ import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.bundle.TalkTime
 import app.conferencecaddie.ui.components.NoteText
-import app.conferencecaddie.ui.shell.InterestedPlaceholder
+import app.conferencecaddie.ui.InterestedPlaceholder
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 

@@ -38,6 +38,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.ServerStatus
 import app.conferencecaddie.ui.shell.ShellActions
 import app.conferencecaddie.ui.shell.ShellState
+import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.shell.TabContent
 import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.strings.Strings
@@ -145,6 +146,7 @@ fun CaddieApp(
                 }
             },
         ),
+        initialTab = if (initialQuery != null) Tab.Search else null,
     )
 
     val talk = openTalk?.let { ready?.bundle?.talksById?.get(it) }
@@ -188,13 +190,13 @@ private fun BundleGate(state: CoreState, core: CaddieCore, content: @Composable 
                 BundleState.Reason.Invalid -> StateView(
                     icon = LucideIcon.CircleExclamationPoint,
                     title = Strings.Blockers.SOMETHING_WRONG,
-                    body = Strings.Talks.BUNDLE_INVALID,
+                    body = TalkStrings.BUNDLE_INVALID,
                     action = retry,
                 )
                 BundleState.Reason.UpdateApp -> StateView(
                     icon = LucideIcon.Info,
-                    title = Strings.Talks.UPDATE_APP_TITLE,
-                    body = Strings.Talks.UPDATE_APP_BODY,
+                    title = TalkStrings.UPDATE_APP_TITLE,
+                    body = TalkStrings.UPDATE_APP_BODY,
                 )
                 BundleState.Reason.NotPublished -> StateView(
                     icon = LucideIcon.CalendarX,
@@ -229,9 +231,9 @@ private fun shellState(
         conferences = conferences,
         conferencesError = when (val c = s.conferences) {
             is ConferencesState.Failed -> when (c.reason) {
-                "update_app" -> Strings.Talks.UPDATE_APP_TITLE
-                "offline" -> Strings.Talks.LIST_OFFLINE
-                else -> Strings.Talks.LIST_FAILED
+                "update_app" -> TalkStrings.UPDATE_APP_TITLE
+                "offline" -> TalkStrings.LIST_OFFLINE
+                else -> TalkStrings.LIST_FAILED
             }
             else -> null
         },
