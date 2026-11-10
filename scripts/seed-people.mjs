@@ -3,8 +3,10 @@
 // Usage: node scripts/seed-people.mjs --event <slug> [--talk "<title>"]... [--limit n]
 //                                     [--file <path> --label <tag>]
 //        node scripts/seed-people.mjs --event <slug> --label <tag> --remove
-// Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY) to write people;
-//        ES_API_KEY (or ELASTISEARCH_API_KEY) to read conferences, topics and talks;
+// Env:   ES_URL; ELASTISEARCH_API_KEY (the admin key, required: the sample cleanup runs
+//        _delete_by_query?refresh=true, which the people key cannot refresh);
+//        ES_PEOPLE_API_KEY (optional) to write the new people, else the admin key writes them;
+//        ES_API_KEY (optional) to read conferences, topics and talks, else the admin key reads them;
 //        ES_PEOPLE_INDEX, ES_INDEX, ES_TOPICS_INDEX, ES_CONFERENCES_INDEX as for the server.
 //
 // Every sample has sample: true, a display name starting "Sample · ", the contact note
@@ -37,7 +39,8 @@ import { visibleUntil, textHash } from '../server/people.mjs';
 import { newDevice, hashSecret, refFor } from '../server/device.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
-const WRITE_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
+const ADMIN_KEY = process.env.ELASTISEARCH_API_KEY;
+const WRITE_KEY = process.env.ES_PEOPLE_API_KEY || ADMIN_KEY;
 const READ_KEY = process.env.ES_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const TALKS_INDEX = process.env.ES_INDEX || 'caddie-talks';
@@ -48,8 +51,8 @@ const CONTACT_NOTE = 'Sample profile, not a real person';
 const BATCH = 10;
 const LINKEDIN_RE = /^https:\/\/(www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]{3,100}\/?$/;
 
-if (!WRITE_KEY || !READ_KEY) {
-  console.error('Set ES_PEOPLE_API_KEY and ES_API_KEY, or ELASTISEARCH_API_KEY.');
+if (!ADMIN_KEY) {
+  console.error('Set ELASTISEARCH_API_KEY (the admin key). Removing the old samples deletes by query with a refresh, which ES_PEOPLE_API_KEY cannot do.');
   process.exit(1);
 }
 
@@ -102,6 +105,7 @@ async function es(key, method, p, body, ndjson = false) {
 }
 const read = (method, p, body) => es(READ_KEY, method, p, body);
 const write = (method, p, body, ndjson) => es(WRITE_KEY, method, p, body, ndjson);
+const admin = (method, p, body) => es(ADMIN_KEY, method, p, body);
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 
 const file = fileArg ? path.resolve(fileArg) : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'samples', 'people.json');
@@ -174,7 +178,7 @@ for (const title of titles) {
 const sameKind = { bool: { filter: [{ term: { event_id: slug } }, { term: { sample: true } }] } };
 if (LABEL_PREFIX) sameKind.bool.filter.push({ prefix: { profile_id: LABEL_PREFIX } });
 else sameKind.bool.must_not = [{ prefix: { profile_id: 'lbl-' } }];
-const deleted = await write('POST', `/${PEOPLE_INDEX}/_delete_by_query?refresh=true`, { query: sameKind });
+const deleted = await admin('POST', `/${PEOPLE_INDEX}/_delete_by_query?refresh=true`, { query: sameKind });
 console.log(`Deleted ${deleted.deleted ?? 0} previous ${label ? `"${label}" ` : ''}samples.`);
 if (removeOnly) process.exit(0);
 

@@ -12,8 +12,10 @@
 //   <kind> is profile, spot or meet; <id> is the person's ref (16 hex characters) for a profile or
 //   a spot and the meet id for a meet, as --hidden and --since print them.
 //
-// Env: ES_URL; ELASTISEARCH_API_KEY (the admin key, the only key that can read the conference for
-//      --purge) or ES_PEOPLE_API_KEY for the other actions; ES_PEOPLE_INDEX (default caddie-people),
+// Env: ES_URL; ELASTISEARCH_API_KEY (the admin key). --unhide and --purge require it: they delete
+//      reports with _delete_by_query?refresh=true, which the people key cannot refresh, and
+//      --purge also reads the conference. --hidden, --since and --delete also run with
+//      ES_PEOPLE_API_KEY alone; ES_PEOPLE_INDEX (default caddie-people),
 //      ES_PEOPLE_MEETS_INDEX (default caddie-people-meets), ES_PEOPLE_REPORTS_INDEX (default
 //      caddie-people-reports), ES_CONFERENCES_INDEX (default caddie-conferences).
 //
@@ -73,6 +75,11 @@ if (flag('--purge')) actions.push(['purge']);
 if (args.length) usage(`Unknown argument: ${args[0]}`);
 if (actions.length !== 1) usage('Give exactly one action.');
 const [action, arg] = actions[0];
+// API_KEY is the admin key whenever it is set; --unhide and --purge refuse to run without it.
+if ((action === 'unhide' || action === 'purge') && !process.env.ELASTISEARCH_API_KEY) {
+  console.error(`--${action} needs ELASTISEARCH_API_KEY (the admin key); ES_PEOPLE_API_KEY cannot refresh the reports index.`);
+  process.exit(1);
+}
 
 // --unhide and --delete name a target as kind:id.
 function parseTarget(value) {
