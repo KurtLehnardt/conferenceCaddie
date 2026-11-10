@@ -1,8 +1,9 @@
 # Conference Caddie native apps
 
 This directory holds the native Android and iOS apps: a Kotlin Multiplatform core shared by both
-platforms, with the UI written once in Compose Multiplatform. It is a skeleton. The tabs are
-placeholders, and the app does not yet talk to a backend. The Capacitor app in `web/android` is
+platforms, with the UI written once in Compose Multiplatform. The UI follows the web app's design
+(see Design system below); the tabs hold placeholders until the talk features arrive, and the app
+does not yet talk to a backend. The Capacitor app in `web/android` is
 still the Android app people use today. The design and the phases these apps follow are in
 [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md); this skeleton is spike S5 of Phase 0.
 
@@ -11,10 +12,12 @@ still the Android app people use today. The design and the phases these apps fol
 | Path | What it is |
 |---|---|
 | `shared/` | Kotlin Multiplatform library with no UI. It holds the placeholder models (`Conference`, `Talk`), the `Capabilities` document, `BackendUrl` (the contract's backend URL rules), and the platform interfaces `Embedder`, `BleRadio`, `Notifier` and `SecureStore`. Its tests in `commonTest` run on the JVM and on the iOS simulator. |
-| `composeApp/` | Compose Multiplatform UI. `App()` draws the bottom bar: For you, Search, Interested, People (shown only when `capabilities.people.enabled` is true) and Settings, which has the Server URL field. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. |
-| `androidApp/` | The Android application: `MainActivity` hosts `App()`. |
+| `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, and `App()`, the web app's shell (see Design system). On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
+| `androidApp/` | The Android application: `MainActivity` hosts the shell. Its instrumented smoke test is in `src/androidTest`. |
 | `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController`, and a build phase runs Gradle to build and embed the framework. |
 | `gradle/libs.versions.toml` | Every dependency version, with the reasons for the choices. |
+| `scripts/generate-app-icons.py` | Makes the app icons and the iOS launch image from the web app's icons. |
+| `licenses/` | Licence texts of third-party material the apps ship (the lucide icons). |
 
 The structure follows the official JetBrains template for Android Gradle Plugin 9, where the
 Android application must be its own module and Kotlin Multiplatform modules use the
@@ -56,7 +59,11 @@ From `native/`:
 ./gradlew :shared:allTests              # shared tests on the JVM (and on the iOS simulator on a Mac)
 ./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-debug.apk
 ./gradlew :androidApp:installDebug      # installs on a connected phone or a running emulator
+./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests on a phone or emulator
+./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented smoke test
 ```
+
+With more than one device connected, pick one with `ANDROID_SERIAL=emulator-5554`.
 
 You can also open `native/` in Android Studio and run the `androidApp` configuration.
 
@@ -68,6 +75,46 @@ reflection.
 The native app uses the same application id as the Capacitor app, `app.conferencecaddie`. A phone
 cannot have both installed at once. Installing a debug build over a release build, or the other way
 round, fails because the two are signed with different keys. Uninstall the other one first.
+
+## Design system
+
+The native apps look like the web app (`web/src`): same colours, type, spacing, icons, components
+and words. Everything lives in `composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/`:
+
+| Package | What it holds |
+|---|---|
+| `theme` | `CaddieTheme`: the web's design tokens from `web/src/styles.css` (`CaddieColors` for light and dark, `CaddieDimens`, `CaddieType`), provided as `Caddie.colors`, `Caddie.dimens` and `Caddie.type` and mapped onto Material 3. Dark mode follows the system unless the Theme setting says Light or Dark, as on the web. |
+| `icons` | `LucideIcon`: every lucide icon the web app uses, generated from the `lucide-preact` package by `composeApp/scripts/generate-lucide-icons.mjs`, drawn by `LucideIcon.vector()` with the web's stroke widths. |
+| `components` | The web's components: `AppBar`, `SwitcherButton`, `NavBar`, `CaddieButton`, `CaddieIconButton`, `CaddieChip` (toggle, dropdown and action chips), `FiltersChip`, `TimePhraseChip`, `SuggestionChip`, `ChipRow`, `SearchField`, `TalkCard`, `InterestedToggle`, `CaddieSheet`, `ConfirmDialog`, `Segmented`, `SwitchRow`, `OptionRow`, the settings rows, `StateView`, `ErrorBanner`, `Toast`, `OfflineBadge`, `NeedsConnection` and `SkeletonCard`. |
+| `strings` | `Strings`: the web's copy word for word, grouped by the web file it comes from. Copy that only the native apps need is marked "native only". |
+| `format` | `Format`: dates and times written as `web/src/lib/time.ts` writes them. |
+| `shell` | `App()`'s parts: `ShellState`, `ShellActions` and `TabContent`, the Settings screen, the conference switcher and the server confirmation. `StandaloneShell` runs the shell without a backend until the talk features replace it. |
+
+`App(state, actions, content)` is the web's shell: the conference switcher in the app bar, the
+Offline badge and the Settings gear on its right, and the tab bar People (only when the backend
+serves people features), For you, Search and Interested. Settings is a screen of its own with Back,
+as on the web. The caller owns the data (`ShellState`), answers `ShellActions`, and supplies each
+tab's screen through `TabContent`; tab content reaches the shell through `LocalShellNavigator`.
+
+Every size of text is in sp, so the system font size setting scales it; controls are at least 44 dp
+tall, icons that carry meaning have content descriptions, headings are marked as headings, and
+controls have keyboard focus rings like the web's.
+
+The web app sets no font of its own: its stack (`system-ui, -apple-system, ..., Roboto, ...`) is San
+Francisco on iPhones and Roboto on Android phones, which is what Compose's default font family
+draws, so no font is bundled. The lucide icons are ISC-licensed (MIT for those that came from
+Feather); `licenses/lucide.txt` holds the text and Settings shows it under Open-source licences.
+
+The app icons and the iOS launch image come from `web/public/icons` through
+`scripts/generate-app-icons.py` (Pillow). Both apps open on the web's page colour, light or dark.
+
+Debug builds take launch options that open a screen directly, for screenshots and manual checks:
+`-caddie.tab Search`, `-caddie.open settings` (or `switcher`), `-caddie.theme dark`,
+`-caddie.connect https://example.org` and `-caddie.gallery 1` (the Search components drawn with the
+web's sample talk). On iOS they are launch arguments
+(`xcrun simctl launch <device> app.conferencecaddie -caddie.tab Search`); on Android they are intent
+extras (`adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.tab Search`). Release
+builds ignore them.
 
 ## Build and run on iOS
 
@@ -247,11 +294,12 @@ implemented in `shared` as `BackendUrl.normalise()`:
   `BackendUrl.kt`: it refuses backslashes, IPv4 shorthand and other inputs that a WHATWG parser
   quietly repairs.
 
-The skeleton does not fetch anything yet. Until it does, the "Preview people features" switch in
-Settings (debug builds only) swaps between the demo and legacy capabilities, to show the People tab
-appearing and disappearing. Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the
-default backend in builds; the skeleton leaves the field empty until the capabilities client
-exists.
+The app does not fetch anything yet. Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3
+server the default backend in builds, so the Server URL field starts with it. A server typed there,
+like one from a `caddie://connect` link, is switched to only after a confirmation that names its base
+URL exactly and warns when it is not the official server. Registering the `caddie://` link itself is
+still to do. The People tab shows only when the capabilities enable people features; the Compose UI
+tests check that gating.
 
 ## Privacy
 
@@ -280,7 +328,8 @@ Mac, so the iOS artifacts are covered, and review the diff:
 ```sh
 ./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
-  :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
+  :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
+  :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
   :composeApp:iosArm64ResolveResourcesFromDependencies \
   :composeApp:iosSimulatorArm64ResolveResourcesFromDependencies
 ```
@@ -303,8 +352,10 @@ dependencies.
   with the debug APK kept as an artifact. On `main` it also builds the unsigned release APK.
 - **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
   It is skipped with a notice when the signing secrets are missing.
-- **iOS simulator build** (macOS): the shared tests on the iOS simulator, the Release device
-  framework link, and an unsigned simulator build of the Xcode project.
+- **UI tests on an Android emulator** (Ubuntu): the Compose UI tests and the instrumented smoke test
+  on an API 34 emulator started by `reactivecircus/android-emulator-runner`. No secrets.
+- **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
+  the Release device framework link, and an unsigned simulator build of the Xcode project.
 - **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
   skipped when its secrets are missing.
 

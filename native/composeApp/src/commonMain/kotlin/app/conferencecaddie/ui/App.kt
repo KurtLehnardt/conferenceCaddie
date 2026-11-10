@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,11 +25,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.components.AppBar
 import app.conferencecaddie.ui.components.AppBarTitle
-import app.conferencecaddie.ui.components.ButtonVariant
-import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieIconButton
 import app.conferencecaddie.ui.components.NavBar
 import app.conferencecaddie.ui.components.NavItem
@@ -62,6 +70,7 @@ fun visibleTabs(peopleEnabled: Boolean): List<Tab> = Tab.entries.filter { it != 
  * the web; the switcher sheet; the toast; and the confirmation before switching servers.
  *
  * The caller owns the data ([state]) and answers [actions]; [content] supplies each tab's screen.
+ * [initialTab] opens another tab than the first one, if the backend offers it.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -69,10 +78,11 @@ fun App(
     state: ShellState,
     actions: ShellActions = ShellActions(),
     content: TabContent = TabContent(),
+    initialTab: Tab? = null,
 ) {
     val tabs = visibleTabs(state.capabilities.people.enabled)
     // Tier 1 has no People tab and opens on For you.
-    var selected by rememberSaveable { mutableStateOf(tabs.first()) }
+    var selected by rememberSaveable { mutableStateOf(initialTab?.takeIf { it in tabs } ?: tabs.first()) }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var switcherOpen by rememberSaveable { mutableStateOf(false) }
     // A server typed in Settings waits here for the same confirmation a link gets.
@@ -217,16 +227,8 @@ private fun navItem(tab: Tab, state: ShellState): NavItem<Tab> = when (tab) {
 private fun TabBody(tab: Tab, state: ShellState, content: TabContent) {
     Box(Modifier.fillMaxSize().testTag("tab-body-${tab.name}")) {
         when (tab) {
-            Tab.People -> content.people?.invoke() ?: if (!state.online) {
-                NeedsConnection(Strings.Offline.PEOPLE_TITLE)
-            } else {
-                PlaceholderScreen(LucideIcon.Users, Strings.People.PLACEHOLDER_TITLE, Strings.People.PLACEHOLDER_BODY)
-            }
-            Tab.ForYou -> content.forYou?.invoke() ?: if (!state.online) {
-                NeedsConnection(Strings.ForYou.NEEDS_CONNECTION_TITLE)
-            } else {
-                PlaceholderScreen(LucideIcon.Sparkles, Strings.ForYou.PICK_TITLE, Strings.ForYou.LEDE)
-            }
+            Tab.People -> content.people?.invoke() ?: PeoplePlaceholder(state.online)
+            Tab.ForYou -> content.forYou?.invoke() ?: ForYouPlaceholder(state.online)
             Tab.Search -> content.search?.invoke() ?: PlaceholderScreen(LucideIcon.Search, null, Strings.Search.PLACEHOLDER)
             Tab.Interested -> content.interested?.invoke() ?: InterestedPlaceholder()
         }
@@ -237,6 +239,26 @@ private fun TabBody(tab: Tab, state: ShellState, content: TabContent) {
 private fun PlaceholderScreen(icon: LucideIcon, title: String?, body: String?) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         StateView(icon = icon, title = title, body = body)
+    }
+}
+
+/** People until its screens arrive (phase 3), or the web's offline state. */
+@Composable
+fun PeoplePlaceholder(online: Boolean) {
+    if (!online) {
+        NeedsConnection(Strings.Offline.PEOPLE_TITLE)
+    } else {
+        PlaceholderScreen(LucideIcon.Users, Strings.People.PLACEHOLDER_TITLE, Strings.People.PLACEHOLDER_BODY)
+    }
+}
+
+/** For you until on-device suggestions arrive (phase 2b), or the web's offline state. */
+@Composable
+fun ForYouPlaceholder(online: Boolean) {
+    if (!online) {
+        NeedsConnection(Strings.ForYou.NEEDS_CONNECTION_TITLE)
+    } else {
+        PlaceholderScreen(LucideIcon.Sparkles, Strings.ForYou.PICK_TITLE, Strings.ForYou.LEDE)
     }
 }
 
@@ -256,12 +278,19 @@ fun InterestedPlaceholder() {
             body = Strings.Interested.EMPTY,
             action = StateAction(Strings.Interested.FIND_TALKS, { nav.selectTab(Tab.Search) }),
             hint = {
-                CaddieButton(
-                    Strings.Interested.IMPORT_HINT_PREFIX + Strings.Interested.IMPORT_HINT_LINK,
-                    onClick = { nav.openSettings() },
-                    variant = ButtonVariant.Text,
-                    small = true,
-                )
+                // "You can import your schedule in Settings", with Settings as the link, as on the web.
+                val c = Caddie.colors
+                val text = buildAnnotatedString {
+                    append(Strings.Interested.IMPORT_HINT_PREFIX)
+                    withLink(
+                        LinkAnnotation.Clickable(
+                            tag = "settings",
+                            styles = TextLinkStyles(SpanStyle(color = c.accentInk, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline)),
+                            linkInteractionListener = { nav.openSettings() },
+                        ),
+                    ) { append(Strings.Interested.IMPORT_HINT_LINK) }
+                }
+                Text(text, style = Caddie.type.meta, color = c.text2, textAlign = TextAlign.Center, modifier = Modifier.heightIn(min = Caddie.dimens.minTouch).wrapContentHeight())
             },
         )
     }
