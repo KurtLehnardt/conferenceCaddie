@@ -33,7 +33,14 @@ import fs from 'node:fs';
 
 const WORDS_FILE = new URL('../config/moderation-words.json', import.meta.url);
 const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
-const URL_RE = /(?:https?:\/\/|www\.)[^\s]+|\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|co|ai|app|me|ly|gg|xyz|info|us|uk|de|tv|link|to|sh|is|it|nl|fr|es|ca)\b(?:\/[^\s]*)?/gi;
+// A web address is one of two shapes. With a scheme or www., anything counts. A bare domain
+// counts only when a '/' path follows it, for any listed top-level domain. A bare domain alone is
+// not taken for an address, so normal tech text (node.js, v1.2, k8s.io, socket.io, install.sh,
+// example.com) and a missed space after a full stop ("jacket.It is me") pass.
+const URL_RES = [
+  /(?:https?:\/\/|www\.)[^\s]+/gi,
+  /\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|co|ai|app|me|ly|gg|xyz|info|us|uk|de|tv|link|to|sh|is|it|nl|fr|es|ca)\/[^\s]*/gi,
+];
 
 export const FILTERED = { error: 'filtered', message: 'That was held back by the filter. Edit it and try again.' };
 export const HELD = { error: 'held', message: 'Waiting for the filter; it will appear shortly.' };
@@ -93,7 +100,7 @@ function hostOf(match) {
 }
 
 function hasForeignUrl(line) {
-  for (const m of String(line).match(URL_RE) ?? []) {
+  for (const m of URL_RES.flatMap((re) => String(line).match(re) ?? [])) {
     const host = hostOf(m);
     if (host !== 'linkedin.com' && !host.endsWith('.linkedin.com')) return true;
   }
