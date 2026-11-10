@@ -1,7 +1,10 @@
 {
   "api_version": 1,
   "tier": "paid",
-  "talks": { "bundle_base": null, "server_search": true },
+  "talks": {
+    "bundle_base": null,
+    "server_search": true
+  },
   "people": {
     "enabled": true,
     "semantic": "server",
@@ -17,8 +20,16 @@
     "service_uuid": "e52c391c-b926-4856-9a38-d46c3c10c733",
     "near_rssi": -75,
     "window_s": 600,
-    "sightings_min_interval_s": 10
+    "sightings_min_interval_s": 10,
+    "colocation_required": false
   },
-  "push": { "apns": false, "fcm": false, "webpush": true },
-  "imports": { "github": "server", "schedule": "server" }
+  "push": {
+    "apns": false,
+    "fcm": false,
+    "webpush": true
+  },
+  "imports": {
+    "github": "server",
+    "schedule": "server"
+  }
 }

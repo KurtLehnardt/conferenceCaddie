@@ -3,7 +3,7 @@
   "min_api_version": 1,
   "tier": "free",
   "operator": { "name": "Example operator", "contact": "https://example.org/contact" },
-  "talks": { "bundle_base": "https://owner.github.io/conferenceCaddie/bundles/", "server_search": false, "bundle_formats": [1, 2] },
+  "talks": { "bundle_base": "https://kurtlehnardt.github.io/conferenceCaddie/bundles/", "server_search": false, "bundle_formats": [1, 2] },
   "people": {
     "enabled": true,
     "semantic": "hybrid-v2",

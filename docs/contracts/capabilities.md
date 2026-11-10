@@ -18,7 +18,7 @@ The response is `application/json` and public. Backends should send `Cache-Contr
 {
   "api_version": 1,
   "tier": "free",
-  "talks": { "bundle_base": "https://owner.github.io/conferenceCaddie/bundles/", "server_search": false },
+  "talks": { "bundle_base": "https://kurtlehnardt.github.io/conferenceCaddie/bundles/", "server_search": false },
   "people": { "enabled": true, "semantic": "client", "presence": true, "gps_bands": true,
               "meets": true, "circles": true, "reports": true, "live": "websocket" },
   "ble": { "mode": "derived-v1", "service_uuid": "e52c391c-b926-4856-9a38-d46c3c10c733",
@@ -45,7 +45,8 @@ The response is `application/json` and public. Backends should send `Cache-Contr
 | `people.live` | `websocket` or `poll` | How the app learns about inbox and presence changes. Polling always works, because every tier serves every People API v1 route; `websocket` is an optimisation whose protocol is specified separately with tier 2. |
 | `ble.mode` | `derived-v1`, `server-rotate` or `none` | Bluetooth proximity: derived tokens ([ble-tokens.md](ble-tokens.md)), the legacy server-minted tokens with the rotate route, or none. |
 | `ble.service_uuid` | UUID | Always `e52c391c-b926-4856-9a38-d46c3c10c733` in v1. |
-| `ble.near_rssi` | integer dBm | The weakest signal that counts as right near. The server applies it; clients should not report weaker sightings. Replaces the server-only `BLE_NEAR_RSSI` as the value operators tune. |
+| `ble.near_rssi` | integer dBm, -100 to -30 | The weakest signal that counts as right near. The server applies it; clients do not report weaker sightings. Replaces the server-only `BLE_NEAR_RSSI` as the value operators tune. It is a relevance threshold, not a security boundary: a report's RSSI is whatever the client claims ([ble-tokens.md](ble-tokens.md), Threat model). |
+| `ble.colocation_required` | boolean | `derived-v1`: a sighted person resolves only when they share the requester's zone or ~100 m cell ([ble-tokens.md](ble-tokens.md), Phase 4 mitigations). Default true; an operator may set false for a single-room event. |
 | `ble.window_s` | integer seconds | Token window. Exactly 600 in `derived-v1`. |
 | `ble.sightings_min_interval_s` | integer seconds | The shortest interval between two sightings reports from one device. 10 to 300 in `derived-v1` (at most half a window, see [ble-tokens.md](ble-tokens.md), Resolution); tier 3 can use 10, tier 2 uses 60 for small events and 300 for a KubeCon-sized one. |
 | `push.apns`, `push.fcm` | boolean | This backend can push to the official iOS or Android app, which needs the publisher's APNs key or Firebase project. Third-party tier 2 and 3 operators set both false. |
@@ -53,7 +54,7 @@ The response is `application/json` and public. Backends should send `Cache-Contr
 | `imports.github` | `device` or `server` | `device`: the app calls `api.github.com` itself. `server`: `POST /api/import/github` is served. |
 | `imports.schedule` | `device` or `server` | `device`: the app parses the file itself. `server`: `POST /api/import/schedule` is served. |
 
-Schema rules beyond the table: `people` fields other than `enabled` are required when `enabled` is true; `ble.mode` must be `none` when `people.enabled` is false; `derived-v1` requires every `ble` field, `window_s: 600` and `sightings_min_interval_s` of at most 300; `server-rotate` requires `service_uuid`, `near_rssi` and `sightings_min_interval_s`.
+Schema rules beyond the table: `people` fields other than `enabled` are required when `enabled` is true; `ble.mode` must be `none` when `people.enabled` is false; `derived-v1` requires every `ble` field, `window_s: 600` and `sightings_min_interval_s` of at most 300; `talks.bundle_base` is an https URL without credentials, query or fragment; `server-rotate` requires `service_uuid`, `near_rssi` and `sightings_min_interval_s`.
 
 ## Reading the document (consumer rules)
 
@@ -61,7 +62,7 @@ A v1 client turns whatever it fetched into an effective feature set, `effectiveC
 
 1. **Unknown fields are ignored**, at every level. A newer backend can add fields without breaking older apps (`forward-compatible-v2.json`).
 2. **Unknown enum values fall back to the most conservative known value**: `people.semantic` to `off`, `people.live` to `poll`, `ble.mode` to `none`, `imports.*` to `device`, and an unknown `tier` to the label `unknown`.
-3. **A missing field is off**: booleans false, `bundle_base` null, `ble.mode` none, imports on the device. Numbers out of range take their defaults (`near_rssi` -75, `window_s` 600, `sightings_min_interval_s` 60, capped at 300 in `derived-v1`).
+3. **A missing field is off**: booleans false, `bundle_base` null, `ble.mode` none, imports on the device. The one exception is `ble.colocation_required`, which is a protection and is therefore on unless the document says false. `near_rssi` is clamped to [-100, -30] (-75 when it is not an integer); other numbers out of range take their defaults (`window_s` 600, `sightings_min_interval_s` 60, capped at 300 in `derived-v1`).
 4. **Dependent features turn off with what they need.** No people features at all unless `people.enabled` and `people.reports` are both true. No presence, meets or GPS bands without `people.presence` (asks are now-only, so they need presence). No Bluetooth without presence.
 
 These rules apply only to a document that exists. A backend without a document is the legacy case below.
@@ -76,21 +77,21 @@ The app holds one configured backend URL, `base` (see Backend URLs below), and d
 
 1. `GET {base}/api/capabilities`. A 200 JSON body the client can negotiate is used (tiers 2 and 3).
 2. Otherwise `GET {base}/capabilities.json`, the same way (tier 1).
-3. Only when step 1 answered **404**: `GET {base}/api/health`. If it answers 200 with `{ "ok": true }`, the backend is **legacy**: today's tier 3 server before Phase 1. Its effective feature set is the full current one, `LEGACY` in the reference implementation and `legacy-effective.json` as a fixture: people features on with server-side semantics and polling, Bluetooth in `server-rotate` mode with a 10-second sightings interval, Web Push, both imports on the server, `server_search` true and no talk bundles (`bundle_base` null; an app may fall back to a bundle base compiled into its build).
+3. Only when step 1 answered **404 with exactly `{ "error": "Not found" }`** (the existing server's answer to an unknown `/api` path, `server/index.mjs`), and only for a backend that has never served a document to this device: `GET {base}/api/health`. If it answers 200 with exactly `{ "ok": true }` (no other keys), the backend is **legacy**: today's tier 3 server before Phase 1. Its effective feature set is the full current one, `LEGACY` in the reference implementation and `legacy-effective.json` as a fixture: people features on with server-side semantics and polling, Bluetooth in `server-rotate` mode with a 10-second sightings interval, Web Push, both imports on the server, `server_search` true and no talk bundles (`bundle_base` null; an app may fall back to a bundle base compiled into its build).
 4. Otherwise the backend is unreachable or not a Caddie backend.
 
-A failure is never read as legacy: a 5xx, a timeout or a network error at step 1 leaves the app on its last good document for that backend origin, and with none it shows the backend as unreachable. An app that has once read a document from a backend never downgrades it to legacy because of a failure.
+A failure is never read as legacy: a 5xx, a timeout, a network error or any other 404 body at step 1 leaves the app on its last good document for that backend, and with none it shows the backend as unreachable. The app records, per backend base, that the backend once served a document, and from then on skips the legacy probe for it entirely (`hadDocument` in `discoverCapabilities()`), so a backend that once had a document is never downgraded to legacy.
 
 ## Caching
 
-The app keeps the last good document per backend origin. It fetches again at every cold start and when the cached copy is older than the response's `max-age` (one hour when there is none), and it uses the cached copy, if any, while a fetch fails. A change of `ble.mode`, `people.enabled` or `talks.bundle_base` takes effect at the next screen change, not in the middle of a meet or a Bluetooth session.
+The app keeps the last good document per backend base. It fetches again at every cold start and when the cached copy is older than the response's `max-age` (one hour when there is none), and it uses the cached copy, if any, while a fetch fails. A change of `ble.mode`, `people.enabled` or `talks.bundle_base` takes effect at the next screen change, not in the middle of a meet or a Bluetooth session.
 
 ## Backend URLs and switching backends
 
 - The default backend URL is compiled into each build. The user can change it in Settings → Server, and an operator can hand one out as a deep link or QR code: `caddie://connect?url=<backend URL, percent-encoded>`.
 - A backend URL must be `https`, without credentials, query or fragment; its path is kept, because a tier 1 site lives under `/<repo>`. Debug builds may also allow plain `http` to `localhost`, `127.0.0.1`, `[::1]` and `10.0.2.2` when the URL is typed in Settings, never from a link (`normaliseBackendUrl()`).
-- **A deep link or QR code never switches the backend by itself.** It requires `https` with no exception, and the switch happens only after the user confirms a prompt that names the new origin exactly (for example "Switch to the server at https://caddie.example?"). Declining leaves everything as it was (`parseConnectLink()`).
-- Device credentials (`profile_id` and `secret`, [people-api.md](people-api.md)), the Bluetooth key, the cached capabilities and the per-conference device state are stored per backend origin, so one backend's secret is never sent to another and switching back finds the old state.
+- **A deep link or QR code never switches the backend by itself.** It requires `https` with no exception, and the switch happens only after the user confirms a prompt that names the new backend's base URL exactly, origin and path (for example "Switch to the server at https://kurtlehnardt.github.io/conferenceCaddie?"). Declining leaves everything as it was (`parseConnectLink()`).
+- Device credentials (`profile_id` and `secret`, [people-api.md](people-api.md)), the Bluetooth key, the cached capabilities, the "has served a document" mark and the per-conference device state are stored per normalised backend base (origin plus path), because two tier 1 sites can share an origin. One backend's secret is never sent to another, and switching back finds the old state.
 
 ## Fixtures
 

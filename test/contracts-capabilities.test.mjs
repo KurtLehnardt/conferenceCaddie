@@ -33,7 +33,7 @@ test('a complete v1 document is its own effective feature set', () => {
 
 test('tier 1 has talk bundles and no people features', () => {
   const e = effectiveCapabilities(fixture('tier1-demo.json'));
-  assert.equal(e.talks.bundle_base, 'https://owner.github.io/conferenceCaddie/bundles/');
+  assert.equal(e.talks.bundle_base, 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/');
   assert.equal(e.people.enabled, false);
   assert.equal(e.people.presence, false);
   assert.equal(e.people.semantic, 'off');
@@ -87,12 +87,22 @@ test('derived-v1 always uses 600-second windows and at most half a window betwee
   const e = effectiveCapabilities({ ...doc, ble: { ...doc.ble, window_s: 60, sightings_min_interval_s: 900 } });
   assert.equal(e.ble.window_s, 600);
   assert.equal(e.ble.sightings_min_interval_s, 60);
-  assert.equal(effectiveCapabilities({ ...doc, ble: { ...doc.ble, near_rssi: -200 } }).ble.near_rssi, -75);
+  // near_rssi is clamped to [-100, -30]; a non-integer takes the default.
+  assert.equal(effectiveCapabilities({ ...doc, ble: { ...doc.ble, near_rssi: -200 } }).ble.near_rssi, -100);
+  assert.equal(effectiveCapabilities({ ...doc, ble: { ...doc.ble, near_rssi: -10 } }).ble.near_rssi, -30);
+  assert.equal(effectiveCapabilities({ ...doc, ble: { ...doc.ble, near_rssi: 'loud' } }).ble.near_rssi, -75);
+  // The co-location rule is on unless the backend says false.
+  const { colocation_required: _omit, ...withoutRule } = doc.ble;
+  assert.equal(effectiveCapabilities({ ...doc, ble: withoutRule }).ble.colocation_required, true);
+  assert.equal(effectiveCapabilities({ ...doc, ble: { ...doc.ble, colocation_required: 'no' } }).ble.colocation_required, true);
+  assert.equal(effectiveCapabilities({ ...doc, ble: { ...doc.ble, colocation_required: false } }).ble.colocation_required, false);
+  assert.equal(validator('capabilities.v1')({ ...doc, ble: { ...doc.ble, near_rssi: -110 } }).valid, false);
+  assert.equal(validator('capabilities.v1')({ ...doc, ble: withoutRule }, { closed: true }).valid, false, 'a derived-v1 producer states the rule');
 });
 
 test('an http or malformed bundle_base is not used', () => {
   const doc = fixture('tier1-demo.json');
-  for (const bad of ['http://owner.github.io/x/', 'https://owner.github.io/x', 'https://owner.github.io/x/?a=1', 'not a url', 42]) {
+  for (const bad of ['http://owner.github.io/x/', 'https://owner.github.io/x', 'https://owner.github.io/x/?a=1', 'https://user:pw@owner.github.io/x/', 'https://user@owner.github.io/x/', 'not a url', 42]) {
     assert.equal(effectiveCapabilities({ ...doc, talks: { bundle_base: bad } }).talks.bundle_base, null, String(bad));
   }
 });
@@ -119,7 +129,7 @@ test('discovery: a tier 2 or 3 backend answers /api/capabilities', async () => {
 });
 
 test('discovery: a tier 1 static site answers capabilities.json under its path', async () => {
-  const base = 'https://owner.github.io/conferenceCaddie';
+  const base = 'https://kurtlehnardt.github.io/conferenceCaddie';
   const f = fakeFetch({ [`${base}/capabilities.json`]: { status: 200, json: fixture('tier1-demo.json') } });
   const r = await discoverCapabilities(base, f);
   assert.equal(r.source, 'static');
@@ -127,15 +137,34 @@ test('discovery: a tier 1 static site answers capabilities.json under its path',
   assert.deepEqual(f.calls, [`${base}/api/capabilities`, `${base}/capabilities.json`]);
 });
 
-test('discovery: no document plus a healthy /api/health is the legacy server', async () => {
-  const f = fakeFetch({
-    'https://legacy.example/api/capabilities': { status: 404, json: { error: 'Not found' } },
-    'https://legacy.example/capabilities.json': { status: 200, json: undefined },
-    'https://legacy.example/api/health': { status: 200, json: { ok: true } },
-  });
-  const r = await discoverCapabilities('https://legacy.example', f);
+const LEGACY_SITE = {
+  'https://legacy.example/api/capabilities': { status: 404, json: { error: 'Not found' } },
+  'https://legacy.example/capabilities.json': { status: 200, json: undefined },
+  'https://legacy.example/api/health': { status: 200, json: { ok: true } },
+};
+
+test('discovery: the server 404 body plus its exact /api/health answer is the legacy server', async () => {
+  const r = await discoverCapabilities('https://legacy.example', fakeFetch(LEGACY_SITE));
   assert.equal(r.source, 'legacy');
   assert.deepEqual(r.effective, fixture('legacy-effective.json'));
+});
+
+test('discovery: the legacy probe is strict and never applies to a backend that once had a document', async () => {
+  // A backend that has served a document before is not downgraded, whatever it answers now.
+  assert.deepEqual(await discoverCapabilities('https://legacy.example', fakeFetch(LEGACY_SITE), { hadDocument: true }), { source: 'none', reason: 'unreachable' });
+  // A 404 with another body, or a health answer with other keys, is some other server.
+  const otherNotFound = fakeFetch({ ...LEGACY_SITE, 'https://legacy.example/api/capabilities': { status: 404, json: { message: 'Not Found' } } });
+  assert.equal((await discoverCapabilities('https://legacy.example', otherNotFound)).source, 'none');
+  const otherHealth = fakeFetch({ ...LEGACY_SITE, 'https://legacy.example/api/health': { status: 200, json: { ok: true, version: '9' } } });
+  assert.equal((await discoverCapabilities('https://legacy.example', otherHealth)).source, 'none');
+  const htmlNotFound = fakeFetch({ ...LEGACY_SITE, 'https://legacy.example/api/capabilities': { status: 404, json: undefined } });
+  assert.equal((await discoverCapabilities('https://legacy.example', htmlNotFound)).source, 'none');
+});
+
+test('the legacy probe matches what server/index.mjs answers', () => {
+  const src = readFileSync(path.join(FIX, '../../../server/index.mjs'), 'utf8');
+  assert.match(src, /sendJson\(res, 200, \{ ok: true \}\);/);
+  assert.match(src, /sendJson\(res, 404, \{ error: 'Not found' \}\);/);
 });
 
 test('discovery: failures never look like legacy', async () => {
@@ -158,7 +187,7 @@ test('discovery: a document only a newer app can read asks for an update', async
 });
 
 test('backend URLs: https only, no credentials, query or fragment; the path is kept', () => {
-  assert.deepEqual(normaliseBackendUrl('https://owner.github.io/conferenceCaddie/'), { ok: true, base: 'https://owner.github.io/conferenceCaddie', origin: 'https://owner.github.io' });
+  assert.deepEqual(normaliseBackendUrl('https://kurtlehnardt.github.io/conferenceCaddie/'), { ok: true, base: 'https://kurtlehnardt.github.io/conferenceCaddie', origin: 'https://kurtlehnardt.github.io' });
   assert.deepEqual(normaliseBackendUrl(' https://Caddie.Example '), { ok: true, base: 'https://caddie.example', origin: 'https://caddie.example' });
   assert.equal(normaliseBackendUrl('http://caddie.example').reason, 'https_required');
   assert.equal(normaliseBackendUrl('https://user:pw@caddie.example').reason, 'credentials_not_allowed');
@@ -173,6 +202,10 @@ test('backend URLs: https only, no credentials, query or fragment; the path is k
 test('connect deep links and QR codes need https and a confirmation that names the origin', () => {
   const ok = parseConnectLink(`caddie://connect?url=${encodeURIComponent('https://caddie.example/')}`);
   assert.deepEqual(ok, { ok: true, base: 'https://caddie.example', origin: 'https://caddie.example', requiresConfirmation: true, prompt: 'Switch to the server at https://caddie.example?' });
+  // Two tier 1 sites can share an origin, so the prompt and the stored state name the whole base.
+  const pages = parseConnectLink(`caddie://connect?url=${encodeURIComponent('https://kurtlehnardt.github.io/conferenceCaddie/')}`);
+  assert.equal(pages.base, 'https://kurtlehnardt.github.io/conferenceCaddie');
+  assert.equal(pages.prompt, 'Switch to the server at https://kurtlehnardt.github.io/conferenceCaddie?');
   assert.equal(parseConnectLink(`caddie://connect?url=${encodeURIComponent('http://caddie.example')}`).reason, 'https_required');
   assert.equal(parseConnectLink(`caddie://connect?url=${encodeURIComponent('http://localhost:8081')}`).reason, 'https_required');
   assert.equal(parseConnectLink('caddie://connect').reason, 'missing_url');

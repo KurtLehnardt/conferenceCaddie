@@ -22,7 +22,7 @@ export const LEGACY = deepFreeze({
   tier: 'paid',
   talks: { bundle_base: null, server_search: true },
   people: { enabled: true, semantic: 'server', presence: true, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
-  ble: { mode: 'server-rotate', service_uuid: SERVICE_UUID, near_rssi: -75, window_s: 600, sightings_min_interval_s: 10 },
+  ble: { mode: 'server-rotate', service_uuid: SERVICE_UUID, near_rssi: -75, window_s: 600, sightings_min_interval_s: 10, colocation_required: false },
   push: { apns: false, fcm: false, webpush: true },
   imports: { github: 'server', schedule: 'server' },
 });
@@ -37,6 +37,9 @@ const obj = (v) => (isObject(v) ? v : {});
 const bool = (v) => v === true;
 const oneOf = (v, allowed, fallback) => (allowed.includes(v) ? v : fallback);
 const int = (v, min, max, fallback) => (Number.isInteger(v) && v >= min && v <= max ? v : fallback);
+const clamp = (v, min, max, fallback) => (Number.isInteger(v) ? Math.min(max, Math.max(min, v)) : fallback);
+/** The range near_rssi is clamped to: weaker than -100 dBm is noise, stronger than -30 is touching. */
+export const NEAR_RSSI_RANGE = Object.freeze([-100, -30]);
 
 /**
  * Picks the major version to speak with a backend. Returns { ok: true, version } or
@@ -92,9 +95,11 @@ export function effectiveCapabilities(doc) {
     ble: {
       mode,
       service_uuid: SERVICE_UUID,
-      near_rssi: int(ble.near_rssi, -127, 20, -75),
+      near_rssi: clamp(ble.near_rssi, NEAR_RSSI_RANGE[0], NEAR_RSSI_RANGE[1], -75),
       window_s: windowS,
       sightings_min_interval_s: int(ble.sightings_min_interval_s, 10, intervalMax, Math.min(60, intervalMax)),
+      // The Phase 4 co-location rule; on unless the backend says false. Legacy servers do not apply it.
+      colocation_required: ble.colocation_required !== false,
     },
     push: { apns: bool(push.apns), fcm: bool(push.fcm), webpush: bool(push.webpush) },
     imports: {
@@ -107,7 +112,7 @@ export function effectiveCapabilities(doc) {
 function isHttpsBase(s) {
   try {
     const u = new URL(s);
-    return u.protocol === 'https:' && s.endsWith('/') && !u.search && !u.hash;
+    return u.protocol === 'https:' && s.endsWith('/') && !u.search && !u.hash && !u.username && !u.password;
   } catch {
     return false;
   }
@@ -138,7 +143,9 @@ export function normaliseBackendUrl(input, { allowLocalHttp = false } = {}) {
 /**
  * Reads a caddie://connect?url=<backend> deep link (or the same text from a QR code). It never
  * switches anything by itself: it returns what the confirmation screen must show, and the switch
- * happens only after the user confirms a prompt that names the origin. Plain http is refused.
+ * happens only after the user confirms a prompt that names the backend's base URL (its origin
+ * and path, since two tier 1 sites can share an origin). Plain http is refused. Credentials and
+ * cached state are kept per base.
  */
 export function parseConnectLink(link) {
   let u;
@@ -152,7 +159,7 @@ export function parseConnectLink(link) {
   if (!target) return { ok: false, reason: 'missing_url' };
   const n = normaliseBackendUrl(target, { allowLocalHttp: false });
   if (!n.ok) return n;
-  return { ok: true, base: n.base, origin: n.origin, requiresConfirmation: true, prompt: `Switch to the server at ${n.origin}?` };
+  return { ok: true, base: n.base, origin: n.origin, requiresConfirmation: true, prompt: `Switch to the server at ${n.base}?` };
 }
 
 /**
@@ -161,15 +168,19 @@ export function parseConnectLink(link) {
  *
  *   1. GET {base}/api/capabilities   (tiers 2 and 3)
  *   2. GET {base}/capabilities.json  (tier 1, a static site)
- *   3. Only when step 1 answered 404: GET {base}/api/health; { "ok": true } means a legacy server.
+ *   3. Only when step 1 answered 404 with exactly { "error": "Not found" } (the existing server's
+ *      answer to an unknown /api path) and this backend has never served a document
+ *      (hadDocument false): GET {base}/api/health, which must answer 200 with exactly
+ *      { "ok": true }. Both together mean the legacy server.
  *
  * Returns { source: 'api' | 'static' | 'legacy', version, doc, effective } on success, or
- * { source: 'none', reason } where reason is 'update_app' or 'unreachable'. The caller keeps the
- * last good result per backend origin and uses it on 'unreachable'; it never downgrades a backend
- * it once read a document from to legacy because of a failure.
+ * { source: 'none', reason } where reason is 'update_app' or 'unreachable'. The caller keeps, per
+ * backend base, the last good result and whether the backend ever served a document; it uses the
+ * last good result on 'unreachable' and passes hadDocument so that a backend that once had a
+ * document is never downgraded to legacy.
  */
-export async function discoverCapabilities(base, fetchFn) {
-  let apiStatus = null;
+export async function discoverCapabilities(base, fetchFn, { hadDocument = false } = {}) {
+  let legacyNotFound = false;
   let tooNew = false;
   for (const [source, path] of [['api', '/api/capabilities'], ['static', '/capabilities.json']]) {
     let r;
@@ -178,20 +189,27 @@ export async function discoverCapabilities(base, fetchFn) {
     } catch {
       continue;
     }
-    if (source === 'api') apiStatus = r.status;
+    if (source === 'api') legacyNotFound = r.status === 404 && exactly(r.json, { error: 'Not found' });
     if (r.status !== 200 || !isObject(r.json)) continue;
     const n = negotiate(r.json);
     if (n.ok) return { source, version: n.version, doc: r.json, effective: effectiveCapabilities(r.json) };
     if (n.reason === 'update_app') tooNew = true;
   }
   if (tooNew) return { source: 'none', reason: 'update_app' };
-  if (apiStatus === 404) {
+  if (legacyNotFound && !hadDocument) {
     try {
       const h = await fetchFn(`${base}/api/health`);
-      if (h.status === 200 && isObject(h.json) && h.json.ok === true) return { source: 'legacy', version: 1, doc: null, effective: structuredClone(LEGACY) };
+      if (h.status === 200 && exactly(h.json, { ok: true })) return { source: 'legacy', version: 1, doc: null, effective: structuredClone(LEGACY) };
     } catch {
       // fall through
     }
   }
   return { source: 'none', reason: 'unreachable' };
+}
+
+// True when a parsed JSON body has exactly these keys and values.
+function exactly(body, want) {
+  if (!isObject(body)) return false;
+  const keys = Object.keys(body);
+  return keys.length === Object.keys(want).length && keys.every((k) => body[k] === want[k]);
 }
