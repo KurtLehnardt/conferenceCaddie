@@ -1,48 +1,74 @@
 # Conference Caddie
 
-## Why this exists
+Conference Caddie finds the people at a conference whose experience overlaps what you're working on or want to learn, and tells you when they're nearby. Turn on "Around," and the app nudges you when a strong match is in the same hall, so a coffee line becomes a conversation; or ask someone to talk shop and agree where to meet. It also suggests talks that match your interests. It leaves schedules, attendee lists and messaging to Sched and the official conference tools.
 
-The most valuable thing an attendee takes home is the people they met. Talks
-are the shared context that starts those conversations. Every screen should
-make it easier to find the right person and give the two of you something to
-talk about. When a choice comes up, pick the option that leads to more good
-conversations.
+It runs as a web app (PWA) on any phone, and as an Android app (.apk) that adds Bluetooth: **only the Android app uses Bluetooth**; the web app finds people nearby by zone and, optionally, GPS.
 
-A mobile-first web app for attendees of any Linux Foundation conference whose schedule is on Sessionize. It answers two questions, in this order: **who here should I talk to?** and then **which talks give us something to talk about?** It is not a scheduling tool; each talk links to the conference's official schedule with "Add to my schedule on the official site".
+<p>
+  <img src="docs/screenshots/find-by-experience.png" alt="Searching people for 'postgres bare metal' shows a sample attendee whose own words match, with the matching passage highlighted" width="200">
+  <img src="docs/screenshots/nudge-nearby.png" alt="A nudge: someone who has rebuilt a 3,000-node cluster's etcd is in your room right now, with a See who button" width="200">
+  <img src="docs/screenshots/meet-up.png" alt="The meet-up screen: you're both in the Expo hall, how to spot them, how to spot me, and the meeting point" width="200">
+  <img src="docs/screenshots/talks-for-you.png" alt="For you: talks matched to your topics, with the reason shown" width="200">
+</p>
 
-Live: https://conference-caddie-265846417372.us-west1.run.app. The switcher at the top of the app lists every conference ingested so far, and links out to the official schedule for events that are not available here yet. Each conference has its own URL, `/e/{slug}`, for a QR code.
+## Install
 
-The app began as an entry in the Elasticsearch "Find the Right Talk" track at a hackathon during KubeCon + CloudNativeCon North America 2026. The pitch: "Find the right talk, and the right people around it." People-matching is a search problem, and the app treats it as one.
+**On your phone (web app).** Open https://conference-caddie-265846417372.us-west1.run.app, or scan the QR code for KubeCon + CloudNativeCon North America 2026. To get nudges with the app closed, add it to your Home Screen (iPhone: Share, then Add to Home Screen; Android: the install prompt) and turn on "Nudge me even when the app is closed". No account is needed.
 
-## What it does
+<img src="docs/demo/qr-kubecon.png" alt="QR code that opens Conference Caddie for KubeCon + CloudNativeCon North America 2026" width="160">
 
-- **People** (the home tab): build a profile on your device with topics you want to learn about and topics you can speak to, then choose to be visible at that conference. People to meet are ranked by Elasticsearch, and each match shows why and an opener from fixed templates.
-- **Find & connect**: type what you're working on, or about to, and the app finds everyone whose own words about what they've built match it, with the passage that matched shown as evidence; rare, specific experience outranks the conference's common topics. Flip "Around and up for a conversation" and pick a zone (a room, the expo hall, registration, food, hallway, outside) to be findable right now, for an hour or until you turn it off that day; in the day mode the app asks "Still in {zone}?" whenever you come back to it after a while. While it's on, the People tab opens on who's around, your zone first. Someone in your zone gets a one-tap Wave; anyone else who's around gets a short ask to talk shop. Asks are now-only: they run out in 15 minutes, accept means now, and the two of you agree a meeting point and each say how to spot you. Someone who isn't around is watched, not booked: the app tells you when they turn up. While you're around, a nudge says when someone with specific, matching experience is in your zone, once per person per day, never a name until you look; turn on "Nudge me even when the app is closed" (from your Home Screen on iPhone) and the same nudge arrives as a push notification, at most a few an hour. Optionally, your position too: it ranks people near you higher and shows others only a band (same zone, near, around, venue), while the one person you accepted sees a rough distance and direction until you meet. The Android app adds "Find people near me by Bluetooth": phones that opted in exchange a random code that changes every ten minutes, and you get a notification only for a strong match within a few metres. Block is symmetric and silent; Report hides a profile, spot line or ask after two reports; short texts pass a filter (a wordlist of rules in Elasticsearch; an optional text classifier, off by default, can hold a doubtful line until an operator looks). What is shared, with whom, for how long: your profile text, to everyone visible at that conference, until its last day; your zone, only to people who are also around, only while you are; your spot line, the same; how to spot you, only to the one person you accepted, only until you meet; your exact position, only to that person, rounded, only until you meet, and never stored after; the Bluetooth code, to nobody but this server, for ten minutes at a time; the push subscription, until you turn it off, delete your profile or the conference ends. Nothing about where you were is kept.
-- **Talk circles**: mark a talk "I'm interested", and separately choose to share your profile with others interested in that talk. Everyone sees how many people want to talk about it; only people who shared can see who else did.
-- **For you**: talk suggestions from your topics and free text, with the matching topics and passage shown.
-- **Search**: hybrid lexical and semantic search over one conference's talks, with filters for day, time, track and the conference's own tag groups.
-- **Schedule** (Search tab, "Search | Schedule"): the whole conference, one day at a time. Day chips list the conference's days, and each day's talks come from Elasticsearch in start order, a page of 50 at a time, under sticky start-time headers. Each row shows the title, speakers, room, track and the Interested star, and opens the talk. The search filters (track, level, tags, slides, sponsor content, events and showcases) apply through the API. "Jump to now" appears only while the conference is running and scrolls to the current or next time slot. Offline, the same layout is drawn from the saved schedule and labelled "Offline".
-- **My schedule** (the Interested tab): the talks you marked, kept on your device, in two views. List groups them by day in time order. Day shows one day as a timeline with an hour gutter: each talk is a card placed by its start and end, talks at the same time sit side by side, and a "now" line marks the current time today. The List or Day choice is remembered on the device. From here you can also share your profile for all of them at once, stop sharing for all, or let sharing follow the list as you mark and unmark talks. It is a view of what you marked, not a planner: nothing warns about or resolves talks at the same time.
-- **Import my schedule**: in Settings (gear icon at the top right, then Import my schedule), upload or paste a schedule you exported from anywhere (PDF, CSV, plain text, calendar .ics or JSON). Elasticsearch extracts the text (PDFs through its Apache Tika attachment processor, in a simulated pipeline that indexes nothing) and finds the conference's real talks with named title, speaker and time queries. You review the matches and mark the ones you keep as Interested on your device; the sheet then offers "View my schedule", which opens My schedule's Day view on the first imported day. The file is read once and never stored.
-- **Links**: views have their own addresses, such as `#/interested?view=day&day=2026-11-10` and `#/search?view=schedule&day=2026-11-11`, so Back and a reload keep the view.
+**On Android with Bluetooth (.apk).** Download the latest debug APK from the [Android APK workflow](https://github.com/KurtLehnardt/conferenceCaddie/actions/workflows/android-apk.yml) (open the newest successful run, then Artifacts; GitHub sign-in required), unzip it, open the `.apk` on the phone and allow installs from your browser. Or from a computer: `gh run download <run-id> --repo KurtLehnardt/conferenceCaddie && adb install -r */*.apk`. Bluetooth proximity needs Android 8.0 or later with Bluetooth 5 extended advertising; building it yourself is described in [docs/ANDROID.md](docs/ANDROID.md).
 
-- **Offline**: after one online visit, the app shell and the conference's schedule are kept on the phone. Without a connection, Search runs a keyword search over that saved schedule, labelled "Offline: keyword search only", and Interested and the profile still work. People, For you and talk circles say they need a connection.
+**Run it locally (no keys, sample data).**
 
-There is no sign-in, no scheduling, no sponsor features and no chat: Sched covers attendee lists, profile sharing and messaging, so this app does not. A profile is written to Elasticsearch only when you turn on a visibility choice; a random device secret, stored only as a hash on the server, protects every edit. Profiles expire after the conference's last day, and "Delete my profile" removes them at once. The sample profiles you may see are labelled "Sample" and are not real people.
+```sh
+npm --prefix web ci
+VITE_MOCK=1 npm --prefix web run dev     # http://localhost:5173 with fixture conferences and sample people
+```
 
-## Demo
+**Run your own server.** Node 22 or later, an Elasticsearch deployment, and Google Cloud Run for the hosted service:
 
-The three-minute demo script is [docs/demo/SCRIPT.md](docs/demo/SCRIPT.md). It covers the preparation, the two labelled demo profiles and how to re-seed them, every tap in order, and a rehearsal run against the live service. Screenshots from that run are in [docs/demo/shots/](docs/demo/shots/).
+```sh
+npm ci && npm --prefix web ci
+ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run es:setup         # talks, conferences, topics
+ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run people:setup     # people, presence, meets, blocks
+ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run ingest -- --event kubecon-cloudnativecon-north-america-2026
+npm run deploy                                                          # Cloud Run; see the checklist for every step
+```
 
-Scan this QR code to open KubeCon + CloudNativeCon North America 2026 in the app (it links to `/e/kubecon-cloudnativecon-north-america-2026`):
+[docs/OPERATOR_CHECKLIST.md](docs/OPERATOR_CHECKLIST.md) lists every setup step in order (reports, moderation rules, push keys, the smoke test), with the environment variables each one reads.
 
-<img src="docs/demo/qr-kubecon.png" alt="QR code that opens Conference Caddie for KubeCon + CloudNativeCon North America 2026" width="240">
+## How people find each other
+
+| | Web app (PWA) | Android app (.apk) |
+|---|---|---|
+| Find people by what they've built or want to learn | yes | yes |
+| "Around": pick a zone (a room, Expo hall, Registration, Food and coffee, Hallway, Outside) | yes | yes |
+| GPS position as a ranking signal, shown to others only as a band (same zone, near, around) | yes, optional | yes, optional |
+| Nudge when a strong match is in your zone | in the app; by push when installed to the Home Screen | yes |
+| Bluetooth: a notification when an opted-in strong match is within a few metres, phone in pocket | **no** (browsers cannot advertise over Bluetooth) | **yes** |
+| Ask to talk shop, Wave, meet-up with a meeting point and "how to spot me" | yes | yes |
+
+Asks are now-only: you can ask someone who is around, they have 15 minutes to answer, and accepting means now. Someone who isn't around can be watched, and the app tells you when they turn up. Nothing is booked in advance.
+
+What is shared, with whom, for how long: your profile text, to people visible at that conference, until its last day; your zone, only to people who are also around, only while you are; how to spot you and a rough distance, only to the one person you accepted, only until you meet; the Bluetooth code, to nobody but the server, for ten minutes at a time. Nothing about where you were is kept. Block is symmetric and silent; Report hides a profile after two reports; short texts pass a filter. There is no sign-in: a random device secret, stored only as a hash, protects your profile, and "Delete my profile" removes it at once.
+
+## Everything else it does
+
+- **For you**: talk suggestions from your topics and free text, with the matching passage shown.
+- **Search**: hybrid keyword and semantic search over the conference's talks, with filters for day, time, track and the conference's own tags. **Schedule** shows the whole conference a day at a time.
+- **Talk circles**: mark a talk "I'm interested" and, separately, share your profile with others interested in it.
+- **My schedule**: the talks you marked, as a list or a day timeline, kept on your device. It is a view, not a planner.
+- **Import my schedule** (Settings): a PDF, CSV, text, .ics or JSON schedule from anywhere, matched to the conference's real talks. The file is read once and never stored.
+- **Import from GitHub** (Profile): proposes "things I've built" text and topics from your public repositories; nothing is stored until you accept it.
+- **Offline**: after one visit, the schedule and keyword search work without a connection.
 
 ## How it works
 
 - Conference schedules are committed snapshots of public Sessionize feeds. Nothing is fetched at runtime.
 - Conferences are discovered from the Linux Foundation events list (`events.linuxfoundation.org`), which names each event's schedule page; the page carries the Sessionize feed to read. Only the operator runs ingestion, from the CLI.
 - Elasticsearch is the only data store and does all matching, ranking and filtering: lexical plus `semantic_text` retrievers fused with reciprocal rank fusion for search, people and suggestions. No generative model is used.
+- Embeddings come from the E5 small model running on the Elasticsearch deployment's own ML node (inference endpoint `caddie-e5-small`). If embedding fails for any reason, search, suggestions and people matching fall back to keyword matching for a minute and the app says so; profiles still save.
 - Each conference's topic list is built from its talk titles at ingestion, with an Elasticsearch analyzer and aggregation.
 - One Node.js service on Cloud Run serves the app and the API. It runs as the dedicated `caddie-runtime` service account, which can read only the secrets `scripts/deploy.sh` mounts and has no project-level roles. Those are two scoped Elasticsearch keys (a read-only key for talks, conferences and topics, and a people key that can only read and write the `caddie-people*` indices), the VAPID private key that signs push nudges, and optionally a read-only GitHub token for the profile import. The text classifier uses the service account's own token; no key. `docs/OPERATOR_CHECKLIST.md` lists the operator steps in order.
 
@@ -63,3 +89,5 @@ node scripts/build-facets.mjs [<slug> ...]  # rebuild the track, room, speaker a
 Re-running is safe: unchanged talks are not re-embedded. Events on other platforms, or with no published schedule, appear in the switcher as "Schedule not available here yet". Per-conference topic fix-ups (rename, merge, remove) live in `data/topics/{slug}.json`; the shared stoplist is `config/topic-stoplist.txt`.
 
 For the API and index shapes, see [docs/CONTRACT.md](docs/CONTRACT.md). Design choices are recorded in [DECISIONS.md](DECISIONS.md).
+
+The app began as an entry in the Elasticsearch "Find the Right Talk" track at a hackathon during KubeCon + CloudNativeCon North America 2026.
