@@ -17,9 +17,22 @@ const CANDIDATES = 400;
 // The Lucene _english_ stop set, which the Elasticsearch analyzer used.
 const ENGLISH_STOP = ['a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'if', 'in', 'into', 'is', 'it', 'no', 'not', 'of', 'on', 'or', 'such', 'that', 'the', 'their', 'then', 'there', 'these', 'they', 'this', 'to', 'was', 'will', 'with'];
 
+// Ordering is by UTF-16 code unit, so the result does not depend on the ICU version or the locale.
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-const collator = new Intl.Collator('en');
-const idOf = (term) => term.replace(/ /g, '-');
+// Labels order case-insensitively first (as the Elasticsearch-side builder's locale compare does for
+// ASCII), then by code unit, with no dependence on ICU.
+const cmpLabel = (a, b) => cmp(a.toLowerCase(), b.toLowerCase()) || cmp(a, b);
+export const TOPIC_ID = /^[a-z0-9][a-z0-9-]{0,99}$/;
+
+/**
+ * The topic id of a term: ASCII letters and digits, with runs of anything else becoming one hyphen.
+ * Returns null when nothing usable is left (for example a term made only of katakana) or when the
+ * result is longer than a topic id may be.
+ */
+export function topicIdOf(term) {
+  const id = term.normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return TOPIC_ID.test(id) ? id : null;
+}
 
 export function readStoplist(text) {
   return text.split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -29,15 +42,23 @@ export function readStoplist(text) {
  * The analysed terms of one title: [{ term, start, end }] for unigrams and for bigrams of
  * neighbouring kept words. Offsets point into the original title.
  */
+// Han and Hiragana characters are tokens of their own, a run of Katakana is one token, and a script
+// change ends a token, as in the Elasticsearch standard tokenizer (Unicode word segmentation).
+const CJK = '\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\u30FC\\uFF70';
+const WORD_CHAR = `(?:(?![${CJK}])[\\p{L}\\p{N}_])`;
+const TOKEN_RE = new RegExp(`${WORD_CHAR}+(?:['.:]${WORD_CHAR}+)*|[\\p{Script=Katakana}\\u30FC\\uFF70]+|[\\p{Script=Han}\\p{Script=Hiragana}]`, 'gu');
+
+/**
+ * The analysed terms of one title: [{ term, start, end }] for unigrams and for bigrams of
+ * neighbouring kept words. Offsets point into the original title.
+ */
 export function analyse(title, stop) {
-  const text = title.replace(/’/g, "'");
+  const text = title.replace(/\u2019/g, "'");
   const tokens = [];
-  const re = /[\p{L}\p{N}_]+(?:['.:][\p{L}\p{N}_]+)*/gu;
-  let m;
   let position = 0;
-  while ((m = re.exec(text))) {
-    let word = m[0].toLowerCase().replace(/'s$/, '');
-    const keep = !stop.has(word) && word.length >= 2 && /\p{L}/u.test(word);
+  for (const m of text.matchAll(TOKEN_RE)) {
+    const word = m[0].toLowerCase().replace(/'s$/, '');
+    const keep = !stop.has(word) && [...word].length >= 2 && /\p{L}/u.test(word);
     if (keep) tokens.push({ term: word, start: m.index, end: m.index + m[0].length, position });
     position++;
   }
@@ -55,9 +76,10 @@ export function analyse(title, stop) {
  *   talks      [{ talk_id, title }] of the kind:talk items
  *   stoplistText  the text of config/topic-stoplist.txt
  *   fixups     { rename, merge, remove } from data/topics/{slug}.json
- * Returns { topics: [{ topic_id, label, talk_count, rank, aliases }], talkTopics: Map talk_id -> [topic_id] }.
+ * Returns { topics: [{ topic_id, label, talk_count, rank, aliases }], talkTopics: Map talk_id -> [topic_id], dropped: [term] }.
+ * Topic ids match ^[a-z0-9][a-z0-9-]{0,99}$; a candidate whose term gives no such id is dropped and logged.
  */
-export function buildTopics({ talks, stoplistText, fixups = {} }) {
+export function buildTopics({ talks, stoplistText, fixups = {}, log = () => {} }) {
   const fx = { rename: fixups.rename ?? {}, merge: fixups.merge ?? {}, remove: fixups.remove ?? [] };
   const stop = new Set([...ENGLISH_STOP, ...readStoplist(stoplistText)]);
   const perTalk = new Map();
@@ -75,7 +97,7 @@ export function buildTopics({ talks, stoplistText, fixups = {} }) {
     .map(([term, count]) => ({ term, count }));
   if (candidates.length === 0 && Object.keys(fx.merge).length === 0) {
     // A conference too small for any shared term has no topics; its talks have empty topic lists.
-    return { topics: [], talkTopics: new Map(talks.map((t) => [t.talk_id, []])) };
+    return { topics: [], talkTopics: new Map(talks.map((t) => [t.talk_id, []])), dropped: [] };
   }
   const wanted = new Set(candidates.map((c) => c.term));
   for (const id of Object.keys(fx.merge)) wanted.add(id.replace(/-/g, ' '));
@@ -97,11 +119,20 @@ export function buildTopics({ talks, stoplistText, fixups = {} }) {
   const labelOf = (term) => {
     const m = casings.get(term);
     if (!m) return term;
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || collator.compare(a[0], b[0]))[0][0];
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || cmp(a[0], b[0]))[0][0];
   };
 
   const topicIds = new Map();
-  for (const c of candidates) topicIds.set(idOf(c.term), { term: c.term, label: labelOf(c.term), aliases: new Set(), members: new Set([c.term]) });
+  const dropped = [];
+  for (const c of candidates) {
+    const id = topicIdOf(c.term);
+    if (!id || topicIds.has(id)) {
+      dropped.push(c.term);
+      continue;
+    }
+    topicIds.set(id, { term: c.term, label: labelOf(c.term), aliases: new Set(), members: new Set([c.term]) });
+  }
+  if (dropped.length) log(`topics: dropped ${dropped.length} candidate(s) without a valid topic id: ${dropped.join(', ')}`);
   for (const id of fx.remove) topicIds.delete(id);
   for (const [alias, canonical] of Object.entries(fx.merge)) {
     const target = topicIds.get(canonical);
@@ -138,7 +169,7 @@ export function buildTopics({ talks, stoplistText, fixups = {} }) {
     for (const set of talkTerms.values()) if (holds(set, t)) count++;
     topics.push({ topic_id: id, label: t.label, aliases: [...t.aliases].sort().map((a) => a.replace(/-/g, ' ')), talk_count: count, members: t.members });
   }
-  topics.sort((a, b) => b.talk_count - a.talk_count || collator.compare(a.label, b.label) || collator.compare(a.topic_id, b.topic_id));
+  topics.sort((a, b) => b.talk_count - a.talk_count || cmpLabel(a.label, b.label) || cmp(a.topic_id, b.topic_id));
   topics.splice(MAX_TOPICS);
   topics.forEach((t, i) => { t.rank = i + 1; });
 
@@ -150,6 +181,7 @@ export function buildTopics({ talks, stoplistText, fixups = {} }) {
   return {
     topics: topics.map(({ topic_id, label, talk_count, rank, aliases }) => ({ topic_id, label, talk_count, rank, aliases })),
     talkTopics,
+    dropped,
   };
 }
 

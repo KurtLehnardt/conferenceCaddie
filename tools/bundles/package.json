@@ -1,0 +1,14 @@
+{
+  "name": "conference-caddie-bundle-tools",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Dependencies of scripts/build-bundles.mjs, kept apart from the root package so that the root npm ci stays light. Install with: npm --prefix tools/bundles ci",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.2"
+  }
+}

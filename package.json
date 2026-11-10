@@ -34,8 +34,5 @@
   },
   "dependencies": {
     "web-push": "4.0.0"
-  },
-  "devDependencies": {
-    "@huggingface/transformers": "4.3.2"
   }
 }
