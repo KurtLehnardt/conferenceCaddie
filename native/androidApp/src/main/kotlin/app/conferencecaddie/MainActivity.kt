@@ -5,7 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import app.conferencecaddie.ui.App
+import app.conferencecaddie.ui.shell.StandaloneShell
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -14,7 +14,7 @@ class MainActivity : ComponentActivity() {
         // Debug builds are debuggable; release builds are not. This avoids generating BuildConfig.
         val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         setContent {
-            App(isDebugBuild = isDebugBuild)
+            StandaloneShell(isDebugBuild = isDebugBuild)
         }
     }
 }
