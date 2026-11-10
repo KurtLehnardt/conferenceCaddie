@@ -326,7 +326,7 @@ export interface RecommendationBody {
 }
 
 export function fetchRecommendations(body: RecommendationBody, signal?: AbortSignal) {
-  return call<{ results: Recommendation[]; needs_profile?: boolean }>(
+  return call<{ results: Recommendation[]; needs_profile?: boolean; degraded?: { semantic: boolean } }>(
     '/api/recommendations',
     post(body, signal),
   );

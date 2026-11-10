@@ -28,6 +28,7 @@ import {
   peopleQuery, searchPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, locationOf,
 } from './people.mjs';
 import { subscriptionsFor, deleteSubscriptionById } from './push.mjs';
+import { semanticAvailable } from './semantic.mjs';
 
 const CANDIDATES = 20;
 const EVIDENCE_MAX = 80;
@@ -138,7 +139,7 @@ export async function nudgeAfterPresence(me, conf) {
     const blocked = await blockedIds(conf.slug, me.profile_id);
     // The same query the Around view runs, distance leg included when I sent a position; the
     // distance leg never decides specificity (people.mjs), so it cannot create a nudge.
-    const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { range: { presence_until: { gt: 'now' } } }], { size: CANDIDATES, blocked, explain: true, origin: locationOf(me) });
+    const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { range: { presence_until: { gt: 'now' } } }], { size: CANDIDATES, blocked, explain: true, origin: locationOf(me), semantic: semanticAvailable() });
     if (!q) return;
     const [json, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
     const hits = (json.hits?.hits ?? []).filter((h) => {

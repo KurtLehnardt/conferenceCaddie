@@ -181,6 +181,8 @@ export interface SearchResponse {
   happening_now?: { available: boolean };
   results: SearchResult[];
   facets: Facets;
+  /** Present only when a text query was answered by keyword matching alone (semantic matching paused). */
+  degraded?: { semantic: boolean };
   /** Only present when the request asked for debug. */
   ranking?: RankingInfo;
 }
