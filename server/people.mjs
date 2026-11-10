@@ -13,6 +13,11 @@
 //   ES_PEOPLE_PUSH_INDEX  default caddie-people-push (Web Push subscriptions, push.mjs).
 //   ES_PEOPLE_NUDGES_INDEX default caddie-people-nudges (nudges sent, nudge.mjs).
 //   REF_SALT              optional salt for the opaque result reference.
+//   PEOPLE_SEMANTIC_MIN_SIMILARITY, PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY and
+//   PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY the lowest cosine similarity a semantic people leg keeps in
+//                         a search, in matches without a query, and in the nudge and Bluetooth
+//                         sightings (defaults 0.82, 0.84 and 0.87, measured for caddie-e5-small;
+//                         "off" for no floor; see SEMANTIC_FLOORS).
 //
 // Rules this module keeps:
 // - Elasticsearch does all matching, ranking and filtering. People are ranked by one rrf
@@ -30,8 +35,8 @@
 //   leaves out anyone the requester has blocked or who has blocked the requester.
 // - secret_hash, text_hash and profile_id are never returned; results carry ref instead, which
 //   is also stored on the document so a block or a meet request can name a person by it.
-//   Request bodies, headers, profile fields and secrets are never logged; the only log lines here
-//   name an Elasticsearch status.
+//   Request bodies, headers, profile fields and secrets are never logged; the log lines here name
+//   an Elasticsearch status, a count, or a conference slug and a number of legs (warnRarely).
 // - Writes whose about, interests and expertise are unchanged use a Bulk API partial update that
 //   omits those fields, so toggling visibility, sharing or presence never re-runs the model.
 // - Presence (zone, spot, since, until, and an optional rounded location with its accuracy, the
@@ -86,6 +91,61 @@ const EVIDENCE_FALLBACK = 160;
 const QUERY_MAX = 300;
 const COMMON_TOPICS = 10;
 const BLOCKS_MAX = 1000;
+
+// The lowest cosine similarity a semantic people leg keeps, passed as the knn query's `similarity`
+// (Elasticsearch compares it with the raw cosine of a profile's best chunk, not with the score).
+// Without it a knn leg returns the k nearest profiles whatever their score, and with the E5 small
+// model that is nearly everyone: on 2026-11-10 the best of the 132 KubeCon sample profiles scored
+// 0.79 to 0.83 against the smoke's made-up text, which none of them has anything to do with, while
+// the profiles written with that text scored 0.88 to 0.94. Every profile joined every semantic
+// leg, so anyone who also shared a common topic outranked the one person whose text matched.
+//
+// The floor depends on who asked (DECISIONS.md has the measurements):
+// - search, 0.82: a search with a query, which also has the keyword leg. Short tool names score
+//   low against whole profiles ("Kyverno" reached 0.823 at best on a profile that names it), so
+//   the floor stays low and the keyword leg finds the exact names.
+// - profile, 0.84: matches without a query and circle members, which rank by the requester's own
+//   interests and expertise with no keyword leg behind them. 0.84 kept a relevant profile for each
+//   of ten realistic interests and left out all but 29 of 943 unrelated pairs.
+// - push, 0.87: the push nudge (nudge.mjs) and Bluetooth sightings (ble.mjs), which reach a person
+//   who did not search, so a text leg must be close to count as a specific match there. A generic
+//   text ("Kubernetes, cloud native platforms and AI") reached 109 of 131 sample profiles at 0.84
+//   and 26 at 0.87.
+// The values belong to the model behind the people index's semantic_text fields: a new inference
+// endpoint needs a new measurement. Each can be set, or turned off, through its variable.
+const FLOOR_SETTINGS = [
+  ['search', 'PEOPLE_SEMANTIC_MIN_SIMILARITY', 0.82],
+  ['profile', 'PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY', 0.84],
+  ['push', 'PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY', 0.87],
+];
+
+/**
+ * A floor variable's value: { floor, warning }. Unset or empty gives the fallback; "off", "none"
+ * and "false" give null (no floor); a number is clamped to -1..1. warning says why a set value was
+ * not used as given, and never quotes it.
+ */
+export function floorFrom(value, fallback) {
+  const v = value === undefined || value === null ? '' : String(value).trim().toLowerCase();
+  if (v === '') return { floor: fallback, warning: null };
+  if (v === 'off' || v === 'none' || v === 'false') return { floor: null, warning: null };
+  const n = Number(v);
+  if (!Number.isFinite(n)) return { floor: fallback, warning: `is not a number or "off", so ${fallback} applies` };
+  const floor = Math.min(1, Math.max(-1, n));
+  return { floor, warning: floor === n ? null : `is outside -1..1, so ${floor} applies` };
+}
+
+/** The floors in effect, read once at start: { search, profile, push }, each a cosine or null. */
+export const SEMANTIC_FLOORS = Object.freeze(Object.fromEntries(FLOOR_SETTINGS.map(([path, name, fallback]) => {
+  const { floor, warning } = floorFrom(process.env[name], fallback);
+  if (warning) console.warn(`${name} ${warning}.`);
+  return [path, floor];
+})));
+
+/** One line for the start-up log that names the floors in effect. */
+export function semanticFloorsLine() {
+  const f = (v) => (v === null ? 'off' : String(v));
+  return `semantic people floors: search ${f(SEMANTIC_FLOORS.search)}, matches ${f(SEMANTIC_FLOORS.profile)}, nudge and Bluetooth ${f(SEMANTIC_FLOORS.push)}`;
+}
 
 // Zones a person can say they are in, besides the conference's room names.
 export const FIXED_ZONES = ['Expo hall', 'Registration', 'Food and coffee', 'Hallway', 'Outside'];
@@ -959,7 +1019,8 @@ export async function finishPendingDeletes() {
 //      presence_cell (100 m pivot, origin the requester's own cell) over people who are around
 //      now, so nearby people rank higher; it is a ranking signal and nothing else, and like the
 //      band it sees cells only,
-// skipping any whose input is empty. Circles add a retriever that matches every member, so a
+// skipping any whose input is empty. Each semantic leg keeps only the profiles at or above the
+// floor of its path (SEMANTIC_FLOORS). Circles add a retriever that matches every member, so a
 // member with nothing in common is still listed, below everyone who shares something. Every
 // retriever is named so that the explanation of a hit says which ones it came from.
 
@@ -969,11 +1030,15 @@ const DISTANCE_PIVOT = '100m';
 // precise presence_location is never read here.
 const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_cell'];
 
-// Returns { body, legs } where legs names each retriever in order ('topics', 'text', 'distance'
-// or 'everyone'), or null when there is nothing to rank by. nudge.mjs and ble.mjs run the same
+// Returns { body, legs, fields } where legs names each retriever in order ('topics', 'text',
+// 'distance' or 'everyone') and fields names the semantic_text field of each semantic leg (null
+// for the others), or null when there is nothing to rank by. nudge.mjs and ble.mjs run the same
 // query as the person whose presence was just written or who is scanning, so the push rule, the
-// Bluetooth matches and the matches view agree.
-export function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false, origin = null, semantic = true }) {
+// Bluetooth matches and the matches view agree; they pass the push floor (SEMANTIC_FLOORS.push)
+// as `floor`. Without one, a search with a query uses the search floor and anything else the
+// profile floor; null sends no floor.
+export function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false, origin = null, semantic = true, floor }) {
+  const minSimilarity = floor === undefined ? (query ? SEMANTIC_FLOORS.search : SEMANTIC_FLOORS.profile) : floor;
   const filter = {
     bool: {
       filter: [{ term: { event_id: me.event_id } }, { range: { visible_until: { gt: 'now' } } }, ...filters],
@@ -981,10 +1046,12 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
     },
   };
   const legs = [];
+  const fields = [];
   const retrievers = [];
   const highlight = {};
   const add = (kind, standard) => {
     legs.push(kind);
+    fields.push(standard.query.knn?.field ?? null);
     retrievers.push({ standard: { ...standard, _name: `${kind}-${legs.length}` } });
   };
   const knn = (field, modelText) => ({
@@ -993,6 +1060,7 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
         field,
         k: KNN_K,
         num_candidates: KNN_CANDIDATES,
+        ...(minSimilarity === null || minSimilarity === undefined ? {} : { similarity: minSimilarity }),
         filter,
         query_vector_builder: { text_embedding: { model_text: modelText } },
       },
@@ -1051,17 +1119,62 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
   };
   if (explain) body.explain = true;
   if (Object.keys(highlight).length) body.highlight = { ...HIGHLIGHT_BASE, fields: highlight };
-  return { body, legs };
+  return { body, legs, fields };
 }
 
-// The retrievers a hit was found by, as indexes into legs, read from the rrf explanation: one
-// detail per retriever, whose value is the hit's rank there and 0 when it was not found. Returns
-// null when the response carries no explanation, so the caller keeps the hit.
-function matchedLegs(hit, legs) {
+// The rrf node of a hit's explanation: the node whose description reads "rrf score: [..] computed
+// for initial ranks [..]" and which has one detail per retriever, each with the hit's rank in that
+// retriever as its value (0, "result not found in query", when the retriever did not find it).
+// Elasticsearch 9.5 does not put that node at the top: on an index with nested fields (the
+// semantic_text chunks) the top is a "sum of:" whose details are the rrf node and the filter that
+// keeps nested chunk documents out of the hits ("FieldExistsQuery [field=_primary_term]", which
+// only top-level documents have), so the top level always has two details whatever the number of
+// retrievers. The node is looked for down to RRF_NODE_DEPTH levels below the top; null when there
+// is none.
+const RRF_NODE_DEPTH = 3;
+const RRF_NODE_RE = /^rrf score: .*computed for initial ranks/;
+const RRF_LEG_RE = /in query at index \[(\d+)\] \[([^\]]+)\]/;
+function rrfNode(node, n, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > RRF_NODE_DEPTH) return null;
+  const details = Array.isArray(node.details) ? node.details : [];
+  if (RRF_NODE_RE.test(node.description ?? '') && details.length === n) return node;
+  for (const d of details) {
+    const found = rrfNode(d, n, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+// The retrievers a hit was found by, as indexes into legs, read from the rrf node of its
+// explanation. A detail that names its retriever ("in query at index [i] [topics-1]") must name
+// the leg at its position, as peopleQuery names them. Returns null when the legs are unknown: the
+// response carries no explanation (the cluster refused it, see searchPeople), none whose shape is
+// recognised, or one whose retriever names do not match.
+export function matchedLegs(hit, legs) {
   if (legs.length === 1) return [0];
-  const details = hit._explanation?.details;
-  if (!Array.isArray(details) || details.length !== legs.length) return null;
-  return details.map((d, i) => (d && d.value > 0 && !/not found/.test(d.description ?? '') ? i : -1)).filter((i) => i >= 0);
+  const node = rrfNode(hit._explanation, legs.length);
+  if (!node) return null;
+  const named = node.details.map((d, i) => {
+    const m = RRF_LEG_RE.exec(d?.description ?? '');
+    return !m || (Number(m[1]) === i && m[2] === `${legs[i]}-${i + 1}`);
+  });
+  if (!named.every(Boolean)) return null;
+  return node.details.map((d, i) => (d && d.value > 0 && !/not found/.test(d.description ?? '') ? i : -1)).filter((i) => i >= 0);
+}
+
+// Semantic highlights come back for every hit that has the field, whether or not the semantic leg
+// on that field found it (checked on 9.5.6: all 21 hits that a knn leg with a 0.95 floor did not
+// find carried an expertise_semantic highlight). A chunk is evidence only when that leg found the
+// hit, so the others are removed and evidenceFor falls back as for a profile with no chunk; the
+// push nudge and Bluetooth sightings then never quote a passage the floor judged unrelated. When
+// the legs are unknown, no semantic highlight is kept.
+const SEMANTIC_FIELDS = ['expertise_semantic', 'about_semantic', 'interests_semantic'];
+function keepFoundChunks(hits, q) {
+  for (const h of hits) {
+    if (!h.highlight) continue;
+    const found = new Set((matchedLegs(h, q.legs) ?? []).map((i) => q.fields?.[i]).filter(Boolean));
+    for (const f of SEMANTIC_FIELDS) if (f in h.highlight && !found.has(f)) delete h.highlight[f];
+  }
 }
 
 const listFormat = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
@@ -1438,37 +1551,61 @@ async function deleteProfile(req, res, url) {
 
 const MATCHES_KEYS = new Set(['event', 'interested_talk_ids', 'query', 'when', 'from', 'size']);
 
+// Warnings that the specificity rule fell back, at most one of each kind per WARN_EVERY_MS. They
+// name the conference and the number of legs and nothing about any person.
+const WARN_EVERY_MS = 10 * 60_000;
+const lastWarned = new Map();
+function warnRarely(kind, text) {
+  const now = Date.now();
+  if (now - (lastWarned.get(kind) ?? -Infinity) < WARN_EVERY_MS) return;
+  lastWarned.set(kind, now);
+  console.warn(text);
+}
+const retrieverCount = (body) => body.retriever?.rrf?.retrievers?.length ?? 1;
+
 // Runs a people search. Should the cluster refuse the explanation, the search runs again without
-// it and every hit is kept.
+// it; the legs of every hit are then unknown, which isBroad resolves per caller.
 export async function searchPeople(slug, body) {
   const path = withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(slug));
   try {
     return (await people('POST', path, body)).json;
   } catch (err) {
     if (!body.explain || !(err instanceof UpstreamError) || err.message !== 'status 400') throw err;
+    warnRarely('refused', `People search for ${slug}: the cluster refused the explanation of a ${retrieverCount(body)}-leg query, so the specificity rule falls back (isBroad).`);
     const { explain, ...rest } = body;
     return (await people('POST', path, rest)).json;
   }
 }
 
-// Runs the people query that build(semantic) returns (peopleQuery's { body, legs }, or null when
-// there is nothing to rank by), semantic when semantic.mjs allows it. When the semantic legs fail
-// because the inference endpoint did (isInferenceFailure), semantic queries pause for a minute and
-// the same request runs again with keyword legs; any other failure propagates. matches, circle
-// members, the push nudge (nudge.mjs) and Bluetooth sightings (ble.mjs) all rank through this.
-// Returns { json, q, semantic } with the query that answered, or null when build gave none.
+// Runs the people query that build(semantic) returns (peopleQuery's { body, legs, fields }, or
+// null when there is nothing to rank by), semantic when semantic.mjs allows it. When the semantic
+// legs fail because the inference endpoint did (isInferenceFailure), semantic queries pause for a
+// minute and the same request runs again with keyword legs; any other failure propagates. matches,
+// circle members, the push nudge (nudge.mjs) and Bluetooth sightings (ble.mjs) all rank through
+// this. Semantic highlights a hit's legs do not back are removed (keepFoundChunks), and an
+// explanation whose legs cannot be read is logged (warnRarely). Returns { json, q, semantic } with
+// the query that answered, or null when build gave none.
 export async function rankPeople(slug, build) {
   const semantic = semanticAvailable();
-  const q = build(semantic);
+  let q = build(semantic);
   if (!q) return null;
+  let json;
+  let used = semantic;
   try {
-    return { json: await searchPeople(slug, q.body), q, semantic };
+    json = await searchPeople(slug, q.body);
   } catch (err) {
     if (!semantic || !q.legs.includes('text') || !isInferenceFailure(err)) throw err;
     pauseSemantic(err);
-    const fallback = build(false);
-    return { json: await searchPeople(slug, fallback.body), q: fallback, semantic: false };
+    q = build(false);
+    used = false;
+    json = await searchPeople(slug, q.body);
   }
+  const hits = json.hits?.hits ?? [];
+  if (q.body.explain && q.legs.length > 1 && hits.some((h) => h._explanation && !matchedLegs(h, q.legs))) {
+    warnRarely('unrecognised', `People search for ${slug}: the explanation of a ${q.legs.length}-leg query was not recognised, so the specificity rule falls back (isBroad).`);
+  }
+  keepFoundChunks(hits, q);
+  return { json, q, semantic: used };
 }
 
 // The topics a hit shares with the requester, in either direction.
@@ -1480,11 +1617,24 @@ function sharedTopics(me, s) {
 
 // The specificity rule: a hit is a broad match when it was found only by the topic retrievers and
 // every topic it shares with the requester is one of the conference's ten most common. A hit found
-// by a text retriever, or one whose explanation is missing, is specific. Being nearby is not
-// experience, so the distance leg counts neither way.
-export function isBroad(hit, legs, me, common) {
+// by a text retriever is specific. Being nearby is not experience, so the distance leg counts
+// neither way.
+//
+// When the legs that found a hit are unknown (matchedLegs gives null), `unknown` decides. With
+// 'topics', the default, the hit is judged by its shared topics alone, as if only the topic legs
+// had found it: it is broad unless it shares a topic outside the common ones. The push nudge
+// (nudge.mjs) and Bluetooth sightings (ble.mjs) use the default, because they reach a person who
+// did not search, and a generic match there costs a notification. With 'specific' the hit is
+// kept; the matches view uses it, so that a person searching never loses a real match to an
+// explanation this module cannot read. The two answers differ on purpose: an unreadable
+// explanation costs the matches view some precision and the nudge and sightings some recall.
+export function isBroad(hit, legs, me, common, { unknown = 'topics' } = {}) {
   const matched = matchedLegs(hit, legs);
-  if (!matched || matched.some((i) => legs[i] !== 'topics' && legs[i] !== 'distance')) return false;
+  if (!matched) {
+    if (unknown === 'specific') return false;
+  } else if (matched.some((i) => legs[i] !== 'topics' && legs[i] !== 'distance')) {
+    return false;
+  }
   return sharedTopics(me, hit._source ?? {}).every((t) => common.has(t));
 }
 
@@ -1529,7 +1679,7 @@ async function matches(req, res) {
   // Broad matches are dropped from a text search and from the "anyone" view. The "around now"
   // view keeps those who are in the requester's own zone right now, after every specific match
   // on the page; that is the only place this module changes the order Elasticsearch returned.
-  const broad = new Set(all.filter((h) => isBroad(h, q.legs, me, topics.common)));
+  const broad = new Set(all.filter((h) => isBroad(h, q.legs, me, topics.common, { unknown: 'specific' })));
   const sameZone = (h) => isAround(me) && isAround(h._source ?? {}) && h._source.presence_zone === me.presence_zone;
   const specific = all.filter((h) => !broad.has(h));
   const hits = query || when !== 'around_now' ? specific : [...specific, ...all.filter((h) => broad.has(h) && sameZone(h))];
@@ -1572,7 +1722,9 @@ async function members(req, res) {
   if (!me || !(me.shared_talk_ids ?? []).includes(talkId)) throw new HttpError(403, { error: 'share_required', count });
 
   const blocked = await blockedIds(conf.slug, me.profile_id);
-  const membersQuery = (semantic) => peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked, semantic });
+  // The explanation says which semantic legs found a member, so that only their chunks are
+  // evidence (keepFoundChunks).
+  const membersQuery = (semantic) => peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked, explain: true, semantic });
   const [talks, { json }, labels] = await Promise.all([
     talksById(conf.slug, [talkId], ['title', 'start', 'end', 'url', 'speaker_profiles']),
     rankPeople(conf.slug, membersQuery),

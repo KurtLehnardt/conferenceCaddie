@@ -66,7 +66,7 @@ import {
   people, idx, docId, PEOPLE_INDEX, LIMITS, BLE_SESSION_OFF,
   HttpError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
   conferenceFor, authenticated, updateOwnProfile, isAround, cellOf, blockedIds, dispatch, topicsOf,
-  peopleQuery, rankPeople, isBroad, toPerson,
+  peopleQuery, rankPeople, isBroad, toPerson, SEMANTIC_FLOORS,
 } from './people.mjs';
 
 /** The 128-bit service UUID the phones advertise and scan for. Same value in BleConstants.kt and the contract. */
@@ -411,14 +411,16 @@ async function sightings(req, res) {
 
   // 5. Blocks in either direction, then the same ranking as POST /api/people/matches, as the
   // requester, restricted to these people, with the same keyword fallback when inference fails
-  // (rankPeople), keeping the strong (non-broad) matches.
+  // (rankPeople), keeping the strong (non-broad) matches. The semantic legs use the stricter push
+  // floor (SEMANTIC_FLOORS.push), so a text match must be close to reach a person who did not
+  // search.
   const blocked = await blockedIds(conf.slug, me.profile_id);
   const candidates = [...found].filter((id) => !blocked.has(id));
   if (!candidates.length) {
     answer([]);
     return;
   }
-  const build = (semantic) => peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: candidates.map((id) => docId(conf.slug, id)) } }], { size: candidates.length, blocked, explain: true, semantic });
+  const build = (semantic) => peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: candidates.map((id) => docId(conf.slug, id)) } }], { size: candidates.length, blocked, explain: true, semantic, floor: SEMANTIC_FLOORS.push });
   const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
   if (!ranked) {
     answer([]);
