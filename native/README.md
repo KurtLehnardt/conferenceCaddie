@@ -316,17 +316,26 @@ check that gating.
   `If-None-Match`), downloads exactly `bundle.json` and `vectors.i8` of the selected conference,
   verifies them as `verifyBundle()` does, decodes them strictly, stores them under
   `bundles/{backend key}/{content hash}/` in the app's files, and installs them in SQLite in one
-  transaction; the previous bundle stays in use until the new one passes. The conference list is
-  fetched at start and at most every 15 minutes in the foreground. With no network, the last good
-  list and bundle are used, and the app shows the web's Offline badge. Settings shows the space the
-  saved schedules take and can clear them; the Interested lists stay.
+  transaction; the previous bundle stays in use until the new one passes. Whatever is stored shows
+  at once at start, before any request, and is fetched again behind it: the capabilities at every
+  start and when older than their `max-age` (an hour without one), the conference list at most
+  every 15 minutes in the foreground. With no network, the last good list and bundle are used, and
+  the app shows the web's Offline badge. Settings shows the space the saved schedules take and can
+  clear them; the Interested lists stay, each marked talk with a copy of its schedule fields, so
+  My schedule still shows a talk a newer bundle drops.
 - **Search.** Keyword search runs on SQLite FTS5 (Porter stemmer) with the server's filters, facet
   counts, time phrases ("tuesday afternoon", "after lunch day 2"), Happening now and "Did you mean"
   chips. `DECISIONS.md` (Native apps phase 2a) lists where it differs from the server.
-- **Storage.** One SQLite database through the bundled androidx.sqlite driver, migrated by
-  `user_version` (`CaddieDatabase.MIGRATIONS`; add a migration at the end, never change a shipped
-  one). Android keeps it in the app's database directory; iOS in Application Support, with the
-  bundle directory excluded from backups.
+- **Storage.** SQLite through the bundled androidx.sqlite driver, in two files on one connection:
+  the main database (settings and the marked talks) and a cache database attached as `cache` (the
+  cached lists, the installed bundles and the search index, all of which can be downloaded again).
+  Each is migrated by its `user_version` (`CaddieDatabase.MIGRATIONS` and `CACHE_MIGRATIONS`; add a
+  migration at the end, never change a shipped one). Android keeps both in the app's database
+  directory, excluded from backups like everything else; iOS keeps them in Application Support,
+  with the cache database and the bundle directory excluded from backups. The apps open the
+  database lazily off the main thread with `CaddieDatabase.openLazily()`, which sets aside a main
+  database it cannot open (`caddie.db.unreadable`) and starts with an empty one rather than
+  crashing.
 
 ### Trying the talk features against local bundles
 
