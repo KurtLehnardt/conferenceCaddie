@@ -2,7 +2,7 @@
 //
 // Usage:
 //   node scripts/es-setup.mjs [index] [--recreate] [--alias name] [--inference-id id] [--lexical-only]
-//       Creates the talks index (default caddie-talks-v2) and points alias caddie-talks at it.
+//       Creates the talks index (default caddie-talks-v3) and points alias caddie-talks at it.
 //   node scripts/es-setup.mjs --conferences [index] [--recreate] [--alias name]
 //       Creates the conferences index (default caddie-conferences-v1) and points alias
 //       caddie-conferences at it.
@@ -11,10 +11,14 @@
 //       pointed at before, and prints the before and after.
 //
 // Env: ES_URL (default: the Elastic Cloud deployment), ES_API_KEY or ELASTISEARCH_API_KEY,
-//      ES_SETUP_INDEX (default talks index), ES_ALIAS (default alias for the talks index).
+//      ES_SETUP_INDEX (default talks index), ES_ALIAS (default alias for the talks index),
+//      ES_INFERENCE_ID (default inference endpoint for the semantic_text field).
 //
-// Without --inference-id the semantic_text field uses the cluster's default endpoint. The script
-// reads the mapping back afterwards and prints which inference endpoint the field resolved to.
+// The semantic_text field uses the inference endpoint caddie-e5-small, the multilingual E5 small
+// model deployed on the cluster's own ML node (see DECISIONS.md). --inference-id <id> or
+// ES_INFERENCE_ID picks another endpoint, and --inference-id "" leaves inference_id out so the
+// field uses the cluster's default endpoint. The script reads the mapping back afterwards and
+// prints which inference endpoint the field resolved to.
 // Pass --alias "" to skip the alias step, for example for a development index.
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
@@ -166,9 +170,10 @@ if (conferences !== undefined) {
 // Talks index.
 
 const lexicalOnly = flag('--lexical-only');
-const inferenceId = opt('--inference-id');
+const inferenceIdArg = opt('--inference-id');
+const inferenceId = inferenceIdArg !== undefined ? inferenceIdArg : process.env.ES_INFERENCE_ID ?? 'caddie-e5-small';
 const aliasArg = opt('--alias');
-const index = args[0] || process.env.ES_SETUP_INDEX || 'caddie-talks-v2';
+const index = args[0] || process.env.ES_SETUP_INDEX || 'caddie-talks-v3';
 const alias = aliasArg !== undefined ? aliasArg : process.env.ES_ALIAS ?? 'caddie-talks';
 checkName(index, 'index');
 if (alias) checkName(alias, 'alias');

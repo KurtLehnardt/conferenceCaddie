@@ -27,6 +27,7 @@
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
+import { semanticAvailable } from './semantic.mjs';
 import {
   people, idx, docId, PEOPLE_INDEX, LIMITS,
   HttpError, UpstreamError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
@@ -154,7 +155,7 @@ async function sightings(req, res) {
   }
 
   // The same ranking as POST /api/people/matches, as the requester, restricted to these people.
-  const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: ids.map((id) => docId(conf.slug, id)) } }], { size: ids.length, blocked, explain: true });
+  const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: ids.map((id) => docId(conf.slug, id)) } }], { size: ids.length, blocked, explain: true, semantic: semanticAvailable() });
   if (!q) {
     sendJson(res, 200, { nearby: [] });
     return;
