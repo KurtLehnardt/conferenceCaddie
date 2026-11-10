@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,6 +30,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
@@ -57,6 +60,10 @@ fun CaddieSheet(
 ) {
     val c = Caddie.colors
     val d = Caddie.dimens
+    // The web's sheet is at most 88% of the viewport tall (.sheet max-height: 88dvh), so the page
+    // behind it stays visible at the top and the sheet never runs under the status bar.
+    val window = LocalWindowInfo.current.containerSize
+    val maxHeight = with(LocalDensity.current) { (window.height * 0.88f).toDp() }
     ModalBottomSheet(
         onDismissRequest = onClose,
         // Opened fully, as the web's sheet is. The replacement API is still settling in Material3
@@ -72,27 +79,29 @@ fun CaddieSheet(
         },
         modifier = modifier.semantics { paneTitle = title },
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = d.gutter, end = 6.dp, top = 4.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(title, style = Caddie.type.sheetTitle, color = c.text, modifier = Modifier.weight(1f).semantics { heading() })
-            CaddieIconButton(LucideIcon.X, closeLabel, onClose, iconSize = 22.dp)
-        }
-        Column(
-            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = d.gutter),
-            content = content,
-        )
-        if (footer != null) {
-            HorizontalDivider(color = c.border)
+        Column(if (window.height > 0) Modifier.heightIn(max = maxHeight) else Modifier) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = d.gutter, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                Modifier.fillMaxWidth().padding(start = d.gutter, end = 6.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                content = footer,
+            ) {
+                Text(title, style = Caddie.type.sheetTitle, color = c.text, modifier = Modifier.weight(1f).semantics { heading() })
+                CaddieIconButton(LucideIcon.X, closeLabel, onClose, iconSize = 22.dp)
+            }
+            Column(
+                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = d.gutter),
+                content = content,
             )
+            if (footer != null) {
+                HorizontalDivider(color = c.border)
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = d.gutter, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = footer,
+                )
+            }
+            Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
         }
-        Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
     }
 }
 

@@ -50,6 +50,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE."""
 
-    const val TEXT = "Conference Caddie is open source under the Apache License 2.0, as are the Kotlin, Compose and " +
-        "AndroidX libraries it is built with. Its icons are from Lucide (lucide.dev), used under the licence below.\n\n" + LUCIDE
+    /**
+     * What Settings shows: a line about the app, then the lucide licence with its hard line breaks
+     * joined, so the paragraphs wrap to the screen.
+     */
+    val TEXT: String = "Conference Caddie is open source under the Apache License 2.0, as are the Kotlin, Compose and " +
+        "AndroidX libraries it is built with. Its icons are from Lucide (lucide.dev), used under the licence below.\n\n" +
+        LUCIDE.replace(Regex("(?<!\n)\n(?!\n)"), " ")
 }

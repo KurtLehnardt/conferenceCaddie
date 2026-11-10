@@ -296,10 +296,14 @@ object Strings {
         const val URL_CREDENTIALS = "Remove the user name or password from the address."
         const val URL_QUERY = "Remove the part after ? or # from the address."
 
-        fun bytes(n: Long): String = when {
-            n < 1_000 -> "$n bytes"
-            n < 1_000_000 -> "${(n + 500) / 1_000} KB"
-            else -> "${n / 1_000_000}.${(n % 1_000_000) / 100_000} MB"
+        /** A size in decimal units, rounded: "999 bytes", "12 KB", "1.0 MB", "1.3 MB". */
+        fun bytes(n: Long): String {
+            if (n < 1_000) return "$n bytes"
+            val kb = (n + 500) / 1_000
+            // A size that rounds to 1000 KB is shown as 1.0 MB rather than "1000 KB".
+            if (kb < 1_000) return "$kb KB"
+            val tenths = (n + 50_000) / 100_000
+            return "${tenths / 10}.${tenths % 10} MB"
         }
     }
 
