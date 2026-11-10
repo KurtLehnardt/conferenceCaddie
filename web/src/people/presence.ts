@@ -398,6 +398,21 @@ onPresenceFromOtherTab((changed) => {
   syncPositionWatch(slug);
 });
 
+/**
+ * Presence the server has already cleared (conference-wide visibility turned off): off on the
+ * device too, with its timers and the position watch, and no request of its own.
+ */
+export function presenceEndedOnServer(slug: string): void {
+  epoch++;
+  const p = getPresence(slug);
+  if (p.on) {
+    lastZone = p.zone;
+    setPresence(slug, OFF);
+  }
+  if (watchedSlug === slug) clearTimers();
+  if (watchSlug === slug) stopPositionWatch();
+}
+
 export function presenceProblem(err: unknown): string {
   if (err instanceof PeopleApiError) {
     if (err.code === 'profile_required' || err.code === 'no_device') return 'Make your profile visible first.';

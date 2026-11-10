@@ -2,6 +2,8 @@
 // is written only while the user is visible conference-wide or shares for a talk;
 // when both are off, one write asks the server to delete it.
 import { deleteProfile, fetchTopics, PeopleApiError, putProfile, type ProfileBody } from './api';
+import { presenceEndedOnServer } from './presence';
+import { pushDeletedOnServer } from './push';
 import { ensureDevice, getProfile, getVisibility, notify, setProfile, setVisibility, slugsOnServer, topicsFor } from './storage';
 import type { Profile, TopicRef, Visibility } from './types';
 
@@ -144,6 +146,9 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>)
         if (!(err instanceof PeopleApiError && err.status === 404)) throw err;
       }
       setVisibility(slug, { ...patch, on_server: false });
+      // The server deleted the document with its presence and push subscription.
+      presenceEndedOnServer(slug);
+      pushDeletedOnServer(slug);
       setStatus({ state: 'saved' });
       return null;
     }
@@ -155,6 +160,8 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>)
       on_server: res.open_to_meet || res.shared_talk_ids.length > 0,
       hidden_for_owner: res.hidden_for_owner === true,
     });
+    // Presence needs conference-wide visibility; the server cleared it with that.
+    if (!res.open_to_meet) presenceEndedOnServer(slug);
     setStatus({ state: 'saved' });
     return null;
   } catch (err) {
