@@ -18,10 +18,10 @@
 # applied on the server so it can be tuned at the venue without an app update.
 #
 # Bluetooth derived tokens: when the secret caddie-ble-master exists (scripts/ble-master.mjs
-# creates and rotates it), its latest version at deploy time is mounted as BLE_MASTER_KEYRING
-# and the server advertises ble.mode derived-v1. Without it the server serves only the legacy
-# server-minted tokens (server-rotate). The keyring is only ever mounted by name and version;
-# this script never reads its value.
+# creates and rotates it), its newest enabled version at deploy time is mounted as
+# BLE_MASTER_KEYRING and the server advertises ble.mode derived-v1. Without it the server serves
+# only the legacy server-minted tokens (server-rotate). The keyring is only ever mounted by name
+# and version; this script never reads its value.
 #
 # The service name comes from the shell's SERVICE (default conference-caddie), so
 # SERVICE=conference-caddie-test npm run deploy deploys a second service for testing without
@@ -101,16 +101,17 @@ else
 fi
 
 # The Bluetooth master keyring turns on derived tokens; the legacy tokens are served either way.
-# It is pinned to the version that is the latest one now, not mounted as "latest": Cloud Run
-# resolves "latest" whenever an instance starts, so an instance started by autoscaling after a
-# keyring change would hold another keyring than its siblings. Pinned, a keyring change reaches
-# the instances only with a deploy, which is what the rotation steps of scripts/ble-master.mjs
-# rely on. Only the version's metadata is read here, never its payload.
+# It is pinned to the newest enabled version now, not mounted as "latest": Cloud Run resolves
+# "latest" whenever an instance starts, so an instance started by autoscaling after a keyring
+# change would hold another keyring than its siblings. Pinned, a keyring change reaches the
+# instances only with a deploy, which is what the rotation steps of scripts/ble-master.mjs rely
+# on (it reads the pinned version back from the service). Only the versions' metadata is read
+# here, never a payload.
 if gcloud secrets describe "$BLE_MASTER_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
-  BLE_MASTER_VERSION="$(gcloud secrets versions describe latest --secret "$BLE_MASTER_SECRET" --project "$PROJECT" --format='value(name)')"
+  BLE_MASTER_VERSION="$(gcloud secrets versions list "$BLE_MASTER_SECRET" --project "$PROJECT" --filter=state:enabled --sort-by=~createTime --limit=1 --format='value(name)')"
   BLE_MASTER_VERSION="${BLE_MASTER_VERSION##*/}"
   if ! [[ "$BLE_MASTER_VERSION" =~ ^[0-9]+$ ]]; then
-    echo "The secret $BLE_MASTER_SECRET has no version; run node scripts/ble-master.mjs --init first." >&2
+    echo "The secret $BLE_MASTER_SECRET has no enabled version; run node scripts/ble-master.mjs --init first." >&2
     exit 1
   fi
   SECRETS="$SECRETS,BLE_MASTER_KEYRING=$BLE_MASTER_SECRET:$BLE_MASTER_VERSION"
