@@ -30,3 +30,9 @@ iosApp/Configuration/Local.xcconfig
 *.p12
 *.mobileprovision
 keystore.properties
+
+# Build outputs that can end up outside build/ (Android Studio's "Generate Signed APK" writes to
+# androidApp/release/).
+androidApp/release/
+*.aab
+*.apk

@@ -33,7 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.Capabilities
-import app.conferencecaddie.shared.ServerUrl
+import app.conferencecaddie.shared.BackendUrl
 
 /** The bottom-bar destinations. People is shown only when the backend's capabilities enable it. */
 enum class Tab(val label: String, val icon: ImageVector) {
@@ -50,12 +50,15 @@ fun visibleTabs(capabilities: Capabilities): List<Tab> =
 
 /**
  * The root of the UI on both platforms. [initialCapabilities] stands in for the document fetched
- * from the backend until the capabilities client exists (Phase 1).
+ * from the backend until the capabilities client exists (Phase 1). [isDebugBuild] comes from the
+ * platform entry point; debug builds accept plain http to a local server and show developer
+ * controls.
  */
 @Composable
 fun App(
     initialCapabilities: Capabilities = Capabilities.Demo,
     initialServerUrl: String = "",
+    isDebugBuild: Boolean = false,
 ) {
     var capabilities by remember { mutableStateOf(initialCapabilities) }
     var serverUrl by rememberSaveable { mutableStateOf(initialServerUrl) }
@@ -93,6 +96,7 @@ fun App(
                     onServerUrlSaved = { serverUrl = it },
                     capabilities = capabilities,
                     onCapabilitiesChanged = { capabilities = it },
+                    isDebugBuild = isDebugBuild,
                     modifier = modifier,
                 )
             }
@@ -114,6 +118,7 @@ private fun SettingsScreen(
     onServerUrlSaved: (String) -> Unit,
     capabilities: Capabilities,
     onCapabilitiesChanged: (Capabilities) -> Unit,
+    isDebugBuild: Boolean,
     modifier: Modifier = Modifier,
 ) {
     var draft by rememberSaveable(serverUrl) { mutableStateOf(serverUrl) }
@@ -138,12 +143,12 @@ private fun SettingsScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         Button(onClick = {
-            when (val result = ServerUrl.normalize(draft)) {
-                is ServerUrl.Result.Valid -> {
-                    draft = result.origin
-                    onServerUrlSaved(result.origin)
+            when (val result = BackendUrl.normalise(draft, allowLocalHttp = isDebugBuild)) {
+                is BackendUrl.Valid -> {
+                    draft = result.base
+                    onServerUrlSaved(result.base)
                 }
-                is ServerUrl.Result.Invalid -> error = result.reason
+                is BackendUrl.Invalid -> error = result.reason.message(isDebugBuild)
             }
         }) {
             Text("Save")
@@ -152,17 +157,32 @@ private fun SettingsScreen(
         Text("Backend tier: ${capabilities.tier.name}", style = MaterialTheme.typography.bodyMedium)
 
         // Until the app fetches capabilities from the backend, this switch previews the gating.
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Switch(
-                checked = capabilities.people.enabled,
-                onCheckedChange = { enabled ->
-                    onCapabilitiesChanged(if (enabled) Capabilities.Legacy else Capabilities.Demo)
-                },
-            )
-            Text("Preview people features", style = MaterialTheme.typography.bodyMedium)
+        // It is a developer control, so release builds do not show it.
+        if (isDebugBuild) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Switch(
+                    checked = capabilities.people.enabled,
+                    onCheckedChange = { enabled ->
+                        onCapabilitiesChanged(if (enabled) Capabilities.Legacy else Capabilities.Demo)
+                    },
+                )
+                Text("Preview people features", style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
+}
+
+private fun BackendUrl.Reason.message(isDebugBuild: Boolean): String = when (this) {
+    BackendUrl.Reason.NotAUrl -> "Enter a full address that starts with https://."
+    BackendUrl.Reason.HttpsRequired ->
+        if (isDebugBuild) {
+            "Use https. Plain http works only for localhost, 127.0.0.1, [::1] and 10.0.2.2."
+        } else {
+            "Use an https address."
+        }
+    BackendUrl.Reason.CredentialsNotAllowed -> "Remove the user name or password from the address."
+    BackendUrl.Reason.QueryNotAllowed -> "Remove the part after ? or # from the address."
 }

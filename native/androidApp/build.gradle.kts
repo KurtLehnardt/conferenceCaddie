@@ -8,16 +8,37 @@ plugins {
     alias(libs.plugins.composeCompiler)
 }
 
-// Release signing comes from the environment, never from files in the repository:
-// ANDROID_KEYSTORE_FILE (path to the keystore), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and
-// ANDROID_KEY_PASSWORD. When any of them is missing, release builds fall back to the debug key so
-// that `assembleRelease` still works on a machine without the keystore.
-val releaseKeystoreFile: String? = providers.environmentVariable("ANDROID_KEYSTORE_FILE").orNull
-val releaseKeystorePassword: String? = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
-val releaseKeyAlias: String? = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
-val releaseKeyPassword: String? = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
-val hasReleaseSigning = listOf(releaseKeystoreFile, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword)
-    .all { !it.isNullOrEmpty() }
+// Release signing for local builds comes from the environment, never from files in the
+// repository: ANDROID_KEYSTORE_FILE (path to the keystore), ANDROID_KEYSTORE_PASSWORD,
+// ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD. With none of them set, release builds are signed with
+// the debug key so that `assembleRelease` still works without the keystore. With only some of them
+// set, the build stops, because that is almost always a mistake.
+//
+// CI never gives Gradle the key. It passes -Pcaddie.unsignedRelease=true, builds an unsigned release
+// APK, and signs it in a separate job (see .github/workflows/native.yml).
+val signingVariables = listOf(
+    "ANDROID_KEYSTORE_FILE",
+    "ANDROID_KEYSTORE_PASSWORD",
+    "ANDROID_KEY_ALIAS",
+    "ANDROID_KEY_PASSWORD",
+).associateWith { providers.environmentVariable(it).orNull?.takeIf(String::isNotEmpty) }
+val missingSigningVariables = signingVariables.filterValues { it == null }.keys
+if (missingSigningVariables.isNotEmpty() && missingSigningVariables.size < signingVariables.size) {
+    throw GradleException(
+        "Release signing needs all four ANDROID_KEYSTORE_FILE, ANDROID_KEYSTORE_PASSWORD, " +
+            "ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD; these are missing: " +
+            missingSigningVariables.joinToString(", "),
+    )
+}
+val hasReleaseSigning = missingSigningVariables.isEmpty()
+val unsignedRelease = providers.gradleProperty("caddie.unsignedRelease").orNull == "true"
+
+// CI sets CADDIE_VERSION_CODE to 1000 + the workflow run number, which keeps every native build
+// above the Capacitor app's versionCode. Local builds use 1.
+val caddieVersionCode = providers.environmentVariable("CADDIE_VERSION_CODE").orNull?.let { value ->
+    value.toIntOrNull()?.takeIf { it > 0 }
+        ?: throw GradleException("CADDIE_VERSION_CODE must be a positive integer.")
+} ?: 1
 
 dependencies {
     implementation(projects.composeApp)
@@ -36,17 +57,17 @@ android {
         // "near me" feature uses. The Capacitor app has the same floor (web/android/variables.gradle).
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
+        versionCode = caddieVersionCode
         versionName = "0.1.0"
     }
 
     signingConfigs {
-        if (hasReleaseSigning) {
+        if (hasReleaseSigning && !unsignedRelease) {
             create("release") {
-                storeFile = file(releaseKeystoreFile!!)
-                storePassword = releaseKeystorePassword
-                keyAlias = releaseKeyAlias
-                keyPassword = releaseKeyPassword
+                storeFile = file(signingVariables.getValue("ANDROID_KEYSTORE_FILE")!!)
+                storePassword = signingVariables.getValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = signingVariables.getValue("ANDROID_KEY_ALIAS")
+                keyPassword = signingVariables.getValue("ANDROID_KEY_PASSWORD")
             }
         }
     }
@@ -59,15 +80,19 @@ android {
 
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = false
-            signingConfig = if (hasReleaseSigning) {
-                signingConfigs.getByName("release")
-            } else {
-                logger.warn(
-                    "Conference Caddie: ANDROID_KEYSTORE_* variables are not set; " +
-                        "the release build is signed with the debug key.",
-                )
-                signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = when {
+                unsignedRelease -> null
+                hasReleaseSigning -> signingConfigs.getByName("release")
+                else -> {
+                    logger.warn(
+                        "Conference Caddie: ANDROID_KEYSTORE_* variables are not set; " +
+                            "the release build is signed with the debug key.",
+                    )
+                    signingConfigs.getByName("debug")
+                }
             }
         }
     }

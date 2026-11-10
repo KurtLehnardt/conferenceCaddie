@@ -1,8 +1,15 @@
-# Builds the Android companion's debug APK and keeps it as a workflow artifact (visible to the
-# repository's collaborators under the Actions tab) for sideloading. This is the project's
-# Android build tool, not a test suite: the Kotlin plugin cannot be compiled without the SDK.
-# When the ANDROID_KEYSTORE_* secrets exist it also builds a release APK signed with the project's
-# release key, the same key the native app in native/ uses, so every release can update the last.
+# Builds the Android companion's debug APK and keeps it as a workflow artifact for sideloading. The
+# repository is public, so anyone signed in to GitHub can download the artifacts from the Actions
+# tab. This is the project's Android build tool, not a test suite: the Kotlin plugin cannot be
+# compiled without the SDK.
+#
+# A manual run on main also builds a release APK and signs it with the project's release key, the
+# same key the native app in native/ uses, so every release can update the last. The build job
+# never sees the key: it runs npm and Capacitor's Gradle code, so it builds the release APK
+# unsigned. A separate job, in the `release` environment (secrets for main only), signs that file
+# without checking out or running any project code.
+#
+# Every action is pinned to a full commit SHA; Dependabot (.github/dependabot.yml) proposes updates.
 name: Android APK
 
 on:
@@ -23,26 +30,28 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      release_apk: ${{ steps.release_apk.outputs.file }}
     env:
       # The API origin the native app talks to. The bundled web app is the same as the PWA.
       VITE_API_ORIGIN: https://conference-caddie-265846417372.us-west1.run.app
-      # Secrets cannot be read in an `if:`, so expose only whether all four are present.
-      HAS_RELEASE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           packages: 'platforms;android-36 build-tools;36.0.0 platform-tools'
 
@@ -67,42 +76,88 @@ jobs:
           cp web/android/app/build/outputs/apk/debug/app-debug.apk "$out"
           echo "file=$out" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.apk.outputs.file }}
           path: ${{ steps.apk.outputs.file }}
           retention-days: 14
 
       # The Capacitor project has no release signing config, so Gradle builds an unsigned release
-      # APK and apksigner signs it here. The keystore lives in the runner's temp directory only for
-      # this step, and apksigner reads the passwords from the environment, not the command line.
-      - name: Assemble and sign the release APK
+      # APK. It is kept for one day, for the sign job below.
+      - name: Assemble the unsigned release APK
         id: release_apk
-        if: env.HAS_RELEASE_KEY == 'true'
+        if: github.ref == 'refs/heads/main'
         working-directory: web/android
+        run: |
+          ./gradlew --no-daemon assembleRelease
+          out="conference-caddie-$(git rev-parse --short HEAD)-release.apk"
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/unsigned-$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.release_apk.outcome == 'success'
+        with:
+          name: unsigned-${{ steps.release_apk.outputs.file }}
+          path: unsigned-${{ steps.release_apk.outputs.file }}
+          retention-days: 1
+
+  # Signs the release APK with the project's release key. This job has the key, so it runs no
+  # project code: no checkout, no npm, no Gradle. It uses the runner image's Android build tools.
+  sign:
+    name: Sign the release APK
+    needs: apk
+    if: github.ref == 'refs/heads/main' && needs.apk.outputs.release_apk != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    env:
+      HAS_RELEASE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
+      APK: ${{ needs.apk.outputs.release_apk }}
+    steps:
+      - name: Note that release signing is skipped
+        if: env.HAS_RELEASE_KEY != 'true'
+        run: echo "::notice title=Release APK skipped::The ANDROID_KEYSTORE_* secrets are not set in the release environment, so the release APK was not signed."
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: env.HAS_RELEASE_KEY == 'true'
+        with:
+          name: unsigned-${{ env.APK }}
+
+      - name: Sign and check the certificate
+        if: env.HAS_RELEASE_KEY == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
         run: |
-          ./gradlew --no-daemon assembleRelease
+          set -euo pipefail
+          umask 077
           ks="$RUNNER_TEMP/release.jks"
           trap 'rm -f "$ks"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ks"
-          tools="$ANDROID_HOME/build-tools/36.0.0"
-          out="conference-caddie-$(git rev-parse --short HEAD)-release.apk"
-          "$tools/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          unset ANDROID_KEYSTORE_BASE64
+
+          tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          "$tools/zipalign" -f -p 4 "unsigned-$APK" "$RUNNER_TEMP/aligned.apk"
           "$tools/apksigner" sign --ks "$ks" --ks-key-alias "$ANDROID_KEY_ALIAS" \
             --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
-            --out "$GITHUB_WORKSPACE/$out" "$RUNNER_TEMP/aligned.apk"
-          fingerprint=$("$tools/apksigner" verify --print-certs "$GITHUB_WORKSPACE/$out" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n 1)
-          echo "Release APK signed by certificate SHA-256 $fingerprint" >> "$GITHUB_STEP_SUMMARY"
-          echo "file=$out" >> "$GITHUB_OUTPUT"
+            --out "$APK" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$ks"
 
-      - uses: actions/upload-artifact@v4
-        if: steps.release_apk.outcome == 'success'
+          "$tools/apksigner" verify --print-certs "$APK" > "$RUNNER_TEMP/certs.txt"
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/certs.txt")
+          expected=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ': ' | tr 'A-F' 'a-f')
+          if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+            echo "::error title=Wrong signing key::The APK's certificate SHA-256 is $actual, not the ANDROID_RELEASE_CERT_SHA256 variable."
+            exit 1
+          fi
+          echo "Release APK signed by certificate SHA-256 $actual" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.HAS_RELEASE_KEY == 'true'
         with:
-          name: ${{ steps.release_apk.outputs.file }}
-          path: ${{ steps.release_apk.outputs.file }}
+          name: ${{ env.APK }}
+          path: ${{ env.APK }}
           retention-days: 30

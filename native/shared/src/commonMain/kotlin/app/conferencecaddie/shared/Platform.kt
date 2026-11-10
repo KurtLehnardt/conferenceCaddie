@@ -68,7 +68,9 @@ interface Notifier {
 
 /**
  * Keychain on iOS, Android Keystore-backed storage on Android. Device secrets are stored per
- * backend origin, so one backend's secret is never sent to another; use [scopedKey] for that.
+ * normalised backend base ([BackendUrl.Valid.base]), so one backend's secret is never sent to
+ * another, even when two backends share an origin under different paths. Build keys with
+ * [scopedKey].
  */
 interface SecureStore {
     suspend fun get(key: String): String?
@@ -78,7 +80,17 @@ interface SecureStore {
     suspend fun remove(key: String)
 
     companion object {
-        /** The storage key for [name] under the normalised backend [origin]. */
-        fun scopedKey(origin: String, name: String): String = "$origin#$name"
+        private val NAME = Regex("[A-Za-z0-9_.-]{1,64}")
+
+        /**
+         * The storage key for [name] under [backend]. A normalised base never contains '#'
+         * (fragments are refused and '#' is not a path character) and [name] is limited to
+         * letters, digits, '_', '.' and '-', so every key splits back into exactly one
+         * (base, name) pair and no two backends can share a key.
+         */
+        fun scopedKey(backend: BackendUrl.Valid, name: String): String {
+            require(NAME.matches(name)) { "A secure store name uses only letters, digits, '_', '.' and '-'." }
+            return "${backend.base}#$name"
+        }
     }
 }
