@@ -3,6 +3,7 @@ package app.conferencecaddie.shared.core
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.CapabilitiesDiscovery
+import app.conferencecaddie.shared.Embedder
 import app.conferencecaddie.shared.asString
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.bundle.BundleStatus
@@ -12,10 +13,12 @@ import app.conferencecaddie.shared.bundle.Publisher
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.Http
+import app.conferencecaddie.shared.search.ForYou
 import app.conferencecaddie.shared.search.SearchRequest
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.shared.search.TalkSearch
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +28,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -53,7 +58,33 @@ data class CoreState(
     val selectedSlug: String? = null,
     val bundle: BundleState = BundleState.None,
     val interested: List<String> = emptyList(),
+    /** Whether meaning-based matching (the on-device query embedder) is available. */
+    val semantic: SemanticState = SemanticState.Off,
+    /** What the person wants to learn at the selected conference, for For you. */
+    val learn: LearnInput = LearnInput(),
 )
+
+/** The query embedder's state. Search and For you use keywords alone unless it is [Ready]. */
+sealed interface SemanticState {
+    /** No embedder was offered (tests, or a host without the model). */
+    data object Off : SemanticState
+
+    data object Loading : SemanticState
+
+    data object Ready : SemanticState
+
+    /** The model is missing or ONNX Runtime refused it; keyword search goes on. */
+    data object Unavailable : SemanticState
+}
+
+/**
+ * For you's input: the topic ids the person wants to learn about at the selected conference, and
+ * the text of what they are trying to learn or figure out next, which is kept for every conference
+ * (as the web keeps it in the profile).
+ */
+data class LearnInput(val topics: List<String> = emptyList(), val text: String = "") {
+    val isEmpty: Boolean get() = topics.isEmpty() && text.isBlank()
+}
 
 sealed interface CapabilitiesState {
     data object Loading : CapabilitiesState
@@ -103,7 +134,9 @@ sealed interface BundleState {
 
     data class Loading(val slug: String) : BundleState
 
-    data class Ready(val bundle: TalkBundle, val search: TalkSearch, val offline: Boolean = false) : BundleState
+    data class Ready(val bundle: TalkBundle, val search: TalkSearch, val offline: Boolean = false) : BundleState {
+        val forYou: ForYou = ForYou(bundle, search)
+    }
 
     /** The conference's bundle could not be loaded and none is installed. */
     data class Failed(val slug: String, val reason: Reason, val problems: List<String> = emptyList()) : BundleState
@@ -140,7 +173,8 @@ class CaddieCore(
             mutex.withLock {
                 val chosen = database.setting(KEY_BACKEND)?.let { BackendUrl.normalise(it, allowLocalHttp) as? BackendUrl.Valid }
                 val backend = chosen ?: defaultBackend
-                _state.value = CoreState(backend, isDefaultBackend = chosen == null)
+                // update, not an assignment, so a concurrent change of the embedder's state is kept.
+                _state.update { CoreState(backend, isDefaultBackend = chosen == null, semantic = it.semantic) }
                 loadBackend(backend, refresh = true)
             }
         }
@@ -173,7 +207,9 @@ class CaddieCore(
             mutex.withLock {
                 database.setSetting(KEY_BACKEND, backend?.base)
                 val target = backend ?: defaultBackend
-                _state.value = CoreState(target, isDefaultBackend = backend == null || backend.base == defaultBackend.base)
+                _state.update {
+                    CoreState(target, isDefaultBackend = backend == null || backend.base == defaultBackend.base, semantic = it.semantic)
+                }
                 loadBackend(target, refresh = true)
             }
         }
@@ -193,6 +229,65 @@ class CaddieCore(
 
     suspend fun search(request: SearchRequest): SearchResult? =
         (_state.value.bundle as? BundleState.Ready)?.search?.search(request)
+
+    @kotlin.concurrent.Volatile
+    private var embedder: Embedder? = null
+    private var embedderJob: Job? = null
+
+    /**
+     * Offers the query embedder. [load] runs once, in the background; while it runs, and if it
+     * returns null or throws, search and For you use keywords alone. The state says which
+     * ([CoreState.semantic]), so the screens can search again when the model is ready.
+     */
+    fun useEmbedder(load: suspend () -> Embedder?) {
+        if (embedderJob != null) return
+        _state.update { it.copy(semantic = SemanticState.Loading) }
+        embedderJob = scope.launch {
+            val loaded = try {
+                load()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            }
+            embedder = loaded
+            _state.update { it.copy(semantic = if (loaded != null) SemanticState.Ready else SemanticState.Unavailable) }
+        }
+    }
+
+    /**
+     * Talks for you at the selected conference, from [CoreState.learn] and the interested list, or
+     * null while no bundle is ready.
+     */
+    suspend fun forYou(size: Int = 20): ForYou.Result? {
+        val s = _state.value
+        val ready = s.bundle as? BundleState.Ready ?: return null
+        val request = ForYou.Request(s.learn.topics, s.learn.text, s.interested.toSet(), size)
+        return ready.forYou.recommend(request, clock.now().toEpochMilliseconds())
+    }
+
+    /** Sets the topics the person wants to learn about at the selected conference. */
+    fun setLearnTopics(topicIds: List<String>) {
+        val s = _state.value
+        val slug = s.selectedSlug ?: return
+        val topics = topicIds.distinct().take(ForYou.MAX_TOPICS)
+        _state.update { if (it.selectedSlug == slug && it.backend == s.backend) it.copy(learn = it.learn.copy(topics = topics)) else it }
+        scope.launch { database.setSetting(KEY_LEARN_TOPICS + BundleSync.scope(s.backend.base, slug), JsonArray(topics.map { JsonPrimitive(it) }).toString()) }
+    }
+
+    /** Sets what the person is trying to learn or figure out next. */
+    fun setLearnText(text: String) {
+        val value = text.take(ForYou.MAX_TEXT)
+        _state.update { it.copy(learn = it.learn.copy(text = value)) }
+        scope.launch { database.setSetting(KEY_LEARN_TEXT, value.ifEmpty { null }) }
+    }
+
+    private suspend fun learnInput(key: String): LearnInput {
+        val topics = database.setting(KEY_LEARN_TOPICS + key)?.let { text ->
+            runCatching { (Capabilities.parseJson(text) as? JsonArray)?.mapNotNull { it.asString() } }.getOrNull()
+        }.orEmpty()
+        return LearnInput(topics, database.setting(KEY_LEARN_TEXT).orEmpty())
+    }
 
     /** Marks or unmarks a talk of the selected conference. */
     fun setInterested(talkId: String, interested: Boolean) {
@@ -226,9 +321,8 @@ class CaddieCore(
             mutex.withLock {
                 database.clearBundles()
                 database.run { files.clear() }
-                val s = _state.value
-                _state.value = s.copy(conferences = ConferencesState.Loading, bundle = BundleState.None)
-                loadBackend(s.backend, refresh = true)
+                _state.update { it.copy(conferences = ConferencesState.Loading, bundle = BundleState.None) }
+                loadBackend(_state.value.backend, refresh = true)
             }
         }
     }
@@ -268,11 +362,13 @@ class CaddieCore(
     private suspend fun loadBundle(backend: BackendUrl.Valid, slug: String, refresh: Boolean) {
         val key = BundleSync.scope(backend.base, slug)
         val interested = database.interested(key)
+        val learn = learnInput(key)
         val installed = sync.installed(backend.base, key)
         _state.update {
             if (it.backend != backend) return@update it
             it.copy(
                 interested = interested,
+                learn = learn,
                 bundle = if (installed != null) ready(installed, key, offline = false) else BundleState.Loading(slug),
             )
         }
@@ -300,8 +396,18 @@ class CaddieCore(
         _state.update { if (it.backend == backend && it.selectedSlug == slug) it.copy(bundle = next) else it }
     }
 
-    private fun ready(bundle: TalkBundle, key: String, offline: Boolean) =
-        BundleState.Ready(bundle, TalkSearch(bundle, key, database) { clock.now() }, offline)
+    private fun ready(bundle: TalkBundle, key: String, offline: Boolean) = BundleState.Ready(
+        bundle,
+        TalkSearch(
+            bundle,
+            key,
+            database,
+            now = { clock.now() },
+            embedder = { embedder },
+            embedderFailed = { _state.value.semantic == SemanticState.Unavailable },
+        ),
+        offline,
+    )
 
     /** Discovers [backend]'s capabilities, keeping the last good result per backend base. */
     private suspend fun capabilities(backend: BackendUrl.Valid): CapabilitiesState {
@@ -370,6 +476,8 @@ class CaddieCore(
         private const val KEY_CAPABILITIES = "capabilities:"
         private const val KEY_HAD_DOCUMENT = "had_document:"
         private const val KEY_UI = "ui:"
+        private const val KEY_LEARN_TOPICS = "learn_topics:"
+        private const val KEY_LEARN_TEXT = "learn_text"
 
         /** The conference list is fetched at most this often in the foreground. */
         const val INDEX_REFRESH_MS = 15 * 60 * 1000L

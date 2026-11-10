@@ -26,7 +26,7 @@ class SearchTest {
     private val database = CaddieDatabase.open(":memory:")
     private val scope = "https://caddie.example\n${Fixtures.SLUG}"
     private var nowMs = IsoTime.epochMillis("2099-03-02T09:15:00Z")!!
-    private val search = TalkSearch(bundle, scope, database) { Instant.fromEpochMilliseconds(nowMs) }
+    private val search = TalkSearch(bundle, scope, database, now = { Instant.fromEpochMilliseconds(nowMs) })
 
     @AfterTest
     fun close() = database.close()
