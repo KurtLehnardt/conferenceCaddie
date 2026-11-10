@@ -197,8 +197,9 @@ async function sendFix(slug: string) {
     });
   } catch (err) {
     // A profile that is gone, or presence the server no longer accepts: stop sending positions;
-    // the zone-only timers decide the rest.
-    if (err instanceof PeopleApiError && err.status >= 400 && err.status < 500 && err.status !== 429) stopPositionWatch();
+    // the zone-only timers decide the rest. A 409 means the profile changed while the server
+    // wrote, and 429 a short limit: the next fix tries again.
+    if (err instanceof PeopleApiError && err.status >= 400 && err.status < 500 && err.status !== 429 && err.status !== 409) stopPositionWatch();
   } finally {
     sending = false;
   }
@@ -428,6 +429,9 @@ export function resetPresence(): void {
 export function presenceProblem(err: unknown): string {
   if (err instanceof PeopleApiError) {
     if (err.code === 'profile_required' || err.code === 'no_device') return 'Make your profile visible first.';
+    // The profile changed while the server wrote presence (another device or tab, a report): the
+    // same tap works a moment later.
+    if (err.status === 409) return 'That did not go through. Try again.';
     return err.message;
   }
   return 'That could not be saved. Please try again.';
