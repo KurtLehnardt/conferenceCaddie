@@ -50,6 +50,7 @@ import {
   ProfileScreen,
   onInterestedChanged,
   registerPeopleUi,
+  startDeleteRetries,
   useInboxCount,
   useInboxWatch,
   usePresenceWatch,
@@ -174,6 +175,10 @@ export function App() {
     registerPeopleUi({ toast: showToast, confirm: (d) => setConfirm(d) });
     return () => registerPeopleUi(null);
   }, [showToast]);
+
+  // A profile delete that did not finish last time is tried again now, and again whenever the app
+  // comes back to the foreground or back online.
+  useEffect(() => startDeleteRetries(), []);
 
   const loadList = useCallback(async () => {
     try {
