@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared.bundle
 
+import kotlinx.io.IOException
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -60,14 +61,29 @@ class BundleFiles(private val root: Path) {
         }
     }
 
-    private fun treeSize(path: Path): Long {
-        val meta = fs.metadataOrNull(path) ?: return 0L
-        return if (meta.isDirectory) fs.list(path).sumOf { treeSize(it) } else meta.size
+    // A download can create, move or delete a directory while the size is being added up, so an
+    // entry that vanishes counts as empty instead of failing the whole sum.
+    private fun treeSize(path: Path): Long = try {
+        val meta = fs.metadataOrNull(path)
+        when {
+            meta == null -> 0L
+            meta.isDirectory -> fs.list(path).sumOf { treeSize(it) }
+            else -> meta.size
+        }
+    } catch (_: IOException) {
+        0L
     }
 
     private fun deleteTree(path: Path) {
         val meta = fs.metadataOrNull(path) ?: return
-        if (meta.isDirectory) fs.list(path).forEach { deleteTree(it) }
+        if (meta.isDirectory) {
+            val children = try {
+                fs.list(path)
+            } catch (_: IOException) {
+                emptyList()
+            }
+            children.forEach { deleteTree(it) }
+        }
         fs.delete(path, mustExist = false)
     }
 }

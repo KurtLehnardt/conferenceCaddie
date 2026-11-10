@@ -104,7 +104,7 @@ fun CaddieApp(
     val ready = state.bundle as? BundleState.Ready
     LaunchedEffect(state.selectedSlug, ready?.bundle?.contentHash) {
         search.onConference(state.selectedSlug, ready?.bundle?.contentHash)
-        cacheBytes = core.cacheSizeBytes()
+        cacheBytes = runCatching { core.cacheSizeBytes() }.getOrNull()
     }
     LaunchedEffect(initialQuery, ready != null) {
         if (initialQuery != null && ready != null && search.input.isEmpty()) search.onInput(initialQuery)
