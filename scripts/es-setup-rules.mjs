@@ -5,7 +5,9 @@
 //
 // The index defaults to caddie-people-rules-v1 and its alias to caddie-people-rules. The name
 // must stay caddie-people-rules*: the deployed server reads it with the people key, which covers
-// caddie-people* and nothing else. Pass --alias "" to skip the alias step.
+// caddie-people* and nothing else. The alias moves only for the default index or
+// caddie-people-rules-v<N>; any other name gets no alias unless --alias names one. Pass --alias ""
+// to skip the alias step.
 //
 // Mapping (dynamic: false):
 //   query  percolator     one Elasticsearch query per rule (match_phrase or regexp on text)
@@ -17,6 +19,8 @@
 //
 // Idempotent: an index that exists is kept (--recreate deletes it first) and the alias is moved
 // when it points elsewhere. Rules are written by scripts/moderation-rules.mjs --reload-rules.
+
+import { chooseAlias } from './lib/alias.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -42,7 +46,8 @@ const flag = (name) => {
 const recreate = flag('--recreate');
 const aliasArg = opt('--alias');
 const index = args[0] || 'caddie-people-rules-v1';
-const alias = aliasArg !== undefined ? aliasArg : 'caddie-people-rules';
+const { alias, hint } = chooseAlias({ index, explicit: aliasArg, defaultIndex: 'caddie-people-rules-v1', defaultAlias: 'caddie-people-rules' });
+if (hint) console.log(hint);
 
 if (!index.startsWith('caddie-people-rules') || (alias && !alias.startsWith('caddie-people-rules'))) {
   console.error('Index and alias names must start with "caddie-people-rules" so the people key covers them.');

@@ -3,10 +3,13 @@
 // Usage: node scripts/es-setup-people.mjs [index] [--recreate] [--alias name] [--lexical-only]
 //                                         [--inference-id id]
 // Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY,
+//        ES_CONFERENCES_INDEX (default caddie-conferences, read for the blocks' expires_at),
 //        ES_INFERENCE_ID (default inference endpoint for the semantic_text fields).
 //
-// The people index defaults to caddie-people-v2 and its alias to caddie-people. Pass --alias ""
-// to skip the alias steps, for example for a development index. --lexical-only leaves out the
+// The people index defaults to caddie-people-v2 and its alias to caddie-people. The live aliases
+// move only for the default index or caddie-people-v<N>; any other name, such as a development
+// index, gets none unless --alias names one (scripts/lib/alias.mjs). --alias "" skips the alias
+// steps. --lexical-only leaves out the
 // three semantic_text fields, so nothing is embedded; matching then fails on the semantic
 // retrievers, so use it only for tests that never send free text.
 //
@@ -22,9 +25,17 @@
 //   text fields) are PUT to its mapping. That is additive and never touches the semantic_text
 //   fields, so nothing is re-embedded. --recreate deletes and recreates it instead.
 // - The blocks index (caddie-people-blocks-v1 behind caddie-people-blocks) and the meets index
-//   (caddie-people-meets-v1 behind caddie-people-meets) are created when missing. With a custom
+//   (caddie-people-meets-v1 behind caddie-people-meets) are created when missing. On a blocks
+//   index that already exists, expires_at (added when blocks began to outlive the blocked
+//   person's profile until the conference ends) is PUT to the mapping, additively; then every
+//   block without an indexed expires_at is updated in place, so the field is indexed where the
+//   document already carries it, and the rest get the end of their conference (backfillBlocks).
+//   The mapping PUT and the refresh need the admin key: run it as
+//   ES_PEOPLE_API_KEY= ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run people:setup. With a custom
 //   people index name the two take the same suffix after "caddie-people" (the default
 //   caddie-people-v2 keeps them at v1); with --alias "" they get no alias.
+
+import { visibleUntil } from '../server/people-shared.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -54,7 +65,10 @@ const inferenceIdArg = opt('--inference-id');
 const inferenceId = inferenceIdArg !== undefined ? inferenceIdArg : process.env.ES_INFERENCE_ID ?? 'caddie-e5-small';
 const DEFAULT_INDEX = 'caddie-people-v2';
 const index = args[0] || DEFAULT_INDEX;
-const alias = aliasArg !== undefined ? aliasArg : 'caddie-people';
+// The blocks and meets aliases follow: none unless the people index gets one.
+import { chooseAlias } from './lib/alias.mjs';
+const { alias, hint: aliasHint } = chooseAlias({ index, explicit: aliasArg, defaultIndex: DEFAULT_INDEX, defaultAlias: 'caddie-people' });
+if (aliasHint) console.log(aliasHint);
 
 if (!index.startsWith('caddie-') || (alias && !alias.startsWith('caddie-'))) {
   console.error('Index and alias names must start with "caddie-".');
@@ -67,6 +81,7 @@ if (!index.startsWith('caddie-') || (alias && !alias.startsWith('caddie-'))) {
 const siblingSuffix = index === DEFAULT_INDEX ? '-v1' : index.slice('caddie-people'.length);
 const sibling = (kind) => (index.startsWith('caddie-people') ? `caddie-people-${kind}${siblingSuffix}` : `${index}-${kind}`);
 const siblingAlias = (kind) => (alias ? `${alias}-${kind}` : '');
+const CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conferences';
 
 async function es(method, path, body) {
   const res = await fetch(ES_URL + path, {
@@ -153,6 +168,8 @@ const blocksProperties = {
   blocked_id: { type: 'keyword' },
   blocked_ref: { type: 'keyword' },
   created_at: { type: 'date' },
+  // The end of the conference (its visible_until); the purge deletes the block after it.
+  expires_at: { type: 'date' },
 };
 
 const meetsProperties = {
@@ -201,6 +218,37 @@ async function ensureIndex(name, props, note = '') {
   return true;
 }
 
+// Blocks written before expires_at was mapped. Mapping a field does not index it in documents that
+// already carry it, so an update in place without a script (which re-indexes each document as it
+// is) comes first, with a refresh so the search below sees the result. Blocks still without the
+// field are written before blocks carried it; each gets the end of its conference (visible_until,
+// as the server computes it) through a script that never overwrites a value. Blocks of a
+// conference that has no document or no end_date are left without, and the purge never deletes
+// them. Idempotent: a second run finds nothing to do.
+const BACKFILL_SCRIPT = "if (ctx._source.expires_at == null) { ctx._source.expires_at = params.expires_at; } else { ctx.op = 'noop'; }";
+async function backfillBlocks(name) {
+  const lacking = { bool: { must_not: [{ exists: { field: 'expires_at' } }] } };
+  const indexed = await es('POST', `/${name}/_update_by_query?conflicts=proceed&refresh=true`, { query: lacking });
+  if (indexed.status !== 200) fail(`Indexing expires_at on ${name}`, indexed);
+  const found = await es('POST', `/${name}/_search`, { size: 0, query: lacking, aggs: { events: { terms: { field: 'event_id', size: 1000 } } } });
+  if (found.status !== 200) fail(`Finding blocks without expires_at on ${name}`, found);
+  for (const { key: slug, doc_count: count } of found.json.aggregations?.events?.buckets ?? []) {
+    const conf = await es('GET', `/${CONFERENCES_INDEX}/_doc/${encodeURIComponent(slug)}?_source_includes=end_date,time_zone`);
+    if (conf.status !== 200 && conf.status !== 404) fail(`Reading conference ${slug}`, conf);
+    if (!conf.json.found || !conf.json._source?.end_date) {
+      console.log(`Left ${count} blocks of ${slug} without expires_at: no conference with an end date.`);
+      continue;
+    }
+    const expiresAt = visibleUntil(conf.json._source.end_date, conf.json._source.time_zone);
+    const set = await es('POST', `/${name}/_update_by_query?conflicts=proceed&refresh=true`, {
+      query: { bool: { filter: [{ term: { event_id: slug } }], must_not: [{ exists: { field: 'expires_at' } }] } },
+      script: { lang: 'painless', source: BACKFILL_SCRIPT, params: { expires_at: expiresAt } },
+    });
+    if (set.status !== 200) fail(`Backfilling expires_at for ${slug}`, set);
+    console.log(`Gave ${set.json.updated ?? 0} blocks of ${slug} expires_at ${expiresAt}.`);
+  }
+}
+
 // The people index.
 const exists = await es('HEAD', `/${index}`);
 if (exists.status === 200 && recreate) {
@@ -220,7 +268,13 @@ if (exists.status !== 200 || recreate) {
 await pointAlias(alias, index);
 
 // The blocks and meets indices.
-await ensureIndex(sibling('blocks'), blocksProperties);
+if (!(await ensureIndex(sibling('blocks'), blocksProperties))) {
+  // Additive: expires_at came after the index existed. Until it is mapped, the purge's range
+  // query on it matches nothing, so no block is deleted early.
+  const put = await es('PUT', `/${sibling('blocks')}/_mapping`, { properties: { expires_at: blocksProperties.expires_at } });
+  if (put.status !== 200) fail(`Adding expires_at to ${sibling('blocks')}`, put);
+  await backfillBlocks(sibling('blocks'));
+}
 await pointAlias(siblingAlias('blocks'), sibling('blocks'));
 if (!(await ensureIndex(sibling('meets'), meetsProperties))) {
   // Additive: same_zone came after the index existed.

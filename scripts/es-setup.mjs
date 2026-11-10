@@ -19,7 +19,11 @@
 // ES_INFERENCE_ID picks another endpoint, and --inference-id "" leaves inference_id out so the
 // field uses the cluster's default endpoint. The script reads the mapping back afterwards and
 // prints which inference endpoint the field resolved to.
-// Pass --alias "" to skip the alias step, for example for a development index.
+// The alias moves only for the default index or <alias>-v<N> (caddie-talks-v4,
+// caddie-conferences-v2); any other name, such as a development index, gets no alias unless
+// --alias (or ES_ALIAS for the talks index) names one. Pass --alias "" to skip the alias step.
+
+import { chooseAlias } from './lib/alias.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -132,7 +136,8 @@ const conferences = flagWithOptionalValue('--conferences');
 if (conferences !== undefined) {
   const aliasArg = opt('--alias');
   const index = conferences || 'caddie-conferences-v1';
-  const alias = aliasArg !== undefined ? aliasArg : 'caddie-conferences';
+  const { alias, hint } = chooseAlias({ index, explicit: aliasArg, defaultIndex: 'caddie-conferences-v1', defaultAlias: 'caddie-conferences' });
+  if (hint) console.log(hint);
   checkName(index, 'index');
   if (alias) checkName(alias, 'alias');
   // The mapping of CONTRACT2 section C. Fields outside it stay in _source but are not indexed.
@@ -174,7 +179,8 @@ const inferenceIdArg = opt('--inference-id');
 const inferenceId = inferenceIdArg !== undefined ? inferenceIdArg : process.env.ES_INFERENCE_ID ?? 'caddie-e5-small';
 const aliasArg = opt('--alias');
 const index = args[0] || process.env.ES_SETUP_INDEX || 'caddie-talks-v3';
-const alias = aliasArg !== undefined ? aliasArg : process.env.ES_ALIAS ?? 'caddie-talks';
+const { alias, hint } = chooseAlias({ index, explicit: aliasArg ?? process.env.ES_ALIAS, defaultIndex: 'caddie-talks-v3', defaultAlias: 'caddie-talks' });
+if (hint) console.log(hint);
 checkName(index, 'index');
 if (alias) checkName(alias, 'alias');
 

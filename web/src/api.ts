@@ -1,4 +1,5 @@
 import type { ConferencesResponse, SearchFilters, SearchRequest, SearchResponse, SearchResult, Talk } from './types';
+import { readCachedJson } from './offline/status';
 
 // In development with VITE_MOCK=1, main.tsx installs an in-browser stand-in for
 // every /api route before the app renders, so this module always uses fetch.
@@ -58,6 +59,9 @@ export async function getConferences(signal?: AbortSignal): Promise<ConferencesR
     res = await fetch('/api/conferences', { signal });
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
+    // Offline without a service worker (the Android app): the copy saveForOffline stored.
+    const cached = (await readCachedJson('/api/conferences')) as ConferencesResponse | null;
+    if (Array.isArray(cached?.conferences)) return cached;
     throw new ApiError('You appear to be offline. Check your connection and try again.');
   }
   if (!res.ok) throw new ApiError('Conferences are temporarily unavailable. Please try again.');

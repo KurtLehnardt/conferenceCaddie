@@ -20,7 +20,10 @@
 //
 // The script creates its own temporary test profiles, each with a random device secret, and
 // deletes them at the end, together with the blocks and meets they made. It never changes the
-// seeded sample profiles. Key values are compared in-process and never printed.
+// seeded sample profiles. Key values are compared in-process and never printed. The test
+// profiles' words are synthetic and carry the run's tag, so they share no word with a real
+// attendee of the live conference, and no nudge can pair one with a real attendee (see
+// SMOKE_SUBJECT below).
 //
 // Each check prints one PASS, FAIL or SKIP line. The script exits 1 if any check fails. A request
 // that answers 5xx or fails on its first attempt is retried once, and prints a NOTE line either way;
@@ -57,15 +60,35 @@ const NON_TALK_QUERIES = ['lunch', 'coffee break', 'registration', 'opening rema
 // A talk that the seeded samples share for, used as the test circle.
 const CIRCLE_TALK_TITLE = 'From Bytes to Traces: A Deep Dive into OpenTelemetry eBPF Instrumentation Internals';
 
-// Topics the test profiles use. The requester wants to learn all three, and exactly one test
-// profile can speak to all three, which no sample does.
+// Topics a talk recommendations request asks for. That request stores nothing; no test profile
+// carries these topics.
 const LEARN = ['ebpf', 'gpu', 'llm'];
 
-// Find & connect. The passage is specific enough that its author ranks first for the query, and
-// the common topic is the one everyone at this conference matches on.
-const FIND_PASSAGE = 'ran Postgres operators on bare metal for three years and debugged WAL corruption after a power cut';
-const FIND_QUERY = 'postgres operators on bare metal';
+// The test profiles run against the live conference, and the server nudges two people who are a
+// specific match and around in the same zone. So every test profile's words are synthetic: made-up
+// tokens with this run's tag, which no real attendee's text or search can share. No test profile
+// carries a topic except the common one, which only ever makes a broad match, and broad matches
+// are never nudged. The profiles that go around (A, F and K) also keep interests and expertise
+// empty while they are around: a nudge is looked for without a search text, so it reads topics,
+// interests and expertise and never about, and a semantic neighbour cannot pick them either.
+const runTag = crypto.randomBytes(4).toString('hex');
+// What A wants to learn (A's interests) and B, C, R and the expired profile have worked on (their
+// expertise; B also wants it, so B finds R).
+const SMOKE_SUBJECT = `zqvsmoke${runTag} vexmorlith quabbit flarnishing`;
+const SMOKE_EXPERTISE = `tuned ${SMOKE_SUBJECT} rigs for three yonders`;
+// Find & connect. F's about line is specific enough that F ranks first for the query, and the
+// common topic is the one everyone at this conference matches on.
+const FIND_WORD = `zqvfind${runTag}`;
+const FIND_PASSAGE = `plonkered gravitronic snorbels on ${FIND_WORD} lattices for three yonders and debugged a wibblecorn after a glimmerfault`;
+const FIND_QUERY = `gravitronic snorbels on ${FIND_WORD} lattices`;
+// A's about line, which F and N search for.
+const ASKER_WORD = `zqvasker${runTag}`;
+const ASKER_ABOUT = `sprocketeer of hummable glintwork at ${ASKER_WORD}`;
+const ASKER_QUERY = `hummable glintwork ${ASKER_WORD}`;
 const COMMON_TOPIC = 'kubernetes';
+// A's two profiles: with interests while A is not around, about and the common topic only while it is.
+const A_LEARNING = { about: ASKER_ABOUT, interests: SMOKE_SUBJECT, speak: [COMMON_TOPIC] };
+const A_AROUND = { about: ASKER_ABOUT, speak: [COMMON_TOPIC] };
 const ZONE_A = 'Registration';
 const ZONE_F = 'Expo hall';
 const WORDLIST = JSON.parse(readFileSync(join(ROOT, 'config', 'moderation-words.json'), 'utf8')).words ?? [];
@@ -246,14 +269,13 @@ function newDevice() {
   return { profileId: crypto.randomBytes(16).toString('base64url'), secret: crypto.randomBytes(32).toString('base64url') };
 }
 
-const runTag = crypto.randomBytes(4).toString('hex');
 const testName = (who) => `Smoke test ${who} ${runTag}`;
 const contactMarker = (who) => `smoke-contact-${who}-${runTag}`;
 
-function profileBody(event, who, { learn = [], speak = [], interests = '', expertise = '' } = {}) {
+function profileBody(event, who, { learn = [], speak = [], about = '', interests = '', expertise = '' } = {}) {
   return {
     display_name: testName(who),
-    about: '',
+    about,
     interests,
     expertise,
     learn_topics: learn,
@@ -821,16 +843,16 @@ if (!process.env.ELASTISEARCH_API_KEY) {
 // ---------------------------------------------------------------------------------------------
 // People, circles and talks for you. Every test profile is created here and deleted at the end.
 
-const A = newDevice(); // the requester: chips only, visible, shares for the circle talk
-const B = newDevice(); // can speak to everything A wants to learn, visible
-const C = newDevice(); // can speak to the same, but only shares for the circle talk
-const D = newDevice(); // visible at another conference, with the same topics where possible
-const N = newDevice(); // visible, but never shares for the circle talk
+const A = newDevice(); // the requester: wants to learn SMOKE_SUBJECT, visible, shares for the circle talk
+const B = newDevice(); // has worked on what A wants to learn, visible
+const C = newDevice(); // has worked on the same, but only shares for the circle talk
+const D = newDevice(); // visible at another conference, wanting what B, C and R have worked on
+const N = newDevice(); // visible, but never shares for the circle talk; no words
 const E = newDevice(); // shares through the exact writes the Interested screen's auto-share switch sends
-const F = newDevice(); // Find & connect: the person with the specific passage, can speak to LEARN
+const F = newDevice(); // Find & connect: the person with the specific passage, in about only
 const K = newDevice(); // Find & connect: shares only the common topic with A, no text
 const X = newDevice(); // Find & connect: never gets a profile
-const R = newDevice(); // Report: visible and in the circle, reported by A and B
+const R = newDevice(); // Report: visible and in the circle, has worked on what A wants, reported by A and B
 const spotMarker = `smoke-spot-${runTag}`;
 const expiredId = `${PRIMARY}:${crypto.randomBytes(16).toString('base64url')}`;
 let expiredWritten = false;
@@ -850,13 +872,13 @@ try {
 
   await check('p1: test profiles are created', async () => {
     const results = [
-      await putProfile(A, PRIMARY, 'A', { learn: LEARN, speak: ['kubernetes'] }, { open: true, shared: [T] }),
-      await putProfile(B, PRIMARY, 'B', { speak: LEARN, learn: ['kubernetes'] }, { open: true }),
-      await putProfile(C, PRIMARY, 'C', { speak: LEARN }, { open: false, shared: [T] }),
-      await putProfile(N, PRIMARY, 'N', { speak: ['kubernetes'] }, { open: true }),
+      await putProfile(A, PRIMARY, 'A', A_LEARNING, { open: true, shared: [T] }),
+      await putProfile(B, PRIMARY, 'B', { interests: SMOKE_SUBJECT, expertise: SMOKE_EXPERTISE }, { open: true }),
+      await putProfile(C, PRIMARY, 'C', { expertise: SMOKE_EXPERTISE }, { open: false, shared: [T] }),
+      await putProfile(N, PRIMARY, 'N', {}, { open: true }),
     ];
-    const extraTopics = (topicsBySlug.get(EXTRA[0]) ?? []).slice(0, 3).map((t) => t.topic_id);
-    results.push(await putProfile(D, EXTRA[0], 'D', { speak: extraTopics, learn: extraTopics }, { open: true }));
+    // D wants what B, C and R have worked on, so any of them crossing conferences would match D.
+    results.push(await putProfile(D, EXTRA[0], 'D', { interests: SMOKE_SUBJECT }, { open: true }));
     const statuses = results.map((r) => r.status);
     report(statuses.every((s) => s === 200), 'p1: test profiles are created', statuses.join(','));
   });
@@ -871,8 +893,8 @@ try {
         event_id: PRIMARY,
         profile_id: expiredId.split(':')[1],
         display_name: testName('Expired'),
-        about: '', interests: '', expertise: '',
-        learn_topics: LEARN, speak_topics: LEARN,
+        about: '', interests: '', expertise: SMOKE_EXPERTISE,
+        learn_topics: [], speak_topics: [],
         open_to_meet: true, sample: false,
         shared_talk_ids: [T],
         visible_until: new Date(Date.now() - 3600_000).toISOString(),
@@ -888,20 +910,20 @@ try {
   }
 
   let matchesA = null;
-  await check('p2: wanting to learn a topic ranks a person who can speak to it near the top', async () => {
+  await check('p2: wanting to learn something ranks a person who has worked on it near the top', async () => {
     const { status, json } = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
     if (status !== 200) throw new Error(`status ${status}`);
     matchesA = json.results ?? [];
     const rank = names(matchesA).indexOf(testName('B'));
     const b = matchesA[rank];
-    const named = b && b.reasons.some((r) => r.startsWith('They can speak to') && r.includes('eBPF')) && b.opener === b.reasons[0];
-    report(rank !== -1 && rank < 5 && named, 'p2: wanting to learn a topic ranks a person who can speak to it near the top', rank === -1 ? 'not returned' : `rank ${rank + 1}, reason "${b.reasons[0]}"`);
+    const named = b && b.reasons.some((r) => r.startsWith('Ask them about') && r.includes('vexmorlith')) && b.opener === b.reasons[0];
+    report(rank !== -1 && rank < 5 && named, 'p2: wanting to learn something ranks a person who has worked on it near the top', rank === -1 ? 'not returned' : `rank ${rank + 1}, reason "${b.reasons[0]}"`);
   });
 
-  await check('p3: a chips-only profile gets people and talk suggestions', async () => {
+  await check('p3: a profile gets people suggestions, and chips alone get talk suggestions', async () => {
     const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: LEARN, interests: '', interested_talk_ids: [] }, { label: 'recs' });
     const ok = (matchesA?.length ?? 0) > 0 && recs.status === 200 && (recs.json.results ?? []).length > 0;
-    report(ok, 'p3: a chips-only profile gets people and talk suggestions', `${matchesA?.length ?? 0} people, ${(recs.json.results ?? []).length} talks`);
+    report(ok, 'p3: a profile gets people suggestions, and chips alone get talk suggestions', `${matchesA?.length ?? 0} people, ${(recs.json.results ?? []).length} talks`);
   });
 
   await check('p4: sharing for one talk does not put a profile in conference-wide matches', async () => {
@@ -964,7 +986,7 @@ try {
     if (wrongTopic.status !== 400) problems.push(`an unknown topic gave ${wrongTopic.status}`);
     const otherTalk = [...ownTalks.get(EXTRA[0])][0];
     if (otherTalk) {
-      const wrongTalk = await putProfile(A, PRIMARY, 'A', { learn: LEARN, speak: ['kubernetes'] }, { open: true, shared: [T, otherTalk] });
+      const wrongTalk = await putProfile(A, PRIMARY, 'A', A_LEARNING, { open: true, shared: [T, otherTalk] });
       if (wrongTalk.status !== 400) problems.push(`sharing another conference's talk gave ${wrongTalk.status}`);
     }
     const counts = await api('POST', '/api/circles/counts', { event: EXTRA[0], talk_ids: [T] }, { label: 'public-counts' });
@@ -974,7 +996,7 @@ try {
 
   await check('p9: a write or read with the wrong secret is rejected', async () => {
     const wrong = { profileId: A.profileId, secret: crypto.randomBytes(32).toString('base64url') };
-    const put = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'Intruder', { learn: [] }), open_to_meet: true, shared_talk_ids: [] }, { device: wrong, label: 'wrong-put' });
+    const put = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'Intruder', {}), open_to_meet: true, shared_talk_ids: [] }, { device: wrong, label: 'wrong-put' });
     const del = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: wrong, label: 'wrong-delete' });
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: wrong, label: 'wrong-matches' });
     const c = await api('POST', '/api/circles/members', { event: PRIMARY, talk_id: T }, { device: wrong, label: 'wrong-members' });
@@ -985,7 +1007,7 @@ try {
   });
 
   await check('p10: a cross-origin write is rejected', async () => {
-    const r = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'A', { learn: LEARN }), open_to_meet: true, shared_talk_ids: [T] }, { device: A, origin: 'https://evil.example', label: 'cross-origin' });
+    const r = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'A', A_LEARNING), open_to_meet: true, shared_talk_ids: [T] }, { device: A, origin: 'https://evil.example', label: 'cross-origin' });
     report(r.status === 403, 'p10: a cross-origin write is rejected', `status ${r.status}`);
   });
 
@@ -1008,7 +1030,7 @@ try {
   let refA = null;
 
   await check('q1: a specific query ranks the person with the matching passage first and returns it as evidence', async () => {
-    const f = await putProfile(F, PRIMARY, 'F', { speak: LEARN, expertise: FIND_PASSAGE }, { open: true });
+    const f = await putProfile(F, PRIMARY, 'F', { about: FIND_PASSAGE }, { open: true });
     const k = await putProfile(K, PRIMARY, 'K', { learn: [COMMON_TOPIC] }, { open: true });
     if (f.status !== 200 || k.status !== 200) throw new Error(`profiles gave ${f.status}/${k.status}`);
     const r = await findMatches(A, 'A-find');
@@ -1018,7 +1040,7 @@ try {
     refF = p?.ref ?? null;
     const problems = [];
     if (rank !== 0) problems.push(rank === -1 ? 'F not returned' : `F at rank ${rank + 1}`);
-    if (!p?.evidence || !/postgres/i.test(p.evidence.replace(/<\/?mark>/g, ''))) problems.push(`evidence "${p?.evidence}"`);
+    if (!p?.evidence || !/gravitronic/i.test(p.evidence.replace(/<\/?mark>/g, ''))) problems.push(`evidence "${p?.evidence}"`);
     if (!p?.reasons?.[0]?.startsWith("They've worked on")) problems.push(`first reason "${p?.reasons?.[0]}"`);
     if (p && (p.around !== false || p.zone !== null)) problems.push('around or zone set before anyone is around');
     if (r.json.from !== 0 || r.json.size !== 20 || typeof r.json.has_more !== 'boolean') problems.push('paging fields missing');
@@ -1032,11 +1054,16 @@ try {
     if (plain.status !== 200 || text.status !== 200) throw new Error(`status ${plain.status}/${text.status}`);
     if (names(plain.json.results).includes(testName('K'))) problems.push('K in profile matches');
     if (names(text.json.results).includes(testName('K'))) problems.push('K in text matches');
-    if (!names(plain.json.results).includes(testName('F'))) problems.push('F (specific topics) missing from profile matches');
+    if (!names(plain.json.results).includes(testName('B'))) problems.push('B (a specific match) missing from profile matches');
     const whenBad = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], when: 'soon' }, { device: A, label: 'A-matches' });
     if (whenBad.status !== 400) problems.push(`when=soon gave ${whenBad.status}`);
-    report(problems.length === 0, 'q2: a result sharing only the common topic is dropped', problems.length ? problems.join('; ') : `K absent, F present among ${plain.json.results.length}`);
+    report(problems.length === 0, 'q2: a result sharing only the common topic is dropped', problems.length ? problems.join('; ') : `K absent, B present among ${plain.json.results.length}`);
   });
+
+  // A is around from q4 to q9, so its interests go first (see SMOKE_SUBJECT); without that no
+  // presence check runs.
+  const quiet = await putProfile(A, PRIMARY, 'A', A_AROUND, { open: true, shared: [T] });
+  if (quiet.status !== 200) throw new Error(`A without interests gave ${quiet.status}, so the presence checks cannot run`);
 
   await check('q3: presence needs a visible profile', async () => {
     const none = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: X, label: 'X-presence' });
@@ -1094,7 +1121,7 @@ try {
     const anyoneView = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
     const fromN = await findMatches(N, 'N-find');
     const f3 = personIn(fromN, 'F');
-    refA = personIn(await findMatches(F, 'F-find', { query: 'eBPF GPU LLM', when: 'around_now' }), 'A')?.ref ?? null;
+    refA = personIn(await findMatches(F, 'F-find', { query: ASKER_QUERY, when: 'around_now' }), 'A')?.ref ?? null;
     const problems = [];
     if (!f1 || f1.around !== false || f1.zone !== null) problems.push('F not around yet shows around or a zone');
     if (!f2 || f2.around !== true || f2.zone !== ZONE_F) problems.push(`both around: F around ${f2?.around}, zone ${f2?.zone}`);
@@ -1114,7 +1141,8 @@ try {
   await check('q6: a third device gets 403 from a meet, and 410 after found', async () => {
     if (!refF) throw new Error('F has no ref');
     const noted = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: `see ${WORDLIST[0] ?? 'example.com'}` }, { device: A, label: 'A-meet' });
-    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: 'ebpf', note: 'compare notes on Postgres operators' }, { device: A, label: 'A-meet' });
+    // A topic on an ask is only its label; it never takes part in matching.
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: 'ebpf', note: `compare notes on ${FIND_WORD}` }, { device: A, label: 'A-meet' });
     if (r.status !== 200) throw new Error(`request gave ${r.status} ${r.json.error ?? ''}`);
     meetId = r.json.meet_id;
     const again = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
@@ -1209,7 +1237,7 @@ try {
     if (!res.ok || aged.errors) throw new Error(`aging A's presence gave ${res.status}`);
     const r = await findMatches(A, 'A-find');
     const f = personIn(r, 'F');
-    const fromF = await findPerson(F, 'F-find', 'A', { query: 'eBPF GPU LLM' });
+    const fromF = await findPerson(F, 'F-find', 'A', { query: ASKER_QUERY });
     const ok = f && f.around === true && f.zone === null && fromF && fromF.around === false;
     report(Boolean(ok), 'q7: presence expires', ok ? 'an aged presence_until hides the zone and shows A as not around' : `F zone ${f?.zone}, A around ${fromF?.around}`);
   });
@@ -1222,7 +1250,7 @@ try {
     if (back.status !== 200) throw new Error(`A presence gave ${back.status}`);
     const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
     const fromA = await findMatches(A, 'A-find');
-    const fromF = await findMatches(F, 'F-find', { query: 'eBPF GPU LLM', when: 'around_now' });
+    const fromF = await findMatches(F, 'F-find', { query: ASKER_QUERY, when: 'around_now' });
     const aToF = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
     const fToA = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: F, label: 'F-meet' });
     const list = await api('GET', `/api/people/blocks?event=${PRIMARY}`, undefined, { device: A, label: 'A-blocks' });
@@ -1313,17 +1341,22 @@ try {
     if ((inbox.json.outgoing ?? []).some((m) => m.meet_id === r.json.meet_id)) problems.push('the meet is still in A\'s inbox');
     if (names(found.json.results).includes(testName('F'))) problems.push('F still found');
     // A blocked by F: F's block went with F's profile, so A is not hidden from anyone now.
-    const fromN = await findMatches(N, 'N-find', { query: 'eBPF GPU LLM' });
+    const fromN = await findMatches(N, 'N-find', { query: ASKER_QUERY });
     if (fromN.status !== 200) problems.push(`N's search gave ${fromN.status}`);
     report(problems.length === 0, 'q9: delete removes everything', problems.length ? problems.join('; ') : 'profile, meet and block gone');
   });
 
   await check('q10: two reports hide a profile from everyone but its owner', async () => {
-    // B shares for the circle talk too, so both reporters see the circle. R is the reported person.
-    const shareB = await putProfile(B, PRIMARY, 'B', { speak: LEARN, learn: ['kubernetes'] }, { open: true, shared: [T] });
+    // A leaves presence for good and takes its interests back, so R is in A's matches. B shares
+    // for the circle talk too, so both reporters see the circle. R is the reported person.
+    const away = await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: A, label: 'A-presence' });
+    if (away.status !== 200) throw new Error(`A presence off gave ${away.status}`);
+    const learning = await putProfile(A, PRIMARY, 'A', A_LEARNING, { open: true, shared: [T] });
+    if (learning.status !== 200) throw new Error(`A with interests gave ${learning.status}`);
+    const shareB = await putProfile(B, PRIMARY, 'B', { interests: SMOKE_SUBJECT, expertise: SMOKE_EXPERTISE }, { open: true, shared: [T] });
     if (shareB.status !== 200) throw new Error(`B sharing gave ${shareB.status}`);
     const countBeforeR = await countOf();
-    const r = await putProfile(R, PRIMARY, 'R', { speak: LEARN, learn: LEARN }, { open: true, shared: [T] });
+    const r = await putProfile(R, PRIMARY, 'R', { expertise: SMOKE_EXPERTISE }, { open: true, shared: [T] });
     if (r.status !== 200) throw new Error(`R gave ${r.status}`);
     const seenBy = async (device, who) => {
       const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device, label: `${who}-matches` });
@@ -1343,7 +1376,7 @@ try {
     const afterA = await seenBy(A, 'A');
     const afterB = await seenBy(B, 'B');
     const meet = await api('POST', '/api/meet', { event: PRIMARY, ref: refR, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
-    const owner = await putProfile(R, PRIMARY, 'R', { speak: LEARN, learn: LEARN }, { open: true, shared: [T] });
+    const owner = await putProfile(R, PRIMARY, 'R', { expertise: SMOKE_EXPERTISE }, { open: true, shared: [T] });
     const count = await countOf();
     const problems = [];
     if (!beforeA.matches || !beforeA.circle || !beforeB.matches || !beforeB.circle) problems.push('R not visible to both before the reports');
@@ -1362,7 +1395,7 @@ try {
     const del = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: B, label: 'B-delete' });
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
     const gone = del.status === 200 && m.status === 200 && !names(m.json.results).includes(testName('B'));
-    const off = await putProfile(C, PRIMARY, 'C', { speak: LEARN }, { open: false, shared: [] });
+    const off = await putProfile(C, PRIMARY, 'C', { expertise: SMOKE_EXPERTISE }, { open: false, shared: [] });
     const count = await countOf();
     const ok = gone && off.status === 200 && count === (countBefore ?? 0) + 1;
     report(ok, 'p11: a deleted profile disappears at once', `delete ${del.status}, B ${gone ? 'gone' : 'still there'}; turning both choices off leaves the count at ${count}`);

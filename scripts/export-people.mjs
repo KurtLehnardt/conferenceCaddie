@@ -3,14 +3,19 @@
 // Usage: node scripts/export-people.mjs --event <slug>
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY); ES_PEOPLE_INDEX (default caddie-people).
 //
-// The export leaves out secret_hash, text_hash, the embeddings and the presence fields (zone,
-// spot, times, position): presence is transient and a position never leaves Elasticsearch as
-// such. data/exports/ is git-ignored, because the file holds personal data; delete it when you
-// no longer need it.
+// The export leaves out secret_hash, text_hash, the embeddings, the presence fields (zone, spot,
+// times, position) and the Bluetooth token: presence is transient and a position never leaves
+// Elasticsearch as such. It also leaves out every profile whose owner asked to delete it and whose
+// delete has not finished yet (hidden, sharing nothing and not visible conference-wide; the
+// server's hourly purge finishes those deletes). data/exports/ is git-ignored, because the file
+// holds personal data; delete it when you no longer need it.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// A profile whose delete hid it and has not finished (server/people-shared.mjs says why that
+// state marks a pending delete).
+import { PENDING_DELETE_QUERY } from '../server/people-shared.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -51,8 +56,8 @@ let after;
 for (;;) {
   const body = {
     size: PAGE,
-    _source: { excludes: ['secret_hash', 'text_hash', '*_semantic', 'presence_*'] },
-    query: { term: { event_id: slug } },
+    _source: { excludes: ['secret_hash', 'text_hash', '*_semantic', 'presence_*', 'ble_*'] },
+    query: { bool: { filter: [{ term: { event_id: slug } }], must_not: [PENDING_DELETE_QUERY] } },
     sort: [{ updated_at: 'asc' }, { profile_id: 'asc' }],
   };
   if (after) body.search_after = after;
