@@ -1,0 +1,167 @@
+{
+  "route": "presence.put",
+  "examples": [
+    {
+      "name": "around for an hour, zone only",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway",
+          "spot": "Green jacket",
+          "location": null,
+          "until": "hour"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "zone": "Hallway",
+          "spot": "Green jacket",
+          "spot_hidden": false,
+          "until": "hour",
+          "presence_since": "2026-11-10T17:00:00.000Z",
+          "presence_until": "2026-11-10T18:00:00.000Z",
+          "located": false
+        }
+      }
+    },
+    {
+      "name": "derived-v1: Bluetooth on returns a new ble_key once",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway",
+          "spot": null,
+          "location": {
+            "lat": 40.76789,
+            "lon": -111.89012,
+            "accuracy": 15
+          },
+          "until": "day",
+          "ble": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "zone": "Hallway",
+          "spot": null,
+          "spot_hidden": false,
+          "until": "day",
+          "presence_since": "2026-11-10T17:00:00.000Z",
+          "presence_until": "2026-11-11T06:59:59.000Z",
+          "located": true,
+          "ble_key": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8"
+        }
+      }
+    },
+    {
+      "name": "server-rotate (legacy): Bluetooth on returns a token",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway",
+          "ble": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "zone": "Hallway",
+          "spot": null,
+          "spot_hidden": false,
+          "until": "hour",
+          "presence_since": "2026-11-10T17:00:00.000Z",
+          "presence_until": "2026-11-10T18:00:00.000Z",
+          "located": false,
+          "ble": {
+            "token": "YGFiY2RlZmdoaWprbG1ubw",
+            "rotate_at": "2026-11-10T17:10:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "spot line held by the classifier",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Expo hall",
+          "spot": "By booth 12"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "zone": "Expo hall",
+          "spot": "By booth 12",
+          "spot_hidden": false,
+          "until": "hour",
+          "presence_since": "2026-11-10T17:00:00.000Z",
+          "presence_until": "2026-11-10T18:00:00.000Z",
+          "located": false,
+          "held": {
+            "fields": [
+              "spot"
+            ],
+            "message": "Waiting for the filter; it will appear shortly."
+          }
+        }
+      }
+    },
+    {
+      "name": "spot line filtered",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway",
+          "spot": "see https://example.com"
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "filtered",
+          "message": "That was held back by the filter. Edit it and try again."
+        }
+      }
+    },
+    {
+      "name": "not visible",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway"
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "profile_required"
+        }
+      }
+    }
+  ]
+}

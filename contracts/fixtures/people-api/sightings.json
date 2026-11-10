@@ -1,0 +1,86 @@
+{
+  "route": "sightings",
+  "examples": [
+    {
+      "name": "one strong match nearby",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "sightings": [
+            {
+              "token": "OkEQ7S2_2qoosZUeyoTaGQ",
+              "rssi": -62
+            },
+            {
+              "token": "tU5Bdzp6-mESMDcuimPGrw",
+              "rssi": -88
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nearby": [
+            {
+              "ref": "3f2a9c0d1e4b5a68",
+              "display_name": "Sample Person",
+              "evidence": "Built <mark>eBPF</mark> load balancing for 40 clusters.",
+              "speak_topics": [
+                {
+                  "topic_id": "ebpf",
+                  "label": "eBPF"
+                }
+              ],
+              "zone": "Hallway"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "nobody resolves",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "sightings": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nearby": []
+        }
+      }
+    },
+    {
+      "name": "the requester is not broadcasting",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "sightings": [
+            {
+              "token": "OkEQ7S2_2qoosZUeyoTaGQ",
+              "rssi": -62
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "ble_required"
+        }
+      }
+    }
+  ]
+}

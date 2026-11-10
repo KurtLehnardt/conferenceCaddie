@@ -1,0 +1,540 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/people-api.v1.schema.json",
+  "title": "Conference Caddie People API, v1",
+  "description": "Request and response bodies of every People API v1 route, as $defs. The route table (contracts/routes/people-api.v1.json) names the definition each route uses. Request bodies are closed because every tier answers an unknown key with 400; response bodies are closed only in producer mode, so clients ignore fields added later. See docs/contracts/people-api.md.",
+  "$defs": {
+    "Slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}$" },
+    "TalkId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}:[A-Za-z0-9_-]{1,64}$" },
+    "TopicId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,99}$" },
+    "Ref": { "description": "The opaque reference of a person: first 16 hex digits of sha256(event_id:profile_id:REF_SALT).", "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "MeetId": { "description": "16 random bytes, base64url without padding.", "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+    "BleToken": { "description": "16 bytes, base64url without padding.", "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+    "BleKey": { "description": "32 bytes, base64url without padding (docs/contracts/ble-tokens.md).", "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "DeviceHeader": {
+      "description": "The X-Caddie-Device header: {profile_id}.{secret}, 16 and 32 random bytes generated on the device, both base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}$"
+    },
+    "Instant": { "type": "string", "format": "date-time" },
+    "NullableInstant": { "anyOf": [{ "$ref": "#/$defs/Instant" }, { "type": "null" }] },
+    "NullableString": { "type": ["string", "null"] },
+    "Topic": {
+      "type": "object",
+      "required": ["topic_id", "label"],
+      "properties": { "topic_id": { "$ref": "#/$defs/TopicId" }, "label": { "type": "string" } }
+    },
+    "Degraded": {
+      "description": "Present when meaning-based matching was unavailable and keyword matching answered instead.",
+      "type": "object",
+      "required": ["semantic"],
+      "properties": { "semantic": { "const": true } }
+    },
+    "Held": {
+      "description": "Present on a 200 when the filter's classifier held a line: it is stored and shown only to its author until the operator clears it.",
+      "type": "object",
+      "required": ["fields", "message"],
+      "properties": {
+        "fields": { "type": "array", "minItems": 1, "items": { "enum": ["spot", "note", "spot_me"] } },
+        "message": { "type": "string" }
+      }
+    },
+    "Ok": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": { "ok": { "const": true } }
+    },
+    "ErrorBody": {
+      "description": "Every error response. error is a stable code for the codes listed in docs/contracts/people-api.md and a human-readable message otherwise (mostly 400 validation errors).",
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "meet_id": { "$ref": "#/$defs/MeetId" },
+        "state": { "enum": ["requested", "active", "found", "cancelled", "declined", "expired"] },
+        "retry_at": { "$ref": "#/$defs/Instant" }
+      }
+    },
+
+    "ProfileFields": {
+      "type": "object",
+      "required": ["display_name"],
+      "additionalProperties": false,
+      "properties": {
+        "display_name": { "description": "1 to 60 characters after trimming.", "type": "string", "minLength": 1, "maxLength": 60 },
+        "about": { "type": ["string", "null"], "maxLength": 280 },
+        "interests": { "description": "What the person wants to learn or figure out next.", "type": ["string", "null"], "maxLength": 500 },
+        "expertise": { "description": "Things they have built, run or broken.", "type": ["string", "null"], "maxLength": 500 },
+        "learn_topics": { "type": ["array", "null"], "maxItems": 30, "items": { "$ref": "#/$defs/TopicId" } },
+        "speak_topics": { "type": ["array", "null"], "maxItems": 30, "items": { "$ref": "#/$defs/TopicId" } },
+        "linkedin_url": {
+          "anyOf": [
+            { "type": "string", "pattern": "^https://(www\\.)?linkedin\\.com/in/[A-Za-z0-9_-]{3,100}/?$" },
+            { "const": "" },
+            { "type": "null" }
+          ]
+        },
+        "contact_note": { "type": ["string", "null"], "maxLength": 120 }
+      }
+    },
+    "ProfilePutRequest": {
+      "type": "object",
+      "required": ["event", "profile", "open_to_meet"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "profile": { "$ref": "#/$defs/ProfileFields" },
+        "open_to_meet": { "type": "boolean" },
+        "shared_talk_ids": { "type": ["array", "null"], "maxItems": 50, "items": { "$ref": "#/$defs/TalkId" } }
+      }
+    },
+    "ProfilePutResponse": {
+      "type": "object",
+      "required": ["ok", "open_to_meet", "shared_talk_ids"],
+      "properties": {
+        "ok": { "const": true },
+        "open_to_meet": { "type": "boolean" },
+        "shared_talk_ids": { "type": "array", "items": { "$ref": "#/$defs/TalkId" } },
+        "hidden_for_owner": { "description": "True while the profile is hidden after reports; only its owner learns it. Absent when the write deleted the profile.", "type": "boolean" },
+        "degraded": { "$ref": "#/$defs/Degraded" }
+      }
+    },
+
+    "Person": {
+      "description": "One result of matches or circle members.",
+      "type": "object",
+      "required": ["ref", "display_name", "about", "sample", "learn_topics", "speak_topics", "reasons", "opener", "contact", "evidence", "around", "zone", "proximity", "broad"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/Ref" },
+        "display_name": { "type": "string" },
+        "about": { "type": "string" },
+        "sample": { "type": "boolean" },
+        "learn_topics": { "type": "array", "items": { "$ref": "#/$defs/Topic" } },
+        "speak_topics": { "type": "array", "items": { "$ref": "#/$defs/Topic" } },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "opener": { "$ref": "#/$defs/NullableString" },
+        "contact": {
+          "type": "object",
+          "required": ["linkedin_url", "contact_note"],
+          "properties": { "linkedin_url": { "$ref": "#/$defs/NullableString" }, "contact_note": { "$ref": "#/$defs/NullableString" } }
+        },
+        "evidence": { "description": "The matched passage; <mark> is the only markup, everything else HTML-escaped. Null for a broad match or a profile with no text.", "$ref": "#/$defs/NullableString" },
+        "around": { "type": "boolean" },
+        "zone": { "description": "Their zone, only when both the requester and they are around.", "$ref": "#/$defs/NullableString" },
+        "proximity": { "description": "A band only, never a number; null unless both are around.", "enum": ["same_zone", "near", "around", "venue", null] },
+        "broad": { "type": "boolean" }
+      }
+    },
+    "MatchesRequest": {
+      "type": "object",
+      "required": ["event"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "interested_talk_ids": { "type": ["array", "null"], "maxItems": 100, "items": { "$ref": "#/$defs/TalkId" } },
+        "query": { "type": ["string", "null"], "maxLength": 300 },
+        "when": { "enum": ["anyone", "around_now", null] },
+        "from": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000 },
+        "size": { "type": ["integer", "null"], "minimum": 1, "maximum": 20 }
+      }
+    },
+    "MatchesResponse": {
+      "type": "object",
+      "required": ["results", "from", "size", "has_more"],
+      "properties": {
+        "results": { "type": "array", "items": { "$ref": "#/$defs/Person" } },
+        "from": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 1 },
+        "has_more": { "type": "boolean" },
+        "degraded": { "$ref": "#/$defs/Degraded" }
+      }
+    },
+
+    "CircleCountsRequest": {
+      "type": "object",
+      "required": ["event"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "talk_ids": { "type": ["array", "null"], "maxItems": 100, "items": { "$ref": "#/$defs/TalkId" } }
+      }
+    },
+    "CircleCountsResponse": {
+      "type": "object",
+      "required": ["counts"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/TalkId" },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "CircleMembersRequest": {
+      "type": "object",
+      "required": ["event", "talk_id"],
+      "additionalProperties": false,
+      "properties": { "event": { "$ref": "#/$defs/Slug" }, "talk_id": { "$ref": "#/$defs/TalkId" } }
+    },
+    "SpeakerProfile": {
+      "type": "object",
+      "required": ["name", "tagline", "links"],
+      "properties": {
+        "name": { "type": "string" },
+        "tagline": { "$ref": "#/$defs/NullableString" },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "url"],
+            "properties": { "title": { "type": "string" }, "url": { "description": "An http(s) link from the feed; the scheme's case is as the feed wrote it.", "type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://" } }
+          }
+        }
+      }
+    },
+    "CircleMembersResponse": {
+      "type": "object",
+      "required": ["talk", "speakers", "count", "members"],
+      "properties": {
+        "talk": {
+          "type": "object",
+          "required": ["title", "start", "end", "url"],
+          "properties": {
+            "title": { "type": "string" },
+            "start": { "$ref": "#/$defs/NullableString" },
+            "end": { "$ref": "#/$defs/NullableString" },
+            "url": { "$ref": "#/$defs/NullableString" }
+          }
+        },
+        "speakers": { "type": "array", "items": { "$ref": "#/$defs/SpeakerProfile" } },
+        "count": { "type": "integer", "minimum": 0 },
+        "members": { "type": "array", "items": { "$ref": "#/$defs/Person" } }
+      }
+    },
+
+    "BlockRequest": {
+      "type": "object",
+      "required": ["event", "ref"],
+      "additionalProperties": false,
+      "properties": { "event": { "$ref": "#/$defs/Slug" }, "ref": { "$ref": "#/$defs/Ref" } }
+    },
+    "BlocksResponse": {
+      "type": "object",
+      "required": ["refs", "blocks"],
+      "properties": {
+        "refs": { "type": "array", "items": { "$ref": "#/$defs/Ref" } },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ref", "display_name", "created_at"],
+            "properties": {
+              "ref": { "$ref": "#/$defs/Ref" },
+              "display_name": { "description": "Null when the blocked profile is gone.", "$ref": "#/$defs/NullableString" },
+              "created_at": { "$ref": "#/$defs/NullableInstant" }
+            }
+          }
+        }
+      }
+    },
+
+    "PresencePutRequest": {
+      "type": "object",
+      "required": ["event", "zone"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "zone": { "description": "One of the conference's zones: its talk rooms plus Expo hall, Registration, Food and coffee, Hallway and Outside.", "type": "string", "minLength": 1 },
+        "spot": { "description": "How to spot me where I am; filtered.", "type": ["string", "null"], "maxLength": 60 },
+        "location": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["lat", "lon", "accuracy"],
+              "additionalProperties": false,
+              "properties": {
+                "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+                "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+                "accuracy": { "description": "Metres. Worse than 200 m stores no position.", "type": "number", "minimum": 0 }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "until": { "enum": ["hour", "day", null] },
+        "ble": { "description": "true starts Bluetooth proximity (mints a new ble_key in derived-v1, a new token in server-rotate), false stops it, absent leaves it as it is.", "type": "boolean" }
+      }
+    },
+    "LegacyBleToken": {
+      "description": "server-rotate mode only (legacy): the token to advertise until rotate_at.",
+      "type": "object",
+      "required": ["token", "rotate_at"],
+      "properties": { "token": { "$ref": "#/$defs/BleToken" }, "rotate_at": { "$ref": "#/$defs/Instant" } }
+    },
+    "PresencePutResponse": {
+      "type": "object",
+      "required": ["ok", "zone", "spot", "spot_hidden", "until", "presence_since", "presence_until", "located"],
+      "properties": {
+        "ok": { "const": true },
+        "zone": { "type": "string" },
+        "spot": { "$ref": "#/$defs/NullableString" },
+        "spot_hidden": { "type": "boolean" },
+        "until": { "enum": ["hour", "day"] },
+        "presence_since": { "$ref": "#/$defs/Instant" },
+        "presence_until": { "$ref": "#/$defs/Instant" },
+        "located": { "type": "boolean" },
+        "ble": { "$ref": "#/$defs/LegacyBleToken" },
+        "ble_key": {
+          "description": "NEW in v1, derived-v1 mode: the 32-byte key of this presence session, returned only in the response to the write with ble: true that minted it and never again. It is valid while presence is live (the latest presence_until the device has seen).",
+          "$ref": "#/$defs/BleKey"
+        },
+        "held": { "$ref": "#/$defs/Held" }
+      }
+    },
+    "BleRotateRequest": {
+      "type": "object",
+      "required": ["event"],
+      "additionalProperties": false,
+      "properties": { "event": { "$ref": "#/$defs/Slug" } }
+    },
+    "BleRotateResponse": {
+      "type": "object",
+      "required": ["ok", "ble"],
+      "properties": { "ok": { "const": true }, "ble": { "$ref": "#/$defs/LegacyBleToken" } }
+    },
+    "SightingsRequest": {
+      "type": "object",
+      "required": ["event", "sightings"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "sightings": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["token", "rssi"],
+            "additionalProperties": false,
+            "properties": {
+              "token": { "$ref": "#/$defs/BleToken" },
+              "rssi": { "type": "integer", "minimum": -127, "maximum": 20 }
+            }
+          }
+        }
+      }
+    },
+    "SightingsResponse": {
+      "type": "object",
+      "required": ["nearby"],
+      "properties": {
+        "nearby": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ref", "display_name", "evidence", "speak_topics", "zone"],
+            "properties": {
+              "ref": { "$ref": "#/$defs/Ref" },
+              "display_name": { "type": "string" },
+              "evidence": { "$ref": "#/$defs/NullableString" },
+              "speak_topics": { "type": "array", "items": { "$ref": "#/$defs/Topic" } },
+              "zone": { "$ref": "#/$defs/NullableString" }
+            }
+          }
+        }
+      }
+    },
+
+    "MeetRequest": {
+      "type": "object",
+      "required": ["event", "ref"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "ref": { "$ref": "#/$defs/Ref" },
+        "topic_id": { "anyOf": [{ "$ref": "#/$defs/TopicId" }, { "type": "null" }] },
+        "note": { "description": "At most 140 characters, filtered. A Wave is an ask whose note the client writes for the user.", "type": ["string", "null"], "maxLength": 140 }
+      }
+    },
+    "MeetDetailsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spot_me": { "type": ["string", "null"], "maxLength": 60 },
+        "rendezvous": { "description": "One of the conference's zones; null or empty clears it.", "type": ["string", "null"] }
+      }
+    },
+    "EmptyRequest": {
+      "description": "Meet actions take an empty JSON object or no body at all.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "MeetView": {
+      "description": "The meet shape, plus the keys a particular route adds (ok, held, from, to); each route's definition says which of those it requires.",
+      "type": "object",
+      "required": ["meet_id", "state", "requested_by_me", "same_zone", "topic", "topic_label", "note", "created_at", "active_since", "active_until", "expires_at", "rendezvous", "mine", "other"],
+      "properties": {
+        "ok": { "const": true },
+        "held": { "$ref": "#/$defs/Held" },
+        "meet_id": { "$ref": "#/$defs/MeetId" },
+        "state": { "enum": ["requested", "active", "found", "cancelled", "declined", "expired"] },
+        "requested_by_me": { "type": "boolean" },
+        "same_zone": { "type": "boolean" },
+        "topic": { "anyOf": [{ "$ref": "#/$defs/Topic" }, { "type": "null" }] },
+        "topic_label": { "$ref": "#/$defs/NullableString" },
+        "note": { "$ref": "#/$defs/NullableString" },
+        "created_at": { "$ref": "#/$defs/NullableInstant" },
+        "active_since": { "$ref": "#/$defs/NullableInstant" },
+        "active_until": { "$ref": "#/$defs/NullableInstant" },
+        "expires_at": { "$ref": "#/$defs/NullableInstant" },
+        "rendezvous": { "$ref": "#/$defs/NullableString" },
+        "mine": {
+          "type": "object",
+          "required": ["spot_me", "around"],
+          "properties": { "spot_me": { "$ref": "#/$defs/NullableString" }, "around": { "type": "boolean" } }
+        },
+        "other": {
+          "type": "object",
+          "required": ["ref", "display_name", "about", "around", "zone", "spot", "spot_me"],
+          "properties": {
+            "ref": { "anyOf": [{ "$ref": "#/$defs/Ref" }, { "type": "null" }] },
+            "display_name": { "type": "string" },
+            "about": { "type": "string" },
+            "around": { "type": "boolean" },
+            "zone": { "$ref": "#/$defs/NullableString" },
+            "spot": { "$ref": "#/$defs/NullableString" },
+            "spot_me": { "$ref": "#/$defs/NullableString" },
+            "distance_m": { "description": "GET /api/meet/{id} only, while active and both have a position: metres, rounded to 10.", "type": "integer", "minimum": 0, "multipleOf": 10 },
+            "bearing_deg": { "description": "GET /api/meet/{id} only, with distance_m: degrees clockwise from north.", "type": "integer", "minimum": 0, "maximum": 359 }
+          },
+          "dependentRequired": { "distance_m": ["bearing_deg"], "bearing_deg": ["distance_m"] }
+        },
+        "from": {
+          "type": "object",
+          "required": ["ref", "display_name", "about"],
+          "properties": { "ref": { "$ref": "#/$defs/Ref" }, "display_name": { "type": "string" }, "about": { "type": "string" } }
+        },
+        "to": {
+          "type": "object",
+          "required": ["ref", "display_name"],
+          "properties": { "ref": { "$ref": "#/$defs/Ref" }, "display_name": { "type": "string" } }
+        }
+      }
+    },
+    "MeetActionResponse": {
+      "description": "POST /api/meet, the four actions and PUT details: { ok, ...meet } and, when a line was held, held.",
+      "allOf": [
+        { "$ref": "#/$defs/MeetView" },
+        { "required": ["ok"] },
+        { "not": { "anyOf": [{ "required": ["from"] }, { "required": ["to"] }] } },
+        { "properties": { "other": { "not": { "anyOf": [{ "required": ["distance_m"] }, { "required": ["bearing_deg"] }] } } } }
+      ]
+    },
+    "MeetReadResponse": {
+      "description": "GET /api/meet/{id}: the meet shape, the only response that may carry other.distance_m and other.bearing_deg.",
+      "allOf": [
+        { "$ref": "#/$defs/MeetView" },
+        { "not": { "anyOf": [{ "required": ["ok"] }, { "required": ["held"] }, { "required": ["from"] }, { "required": ["to"] }] } }
+      ]
+    },
+    "InboxResponse": {
+      "type": "object",
+      "required": ["incoming", "outgoing"],
+      "properties": {
+        "incoming": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/MeetView" },
+              { "required": ["from"] },
+              { "not": { "anyOf": [{ "required": ["to"] }, { "required": ["ok"] }] } },
+              { "properties": { "state": { "enum": ["requested", "active"] }, "other": { "not": { "anyOf": [{ "required": ["distance_m"] }, { "required": ["bearing_deg"] }] } } } }
+            ]
+          }
+        },
+        "outgoing": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/MeetView" },
+              { "required": ["to"] },
+              { "not": { "anyOf": [{ "required": ["from"] }, { "required": ["ok"] }] } },
+              { "properties": { "state": { "enum": ["requested", "active"] }, "other": { "not": { "anyOf": [{ "required": ["distance_m"] }, { "required": ["bearing_deg"] }] } } } }
+            ]
+          }
+        }
+      }
+    },
+
+    "ReportRequest": {
+      "type": "object",
+      "required": ["event", "ref", "context", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "ref": { "$ref": "#/$defs/Ref" },
+        "context": {
+          "type": "object",
+          "required": ["kind", "id"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["profile", "meet", "spot"] },
+            "id": { "description": "The reported person's ref for profile and spot (equal to ref); a meet_id for meet.", "type": "string" }
+          },
+          "if": { "properties": { "kind": { "const": "meet" } } },
+          "then": { "properties": { "id": { "$ref": "#/$defs/MeetId" } } },
+          "else": { "properties": { "id": { "$ref": "#/$defs/Ref" } } }
+        },
+        "reason": { "enum": ["harassment", "hate", "sexual", "spam", "other"] }
+      }
+    },
+    "ReportResponse": {
+      "type": "object",
+      "required": ["ok", "hidden"],
+      "properties": { "ok": { "const": true }, "hidden": { "type": "boolean" } }
+    },
+
+    "PushVapidResponse": {
+      "type": "object",
+      "required": ["publicKey"],
+      "properties": { "publicKey": { "description": "The VAPID public key, or null when Web Push is not configured.", "type": ["string", "null"] } }
+    },
+    "PushSubscriptionPutRequest": {
+      "type": "object",
+      "required": ["event", "subscription"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "subscription": {
+          "description": "The browser's PushSubscription.toJSON().",
+          "type": "object",
+          "required": ["endpoint", "keys"],
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
+            "keys": {
+              "type": "object",
+              "required": ["p256dh", "auth"],
+              "additionalProperties": false,
+              "properties": {
+                "p256dh": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,256}$" },
+                "auth": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,256}$" }
+              }
+            },
+            "expirationTime": { "type": ["number", "null"] }
+          }
+        }
+      }
+    },
+    "PushSubscriptionDeleteRequest": {
+      "type": "object",
+      "required": ["event", "endpoint"],
+      "additionalProperties": false,
+      "properties": { "event": { "$ref": "#/$defs/Slug" }, "endpoint": { "type": "string", "pattern": "^https://", "maxLength": 2048 } }
+    }
+  }
+}

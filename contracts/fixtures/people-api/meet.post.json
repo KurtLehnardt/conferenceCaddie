@@ -1,0 +1,151 @@
+{
+  "route": "meet.post",
+  "examples": [
+    {
+      "name": "a wave to someone in my zone",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68",
+          "topic_id": "ebpf",
+          "note": "I'm in Hallway too — want to talk shop?"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw",
+          "state": "requested",
+          "requested_by_me": true,
+          "same_zone": true,
+          "topic": {
+            "topic_id": "ebpf",
+            "label": "eBPF"
+          },
+          "topic_label": "eBPF",
+          "note": "I'm in Hallway too — want to talk shop?",
+          "created_at": "2026-11-10T17:02:00.000Z",
+          "active_since": null,
+          "active_until": null,
+          "expires_at": "2026-11-10T17:17:00.000Z",
+          "rendezvous": null,
+          "mine": {
+            "spot_me": null,
+            "around": true
+          },
+          "other": {
+            "ref": "3f2a9c0d1e4b5a68",
+            "display_name": "Sample Person",
+            "about": "Platform engineer working on multi-cluster networking.",
+            "around": true,
+            "zone": "Hallway",
+            "spot": null,
+            "spot_me": null
+          }
+        }
+      }
+    },
+    {
+      "name": "an ask is already open",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68"
+        }
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "error": "meet_open",
+          "meet_id": "QEFCQ0RFRkdISUpLTE1OTw"
+        }
+      }
+    },
+    {
+      "name": "they are not around",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68"
+        }
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "error": "not_around",
+          "message": "They're not around right now."
+        }
+      }
+    },
+    {
+      "name": "I am not around",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68"
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "presence_required",
+          "message": "Turn on 'Around and up for a conversation' first."
+        }
+      }
+    },
+    {
+      "name": "blocked either way",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68"
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "blocked"
+        }
+      }
+    },
+    {
+      "name": "three declines today",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68"
+        }
+      },
+      "response": {
+        "status": 429,
+        "headers": {
+          "Retry-After": "50000"
+        },
+        "body": {
+          "error": "paused",
+          "message": "Three people said not now today. You can ask again tomorrow.",
+          "retry_at": "2026-11-11T06:59:59.999Z"
+        }
+      }
+    }
+  ]
+}

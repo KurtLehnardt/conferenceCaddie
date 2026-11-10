@@ -1,0 +1,76 @@
+{
+  "route": "report",
+  "examples": [
+    {
+      "name": "report a profile",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68",
+          "context": {
+            "kind": "profile",
+            "id": "3f2a9c0d1e4b5a68"
+          },
+          "reason": "spam"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "hidden": false
+        }
+      }
+    },
+    {
+      "name": "report a meet note; second report hides it",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "3f2a9c0d1e4b5a68",
+          "context": {
+            "kind": "meet",
+            "id": "QEFCQ0RFRkdISUpLTE1OTw"
+          },
+          "reason": "harassment"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "unknown person",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "ref": "9b1c7e5d3a2f4c60",
+          "context": {
+            "kind": "spot",
+            "id": "9b1c7e5d3a2f4c60"
+          },
+          "reason": "other"
+        }
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "not_found"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,242 @@
+{
+  "api": "people",
+  "version": 1,
+  "schema": "https://raw.githubusercontent.com/KurtLehnardt/conferenceCaddie/main/contracts/schema/people-api.v1.schema.json",
+  "common_errors": [
+    { "status": 400, "error": "*", "when": "invalid input: malformed JSON, a body that is not an object, an unknown key (\"Unknown key: ...\"), a value out of range, an unknown or unavailable conference (\"conference is not available\")" },
+    { "status": 403, "error": "forbidden", "when": "device routes: the X-Caddie-Device header is missing or malformed, or the secret does not match the stored hash" },
+    { "status": 403, "error": "cross-origin request", "when": "an Origin header that does not name the backend's own host" },
+    { "status": 405, "error": "Method not allowed", "headers": ["Allow"] },
+    { "status": 413, "error": "Request body is too large", "when": "bodies over 8 KB" },
+    { "status": 415, "error": "Content-Type must be application/json", "when": "routes with a body" },
+    { "status": 429, "error": "Too many requests", "headers": ["Retry-After"] },
+    { "status": 502, "error": "People are temporarily unavailable", "when": "the store failed; the store's own error is never forwarded" }
+  ],
+  "limits": {
+    "people-write": [{ "per": 20, "window_s": 60, "key": "device" }, { "per": 60, "window_s": 60, "key": "ip" }],
+    "people-read": [{ "per": 30, "window_s": 60, "key": "device" }, { "per": 90, "window_s": 60, "key": "ip" }],
+    "people-poll": [{ "per": 30, "window_s": 60, "key": "device" }, { "per": 1200, "window_s": 60, "key": "ip" }],
+    "public": [{ "per": 60, "window_s": 60, "key": "ip" }],
+    "sightings": [{ "per": 6, "window_s": 60, "key": "device" }, { "per": 300, "window_s": 60, "key": "ip" }],
+    "report": [{ "per": 20, "window_s": 3600, "key": "device" }, { "per": 60, "window_s": 60, "key": "ip" }],
+    "meet-request": [{ "per": 10, "window_s": 3600, "key": "device" }]
+  },
+  "routes": [
+    {
+      "id": "profile.put", "method": "PUT", "path": "/api/people/profile", "status": "frozen", "auth": "device",
+      "query": [], "request": "ProfilePutRequest", "response": "ProfilePutResponse", "limits": ["people-write"], "capability": "people.enabled",
+      "summary": "Create or update the device's profile at one conference, or delete it when open_to_meet is false and shared_talk_ids is empty.",
+      "errors": [
+        { "status": 400, "error": "*", "when": "unknown topic or talk, a field over its cap, or a write that turns visibility on after the conference ended (\"conference has ended\")" },
+        { "status": 409, "error": "*", "when": "the profile changed during the write (\"The profile changed at the same time; try again\")" }
+      ]
+    },
+    {
+      "id": "profile.delete", "method": "DELETE", "path": "/api/people/profile", "status": "frozen", "auth": "device",
+      "query": ["event"], "request": null, "response": "Ok", "limits": ["people-write"], "capability": "people.enabled",
+      "summary": "Delete the device's profile at one conference and everything connected to it. Answers { ok: true } when there is nothing to delete.",
+      "errors": []
+    },
+    {
+      "id": "matches", "method": "POST", "path": "/api/people/matches", "status": "frozen", "auth": "device",
+      "query": [], "request": "MatchesRequest", "response": "MatchesResponse", "limits": ["people-read"], "capability": "people.enabled",
+      "summary": "People to meet, a text search over what people have built, and (when: around_now) who is around. Also the in-app nudge check.",
+      "errors": [{ "status": 403, "error": "visibility_required", "when": "the requester has no live profile with open_to_meet: true" }]
+    },
+    {
+      "id": "circles.counts", "method": "POST", "path": "/api/circles/counts", "status": "frozen", "auth": "none",
+      "query": [], "request": "CircleCountsRequest", "response": "CircleCountsResponse", "limits": ["public"], "capability": "people.circles",
+      "summary": "How many people share their profile for each talk. Never who.",
+      "errors": []
+    },
+    {
+      "id": "circles.members", "method": "POST", "path": "/api/circles/members", "status": "frozen", "auth": "device",
+      "query": [], "request": "CircleMembersRequest", "response": "CircleMembersResponse", "limits": ["people-read"], "capability": "people.circles",
+      "summary": "Who shares for a talk, ranked for the requester, who must share for it too.",
+      "errors": [
+        { "status": 403, "error": "share_required", "extra": ["count"], "when": "the requester does not share for that talk" },
+        { "status": 404, "error": "*", "when": "no such talk (\"talk not found\")" }
+      ]
+    },
+    {
+      "id": "block.post", "method": "POST", "path": "/api/people/block", "status": "frozen", "auth": "device",
+      "query": [], "request": "BlockRequest", "response": "Ok", "limits": ["people-write"], "capability": "people.enabled",
+      "summary": "Block a person by ref (symmetric: neither sees the other). Ends any open meet between the two.",
+      "errors": [
+        { "status": 403, "error": "profile_required" },
+        { "status": 404, "error": "not_found", "when": "unknown or expired ref, or the requester's own" }
+      ]
+    },
+    {
+      "id": "block.delete", "method": "DELETE", "path": "/api/people/block", "status": "frozen", "auth": "device",
+      "query": [], "request": "BlockRequest", "response": "Ok", "limits": ["people-write"], "capability": "people.enabled",
+      "summary": "Lift the requester's block of a ref, whether or not that profile still exists.",
+      "errors": [{ "status": 403, "error": "profile_required" }]
+    },
+    {
+      "id": "blocks.get", "method": "GET", "path": "/api/people/blocks", "status": "frozen", "auth": "device",
+      "query": ["event"], "request": null, "response": "BlocksResponse", "limits": ["people-read"], "capability": "people.enabled",
+      "summary": "The requester's blocks, newest first.",
+      "errors": [{ "status": 403, "error": "profile_required" }]
+    },
+    {
+      "id": "presence.put", "method": "PUT", "path": "/api/presence", "status": "frozen", "auth": "device",
+      "query": [], "request": "PresencePutRequest", "response": "PresencePutResponse", "limits": ["people-write"], "capability": "people.presence",
+      "summary": "Around and up for a conversation: zone, spot line, optional position, hour or day. With ble: true it also starts Bluetooth proximity; in derived-v1 the response carries the new ble_key (the one new field of v1).",
+      "notes": "ble_key is new in v1 (docs/contracts/ble-tokens.md) and is sent only by backends whose capabilities say ble.mode derived-v1. The legacy ble { token, rotate_at } is sent only in server-rotate mode. A backend serving both during the transition may send both.",
+      "errors": [
+        { "status": 400, "error": "filtered", "extra": ["message"], "when": "the spot line hit the filter" },
+        { "status": 400, "error": "*", "when": "a zone that is not one of the conference's, a malformed location, or the conference has ended" },
+        { "status": 403, "error": "profile_required", "when": "no live profile with open_to_meet: true" }
+      ]
+    },
+    {
+      "id": "presence.delete", "method": "DELETE", "path": "/api/presence", "status": "frozen", "auth": "device",
+      "query": ["event"], "request": null, "response": "Ok", "limits": ["people-write"], "capability": "people.presence",
+      "summary": "End presence: clears zone, spot, position and Bluetooth state, and expires any active meet.",
+      "errors": []
+    },
+    {
+      "id": "ble.rotate", "method": "POST", "path": "/api/presence/ble/rotate", "status": "legacy", "auth": "device",
+      "query": [], "request": "BleRotateRequest", "response": "BleRotateResponse", "limits": ["people-write"], "capability": "ble.mode=server-rotate",
+      "summary": "Legacy server-rotate mode only: a new server-minted token every ten minutes. Kept for the Capacitor APK until it is retired; derived-v1 clients never call it.",
+      "errors": [
+        { "status": 403, "error": "profile_required" },
+        { "status": 403, "error": "presence_required" }
+      ]
+    },
+    {
+      "id": "sightings", "method": "POST", "path": "/api/presence/sightings", "status": "frozen", "auth": "device",
+      "query": [], "request": "SightingsRequest", "response": "SightingsResponse", "limits": ["sightings"], "capability": "ble.mode",
+      "summary": "Which of the tokens this phone heard belong to strong matches right here. The request shape is the same in both Bluetooth modes.",
+      "errors": [
+        { "status": 403, "error": "profile_required" },
+        { "status": 403, "error": "ble_required", "when": "the requester is not around with Bluetooth on" }
+      ]
+    },
+    {
+      "id": "meet.post", "method": "POST", "path": "/api/meet", "status": "frozen", "auth": "device",
+      "query": [], "request": "MeetRequest", "response": "MeetActionResponse", "limits": ["people-write", "meet-request"], "capability": "people.meets",
+      "summary": "Ask to talk shop now. A Wave is the same request with a note the client writes.",
+      "errors": [
+        { "status": 400, "error": "filtered", "extra": ["message"] },
+        { "status": 403, "error": "profile_required" },
+        { "status": 403, "error": "hidden", "when": "the requester's profile is hidden after reports" },
+        { "status": 403, "error": "blocked", "when": "a block in either direction; the same body whichever side blocked" },
+        { "status": 403, "error": "presence_required", "extra": ["message"] },
+        { "status": 404, "error": "not_found" },
+        { "status": 409, "error": "not_around", "extra": ["message"] },
+        { "status": 409, "error": "meet_open", "extra": ["meet_id"] },
+        { "status": 429, "error": "paused", "extra": ["message", "retry_at"], "headers": ["Retry-After"], "when": "three declines today" }
+      ]
+    },
+    {
+      "id": "meet.inbox", "method": "GET", "path": "/api/meet/inbox", "status": "frozen", "auth": "device",
+      "query": ["event"], "request": null, "response": "InboxResponse", "limits": ["people-poll"], "capability": "people.meets",
+      "summary": "Open asks to and from the requester, newest first. Polled every 20 seconds while the app is open (live: poll).",
+      "errors": [{ "status": 403, "error": "profile_required" }]
+    },
+    {
+      "id": "meet.get", "method": "GET", "path": "/api/meet/{meet_id}", "status": "frozen", "auth": "device",
+      "query": [], "request": null, "response": "MeetReadResponse", "limits": ["people-poll"], "capability": "people.meets",
+      "summary": "One meet, for its participants. The only response with other.distance_m and other.bearing_deg.",
+      "errors": [
+        { "status": 403, "error": "blocked" },
+        { "status": 404, "error": "not_found" },
+        { "status": 410, "error": "over", "extra": ["state"] }
+      ]
+    },
+    {
+      "id": "meet.accept", "method": "POST", "path": "/api/meet/{meet_id}/accept", "status": "frozen", "auth": "device",
+      "query": [], "request": "EmptyRequest", "response": "MeetActionResponse", "limits": ["people-write"], "capability": "people.meets",
+      "summary": "The person asked accepts, now: the meet becomes active.",
+      "errors": [
+        { "status": 403, "error": "blocked" },
+        { "status": 403, "error": "presence_required", "extra": ["message"] },
+        { "status": 404, "error": "not_found" },
+        { "status": 409, "error": "state", "extra": ["state"] },
+        { "status": 409, "error": "*", "when": "the meet changed during the write" },
+        { "status": 410, "error": "over", "extra": ["state"] }
+      ]
+    },
+    {
+      "id": "meet.decline", "method": "POST", "path": "/api/meet/{meet_id}/decline", "status": "frozen", "auth": "device",
+      "query": [], "request": "EmptyRequest", "response": "MeetActionResponse", "limits": ["people-write"], "capability": "people.meets",
+      "summary": "Not now. The requester never learns it.",
+      "errors": [
+        { "status": 403, "error": "blocked" },
+        { "status": 404, "error": "not_found" },
+        { "status": 409, "error": "state", "extra": ["state"] },
+        { "status": 409, "error": "*", "when": "the meet changed during the write" },
+        { "status": 410, "error": "over", "extra": ["state"] }
+      ]
+    },
+    {
+      "id": "meet.found", "method": "POST", "path": "/api/meet/{meet_id}/found", "status": "frozen", "auth": "device",
+      "query": [], "request": "EmptyRequest", "response": "MeetActionResponse", "limits": ["people-write"], "capability": "people.meets",
+      "summary": "Either participant: we found each other.",
+      "errors": [
+        { "status": 403, "error": "blocked" },
+        { "status": 404, "error": "not_found" },
+        { "status": 409, "error": "state", "extra": ["state"] },
+        { "status": 409, "error": "*", "when": "the meet changed during the write" },
+        { "status": 410, "error": "over", "extra": ["state"] }
+      ]
+    },
+    {
+      "id": "meet.cancel", "method": "POST", "path": "/api/meet/{meet_id}/cancel", "status": "frozen", "auth": "device",
+      "query": [], "request": "EmptyRequest", "response": "MeetActionResponse", "limits": ["people-write"], "capability": "people.meets",
+      "summary": "Either participant, any open state.",
+      "errors": [
+        { "status": 403, "error": "blocked" },
+        { "status": 404, "error": "not_found" },
+        { "status": 409, "error": "*", "when": "the meet changed during the write" },
+        { "status": 410, "error": "over", "extra": ["state"] }
+      ]
+    },
+    {
+      "id": "meet.details", "method": "PUT", "path": "/api/meet/{meet_id}/details", "status": "frozen", "auth": "device",
+      "query": [], "request": "MeetDetailsRequest", "response": "MeetActionResponse", "limits": ["people-write"], "capability": "people.meets",
+      "summary": "My how-to-spot-me line and the meeting point, while the meet is open.",
+      "errors": [
+        { "status": 400, "error": "filtered", "extra": ["message"] },
+        { "status": 400, "error": "*", "when": "a rendezvous that is not one of the conference's zones" },
+        { "status": 403, "error": "blocked" },
+        { "status": 404, "error": "not_found" },
+        { "status": 409, "error": "state", "extra": ["state"] },
+        { "status": 409, "error": "*", "when": "the meet changed during the write" },
+        { "status": 410, "error": "over", "extra": ["state"] }
+      ]
+    },
+    {
+      "id": "report", "method": "POST", "path": "/api/people/report", "status": "frozen", "auth": "device",
+      "query": [], "request": "ReportRequest", "response": "ReportResponse", "limits": ["report"], "capability": "people.reports",
+      "summary": "Report a profile, a meet or a spot line. Two reports hide the target from everyone but its owner.",
+      "errors": [
+        { "status": 403, "error": "profile_required" },
+        { "status": 404, "error": "not_found" }
+      ]
+    },
+    {
+      "id": "push.vapid", "method": "GET", "path": "/api/push/vapid", "status": "frozen", "auth": "none",
+      "query": [], "request": null, "response": "PushVapidResponse", "limits": ["public"], "capability": "push.webpush",
+      "summary": "The VAPID public key for Web Push, or null when push is not configured.",
+      "errors": []
+    },
+    {
+      "id": "push.subscription.put", "method": "PUT", "path": "/api/push/subscription", "status": "frozen", "auth": "device",
+      "query": [], "request": "PushSubscriptionPutRequest", "response": "Ok", "limits": ["people-write"], "capability": "push.webpush",
+      "summary": "Store this browser's Web Push subscription for the requester's profile at one conference.",
+      "errors": [
+        { "status": 400, "error": "*", "when": "a malformed subscription, or the conference has ended" },
+        { "status": 403, "error": "profile_required" }
+      ]
+    },
+    {
+      "id": "push.subscription.delete", "method": "DELETE", "path": "/api/push/subscription", "status": "frozen", "auth": "device",
+      "query": [], "request": "PushSubscriptionDeleteRequest", "response": "Ok", "limits": ["people-write"], "capability": "push.webpush",
+      "summary": "Remove a subscription; only the profile it belongs to can. Answers { ok: true } either way.",
+      "errors": [{ "status": 403, "error": "profile_required" }]
+    }
+  ]
+}
