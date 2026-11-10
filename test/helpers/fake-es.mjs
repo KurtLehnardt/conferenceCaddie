@@ -553,6 +553,8 @@ export const HIDDEN_FOR_DELETE = {
   presence_until: null,
   presence_location: null,
   presence_accuracy: null,
+  presence_cell: null,
+  presence_located_at: null,
   ble_token: null,
   ble_token_until: null,
 };

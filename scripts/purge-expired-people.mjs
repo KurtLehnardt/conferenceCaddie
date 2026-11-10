@@ -128,8 +128,8 @@ const profiles = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_delete_
 console.log(`Deleted ${profiles.deleted ?? 0} expired profiles.`);
 
 // Presence that has run out is cleared with a Bulk partial update of the presence fields (the
-// position, the held flag and the Bluetooth token among them, PRESENCE_OFF), the same write the
-// server uses, so nothing is re-embedded.
+// position, its cell and its time, the held flag and the Bluetooth token among them,
+// PRESENCE_OFF), the same write the server uses, so nothing is re-embedded.
 let cleared = 0;
 for (;;) {
   const found = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_search`, {

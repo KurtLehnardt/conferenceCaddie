@@ -105,16 +105,56 @@ async function retireTopics(slug: string, p: Profile): Promise<Profile | null> {
 /**
  * Sends the profile. When the server rejects a topic it no longer offers, that topic is removed
  * from the profile and the write is tried once more, so one retired topic cannot block sharing.
+ * When the server answers degraded (it could not embed the text and saved the profile without it
+ * for now), one more write of the profile is scheduled for after its one-minute pause.
  */
 async function putChecked(slug: string, p: Profile, v: Visibility) {
   retiredNotice = null;
+  let res;
   try {
-    return await putProfile(bodyFor(slug, p, v));
+    res = await putProfile(bodyFor(slug, p, v));
   } catch (err) {
     const retired = err instanceof PeopleApiError && err.status === 400 && /_topics contains an unknown topic/.test(err.code ?? '');
     const fixed = retired ? await retireTopics(slug, p) : null;
     if (!fixed) throw err;
-    return await putProfile(bodyFor(slug, fixed, v));
+    res = await putProfile(bodyFor(slug, fixed, v));
+  }
+  if (res.degraded?.semantic === true) scheduleDegradedResend();
+  return res;
+}
+
+/** The server pauses embedding for 60 s after a failure; the re-send waits a little longer. */
+const DEGRADED_RESEND_MS = 70_000;
+let resendTimer: number | undefined;
+let resending = false;
+
+/**
+ * Schedules one quiet re-send of the profile to every conference that holds a document, so text
+ * the server could not embed gets embedded once it can. Once per degraded answer: a re-send that
+ * is answered degraded again does not schedule another (the server also embeds the kept text on
+ * this device's next presence write), and a re-send already waiting is not doubled.
+ */
+function scheduleDegradedResend(): void {
+  if (resending || resendTimer !== undefined || typeof window === 'undefined') return;
+  resendTimer = window.setTimeout(() => {
+    resendTimer = undefined;
+    resending = true;
+    void resendProfile().finally(() => {
+      resending = false;
+    });
+  }, DEGRADED_RESEND_MS);
+}
+
+async function resendProfile(): Promise<void> {
+  const p = getProfile();
+  if (!p || profileProblem(p)) return;
+  for (const slug of slugsOnServer()) {
+    try {
+      const res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
+      if ((res.hidden_for_owner === true) !== getVisibility(slug).hidden_for_owner) setVisibility(slug, { hidden_for_owner: res.hidden_for_owner === true });
+    } catch {
+      // Quiet: the next edit or presence write sends the text again.
+    }
   }
 }
 

@@ -4,7 +4,7 @@
 // purge and makes no request, so a script can use these without running the server's purge.
 
 // The Bluetooth token (ble.mjs) rides along with presence: cleared with it, carried through a reindex.
-export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, ble_token: null, ble_token_until: null };
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, presence_cell: null, presence_located_at: null, ble_token: null, ble_token_until: null };
 // A profile whose delete hid it (step 1 of deleteProfileAndConnections in people.mjs) and has not
 // finished yet: not visible conference-wide and sharing for no talk. No other write leaves a
 // document in that state, because a profile write with both choices off deletes the document

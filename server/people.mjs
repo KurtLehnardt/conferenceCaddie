@@ -34,13 +34,15 @@
 //   name an Elasticsearch status.
 // - Writes whose about, interests and expertise are unchanged use a Bulk API partial update that
 //   omits those fields, so toggling visibility, sharing or presence never re-runs the model.
-// - Presence (zone, spot, since, until, and an optional rounded location with its accuracy) lives
-//   on the people document and is returned to another person only while both are around. The
-//   location itself is returned to nobody: it ranks nearby people higher through a
-//   distance_feature leg and becomes a band (same_zone, near, around, venue) on a result; only an
-//   active meet learns a distance and a bearing (connect.mjs). Meets and the blocks the person
-//   made are deleted with the profile; blocks others made of the person stay until the
-//   conference ends, so deleting and re-creating a profile never lifts a block.
+// - Presence (zone, spot, since, until, and an optional rounded location with its accuracy, the
+//   centre of its ~100 m cell and the time of the fix) lives on the people document and is
+//   returned to another person only while both are around. The location itself is returned to
+//   nobody and never read for anyone but its owner outside a meet: ranking (a distance_feature
+//   leg) and the band on a result (same_zone, near, around, venue) use only the cells, so no
+//   sequence of positions a requester claims can measure anyone more finely than a cell; only an
+//   active meet learns a distance and a bearing, from the precise fixes (connect.mjs). Meets and
+//   the blocks the person made are deleted with the profile; blocks others made of the person
+//   stay until the conference ends, so deleting and re-creating a profile never lifts a block.
 //
 // The block, presence and meet routes themselves are in connect.mjs, which uses the transport,
 // plumbing and lookups exported here.
@@ -49,7 +51,8 @@ import crypto from 'node:crypto';
 import { take, clientIp } from './ratelimit.mjs';
 import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
-import { pauseSemantic, semanticAvailable } from './semantic.mjs';
+import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
+import { reportCountsFor, HIDE_AT } from './report.mjs';
 import { PRESENCE_OFF, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds } from './people-shared.mjs';
 
 // Re-exported, so the other server modules and the scripts that import them from here keep working.
@@ -113,13 +116,24 @@ export class HttpError extends Error {
     this.headers = headers;
   }
 }
-export class UpstreamError extends Error {}
+// An Elasticsearch request that failed. The message names a status or an error class and is the
+// only part that is logged; details carry `status`, and the error `types` and `inferenceReason`
+// of esErrorInfo (semantic.mjs) so a caller can tell an inference failure from anything else.
+export class UpstreamError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.status = details.status ?? null;
+    this.types = details.types ?? [];
+    this.inferenceReason = details.inferenceReason === true;
+  }
+}
 
 export const bad = (message) => new HttpError(400, { error: message });
 export const forbidden = () => new HttpError(403, { error: 'forbidden' });
 
 // ---------------------------------------------------------------------------------------------
-// Elasticsearch transport. Error bodies from Elasticsearch are never passed on or logged.
+// Elasticsearch transport. Error bodies from Elasticsearch are never passed on or logged; an
+// error response is read only for its status and error types (esErrorInfo).
 
 async function es(key, method, path, body, { ndjson = false, okStatuses = [] } = {}) {
   let res;
@@ -137,8 +151,13 @@ async function es(key, method, path, body, { ndjson = false, okStatuses = [] } =
     throw new UpstreamError(err?.name === 'TimeoutError' ? 'timeout' : 'network error');
   }
   if (!res.ok && !okStatuses.includes(res.status)) {
-    await res.body?.cancel();
-    throw new UpstreamError(`status ${res.status}`);
+    let info = {};
+    try {
+      info = esErrorInfo((await res.json())?.error);
+    } catch {
+      // Not JSON, or the body could not be read: the status alone.
+    }
+    throw new UpstreamError(`status ${res.status}`, { status: res.status, ...info });
   }
   try {
     return { status: res.status, json: await res.json() };
@@ -537,10 +556,10 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // ---------------------------------------------------------------------------------------------
 // People documents (people key).
 
-const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
+const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy', 'presence_cell', 'presence_located_at'];
 // The Bluetooth token of ble.mjs: the owner's own document carries it; it is never read for others.
 const BLE_FIELDS = ['ble_token', 'ble_token_until'];
-const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
+const OWN_FIELDS = ['secret_hash', 'text_hash', 'text_pending', 'sample', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
 const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
 
@@ -561,15 +580,44 @@ export const isLive = (source) => typeof source.visible_until === 'string' && Da
 export const isAround = (source) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > Date.now();
 
 // ---------------------------------------------------------------------------------------------
-// Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre). It is read
-// here only to rank, to band and, inside an active meet, to give a distance and a bearing.
+// Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre), stored with
+// presence_cell, the centre of the ~100 m grid cell it falls in (cellFor), in the same write. The
+// precise location is read only inside an active meet, for a distance and a bearing between its
+// two participants (connect.mjs). Everything a stranger can observe, the band on a result and the
+// order the distance leg gives, comes from cells alone, so a requester who claims any positions
+// they like learns at most which cell someone is in, never where in it.
 
-export const PROXIMITY_NEAR_M = 75;
+// The grid: latitude snapped to 0.001 degrees (about 111 m), longitude to the step that spans the
+// same distance at the snapped latitude, so the cells of one row are about square.
+export const CELL_DEG = 0.001;
+const CELL_DECIMALS = 6;
+// Cell centres closer than this make two people 'around' each other; the same cell is 'near'.
 export const PROXIMITY_AROUND_M = 300;
 const EARTH_RADIUS_M = 6_371_000;
 const rad = (deg) => (deg * Math.PI) / 180;
+const roundCell = (v) => Number(v.toFixed(CELL_DECIMALS));
 
-// The location of a person who is around and opted in, else null.
+// The centre of the grid cell a position falls in, as { lat, lon }.
+export function cellFor({ lat, lon }) {
+  const cLat = Math.max(-90, Math.min(90, Math.round(lat / CELL_DEG) * CELL_DEG));
+  // Near a pole the longitude step is capped at one degree.
+  const lonStep = CELL_DEG / Math.max(Math.cos(rad(cLat)), CELL_DEG);
+  let cLon = Math.round(lon / lonStep) * lonStep;
+  if (cLon > 180) cLon -= 360;
+  if (cLon < -180) cLon += 360;
+  return { lat: roundCell(cLat), lon: roundCell(cLon) };
+}
+
+// The cell of a person who is around and opted in to a position, else null.
+export function cellOf(source) {
+  if (!isAround(source)) return null;
+  const c = source.presence_cell;
+  if (!c || typeof c !== 'object' || !Number.isFinite(c.lat) || !Number.isFinite(c.lon)) return null;
+  return { lat: c.lat, lon: c.lon };
+}
+
+// The precise location of a person who is around and opted in, else null. Read only for the
+// owner's own document and for the two participants of an active meet (connect.mjs).
 export function locationOf(source) {
   if (!isAround(source)) return null;
   const l = source.presence_location;
@@ -593,26 +641,33 @@ export function bearingDeg(a, b) {
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
-// The band between two people who are both around: the same zone first, then distance when both
-// have a location, else the venue as a whole. Never a number.
+// The band between two people who are both around: the same zone first; then, when both have a
+// cell, 'near' for the same cell and 'around' for cell centres under 300 m apart; else the venue
+// as a whole. Never a number, and never from a precise location.
 export function proximityBand(me, them) {
   if (me.presence_zone && me.presence_zone === them.presence_zone) return 'same_zone';
-  const a = locationOf(me);
-  const b = locationOf(them);
+  const a = cellOf(me);
+  const b = cellOf(them);
   if (!a || !b) return 'venue';
-  const d = distanceM(a, b);
-  if (d < PROXIMITY_NEAR_M) return 'near';
-  if (d < PROXIMITY_AROUND_M) return 'around';
+  if (a.lat === b.lat && a.lon === b.lon) return 'near';
+  if (distanceM(a, b) < PROXIMITY_AROUND_M) return 'around';
   return 'venue';
 }
 
-// One bulk action on the people index with refresh=wait_for. Returns the item status.
-export async function bulkOne(action, doc) {
+// One bulk action on the people index with refresh=wait_for. Returns the item's { status, error }:
+// the item status (500 when the answer has none) and its Elasticsearch error object, if any, which
+// is read for its types only (esErrorInfo) and never logged.
+async function bulkItem(action, doc) {
   const body = `${JSON.stringify(action)}\n${JSON.stringify(doc)}\n`;
   const { json } = await people('POST', `${idx(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
   const item = json.items?.[0] ?? {};
   const result = Object.values(item)[0] ?? {};
-  return result.status ?? 500;
+  return { status: result.status ?? 500, error: result.error };
+}
+
+// One bulk action on the people index with refresh=wait_for. Returns the item status.
+export async function bulkOne(action, doc) {
+  return (await bulkItem(action, doc)).status;
 }
 
 // Deletes one people document and returns the status (404 when it was already gone). With a
@@ -878,16 +933,18 @@ export async function finishPendingDeletes() {
 //   5. my expertise against their interests (semantic),
 //   6. in a search, the query as a lexical match on their expertise and about,
 //   7. in matches, when the requester is around with a location, a distance_feature on
-//      presence_location (100 m pivot, origin the requester's rounded location) over people who
-//      are around now, so nearby people rank higher; it is a ranking signal and nothing else,
+//      presence_cell (100 m pivot, origin the requester's own cell) over people who are around
+//      now, so nearby people rank higher; it is a ranking signal and nothing else, and like the
+//      band it sees cells only,
 // skipping any whose input is empty. Circles add a retriever that matches every member, so a
 // member with nothing in common is still listed, below everyone who shares something. Every
 // retriever is named so that the explanation of a hit says which ones it came from.
 
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
 const DISTANCE_PIVOT = '100m';
-// presence_location is read to compute the band of a result and is never passed on.
-const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_location'];
+// presence_cell is read to compute the band of a result and is never passed on; another person's
+// precise presence_location is never read here.
+const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_cell'];
 
 // Returns { body, legs } where legs names each retriever in order ('topics', 'text', 'distance'
 // or 'everyone'), or null when there is nothing to rank by. nudge.mjs and ble.mjs run the same
@@ -952,7 +1009,7 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
     add('distance', {
       query: {
         bool: {
-          must: [{ distance_feature: { field: 'presence_location', pivot: DISTANCE_PIVOT, origin } }],
+          must: [{ distance_feature: { field: 'presence_cell', pivot: DISTANCE_PIVOT, origin } }],
           filter: [{ range: { presence_until: { gt: 'now' } } }],
         },
       },
@@ -1044,7 +1101,7 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
 // Shapes one hit for the requester. In a text search (query given) the evidence leads the
 // reasons; zone and the proximity band are included only while both the requester and this
 // person are around. A broad match carries no evidence and is labelled with the common topic it
-// shares instead. The location a hit may carry is read for the band and goes no further.
+// shares instead. The cell a hit carries is read for the band and goes no further.
 export function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
   const s = hit._source ?? {};
   const topicsOf = (ids) => (ids ?? []).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) }));
@@ -1137,28 +1194,86 @@ export async function updateOwnProfile(device, slug, build) {
 // ---------------------------------------------------------------------------------------------
 // Handlers.
 
+// True when a failed bulk item says the text could not be embedded: a 429 (what the inference
+// service's trial limit answers with), or an error whose types or reason name an inference failure
+// (isInferenceFailure). A version conflict (409) or a mapping error (400) is not one.
+function embeddingFailed(item) {
+  if (item.status >= 200 && item.status <= 299) return false;
+  return item.status === 429 || isInferenceFailure(esErrorInfo(item.error));
+}
+
 // Writes a profile document. Indexing about/interests/expertise asks Elasticsearch to embed them
 // (semantic_text copy_to), so while the inference endpoint is unavailable (semantic.mjs) the same
-// document is written without those three fields and with text_hash null, which makes the next
-// save a full reindex that embeds them once the endpoint is back. The person stays visible and
-// can share meanwhile; only their text is missing until then.
+// document is written without those three fields, with text_hash null and text_pending true, and
+// with the text kept in pending_about, pending_interests and pending_expertise, which are mapped
+// unindexed and never copied anywhere, so nothing embeds them. The person stays visible and can
+// share meanwhile; only their text is missing from matching until the owner's next write: a
+// profile save is a full reindex (text_hash null never equals a hash), and a presence write calls
+// reembedPending. Either embeds the real text and drops the pending fields once the endpoint is
+// back. Only an embedding failure (embeddingFailed, or a request that failed with
+// isInferenceFailure) pauses and writes without text; any other failure is returned or thrown as
+// it is.
 async function writeProfileDoc(action, doc) {
   const hasText = 'about' in doc;
   const withoutText = () => {
     const { about, interests, expertise, ...rest } = doc;
-    return { ...rest, text_hash: null, text_pending: true };
+    return { ...rest, text_hash: null, text_pending: true, pending_about: about, pending_interests: interests, pending_expertise: expertise };
   };
-  if (hasText && !semanticAvailable()) return { status: await bulkOne(action, withoutText()), degraded: true };
-  let status;
+  if (!hasText) return { status: await bulkOne(action, doc), degraded: false };
+  if (!semanticAvailable()) return { status: await bulkOne(action, withoutText()), degraded: true };
+  let failure;
   try {
-    status = await bulkOne(action, doc);
+    const item = await bulkItem(action, doc);
+    if (!embeddingFailed(item)) return { status: item.status, degraded: false };
+    failure = new UpstreamError(`bulk item status ${item.status}`, { status: item.status, ...esErrorInfo(item.error) });
   } catch (err) {
-    if (!hasText || !(err instanceof UpstreamError)) throw err;
-    status = 500;
+    if (!(err instanceof UpstreamError) || !isInferenceFailure(err)) throw err;
+    failure = err;
   }
-  if (!hasText || status < 500) return { status, degraded: false };
-  pauseSemantic(new UpstreamError(`bulk item status ${status}`));
+  pauseSemantic(failure);
   return { status: await bulkOne(action, withoutText()), degraded: true };
+}
+
+// Indexes the owner's document again with the text a degraded write left in the pending fields,
+// once semantic matching is available, so the text is embedded and the pending fields go. Runs on
+// the owner's presence writes (connect.mjs); a profile save needs no call, since its full reindex
+// carries the text from the request. Guarded by the sequence number it read, so a write that
+// lands in between wins (409, ignored). Returns true when the text was embedded; throws an
+// UpstreamError when the write failed for another reason. A document whose text was dropped
+// before the pending fields existed has none to embed and keeps text_hash null for the next save.
+export async function reembedPending(eventId, profileId) {
+  if (!semanticAvailable()) return false;
+  const id = docId(eventId, profileId);
+  const { status, json } = await people('GET', `${idx(PEOPLE_INDEX)}/_doc/${encodeURIComponent(id)}`, undefined, { okStatuses: [404] });
+  if (status === 404 || !json.found) return false;
+  // The semantic fields are filled by copy_to and are not part of a document's source; they are
+  // left out here in case a cluster returns them.
+  const { pending_about, pending_interests, pending_expertise, text_pending, about_semantic, interests_semantic, expertise_semantic, _inference_fields, ...rest } = json._source ?? {};
+  if (text_pending !== true || [pending_about, pending_interests, pending_expertise].every((v) => typeof v !== 'string')) return false;
+  const text = { about: pending_about ?? '', interests: pending_interests ?? '', expertise: pending_expertise ?? '' };
+  const guard = { _id: id, if_seq_no: json._seq_no, if_primary_term: json._primary_term };
+  const written = await writeProfileDoc({ index: guard }, { ...rest, ...text, text_hash: textHash(text) });
+  if (written.status === 409) return false;
+  if (written.status < 200 || written.status > 299) throw new UpstreamError(`bulk item status ${written.status}`);
+  return !written.degraded;
+}
+
+// The report flags for a profile document that is being created or fully reindexed: the flags it
+// already carries, and hidden or spot_hidden again when its reports (which outlive the document,
+// see report.mjs) reach HIDE_AT. Fails closed: when counting fails, a reindex keeps the stored
+// flags and never unhides, and a create (which has no stored flags to keep) fails with the error,
+// so a deleted and re-made profile is never created visible on a guess.
+async function reportFlags(slug, ref, own) {
+  const stored = { hidden: own.found && own.source.hidden === true, spot_hidden: own.found && own.source.spot_hidden === true };
+  let counts;
+  try {
+    counts = await reportCountsFor(slug, ref);
+  } catch (err) {
+    if (!own.found) throw err;
+    console.error(`Counting reports failed; keeping the stored flags: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
+    return stored;
+  }
+  return { hidden: stored.hidden || counts.profile >= HIDE_AT, spot_hidden: stored.spot_hidden || counts.spot >= HIDE_AT };
 }
 
 async function putProfile(req, res) {
@@ -1204,10 +1319,14 @@ async function putProfile(req, res) {
   };
   // Presence needs conference-wide visibility, so turning that off clears it. Otherwise a full
   // reindex carries the stored presence over and a partial update leaves it alone.
-  const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
+  const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : { ...PRESENCE_OFF };
   if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
-  // The report flags live on the document too; a full reindex would otherwise unhide silently.
-  const flags = own.found ? { hidden: own.source.hidden === true, spot_hidden: own.source.spot_hidden === true } : {};
+  // The report flags live on the document too, and a create or a full reindex writes them from the
+  // stored flags and the reports on file (reportFlags), so neither unhides silently, not even after
+  // the owner deleted the document. A partial update leaves them as they are.
+  const partial = own.found && own.source.text_hash === hash;
+  const flags = partial ? null : await reportFlags(conf.slug, common.ref, own);
+  if (flags?.spot_hidden) presence.presence_spot = null;
 
   let status;
   let degraded = false;
@@ -1224,13 +1343,14 @@ async function putProfile(req, res) {
         sample: false,
         secret_hash: hashSecret(device.secret),
         text_hash: hash,
+        ...flags,
         ...common,
       },
     ));
     if (status === 409) throw forbidden();
   } else {
     const guard = { _id: id, if_seq_no: own.seqNo, if_primary_term: own.primaryTerm };
-    if (own.source.text_hash === hash) {
+    if (partial) {
       // Text unchanged: a Bulk partial update without the text fields reuses the embeddings.
       status = await bulkOne({ update: guard }, { doc: common });
     } else {
@@ -1258,7 +1378,7 @@ async function putProfile(req, res) {
     ok: true,
     open_to_meet: body.open_to_meet,
     shared_talk_ids: shared,
-    hidden_for_owner: own.found && own.source.hidden === true,
+    hidden_for_owner: flags ? flags.hidden : own.source.hidden === true,
     // Present only when the text could not be embedded and was left off the document for now.
     ...(degraded ? { degraded: { semantic: true } } : {}),
   });
@@ -1292,6 +1412,26 @@ export async function searchPeople(slug, body) {
     if (!body.explain || !(err instanceof UpstreamError) || err.message !== 'status 400') throw err;
     const { explain, ...rest } = body;
     return (await people('POST', path, rest)).json;
+  }
+}
+
+// Runs the people query that build(semantic) returns (peopleQuery's { body, legs }, or null when
+// there is nothing to rank by), semantic when semantic.mjs allows it. When the semantic legs fail
+// because the inference endpoint did (isInferenceFailure), semantic queries pause for a minute and
+// the same request runs again with keyword legs; any other failure propagates. matches, circle
+// members, the push nudge (nudge.mjs) and Bluetooth sightings (ble.mjs) all rank through this.
+// Returns { json, q, semantic } with the query that answered, or null when build gave none.
+export async function rankPeople(slug, build) {
+  const semantic = semanticAvailable();
+  const q = build(semantic);
+  if (!q) return null;
+  try {
+    return { json: await searchPeople(slug, q.body), q, semantic };
+  } catch (err) {
+    if (!semantic || !q.legs.includes('text') || !isInferenceFailure(err)) throw err;
+    pauseSemantic(err);
+    const fallback = build(false);
+    return { json: await searchPeople(slug, fallback.body), q: fallback, semantic: false };
   }
 }
 
@@ -1335,32 +1475,20 @@ async function matches(req, res) {
   if (when === 'around_now') filters.push({ range: { presence_until: { gt: 'now' } } });
   const blocked = await blockedIds(conf.slug, me.profile_id);
   // A requester who is around with a position gets the distance leg; the origin is their own
-  // stored, rounded location and never leaves the query.
-  const build = (semantic) => peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: locationOf(me), semantic });
-  let semantic = semanticAvailable();
-  let q = build(semantic);
-  if (!q) {
+  // stored cell and never leaves the query.
+  const build = (semantic) => peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: cellOf(me), semantic });
+  // When the semantic legs fail because inference did, the same request is answered with keyword
+  // legs and says so; semantic queries pause for a minute (rankPeople, semantic.mjs).
+  const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
+  if (!ranked) {
     sendJson(res, 200, { results: [], from, size, has_more: false });
     return;
   }
+  const { json, q, semantic } = ranked;
   // Only talks the requester marked and also shared for are named in a reason, so a match never
   // reveals a talk circle the requester has not joined.
   const mine = new Set(me.shared_talk_ids ?? []);
   const talkIds = interested.filter((id) => mine.has(id));
-  // When the semantic legs fail (inference endpoint unavailable), the same request is answered
-  // with keyword legs and says so; semantic queries pause for a minute (semantic.mjs).
-  const run = async () => {
-    try {
-      return await searchPeople(conf.slug, q.body);
-    } catch (err) {
-      if (!semantic || !q.legs.includes('text') || !(err instanceof UpstreamError)) throw err;
-      pauseSemantic(err);
-      semantic = false;
-      q = build(false);
-      return searchPeople(conf.slug, q.body);
-    }
-  };
-  const [json, topics] = await Promise.all([run(), topicsOf(conf.slug)]);
   const all = json.hits?.hits ?? [];
   // Broad matches are dropped from a text search and from the "anyone" view. The "around now"
   // view keeps those who are in the requester's own zone right now, after every specific match
@@ -1409,20 +1537,9 @@ async function members(req, res) {
 
   const blocked = await blockedIds(conf.slug, me.profile_id);
   const membersQuery = (semantic) => peopleQuery(me, [{ term: { shared_talk_ids: talkId } }], { size: MEMBERS_SIZE, includeEveryone: true, blocked, semantic });
-  const path = withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(conf.slug));
-  const membersSearch = async () => {
-    const semantic = semanticAvailable();
-    try {
-      return await people('POST', path, membersQuery(semantic).body);
-    } catch (err) {
-      if (!semantic || !(err instanceof UpstreamError)) throw err;
-      pauseSemantic(err);
-      return people('POST', path, membersQuery(false).body);
-    }
-  };
   const [talks, { json }, labels] = await Promise.all([
     talksById(conf.slug, [talkId], ['title', 'start', 'end', 'url', 'speaker_profiles']),
-    membersSearch(),
+    rankPeople(conf.slug, membersQuery),
     topicLabels(conf.slug),
   ]);
   const talk = talks.get(talkId);

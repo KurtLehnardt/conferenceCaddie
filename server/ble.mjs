@@ -27,12 +27,11 @@
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
-import { semanticAvailable } from './semantic.mjs';
 import {
   people, idx, docId, PEOPLE_INDEX, LIMITS,
   HttpError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
   conferenceFor, authenticated, updateOwnProfile, isAround, blockedIds, dispatch, topicsOf,
-  peopleQuery, searchPeople, isBroad, toPerson,
+  peopleQuery, rankPeople, isBroad, toPerson,
 } from './people.mjs';
 
 /** The 128-bit service UUID the Android app advertises and scans for. Same value in BleConstants.kt. */
@@ -156,13 +155,15 @@ async function sightings(req, res) {
     return;
   }
 
-  // The same ranking as POST /api/people/matches, as the requester, restricted to these people.
-  const q = peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: ids.map((id) => docId(conf.slug, id)) } }], { size: ids.length, blocked, explain: true, semantic: semanticAvailable() });
-  if (!q) {
+  // The same ranking as POST /api/people/matches, as the requester, restricted to these people,
+  // with the same keyword fallback when inference fails (rankPeople).
+  const build = (semantic) => peopleQuery(me, [{ term: { open_to_meet: true } }, { ids: { values: ids.map((id) => docId(conf.slug, id)) } }], { size: ids.length, blocked, explain: true, semantic });
+  const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
+  if (!ranked) {
     sendJson(res, 200, { nearby: [] });
     return;
   }
-  const [result, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
+  const { json: result, q } = ranked;
   const hits = (result.hits?.hits ?? []).filter((h) => !isBroad(h, q.legs, me, topics.common));
   const nearby = hits.map((h) => {
     const p = toPerson(h, me, topics.labels, new Map(), null);
