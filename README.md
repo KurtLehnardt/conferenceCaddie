@@ -13,7 +13,7 @@ It runs as a web app (PWA) on any phone, and as an Android app (.apk) that adds 
 
 ## Install
 
-**On your phone (web app).** Open https://conference-caddie-265846417372.us-west1.run.app, or scan the QR code for KubeCon + CloudNativeCon North America 2026. To get nudges with the app closed, add it to your Home Screen (iPhone: Share, then Add to Home Screen; Android: the install prompt) and turn on "Nudge me even when the app is closed". No account is needed.
+**On your phone (web app).** Open https://kurtlehnardt.github.io/conferenceCaddie/ (the free GitHub Pages app), or scan the QR code for KubeCon + CloudNativeCon North America 2026. To get nudges with the app closed, add it to your Home Screen (iPhone: Share, then Add to Home Screen; Android: the install prompt) and turn on "Nudge me even when the app is closed". No account is needed.
 
 <img src="docs/demo/qr-kubecon.png" alt="QR code that opens Conference Caddie for KubeCon + CloudNativeCon North America 2026" width="160">
 
@@ -26,7 +26,11 @@ npm --prefix web ci
 VITE_MOCK=1 npm --prefix web run dev     # http://localhost:5173 with fixture conferences and sample people
 ```
 
-**Run your own server.** Node 22 or later, an Elasticsearch deployment, and Google Cloud Run for the hosted service:
+The older Cloud Run address, https://conference-caddie-265846417372.us-west1.run.app, stays up until the paid stack is shut down; see [docs/FREE_HOSTING.md](docs/FREE_HOSTING.md) for the plan and the status of the move.
+
+**Run it for free (no expiry).** The free stack is a static app on GitHub Pages plus one Cloudflare Worker (`worker/`) that keeps everything in SQLite-backed Durable Objects and uses Workers AI for embeddings. It needs no Elasticsearch and no Google Cloud. [docs/FREE_HOSTING.md](docs/FREE_HOSTING.md) describes the architecture, the free limits, how the app degrades and the operations runbook, and [worker/README.md](worker/README.md) has the deploy steps.
+
+**Run your own server (Cloud Run and Elasticsearch).** Node 22 or later, an Elasticsearch deployment, and Google Cloud Run for the hosted service:
 
 ```sh
 npm ci && npm --prefix web ci
