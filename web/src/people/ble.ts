@@ -13,7 +13,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { useEffect, useState } from 'preact/hooks';
 import { isAbort, PeopleApiError, postSightings, putPresenceBle, rotateBleToken, type BleToken, type NearbyPerson, type Sighting } from './api';
-import { lastPositionFix } from './presence';
+import { lastPositionFix, presenceWrite } from './presence';
 import { getPresence, isBlocked, notify, usePeopleStore } from './storage';
 import type { PersonResult } from './types';
 import { toast } from './ui';
@@ -330,10 +330,14 @@ async function onStopped(slug: string, reason: string): Promise<void> {
 }
 
 async function clearOnServer(slug: string): Promise<void> {
-  const p = getPresence(slug);
-  if (!p.on || !p.zone) return;
+  if (!getPresence(slug).on) return;
   try {
-    await putPresenceBle(slug, p.zone, p.spot, false, lastPositionFix(slug), p.mode);
+    // In the presence write queue, and only if presence is still on when its turn comes: a write
+    // after the delete would switch presence back on.
+    await presenceWrite(async () => {
+      const p = getPresence(slug);
+      if (p.on && p.zone) await putPresenceBle(slug, p.zone, p.spot, false, lastPositionFix(slug), p.mode);
+    });
   } catch {
     // The token dies with presence, at the latest in ten minutes.
   }
@@ -365,12 +369,17 @@ export async function startBle(slug: string): Promise<string | null> {
   } catch (err) {
     return describe(err);
   }
-  let res: Awaited<ReturnType<typeof putPresenceBle>>;
+  let res: Awaited<ReturnType<typeof putPresenceBle>> | null;
   try {
-    res = await putPresenceBle(slug, p.zone, p.spot, true, lastPositionFix(slug), p.mode);
+    res = await presenceWrite(async () => {
+      // Presence may have been turned off while the permission prompts were open.
+      const now = getPresence(slug);
+      return now.on && now.zone ? putPresenceBle(slug, now.zone, now.spot, true, lastPositionFix(slug), now.mode) : null;
+    });
   } catch (err) {
     return describe(err);
   }
+  if (!res) return 'Turn on being around first.';
   if (!res.ble?.token) return 'That could not be started. Please try again.';
   try {
     await CaddieBle.start({ token: res.ble.token, scan: true, durationMs: presenceDuration(slug) });
@@ -395,6 +404,12 @@ export async function stopBle(slug: string, { tellServer = true }: { tellServer?
   }
   if (getBle(slug).on) setBle(slug, { on: false });
   if (tellServer) await clearOnServer(slug);
+}
+
+/** Stops the feature and forgets its device state, for "Delete my profile" (the server cleared the token). */
+export async function resetBle(): Promise<void> {
+  if (session) await stopBle(session.slug, { tellServer: false });
+  stateMem.clear();
 }
 
 /**
