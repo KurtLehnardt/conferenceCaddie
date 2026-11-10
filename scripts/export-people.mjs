@@ -4,11 +4,15 @@
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY); ES_PEOPLE_INDEX (default caddie-people).
 //
 // The export leaves out secret_hash, text_hash, the embeddings, the presence fields (zone, spot,
-// times, position) and the Bluetooth token: presence is transient and a position never leaves
-// Elasticsearch as such. It also leaves out every profile whose owner asked to delete it and whose
-// delete has not finished yet (hidden, sharing nothing and not visible conference-wide; the
-// server's hourly purge finishes those deletes). data/exports/ is git-ignored, because the file
-// holds personal data; delete it when you no longer need it.
+// times, position) and everything Bluetooth: the legacy token, the derived-token session
+// (presence_nonce and ble_master_id, from which the key could be rebuilt by anyone who also holds
+// the master secret) and the record of whom Bluetooth answers returned (ble_caps). Presence is
+// transient and a position never leaves Elasticsearch as such. The Bluetooth fields are named as
+// well as matched by their prefixes, so renaming a pattern can never export them. It also leaves
+// out every profile whose owner asked to delete it and whose delete has not finished yet (hidden,
+// sharing nothing and not visible conference-wide; the server's hourly purge finishes those
+// deletes). data/exports/ is git-ignored, because the file holds personal data; delete it when you
+// no longer need it.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,6 +25,7 @@ const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const PAGE = 1000;
+const EXCLUDED = ['secret_hash', 'text_hash', '*_semantic', 'presence_*', 'ble_*', 'presence_nonce', 'ble_master_id', 'ble_caps', 'ble_caps_until', 'ble_token', 'ble_token_until', 'ble_rotated'];
 
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -56,7 +61,7 @@ let after;
 for (;;) {
   const body = {
     size: PAGE,
-    _source: { excludes: ['secret_hash', 'text_hash', '*_semantic', 'presence_*', 'ble_*'] },
+    _source: { excludes: EXCLUDED },
     query: { bool: { filter: [{ term: { event_id: slug } }], must_not: [PENDING_DELETE_QUERY] } },
     sort: [{ updated_at: 'asc' }, { profile_id: 'asc' }],
   };

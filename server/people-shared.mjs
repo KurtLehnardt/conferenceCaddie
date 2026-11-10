@@ -3,8 +3,20 @@
 // Importing this module has no side effects: unlike server/people.mjs, it reads no env, starts no
 // purge and makes no request, so a script can use these without running the server's purge.
 
-// The Bluetooth token (ble.mjs) rides along with presence: cleared with it, carried through a reindex.
-export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, presence_cell: null, presence_located_at: null, ble_token: null, ble_token_until: null };
+// The Bluetooth session (ble.mjs) rides along with presence: cleared with it, carried through a
+// reindex. That is the legacy token (ble_token, ble_token_until, and ble_rotated, set once the
+// rotate route has replaced the token, which only the old APK calls) and the derived-token session
+// (presence_nonce, the 16-byte nonce as base64url, and ble_master_id, the id of the master that
+// issued it), all unindexed except the legacy token and never returned. The record of whom the
+// Bluetooth answers returned to the device (ble_caps, with ble_caps_until, when its newest entry
+// leaves the rolling hour) is not here: it outlives a presence session, so that turning presence
+// off and on does not reset the caps, and goes with the profile or when the purge finds it run out.
+export const BLE_SESSION_OFF = { ble_token: null, ble_token_until: null, ble_rotated: null, presence_nonce: null, ble_master_id: null };
+export const BLE_CAPS_OFF = { ble_caps: null, ble_caps_until: null };
+// Caps records whose newest entry is more than an hour old: they no longer count for anything, so
+// both purges (server/people.mjs and scripts/purge-expired-people.mjs) clear them.
+export const EXPIRED_CAPS_QUERY = { range: { ble_caps_until: { lt: 'now' } } };
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, presence_cell: null, presence_located_at: null, ...BLE_SESSION_OFF };
 // A profile whose delete hid it (step 1 of deleteProfileAndConnections in people.mjs) and has not
 // finished yet: not visible conference-wide and sharing for no talk. No other write leaves a
 // document in that state, because a profile write with both choices off deletes the document

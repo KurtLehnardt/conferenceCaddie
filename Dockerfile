@@ -15,6 +15,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY server/ ./server/
+# The Bluetooth token reference implementation, which the server imports so the two cannot drift.
+COPY contracts/js/ble-token.mjs ./contracts/js/ble-token.mjs
 COPY config/moderation-words.json ./config/moderation-words.json
 COPY --from=web-build /build/web/dist ./web/dist
 USER node
