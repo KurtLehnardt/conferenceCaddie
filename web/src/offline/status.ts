@@ -1,6 +1,7 @@
 // Offline mode: the connection state, the service worker registration, and the cached schedule
 // that the offline keyword search reads.
 import { useEffect, useState } from 'preact/hooks';
+import { apiFetch, apiOrigin, apiUrl, appPath } from '../lib/apiBase';
 import type { Talk } from '../types';
 import { isNative } from '../native';
 
@@ -14,8 +15,10 @@ export interface Schedule {
   talks: ScheduleTalk[];
 }
 
-const scheduleUrl = (slug: string) => `/api/schedule?event=${encodeURIComponent(slug)}`;
-const CONFERENCES_URL = '/api/conferences';
+// The schedule's and the conference list's absolute URLs when the API is on another origin. The
+// service worker caches them under these URLs, and caches.match looks them up under the same ones.
+const scheduleUrl = (slug: string) => apiUrl(`/api/schedule?event=${encodeURIComponent(slug)}`);
+const CONFERENCES_URL = apiUrl('/api/conferences');
 
 /**
  * The Cache Storage cache the Android app writes itself, since it registers no service worker.
@@ -43,16 +46,19 @@ export function useOnline(): boolean {
 }
 
 /**
- * Registers /sw.js in production builds only. The build id is the hashed file name of the entry
- * script, so each build registers a new worker with its own caches. Dev and mock mode never
- * register a worker.
+ * Registers {base}sw.js in production builds only. The build id is the hashed file name of the
+ * entry script, so each build registers a new worker with its own caches. The worker is told the
+ * API origin, when it is not the app's own, so it can cache the schedule from there. Dev and mock
+ * mode never register a worker.
  */
 export function registerServiceWorker(entryUrl: string): void {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
   const file = new URL(entryUrl).pathname.split('/').pop() ?? '';
   const build = file.replace(/\.js$/, '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || 'build';
   const register = () => {
-    navigator.serviceWorker.register(`/sw.js?build=${build}`, { scope: '/' }).catch(() => {
+    const api = apiOrigin();
+    const url = `${appPath('sw.js')}?build=${build}${api ? `&api=${encodeURIComponent(api)}` : ''}`;
+    navigator.serviceWorker.register(url, { scope: appPath('') }).catch(() => {
       // Without a worker the app still works online; only the offline shell is missing.
     });
   };
@@ -100,7 +106,7 @@ export async function loadSchedule(slug: string): Promise<Schedule | null> {
   const known = memory.get(slug);
   if (known) return known;
   try {
-    const res = await fetch(scheduleUrl(slug));
+    const res = await apiFetch(scheduleUrl(slug));
     if (res.ok) {
       const json = await res.json();
       if (isSchedule(json, slug)) {
@@ -127,7 +133,7 @@ export function saveForOffline(slug: string): void {
   if (warmed.has(slug)) return;
   warmed.add(slug);
   const native = isNative();
-  fetch(scheduleUrl(slug))
+  apiFetch(scheduleUrl(slug))
     .then(async (res) => {
       if (!res.ok) throw new Error('not saved');
       const json = await res.json();
@@ -137,7 +143,7 @@ export function saveForOffline(slug: string): void {
     })
     .catch(() => warmed.delete(slug));
   if (native) {
-    fetch(CONFERENCES_URL)
+    apiFetch('/api/conferences')
       .then(async (res) => {
         if (!res.ok) throw new Error('not saved');
         const json = await res.json();

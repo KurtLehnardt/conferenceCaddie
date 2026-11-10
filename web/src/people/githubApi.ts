@@ -2,6 +2,7 @@
 // person typed, carries no device header (nothing is written) and follows api.ts's conventions:
 // a PeopleApiError with the status and the server's error code on failure. The handle is never
 // stored on the device; it lives in component state until the preview is closed.
+import { apiFetch } from '../lib/apiBase';
 import { PeopleApiError } from './api';
 import type { TopicRef } from './types';
 
@@ -36,7 +37,7 @@ export function normalizeHandle(raw: string): string {
 export async function importGithub(event: string, handle: string, signal?: AbortSignal): Promise<GithubProposal> {
   let res: Response;
   try {
-    res = await fetch('/api/import/github', {
+    res = await apiFetch('/api/import/github', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ event, handle }),

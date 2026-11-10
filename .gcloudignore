@@ -20,3 +20,6 @@ gcp-key*.json
 application_default_credentials.json
 .secrets/
 .DS_Store
+# The Cloudflare Worker (the free stack) is deployed separately with wrangler; it never goes
+# into the Cloud Run upload or image.
+worker/
