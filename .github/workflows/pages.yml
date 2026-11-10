@@ -12,12 +12,11 @@ name: Deploy the talk bundles to GitHub Pages
 # github.io origin is shared with the account's other Pages sites, which could read the app's device
 # secrets from localStorage there, so the app is never published here (DECISIONS.md, 2026-11-10).
 #
-# Repository variables (Settings, Secrets and variables, Actions, Variables), public addresses and
-# not secrets:
-#   CADDIE_API_BASE  the Worker's https address. While it is empty the free stack is not deployed,
-#                    so a push or a scheduled run only logs a notice and publishes nothing, and a
-#                    manual run fails.
-#   CADDIE_APP_URL   the app's address, the same Worker address. The landing page links to it, or
+# Nothing here needs the Worker: the site is built from the committed data/ and published as is, so
+# the talk bundles are available to the native apps whether or not the Worker has been deployed.
+# Repository variable (Settings, Secrets and variables, Actions, Variables), a public address and
+# not a secret:
+#   CADDIE_APP_URL   the app's address, the Worker's https address. The landing page links to it, or
 #                    says the app is not live yet while it is empty.
 #
 # Triggers: a push to main that changes the conference data or the bundle builder; a weekly
@@ -32,6 +31,7 @@ on:
     paths:
       - 'data/**'
       - 'contracts/**'
+      - 'config/**'
       - 'scripts/build-bundles.mjs'
       - 'scripts/carry-forward-bundles.mjs'
       - 'scripts/pages-landing.mjs'
@@ -39,14 +39,18 @@ on:
       - 'tools/bundles/**'
       - '.github/workflows/pages.yml'
   schedule:
-    # Mondays, after the weekly ingest (ingest.yml, 09:17 UTC) has had time to commit new data.
+    # Mondays, after the weekly ingest (ingest.yml, 09:17 UTC) has had time to push new data to the Worker.
+    # The ingest commits nothing, so this run rebuilds the bundles from the data already committed.
     - cron: '47 11 * * 1'
   workflow_dispatch:
 
+# The build job installs the third-party packages of tools/bundles (about seventy) with no install
+# script, and nothing from the root package, which the bundle builder, the carry-forward script and the
+# landing page script do not use. Even so, the build job holds no deploy credential: only the deploy
+# job gets pages: write and the OIDC token, and it runs no repository code. The verify job checks the
+# packed artifact itself, in a job with no permissions, before the deploy job may run.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -61,41 +65,25 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pages: read
     env:
-      CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
       CADDIE_APP_URL: ${{ vars.CADDIE_APP_URL }}
-    outputs:
-      ready: ${{ steps.config.outputs.ready }}
     steps:
-      - name: Check the Worker address is set
-        id: config
-        run: |
-          if [ -n "$CADDIE_API_BASE" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "::error::The repository variable CADDIE_API_BASE is empty. Set it to the Worker's https address."
-            exit 1
-          fi
-          echo "::notice::Skipping the Pages deploy: the repository variable CADDIE_API_BASE is empty (the Worker is not deployed yet)."
-          echo "ready=false" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - if: steps.config.outputs.ready == 'true'
-        uses: actions/checkout@v4
-
-      - if: steps.config.outputs.ready == 'true'
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            package-lock.json
             tools/bundles/package-lock.json
 
-      - name: Install
-        if: steps.config.outputs.ready == 'true'
-        run: npm ci
-
       - name: Start an empty dist-pages
-        if: steps.config.outputs.ready == 'true'
         run: |
           rm -rf dist-pages
           mkdir -p dist-pages
@@ -103,11 +91,9 @@ jobs:
       # The embedding library, with no install script: onnxruntime-node's postinstall would
       # download an unverified CUDA provider, and the CPU binaries ship in the package.
       - name: Install the bundle tools
-        if: steps.config.outputs.ready == 'true'
         run: npm --prefix tools/bundles ci --ignore-scripts
 
       - name: Read the pinned model revision
-        if: steps.config.outputs.ready == 'true'
         id: model
         run: |
           rev=$(grep -oE "ONNX_REVISION = '[0-9a-f]+'" scripts/lib/embedder.mjs | grep -oE "[0-9a-f]{40}")
@@ -118,15 +104,13 @@ jobs:
       # download (--no-model-download), so a missing or altered file fails it; on a cache miss it
       # downloads once and the cache is saved at the end of the job.
       - name: Cache the embedding model
-        if: steps.config.outputs.ready == 'true'
         id: model-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/model
           key: bundle-model-${{ steps.model.outputs.revision }}
 
       - name: Build the talk bundles
-        if: steps.config.outputs.ready == 'true'
         env:
           MODEL_FLAG: ${{ steps.model-cache.outputs.cache-hit == 'true' && '--no-model-download' || '' }}
           REUSE_FLAG: ${{ github.event_name == 'schedule' && '--reuse-from none' || '' }}
@@ -139,39 +123,99 @@ jobs:
       # the live conferences.json names, so those are copied into this build first (verified by
       # size and SHA-256). A 404 on the first deploy is fine.
       - name: Carry forward the live bundle directories
-        if: steps.config.outputs.ready == 'true'
         run: node scripts/carry-forward-bundles.mjs --out dist-pages --base-url "$BUNDLE_BASE"
 
       # The landing page reads CADDIE_APP_URL from the environment; an empty value gives the
       # "not live yet" page, and a value that is not a plain https address fails the build.
       - name: Write the landing page
-        if: steps.config.outputs.ready == 'true'
         run: node scripts/pages-landing.mjs --out dist-pages --site-url "$SITE_URL"
 
-      # Only the bundle builder's outputs and the landing page may be published: no app code.
+      # Only the bundle builder's outputs and the landing page may be published: no app code. The
+      # github.io origin is shared with other Pages sites of the same account, so a script published
+      # here could read their storage. The check therefore looks below the top level too, rejects
+      # every symlink and every other entry that is not a plain file or directory (the artifact is
+      # packed with tar --dereference, which would copy what a link points at), and allows under
+      # bundles/ only the files the bundle builder writes. This is an early failure: the verify job
+      # repeats the checks on the packed artifact, outside the job that ran the third-party code.
       - name: Check the site holds no web app
-        if: steps.config.outputs.ready == 'true'
         run: |
+          [ -d dist-pages/bundles ] || { echo "::error::dist-pages/bundles is missing."; exit 1; }
+          links=$(find dist-pages -type l -print)
+          if [ -n "$links" ]; then echo "::error::Symlinks in dist-pages: $links"; exit 1; fi
           unexpected=$(find dist-pages -mindepth 1 -maxdepth 1 \
             ! -name bundles ! -name conferences.json ! -name capabilities.json ! -name index.html ! -name 404.html -print)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected files in dist-pages: $unexpected"; exit 1; fi
-          if grep -l "<script" dist-pages/index.html dist-pages/404.html; then echo "::error::The landing page must hold no script."; exit 1; fi
+          unexpected=$(find dist-pages -mindepth 1 -maxdepth 1 ! -name bundles ! -type f -print)
+          if [ -n "$unexpected" ]; then echo "::error::Top-level entries that are not plain files: $unexpected"; exit 1; fi
+          unexpected=$(find dist-pages/bundles -mindepth 1 ! -type d ! -type f -print)
+          if [ -n "$unexpected" ]; then echo "::error::Entries under bundles that are not plain files: $unexpected"; exit 1; fi
+          unexpected=$(find dist-pages/bundles -mindepth 1 ! -type d -print | sed 's|^dist-pages/||' \
+            | grep -vE '^bundles/(conferences\.json|build-info\.json|[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
+          if [ -n "$unexpected" ]; then echo "::error::Unexpected files in dist-pages/bundles: $unexpected"; exit 1; fi
+          unexpected=$(find dist-pages/bundles -mindepth 1 -type d -print | sed 's|^dist-pages/||' \
+            | grep -vE '^bundles/[^/]+(/[0-9a-f]{16})?$' || true)
+          if [ -n "$unexpected" ]; then echo "::error::Unexpected directories in dist-pages/bundles: $unexpected"; exit 1; fi
+          # grep exits 0 on a match, 1 on none and 2 on an error such as a missing file, so only 1 passes.
+          rc=0
+          grep -qiE '<script|[[:space:]]on[a-z]+[[:space:]]*=' dist-pages/index.html dist-pages/404.html || rc=$?
+          if [ "$rc" -ne 1 ]; then echo "::error::The landing page must hold no script or event handler (grep status $rc)."; exit 1; fi
+          for f in dist-pages/index.html dist-pages/404.html; do
+            grep -qF "default-src 'none'" "$f" || { echo "::error::$f has no default-src 'none' policy."; exit 1; }
+          done
 
-      - if: steps.config.outputs.ready == 'true'
-        uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
-      - if: steps.config.outputs.ready == 'true'
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: dist-pages
 
-  deploy:
+  # Checks the artifact that will be deployed, in a job with no permissions and no repository code, so
+  # that a package that ran in the build job cannot have tampered with the check itself. The artifact
+  # is a zip holding artifact.tar (upload-pages-artifact); the tar listing is checked first, so a
+  # link or device entry is rejected before anything is extracted, then the files are checked again.
+  verify:
     needs: build
-    if: needs.build.outputs.ready == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: github-pages
+          path: artifact
+
+      - name: Check the packed site
+        run: |
+          tar -tvf artifact/artifact.tar | cut -c1 | sort -u > types.txt
+          if grep -qvE '^[-d]$' types.txt; then echo "::error::The artifact holds an entry that is not a plain file or directory (a link or a device)."; tar -tvf artifact/artifact.tar | grep -vE '^[-d]'; exit 1; fi
+          entries=$(tar -tf artifact/artifact.tar | sed 's|^\./||; s|/$|/|' | grep -vxE '\.?/?|\.' || true)
+          unexpected=$(printf '%s\n' "$entries" | grep -vE '/$' \
+            | grep -vE '^(index\.html|404\.html|conferences\.json|capabilities\.json|bundles/conferences\.json|bundles/build-info\.json|bundles/[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
+          if [ -n "$unexpected" ]; then echo "::error::Unexpected files in the artifact: $unexpected"; exit 1; fi
+          unexpected=$(printf '%s\n' "$entries" | grep -E '/$' | grep -vE '^bundles/([^/]+/([0-9a-f]{16}/)?)?$' || true)
+          if [ -n "$unexpected" ]; then echo "::error::Unexpected directories in the artifact: $unexpected"; exit 1; fi
+          mkdir site
+          tar -xf artifact/artifact.tar -C site --no-same-owner
+          [ -d site/bundles ] || { echo "::error::The artifact has no bundles directory."; exit 1; }
+          [ -f site/bundles/conferences.json ] || { echo "::error::The artifact has no bundles/conferences.json."; exit 1; }
+          [ -f site/capabilities.json ] || { echo "::error::The artifact has no capabilities.json."; exit 1; }
+          rc=0
+          grep -qiE '<script|[[:space:]]on[a-z]+[[:space:]]*=' site/index.html site/404.html || rc=$?
+          if [ "$rc" -ne 1 ]; then echo "::error::The landing page must hold no script or event handler (grep status $rc)."; exit 1; fi
+          for f in site/index.html site/404.html; do
+            grep -qF "default-src 'none'" "$f" || { echo "::error::$f has no default-src 'none' policy."; exit 1; }
+          done
+
+  deploy:
+    needs: [build, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

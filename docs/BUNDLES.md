@@ -19,6 +19,8 @@ Cache `.cache/model` (or the directory named by `CADDIE_MODEL_CACHE`, resolved a
 
 Pass `--takedown` and `--publisher-name` explicitly in CI. The defaults are the repository's issue tracker (`https://github.com/KurtLehnardt/conferenceCaddie/issues`) and "Conference Caddie (Kurt Lehnardt)", which are public; the maintainer may prefer a private contact such as a `mailto:` address, and it ends up in every published bundle and in the index.
 
+If a cached model fails verification (the build fails closed with `--no-model-download`), delete the cache entry with `gh cache delete bundle-model-<rev>`, where `<rev>` is the `ONNX_REVISION`, and run the workflow again so it downloads and verifies the model afresh.
+
 ### Why `--ignore-scripts`
 
 `@huggingface/transformers` runs on `onnxruntime-node`, whose `postinstall` (`script/install.js`, version 1.30.0) downloads the CUDA 12 provider from nuget.org on `linux/x64` when it is not a "local install" (`install-metadata.js` lists `cuda12` as a requirement of that platform). The CPU binaries ship inside the npm package (`bin/napi-v6/linux/x64/` holds `libonnxruntime.so.1` and `onnxruntime_binding.node`), and the builder runs on the CPU only, so the download is unneeded and unverified. `npm --prefix tools/bundles ci --ignore-scripts` runs no install script at all; it was checked here to give the same bundle bytes as an install with scripts. If a tool in your pipeline cannot pass `--ignore-scripts`, set `ONNXRUNTIME_NODE_INSTALL=skip` instead: the script reads that variable (also `npm_config_onnxruntime_node_install` and the flag `--onnxruntime-node-install=skip`) and the value `skip` makes it exit before doing anything.
