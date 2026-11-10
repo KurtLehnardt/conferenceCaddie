@@ -4,7 +4,7 @@ import { useRef, useState } from 'preact/hooks';
 import { X } from 'lucide-preact';
 import { useFocusTrap } from '../lib/focus';
 import { PeopleApiError, requestMeet } from './api';
-import { noteSentRequest } from './connect';
+import { noteSentRequest, openMeetId } from './connect';
 import type { PersonResult } from './types';
 
 export const NOTE_MAX = 140;
@@ -34,9 +34,6 @@ export function prefill(person: PersonResult): { note: string; topicId: string |
   if (topic) return { note: `${lead}${topic.label}`.slice(0, NOTE_MAX), topicId: topic.topic_id };
   return { note: `${lead}what you're working on`, topicId: null };
 }
-
-/** Whether a 409 means an ask is already open (as opposed to the person not being around). */
-export const isMeetOpen = (err: unknown) => err instanceof PeopleApiError && err.status === 409 && err.code !== 'not_around';
 
 export function problem(err: unknown): string {
   if (err instanceof PeopleApiError) {
@@ -73,7 +70,8 @@ export function AskSheet({ slug, person, onClose }: { slug: string; person: Pers
       noteSentRequest(slug, person.ref, res.meet_id);
       setSent(true);
     } catch (err) {
-      if (isMeetOpen(err)) noteSentRequest(slug, person.ref, `pending:${person.ref}`);
+      const open = openMeetId(err);
+      if (open) noteSentRequest(slug, person.ref, open);
       setError(problem(err));
     }
     setBusy(false);

@@ -68,6 +68,11 @@ export function toggleWatch(slug: string, person: { ref: string; display_name: s
   return true;
 }
 
+/** Forgets the in-memory lists, for "Delete my profile" (which removes the stored ones). */
+export function clearWatches(): void {
+  mem.clear();
+}
+
 export function removeWatch(slug: string, ref: string): void {
   save(
     slug,

@@ -434,6 +434,24 @@ function meetFor(c: Connect, meetId: string, id: string): MockMeet {
   return m;
 }
 
+/**
+ * As people.mjs deleteProfileAndConnections: the document goes, with its presence, every meet the
+ * person takes part in, their push subscription and their blocks.
+ */
+function deleteProfileAndConnections(slug: string, id: string) {
+  const key = `${slug}:${id}`;
+  const store = readStore();
+  delete store[key];
+  writeStore(store);
+  const c = readConnect();
+  const me = `dev:${id}`;
+  delete c.presence[key];
+  delete c.push[key];
+  delete c.blocks[key];
+  c.meets = c.meets.filter((m) => m.event_id !== slug || (m.requester !== me && m.recipient !== me));
+  writeConnect(c);
+}
+
 function randomId(): string {
   const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
@@ -517,16 +535,26 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const key = `${conf.slug}:${id}`;
     const open = !!body.open_to_meet;
     const shared = ((body.shared_talk_ids as string[]) ?? []).slice(0, 50);
-    if (!open && !shared.length) delete store[key];
-    else store[key] = { profile: (body.profile as Json) ?? {}, open_to_meet: open, shared_talk_ids: shared };
+    // As people.mjs putProfile: both choices off deletes the document and everything connected to
+    // it. (The fixtures' dates are fixed, so the mock never answers "conference has ended".)
+    if (!open && !shared.length) {
+      if (store[key]) deleteProfileAndConnections(conf.slug, id);
+      return { ok: true, open_to_meet: false, shared_talk_ids: [] };
+    }
+    store[key] = { profile: (body.profile as Json) ?? {}, open_to_meet: open, shared_talk_ids: shared };
     writeStore(store);
+    // Presence needs conference-wide visibility, so turning that off clears it.
+    if (!open) {
+      const c = readConnect();
+      delete c.presence[key];
+      writeConnect(c);
+    }
     return { ok: true, open_to_meet: open, shared_talk_ids: shared, hidden_for_owner: hiddenForOwner(readConnect()) };
   }
   if (path === '/api/people/profile' && method === 'DELETE') {
     const id = device(headers);
-    const store = readStore();
-    delete store[`${query.get('event')}:${id}`];
-    writeStore(store);
+    const slug = String(query.get('event') ?? '');
+    if (readStore()[`${slug}:${id}`]) deleteProfileAndConnections(slug, id);
     return { ok: true };
   }
 
@@ -717,6 +745,8 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
   if (path === '/api/meet/inbox' && method === 'GET') {
     const id = device(headers);
     const conf = conferenceOf(query.get('event'));
+    // As connect.mjs requireProfile: no document at this conference, no inbox.
+    if (!readStore()[`${conf.slug}:${id}`]) throw new HttpError(403, { error: 'profile_required' });
     const c = readConnect();
     advanceMeets(c, conf.slug, id);
     writeConnect(c);
