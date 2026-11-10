@@ -18,6 +18,34 @@ export class PeopleApiError extends Error {
 /** The server's own wording for a text field that the filter held back. */
 export const FILTERED_MESSAGE = 'That was held back by the filter. Edit it and try again.';
 
+// The server explains a rejected write in its own words, naming the field ("display_name is
+// required"). The user gets the same fact in plain words, without field names or ids. Anything not
+// listed here keeps the generic text.
+const FIELD_LABELS: Record<string, string> = {
+  display_name: 'Your name',
+  about: 'About me',
+  interests: '"What I\'m trying to learn or figure out next"',
+  expertise: '"Things I\'ve built, run or broken"',
+  contact_note: '"Another way to reach me"',
+};
+
+export function explainBadRequest(code: string | null): string | null {
+  if (!code) return null;
+  if (/^display_name is required/.test(code)) return 'Add your name to your profile first.';
+  const tooLong = /^(\w+) must be at most (\d+) characters$/.exec(code);
+  if (tooLong) return `${FIELD_LABELS[tooLong[1]] ?? 'One of your details'} is too long: ${tooLong[2]} characters at most. Shorten it in your profile.`;
+  if (/^linkedin_url must be/.test(code)) return 'The LinkedIn link should look like https://www.linkedin.com/in/your-name. Fix it in your profile.';
+  if (/^(learn|speak)_topics contains an unknown topic/.test(code)) return 'A topic you picked is no longer offered. Open your profile and remove it.';
+  if (/^(learn|speak)_topics must be an array/.test(code)) return 'Your topics could not be saved. Open your profile and check the topics you picked.';
+  if (/^shared_talk_ids (contains an unknown talk|must be talks of this conference)/.test(code)) {
+    return 'A talk you share for is no longer in the schedule. Tap "Stop sharing for all", then share again.';
+  }
+  if (/^shared_talk_ids must be an array/.test(code)) return 'You can share for up to 50 talks.';
+  if (/^conference has ended/.test(code)) return 'This conference has ended, so sharing is closed.';
+  if (/^conference is not available/.test(code)) return 'Sharing is not open for this conference.';
+  return null;
+}
+
 function friendly(status: number, code: string | null = null, message: string | null = null): string {
   if (code === 'filtered') return message ?? FILTERED_MESSAGE;
   // Now-only asks: the server's own wording is the one to show.
@@ -57,7 +85,7 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
     } catch {
       // The body is not JSON; the status is enough.
     }
-    throw new PeopleApiError(friendly(res.status, code, message), res.status, code, count);
+    throw new PeopleApiError((res.status === 400 ? explainBadRequest(code) : null) ?? friendly(res.status, code, message), res.status, code, count);
   }
   return (await res.json()) as T;
 }
@@ -292,9 +320,7 @@ export function fetchCircleMembers(slug: string, talkId: string, signal?: AbortS
 export interface RecommendationBody {
   event: string;
   learn_topics: string[];
-  speak_topics: string[];
   interests: string;
-  expertise: string;
   interested_talk_ids: string[];
   size: number;
 }

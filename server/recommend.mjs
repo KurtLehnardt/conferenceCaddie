@@ -4,16 +4,20 @@
 // matching and ranking in one rrf retriever over the talks of one conference. This module builds
 // the query, validates input, and reshapes hits in the order Elasticsearch returned them.
 //
-// Retrievers, each skipped when its input is empty:
+// Talks are recommended only from what the user wants to learn or the problems they face. There
+// are two retrievers, each skipped when its input is empty:
 //   learn_topics  against the talk "topics" field   weight 1
-//   interests     against the talk "semantic" field weight 1
-//   speak_topics  against the talk "topics" field   weight 0.5
-//   expertise     against the talk "semantic" field weight 0.5
+//   interests     against the talk "semantic" field weight 1 (the learn and problems free text)
 //
-// Per-retriever weights are supported by the rrf retriever of Elasticsearch 9.5.6 through the
-// documented form "retrievers": [ { "retriever": { ... }, "weight": 2 } ]. A talk that matches
-// more of a retriever's topics scores higher in that retriever, because each topic is its own
+// What a person can speak to is never a signal for talks. The request still accepts speak_topics
+// and expertise so that cached clients keep working, but both are ignored.
+//
+// A talk that matches more of the learn topics scores higher, because each topic is its own
 // constant-score clause.
+//
+// Reasons: why.learn_topics names the learn topics of this request that the talk has, and
+// why.topics is kept equal to it for clients that predate the split. Nothing outside the request
+// is ever named, and speak topics are never named.
 //
 // Filter: the conference, kind talk, end in the future, and not one of interested_talk_ids.
 // The same filter is carried by the semantic (knn) retrievers so it applies before the
@@ -24,6 +28,7 @@
 //      caddie-people) for the circle counts.
 
 import { take, clientIp } from './ratelimit.mjs';
+import { conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_API_KEY = process.env.ES_API_KEY || '';
@@ -71,7 +76,7 @@ export async function checkRate(req, res, name) {
 }
 
 // A browser sends Origin on a cross-origin POST. When it is present it must name this host.
-function sameOrigin(req) {
+export function sameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return true;
   try {
@@ -196,8 +201,12 @@ export async function esRequest(path, body, key = ES_API_KEY) {
   }
 }
 
-export const searchTalks = (body) => esRequest(`/${encodeURIComponent(TALKS_INDEX)}/_search`, body);
-export const searchTopics = (body) => esRequest(`/${encodeURIComponent(TOPICS_INDEX)}/_search`, body);
+// Both take the conference slug, whose preference keeps every search for it on one shard copy, so
+// ties between equal scores break the same way on every request and every instance.
+export const searchTalks = (body, event) =>
+  esRequest(withPreference(`/${encodeURIComponent(TALKS_INDEX)}/_search`, conferencePreference(event)), body);
+export const searchTopics = (body, event) =>
+  esRequest(withPreference(`/${encodeURIComponent(TOPICS_INDEX)}/_search`, conferencePreference(event)), body);
 
 // ---------------------------------------------------------------------------------------------
 // Validation.
@@ -226,12 +235,14 @@ function validate(body) {
     if (!Number.isInteger(body.size) || body.size < 1 || body.size > 50) throw new BadRequest('size must be an integer from 1 to 50');
     size = body.size;
   }
+  // speak_topics and expertise are accepted and ignored: talks are recommended from what the user
+  // wants to learn only. They are still checked, so a malformed value is a 400 as it always was.
+  validTopicIds(body.speak_topics, 'speak_topics');
+  validText(body.expertise, 'expertise');
   return {
     event: validEvent(body.event),
     learn: validTopicIds(body.learn_topics, 'learn_topics'),
-    speak: validTopicIds(body.speak_topics, 'speak_topics'),
     interests: validText(body.interests, 'interests'),
-    expertise: validText(body.expertise, 'expertise'),
     interestedIds: validTalkIds(body.interested_talk_ids, 'interested_talk_ids'),
     size,
   };
@@ -285,14 +296,12 @@ function buildSearch(p) {
   const weighted = [];
   if (p.learn.length) weighted.push({ retriever: topicRetriever(p.learn), weight: 1 });
   if (p.interests) weighted.push({ retriever: semanticRetriever(p.interests, filter), weight: 1 });
-  if (p.speak.length) weighted.push({ retriever: topicRetriever(p.speak), weight: 0.5 });
-  if (p.expertise) weighted.push({ retriever: semanticRetriever(p.expertise, filter), weight: 0.5 });
   const body = {
     retriever: { rrf: { retrievers: weighted, filter, rank_window_size: RANK_WINDOW } },
     size: p.size,
     _source: ['talk_id', 'conference', 'title', 'abstract', 'speakers', 'room', 'start', 'end', 'track', 'level', 'tags', 'slides_url', 'url', 'topics', 'speaker_profiles'],
   };
-  if (p.interests || p.expertise) {
+  if (p.interests) {
     body.highlight = { encoder: 'default', pre_tags: [''], post_tags: [''], fields: { semantic: { number_of_fragments: 2 } } };
   }
   return body;
@@ -323,7 +332,7 @@ function passageFor(hit) {
 async function circleCounts(event, talkIds) {
   if (!ES_PEOPLE_API_KEY || !talkIds.length) return {};
   try {
-    const json = await esRequest(`/${encodeURIComponent(PEOPLE_INDEX)}/_search`, {
+    const json = await esRequest(withPreference(`/${encodeURIComponent(PEOPLE_INDEX)}/_search`, peoplePreference(event)), {
       size: 0,
       query: {
         bool: {
@@ -346,15 +355,16 @@ async function topicLabels(event, topicIds) {
     size: Math.min(topicIds.length, 200),
     _source: ['topic_id', 'label'],
     query: { bool: { filter: [{ term: { conference: event } }, { terms: { topic_id: topicIds } }] } },
-  });
+  }, event);
   return new Map((json.hits?.hits ?? []).map((h) => [h._source.topic_id, h._source.label]));
 }
 
 async function recommend(p) {
-  const json = await searchTalks(buildSearch(p));
+  const json = await searchTalks(buildSearch(p), p.event);
   const hits = json.hits?.hits ?? [];
-  const wanted = [...p.learn, ...p.speak.filter((t) => !p.learn.includes(t))];
-  const topicIds = [...new Set([...wanted, ...hits.flatMap((h) => h._source?.topics ?? [])])];
+  // The reasons are built only from the topics of this request, never from anything remembered or
+  // from the talk's other topics, so a topic the user has removed can never be named.
+  const topicIds = [...new Set([...p.learn, ...hits.flatMap((h) => h._source?.topics ?? [])])];
   const ids = hits.map((h) => String(h._source?.talk_id ?? h._id));
   const [labels, counts] = await Promise.all([topicLabels(p.event, topicIds), circleCounts(p.event, ids)]);
 
@@ -362,7 +372,8 @@ async function recommend(p) {
     const s = hit._source ?? {};
     const talkTopics = s.topics ?? [];
     const passage = passageFor(hit);
-    const matched = wanted.filter((t) => talkTopics.includes(t) && labels.has(t)).map((t) => labels.get(t));
+    const named = (ids) => ids.filter((t) => talkTopics.includes(t) && labels.has(t)).map((t) => labels.get(t));
+    const learnMatched = named(p.learn);
     const talkId = String(s.talk_id ?? hit._id);
     return {
       talk_id: talkId,
@@ -380,7 +391,8 @@ async function recommend(p) {
       evidence: escapeHtml(passage ?? trimText(s.abstract || s.title || '', EVIDENCE_MAX)),
       topics: talkTopics.filter((t) => labels.has(t)).map((t) => ({ topic_id: t, label: labels.get(t) })),
       speaker_profiles: s.speaker_profiles ?? [],
-      why: { topics: matched, passage },
+      // topics equals learn_topics, kept for clients that predate the split. Speak topics are never named.
+      why: { topics: learnMatched, learn_topics: learnMatched, passage },
       circle_count: counts[talkId] ?? 0,
     };
   });
@@ -399,7 +411,7 @@ export async function handleRecommendationsApi(req, res, url) {
   if (body === undefined) return true;
   try {
     const params = validate(body);
-    if (!params.learn.length && !params.speak.length && !params.interests && !params.expertise) {
+    if (!params.learn.length && !params.interests) {
       sendJson(res, 200, { results: [], needs_profile: true });
       return true;
     }

@@ -183,7 +183,9 @@ export interface Recommendation extends TalkLike {
   level?: string | null;
   topics?: TopicRef[];
   speaker_profiles?: SpeakerProfile[];
-  why: { topics: string[]; passage: string | null };
+  // learn_topics names the request's learn topics that the talk has; topics is kept equal to it
+  // and is read only when a response predates the split.
+  why: { topics: string[]; learn_topics?: string[]; passage: string | null };
   circle_count: number;
 }
 

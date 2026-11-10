@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, Download, Plus } from 'lucide-preact';
 import { isAbort, PeopleApiError } from './api';
-import { GITHUB_ERROR_COPY, GITHUB_HANDLE_RE, importGithub, normalizeHandle, type GithubProposal } from './importGithub';
+import { GITHUB_ERROR_COPY, GITHUB_HANDLE_RE, importGithub, normalizeHandle, type GithubProposal } from './githubApi';
 import type { Profile, TopicRef } from './types';
 import './import.css';
 

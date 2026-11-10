@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { EllipsisVertical, Search, Sparkles, Star, Users } from 'lucide-preact';
 import { useFocusTrap } from '../lib/focus';
-import type { Tab } from '../lib/route';
+import { tabHash, type Tab, type TabParams } from '../lib/route';
 
 const TABS: { id: Tab; label: string; Icon: typeof Search }[] = [
   { id: 'people', label: 'People', Icon: Users },
@@ -17,12 +17,15 @@ export function NavBar({
   base,
   interestedCount,
   peopleCount = 0,
+  views = {},
 }: {
   tab: Tab;
   base: string;
   interestedCount: number;
   /** Requests waiting in the inbox, shown on the People tab. */
   peopleCount?: number;
+  /** The view and day last shown on each tab, so going back to a tab keeps them. */
+  views?: Partial<Record<Tab, TabParams>>;
 }) {
   const badge = (id: Tab) => (id === 'interested' ? interestedCount : id === 'people' ? peopleCount : 0);
   const name = (id: Tab) => {
@@ -36,7 +39,13 @@ export function NavBar({
         <img src="/icons/icon-192.png" alt="" width={32} height={32} />
       </div>
       {TABS.map(({ id, label, Icon }) => (
-        <a key={id} href={`${base}#/${id}`} class="nav-item" aria-current={tab === id ? 'page' : undefined} aria-label={name(id)}>
+        <a
+          key={id}
+          href={`${base}${tabHash(id, views[id])}`}
+          class="nav-item"
+          aria-current={tab === id ? 'page' : undefined}
+          aria-label={name(id)}
+        >
           <span class="nav-icon">
             <Icon size={24} strokeWidth={tab === id ? 2.25 : 1.75} aria-hidden="true" />
             {badge(id) > 0 && (
@@ -242,14 +251,26 @@ export function Segmented<T extends string>({
   onChange: (v: T) => void;
   label: string;
 }) {
+  // A radio group: one tab stop, and the arrow keys move the choice, as platform controls do.
+  const onKeyDown = (e: KeyboardEvent) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const i = options.findIndex((o) => o.value === value);
+    const next = options[(i + step + options.length) % options.length];
+    onChange(next.value);
+    const group = e.currentTarget as HTMLElement;
+    requestAnimationFrame(() => group.querySelector<HTMLElement>('[aria-checked="true"]')?.focus());
+  };
   return (
-    <div class="segmented" role="radiogroup" aria-label={label}>
+    <div class="segmented" role="radiogroup" aria-label={label} onKeyDown={onKeyDown}>
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           role="radio"
           aria-checked={value === o.value}
+          tabIndex={value === o.value ? 0 : -1}
           class="segment"
           onClick={() => onChange(o.value)}
         >

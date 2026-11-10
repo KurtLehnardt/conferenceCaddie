@@ -159,7 +159,7 @@ async function sightings(req, res) {
     sendJson(res, 200, { nearby: [] });
     return;
   }
-  const [result, topics] = await Promise.all([searchPeople(q.body), topicsOf(conf.slug)]);
+  const [result, topics] = await Promise.all([searchPeople(conf.slug, q.body), topicsOf(conf.slug)]);
   const hits = (result.hits?.hits ?? []).filter((h) => !isBroad(h, q.legs, me, topics.common));
   const nearby = hits.map((h) => {
     const p = toPerson(h, me, topics.labels, new Map(), null);

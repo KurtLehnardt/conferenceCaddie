@@ -3,7 +3,7 @@
 
 const cache = new Map<string, Intl.DateTimeFormat>();
 
-function fmt(timeZone: string, kind: 'day' | 'long' | 'time' | 'ymd' | 'zone' | 'range'): Intl.DateTimeFormat {
+function fmt(timeZone: string, kind: 'day' | 'long' | 'time' | 'ymd' | 'zone' | 'range' | 'hm'): Intl.DateTimeFormat {
   const key = `${timeZone}|${kind}`;
   let f = cache.get(key);
   if (!f) {
@@ -14,6 +14,7 @@ function fmt(timeZone: string, kind: 'day' | 'long' | 'time' | 'ymd' | 'zone' | 
       ymd: { year: 'numeric', month: '2-digit', day: '2-digit' },
       zone: { hour: 'numeric', timeZoneName: 'short' },
       range: { month: 'short', day: 'numeric' },
+      hm: { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     };
     f = new Intl.DateTimeFormat(kind === 'ymd' ? 'en-CA' : 'en-US', { timeZone, ...opts[kind] });
     cache.set(key, f);
@@ -57,6 +58,24 @@ export function localDay(iso: string, timeZone: string): string {
   const parts = fmt(timeZone, 'ymd').formatToParts(new Date(iso));
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
   return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/** Today's local "YYYY-MM-DD" in the conference's zone. */
+export function todayIn(timeZone: string, now = Date.now()): string {
+  return localDay(new Date(now).toISOString(), timeZone);
+}
+
+/** Minutes after local midnight in the given zone, for placing a talk on a day's timeline. */
+export function minutesInDay(iso: string, timeZone: string): number {
+  const parts = fmt(timeZone, 'hm').formatToParts(new Date(iso));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return (get('hour') % 24) * 60 + get('minute');
+}
+
+/** "9 AM", "12 PM" for an hour of the local day from 0 to 24. */
+export function formatHour(hour: number): string {
+  const h = hour % 24;
+  return `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
 /** Intl's short name for the zone at that instant, such as "GMT+3" or "CST". */

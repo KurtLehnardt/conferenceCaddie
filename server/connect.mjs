@@ -45,6 +45,7 @@ import { moderate, HELD } from './moderation.mjs';
 import { classifierReport } from './report.mjs';
 import { nudgeAfterPresence } from './nudge.mjs';
 import { mintBleToken, bleView, BLE_OFF } from './ble.mjs';
+import { peoplePreference, withPreference } from './preference.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
@@ -174,7 +175,7 @@ const sameZone = (me, other) => bothAround(me, other) && typeof me.presence_zone
 // Closes every open meet that matches the filters, in the state endState(source) gives. A meet
 // changed by someone else in the meantime keeps that change; its own transition applies then.
 async function closeMeets(slug, filters, endState) {
-  const { json } = await people('POST', `${idx(MEETS_INDEX)}/_search?ignore_unavailable=true&seq_no_primary_term=true`, {
+  const { json } = await people('POST', withPreference(`${idx(MEETS_INDEX)}/_search?ignore_unavailable=true&seq_no_primary_term=true`, peoplePreference(slug)), {
     size: INBOX_SIZE,
     query: { bool: { filter: [{ term: { event_id: slug } }, { terms: { state: OPEN_STATES } }, ...filters] } },
   });
@@ -320,7 +321,7 @@ async function blocks(req, res, url) {
   const device = reader(req);
   const conf = await conferenceFor(eventOf(url));
   const me = await requireProfile(device, conf.slug);
-  const { json } = await people('POST', `${idx(BLOCKS_INDEX)}/_search?ignore_unavailable=true`, {
+  const { json } = await people('POST', withPreference(`${idx(BLOCKS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(conf.slug)), {
     size: BLOCKS_SIZE,
     _source: ['blocked_id', 'blocked_ref', 'created_at'],
     sort: [{ created_at: 'desc' }],
@@ -439,7 +440,7 @@ async function requestMeet(req, res) {
 
   const now = Date.now();
   const day = dayBounds(now, conf.timeZone);
-  const declined = await people('POST', `${idx(MEETS_INDEX)}/_count?ignore_unavailable=true`, {
+  const declined = await people('POST', withPreference(`${idx(MEETS_INDEX)}/_count?ignore_unavailable=true`, peoplePreference(conf.slug)), {
     query: {
       bool: {
         filter: [{ term: { event_id: conf.slug } }, { term: { requester_id: me.profile_id } }, { term: { state: 'declined' } }, { range: { ended_at: { gte: iso(day.start) } } }],
@@ -450,7 +451,7 @@ async function requestMeet(req, res) {
     throw new HttpError(429, { error: 'paused', message: 'Three people said not now today. You can ask again tomorrow.', retry_at: iso(day.end) }, { 'Retry-After': String(Math.max(1, Math.ceil((day.end - now) / 1000))) });
   }
 
-  const existing = await people('POST', `${idx(MEETS_INDEX)}/_search?ignore_unavailable=true`, {
+  const existing = await people('POST', withPreference(`${idx(MEETS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(conf.slug)), {
     size: 1,
     _source: ['meet_id'],
     query: { bool: { filter: [{ term: { event_id: conf.slug } }, { term: { participants: me.profile_id } }, { term: { participants: them.profile_id } }, { terms: { state: OPEN_STATES } }, { range: { expires_at: { gt: 'now' } } }] } },
@@ -495,7 +496,7 @@ async function inbox(req, res, url) {
   const [hidden, labels, { json }] = await Promise.all([
     blockedIds(conf.slug, me.profile_id),
     topicLabels(conf.slug),
-    people('POST', `${idx(MEETS_INDEX)}/_search?ignore_unavailable=true`, {
+    people('POST', withPreference(`${idx(MEETS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(conf.slug)), {
       size: INBOX_SIZE,
       sort: [{ created_at: 'desc' }],
       query: {

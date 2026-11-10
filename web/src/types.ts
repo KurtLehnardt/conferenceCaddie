@@ -46,8 +46,15 @@ export interface SearchFilters {
   track: string[];
   level: string[];
   tags: TagRef[];
+  /** Speaker and room names chosen from a suggested chip; each list holds alternatives. */
+  speaker: string[];
+  room: string[];
   has_slides: boolean | null;
   hide_sponsor: boolean;
+  /** Talks in progress or starting within 60 minutes, judged by Elasticsearch against its clock. */
+  happening_now: boolean;
+  /** Adds co-located events and showcases to the results; off by default. */
+  include_events: boolean;
 }
 
 export interface SearchRequest {
@@ -56,6 +63,33 @@ export interface SearchRequest {
   filters?: SearchFilters;
   saved_talk_ids?: string[];
   size?: number;
+  /** Browse mode only: how many results to skip, for paging through a day in start order. */
+  from?: number;
+  /** Asks for the ranking drawer's details; normal searches leave it out. */
+  debug?: boolean;
+  /** Keys of time phrases the person removed; the server then stops filtering by them. */
+  ignore_phrases?: string[];
+}
+
+/** A track, room, speaker or tag name found in the search text. It is only offered; tapping it applies the matching filter. */
+export interface ChipSuggestion {
+  kind: 'track' | 'room' | 'speaker' | 'tag';
+  label: string;
+  /** What the matching filter takes: the track, full room or speaker name, or the tag value. */
+  value: string;
+  /** The Sessionize group, for a tag. */
+  group?: string;
+  talks: number;
+}
+
+/** A time phrase the server found in the search text, such as "after lunch" or "Tuesday". */
+export interface TimePhrase {
+  key: string;
+  label: string;
+  /** The conference days a day or weekday phrase stands for; empty for the other phrases. */
+  days: string[];
+  /** False when the person removed it: it left the text but no longer filters. */
+  applied: boolean;
 }
 
 export interface Talk {
@@ -73,10 +107,43 @@ export interface Talk {
   speaker_profiles?: SpeakerProfile[];
   slides_url: string | null;
   url: string;
+  /** "ambient" marks a co-located event or showcase; absent or "talk" is a talk. */
+  kind?: string;
+}
+
+/** Where a result stood in each of the two rankings Elasticsearch fused; null is outside the window. */
+export interface ResultRanking {
+  rank: number;
+  keyword_rank: number | null;
+  semantic_rank: number | null;
 }
 
 export interface SearchResult extends Talk {
   evidence: string;
+  /** Only present when the request asked for debug. */
+  ranking?: ResultRanking;
+}
+
+/** The ranking window sizes and the filters every query of a debug search applied. */
+export interface RankingInfo {
+  rank_window: number;
+  semantic_k: number;
+  filters: {
+    kind: string;
+    day: string | null;
+    start_after: string | null;
+    start_before: string | null;
+    track: string[];
+    level: string[];
+    tags: TagRef[];
+    speaker?: string[];
+    room?: string[];
+    has_slides: boolean | null;
+    hide_sponsor: boolean;
+    happening_now?: boolean;
+    include_events?: boolean;
+    time_phrases?: string[];
+  };
 }
 
 /** A talk the user marked as interesting, stored on the device without its evidence. */
@@ -105,8 +172,17 @@ export interface Facets {
 export interface SearchResponse {
   total: number;
   conference: string;
+  /** The text the search ran on, after time phrases left it. */
+  search_text?: string;
+  time_phrases?: TimePhrase[];
+  /** Names found in the search text, offered as chips ("Did you mean track: Security?"). */
+  suggestions?: ChipSuggestion[];
+  /** Whether the conference has talks today in its own time zone, so the Happening now chip can be used. */
+  happening_now?: { available: boolean };
   results: SearchResult[];
   facets: Facets;
+  /** Only present when the request asked for debug. */
+  ranking?: RankingInfo;
 }
 
 export interface ErrorResponse {
@@ -120,6 +196,10 @@ export const EMPTY_FILTERS: SearchFilters = {
   track: [],
   level: [],
   tags: [],
+  speaker: [],
+  room: [],
   has_slides: null,
   hide_sponsor: false,
+  happening_now: false,
+  include_events: false,
 };

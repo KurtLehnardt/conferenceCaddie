@@ -1,12 +1,26 @@
 import type { Conference } from '../types';
 
 // Routes are /e/{slug} with a hash tab on top, for example /e/some-event-2026#/search.
+// A tab can carry a view and a day, for example #/interested?view=day&day=2026-11-10 or
+// #/search?view=schedule&day=2026-11-10, so Back and a reload keep the view.
 // The server serves index.html for unknown HTML paths, so no router library is needed.
 
 export type Tab = 'people' | 'for-you' | 'search' | 'interested' | 'profile' | 'settings' | 'inbox' | 'meet' | 'here';
 
 const TABS: Tab[] = ['people', 'for-you', 'search', 'interested', 'profile', 'settings', 'inbox', 'meet', 'here'];
 const SLUG = /^[a-z0-9][a-z0-9-]{0,119}$/;
+
+/** The view inside a tab: List or Day on Interested, Search or Schedule on Search. */
+export type TabView = 'list' | 'day' | 'search' | 'schedule';
+
+const VIEWS: TabView[] = ['list', 'day', 'search', 'schedule'];
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+export interface TabParams {
+  view?: TabView;
+  /** A local "YYYY-MM-DD" day in the conference's time zone. */
+  day?: string;
+}
 
 export interface Route {
   slug: string | null;
@@ -15,6 +29,7 @@ export interface Route {
   param: string | null;
   /** The query after the tab, as in `#/people?around=1` (a push nudge opens Around now). */
   query: URLSearchParams;
+  params: TabParams;
 }
 
 export function readRoute(): Route {
@@ -32,15 +47,20 @@ export function readRoute(): Route {
   const qm = full.indexOf('?');
   const query = new URLSearchParams(qm >= 0 ? full.slice(qm + 1) : '');
   const h = qm >= 0 ? full.slice(0, qm) : full;
+  const params: TabParams = {};
+  const view = query.get('view') as TabView | null;
+  if (view && VIEWS.includes(view)) params.view = view;
+  const day = query.get('day');
+  if (day && DAY.test(day)) params.day = day;
   const slash = h.indexOf('/');
   const head = (slash >= 0 ? h.slice(0, slash) : h) as Tab;
   const rest = slash >= 0 ? h.slice(slash + 1) : '';
-  if (!TABS.includes(head)) return { slug, tab: 'people', param: null, query };
+  if (!TABS.includes(head)) return { slug, tab: 'people', param: null, query, params: {} };
   // Only the meet and here routes take a parameter, and they need one.
   if (head === 'meet' || head === 'here') {
-    return rest ? { slug, tab: head, param: rest.slice(0, 200), query } : { slug, tab: 'people', param: null, query };
+    return rest ? { slug, tab: head, param: rest.slice(0, 200), query, params: {} } : { slug, tab: 'people', param: null, query, params: {} };
   }
-  return { slug, tab: head, param: null, query };
+  return { slug, tab: head, param: null, query, params };
 }
 
 /** A route parameter as written in the hash, decoded; the raw value when it is not valid encoding. */
@@ -50,6 +70,24 @@ export function decodeParam(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+/** "#/interested?view=day&day=2026-11-10", leaving out what is not set. */
+export function tabHash(tab: Tab, params: TabParams = {}): string {
+  const q = new URLSearchParams();
+  if (params.view) q.set('view', params.view);
+  if (params.day) q.set('day', params.day);
+  const qs = q.toString();
+  return `#/${tab}${qs ? `?${qs}` : ''}`;
+}
+
+/**
+ * Changes the current tab's view or day in the URL without a history entry. The entry's state is
+ * kept, because the history record in trail.ts numbers each entry there.
+ */
+export function replaceTabParams(tab: Tab, params: TabParams): void {
+  history.replaceState(history.state, '', `${location.pathname}${location.search}${tabHash(tab, params)}`);
+  window.dispatchEvent(new Event('caddie:route'));
 }
 
 export function conferencePath(slug: string, tab: Tab): string {

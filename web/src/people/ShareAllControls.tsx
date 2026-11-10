@@ -3,7 +3,7 @@
 import { useState } from 'preact/hooks';
 import { Users } from 'lucide-preact';
 import { getVisibility, setVisibility, usePeopleStore } from './storage';
-import { CUT_MESSAGE, followInterested, MAX_SHARED_TALKS, shareForTalks, unshareAll } from './sync';
+import { followInterested, isHintMessage, MAX_SHARED_TALKS, shareForTalks, unshareAll } from './sync';
 import type { ConferenceLike, InterestedProp } from './types';
 import { interestedIds, SHARE_NOTICE } from './util';
 
@@ -45,12 +45,17 @@ export function ShareAllControls({ conference, interested }: { conference: Confe
     else setNotice('follow');
   };
 
+  // A single marked talk reads as "this talk", so the line never says "these 1 talks".
   const summary =
-    sharedHere === 0
-      ? `Your profile is not shared for any of these ${ids.length} talks.`
-      : allShared
-        ? `Your profile is shared for all ${ids.length} talks here.`
-        : `Your profile is shared for ${sharedHere} of these ${ids.length} talks.`;
+    ids.length === 1
+      ? sharedHere === 0
+        ? 'Your profile is not shared for this talk.'
+        : 'Your profile is shared for this talk.'
+      : sharedHere === 0
+        ? `Your profile is not shared for any of these ${ids.length} talks.`
+        : allShared
+          ? `Your profile is shared for all ${ids.length} talks here.`
+          : `Your profile is shared for ${sharedHere} of these ${ids.length} talks.`;
 
   return (
     <section class="pp-card pp-share-all" aria-labelledby="pp-share-all-h">
@@ -64,7 +69,7 @@ export function ShareAllControls({ conference, interested }: { conference: Confe
       <div class="pp-actions">
         {!allShared && (
           <button type="button" class="btn btn-primary btn-small" disabled={busy} onClick={onShareAll}>
-            Share for all {ids.length > MAX_SHARED_TALKS ? MAX_SHARED_TALKS : ids.length}
+            {ids.length === 1 ? 'Share for this talk' : `Share for all ${Math.min(ids.length, MAX_SHARED_TALKS)}`}
           </button>
         )}
         {vis.shared_talk_ids.length > 0 && (
@@ -103,7 +108,7 @@ export function ShareAllControls({ conference, interested }: { conference: Confe
         </div>
       )}
       {message && (
-        <p class={message === CUT_MESSAGE ? 'pp-hint' : 'pp-error'} role="status">
+        <p class={isHintMessage(message) ? 'pp-hint' : 'pp-error'} role="status">
           {message}{' '}
           {message.includes('profile') && (
             <a class="pp-inline-link" href="#/profile">

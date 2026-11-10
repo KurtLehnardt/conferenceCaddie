@@ -1,9 +1,9 @@
 // Writes the device's profile and visibility choices to the server. A document
 // is written only while the user is visible conference-wide or shares for a talk;
 // when both are off, one write asks the server to delete it.
-import { deleteProfile, PeopleApiError, putProfile, type ProfileBody } from './api';
-import { ensureDevice, getProfile, getVisibility, notify, setVisibility, slugsOnServer, topicsFor } from './storage';
-import type { Profile, Visibility } from './types';
+import { deleteProfile, fetchTopics, PeopleApiError, putProfile, type ProfileBody } from './api';
+import { ensureDevice, getProfile, getVisibility, notify, setProfile, setVisibility, slugsOnServer, topicsFor } from './storage';
+import type { Profile, TopicRef, Visibility } from './types';
 
 export const LINKEDIN_RE = /^https:\/\/(www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]{3,100}\/?$/;
 
@@ -54,12 +54,66 @@ function bodyFor(slug: string, p: Profile, v: Visibility): ProfileBody {
   };
 }
 
+// A PeopleApiError already carries the plain-language text: the server's own reason for a 400
+// when the app knows how to put it in words, otherwise a generic line.
 function messageFor(err: unknown): string {
-  if (err instanceof PeopleApiError) {
-    if (err.status === 400) return 'That could not be saved. Check your details and try again.';
-    return err.message;
-  }
+  if (err instanceof PeopleApiError) return err.message;
   return 'That could not be saved. Please try again.';
+}
+
+/** Starts the note that tells the user which topics were removed. Also marks it as a hint, not an error. */
+export const RETIRED_NOTICE_PREFIX = 'Topics the conference list no longer offers were removed from your profile';
+let retiredNotice: string | null = null;
+
+/** True for messages that report something done for the user rather than a failure. */
+export function isHintMessage(message: string): boolean {
+  return message === CUT_MESSAGE || message.startsWith(RETIRED_NOTICE_PREFIX);
+}
+
+/**
+ * Removes the topics of this conference that its topic list no longer offers (a topics run can
+ * drop a topic after someone picked it) and returns the changed profile, or null when nothing
+ * can be removed. The list holds at most 150 topics, so one request returns all of them.
+ */
+async function retireTopics(slug: string, p: Profile): Promise<Profile | null> {
+  let known: Set<string>;
+  try {
+    known = new Set((await fetchTopics(slug, '', 150)).topics.map((t) => t.topic_id));
+  } catch {
+    return null;
+  }
+  if (!known.size) return null;
+  const t = topicsFor(p, slug);
+  const gone = new Map<string, string>();
+  const keep = (list: TopicRef[]) =>
+    list.filter((x) => {
+      if (known.has(x.topic_id)) return true;
+      gone.set(x.topic_id, x.label);
+      return false;
+    });
+  const learn = keep(t.learn);
+  const speak = keep(t.speak);
+  if (!gone.size) return null;
+  const next: Profile = { ...p, topics: { ...p.topics, [slug]: { learn, speak } } };
+  setProfile(next);
+  retiredNotice = `${RETIRED_NOTICE_PREFIX}: ${[...gone.values()].join(', ')}.`;
+  return next;
+}
+
+/**
+ * Sends the profile. When the server rejects a topic it no longer offers, that topic is removed
+ * from the profile and the write is tried once more, so one retired topic cannot block sharing.
+ */
+async function putChecked(slug: string, p: Profile, v: Visibility) {
+  retiredNotice = null;
+  try {
+    return await putProfile(bodyFor(slug, p, v));
+  } catch (err) {
+    const retired = err instanceof PeopleApiError && err.status === 400 && /_topics contains an unknown topic/.test(err.code ?? '');
+    const fixed = retired ? await retireTopics(slug, p) : null;
+    if (!fixed) throw err;
+    return await putProfile(bodyFor(slug, fixed, v));
+  }
 }
 
 /**
@@ -93,7 +147,7 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>)
       setStatus({ state: 'saved' });
       return null;
     }
-    const res = await putProfile(bodyFor(slug, p as Profile, next));
+    const res = await putChecked(slug, p as Profile, next);
     setVisibility(slug, {
       ...patch,
       open_to_meet: res.open_to_meet,
@@ -145,7 +199,9 @@ async function shareNow(slug: string, talkIds: string[]): Promise<{ ok: boolean;
     share_notice_seen: true,
   });
   if (err) return { ok: false, message: err };
-  return { ok: true, message: cut ? CUT_MESSAGE : null };
+  const retired = retiredNotice;
+  retiredNotice = null;
+  return { ok: true, message: cut ? CUT_MESSAGE : retired };
 }
 
 /** Stops sharing for the given talks. Returns an error message, or null. */
@@ -204,7 +260,7 @@ export function scheduleProfileSync(): void {
     }
     try {
       for (const slug of slugsOnServer()) {
-        const res = await putProfile(bodyFor(slug, p, getVisibility(slug)));
+        const res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
         // The server says whether this profile is hidden after reports; the profile screen shows it.
         if ((res.hidden_for_owner === true) !== getVisibility(slug).hidden_for_owner) setVisibility(slug, { hidden_for_owner: res.hidden_for_owner === true });
       }
