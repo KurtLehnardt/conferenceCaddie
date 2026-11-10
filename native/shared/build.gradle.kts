@@ -316,8 +316,12 @@ tasks.matching { it.name.startsWith("cinteropOnnxruntime") }.configureEach { dep
 
 // The embedding tests run the real model: on the JVM they find it through a system property, on the
 // iOS simulator through an environment variable (simctl passes SIMCTL_CHILD_ variables to the app).
+// ONNX Runtime sends usage telemetry unless ORT_DISABLE_TELEMETRY is set before it starts
+// (see disableOnnxRuntimeTelemetryByEnvironment); the JVM cannot set its own environment, so the
+// test processes get it here, and the simulator tests through simctl.
 val jvmTest = tasks.named<Test>("jvmTest") {
     dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
+    environment("ORT_DISABLE_TELEMETRY", "1")
     systemProperty("caddie.embeddingDir", embeddingDir.get().asFile.absolutePath)
     filter { excludeTestsMatching("*.TalkSmokeTest") }
 }
@@ -330,6 +334,7 @@ tasks.register<Test>("smokeTalks") {
     testClassesDirs = jvmTest.get().testClassesDirs
     classpath = jvmTest.get().classpath
     dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
+    environment("ORT_DISABLE_TELEMETRY", "1")
     filter { includeTestsMatching("*.TalkSmokeTest") }
     val site = providers.gradleProperty("caddie.smokeSite")
     systemProperty("caddie.smokeSite", site.orNull ?: "")
@@ -340,7 +345,11 @@ tasks.register<Test>("smokeTalks") {
     outputs.upToDateWhen { false }
     doFirst { if (site.orNull.isNullOrBlank()) throw GradleException("Pass -Pcaddie.smokeSite=<directory written by scripts/build-bundles.mjs>.") }
 }
+val simulator = providers.gradleProperty("caddie.iosSimulator")
 tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
     environment("SIMCTL_CHILD_CADDIE_EMBEDDING_DIR", embeddingDir.get().asFile.absolutePath)
+    environment("SIMCTL_CHILD_ORT_DISABLE_TELEMETRY", "1")
+    // -Pcaddie.iosSimulator=<name> runs the tests on that simulator instead of Kotlin's default one.
+    simulator.orNull?.let { device.set(it) }
 }

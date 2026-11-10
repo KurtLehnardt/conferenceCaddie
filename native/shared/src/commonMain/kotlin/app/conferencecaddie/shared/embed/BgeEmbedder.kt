@@ -19,9 +19,22 @@ internal interface EncoderSession {
 
 /**
  * Opens an encoder on the ONNX model in [model] that runs each operator on [threads] threads.
- * Throws when ONNX Runtime refuses the model.
+ * Throws when ONNX Runtime refuses the model. Every implementation switches ONNX Runtime's telemetry
+ * off first ([disableOnnxRuntimeTelemetryByEnvironment]) and turns its telemetry events off once
+ * the environment exists.
  */
 internal expect fun openEncoder(model: ByteArray, threads: Int): EncoderSession
+
+/**
+ * ONNX Runtime 1.30 on Android and Apple platforms sends usage telemetry to Microsoft
+ * (mobile.events.data.microsoft.com) and keeps a device id, unless the process environment sets
+ * ORT_DISABLE_TELEMETRY before ONNX Runtime initialises (core/platform/posix/telemetry.cc). The app
+ * sends nothing anywhere but its backend, so this sets it; it must run before the first ONNX
+ * Runtime call. On Android the manifest also removes the AAR's telemetry initializer.
+ */
+internal expect fun disableOnnxRuntimeTelemetryByEnvironment()
+
+internal const val ORT_DISABLE_TELEMETRY = "ORT_DISABLE_TELEMETRY"
 
 /**
  * The query embedder of the talk bundle contract (docs/contracts/talk-bundle.md, Embedding
