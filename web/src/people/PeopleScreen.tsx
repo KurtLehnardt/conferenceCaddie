@@ -336,7 +336,7 @@ function PeopleList({
   // Nudges: "See who" (and a tapped Bluetooth "right near you" notification in the Android app)
   // fetches the list again (the person arrived after it loaded) and then lands on their card, in
   // the order the cards are rendered.
-  const shown = useRef<PersonResult[]>([]);
+  const rendered = useRef<PersonResult[]>([]);
   const [revealAt, setRevealAt] = useState(0);
   useEffect(() => {
     if (!around || (!reveal && !bleReveal) || !vis.open_to_meet) return;
@@ -356,8 +356,8 @@ function PeopleList({
   }, [reveal, bleReveal, key]);
   useEffect(() => {
     if (!revealAt) return;
-    revealIn(slug, list.current, shown.current);
-    revealBleCard(slug, list.current, shown.current);
+    revealIn(slug, list.current, rendered.current);
+    revealBleCard(slug, list.current, rendered.current);
   }, [revealAt]);
 
   if (!profile?.display_name.trim()) return <CreateProfilePrompt />;
@@ -378,7 +378,7 @@ function PeopleList({
   // The Around home view groups by zone (server order kept inside each group): my zone first.
   const inZone = groupZone ? results.filter((p) => p.proximity === 'same_zone' || p.zone === groupZone) : [];
   const elsewhere = groupZone ? results.filter((p) => !inZone.includes(p)) : results;
-  shown.current = [...inZone, ...elsewhere];
+  rendered.current = [...inZone, ...elsewhere];
   return (
     <div class="pp-progress-host">
       <div class={`pp-progress pp-progress-top${refreshing ? ' is-active' : ''}`} aria-hidden="true" />
