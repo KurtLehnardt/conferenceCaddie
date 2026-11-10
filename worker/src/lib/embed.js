@@ -59,10 +59,25 @@ function fakeVector(textValue, dim = FAKE_DIM) {
   return normalize(v);
 }
 
+// Local runs only: `wrangler dev --local` cannot reach the AI binding with an account token, so
+// env.EMBED_PROXY (set in .dev.vars by `dev-vars.mjs --real-ai`, never in wrangler.toml) points at
+// worker/scripts/dev-ai-proxy.mjs, which forwards the call to the Workers AI REST API.
+async function runModel(ctx, texts) {
+  const proxy = ctx.env.EMBED_PROXY;
+  if (!proxy) return ctx.env.AI.run(modelOf(ctx), { text: texts });
+  const res = await fetch(proxy, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelOf(ctx), text: texts }),
+  });
+  if (!res.ok) throw new Error(`proxy ${res.status}`);
+  return res.json();
+}
+
 async function callAi(ctx, texts) {
   let out;
   try {
-    out = await ctx.env.AI.run(modelOf(ctx), { text: texts });
+    out = await runModel(ctx, texts);
   } catch (err) {
     stateOf(ctx).pausedUntil = Date.now() + PAUSE_MS;
     throw new EmbedUnavailable(err?.name ?? 'Error');

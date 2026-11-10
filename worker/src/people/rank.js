@@ -9,6 +9,7 @@
 //   6. text (query only, semantic mode): lexical BM25 on people_fts expertise and about;
 //   7. distance (only when I am around with a position): people around with a position, by cell;
 //   8. everyone (circles only): the circle's sharers, most recently updated first.
+// Semantic legs keep only profiles at or above a similarity floor (SEMANTIC_FLOOR below).
 // Every leg is skipped when its input is empty. On EmbedUnavailable the semantic legs become
 // lexical legs on the same column and the result says degraded; a candidate with no vector yet
 // (its embedding is pending) is reached by a lexical leg on the same column, interleaved with the
@@ -21,7 +22,7 @@
 // rankPeople(ctx, me, opts) returns { hits, degraded } where hits is the page (from, size) before
 // the specificity filter: [{ person, legs: string[], broad, evidence, passage }].
 
-import { embedQuery, semanticAvailable, EmbedUnavailable } from '../lib/embed.js';
+import { embedQuery, semanticAvailable, EmbedUnavailable, modelOf } from '../lib/embed.js';
 import { topK, rrf } from '../lib/vectors.js';
 import { cutText, escapeHtml } from '../lib/text.js';
 import { lexicalLeg, snippets } from './lexical.js';
@@ -30,6 +31,21 @@ import { cellOf, distanceM, sharedTopics, plainEvidence, PASSAGE_MAX } from './v
 const KNN_K = 100;
 const RANK_WINDOW = 100;
 const DISTANCE_PIVOT_M = 100;
+
+// The lowest cosine similarity a semantic people leg keeps, per embedding model. Elasticsearch's
+// kNN returned the k nearest profiles whatever their score, and with E5 that was harmless. With
+// bge-small, a conference's profiles all score between about 0.4 and 0.6 against a query they have
+// nothing to do with (measured on the KubeCon sample profiles on 2026-11-10: unrelated profiles
+// sit at a median of 0.39 to 0.60, a synthetic query's best unrelated profile at 0.53, and real
+// matches at 0.65 to 0.93). Without a floor nearly every candidate joins every semantic leg, so
+// anyone who also shares a common topic outranks the one person whose text actually matches.
+// env.PEOPLE_SEMANTIC_FLOOR overrides the value; a model not listed here has no floor.
+const SEMANTIC_FLOOR = { '@cf/baai/bge-small-en-v1.5': 0.55 };
+function semanticFloor(ctx) {
+  const v = Number.parseFloat(ctx.env?.PEOPLE_SEMANTIC_FLOOR ?? '');
+  if (Number.isFinite(v)) return v;
+  return SEMANTIC_FLOOR[modelOf(ctx)] ?? -Infinity;
+}
 
 const byRecent = (a, b) => b.updated_at_ms - a.updated_at_ms || (a.profile_id < b.profile_id ? -1 : a.profile_id > b.profile_id ? 1 : 0);
 
@@ -133,7 +149,8 @@ export async function rankPeople(ctx, me, {
       add('text', lexicalLeg(ctx, [field], textValue, candidates, KNN_K, state), 'lexical', field);
       return;
     }
-    const semantic = topK(vec, candidates, KNN_K, (p) => p.vec[field]).map((x) => x.item);
+    const floor = semanticFloor(ctx);
+    const semantic = topK(vec, candidates, KNN_K, (p) => p.vec[field]).filter((x) => x.score >= floor).map((x) => x.item);
     const pending = candidates.filter((p) => !p.vec[field] && p[field].trim());
     const lexical = pending.length ? lexicalLeg(ctx, [field], textValue, pending, KNN_K, state) : [];
     add('text', interleave(semantic, lexical).slice(0, KNN_K), 'semantic', field);

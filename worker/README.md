@@ -14,9 +14,13 @@ Run upload and image never include it.
 
 - Node 22 or later. Wrangler is a dev dependency of `worker/package.json`; always run it as
   `npx wrangler`, never from a global install.
-- `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the environment. The token needs Workers
-  Scripts (deploy, secrets, Cron Triggers, Durable Objects) and Workers AI. D1, KV, Vectorize and
-  Pages are not used.
+- `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the environment. The token needs the
+  account permissions "Workers Scripts: Edit" (deploy, secrets, Cron Triggers, Durable Objects)
+  and "Workers AI: Read" (or Edit), plus "Workers Tail: Read" for the CPU readings in
+  [Logs and CPU](#logs-and-cpu). If the token cannot read or create the account's `workers.dev`
+  subdomain, create the subdomain once in the dashboard. D1, KV, Vectorize and Pages are not used. A token that can
+  list Workers but answers 403 "No access to the specified resource" on
+  `/workers/scripts/<name>` lacks "Workers Scripts: Edit"; `deploy.sh` says so when it fails.
 - The GitHub CLI (`gh`), logged in with access to `KurtLehnardt/conferenceCaddie`, for the
   repository secret, variable, Pages and workflow steps.
 
@@ -34,8 +38,20 @@ npx wrangler dev --local --port 8787
 
 - `.dev.vars` holds development-only values: a random `ADMIN_TOKEN` and `REF_SALT`, a fresh VAPID
   pair, and `EMBED_FAKE=1`. With `EMBED_FAKE=1` embeddings are deterministic feature-hashed vectors
-  and no Workers AI call is made. `node scripts/dev-vars.mjs --real-ai` leaves it out; the AI
-  binding then calls the real service (and spends neurons) even in a local run.
+  and no Workers AI call is made.
+- Real embeddings in a local run (needed for the smoke's semantic checks): `wrangler dev --local`
+  cannot reach the AI binding, and a remote dev session cannot be authenticated with an account
+  API token, so the Worker sends its embedding calls to a small local proxy instead:
+
+  ```sh
+  node scripts/dev-vars.mjs --real-ai          # drops EMBED_FAKE, sets EMBED_PROXY=http://127.0.0.1:8786
+  node scripts/dev-ai-proxy.mjs --port 8786 &  # forwards to the Workers AI REST API (spends neurons)
+  npx wrangler dev --local --port 8787
+  ```
+
+  The proxy reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from its own environment, so
+  the token never enters the Worker or `.dev.vars`. `node scripts/dev-vars.mjs` without
+  `--real-ai` switches back to fake vectors. `EMBED_PROXY` is never set in `wrangler.toml`.
 - Parallel local runs use port 8787 plus a task number, so they do not collide.
 - To exercise the Cron Trigger, start with `npx wrangler dev --local --port 8787 --test-scheduled`
   and request `http://localhost:8787/__scheduled?cron=*/10+*+*+*+*`.

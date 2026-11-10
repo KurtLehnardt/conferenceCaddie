@@ -186,7 +186,12 @@ redact_tail() {
 if ! npx --yes wrangler deploy </dev/null >"$WORK/deploy.log" 2>&1; then
   echo "wrangler deploy failed; its last lines:" >&2
   redact_tail "$WORK/deploy.log" >&2
-  if [ "$unreadable" = "1" ]; then
+  if grep -q 'workers/scripts/.*failed' "$WORK/deploy.log" && grep -q 'No access to the specified resource' "$WORK/deploy.log"; then
+    # Seen on 2026-11-10: the account token could list Workers and run Workers AI, but every call
+    # on a named script (read, upload, secrets, deployments) answered 403, so it lacks the
+    # "Workers Scripts: Edit" permission. wrangler's pre-deploy checks fail first.
+    echo "Blocker: the Cloudflare token cannot read or upload Worker scripts (HTTP 403 on /workers/scripts/<name>). Give the token the account permission \"Workers Scripts: Edit\" (and \"Workers Tail: Read\" for CPU readings), then run this script again." >&2
+  elif [ "$unreadable" = "1" ]; then
     echo "Blocker: the account probably has no workers.dev subdomain and the token cannot create one. Create it once in the dashboard (Workers & Pages, Overview, workers.dev subdomain), then run this script again." >&2
   fi
   exit 1

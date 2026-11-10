@@ -6,9 +6,10 @@
 //
 // Usage: node scripts/dev-vars.mjs [--force] [--real-ai] [--set NAME=VALUE ...]
 //   --set adds or overrides one plain variable (for example DAILY_REQUEST_BUDGET=10) in the file.
-//   --real-ai removes EMBED_FAKE. `wrangler dev --local` cannot reach Workers AI, and on
-//   2026-11-10 a remote dev session could not be authenticated with the account token, so this is
-//   only useful once such a session works.
+//   --real-ai removes EMBED_FAKE and sets EMBED_PROXY=http://127.0.0.1:8786 (unless already set).
+//   `wrangler dev --local` cannot reach Workers AI, and a remote dev session cannot be
+//   authenticated with an account API token, so real embeddings in a local run go through
+//   scripts/dev-ai-proxy.mjs, which must be running (it calls the Workers AI REST API).
 
 import { existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -54,10 +55,18 @@ if (!vars.has('VAPID_PUBLIC_KEY') || !vars.has('VAPID_PRIVATE_KEY')) {
   vars.set('VAPID_PRIVATE_KEY', jwk.d);
   created.push('VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY');
 }
-if (realAi) vars.delete('EMBED_FAKE');
-else if (!vars.has('EMBED_FAKE')) {
-  vars.set('EMBED_FAKE', '1');
-  created.push('EMBED_FAKE');
+if (realAi) {
+  vars.delete('EMBED_FAKE');
+  if (!vars.has('EMBED_PROXY')) {
+    vars.set('EMBED_PROXY', 'http://127.0.0.1:8786');
+    created.push('EMBED_PROXY');
+  }
+} else {
+  vars.delete('EMBED_PROXY');
+  if (!vars.has('EMBED_FAKE')) {
+    vars.set('EMBED_FAKE', '1');
+    created.push('EMBED_FAKE');
+  }
 }
 for (const s of sets) {
   const eq = s.indexOf('=');
