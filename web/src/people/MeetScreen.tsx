@@ -1,19 +1,97 @@
 // The meet screen (#/meet/{id}): the rendezvous, their zone and spot, how to spot them, my own
-// how-to-spot-me line, then "We found each other" / "Cancel". Polls every 10 s while open.
+// how-to-spot-me line, then, only when the server sent one, the distance (and an arrow once the
+// compass is allowed), then "We found each other" / "Cancel". Polls every 10 s while open. The
+// other person's card has Report in its overflow menu (the meet-up) and on their spot line.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { Check, MapPin, MessageCircle } from 'lucide-preact';
+import { ArrowUp, Check, MapPin, MessageCircle } from 'lucide-preact';
+import { OverflowMenu } from '../components/common';
 import { fetchMeet, isAbort, meetAction, PeopleApiError, putMeetDetails } from './api';
 import { personForMeet, refreshInbox } from './connect';
 import { useZones } from './presence';
 import { ZoneSelect } from './PresenceControls';
+import { ReportSheet, type ReportTarget } from './ReportSheet';
 import { addMet, getPresence, usePeopleStore } from './storage';
 import type { ConferenceLike, InterestedProp, MeetDetail } from './types';
 import { confirm, toast } from './ui';
 import { interestedTalks, Marked } from './util';
 
-export const MEET_CAVEAT = 'Head to the meeting point and look for them.';
+export const MEET_CAVEAT = 'Positions indoors are rough. Head to the meeting point and look for them.';
 export const MEET_POLL_MS = 10_000;
 const SPOT_ME_MAX = 60;
+
+/** "About 120 m", from the server's distance (already rounded to 10 m). */
+export function distanceText(m: number): string {
+  return m < 10 ? 'Less than 10 m away' : `About ${m} m`;
+}
+
+type OrientationCtor = typeof DeviceOrientationEvent & { requestPermission?: () => Promise<'granted' | 'denied'> };
+type CompassEvent = DeviceOrientationEvent & { webkitCompassHeading?: number };
+
+/** The compass heading of an orientation event, degrees clockwise from north, or null. */
+function headingOf(e: CompassEvent): number | null {
+  if (typeof e.webkitCompassHeading === 'number' && Number.isFinite(e.webkitCompassHeading)) return e.webkitCompassHeading;
+  if (e.absolute && typeof e.alpha === 'number' && Number.isFinite(e.alpha)) return (360 - e.alpha) % 360;
+  return null;
+}
+
+/**
+ * The distance to the other person and, after a tap that asks for the compass (iOS needs
+ * DeviceOrientationEvent.requestPermission on a user gesture), an arrow turned by
+ * bearing minus heading. Without permission or a heading there is only the distance.
+ */
+function Distance({ distance, bearing }: { distance: number; bearing: number }) {
+  const [heading, setHeading] = useState<number | null>(null);
+  const [listening, setListening] = useState(false);
+  const [refused, setRefused] = useState(false);
+  const hasCompass = typeof DeviceOrientationEvent !== 'undefined';
+
+  useEffect(() => {
+    if (!listening) return;
+    const onOrientation = (e: Event) => {
+      const h = headingOf(e as CompassEvent);
+      if (h !== null) setHeading(h);
+    };
+    const type = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+    window.addEventListener(type, onOrientation);
+    return () => window.removeEventListener(type, onOrientation);
+  }, [listening]);
+
+  const pointMe = async () => {
+    const ctor = DeviceOrientationEvent as OrientationCtor;
+    if (typeof ctor.requestPermission === 'function') {
+      try {
+        if ((await ctor.requestPermission()) !== 'granted') {
+          setRefused(true);
+          return;
+        }
+      } catch {
+        setRefused(true);
+        return;
+      }
+    }
+    setListening(true);
+  };
+
+  const turn = heading === null ? null : (((bearing - heading) % 360) + 360) % 360;
+  return (
+    <section class="pp-card pp-distance" aria-labelledby="pp-dist-h">
+      <h2 id="pp-dist-h" class="pp-card-title">
+        {distanceText(distance)}
+      </h2>
+      {turn !== null ? (
+        <p class="pp-arrow" role="img" aria-label={`They're ${Math.round(turn)} degrees to your right of straight ahead`}>
+          <ArrowUp size={36} aria-hidden="true" style={{ transform: `rotate(${turn}deg)` }} />
+        </p>
+      ) : listening ? (
+        <p class="pp-hint">Waiting for the compass… hold the phone flat.</p>
+      ) : hasCompass && !refused ? (
+        <button type="button" class="btn btn-tonal btn-small pp-self-start" onClick={() => void pointMe()}>
+          Point me
+        </button>
+      ) : null}
+    </section>
+  );
+}
 
 type View =
   | { kind: 'loading' }
@@ -52,6 +130,7 @@ export function MeetScreen({
   const [pickingSpot, setPickingSpot] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [reporting, setReporting] = useState<ReportTarget | null>(null);
   const seededSpot = useRef(false);
   const stop = useRef(false);
 
@@ -245,6 +324,11 @@ export function MeetScreen({
   const name = d.other.display_name;
   const active = d.state === 'active';
   const minutes = d.active_until ? Math.max(0, Math.ceil((Date.parse(d.active_until) - Date.now()) / 60_000)) : null;
+  // Reports name the other person by their ref, which the server sends with the meet.
+  const otherRef = d.other.ref ?? null;
+  const report = (kind: 'meet' | 'spot') => {
+    if (otherRef) setReporting({ ref: otherRef, display_name: name, kind, id: kind === 'meet' ? meetId : otherRef });
+  };
   // Same zone: they are already next to each other, so how to spot each other comes first and
   // the meeting point is optional.
   const sameZone = d.same_zone === true;
@@ -277,14 +361,26 @@ export function MeetScreen({
 
   const themCard = (
     <section class="pp-card" aria-labelledby="pp-them-h">
-      <h2 id="pp-them-h" class="pp-card-title">
-        {name}
-      </h2>
+      <header class="pp-person-head">
+        <h2 id="pp-them-h" class="pp-card-title">
+          {name}
+        </h2>
+        {otherRef && (
+          <span class="pp-person-menu">
+            <OverflowMenu label={`Options for ${name}`} items={[{ label: 'Report', onSelect: () => report('meet') }]} />
+          </span>
+        )}
+      </header>
       {d.other.zone ? (
         <p class="pp-around">
           <MapPin size={16} aria-hidden="true" />
           {d.other.zone}
           {d.other.spot && ` · ${d.other.spot}`}
+          {d.other.spot && otherRef && (
+            <button type="button" class="btn btn-text btn-small pp-spot-report" onClick={() => report('spot')}>
+              Report
+            </button>
+          )}
         </p>
       ) : (
         <p class="pp-hint">{active ? "They haven't said where they are." : `${name} isn't around right now.`}</p>
@@ -357,6 +453,11 @@ export function MeetScreen({
         </>
       )}
 
+      {/* Below the meeting point, their zone and the spot-me lines, never above: a rough aid, not the plan. */}
+      {active && typeof d.other.distance_m === 'number' && typeof d.other.bearing_deg === 'number' && (
+        <Distance distance={d.other.distance_m} bearing={d.other.bearing_deg} />
+      )}
+
       <p class="pp-lede pp-caveat">{MEET_CAVEAT}</p>
       <div class="pp-actions">
         <button type="button" class="btn btn-primary" disabled={busy} onClick={found}>
@@ -366,6 +467,7 @@ export function MeetScreen({
           Cancel
         </button>
       </div>
+      {reporting && <ReportSheet slug={slug} target={reporting} onClose={() => setReporting(null)} />}
     </div>
   );
 }

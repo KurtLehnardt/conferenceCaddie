@@ -1,8 +1,8 @@
 // Calls to the people, circles, recommendations and topics endpoints of CONTRACT3.
-// The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence
-// and /api/meet/*. This is the only place that reads the device secret.
+// The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence,
+// /api/meet/* and /api/push/subscription. This is the only place that reads the device secret.
 import { getDevice } from './storage';
-import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Recommendation, TopicHit } from './types';
+import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
 export class PeopleApiError extends Error {
   constructor(
@@ -110,7 +110,7 @@ export interface ProfileBody {
 }
 
 export function putProfile(body: ProfileBody) {
-  return call<{ ok: boolean; open_to_meet: boolean; shared_talk_ids: string[] }>('/api/people/profile', {
+  return call<{ ok: boolean; open_to_meet: boolean; shared_talk_ids: string[]; hidden_for_owner?: boolean }>('/api/people/profile', {
     method: 'PUT',
     body: JSON.stringify(body),
     device: true,
@@ -158,6 +158,14 @@ export function unblockPerson(slug: string, ref: string) {
   });
 }
 
+/**
+ * Reports a person (kind profile or spot, id is their ref) or a meet (kind meet, id is the
+ * meet_id; ref names the other participant). The reporter never learns who else reported.
+ */
+export function reportPerson(slug: string, ref: string, kind: ReportKind, id: string, reason: ReportReason) {
+  return call<{ ok: boolean; hidden: boolean }>('/api/people/report', post({ event: slug, ref, context: { kind, id }, reason }, undefined, true));
+}
+
 export function fetchBlocks(slug: string, signal?: AbortSignal) {
   return call<{ refs: string[]; blocks?: { ref: string; display_name: string | null; created_at: string }[] }>(
     `/api/people/blocks?event=${encodeURIComponent(slug)}`,
@@ -165,16 +173,101 @@ export function fetchBlocks(slug: string, signal?: AbortSignal) {
   );
 }
 
-export function putPresence(slug: string, zone: string, spot: string) {
-  return call<{ ok: boolean; presence_until: string }>('/api/presence', {
+/**
+ * With a position, the server keeps it (rounded) only while its accuracy is within 200 m. `until`
+ * 'day' runs presence to the end of the conference day instead of an hour.
+ */
+export function putPresence(slug: string, zone: string, spot: string, location: Position | null = null, until: PresenceMode = 'hour') {
+  return call<{ ok: boolean; presence_until: string; located?: boolean }>('/api/presence', {
     method: 'PUT',
-    body: JSON.stringify({ event: slug, zone, spot: spot.trim().slice(0, 60) }),
+    body: JSON.stringify(presenceBody(slug, zone, spot, location, until)),
     device: true,
   });
 }
 
+function presenceBody(slug: string, zone: string, spot: string, location: Position | null, until: PresenceMode) {
+  const body: Record<string, unknown> = { event: slug, zone, spot: spot.trim().slice(0, 60) };
+  if (location) body.location = { lat: location.lat, lon: location.lon, accuracy: Math.round(location.accuracy) };
+  if (until !== 'hour') body.until = until;
+  return body;
+}
+
 export function deletePresence(slug: string) {
   return call<{ ok: boolean }>(`/api/presence?event=${encodeURIComponent(slug)}`, { method: 'DELETE', device: true });
+}
+
+/* ---------- Web Push nudges ---------- */
+
+/** The browser's PushSubscription.toJSON() shape, as the server stores it. */
+export interface PushSubscriptionBody {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
+/** The server's public VAPID key; null when push is not set up on the server. */
+export function fetchVapidKey(signal?: AbortSignal) {
+  return call<{ publicKey: string | null }>('/api/push/vapid', { signal });
+}
+
+export function putPushSubscription(slug: string, subscription: PushSubscriptionBody) {
+  return call<{ ok: boolean }>('/api/push/subscription', {
+    method: 'PUT',
+    body: JSON.stringify({ event: slug, subscription }),
+    device: true,
+  });
+}
+
+export function deletePushSubscription(slug: string, endpoint: string) {
+  return call<{ ok: boolean }>('/api/push/subscription', {
+    method: 'DELETE',
+    body: JSON.stringify({ event: slug, endpoint }),
+    device: true,
+  });
+}
+
+/* ---------- Android companion: find people near me by Bluetooth (server/ble.mjs) ---------- */
+
+export interface BleToken {
+  /** 16 random bytes, base64url: what the phone advertises. */
+  token: string;
+  /** ISO time the token stops resolving; the phone asks for a new one before then. */
+  rotate_at: string;
+}
+
+/**
+ * A presence write that also mints (ble: true) or clears (ble: false) the Bluetooth token. It is
+ * the same write as putPresence, so it carries the current mode and the last position: a write
+ * without them would shorten a day-long presence to an hour and clear the stored position.
+ */
+export function putPresenceBle(slug: string, zone: string, spot: string, ble: boolean, location: Position | null = null, until: PresenceMode = 'hour') {
+  return call<{ ok: boolean; presence_until: string; ble?: BleToken }>('/api/presence', {
+    method: 'PUT',
+    body: JSON.stringify({ ...presenceBody(slug, zone, spot, location, until), ble }),
+    device: true,
+  });
+}
+
+export function rotateBleToken(slug: string) {
+  return call<{ ok: boolean; ble: BleToken }>('/api/presence/ble/rotate', post({ event: slug }, undefined, true));
+}
+
+export interface Sighting {
+  token: string;
+  rssi: number;
+}
+
+/** A person a sightings report resolved to: a strong match within a few metres. */
+export interface NearbyPerson {
+  ref: string;
+  display_name: string;
+  evidence: string | null;
+  speak_topics: TopicRef[];
+  zone: string | null;
+}
+
+/** The tokens heard in the last window. The server keeps none of it and answers with strong matches only. */
+export function postSightings(slug: string, sightings: Sighting[], signal?: AbortSignal) {
+  return call<{ nearby: NearbyPerson[] }>('/api/presence/sightings', post({ event: slug, sightings: sightings.slice(0, 50) }, signal, true));
 }
 
 export function requestMeet(slug: string, ref: string, topicId: string | null, note: string) {

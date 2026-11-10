@@ -6,12 +6,14 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-# Stage 2: runtime. The server uses only Node built-ins, so there is no npm install.
-# data/ and env files are never copied: Elasticsearch is the only data store.
+# Stage 2: runtime. The server's one dependency (web-push, for the nudges) is installed from the
+# lockfile without dev dependencies. data/ and env files are never copied: Elasticsearch is the
+# only data store.
 FROM node:26-slim
 ENV NODE_ENV=production
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY server/ ./server/
 COPY config/moderation-words.json ./config/moderation-words.json
 COPY --from=web-build /build/web/dist ./web/dist

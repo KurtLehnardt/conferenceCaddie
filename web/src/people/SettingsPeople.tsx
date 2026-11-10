@@ -1,12 +1,36 @@
 // Settings sections for Find & connect: the people this device has blocked (refreshed from the
-// server when Settings opens), the device-only "People I met" list and the device-only
-// "People I'm watching" list.
+// server when Settings opens), the device-only "People I met" list, the device-only "People I'm
+// watching" list and the push nudge switch.
 import { useEffect, useState } from 'preact/hooks';
 import { fetchBlocks, isAbort } from './api';
 import { unblock } from './connect';
+import { pushAvailable, PushSwitch } from './PushControls';
 import { getBlocks, getMet, mergeBlocks, removeMet, usePeopleStore } from './storage';
 import type { ConferenceLike } from './types';
 import { getWatches, removeWatch } from './watch';
+
+/**
+ * Push: the same "Nudge me even when the app is closed" switch as the presence card, mirroring
+ * its state. The in-app nudge switch is the Nudges section (NudgeBanner.tsx); this one is the
+ * channel that reaches a closed app.
+ */
+export function NudgeSettings({ conference }: { conference: ConferenceLike }) {
+  if (!pushAvailable()) return null;
+  return (
+    <section class="settings-group" aria-labelledby="set-push">
+      <h2 class="settings-heading" id="set-push">
+        Push
+      </h2>
+      <div class="settings-card">
+        <PushSwitch slug={conference.slug} variant="settings" />
+        <p class="settings-row settings-text">
+          The same nudge as a notification while the app is closed: when someone whose experience matches yours is in
+          your zone. It never says who until you open the app, and you get at most a few an hour.
+        </p>
+      </div>
+    </section>
+  );
+}
 
 export function BlockedPeople({ conference }: { conference: ConferenceLike }) {
   usePeopleStore();

@@ -10,6 +10,8 @@
 //   ES_CONFERENCES_INDEX  default caddie-conferences.
 //   ES_PEOPLE_BLOCKS_INDEX default caddie-people-blocks (who blocked whom).
 //   ES_PEOPLE_MEETS_INDEX default caddie-people-meets (ask to talk shop).
+//   ES_PEOPLE_PUSH_INDEX  default caddie-people-push (Web Push subscriptions, push.mjs).
+//   ES_PEOPLE_NUDGES_INDEX default caddie-people-nudges (nudges sent, nudge.mjs).
 //   REF_SALT              optional salt for the opaque result reference.
 //
 // Rules this module keeps:
@@ -29,8 +31,12 @@
 //   name an Elasticsearch status.
 // - Writes whose about, interests and expertise are unchanged use a Bulk API partial update that
 //   omits those fields, so toggling visibility, sharing or presence never re-runs the model.
-// - Presence (zone, spot, since, until) lives on the people document and is returned to another
-//   person only while both are around. Blocks and meets are deleted with the profile.
+// - Presence (zone, spot, since, until, and an optional rounded location with its accuracy) lives
+//   on the people document and is returned to another person only while both are around. The
+//   location itself is returned to nobody: it ranks nearby people higher through a
+//   distance_feature leg and becomes a band (same_zone, near, around, venue) on a result; only an
+//   active meet learns a distance and a bearing (connect.mjs). Blocks and meets are deleted with
+//   the profile.
 //
 // The block, presence and meet routes themselves are in connect.mjs, which uses the transport,
 // plumbing and lookups exported here.
@@ -46,6 +52,8 @@ const READ_KEY = process.env.ES_API_KEY || '';
 export const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 export const BLOCKS_INDEX = process.env.ES_PEOPLE_BLOCKS_INDEX || 'caddie-people-blocks';
 export const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
+export const PUSH_INDEX = process.env.ES_PEOPLE_PUSH_INDEX || 'caddie-people-push';
+export const NUDGES_INDEX = process.env.ES_PEOPLE_NUDGES_INDEX || 'caddie-people-nudges';
 const TALKS_INDEX = process.env.ES_INDEX || 'caddie-talks';
 const TOPICS_INDEX = process.env.ES_TOPICS_INDEX || 'caddie-topics';
 const CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conferences';
@@ -135,8 +143,9 @@ export const docId = (eventId, profileId) => `${eventId}:${profileId}`;
 // visible_until has passed; this deletes it as well. It runs when the server starts, which covers
 // every cold start, and then once an hour while an instance stays up. A document without
 // visible_until is never live, so it is deleted too. The same pass clears presence that has
-// expired (a Bulk partial update of the four presence fields, so nothing is re-embedded) and
-// deletes meets whose expires_at has passed. The purge CLI runs the same three steps.
+// expired (a Bulk partial update of the presence fields, so nothing is re-embedded) and
+// deletes meets whose expires_at has passed, then push subscriptions and nudge records whose
+// expires_at (the end of their conference) has passed. The purge CLI runs the same steps.
 const PURGE_INTERVAL_MS = 60 * 60_000;
 const PURGE_PRESENCE_PAGE = 500;
 export const EXPIRED_PEOPLE_QUERY = {
@@ -147,7 +156,9 @@ export const EXPIRED_PEOPLE_QUERY = {
 };
 export const EXPIRED_PRESENCE_QUERY = { range: { presence_until: { lt: 'now' } } };
 export const EXPIRED_MEETS_QUERY = { range: { expires_at: { lt: 'now' } } };
-export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null };
+export const EXPIRED_AT_QUERY = { range: { expires_at: { lt: 'now' } } };
+// The Bluetooth token (ble.mjs) rides along with presence: cleared with it, carried through a reindex.
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, ble_token: null, ble_token_until: null };
 
 async function purgeExpired() {
   if (!PEOPLE_KEY) return;
@@ -181,6 +192,16 @@ async function purgeExpired() {
     if (json.deleted) console.log(`Deleted ${json.deleted} expired meets.`);
   } catch (err) {
     console.error(`Deleting expired meets failed: ${err.message}`);
+  }
+  for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records']]) {
+    try {
+      const { json } = await people('POST', `${idx(name)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
+        query: EXPIRED_AT_QUERY,
+      });
+      if (json.deleted) console.log(`Deleted ${json.deleted} expired ${what}.`);
+    } catch (err) {
+      console.error(`Deleting expired ${what} failed: ${err.message}`);
+    }
   }
 }
 
@@ -404,7 +425,7 @@ function readBody(req) {
   });
 }
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+export const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 export async function jsonBody(req, allowedKeys) {
   const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -499,10 +520,12 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // ---------------------------------------------------------------------------------------------
 // People documents (people key).
 
-const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_since', 'presence_until'];
-const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', ...PRESENCE_FIELDS];
+const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
+// The Bluetooth token of ble.mjs: the owner's own document carries it; it is never read for others.
+const BLE_FIELDS = ['ble_token', 'ble_token_until'];
+const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
-const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', ...PRESENCE_FIELDS];
+const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
 
 // Returns { found, source, seqNo, primaryTerm } for the caller's own document.
 export async function ownDoc(eventId, profileId) {
@@ -519,6 +542,52 @@ export async function ownDoc(eventId, profileId) {
 export const isLive = (source) => typeof source.visible_until === 'string' && Date.parse(source.visible_until) > Date.now();
 // True while the person has said they are around and that has not run out.
 export const isAround = (source) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > Date.now();
+
+// ---------------------------------------------------------------------------------------------
+// Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre). It is read
+// here only to rank, to band and, inside an active meet, to give a distance and a bearing.
+
+export const PROXIMITY_NEAR_M = 75;
+export const PROXIMITY_AROUND_M = 300;
+const EARTH_RADIUS_M = 6_371_000;
+const rad = (deg) => (deg * Math.PI) / 180;
+
+// The location of a person who is around and opted in, else null.
+export function locationOf(source) {
+  if (!isAround(source)) return null;
+  const l = source.presence_location;
+  if (!l || typeof l !== 'object' || !Number.isFinite(l.lat) || !Number.isFinite(l.lon)) return null;
+  return { lat: l.lat, lon: l.lon };
+}
+
+// Great-circle distance in metres (haversine).
+export function distanceM(a, b) {
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Initial bearing from a to b, 0 to 360 degrees clockwise from north.
+export function bearingDeg(a, b) {
+  const dLon = rad(b.lon - a.lon);
+  const y = Math.sin(dLon) * Math.cos(rad(b.lat));
+  const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// The band between two people who are both around: the same zone first, then distance when both
+// have a location, else the venue as a whole. Never a number.
+export function proximityBand(me, them) {
+  if (me.presence_zone && me.presence_zone === them.presence_zone) return 'same_zone';
+  const a = locationOf(me);
+  const b = locationOf(them);
+  if (!a || !b) return 'venue';
+  const d = distanceM(a, b);
+  if (d < PROXIMITY_NEAR_M) return 'near';
+  if (d < PROXIMITY_AROUND_M) return 'around';
+  return 'venue';
+}
 
 // One bulk action on the people index with refresh=wait_for. Returns the item status.
 export async function bulkOne(action, doc) {
@@ -559,10 +628,13 @@ export async function docByRef(eventId, ref) {
 }
 
 // The person a result's ref points at, or null. Only someone the requester could have seen
-// qualifies: visible conference-wide, or sharing a talk the requester also shares for.
+// qualifies: visible conference-wide, or sharing a talk the requester also shares for, and not
+// hidden after reports. docByRef stays unfiltered: a hidden person must stay blockable and
+// reportable.
 export async function personByRef(me, ref) {
   const s = await docByRef(me.event_id, ref);
   if (!s || s.profile_id === me.profile_id) return null;
+  if (s.hidden === true) return null;
   const mine = new Set(me.shared_talk_ids ?? []);
   if (s.open_to_meet !== true && !(s.shared_talk_ids ?? []).some((id) => mine.has(id))) return null;
   return s;
@@ -606,9 +678,9 @@ export async function blockedBetween(eventId, a, b) {
 // The filter clause that hides blocked pairs from a people query.
 const notBlocked = (eventId, ids) => (ids.size ? [{ ids: { values: [...ids].map((id) => docId(eventId, id)) } }] : []);
 
-// Everything that connects a person to others at one conference: their blocks in both directions
-// and every meet they take part in. Runs when the profile is deleted. refresh=true, so the next
-// request already sees them gone.
+// Everything that connects a person to others at one conference: their blocks in both directions,
+// every meet they take part in, their push subscriptions and the nudges they were part of. Runs
+// when the profile is deleted. refresh=true, so the next request already sees them gone.
 export async function deleteConnections(eventId, profileId) {
   await people('POST', `${idx(BLOCKS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
     query: {
@@ -622,6 +694,12 @@ export async function deleteConnections(eventId, profileId) {
   await people('POST', `${idx(MEETS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
     query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } },
   });
+  await people('POST', `${idx(PUSH_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
+    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } },
+  });
+  await people('POST', `${idx(NUDGES_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
+    query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } },
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -632,20 +710,27 @@ export async function deleteConnections(eventId, profileId) {
 //   4. in a search, the same text against their about (semantic),
 //   5. my expertise against their interests (semantic),
 //   6. in a search, the query as a lexical match on their expertise and about,
+//   7. in matches, when the requester is around with a location, a distance_feature on
+//      presence_location (100 m pivot, origin the requester's rounded location) over people who
+//      are around now, so nearby people rank higher; it is a ranking signal and nothing else,
 // skipping any whose input is empty. Circles add a retriever that matches every member, so a
 // member with nothing in common is still listed, below everyone who shares something. Every
 // retriever is named so that the explanation of a hit says which ones it came from.
 
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
-const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until'];
+const DISTANCE_PIVOT = '100m';
+// presence_location is read to compute the band of a result and is never passed on.
+const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_location'];
 
-// Returns { body, legs } where legs names each retriever in order ('topics', 'text' or
-// 'everyone'), or null when there is nothing to rank by.
-function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false }) {
+// Returns { body, legs } where legs names each retriever in order ('topics', 'text', 'distance'
+// or 'everyone'), or null when there is nothing to rank by. nudge.mjs and ble.mjs run the same
+// query as the person whose presence was just written or who is scanning, so the push rule, the
+// Bluetooth matches and the matches view agree.
+export function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, query = '', blocked = new Set(), explain = false, origin = null }) {
   const filter = {
     bool: {
       filter: [{ term: { event_id: me.event_id } }, { range: { visible_until: { gt: 'now' } } }, ...filters],
-      must_not: [{ ids: { values: [docId(me.event_id, me.profile_id)] } }, ...notBlocked(me.event_id, blocked)],
+      must_not: [{ ids: { values: [docId(me.event_id, me.profile_id)] } }, { term: { hidden: true } }, ...notBlocked(me.event_id, blocked)],
     },
   };
   const legs = [];
@@ -690,6 +775,16 @@ function peopleQuery(me, filters, { size, from = 0, includeEveryone = false, que
     highlight.expertise = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
     highlight.about = { fragment_size: PASSAGE_MAX, number_of_fragments: 1 };
   }
+  if (origin) {
+    add('distance', {
+      query: {
+        bool: {
+          must: [{ distance_feature: { field: 'presence_location', pivot: DISTANCE_PIVOT, origin } }],
+          filter: [{ range: { presence_until: { gt: 'now' } } }],
+        },
+      },
+    });
+  }
   if (includeEveryone) add('everyone', { query: { match_all: {} }, sort: [{ updated_at: 'desc' }] });
   if (!retrievers.length) return null;
 
@@ -718,9 +813,9 @@ function matchedLegs(hit, legs) {
 
 const listFormat = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-const unescapeHtml = (s) => s.replace(/<\/?mark>/g, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+export const unescapeHtml = (s) => s.replace(/<\/?mark>/g, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
-function cutText(raw, max) {
+export function cutText(raw, max) {
   let t = String(raw).replace(/\s+/g, ' ').trim().replace(/[.!?;:,\s]+$/, '');
   if (t.length > max) {
     const cut = t.slice(0, max);
@@ -739,7 +834,7 @@ function passageFrom(hit) {
 // The passage that matched, with <mark> tags as the only markup: a lexical fragment of expertise
 // or about when the query matched words there, else the best semantic chunk of expertise or
 // about, else the start of their expertise (or about). Null for a profile with no text at all.
-function evidenceFor(hit) {
+export function evidenceFor(hit) {
   const hl = hit.highlight ?? {};
   const s = hit._source ?? {};
   const lexical = [hl.expertise?.[0], hl.about?.[0]].find((f) => typeof f === 'string' && f.includes('<mark>'));
@@ -771,14 +866,17 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
 }
 
 // Shapes one hit for the requester. In a text search (query given) the evidence leads the
-// reasons; zone is included only while both the requester and this person are around. A broad
-// match carries no evidence and is labelled with the common topic it shares instead.
-function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
+// reasons; zone and the proximity band are included only while both the requester and this
+// person are around. A broad match carries no evidence and is labelled with the common topic it
+// shares instead. The location a hit may carry is read for the band and goes no further.
+export function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
   const s = hit._source ?? {};
   const topicsOf = (ids) => (ids ?? []).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) }));
   const evidence = broad ? null : evidenceFor(hit);
   const around = isAround(s);
-  const zone = around && isAround(me) && s.presence_zone ? s.presence_zone : null;
+  const both = around && isAround(me);
+  const zone = both && s.presence_zone ? s.presence_zone : null;
+  const proximity = both ? proximityBand(me, s) : null;
   let reasons;
   if (broad) {
     const shared = sharedTopics(me, s).filter((t) => labels.has(t)).map((t) => labels.get(t));
@@ -800,6 +898,7 @@ function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, b
     evidence,
     around,
     zone,
+    proximity,
     broad,
   };
 }
@@ -810,6 +909,7 @@ async function circleCounts(slug, ids) {
     query: {
       bool: {
         filter: [{ term: { event_id: slug } }, { range: { visible_until: { gt: 'now' } } }, { terms: { shared_talk_ids: ids } }],
+        must_not: [{ term: { hidden: true } }],
       },
     },
     aggs: { talks: { terms: { field: 'shared_talk_ids', include: ids, size: ids.length } } },
@@ -878,8 +978,10 @@ async function putProfile(req, res) {
   };
   // Presence needs conference-wide visibility, so turning that off clears it. Otherwise a full
   // reindex carries the stored presence over and a partial update leaves it alone.
-  const presence = own.found ? Object.fromEntries(PRESENCE_FIELDS.map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
+  const presence = own.found ? Object.fromEntries([...PRESENCE_FIELDS, ...BLE_FIELDS].map((f) => [f, own.source[f] ?? null])) : PRESENCE_OFF;
   if (!body.open_to_meet) Object.assign(common, PRESENCE_OFF);
+  // The report flags live on the document too; a full reindex would otherwise unhide silently.
+  const flags = own.found ? { hidden: own.source.hidden === true, spot_hidden: own.source.spot_hidden === true } : {};
 
   let status;
   if (!own.found) {
@@ -917,6 +1019,7 @@ async function putProfile(req, res) {
           secret_hash: own.source.secret_hash,
           text_hash: hash,
           ...presence,
+          ...flags,
           ...common,
         },
       );
@@ -924,7 +1027,7 @@ async function putProfile(req, res) {
     if (status === 409) throw new HttpError(409, { error: 'The profile changed at the same time; try again' });
   }
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  sendJson(res, 200, { ok: true, open_to_meet: body.open_to_meet, shared_talk_ids: shared });
+  sendJson(res, 200, { ok: true, open_to_meet: body.open_to_meet, shared_talk_ids: shared, hidden_for_owner: own.found && own.source.hidden === true });
 }
 
 async function deleteProfile(req, res, url) {
@@ -948,7 +1051,7 @@ const MATCHES_KEYS = new Set(['event', 'interested_talk_ids', 'query', 'when', '
 
 // Runs a people search. Should the cluster refuse the explanation, the search runs again without
 // it and every hit is kept.
-async function searchPeople(slug, body) {
+export async function searchPeople(slug, body) {
   const path = withPreference(`${idx(PEOPLE_INDEX)}/_search`, peoplePreference(slug));
   try {
     return (await people('POST', path, body)).json;
@@ -968,10 +1071,11 @@ function sharedTopics(me, s) {
 
 // The specificity rule: a hit is a broad match when it was found only by the topic retrievers and
 // every topic it shares with the requester is one of the conference's ten most common. A hit found
-// by a text retriever, or one whose explanation is missing, is specific.
-function isBroad(hit, legs, me, common) {
+// by a text retriever, or one whose explanation is missing, is specific. Being nearby is not
+// experience, so the distance leg counts neither way.
+export function isBroad(hit, legs, me, common) {
   const matched = matchedLegs(hit, legs);
-  if (!matched || matched.some((i) => legs[i] !== 'topics')) return false;
+  if (!matched || matched.some((i) => legs[i] !== 'topics' && legs[i] !== 'distance')) return false;
   return sharedTopics(me, hit._source ?? {}).every((t) => common.has(t));
 }
 
@@ -997,7 +1101,9 @@ async function matches(req, res) {
   const filters = [{ term: { open_to_meet: true } }];
   if (when === 'around_now') filters.push({ range: { presence_until: { gt: 'now' } } });
   const blocked = await blockedIds(conf.slug, me.profile_id);
-  const q = peopleQuery(me, filters, { size, from, query, blocked, explain: true });
+  // A requester who is around with a position gets the distance leg; the origin is their own
+  // stored, rounded location and never leaves the query.
+  const q = peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: locationOf(me) });
   if (!q) {
     sendJson(res, 200, { results: [], from, size, has_more: false });
     return;

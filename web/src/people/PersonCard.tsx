@@ -1,14 +1,16 @@
 // One person in People to meet, a search result or a talk circle: the opener, the passage that
 // matched, the other reasons, their topics and, when present, "How to reach me". Every card has
-// Block in its overflow menu. Asks are now-only: "Ask to talk shop" only while they are around
-// (one-tap "Wave" when they are in my zone); otherwise "Tell me when they're around" toggles a
-// device-side watch.
+// Report and Block in its overflow menu. Asks are now-only: "Ask to talk shop" only while they are
+// around (one-tap "Wave" when they are in my zone); otherwise "Tell me when they're around" toggles
+// a device-side watch.
 import { useEffect, useState } from 'preact/hooks';
 import { Bell, BellOff, ExternalLink, Hand, MapPin, MessageCircle } from 'lucide-preact';
 import { OverflowMenu } from '../components/common';
 import { requestMeet } from './api';
 import { AskSheet, isMeetOpen, plainText, problem } from './AskSheet';
+import { BroadLine, broadReason } from './BroadLine';
 import { blockWithConfirm, noteSentRequest, outgoingTo, rememberPerson, requestTo } from './connect';
+import { ReportSheet } from './ReportSheet';
 import { getPresence, usePeopleStore } from './storage';
 import type { PersonResult, TopicRef } from './types';
 import { toast } from './ui';
@@ -32,6 +34,14 @@ function Topics({ label, topics }: { label: string; topics: TopicRef[] }) {
   );
 }
 
+/** The short label of a proximity band; nothing for the venue as a whole. */
+export function proximityLabel(band: PersonResult['proximity']): string | null {
+  if (band === 'same_zone') return 'Same zone';
+  if (band === 'near') return 'Near';
+  if (band === 'around') return 'Around';
+  return null;
+}
+
 // A line to show under a list of people when any of them is a sample profile.
 export function SampleNote({ people }: { people: PersonResult[] }) {
   if (!people.some((p) => p.sample)) return null;
@@ -41,13 +51,16 @@ export function SampleNote({ people }: { people: PersonResult[] }) {
 export function PersonCard({ person, slug }: { person: PersonResult; slug: string }) {
   usePeopleStore();
   const [asking, setAsking] = useState(false);
+  const [reporting, setReporting] = useState(false);
   useEffect(() => rememberPerson(person), [person.ref]);
 
   const evidence = person.evidence ? plainText(person.evidence) : '';
   // The evidence block already shows the matched passage, so a reason that repeats it is left out.
   const repeats = (r: string) => !!evidence && plainText(r).includes(evidence);
-  const opener = person.opener && !repeats(person.opener) ? person.opener : '';
-  const reasons = (person.reasons ?? []).filter((r) => r && r !== person.opener && !repeats(r));
+  // A broad match leads with its "Also interested in" line instead of an opener (BroadLine).
+  const broad = person.broad === true;
+  const opener = !broad && person.opener && !repeats(person.opener) ? person.opener : '';
+  const reasons = (person.reasons ?? []).filter((r) => r && r !== person.opener && !repeats(r) && !(broad && r === broadReason(person)));
   const contact = person.contact;
   const hasContact = !!(contact && (contact.linkedin_url || contact.contact_note));
   const asked = requestTo(slug, person.ref);
@@ -74,9 +87,11 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
     }
     setWaving(false);
   };
+  // A band only; the server never sends a distance here.
+  const band = person.around ? proximityLabel(person.proximity) : null;
 
   return (
-    <article class="pp-person">
+    <article class={`pp-person${broad ? ' pp-person-broad' : ''}`}>
       <header class="pp-person-head">
         <h3 class="pp-person-name">{person.display_name}</h3>
         {person.sample && (
@@ -88,18 +103,23 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
         <span class="pp-person-menu">
           <OverflowMenu
             label={`Options for ${person.display_name}`}
-            items={[{ label: 'Block', destructive: true, onSelect: () => blockWithConfirm(slug, person) }]}
+            items={[
+              { label: 'Report', onSelect: () => setReporting(true) },
+              { label: 'Block', destructive: true, onSelect: () => blockWithConfirm(slug, person) },
+            ]}
           />
         </span>
       </header>
+      {broad && <BroadLine person={person} />}
       {person.around && (
         <p class="pp-around">
           <MapPin size={16} aria-hidden="true" />
           {person.zone ? `Around · ${person.zone}` : 'Around now'}
+          {band && <span class="pp-band">{band}</span>}
         </p>
       )}
       {person.about && <p class="pp-person-about">{person.about}</p>}
-      {person.evidence && (
+      {!broad && person.evidence && (
         <blockquote class="pp-evidence">
           <Marked text={person.evidence} />
         </blockquote>
@@ -170,6 +190,13 @@ export function PersonCard({ person, slug }: { person: PersonResult; slug: strin
         )}
       </div>
       {asking && <AskSheet slug={slug} person={person} onClose={() => setAsking(false)} />}
+      {reporting && (
+        <ReportSheet
+          slug={slug}
+          target={{ ref: person.ref, display_name: person.display_name, kind: 'profile', id: person.ref }}
+          onClose={() => setReporting(false)}
+        />
+      )}
     </article>
   );
 }

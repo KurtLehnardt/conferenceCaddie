@@ -1,11 +1,13 @@
 // Deletes every people profile whose conference has ended, in every conference, clears presence
-// that has run out and deletes meets that have run out.
+// that has run out, deletes meets that have run out, and deletes push subscriptions and nudge
+// records whose conference has ended.
 //
 // Usage: node scripts/purge-expired-people.mjs
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY); ES_PEOPLE_INDEX (default caddie-people);
-//        ES_PEOPLE_MEETS_INDEX (default caddie-people-meets).
+//        ES_PEOPLE_MEETS_INDEX (default caddie-people-meets); ES_PEOPLE_PUSH_INDEX (default
+//        caddie-people-push); ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges).
 //
-// The server runs the same three steps when it starts and once an hour. This is the operator's
+// The server runs the same steps when it starts and once an hour. This is the operator's
 // step for after a conference, when no instance may be running. It prints only counts. Blocks are
 // not purged here: they are deleted with the profile that made them.
 
@@ -13,6 +15,8 @@ const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
+const PUSH_INDEX = process.env.ES_PEOPLE_PUSH_INDEX || 'caddie-people-push';
+const NUDGES_INDEX = process.env.ES_PEOPLE_NUDGES_INDEX || 'caddie-people-nudges';
 const PRESENCE_PAGE = 500;
 
 if (!API_KEY) {
@@ -46,9 +50,9 @@ const expiredProfiles = {
 const profiles = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_delete_by_query?conflicts=proceed`, { query: expiredProfiles });
 console.log(`Deleted ${profiles.deleted ?? 0} expired profiles.`);
 
-// Presence that has run out is cleared with a Bulk partial update of its four fields, the same
-// write the server uses, so nothing is re-embedded.
-const off = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null };
+// Presence that has run out is cleared with a Bulk partial update of its six fields (the
+// position among them), the same write the server uses, so nothing is re-embedded.
+const off = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null };
 let cleared = 0;
 for (;;) {
   const found = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_search`, {
@@ -70,3 +74,11 @@ const meets = await es('POST', `/${encodeURIComponent(MEETS_INDEX)}/_delete_by_q
   query: { range: { expires_at: { lt: 'now' } } },
 });
 console.log(`Deleted ${meets.deleted ?? 0} expired meets.`);
+
+// Push subscriptions and nudge records expire with their conference (expires_at = visible_until).
+for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records']]) {
+  const r = await es('POST', `/${encodeURIComponent(name)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
+    query: { range: { expires_at: { lt: 'now' } } },
+  });
+  console.log(`Deleted ${r.deleted ?? 0} expired ${what}.`);
+}

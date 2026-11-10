@@ -753,6 +753,7 @@ const E = newDevice(); // shares through the exact writes the Interested screen'
 const F = newDevice(); // Find & connect: the person with the specific passage, can speak to LEARN
 const K = newDevice(); // Find & connect: shares only the common topic with A, no text
 const X = newDevice(); // Find & connect: never gets a profile
+const R = newDevice(); // Report: visible and in the circle, reported by A and B
 const spotMarker = `smoke-spot-${runTag}`;
 const expiredId = `${PRIMARY}:${crypto.randomBytes(16).toString('base64url')}`;
 let expiredWritten = false;
@@ -1134,6 +1135,46 @@ try {
     report(problems.length === 0, 'q9: delete removes everything', problems.length ? problems.join('; ') : 'profile, meet and block gone');
   });
 
+  await check('q10: two reports hide a profile from everyone but its owner', async () => {
+    // B shares for the circle talk too, so both reporters see the circle. R is the reported person.
+    const shareB = await putProfile(B, PRIMARY, 'B', { speak: LEARN, learn: ['kubernetes'] }, { open: true, shared: [T] });
+    if (shareB.status !== 200) throw new Error(`B sharing gave ${shareB.status}`);
+    const countBeforeR = await countOf();
+    const r = await putProfile(R, PRIMARY, 'R', { speak: LEARN, learn: LEARN }, { open: true, shared: [T] });
+    if (r.status !== 200) throw new Error(`R gave ${r.status}`);
+    const seenBy = async (device, who) => {
+      const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device, label: `${who}-matches` });
+      const c = await api('POST', '/api/circles/members', { event: PRIMARY, talk_id: T }, { device, label: `${who}-members` });
+      if (m.status !== 200 || c.status !== 200) throw new Error(`${who} got ${m.status}/${c.status}`);
+      return { matches: names(m.json.results).includes(testName('R')), circle: names(c.json.members).includes(testName('R')), ref: personIn(m, 'R')?.ref ?? null };
+    };
+    const beforeA = await seenBy(A, 'A');
+    const beforeB = await seenBy(B, 'B');
+    if (!beforeA.ref) throw new Error('R is not in A\'s matches before any report');
+    const refR = beforeA.ref;
+    const reportR = (device, who, reason = 'spam') => api('POST', '/api/people/report', { event: PRIMARY, ref: refR, context: { kind: 'profile', id: refR }, reason }, { device, label: `${who}-report` });
+    const first = await reportR(A, 'A');
+    const again = await reportR(A, 'A', 'other');
+    const stillA = await seenBy(A, 'A');
+    const second = await reportR(B, 'B');
+    const afterA = await seenBy(A, 'A');
+    const afterB = await seenBy(B, 'B');
+    const meet = await api('POST', '/api/meet', { event: PRIMARY, ref: refR, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
+    const owner = await putProfile(R, PRIMARY, 'R', { speak: LEARN, learn: LEARN }, { open: true, shared: [T] });
+    const count = await countOf();
+    const problems = [];
+    if (!beforeA.matches || !beforeA.circle || !beforeB.matches || !beforeB.circle) problems.push('R not visible to both before the reports');
+    if (first.status !== 200 || first.json.hidden !== false) problems.push(`the first report gave ${first.status} hidden ${first.json.hidden}`);
+    if (again.status !== 200 || again.json.hidden !== false) problems.push(`the same device's second report gave ${again.status} hidden ${again.json.hidden}`);
+    if (!stillA.matches || !stillA.circle) problems.push('one reporter alone hid R');
+    if (second.status !== 200 || second.json.hidden !== true) problems.push(`the second reporter gave ${second.status} hidden ${second.json.hidden}`);
+    if (afterA.matches || afterA.circle || afterB.matches || afterB.circle) problems.push('R still visible after two reports');
+    if (meet.status !== 404) problems.push(`a meet request to R gave ${meet.status}`);
+    if (owner.status !== 200 || owner.json.hidden_for_owner !== true) problems.push(`the owner's write gave ${owner.status} hidden_for_owner ${owner.json.hidden_for_owner}`);
+    if (count !== countBeforeR) problems.push(`the circle count is ${count}, expected ${countBeforeR} without R`);
+    report(problems.length === 0, 'q10: two reports hide a profile from everyone but its owner', problems.length ? problems.join('; ') : 'gone from matches, circles, counts and meets; the owner sees hidden_for_owner');
+  });
+
   await check('p11: a deleted profile disappears at once', async () => {
     const del = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: B, label: 'B-delete' });
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
@@ -1508,8 +1549,8 @@ await check('inst1: the manifest makes the app installable and the page links it
   // l. secret_hash and other private fields never leak, and a test profile's contact details
   // reach only people allowed to see them.
   const hits = [];
-  const secrets = [A, B, C, D, N, F, K, X].flatMap((d) => [d.secret, d.profileId]);
-  const hashes = [A, B, C, D, N, F, K, X].map((d) => crypto.createHash('sha256').update(d.secret).digest('hex'));
+  const secrets = [A, B, C, D, N, F, K, X, R].flatMap((d) => [d.secret, d.profileId]);
+  const hashes = [A, B, C, D, N, F, K, X, R].map((d) => crypto.createHash('sha256').update(d.secret).digest('hex'));
   for (const r of responses) {
     for (const word of ['secret_hash', 'text_hash', '"profile_id"', '_semantic', 'presence_spot', 'blocker_id', 'blocked_id']) if (r.text.includes(word)) hits.push(`${word} in ${r.path}`);
     for (const s of [...secrets, ...hashes]) if (r.text.includes(s)) hits.push(`a device secret, id or hash in ${r.path}`);

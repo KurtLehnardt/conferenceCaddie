@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Conference Caddie</string>
+    <string name="title_activity_main">Conference Caddie</string>
+    <string name="package_name">app.conferencecaddie</string>
+    <string name="custom_url_scheme">app.conferencecaddie</string>
+
+    <!-- Find people near me by Bluetooth -->
+    <string name="ble_channel_presence">Finding people near you</string>
+    <string name="ble_channel_presence_desc">Shown while Conference Caddie looks for matching people nearby over Bluetooth.</string>
+    <string name="ble_channel_nearby">Someone near you</string>
+    <string name="ble_channel_nearby_desc">A strong match is within a few metres.</string>
+    <string name="ble_foreground_title">Conference Caddie is finding people near you</string>
+    <string name="ble_foreground_text">Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth.</string>
+    <string name="ble_stop">Stop</string>
+
+    <!-- Permission rationale, returned to the web app so it can explain before asking. -->
+    <string name="ble_rationale_bluetooth">Caddie needs the Nearby devices permission to broadcast a random code and to hear other phones that also turned this on. The code changes every 10 minutes and means nothing without our server.</string>
+    <string name="ble_rationale_location">On Android 11 and older, Android only lets an app scan for Bluetooth devices with the Location permission. Caddie never reads your position; it only listens for codes from other phones.</string>
+    <string name="ble_rationale_notifications">Notifications let Caddie tell you when a strong match is right near you, and show that it is listening.</string>
+</resources>
