@@ -30,7 +30,7 @@
 
 import {
   people, idx, NUDGES_INDEX, UpstreamError,
-  peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, locationOf,
+  peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf,
 } from './people.mjs';
 import { subscriptionsFor, deleteSubscriptionById } from './push.mjs';
 
@@ -146,7 +146,7 @@ export async function nudgeAfterPresence(me, conf) {
     // distance leg never decides specificity (people.mjs), so it cannot create a nudge. When
     // inference fails it falls back to keyword legs like the Around view (rankPeople).
     const filters = [{ term: { open_to_meet: true } }, { range: { presence_until: { gt: 'now' } } }, { bool: { must_not: [{ term: { sample: true } }] } }];
-    const build = (semantic) => peopleQuery(me, filters, { size: CANDIDATES, blocked, explain: true, origin: locationOf(me), semantic });
+    const build = (semantic) => peopleQuery(me, filters, { size: CANDIDATES, blocked, explain: true, origin: cellOf(me), semantic });
     const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
     if (!ranked) return;
     const { json, q } = ranked;

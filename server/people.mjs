@@ -31,12 +31,14 @@
 //   name an Elasticsearch status.
 // - Writes whose about, interests and expertise are unchanged use a Bulk API partial update that
 //   omits those fields, so toggling visibility, sharing or presence never re-runs the model.
-// - Presence (zone, spot, since, until, and an optional rounded location with its accuracy) lives
-//   on the people document and is returned to another person only while both are around. The
-//   location itself is returned to nobody: it ranks nearby people higher through a
-//   distance_feature leg and becomes a band (same_zone, near, around, venue) on a result; only an
-//   active meet learns a distance and a bearing (connect.mjs). Blocks and meets are deleted with
-//   the profile.
+// - Presence (zone, spot, since, until, and an optional rounded location with its accuracy, the
+//   centre of its ~100 m cell and the time of the fix) lives on the people document and is
+//   returned to another person only while both are around. The location itself is returned to
+//   nobody and never read for anyone but its owner outside a meet: ranking (a distance_feature
+//   leg) and the band on a result (same_zone, near, around, venue) use only the cells, so no
+//   sequence of positions a requester claims can measure anyone more finely than a cell; only an
+//   active meet learns a distance and a bearing, from the precise fixes (connect.mjs). Blocks and
+//   meets are deleted with the profile.
 //
 // The block, presence and meet routes themselves are in connect.mjs, which uses the transport,
 // plumbing and lookups exported here.
@@ -198,7 +200,7 @@ export const SCRUB_MEET_SCRIPT = {
 };
 export const EXPIRED_AT_QUERY = { range: { expires_at: { lt: 'now' } } };
 // The Bluetooth token (ble.mjs) rides along with presence: cleared with it, carried through a reindex.
-export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, ble_token: null, ble_token_until: null };
+export const PRESENCE_OFF = { presence_zone: null, presence_spot: null, presence_spot_pending: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, presence_cell: null, presence_located_at: null, ble_token: null, ble_token_until: null };
 
 async function purgeExpired() {
   if (!PEOPLE_KEY) return;
@@ -569,7 +571,7 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // ---------------------------------------------------------------------------------------------
 // People documents (people key).
 
-const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
+const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy', 'presence_cell', 'presence_located_at'];
 // The Bluetooth token of ble.mjs: the owner's own document carries it; it is never read for others.
 const BLE_FIELDS = ['ble_token', 'ble_token_until'];
 const OWN_FIELDS = ['secret_hash', 'text_hash', 'text_pending', 'sample', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
@@ -593,15 +595,44 @@ export const isLive = (source) => typeof source.visible_until === 'string' && Da
 export const isAround = (source) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > Date.now();
 
 // ---------------------------------------------------------------------------------------------
-// Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre). It is read
-// here only to rank, to band and, inside an active meet, to give a distance and a bearing.
+// Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre), stored with
+// presence_cell, the centre of the ~100 m grid cell it falls in (cellFor), in the same write. The
+// precise location is read only inside an active meet, for a distance and a bearing between its
+// two participants (connect.mjs). Everything a stranger can observe, the band on a result and the
+// order the distance leg gives, comes from cells alone, so a requester who claims any positions
+// they like learns at most which cell someone is in, never where in it.
 
-export const PROXIMITY_NEAR_M = 75;
+// The grid: latitude snapped to 0.001 degrees (about 111 m), longitude to the step that spans the
+// same distance at the snapped latitude, so the cells of one row are about square.
+export const CELL_DEG = 0.001;
+const CELL_DECIMALS = 6;
+// Cell centres closer than this make two people 'around' each other; the same cell is 'near'.
 export const PROXIMITY_AROUND_M = 300;
 const EARTH_RADIUS_M = 6_371_000;
 const rad = (deg) => (deg * Math.PI) / 180;
+const roundCell = (v) => Number(v.toFixed(CELL_DECIMALS));
 
-// The location of a person who is around and opted in, else null.
+// The centre of the grid cell a position falls in, as { lat, lon }.
+export function cellFor({ lat, lon }) {
+  const cLat = Math.max(-90, Math.min(90, Math.round(lat / CELL_DEG) * CELL_DEG));
+  // Near a pole the longitude step is capped at one degree.
+  const lonStep = CELL_DEG / Math.max(Math.cos(rad(cLat)), CELL_DEG);
+  let cLon = Math.round(lon / lonStep) * lonStep;
+  if (cLon > 180) cLon -= 360;
+  if (cLon < -180) cLon += 360;
+  return { lat: roundCell(cLat), lon: roundCell(cLon) };
+}
+
+// The cell of a person who is around and opted in to a position, else null.
+export function cellOf(source) {
+  if (!isAround(source)) return null;
+  const c = source.presence_cell;
+  if (!c || typeof c !== 'object' || !Number.isFinite(c.lat) || !Number.isFinite(c.lon)) return null;
+  return { lat: c.lat, lon: c.lon };
+}
+
+// The precise location of a person who is around and opted in, else null. Read only for the
+// owner's own document and for the two participants of an active meet (connect.mjs).
 export function locationOf(source) {
   if (!isAround(source)) return null;
   const l = source.presence_location;
@@ -625,16 +656,16 @@ export function bearingDeg(a, b) {
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
-// The band between two people who are both around: the same zone first, then distance when both
-// have a location, else the venue as a whole. Never a number.
+// The band between two people who are both around: the same zone first; then, when both have a
+// cell, 'near' for the same cell and 'around' for cell centres under 300 m apart; else the venue
+// as a whole. Never a number, and never from a precise location.
 export function proximityBand(me, them) {
   if (me.presence_zone && me.presence_zone === them.presence_zone) return 'same_zone';
-  const a = locationOf(me);
-  const b = locationOf(them);
+  const a = cellOf(me);
+  const b = cellOf(them);
   if (!a || !b) return 'venue';
-  const d = distanceM(a, b);
-  if (d < PROXIMITY_NEAR_M) return 'near';
-  if (d < PROXIMITY_AROUND_M) return 'around';
+  if (a.lat === b.lat && a.lon === b.lon) return 'near';
+  if (distanceM(a, b) < PROXIMITY_AROUND_M) return 'around';
   return 'venue';
 }
 
@@ -828,16 +859,18 @@ async function deleteProfileAndConnections(eventId, profileId) {
 //   5. my expertise against their interests (semantic),
 //   6. in a search, the query as a lexical match on their expertise and about,
 //   7. in matches, when the requester is around with a location, a distance_feature on
-//      presence_location (100 m pivot, origin the requester's rounded location) over people who
-//      are around now, so nearby people rank higher; it is a ranking signal and nothing else,
+//      presence_cell (100 m pivot, origin the requester's own cell) over people who are around
+//      now, so nearby people rank higher; it is a ranking signal and nothing else, and like the
+//      band it sees cells only,
 // skipping any whose input is empty. Circles add a retriever that matches every member, so a
 // member with nothing in common is still listed, below everyone who shares something. Every
 // retriever is named so that the explanation of a hit says which ones it came from.
 
 const HIGHLIGHT_BASE = { encoder: 'html', pre_tags: ['<mark>'], post_tags: ['</mark>'] };
 const DISTANCE_PIVOT = '100m';
-// presence_location is read to compute the band of a result and is never passed on.
-const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_location'];
+// presence_cell is read to compute the band of a result and is never passed on; another person's
+// precise presence_location is never read here.
+const RESULT_FIELDS = ['profile_id', 'display_name', 'about', 'expertise', 'sample', 'learn_topics', 'speak_topics', 'shared_talk_ids', 'linkedin_url', 'contact_note', 'presence_zone', 'presence_until', 'presence_cell'];
 
 // Returns { body, legs } where legs names each retriever in order ('topics', 'text', 'distance'
 // or 'everyone'), or null when there is nothing to rank by. nudge.mjs and ble.mjs run the same
@@ -902,7 +935,7 @@ export function peopleQuery(me, filters, { size, from = 0, includeEveryone = fal
     add('distance', {
       query: {
         bool: {
-          must: [{ distance_feature: { field: 'presence_location', pivot: DISTANCE_PIVOT, origin } }],
+          must: [{ distance_feature: { field: 'presence_cell', pivot: DISTANCE_PIVOT, origin } }],
           filter: [{ range: { presence_until: { gt: 'now' } } }],
         },
       },
@@ -994,7 +1027,7 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
 // Shapes one hit for the requester. In a text search (query given) the evidence leads the
 // reasons; zone and the proximity band are included only while both the requester and this
 // person are around. A broad match carries no evidence and is labelled with the common topic it
-// shares instead. The location a hit may carry is read for the band and goes no further.
+// shares instead. The cell a hit carries is read for the band and goes no further.
 export function toPerson(hit, me, labels, talkTitles, circleTalkId, { search = false, broad = false } = {}) {
   const s = hit._source ?? {};
   const topicsOf = (ids) => (ids ?? []).filter((id) => labels.has(id)).map((id) => ({ topic_id: id, label: labels.get(id) }));
@@ -1339,8 +1372,8 @@ async function matches(req, res) {
   if (when === 'around_now') filters.push({ range: { presence_until: { gt: 'now' } } });
   const blocked = await blockedIds(conf.slug, me.profile_id);
   // A requester who is around with a position gets the distance leg; the origin is their own
-  // stored, rounded location and never leaves the query.
-  const build = (semantic) => peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: locationOf(me), semantic });
+  // stored cell and never leaves the query.
+  const build = (semantic) => peopleQuery(me, filters, { size, from, query, blocked, explain: true, origin: cellOf(me), semantic });
   // When the semantic legs fail because inference did, the same request is answered with keyword
   // legs and says so; semantic queries pause for a minute (rankPeople, semantic.mjs).
   const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);

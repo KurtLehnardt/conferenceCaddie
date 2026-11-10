@@ -14,14 +14,17 @@
 //   A meet is read or changed only by its two participants; everyone else gets 403.
 // - A block is symmetric and silent: both people vanish from each other's matches, circles and
 //   meets, and a meet attempt in either direction gets the same 403 { error: "blocked" }.
-// - Presence lives on the people document and is written with a Bulk partial update of its six
+// - Presence lives on the people document and is written with a Bulk partial update of its own
 //   fields only, so it never re-runs the embedding model. It ends 60 minutes after it was turned
 //   on, or with until: 'day' at the end of the conference day, at the latest at the end of the
 //   conference.
 // - A position is optional: rounded to 5 decimals, dropped when its accuracy is worse than 200 m,
-//   cleared with presence. It is never returned. It ranks nearby people higher and becomes a band
-//   on a result (people.mjs); only an active meet turns it into a distance rounded to 10 m and a
-//   bearing, for its two participants, through GET /api/meet/{id} and nowhere else.
+//   dropped too when it implies the device moved faster than 7 m/s since its previous fix of the
+//   last ten minutes, cleared with presence. It is stored with the centre of its ~100 m cell
+//   (presence_cell) and the time of the fix. It is never returned. Its cell ranks nearby people
+//   higher and becomes a band on a result (people.mjs); only an active meet turns the precise fix
+//   into a distance rounded to 10 m and a bearing, for its two participants, through
+//   GET /api/meet/{id} and nowhere else.
 // - A person's zone and spot reach another person only inside an active meet, which exists only
 //   while both are around; a how-to-spot-me line reaches only the other participant, only while
 //   the meet is active. Search results carry a zone only when both people are around (people.mjs).
@@ -53,7 +56,7 @@ import {
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
   conferenceFor, dayBounds, topicLabels, zonesFor, authenticated, bulkOne, isAround, PRESENCE_OFF,
   peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch, deleteWhere,
-  locationOf, distanceM, bearingDeg, reembedPending,
+  locationOf, cellFor, distanceM, bearingDeg, reembedPending,
 } from './people.mjs';
 
 const PRESENCE_MS = 60 * 60_000;
@@ -63,6 +66,10 @@ const HOUR_MS = 60 * 60_000;
 const SPOT_MAX = 60;
 const ACCURACY_MAX_M = 200;
 const COORD_DECIMALS = 5;
+// A new fix is checked against the previous one while that is younger than this ...
+const JUMP_WINDOW_MS = 10 * 60_000;
+// ... and dropped when it implies a faster move than this: a brisk run, never walking in a hall.
+const JUMP_MAX_MPS = 7;
 const DISTANCE_STEP_M = 10;
 const NOTE_MAX = 140;
 const MEET_REQUESTS_PER_HOUR = 10;
@@ -402,6 +409,8 @@ const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until', 'bl
 const PRESENCE_MODES = new Set(['hour', 'day']);
 const LOCATION_KEYS = new Set(['lat', 'lon', 'accuracy']);
 
+const NO_POSITION = { presence_location: null, presence_accuracy: null, presence_cell: null, presence_located_at: null };
+
 // The optional position of a presence write: { lat, lon, accuracy } with accuracy in metres.
 // Returns { presence_location: { lat, lon }, presence_accuracy } rounded to 5 decimals and whole
 // metres, or the two fields as null when there is no position or it is worse than 200 m, in
@@ -418,6 +427,25 @@ function locationFields(value) {
   if (accuracy > ACCURACY_MAX_M) return none;
   const round = (v) => Number(v.toFixed(COORD_DECIMALS));
   return { presence_location: { lat: round(lat), lon: round(lon) }, presence_accuracy: Math.round(accuracy) };
+}
+
+// True when a new fix implies the device moved faster than JUMP_MAX_MPS since its previous stored
+// fix, and that fix is younger than JUMP_WINDOW_MS. Such a fix is not stored: a phone cannot jump
+// across a venue, and a client that claims to is probing. (The bands do not depend on this:
+// people.mjs computes them from cells only.) Writes less than a second apart count as a second.
+function implausibleJump(me, next, nowMs) {
+  const prev = locationOf(me);
+  const at = Date.parse(me.presence_located_at);
+  if (!prev || !Number.isFinite(at) || nowMs - at >= JUMP_WINDOW_MS) return false;
+  return distanceM(prev, next) / Math.max(1, (nowMs - at) / 1000) > JUMP_MAX_MPS;
+}
+
+// The position fields a presence write stores: the fix, its accuracy, its cell and its time, or
+// all four null for a zone-only presence.
+function positionFields(location, me, nowMs) {
+  const fix = location.presence_location;
+  if (!fix || implausibleJump(me, fix, nowMs)) return NO_POSITION;
+  return { ...location, presence_cell: cellFor(fix), presence_located_at: iso(nowMs) };
 }
 
 async function putPresence(req, res) {
@@ -444,9 +472,11 @@ async function putPresence(req, res) {
   const since = isAround(me) && typeof me.presence_since === 'string' ? me.presence_since : iso(now);
   // A spot line hidden after reports stays off until the operator unhides it.
   const storedSpot = me.spot_hidden === true ? null : spot;
-  // A write without a usable position clears any stored one, so the presence is zone-only again.
+  // A write without a usable position clears any stored one, so the presence is zone-only again;
+  // so does a fix that jumped implausibly far since the last one (no error: the zone still counts).
   const held = Boolean(storedSpot) && spotPending;
-  const presence = { presence_zone: zone, presence_spot: storedSpot, presence_spot_pending: held, presence_since: since, presence_until: iso(untilMs), ...location };
+  const position = positionFields(location, me, now);
+  const presence = { presence_zone: zone, presence_spot: storedSpot, presence_spot_pending: held, presence_since: since, presence_until: iso(untilMs), ...position };
   // Android companion (ble.mjs): ble: true mints a ten-minute Bluetooth token in the same bulk
   // update as the presence, ble: false clears it, and a write that says nothing leaves it as it was.
   const ble = body.ble === true ? mintBleToken(now, untilMs) : body.ble === false ? BLE_OFF : {};
@@ -462,7 +492,7 @@ async function putPresence(req, res) {
       console.error(`Embedding pending profile text failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
     }
   }
-  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null, ...(body.ble === true ? { ble: bleView(ble) } : {}), ...heldInfo(held ? ['spot'] : []) });
+  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: position.presence_location !== null, ...(body.ble === true ? { ble: bleView(ble) } : {}), ...heldInfo(held ? ['spot'] : []) });
   // After the answer: the push nudge for strong matches in this zone (nudge.mjs never throws).
   void nudgeAfterPresence({ ...me, ...presence }, conf);
 }
