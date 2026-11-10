@@ -37,11 +37,15 @@ import {
   getDeleteAll,
   getDeletePending,
   getDevice,
+  getPresence,
   getProfile,
+  getPush,
   getVisibility,
   NEW_RETRY,
   setDeletePending,
+  setPresence,
   setProfile,
+  setPush,
   setVisibility,
 } from '../src/people/storage.ts';
 import {
@@ -56,6 +60,7 @@ import {
   getSyncStatus,
   hasUnfinishedDelete,
   onInterestedChanged,
+  registerRuntimeReset,
   scheduleProfileSync,
   shareForTalks,
   startDeleteRetries,
@@ -300,6 +305,27 @@ test('A first share the server refuses leaves nothing to delete', async () => {
   calls.length = 0;
   assert.equal((await deleteMyProfile()).done, true);
   assert.deepEqual(requests(), []);
+});
+
+test('A confirmed delete ends presence and push for its conference, and the final wipe stops the in-memory state first', async () => {
+  published(SLUG);
+  const until = new Date(Date.now() + HOUR).toISOString();
+  setPresence(SLUG, { on: true, zone: 'Expo hall', until });
+  setPush(SLUG, { on: true, endpoint: 'https://push.example/endpoint' });
+  server(200);
+  assert.equal(await changeVisibility(SLUG, { open_to_meet: false }), null);
+  assert.equal(getPresence(SLUG).on, false, 'the server ended presence with the document');
+  assert.equal(getPush(SLUG).on, false, 'and deleted the push subscription');
+
+  published(SLUG);
+  let storedWhenReset = null;
+  registerRuntimeReset(async () => {
+    storedWhenReset = getDevice() !== null;
+  });
+  assert.equal((await deleteMyProfile()).done, true);
+  registerRuntimeReset(async () => undefined);
+  assert.equal(storedWhenReset, true, 'the runtime reset ran, before the stored data went');
+  assert.equal(getDevice(), null);
 });
 
 /* ---------- The device keeps what it needs until the server has confirmed ---------- */

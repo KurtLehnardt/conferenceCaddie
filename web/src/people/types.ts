@@ -58,7 +58,10 @@ export interface PersonResult {
   broad?: boolean;
 }
 
-/** How close someone who is around is: the same zone, under 75 m, under 300 m, or just the venue. */
+/**
+ * How close someone who is around is: the same zone, the same ~100 m cell, cells under 300 m apart,
+ * or just the venue. The server computes it from cells only, never from a precise position.
+ */
 export type Proximity = 'same_zone' | 'near' | 'around' | 'venue';
 
 /** Find & connect: device-side presence state (caddie.presence.v1.{slug}). */
