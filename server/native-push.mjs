@@ -294,8 +294,16 @@ const errorClass = (err) => {
   return typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? code : 'network error';
 };
 
+// The link the native apps open when the notification is tapped. The Web Push payload names a web
+// route (/e/{slug}#/people?around=1); the apps take their own scheme, which the iOS app delegate and
+// the Android activity accept only when it starts with caddie://.
+export const deepLinkOf = (url) => (/#\/people\?around=1$/.test(url) ? 'caddie://people?around=1' : 'caddie://people');
+
 // The visible notification of the nudge, from the payload nudge.mjs sends by Web Push.
-const messageOf = (payload) => ({ title: String(payload.title), body: String(payload.body), url: String(payload.data?.url ?? '') });
+const messageOf = (payload) => {
+  const url = String(payload.data?.url ?? '');
+  return { title: String(payload.title), body: String(payload.body), url, deepLink: deepLinkOf(url) };
+};
 
 function apnsChannel(config, { transport, now, log }) {
   let provider = null; // { token, issuedAt }
@@ -320,7 +328,7 @@ function apnsChannel(config, { transport, now, log }) {
   return async function send(registration, payload, { ttl }) {
     const m = messageOf(payload);
     const origin = registration.environment === 'sandbox' ? APNS_ORIGINS.sandbox : APNS_ORIGINS.production;
-    const body = JSON.stringify({ aps: { alert: { title: m.title, body: m.body }, sound: 'default' }, data: { url: m.url } });
+    const body = JSON.stringify({ aps: { alert: { title: m.title, body: m.body }, sound: 'default' }, deepLink: m.deepLink, data: { url: m.url } });
     const attempt = (token) => transport(origin, {
       path: `/3/device/${registration.token}`,
       headers: {
@@ -419,7 +427,7 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
       message: {
         token: registration.token,
         notification: { title: m.title, body: m.body },
-        data: { url: m.url },
+        data: { url: m.url, deepLink: m.deepLink },
         android: { ttl: `${ttl}s`, priority: 'normal', notification: { tag: NUDGE_TAG } },
       },
     });

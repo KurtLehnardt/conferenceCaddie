@@ -115,7 +115,7 @@ describe('APNs', () => {
       'apns-collapse-id': 'caddie-nudge',
       'content-type': 'application/json',
     });
-    assert.deepEqual(calls[0].payload, { aps: { alert: { title: PAYLOAD.title, body: PAYLOAD.body }, sound: 'default' }, data: { url: PAYLOAD.data.url } });
+    assert.deepEqual(calls[0].payload, { aps: { alert: { title: PAYLOAD.title, body: PAYLOAD.body }, sound: 'default' }, deepLink: 'caddie://people?around=1', data: { url: PAYLOAD.data.url } });
   });
 
   test('the topic defaults to app.conferencecaddie', async () => {
@@ -276,7 +276,7 @@ describe('FCM', () => {
       message: {
         token: FCM_TOKEN,
         notification: { title: PAYLOAD.title, body: PAYLOAD.body },
-        data: { url: PAYLOAD.data.url },
+        data: { url: PAYLOAD.data.url, deepLink: 'caddie://people?around=1' },
         android: { ttl: '600s', priority: 'normal', notification: { tag: 'caddie-nudge' } },
       },
     });
@@ -588,4 +588,11 @@ describe('the HTTP/2 transport', () => {
       real.close();
     }
   });
+});
+
+test('the native deep link names the apps\' own scheme for the nudge route only', async () => {
+  const { deepLinkOf } = await import('../server/native-push.mjs');
+  assert.equal(deepLinkOf('/e/testconf-2099#/people?around=1'), 'caddie://people?around=1');
+  assert.equal(deepLinkOf('/e/testconf-2099#/people'), 'caddie://people');
+  assert.equal(deepLinkOf(''), 'caddie://people');
 });
