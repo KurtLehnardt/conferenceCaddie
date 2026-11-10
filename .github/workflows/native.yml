@@ -17,11 +17,15 @@ on:
   pull_request:
     paths:
       - 'native/**'
+      # The shared tests compile the contract fixtures and follow the contract schemas.
+      - 'contracts/**'
       - '.github/workflows/native.yml'
   push:
     branches: [main]
     paths:
       - 'native/**'
+      # The shared tests compile the contract fixtures and follow the contract schemas.
+      - 'contracts/**'
       - '.github/workflows/native.yml'
   workflow_dispatch:
 
@@ -67,7 +71,7 @@ jobs:
       - name: Set the version code
         run: echo "CADDIE_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
 
-      # On Linux the iOS targets are skipped, so allTests runs the shared tests as Android host tests.
+      # On Linux the iOS targets are skipped, so allTests runs the shared tests on the JVM target.
       - name: Shared tests and debug APK
         run: ./gradlew :shared:allTests :androidApp:assembleDebug
 

@@ -4,9 +4,11 @@
      Release iosArm64 ComposeApp framework (Kotlin 2.4.21, Compose Multiplatform 1.12.2):
      stat and fstat (Skia's file access and ICU's data file), and mach_absolute_time (Skia's DNG
      codec timing). Phase 2a adds lstat (FileTimestamp, the bundle cache's file system calls), and
-     statfs and fstatfs (DiskSpace), which the bundled SQLite calls on the database's file system;
-     E174.1 is the reason that fits a database writing its own files. No user-defaults API is
-     linked. Check again with
+     statfs and fstatfs (DiskSpace), which the bundled SQLite calls on the file system that holds
+     its database while it writes the database's files. E174.1 is the DiskSpace reason for checking
+     disk space in order to write files; it is the one declared because these calls serve only
+     SQLite's own writes, and the app never shows the result or sends it off the device.
+     No user-defaults API is linked. Check again with
      `nm -u ComposeApp.framework/ComposeApp` whenever dependencies change, and fill in
      NSPrivacyCollectedDataTypes when the app starts sending profile data to a backend. -->
 <plist version="1.0">
