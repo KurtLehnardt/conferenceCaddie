@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
@@ -87,9 +88,12 @@ class TalkScreensUiTest {
 
         // Removing the phrase stops it filtering, but the text keeps the words.
         onNodeWithText("After lunch").performClick()
+        waitUntil(timeoutMillis = 20_000) { onAllNodes(hasText("After lunch")).fetchSemanticsNodes().isEmpty() }
         waitFor(text = Strings.Search.count(2, browse = false, includeEvents = false))
 
-        // Open a talk: the sheet shows the speaker's tagline and the related talks.
+        // Open a talk: the sheet shows the speaker's tagline and the related talks. The list is
+        // lazy, so on a short screen the card is brought into view first.
+        onNodeWithTag("search-results").performScrollToNode(hasTestTag("talk-alpha-conf-2099:3"))
         onNodeWithText("Kubernetes scheduling deep dive").performClick()
         waitFor(tag = "talk-sheet")
         waitFor(text = "Maintainer").assertIsDisplayed()
@@ -104,6 +108,7 @@ class TalkScreensUiTest {
         waitFor(tag = "tab-Interested").performClick()
         waitFor(tag = "interested-screen")
         waitFor(text = Strings.Interested.TITLE)
+        onNodeWithTag("interested-screen").performScrollToNode(hasTestTag("talk-alpha-conf-2099:3"))
         waitFor(tag = "talk-alpha-conf-2099:3")
     }
 
@@ -114,7 +119,8 @@ class TalkScreensUiTest {
         waitFor(tag = "talk-alpha-conf-2099:1")
         onNodeWithTag("conference-switcher").performClick()
         waitFor(text = "Beta Conference").performClick()
-        waitFor(tag = "talk-beta-conf-2099:1")
+        waitFor(text = Strings.Search.count(1, browse = true, includeEvents = false))
+        onNodeWithTag("search-results").performScrollToNode(hasTestTag("talk-beta-conf-2099:1"))
         onNodeWithTag("talk-alpha-conf-2099:1").assertDoesNotExist()
     }
 

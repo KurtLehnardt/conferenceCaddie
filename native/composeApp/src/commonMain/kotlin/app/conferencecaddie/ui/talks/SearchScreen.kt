@@ -71,7 +71,7 @@ fun SearchScreen(
             loading = model.loading,
         )
         LazyColumn(
-            Modifier.fillMaxSize(),
+            Modifier.fillMaxSize().testTag("search-results"),
             state = listState,
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
