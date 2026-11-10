@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -59,6 +60,7 @@ fun TopicChip(
     val iconTint = if (on) c.onAccent else c.text2
     Row(
         modifier
+            .minimumInteractiveComponentSize()
             .heightIn(min = Caddie.dimens.minTouch)
             .alpha(if (usable) 1f else 0.45f)
             .caddieClickable(Pill, enabled = usable, onClick = onToggle)

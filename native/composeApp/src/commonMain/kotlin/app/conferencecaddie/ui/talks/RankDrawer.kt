@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +63,7 @@ fun RankDrawer(
         Row(
             Modifier
                 .offset(x = (-14).dp)
+                .minimumInteractiveComponentSize()
                 .heightIn(min = Caddie.dimens.minTouch)
                 .caddieClickable(Pill, role = Role.Button) { open = !open }
                 .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
