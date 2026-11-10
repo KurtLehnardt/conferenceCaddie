@@ -557,6 +557,8 @@ export const HIDDEN_FOR_DELETE = {
   presence_located_at: null,
   ble_token: null,
   ble_token_until: null,
+  presence_nonce: null,
+  ble_master_id: null,
 };
 
 // The documents that connect one person to others: two meets, a push subscription and a nudge

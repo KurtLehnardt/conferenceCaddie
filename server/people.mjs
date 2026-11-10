@@ -53,10 +53,10 @@ import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 import { reportCountsFor, HIDE_AT } from './report.mjs';
-import { PRESENCE_OFF, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds } from './people-shared.mjs';
+import { PRESENCE_OFF, BLE_SESSION_OFF, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds } from './people-shared.mjs';
 
 // Re-exported, so the other server modules and the scripts that import them from here keep working.
-export { PRESENCE_OFF, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds };
+export { PRESENCE_OFF, BLE_SESSION_OFF, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds };
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
@@ -557,8 +557,11 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 // People documents (people key).
 
 const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy', 'presence_cell', 'presence_located_at'];
-// The Bluetooth token of ble.mjs: the owner's own document carries it; it is never read for others.
-const BLE_FIELDS = ['ble_token', 'ble_token_until'];
+// The Bluetooth session of ble.mjs (the legacy token, the derived-token nonce and the id of its
+// master) and the record of whom Bluetooth answers returned (ble_caps). The owner's own document
+// carries them; they are never returned, and only ble.mjs reads them on another person's document,
+// to check a sighted token against the store.
+const BLE_FIELDS = ['ble_token', 'ble_token_until', 'presence_nonce', 'ble_master_id', 'ble_caps'];
 const OWN_FIELDS = ['secret_hash', 'text_hash', 'text_pending', 'sample', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
 const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
@@ -1176,10 +1179,12 @@ const OWN_UPDATE_ATTEMPTS = 2;
 // write, it is read and built again once; so a write that read the profile before a delete hid
 // it can never put presence or a Bluetooth token back on the hidden document: the second read
 // finds no profile. A second conflict answers 409, and a document gone again by the second write
-// answers 403 profile_required. Resolves to { me, ...what build returned }.
-export async function updateOwnProfile(device, slug, build) {
+// answers 403 profile_required. Resolves to { me, ...what build returned }. A caller that has just
+// read the profile with authenticated() may pass it as `current`, which the first attempt then
+// uses instead of reading it again; a conflict still reads it afresh.
+export async function updateOwnProfile(device, slug, build, { current = null } = {}) {
   for (let attempt = 1; ; attempt++) {
-    const me = await authenticated(device, slug);
+    const me = attempt === 1 && current ? current : await authenticated(device, slug);
     const write = await build(me);
     const action = { update: { _id: docId(slug, me.profile_id), if_seq_no: me._seq_no, if_primary_term: me._primary_term } };
     const status = await bulkOne(action, { doc: write.doc });

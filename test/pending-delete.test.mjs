@@ -207,13 +207,17 @@ describe('npm run people:purge (scripts/purge-expired-people.mjs)', () => {
     cluster.put(INDEX.blocks, 'ended', { event_id: EVENT, blocker_id: 'a', blocked_id: 'b', blocked_ref: 'ffffffffffffffff', created_at: PAST, expires_at: PAST });
     cluster.put(INDEX.blocks, 'legacy', { event_id: EVENT, blocker_id: 'c', blocked_id: 'd', blocked_ref: 'ffffffffffffffff', created_at: PAST });
     const lapsed = newDevice();
-    addPerson(cluster, lapsed, { display_name: 'Lapsed', presence_spot_pending: true, presence_until: PAST, ble_token_until: PAST });
+    const caps = [{ ref: '0123456789abcdef', at: Date.now() - 60_000, w: 1 }];
+    addPerson(cluster, lapsed, { display_name: 'Lapsed', presence_spot_pending: true, presence_until: PAST, ble_token_until: PAST, presence_nonce: 'AAECAwQFBgcICQoLDA0ODw', ble_master_id: 'm1', ble_caps: caps });
     const before = seqs();
     const out = await runScript(cluster, 'purge-expired-people.mjs');
     const lapsedDoc = cluster.source(INDEX.people, personId(lapsed.profileId));
     for (const [field, value] of Object.entries(HIDDEN_FOR_DELETE)) {
       if (field.startsWith('presence_') || field.startsWith('ble_')) assert.equal(lapsedDoc[field], value, `${field} is cleared with run-out presence`);
     }
+    assert.equal(lapsedDoc.presence_nonce, null, 'the derived-token nonce is cleared with run-out presence');
+    assert.equal(lapsedDoc.ble_master_id, null, 'and so is the id of its master');
+    assert.deepEqual(lapsedDoc.ble_caps, caps, 'the caps record outlives the presence session');
     assert.match(out, /Finished 1 pending profile deletes\./);
     assertFinished(cluster, pending, ids);
     assert.deepEqual(seqs(), before, 'the visible and the circle-only profiles are untouched');
@@ -273,8 +277,11 @@ describe('npm run people:export (scripts/export-people.mjs)', () => {
     const slug = `export-test-${crypto.randomBytes(4).toString('hex')}`;
     const cluster = useCluster(new FakeES());
     const [visible, circle, pending] = [newDevice(), newDevice(), newDevice()];
-    addPerson(cluster, visible, { event_id: slug, display_name: 'Visible' });
-    addPerson(cluster, circle, { event_id: slug, display_name: 'Circle only', open_to_meet: false });
+    // The derived-token session and the caps record would let the key be rebuilt with the master
+    // secret, or tell whom Bluetooth returned; none of it is exported (docs/contracts/ble-tokens.md).
+    const bluetooth = { presence_nonce: 'AAECAwQFBgcICQoLDA0ODw', ble_master_id: 'm1', ble_caps: [{ ref: '0123456789abcdef', at: Date.now(), w: 1 }] };
+    addPerson(cluster, visible, { event_id: slug, display_name: 'Visible', ...bluetooth });
+    addPerson(cluster, circle, { event_id: slug, display_name: 'Circle only', open_to_meet: false, ...bluetooth });
     addPerson(cluster, pending, { event_id: slug, display_name: 'Pending', ...HIDDEN_FOR_DELETE });
     const dir = path.join(ROOT, 'data', 'exports');
     const file = path.join(dir, `people-${slug}.ndjson`);
@@ -286,7 +293,10 @@ describe('npm run people:export (scripts/export-people.mjs)', () => {
       assert.deepEqual(rows.map((r) => r.display_name).sort(), ['Circle only', 'Visible']);
       for (const row of rows) {
         for (const key of Object.keys(row)) assert.ok(!/^(secret_hash|text_hash|presence_|ble_)/.test(key), `${key} is not exported`);
+        for (const key of ['presence_nonce', 'ble_master_id', 'ble_caps', 'ble_token', 'ble_token_until']) assert.equal(key in row, false, `${key} is not exported`);
       }
+      const excludes = cluster.calls('search:people')[0]?.body?._source?.excludes ?? [];
+      for (const key of ['presence_nonce', 'ble_master_id', 'ble_caps']) assert.ok(excludes.includes(key), `the export names ${key} among its exclusions`);
     } finally {
       fs.rmSync(file, { force: true });
       if (!dirExisted) fs.rmSync(dir, { recursive: true, force: true });

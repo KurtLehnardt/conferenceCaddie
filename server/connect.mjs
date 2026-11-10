@@ -52,7 +52,7 @@ import { refFor } from './device.mjs';
 import { moderate, HELD } from './moderation.mjs';
 import { classifierReport } from './report.mjs';
 import { nudgeAfterPresence } from './nudge.mjs';
-import { mintBleToken, bleView, BLE_OFF } from './ble.mjs';
+import { mintBleSession, BLE_OFF } from './ble.mjs';
 import { peoplePreference, withPreference } from './preference.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
@@ -483,7 +483,7 @@ async function putPresence(req, res) {
   // Guarded by the sequence number of the profile read (updateOwnProfile), so a presence write
   // that read the profile just before a delete hid it cannot bring presence back on the hidden
   // document: the write conflicts, the profile is read again and is no longer there.
-  const { me, presence, position, ble, held, storedSpot, since } = await updateOwnProfile(device, conf.slug, async (me) => {
+  const { me, presence, position, bleAnswer, held, storedSpot, since } = await updateOwnProfile(device, conf.slug, async (me) => {
     if (!me || me.open_to_meet !== true) throw profileRequired();
     if (!(await zonesFor(conf.slug)).has(zone)) throw bad("zone must be one of the conference's zones");
     const now = Date.now();
@@ -501,10 +501,14 @@ async function putPresence(req, res) {
     const held = Boolean(storedSpot) && spotPending;
     const position = positionFields(location, me, now);
     const presence = { presence_zone: zone, presence_spot: storedSpot, presence_spot_pending: held, presence_since: since, presence_until: iso(untilMs), ...position };
-    // Android companion (ble.mjs): ble: true mints a ten-minute Bluetooth token in the same bulk
-    // update as the presence, ble: false clears it, and a write that says nothing leaves it as it was.
-    const ble = body.ble === true ? mintBleToken(now, untilMs) : body.ble === false ? BLE_OFF : {};
-    return { doc: { ...presence, ...ble }, presence, position, ble, held, storedSpot, since };
+    // Bluetooth (ble.mjs): ble: true starts a new session in the same bulk update as the presence
+    // (a legacy ten-minute token, and with the master keyring a fresh nonce whose key goes back in
+    // this response only); ble: false ends it. A write that says nothing leaves a live session as
+    // it was, except that one starting a new presence session clears whatever an ended one left,
+    // because one nonce is one presence session.
+    const session = body.ble === true ? mintBleSession(me.profile_id, now, untilMs) : null;
+    const ble = session ? session.fields : body.ble === false || !isAround(me) ? BLE_OFF : {};
+    return { doc: { ...presence, ...ble }, presence, position, bleAnswer: session?.view ?? {}, held, storedSpot, since };
   });
   if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);
   // A profile save that could not embed its text kept it in the pending fields (people.mjs); the
@@ -516,7 +520,7 @@ async function putPresence(req, res) {
       console.error(`Embedding pending profile text failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
     }
   }
-  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: position.presence_location !== null, ...(body.ble === true ? { ble: bleView(ble) } : {}), ...heldInfo(held ? ['spot'] : []) });
+  sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: position.presence_location !== null, ...bleAnswer, ...heldInfo(held ? ['spot'] : []) });
   // After the answer: the push nudge for strong matches in this zone (nudge.mjs never throws).
   void nudgeAfterPresence({ ...me, ...presence }, conf);
 }

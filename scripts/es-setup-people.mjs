@@ -125,6 +125,10 @@ const connectProperties = {
   presence_cell: { type: 'geo_point' },
   presence_located_at: { type: 'date' },
   // The Android companion's Bluetooth token (server/ble.mjs): resolved by exact value, ten minutes.
+  // The derived-token session (presence_nonce, ble_master_id) and the caps record (ble_caps) are
+  // deliberately not mapped: the index is dynamic: false, so they live in _source only, are never
+  // indexed or searchable, and need no mapping change or setup run. The server reads them with the
+  // document and never queries them.
   ble_token: { type: 'keyword' },
   ble_token_until: { type: 'date' },
   // The text of a profile save that could not be embedded (server/semantic.mjs paused): kept in the
