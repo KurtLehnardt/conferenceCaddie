@@ -6,9 +6,12 @@
 //
 // The stand-in keeps documents per index with a sequence number each, evaluates the queries the
 // server sends (bool, term, terms, ids, exists, range with "now" date math, match_all), and
-// answers _doc, _create, _update, _search, _mget, _count, _bulk, _delete_by_query and
-// _update_by_query. Bulk updates honour if_seq_no/if_primary_term and retry_on_conflict. A people
-// search by retriever (matches, nudges) finds nobody. Every call is logged with a tag (see tagOf),
+// answers _doc, _create, _update, _search (with terms aggregations), _mget, _count, _bulk,
+// _delete_by_query, _update_by_query (no script, or the setup's expires_at backfill script),
+// _mapping and index creation. Writes honour if_seq_no/if_primary_term the way Elasticsearch does:
+// a guarded delete or index of a missing document is a 409, and a Bulk action that combines
+// if_seq_no with retry_on_conflict fails the whole request with 400. A people search by retriever
+// (matches, nudges) finds nobody. Every call is logged with a tag (see tagOf),
 // and a test can make a call fail, run a hook before or after it, or hold calls at a barrier.
 
 import http from 'node:http';
@@ -279,6 +282,15 @@ export class FakeES {
 
   answer(method, index, op, docKey, params, body, rawBody, tag, failure) {
     if (method === 'HEAD') return new Response(null, { status: this.indices.has(index) ? 200 : 404 });
+    if (op === '_mapping' && method === 'PUT') {
+      this.mappings = [...(this.mappings ?? []), { index, properties: body?.properties ?? {} }];
+      return json({ acknowledged: true });
+    }
+    if (op === undefined && method === 'PUT') {
+      if (this.indices.has(index)) return json({ error: { type: 'resource_already_exists_exception' } }, 400);
+      this.docs(index);
+      return json({ acknowledged: true, index });
+    }
     const docs = this.docs(index);
     if ((op === '_doc' || op === '_create') && (method === 'PUT' || method === 'POST')) {
       const existing = docs.get(docKey);
@@ -295,6 +307,7 @@ export class FakeES {
     }
     if (op === '_doc' && method === 'DELETE') {
       const doc = docs.get(docKey);
+      if (!doc && params.has('if_seq_no')) return json({ error: { type: 'version_conflict_engine_exception' } }, 409);
       if (!doc) return json({ result: 'not_found' }, 404);
       if (params.has('if_seq_no') && (doc.seq !== Number(params.get('if_seq_no')) || doc.term !== Number(params.get('if_primary_term')))) {
         return json({ error: { type: 'version_conflict_engine_exception' } }, 409);
@@ -323,7 +336,7 @@ export class FakeES {
       for (const [id] of found) docs.delete(id);
       return json({ deleted: found.length });
     }
-    if (op === '_update_by_query') return json({ updated: 0 });
+    if (op === '_update_by_query') return this.updateByQuery(index, body ?? {});
     throw new Error(`fake Elasticsearch: unexpected ${method} /${index}/${op ?? ''}`);
   }
 
@@ -332,28 +345,66 @@ export class FakeES {
     return [...this.docs(index)].filter(([id, doc]) => matches(doc.source, id, query, now));
   }
 
+  // Terms aggregations ({ terms: { field, size, include } }) over every matching document; any
+  // other aggregation answers no buckets.
+  aggregate(found, aggs) {
+    return Object.fromEntries(Object.entries(aggs).map(([name, spec]) => {
+      if (!spec.terms) return [name, { buckets: [] }];
+      const counts = new Map();
+      for (const [, doc] of found) {
+        for (const v of valuesOf(doc.source, spec.terms.field)) {
+          if (spec.terms.include && !spec.terms.include.includes(v)) continue;
+          counts.set(v, (counts.get(v) ?? 0) + 1);
+        }
+      }
+      const buckets = [...counts].map(([key, doc_count]) => ({ key, doc_count })).sort((a, b) => b.doc_count - a.doc_count);
+      return [name, { buckets: buckets.slice(0, spec.terms.size ?? 10) }];
+    }));
+  }
+
+  // Without a script, every matching document is written again as it is. The one script the stand-in
+  // runs sets a field from params unless the document already has it (the setup's backfill); any
+  // other script (the purge's scrub of declined meets) changes nothing.
+  updateByQuery(index, body) {
+    const found = this.find(index, body.query);
+    this.updates = [...(this.updates ?? []), { index, body }];
+    if (!body.script) {
+      for (const [id] of found) this.patch(index, id, {});
+      return json({ updated: found.length });
+    }
+    const m = /^if \(ctx\._source\.(\w+) == null\) \{ ctx\._source\.\1 = params\.(\w+); \}/.exec(body.script.source ?? '');
+    if (!m) return json({ updated: 0 });
+    let updated = 0;
+    for (const [id, doc] of found) {
+      if (doc.source[m[1]] !== undefined && doc.source[m[1]] !== null) continue;
+      this.patch(index, id, { [m[1]]: body.script.params[m[2]] });
+      updated++;
+    }
+    return json({ updated, noops: found.length - updated });
+  }
+
   search(index, params, body) {
     const empty = { hits: { total: { value: 0 }, hits: [] }, aggregations: Object.fromEntries(Object.keys(body.aggs ?? {}).map((k) => [k, { buckets: [] }])) };
     // Ranked people searches (matches, nudges, members) go through a retriever: nobody is found.
     if (body.retriever) return json(empty);
     let found = this.find(index, body.query);
+    const aggregations = this.aggregate(found, body.aggs ?? {});
     const specs = sortSpecs(body.sort);
-    if (specs.length) {
-      found.sort(([, a], [, b]) => {
-        for (const [field, order] of specs) {
-          const x = a.source[field] ?? '';
-          const y = b.source[field] ?? '';
-          if (x === y) continue;
-          return (x < y ? -1 : 1) * (order === 'desc' ? -1 : 1);
-        }
-        return 0;
-      });
-    }
-    if (body.search_after) {
-      const after = JSON.stringify(body.search_after);
-      const at = found.findIndex(([, d]) => JSON.stringify(specs.map(([f]) => d.source[f] ?? null)) === after);
-      found = at === -1 ? [] : found.slice(at + 1);
-    }
+    // Compares two lists of sort values in the order the sort asks for.
+    const compare = (xs, ys) => {
+      for (let i = 0; i < specs.length; i++) {
+        const x = xs[i] ?? '';
+        const y = ys[i] ?? '';
+        if (x === y) continue;
+        return (x < y ? -1 : 1) * (specs[i][1] === 'desc' ? -1 : 1);
+      }
+      return 0;
+    };
+    const sortValues = (doc) => specs.map(([f]) => doc.source[f] ?? null);
+    if (specs.length) found.sort(([, a], [, b]) => compare(sortValues(a), sortValues(b)));
+    // As in Elasticsearch, a page starts after the given sort values, whether or not the document
+    // that had them still exists.
+    if (body.search_after) found = found.filter(([, d]) => compare(sortValues(d), body.search_after) > 0);
     const from = body.from ?? 0;
     const size = body.size ?? 10;
     const withSeq = params.get('seq_no_primary_term') === 'true';
@@ -364,7 +415,7 @@ export class FakeES {
       ...(withSeq ? { _seq_no: doc.seq, _primary_term: doc.term } : {}),
       ...(specs.length ? { sort: specs.map(([f]) => doc.source[f] ?? null) } : {}),
     }));
-    return json({ ...empty, hits: { total: { value: found.length }, hits } });
+    return json({ aggregations, hits: { total: { value: found.length }, hits } });
   }
 
   bulk(index, raw, tag, failure) {
@@ -373,6 +424,9 @@ export class FakeES {
     for (let i = 0; i < lines.length; i++) {
       const [[type, meta]] = Object.entries(lines[i]);
       ops.push({ type, meta, payload: type === 'delete' ? undefined : lines[++i] });
+    }
+    if (ops.some(({ meta }) => meta.if_seq_no !== undefined && meta.retry_on_conflict !== undefined)) {
+      return json({ error: { type: 'action_request_validation_exception', reason: 'compare and write operations can not be used with retry_on_conflict' } }, 400);
     }
     const forced = typeof failure === 'string' ? /^(item|partial)(\d+)$/.exec(failure) : null;
     const docs = this.docs(index);
@@ -393,7 +447,7 @@ export class FakeES {
         return result(201);
       }
       if (type === 'index') {
-        if (casFails && doc) return result(409);
+        if (casFails) return result(409);
         this.put(index, meta._id, payload);
         return result(doc ? 200 : 201);
       }
@@ -431,14 +485,21 @@ globalThis.fetch = async (input, init = {}) => {
 };
 
 // Waits until the purge that server/people.mjs runs on import has made its last call to the
-// default cluster, so it can never act on a test's cluster.
-export async function bootPurgeDone(lastTag = 'delete_by_query:nudges') {
-  const deadline = Date.now() + 5000;
+// default cluster (its delete of expired blocks), so it can never act on a test's cluster. A
+// server/ from before blocks expired ends with the nudge records instead; that is accepted once
+// the default cluster has been quiet for a second, so these tests can also run against it.
+export async function bootPurgeDone() {
+  const deadline = Date.now() + 10_000;
   let seen = -1;
+  let quietSince = Date.now();
   for (;;) {
-    const done = boot.tags().includes(lastTag);
-    if (done && boot.log.length === seen) return;
-    seen = boot.log.length;
+    const tags = boot.tags();
+    if (boot.log.length !== seen) {
+      seen = boot.log.length;
+      quietSince = Date.now();
+    } else if (tags.includes('delete_by_query:blocks') || (tags.includes('delete_by_query:nudges') && Date.now() - quietSince > 1000)) {
+      return;
+    }
     if (Date.now() > deadline) throw new Error('the import-time purge did not finish');
     await new Promise((resolve) => setTimeout(resolve, 30));
   }

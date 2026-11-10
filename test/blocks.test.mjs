@@ -37,6 +37,16 @@ test('a block carries expires_at, the end of its conference, for the purge', asy
   assert.equal(cluster.source(INDEX.blocks, blockId).expires_at, FUTURE);
 });
 
+test('a block runs at least as long as either profile can still be found', async () => {
+  for (const [who, later] of [['blocker', '2100-01-02T00:00:00.000Z'], ['blocked', '2100-03-04T00:00:00.000Z']]) {
+    const { cluster, blocker, blocked, blockId } = setup();
+    cluster.patch(INDEX.people, personId((who === 'blocker' ? blocker : blocked).profileId), { visible_until: later });
+    const { result } = await quietly(() => block(blocker, refOf(blocked.profileId)));
+    assert.equal(result.status, 200);
+    assert.equal(cluster.source(INDEX.blocks, blockId).expires_at, later, `the ${who}'s later visible_until wins`);
+  }
+});
+
 test("the blocked person's delete keeps the block, which the blocker's list shows without a name and can lift", async () => {
   const { cluster, blocker, blocked, blockId } = setup();
   const ref = refOf(blocked.profileId);

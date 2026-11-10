@@ -16,7 +16,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  FakeES, useCluster, bootPurgeDone, INDEX, EVENT, newDevice, personId, addPerson,
+  FakeES, useCluster, bootPurgeDone, INDEX, EVENT, FUTURE, newDevice, personId, addPerson,
   addConnections, request, quietly, serve, HIDDEN_FOR_DELETE,
 } from './helpers/fake-es.mjs';
 
@@ -62,6 +62,14 @@ function assertKept(cluster, pending, ids) {
   for (const block of ids.ownBlocks) assert.ok(cluster.source(INDEX.blocks, block), 'the re-enabled profile keeps every block it made');
 }
 
+// Nothing that connects the person to others was touched.
+function assertUntouched(cluster, ids) {
+  for (const meet of ids.meets) assert.ok(cluster.source(INDEX.meets, meet), `${meet} is kept`);
+  assert.equal(cluster.ids(INDEX.push).length, 1, 'the push subscription is kept');
+  assert.equal(cluster.ids(INDEX.nudges).length, 1, 'the nudge record is kept');
+  for (const name of ['meets', 'push', 'nudges', 'blocks']) assert.ok(!cluster.tags().includes(`search:${name}`), `no ${name} were looked at`);
+}
+
 // The owner makes the hidden profile visible again (a profile write) right after the purge found it.
 const reEnable = (pending) => (c) => c.patch(INDEX.people, personId(pending.profileId), { open_to_meet: true, shared_talk_ids: [`${EVENT}:talk1`] });
 
@@ -78,16 +86,58 @@ describe('the hourly purge (server/people.mjs)', () => {
     assert.ok(tags.indexOf('bulk:blocks') > docAt, 'the blocks go after the document');
     const del = cluster.calls('delete-doc')[0];
     assert.ok(del.params.has('if_seq_no') && del.params.has('if_primary_term'), 'the document delete is guarded');
+    assert.deepEqual(tags.slice(0, 2), ['search:pending', 'get'], 'a realtime read comes before anything is deleted');
+    assert.deepEqual(cluster.calls('search:pending')[0].body.sort, [{ updated_at: 'asc' }, { profile_id: 'asc' }]);
     assert.deepEqual(lines, ['Finished 1 pending profile deletes.']);
   });
 
-  test('keeps a profile whose owner made it visible again after the purge found it, with its blocks', async () => {
+  test('a profile its owner made visible again after the search is not touched at all', async () => {
     const { cluster, pending, ids } = setup();
     cluster.after('search:pending', 1, reEnable(pending));
     const { lines } = await quietly(() => people.finishPendingDeletes());
     assertKept(cluster, pending, ids);
+    assertUntouched(cluster, ids);
+    assert.ok(!cluster.tags().includes('delete-doc'), 'the document delete was not tried');
+    assert.deepEqual(lines, ['Kept 1 pending profile deletes that changed since they were found.']);
+  });
+
+  test('a profile its owner made visible again after the realtime read is kept, with its blocks', async () => {
+    const { cluster, pending, ids } = setup();
+    cluster.after('get', 1, reEnable(pending));
+    const { lines } = await quietly(() => people.finishPendingDeletes());
+    assertKept(cluster, pending, ids);
     assert.ok(!cluster.tags().includes('search:blocks'), 'no block was looked at');
     assert.deepEqual(lines, ['Kept 1 pending profile deletes that changed since they were found.']);
+  });
+
+  test("a document the owner's own retry deleted in the meantime (a guarded delete answers 409) still loses its blocks", async () => {
+    const { cluster, pending, ids } = setup();
+    cluster.before('delete-doc', 1, (c) => c.docs(INDEX.people).delete(personId(pending.profileId)));
+    const { lines } = await quietly(() => people.finishPendingDeletes());
+    assertFinished(cluster, pending, ids);
+    assert.deepEqual(lines, ['Finished 1 pending profile deletes.']);
+  });
+
+  test('a profile re-created from the same device right after the delete keeps the blocks', async () => {
+    const { cluster, pending, ids } = setup();
+    cluster.after('delete-doc', 1, (c) => addPerson(c, pending, { display_name: 'Back again' }));
+    const { lines } = await quietly(() => people.finishPendingDeletes());
+    assert.equal(cluster.source(INDEX.people, personId(pending.profileId)).display_name, 'Back again');
+    for (const block of ids.ownBlocks) assert.ok(cluster.source(INDEX.blocks, block), 'the blocks are kept');
+    assert.deepEqual(lines, ['Finished 1 pending profile deletes.']);
+  });
+
+  test('pages through more pending deletes than fit in one search', async () => {
+    const cluster = useCluster(new FakeES());
+    const devices = Array.from({ length: 101 }, () => newDevice());
+    devices.forEach((d, i) => addPerson(cluster, d, { ...HIDDEN_FOR_DELETE, updated_at: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString() }));
+    const { lines } = await quietly(() => people.finishPendingDeletes());
+    assert.equal(cluster.ids(INDEX.people).length, 0, 'every pending delete is finished');
+    const searches = cluster.calls('search:pending');
+    assert.equal(searches.length, 2);
+    assert.equal(searches[0].body.search_after, undefined);
+    assert.ok(Array.isArray(searches[1].body.search_after), 'the second page starts after the first');
+    assert.deepEqual(lines, ['Finished 101 pending profile deletes.']);
   });
 
   test('a failure leaves the pending document for the next run, which finishes it', async () => {
@@ -137,12 +187,12 @@ describe('a pending delete is treated as gone', () => {
 });
 
 // Runs a CLI script against the cluster with dummy env values only, and returns its stdout.
-async function runScript(cluster, script, args = []) {
+async function runScript(cluster, script, args = [], env = { ES_PEOPLE_API_KEY: 'test-people-key' }) {
   const server = await serve(cluster);
   try {
     const { stdout } = await execFileP(process.execPath, [path.join(ROOT, 'scripts', script), ...args], {
       cwd: ROOT,
-      env: { ES_URL: server.url, ES_PEOPLE_API_KEY: 'test-people-key' },
+      env: { ES_URL: server.url, ...env },
       timeout: 30_000,
     });
     return stdout;
@@ -156,8 +206,14 @@ describe('npm run people:purge (scripts/purge-expired-people.mjs)', () => {
     const { cluster, pending, ids, seqs } = setup();
     cluster.put(INDEX.blocks, 'ended', { event_id: EVENT, blocker_id: 'a', blocked_id: 'b', blocked_ref: 'ffffffffffffffff', created_at: PAST, expires_at: PAST });
     cluster.put(INDEX.blocks, 'legacy', { event_id: EVENT, blocker_id: 'c', blocked_id: 'd', blocked_ref: 'ffffffffffffffff', created_at: PAST });
+    const lapsed = newDevice();
+    addPerson(cluster, lapsed, { display_name: 'Lapsed', presence_spot_pending: true, presence_until: PAST, ble_token_until: PAST });
     const before = seqs();
     const out = await runScript(cluster, 'purge-expired-people.mjs');
+    const lapsedDoc = cluster.source(INDEX.people, personId(lapsed.profileId));
+    for (const [field, value] of Object.entries(HIDDEN_FOR_DELETE)) {
+      if (field.startsWith('presence_') || field.startsWith('ble_')) assert.equal(lapsedDoc[field], value, `${field} is cleared with run-out presence`);
+    }
     assert.match(out, /Finished 1 pending profile deletes\./);
     assertFinished(cluster, pending, ids);
     assert.deepEqual(seqs(), before, 'the visible and the circle-only profiles are untouched');
@@ -167,12 +223,48 @@ describe('npm run people:purge (scripts/purge-expired-people.mjs)', () => {
     assert.ok(del.params.has('if_seq_no') && del.params.has('if_primary_term'), 'the document delete is guarded');
   });
 
-  test('keeps a profile whose owner made it visible again after the script found it', async () => {
+  test('does not touch a profile whose owner made it visible again after the script found it', async () => {
     const { cluster, pending, ids } = setup();
     cluster.after('search:pending', 1, reEnable(pending));
     const out = await runScript(cluster, 'purge-expired-people.mjs');
     assert.match(out, /kept 1 that changed/);
     assertKept(cluster, pending, ids);
+    for (const meet of ids.meets) assert.ok(cluster.source(INDEX.meets, meet), `${meet} is kept`);
+    assert.equal(cluster.ids(INDEX.push).length, 1, 'the push subscription is kept');
+    assert.equal(cluster.ids(INDEX.nudges).length, 1, 'the nudge record is kept');
+  });
+
+  test("still deletes the blocks of a document the owner's own retry deleted in the meantime", async () => {
+    const { cluster, pending, ids } = setup();
+    cluster.before('delete-doc', 1, (c) => c.docs(INDEX.people).delete(personId(pending.profileId)));
+    const out = await runScript(cluster, 'purge-expired-people.mjs');
+    assert.match(out, /Finished 1 pending profile deletes\./);
+    assertFinished(cluster, pending, ids);
+  });
+});
+
+describe('npm run people:setup (scripts/es-setup-people.mjs) on an existing blocks index', () => {
+  test('maps expires_at, indexes it where blocks carry it, and gives older blocks the end of their conference', async () => {
+    const cluster = useCluster(new FakeES());
+    const block = (event, extra = {}) => ({ event_id: event, blocker_id: 'a', blocked_id: 'b', blocked_ref: 'ffffffffffffffff', created_at: PAST, ...extra });
+    cluster.put(INDEX.blocks, 'old', block(EVENT));
+    cluster.put(INDEX.blocks, 'new', block(EVENT, { expires_at: '2100-01-01T00:00:00.000Z' }));
+    cluster.put(INDEX.blocks, 'unknown', block('no-such-conference'));
+    cluster.put(INDEX.meets, 'meet', { event_id: EVENT, meet_id: 'meet' });
+    addPerson(cluster, newDevice());
+    const args = ['caddie-people', '--alias', '', '--lexical-only'];
+    const env = { ES_PEOPLE_API_KEY: '', ELASTISEARCH_API_KEY: 'test-admin-key' };
+    const out = await runScript(cluster, 'es-setup-people.mjs', args, env);
+    assert.ok(cluster.mappings.some((m) => m.index === INDEX.blocks && m.properties.expires_at?.type === 'date'), 'expires_at is mapped');
+    const updates = cluster.updates.filter((u) => u.index === INDEX.blocks);
+    assert.equal(updates[0].body.script, undefined, 'the first update re-indexes blocks as they are');
+    assert.equal(cluster.source(INDEX.blocks, 'old').expires_at, FUTURE, 'an older block gets the end of its conference');
+    assert.equal(cluster.source(INDEX.blocks, 'new').expires_at, '2100-01-01T00:00:00.000Z', 'a block that has expires_at keeps it');
+    assert.equal(cluster.source(INDEX.blocks, 'unknown').expires_at, undefined, 'a block of an unknown conference is left without');
+    assert.match(out, /Left 1 blocks of no-such-conference without expires_at/);
+
+    const again = await runScript(cluster, 'es-setup-people.mjs', args, env);
+    assert.doesNotMatch(again, /Gave \d+ blocks/, 'a second run has nothing to backfill');
   });
 });
 

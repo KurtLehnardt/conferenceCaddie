@@ -70,6 +70,16 @@ for (const [route, { send, field }] of Object.entries(ROUTES)) {
       assert.notEqual(cluster.source(INDEX.people, id)[field], old, `${field} was written`);
     });
 
+    test('a write whose document is gone by the second attempt answers profile_required', async () => {
+      const { device, cluster, id } = setup();
+      cluster.after('get', 1, (c) => c.patch(INDEX.people, id, { spot_hidden: false }));
+      cluster.after('get', 2, (c) => c.docs(INDEX.people).delete(id));
+      const { result } = await quietly(() => send(device));
+      assert.equal(result.status, 403);
+      assert.deepEqual(result.body, { error: 'profile_required' });
+      assert.deepEqual(cluster.tags(), ['get', 'update', 'get', 'update']);
+    });
+
     test('a write that conflicts twice answers 409', async () => {
       const { device, cluster, id } = setup();
       cluster.after('get', 1, (c) => c.patch(INDEX.people, id, { spot_hidden: false }));
@@ -80,6 +90,24 @@ for (const [route, { send, field }] of Object.entries(ROUTES)) {
     });
   });
 }
+
+describe('DELETE /api/presence', () => {
+  const clear = (device) => request(handleConnectApi, 'DELETE', `/api/presence?event=${EVENT}`, device);
+
+  test('clears presence with a partial update that Elasticsearch retries on a conflict', async () => {
+    const { device, cluster, id } = setup();
+    cluster.conflict('update', 1);
+    const { result } = await quietly(() => clear(device));
+    assert.equal(result.status, 200);
+    const action = updateAction(cluster.calls('update')[0]);
+    assert.equal(action.retry_on_conflict, 3);
+    assert.equal(action.if_seq_no, undefined, 'unguarded: it only clears');
+    const p = cluster.source(INDEX.people, id);
+    for (const [key, value] of Object.entries(HIDDEN_FOR_DELETE)) {
+      if (key.startsWith('presence_') || key.startsWith('ble_')) assert.deepEqual(p[key], value, `${key} is cleared`);
+    }
+  });
+});
 
 describe('meets and a person who is not visible conference-wide', () => {
   // The requester M is visible and around in the Hallway. O shares a talk but is not visible
