@@ -18,8 +18,9 @@
 // Every step is idempotent, so the command can be re-run after a release that adds fields:
 // - A people index that already exists is kept, and only the fields that Find & connect added
 //   (ref, the presence fields and, from the GPS bands release, presence_location and
-//   presence_accuracy) are PUT to its mapping. That is additive and never touches the
-//   semantic_text fields, so nothing is re-embedded. --recreate deletes and recreates it instead.
+//   presence_accuracy; later the unindexed pending_* text fields) are PUT to its mapping. That is
+//   additive and never touches the semantic_text fields, so nothing is re-embedded. --recreate
+//   deletes and recreates it instead.
 // - The blocks index (caddie-people-blocks-v1 behind caddie-people-blocks) and the meets index
 //   (caddie-people-meets-v1 behind caddie-people-meets) are created when missing. With a custom
 //   people index name the two take the same suffix after "caddie-people" (the default
@@ -105,6 +106,12 @@ const connectProperties = {
   // The Android companion's Bluetooth token (server/ble.mjs): resolved by exact value, ten minutes.
   ble_token: { type: 'keyword' },
   ble_token_until: { type: 'date' },
+  // The text of a profile save that could not be embedded (server/semantic.mjs paused): kept in the
+  // source only, never indexed, never copied to a semantic field, until the owner's next write
+  // embeds it and drops these.
+  pending_about: { type: 'text', index: false },
+  pending_interests: { type: 'text', index: false },
+  pending_expertise: { type: 'text', index: false },
 };
 
 const properties = {

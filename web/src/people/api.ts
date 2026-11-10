@@ -110,7 +110,9 @@ export interface ProfileBody {
 }
 
 export function putProfile(body: ProfileBody) {
-  return call<{ ok: boolean; open_to_meet: boolean; shared_talk_ids: string[]; hidden_for_owner?: boolean }>('/api/people/profile', {
+  // degraded is present when the server could not embed the text and saved the profile without it
+  // for now (sync.ts sends it once more a little later).
+  return call<{ ok: boolean; open_to_meet: boolean; shared_talk_ids: string[]; hidden_for_owner?: boolean; degraded?: { semantic: boolean } }>('/api/people/profile', {
     method: 'PUT',
     body: JSON.stringify(body),
     device: true,

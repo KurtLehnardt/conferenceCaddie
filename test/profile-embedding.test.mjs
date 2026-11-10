@@ -7,7 +7,11 @@
 //   trial limit answered with), a status_exception or inference_exception, or a reason naming
 //   inference;
 // - still answers 409 for a version conflict, and 502 for a mapping error or a failed Bulk request
-//   that is not an inference failure, without pausing anything or dropping the text.
+//   that is not an inference failure, without pausing anything or dropping the text;
+// - keeps the text of a degraded save in the unindexed pending_* fields, and embeds it on the
+//   owner's next write: a profile save (full reindex with the request's text) or a presence write
+//   (reembedPending), once semantic matching is available again; until then, and when embedding
+//   fails again, the pending text stays and the presence write still succeeds.
 //
 // A semantic pause lasts a minute and lives in the module, so each test moves the clock past it.
 
@@ -16,7 +20,8 @@ import assert from 'node:assert/strict';
 import { fake, EVENT, newDevice, request, profileBody, esError, json, advanceClock } from './lib/fake-es.mjs';
 
 const { SEMANTIC_PAUSE_MS } = await import('../server/semantic.mjs');
-const { handlePeopleApi } = await import('../server/people.mjs');
+const { handlePeopleApi, textHash } = await import('../server/people.mjs');
+const { handleConnectApi } = await import('../server/connect.mjs');
 
 async function quietly(fn) {
   const lines = [];
@@ -104,4 +109,81 @@ describe('PUT /api/people/profile when embedding fails', () => {
       assert.equal(docOf(d).expertise, TEXT.expertise);
     });
   }
+});
+
+const presence = (d) => request(handleConnectApi, 'PUT', '/api/presence', d, { event: EVENT, zone: 'Hall A', spot: '' });
+// Lets the push nudge that a presence write starts in the background finish.
+const settle = () => new Promise((r) => setTimeout(r, 30));
+const PENDING = ['pending_about', 'pending_interests', 'pending_expertise', 'text_pending'];
+
+// A profile saved while a 429 item made it degraded; semantic matching is paused afterwards.
+async function degradedProfile() {
+  advanceClock(SEMANTIC_PAUSE_MS + 1000);
+  fake.reset();
+  const d = newDevice();
+  failTextWriteOnce({ status: 429 });
+  const { result } = await quietly(() => put(d, TEXT));
+  assert.deepEqual(result.body.degraded, { semantic: true });
+  return d;
+}
+
+describe('the text of a degraded save', () => {
+  test('is kept unindexed in the pending fields', async () => {
+    const d = await degradedProfile();
+    const doc = docOf(d);
+    assert.deepEqual([doc.about, doc.interests, doc.expertise], [undefined, undefined, undefined]);
+    assert.deepEqual([doc.pending_about, doc.pending_interests, doc.pending_expertise], [TEXT.about, TEXT.interests, TEXT.expertise]);
+    assert.equal(doc.text_hash, null);
+  });
+
+  test("is embedded by the owner's next profile save, and the pending fields go", async () => {
+    const d = await degradedProfile();
+    advanceClock(SEMANTIC_PAUSE_MS + 1000);
+    const again = await put(d, TEXT);
+    assert.equal(again.status, 200);
+    assert.equal(again.body.degraded, undefined);
+    const doc = docOf(d);
+    assert.equal(doc.expertise, TEXT.expertise);
+    assert.equal(doc.text_hash, textHash(TEXT));
+    for (const f of PENDING) assert.equal(doc[f], undefined, `${f} is gone`);
+  });
+
+  test("is embedded by the owner's next presence write once semantic is back, presence kept", async () => {
+    const d = await degradedProfile();
+    advanceClock(SEMANTIC_PAUSE_MS + 1000);
+    const p = await presence(d);
+    await settle();
+    assert.equal(p.status, 200);
+    const doc = docOf(d);
+    assert.deepEqual([doc.about, doc.interests, doc.expertise], [TEXT.about, TEXT.interests, TEXT.expertise]);
+    assert.equal(doc.text_hash, textHash(TEXT));
+    for (const f of PENDING) assert.equal(doc[f], undefined, `${f} is gone`);
+    assert.equal(doc.presence_zone, 'Hall A', 'the presence written just before is kept');
+    assert.equal(doc.open_to_meet, true);
+  });
+
+  test('stays pending while semantic is paused; the presence write succeeds', async () => {
+    const d = await degradedProfile();
+    const p = await presence(d);
+    await settle();
+    assert.equal(p.status, 200);
+    const doc = docOf(d);
+    assert.equal(doc.pending_expertise, TEXT.expertise);
+    assert.equal(doc.expertise, undefined);
+    assert.equal(doc.presence_zone, 'Hall A');
+  });
+
+  test('stays pending when embedding fails again on the presence write', async () => {
+    const d = await degradedProfile();
+    advanceClock(SEMANTIC_PAUSE_MS + 1000);
+    failTextWriteOnce({ status: 400, error: { type: 'inference_exception', reason: 'x' } });
+    const { result } = await quietly(() => presence(d));
+    await settle();
+    assert.equal(result.status, 200);
+    const doc = docOf(d);
+    assert.equal(doc.pending_expertise, TEXT.expertise);
+    assert.equal(doc.expertise, undefined);
+    assert.equal(doc.text_pending, true);
+    assert.equal(doc.presence_zone, 'Hall A');
+  });
 });

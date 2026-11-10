@@ -571,7 +571,7 @@ export const textHash = (p) => crypto.createHash('sha256').update(JSON.stringify
 const PRESENCE_FIELDS = ['presence_zone', 'presence_spot', 'presence_spot_pending', 'presence_since', 'presence_until', 'presence_location', 'presence_accuracy'];
 // The Bluetooth token of ble.mjs: the owner's own document carries it; it is never read for others.
 const BLE_FIELDS = ['ble_token', 'ble_token_until'];
-const OWN_FIELDS = ['secret_hash', 'text_hash', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
+const OWN_FIELDS = ['secret_hash', 'text_hash', 'text_pending', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'learn_topics', 'speak_topics', 'interests', 'expertise', 'display_name', 'hidden', 'spot_hidden', ...PRESENCE_FIELDS, ...BLE_FIELDS];
 // What one participant of a meet, or a blocked person, may learn about the other.
 const OTHER_FIELDS = ['profile_id', 'display_name', 'about', 'open_to_meet', 'shared_talk_ids', 'visible_until', 'sample', 'hidden', ...PRESENCE_FIELDS];
 
@@ -1067,16 +1067,20 @@ function embeddingFailed(item) {
 
 // Writes a profile document. Indexing about/interests/expertise asks Elasticsearch to embed them
 // (semantic_text copy_to), so while the inference endpoint is unavailable (semantic.mjs) the same
-// document is written without those three fields and with text_hash null, which makes the next
-// save a full reindex that embeds them once the endpoint is back. The person stays visible and
-// can share meanwhile; only their text is missing until then. Only an embedding failure
-// (embeddingFailed, or a request that failed with isInferenceFailure) pauses and writes without
-// text; any other failure is returned or thrown as it is.
+// document is written without those three fields, with text_hash null and text_pending true, and
+// with the text kept in pending_about, pending_interests and pending_expertise, which are mapped
+// unindexed and never copied anywhere, so nothing embeds them. The person stays visible and can
+// share meanwhile; only their text is missing from matching until the owner's next write: a
+// profile save is a full reindex (text_hash null never equals a hash), and a presence write calls
+// reembedPending. Either embeds the real text and drops the pending fields once the endpoint is
+// back. Only an embedding failure (embeddingFailed, or a request that failed with
+// isInferenceFailure) pauses and writes without text; any other failure is returned or thrown as
+// it is.
 async function writeProfileDoc(action, doc) {
   const hasText = 'about' in doc;
   const withoutText = () => {
     const { about, interests, expertise, ...rest } = doc;
-    return { ...rest, text_hash: null, text_pending: true };
+    return { ...rest, text_hash: null, text_pending: true, pending_about: about, pending_interests: interests, pending_expertise: expertise };
   };
   if (!hasText) return { status: await bulkOne(action, doc), degraded: false };
   if (!semanticAvailable()) return { status: await bulkOne(action, withoutText()), degraded: true };
@@ -1091,6 +1095,30 @@ async function writeProfileDoc(action, doc) {
   }
   pauseSemantic(failure);
   return { status: await bulkOne(action, withoutText()), degraded: true };
+}
+
+// Indexes the owner's document again with the text a degraded write left in the pending fields,
+// once semantic matching is available, so the text is embedded and the pending fields go. Runs on
+// the owner's presence writes (connect.mjs); a profile save needs no call, since its full reindex
+// carries the text from the request. Guarded by the sequence number it read, so a write that
+// lands in between wins (409, ignored). Returns true when the text was embedded; throws an
+// UpstreamError when the write failed for another reason. A document whose text was dropped
+// before the pending fields existed has none to embed and keeps text_hash null for the next save.
+export async function reembedPending(eventId, profileId) {
+  if (!semanticAvailable()) return false;
+  const id = docId(eventId, profileId);
+  const { status, json } = await people('GET', `${idx(PEOPLE_INDEX)}/_doc/${encodeURIComponent(id)}`, undefined, { okStatuses: [404] });
+  if (status === 404 || !json.found) return false;
+  // The semantic fields are filled by copy_to and are not part of a document's source; they are
+  // left out here in case a cluster returns them.
+  const { pending_about, pending_interests, pending_expertise, text_pending, about_semantic, interests_semantic, expertise_semantic, _inference_fields, ...rest } = json._source ?? {};
+  if (text_pending !== true || [pending_about, pending_interests, pending_expertise].every((v) => typeof v !== 'string')) return false;
+  const text = { about: pending_about ?? '', interests: pending_interests ?? '', expertise: pending_expertise ?? '' };
+  const guard = { _id: id, if_seq_no: json._seq_no, if_primary_term: json._primary_term };
+  const written = await writeProfileDoc({ index: guard }, { ...rest, ...text, text_hash: textHash(text) });
+  if (written.status === 409) return false;
+  if (written.status < 200 || written.status > 299) throw new UpstreamError(`bulk item status ${written.status}`);
+  return !written.degraded;
 }
 
 async function putProfile(req, res) {

@@ -53,7 +53,7 @@ import {
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
   conferenceFor, dayBounds, topicLabels, zonesFor, authenticated, bulkOne, isAround, PRESENCE_OFF,
   peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch, deleteWhere,
-  locationOf, distanceM, bearingDeg,
+  locationOf, distanceM, bearingDeg, reembedPending,
 } from './people.mjs';
 
 const PRESENCE_MS = 60 * 60_000;
@@ -453,6 +453,15 @@ async function putPresence(req, res) {
   const status = await bulkOne({ update: { _id: docId(conf.slug, me.profile_id) } }, { doc: { ...presence, ...ble } });
   if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
   if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);
+  // A profile save that could not embed its text kept it in the pending fields (people.mjs); the
+  // owner's next presence write embeds it once that works again. It never fails the presence.
+  if (me.text_pending === true) {
+    try {
+      await reembedPending(conf.slug, me.profile_id);
+    } catch (err) {
+      console.error(`Embedding pending profile text failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
+    }
+  }
   sendJson(res, 200, { ok: true, zone, spot: storedSpot, spot_hidden: me.spot_hidden === true, until: mode, presence_since: since, presence_until: presence.presence_until, located: location.presence_location !== null, ...(body.ble === true ? { ble: bleView(ble) } : {}), ...heldInfo(held ? ['spot'] : []) });
   // After the answer: the push nudge for strong matches in this zone (nudge.mjs never throws).
   void nudgeAfterPresence({ ...me, ...presence }, conf);
