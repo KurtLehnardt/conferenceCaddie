@@ -241,8 +241,13 @@ Mac, so the iOS artifacts are covered, and review the diff:
 ```sh
 ./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
-  :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64
+  :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
+  :composeApp:iosArm64ResolveResourcesFromDependencies \
+  :composeApp:iosSimulatorArm64ResolveResourcesFromDependencies
 ```
+
+Then build the iOS app once with `xcodebuild` (see above), since Xcode's build phase resolves a few
+more artifacts; if it reports a missing checksum, add the task it names to the command.
 
 Some artifacts differ by operating system (AAPT2 for Linux and macOS), so the file also lists the
 Linux variants that CI needs; when a Linux CI run fails verification, add the entry it names.
