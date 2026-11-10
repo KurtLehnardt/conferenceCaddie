@@ -109,6 +109,7 @@ const echoMismatches = [];
 // from the stored profile), and the writes whose stored shared talks differed from the request's.
 let storedChecked = 0;
 const storedMismatches = [];
+const storedInconclusive = [];
 // Requests that answered 5xx or failed on the first attempt and were retried.
 let retried = 0;
 
@@ -116,6 +117,8 @@ const MAX_RATE_WAITS = 8;
 
 async function api(method, path, body, { device, label = '', origin } = {}) {
   let lastError;
+  let result;
+  let readBackJob = null;
   let rateWaits = 0;
   const url = new URL(path, BASE_URL);
   const event = body?.event ?? url.searchParams.get('event');
@@ -168,12 +171,13 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
           if (JSON.stringify(echoed) !== JSON.stringify(requested)) echoMismatches.push(label || 'no label');
           const before = sharing.get(device).get(event) ?? [];
           sharing.get(device).set(event, requested);
-          await readBackShared(device, event, requested, before, label || 'no label');
+          readBackJob = { device, event, requested, before, label: label || 'no label' };
         }
         if (method === 'DELETE') sharing.get(device).delete(event);
       }
       responses.push({ path, label, status: res.status, text, json, request: body, sharedTalks });
-      return { status: res.status, json, headers: res.headers };
+      result = { status: res.status, json, headers: res.headers };
+      break;
     } catch (err) {
       lastError = err;
       if (attempt === 0) {
@@ -182,7 +186,10 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       }
     }
   }
-  throw new Error(`${method} ${path} failed: ${lastError?.message ?? 'unknown error'}`);
+  if (!result) throw new Error(`${method} ${path} failed: ${lastError?.message ?? 'unknown error'}`);
+  // The read-back runs outside the retry loop above, so a failure in it can never repeat the write.
+  if (readBackJob) await readBackShared(readBackJob.device, readBackJob.event, readBackJob.requested, readBackJob.before, readBackJob.label);
+  return result;
 }
 
 // The server echoes the list it parsed, which says nothing about what it stored. So read the stored
@@ -197,10 +204,15 @@ async function readBackShared(device, event, requested, before, label) {
     try {
       const r = await api('POST', '/api/circles/members', { event, talk_id: talkId }, { device, label: `${label}-readback` });
       storedChecked++;
-      const held = r.status === 200;
-      if (held !== shouldHold || (!held && !(r.status === 403 && r.json.error === 'share_required'))) storedMismatches.push(`${label} (${talkId} ${shouldHold ? 'should be stored' : 'should not be stored'}, status ${r.status})`);
+      if (r.status === 200) {
+        if (!shouldHold) storedMismatches.push(`${label} (${talkId} should not be stored, status 200)`);
+      } else if (r.status === 403 && r.json.error === 'share_required') {
+        if (shouldHold) storedMismatches.push(`${label} (${talkId} should be stored, answered share_required)`);
+      } else {
+        storedInconclusive.push(`${label} (status ${r.status})`);
+      }
     } catch (err) {
-      storedMismatches.push(`${label} (read-back failed: ${err.message})`);
+      storedInconclusive.push(`${label} (${err.message})`);
     }
   }
 }
@@ -1745,6 +1757,7 @@ await check('inst1: the manifest makes the app installable and the page links it
   const l0Problems = [
     ...(echoMismatches.length ? [`different echo in ${[...new Set(echoMismatches)].slice(0, 4).join(', ')}`] : []),
     ...(storedMismatches.length ? [`stored differently: ${[...new Set(storedMismatches)].slice(0, 4).join('; ')}`] : []),
+    ...(storedInconclusive.length ? [`read-back inconclusive: ${[...new Set(storedInconclusive)].slice(0, 4).join('; ')}`] : []),
     ...(echoChecked > 0 && storedChecked === 0 ? ['no stored profile was read back'] : []),
   ];
   report(l0Problems.length === 0, 'l0: every accepted profile write echoes and stores the shared talks it sent', l0Problems.length ? l0Problems.join('; ') : `${echoChecked} writes checked, ${storedChecked} talks read back`);

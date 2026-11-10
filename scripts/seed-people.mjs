@@ -52,7 +52,7 @@ const BATCH = 10;
 const LINKEDIN_RE = /^https:\/\/(www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]{3,100}\/?$/;
 
 if (!ADMIN_KEY) {
-  console.error('Set ELASTISEARCH_API_KEY (the admin key). Removing the old samples deletes by query with a refresh, which ES_PEOPLE_API_KEY cannot do.');
+  console.error('Set ELASTISEARCH_API_KEY (the admin key). Seeding is an operator-only task and the people key is not accepted for it.');
   process.exit(1);
 }
 

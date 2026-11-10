@@ -9,7 +9,13 @@
 // - a reload refuses to run without ELASTISEARCH_API_KEY, even when the people key is set, and
 //   names only the variables in its message;
 // - the new rules are written before any old rule is deleted, and the index is never empty;
-// - an empty wordlist, a failed write and a refused rule keep the old rules and exit non-zero;
+// - an empty wordlist, a failed write, a refused rule and a short or missing items list keep the old
+//   rules and exit non-zero, and an empty index says so loudly;
+// - a delete item that answers 409, 429 or 500, or has no delete result, exits 2 with the new rules live;
+// - more than 500 stale rules are deleted in batches, and the round cap stops a run that cannot finish;
+// - --test works with only the people key;
+// - seed-people.mjs and moderation.mjs --unhide and --purge refuse to start with only the people key
+//   and make no request;
 // - the rule ids are stable, so a second reload leaves the same ids and removes nothing.
 
 import { test, describe } from 'node:test';
@@ -40,10 +46,13 @@ globalThis.fetch = async (url, init = {}) => {
   const entry = { method, path: u.pathname, search: u.search, auth: init.headers?.Authorization === 'ApiKey ${ADMIN}' ? 'admin' : 'other', before: [...st.docs] };
   st.log.push(entry);
   if (method === 'HEAD') return reply(200, {});
+  if (u.pathname.endsWith('/_count')) return reply(200, { count: st.docs.length });
   if (u.pathname.endsWith('/_bulk')) {
     const lines = init.body.trim().split('\\n').map((l) => JSON.parse(l));
     if (st.failWrite && lines[0].index) return reply(503, { error: { type: 'unavailable' } });
     const items = [];
+    if (st.shortItems && lines[0].index) return reply(200, { errors: false, items: [{ index: { _id: lines[0].index._id, status: 200 } }] });
+    if (st.noItems && lines[0].index) return reply(200, { errors: false });
     for (let i = 0; i < lines.length; ) {
       if (lines[i].index) {
         const id = lines[i].index._id;
@@ -52,6 +61,8 @@ globalThis.fetch = async (url, init = {}) => {
         i += 2;
       } else {
         const id = lines[i].delete._id;
+        if (st.deleteStatus) { items.push({ delete: { _id: id, status: st.deleteStatus } }); i += 1; continue; }
+        if (st.noDeleteResult) { items.push({}); i += 1; continue; }
         st.docs = st.docs.filter((d) => d !== id);
         items.push({ delete: { _id: id, status: 200 } });
         i += 1;
@@ -62,6 +73,7 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (u.pathname.endsWith('/_search')) {
     const body = JSON.parse(init.body);
+    if (body.query.percolate) return reply(200, { hits: { hits: [] } });
     const keep = new Set(body.query.bool.must_not[0].ids.values);
     const hits = st.docs.filter((d) => !keep.has(d)).slice(0, body.size).map((_id) => ({ _id }));
     return reply(200, { hits: { hits } });
@@ -70,7 +82,7 @@ globalThis.fetch = async (url, init = {}) => {
 };
 `;
 
-function reload({ words, docs = [], env = {}, state = {} }) {
+function reload({ words, docs = [], env = {}, state = {}, argv }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caddie-rules-'));
   const stateFile = path.join(dir, 'state.json');
   const wordsFile = path.join(dir, 'words.json');
@@ -85,7 +97,8 @@ function reload({ words, docs = [], env = {}, state = {} }) {
     MODERATION_WORDS_FILE: wordsFile,
     ...env,
   };
-  const r = spawnSync(process.execPath, ['--import', preload, SCRIPT, '--reload-rules'], { env: childEnv, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['--import', preload, SCRIPT, ...(argv ?? ['--reload-rules'])], { env: childEnv, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(r.signal, null, 'the child finished on its own');
   const after = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   fs.rmSync(dir, { recursive: true, force: true });
   return { code: r.status, out: r.stdout, err: r.stderr, ...after };
@@ -153,4 +166,90 @@ describe('moderation-rules --reload-rules', () => {
     assert.equal(r.code, 2);
     assert.ok(r.docs.includes('old-1'));
   });
+
+  test('a missing or short items list keeps the old rules and exits 2', () => {
+    for (const state of [{ shortItems: true }, { noItems: true }]) {
+      const r = reload({ words: WORDS, docs: ['old-1'], env: adminEnv, state });
+      assert.equal(r.code, 2, JSON.stringify(state));
+      assert.ok(r.docs.includes('old-1'));
+      assert.ok(!r.log.some((c) => c.path.endsWith('/_search')), 'nothing was searched for deletion');
+    }
+  });
+
+  test('a failed write into an empty index says that rule moderation is off', () => {
+    const r = reload({ words: WORDS, env: adminEnv, state: { failWrite: true } });
+    assert.equal(r.code, 2);
+    assert.match(r.err, /WARNING/);
+  });
+
+  for (const status of [409, 429, 500]) {
+    test(`a delete item answering ${status} exits 2 and the new rules stay live`, () => {
+      const r = reload({ words: WORDS, docs: ['old-1'], env: adminEnv, state: { deleteStatus: status } });
+      assert.equal(r.code, 2);
+      assert.match(r.err, /new rules are live/);
+      assert.equal(r.docs.length, WORDS.length + 1);
+    });
+  }
+
+  test('a delete item without a delete result counts as a failure', () => {
+    const r = reload({ words: WORDS, docs: ['old-1'], env: adminEnv, state: { noDeleteResult: true } });
+    assert.equal(r.code, 2);
+  });
+
+  test('more than 500 stale rules are removed in several batches', () => {
+    const stale = Array.from({ length: 1203 }, (_, i) => `old-${i}`);
+    const r = reload({ words: WORDS, docs: stale, env: adminEnv });
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.docs.length, WORDS.length);
+    assert.match(r.out, /removed 1203 others/);
+    assert.equal(r.log.filter((c) => c.path.endsWith('/_bulk')).length, 1 + 3);
+  });
+
+  test('the round cap stops a run that cannot finish and says the new rules are live', () => {
+    const stale = Array.from({ length: 500 * 20 + 1 }, (_, i) => `old-${i}`);
+    const r = reload({ words: WORDS, docs: stale, env: adminEnv });
+    assert.equal(r.code, 2);
+    assert.match(r.err, /Too many old rules/);
+    assert.ok(WORDS.length <= r.docs.length);
+  });
+
+  test('--test works with only the people key', () => {
+    const r = reload({ words: WORDS, env: { ES_PEOPLE_API_KEY: PEOPLE }, argv: ['--test', 'hello'] });
+    assert.notEqual(r.code, 1, r.err);
+    assert.ok(r.log.length > 0 && r.log.every((c) => c.auth === 'other'));
+  });
+
+  test('a words file override is named in the summary', () => {
+    const r = reload({ words: WORDS, env: adminEnv });
+    assert.match(r.out, /words\.json/);
+  });
+});
+
+// seed-people.mjs and moderation.mjs, started with the people key only. Every fetch throws, so a
+// request would show up as a crash with a different message; the scripts must stop first.
+describe('scripts that need the admin key', () => {
+  const NO_FETCH = 'globalThis.fetch = () => { throw new Error("a request was made"); };';
+  const cases = [
+    ['seed-people.mjs', ['--event', 'test-conf']],
+    ['moderation.mjs', ['--event', 'test-conf', '--unhide', `profile:${'0'.repeat(16)}`]],
+    ['moderation.mjs', ['--event', 'test-conf', '--purge']],
+  ];
+  for (const [script, args] of cases) {
+    test(`${script} ${args.slice(2).join(' ')} refuses the people key alone`, () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caddie-nofetch-'));
+      const preload = path.join(dir, 'preload.mjs');
+      fs.writeFileSync(preload, NO_FETCH);
+      const r = spawnSync(process.execPath, ['--import', preload, fileURLToPath(new URL(`../scripts/${script}`, import.meta.url)), ...args], {
+        env: { PATH: process.env.PATH, ES_URL: `https://${ES_HOST}`, ES_PEOPLE_API_KEY: PEOPLE },
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+      fs.rmSync(dir, { recursive: true, force: true });
+      assert.equal(r.signal, null);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /ELASTISEARCH_API_KEY/);
+      assert.doesNotMatch(r.stderr + r.stdout, /a request was made/);
+      assert.doesNotMatch(r.stderr + r.stdout, new RegExp(PEOPLE));
+    });
+  }
 });
