@@ -192,6 +192,14 @@ function distanceM(a: LatLon, b: LatLon): number {
   return 2 * EARTH_M * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/** The centre of the ~100 m grid cell a position falls in, as the server's cellFor (people.mjs). */
+const CELL_DEG = 0.001;
+function cellFor(p: LatLon): LatLon {
+  const lat = Math.max(-90, Math.min(90, Math.round(p.lat / CELL_DEG) * CELL_DEG));
+  const step = CELL_DEG / Math.max(Math.cos(rad(lat)), CELL_DEG);
+  return { lat: Number(lat.toFixed(6)), lon: Number((Math.round(p.lon / step) * step).toFixed(6)) };
+}
+
 /** A point `metres` away from `from` in direction `bearing` (degrees clockwise from north). */
 function offset(from: LatLon, metres: number, bearing: number): LatLon {
   const dLat = (metres * Math.cos(rad(bearing))) / EARTH_M;
@@ -207,12 +215,15 @@ function samplePosition(p: MockPerson, mine: LatLon, theirZone: string | null = 
   return offset(mine, metres, (n * 73) % 360);
 }
 
+// As the server: cells only, 'near' for the same cell, 'around' for cell centres under 300 m apart.
 function band(myZone: string, mine: LatLon | undefined, p: MockPerson, theirZone: string | null): Proximity {
   if (theirZone === myZone) return 'same_zone';
   const theirs = mine ? samplePosition(p, mine, theirZone) : null;
   if (!mine || !theirs) return 'venue';
-  const d = distanceM(mine, theirs);
-  return d < 75 ? 'near' : d < 300 ? 'around' : 'venue';
+  const a = cellFor(mine);
+  const b = cellFor(theirs);
+  if (a.lat === b.lat && a.lon === b.lon) return 'near';
+  return distanceM(a, b) < 300 ? 'around' : 'venue';
 }
 
 function personResult(
@@ -557,7 +568,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     // real ranking would.
     const near = (p: MockPerson) => {
       const theirs = mine?.location ? samplePosition(p, mine.location) : null;
-      return theirs && mine?.location ? Math.max(0, 1 - distanceM(mine.location, theirs) / 1000) : 0;
+      return theirs && mine?.location ? Math.max(0, 1 - distanceM(cellFor(mine.location), cellFor(theirs)) / 1000) : 0;
     };
     const score = (p: MockPerson) =>
       (terms.filter((w) => p.expertise.toLowerCase().includes(w)).length || 0) * 10 + (zoneOf(p, mine) ? 1 : 0) + near(p);
