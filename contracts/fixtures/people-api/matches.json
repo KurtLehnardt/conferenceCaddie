@@ -1,0 +1,202 @@
+{
+  "route": "matches",
+  "examples": [
+    {
+      "name": "people to meet",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "interested_talk_ids": [
+            "kubecon-cloudnativecon-north-america-2026:1371070"
+          ],
+          "query": null,
+          "when": "anyone",
+          "from": 0,
+          "size": 20
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "results": [
+            {
+              "ref": "3f2a9c0d1e4b5a68",
+              "display_name": "Sample Person",
+              "about": "Platform engineer working on multi-cluster networking.",
+              "sample": true,
+              "learn_topics": [
+                {
+                  "topic_id": "ai-agents",
+                  "label": "AI Agents"
+                }
+              ],
+              "speak_topics": [
+                {
+                  "topic_id": "cilium",
+                  "label": "Cilium"
+                },
+                {
+                  "topic_id": "ebpf",
+                  "label": "eBPF"
+                }
+              ],
+              "reasons": [
+                "They've worked on <mark>eBPF</mark> load balancing at scale.",
+                "They can speak to Cilium and eBPF, which you want to learn about."
+              ],
+              "opener": "They've worked on <mark>eBPF</mark> load balancing at scale.",
+              "contact": {
+                "linkedin_url": null,
+                "contact_note": "Find me at the Cilium booth."
+              },
+              "evidence": "Built <mark>eBPF</mark> load balancing for 40 clusters.",
+              "around": false,
+              "zone": null,
+              "proximity": null,
+              "broad": false
+            }
+          ],
+          "from": 0,
+          "size": 20,
+          "has_more": false
+        }
+      }
+    },
+    {
+      "name": "who is around, same zone",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "when": "around_now"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "results": [
+            {
+              "ref": "3f2a9c0d1e4b5a68",
+              "display_name": "Sample Person",
+              "about": "Platform engineer working on multi-cluster networking.",
+              "sample": true,
+              "learn_topics": [
+                {
+                  "topic_id": "ai-agents",
+                  "label": "AI Agents"
+                }
+              ],
+              "speak_topics": [
+                {
+                  "topic_id": "cilium",
+                  "label": "Cilium"
+                },
+                {
+                  "topic_id": "ebpf",
+                  "label": "eBPF"
+                }
+              ],
+              "reasons": [
+                "They're in Hallway right now."
+              ],
+              "opener": "They're in Hallway right now.",
+              "contact": {
+                "linkedin_url": null,
+                "contact_note": "Find me at the Cilium booth."
+              },
+              "evidence": "Built <mark>eBPF</mark> load balancing for 40 clusters.",
+              "around": true,
+              "zone": "Hallway",
+              "proximity": "same_zone",
+              "broad": false
+            },
+            {
+              "ref": "9b1c7e5d3a2f4c60",
+              "display_name": "Sample Person",
+              "about": "Platform engineer working on multi-cluster networking.",
+              "sample": false,
+              "learn_topics": [
+                {
+                  "topic_id": "ai-agents",
+                  "label": "AI Agents"
+                }
+              ],
+              "speak_topics": [
+                {
+                  "topic_id": "cilium",
+                  "label": "Cilium"
+                },
+                {
+                  "topic_id": "ebpf",
+                  "label": "eBPF"
+                }
+              ],
+              "reasons": [
+                "Also interested in Kubernetes."
+              ],
+              "opener": "Also interested in Kubernetes.",
+              "contact": {
+                "linkedin_url": null,
+                "contact_note": "Find me at the Cilium booth."
+              },
+              "evidence": null,
+              "around": true,
+              "zone": "Hall B",
+              "proximity": "near",
+              "broad": true
+            }
+          ],
+          "from": 0,
+          "size": 20,
+          "has_more": false
+        }
+      }
+    },
+    {
+      "name": "keyword matches only while embeddings are unavailable",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "query": "ebpf load balancing"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "results": [],
+          "degraded": {
+            "semantic": true
+          },
+          "from": 0,
+          "size": 20,
+          "has_more": false
+        }
+      }
+    },
+    {
+      "name": "not visible",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026"
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "visibility_required"
+        }
+      }
+    }
+  ]
+}

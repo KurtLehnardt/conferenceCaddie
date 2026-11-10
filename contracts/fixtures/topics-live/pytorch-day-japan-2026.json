@@ -1,0 +1,22 @@
+{
+  "snapshot": {
+    "taken_on": "2026-11-10",
+    "fetched_at": "2026-11-10T08:51:37Z",
+    "source": "GET https://conference-caddie-265846417372.us-west1.run.app/api/topics?event=pytorch-day-japan-2026",
+    "status": 200,
+    "note": "Public data from the live tier 3 service, captured once for the Phase 1 topics port: the Node topics builder is diffed against these lists before Elasticsearch is decommissioned. A snapshot, not a contract: it is never refreshed automatically."
+  },
+  "event": "pytorch-day-japan-2026",
+  "topics": [
+    {
+      "topic_id": "pytorch",
+      "label": "PyTorch",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "training",
+      "label": "Training",
+      "talk_count": 3
+    }
+  ]
+}

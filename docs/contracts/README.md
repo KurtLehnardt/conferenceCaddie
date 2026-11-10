@@ -1,0 +1,38 @@
+# Shared contracts, version 1
+
+These four contracts are the plug between the native apps and every deployment tier of the native-apps plan (tier 1: a static demo on GitHub Pages; tier 2: a free Cloudflare backend; tier 3: today's Cloud Run and Elastic Cloud server). Each one is defined once here, with a JSON Schema, golden fixtures and a Node reference implementation, and every app and backend tests itself against the same files.
+
+| Contract | Spec | Schema | Fixtures | Reference implementation |
+|---|---|---|---|---|
+| Capabilities v1 | [capabilities.md](capabilities.md) | `contracts/schema/capabilities.v1.schema.json` | `contracts/fixtures/capabilities/` | `contracts/js/capabilities.mjs` |
+| Talk bundle v1 | [talk-bundle.md](talk-bundle.md) | `contracts/schema/talk-bundle.v1.schema.json`, `contracts/schema/conferences-index.v1.schema.json`, `contracts/schema/embedding-reference.v1.schema.json` | `contracts/fixtures/bundle/` (built from `contracts/fixtures/bundle-inputs/`), `contracts/fixtures/embedding/reference.v1.json` | `contracts/js/bundle.mjs`, `contracts/js/canonical-json.mjs` |
+| People API v1 | [people-api.md](people-api.md) | `contracts/schema/people-api.v1.schema.json`, route table `contracts/routes/people-api.v1.json` | `contracts/fixtures/people-api/` | today's `server/` (all 24 routes checked by `test/contracts-people-conformance.test.mjs`) |
+| Bluetooth derived tokens v1 | [ble-tokens.md](ble-tokens.md) | `contracts/schema/ble-fixtures.v1.schema.json` (the vector files) | `contracts/fixtures/ble/` | `contracts/js/ble-token.mjs` |
+
+`contracts/fixtures/topics-live/` holds the live topic lists of the four searchable conferences, a snapshot taken on 2026-11-10 through the public `GET /api/topics?event={slug}`. They are not a contract: they are the reference that the Phase 1 Node port of the topics builder is diffed against before Elasticsearch is decommissioned.
+
+## What is frozen and what is new
+
+- **Frozen** means today's behaviour, written down and checked. The People API routes, bodies, status codes and error codes are frozen from `docs/CONTRACT.md` and the code in `server/`; nothing in `server/` changed for these contracts. The sightings request and the 16-byte token on the wire are frozen too.
+- **New** means defined here and implemented in a later phase: the capabilities document (Phase 1 adds `GET /api/capabilities` to the tier 3 server and `capabilities.json` to tier 1), the talk bundle (Phase 1 builds it in a GitHub Action), the `ble_key` field of `PUT /api/presence` and derived tokens (Phase 4).
+- **Legacy** means served for old clients and not used by new ones: `POST /api/presence/ble/rotate` and the server-minted Bluetooth tokens (`ble.mode: server-rotate`), which today's Capacitor APK uses until it is retired.
+
+## Versioning rules shared by every contract
+
+1. Each contract has an integer major version (`api_version`, `bundle_version`, `index_version`, the `-v1` in the Bluetooth labels). Adding an optional field, an optional route or a new enum value that old clients can safely treat as a known fallback is not a new major: it is added to the same v1 schema file, in the same change that starts sending it. Removing or renaming a field, changing its meaning, type or fixed value (for the talk bundle, its embedding model or conventions), or making an optional field required is a new major.
+2. Readers ignore fields they do not know, at every level, and read lists entry by entry, skipping an entry they cannot use rather than failing the whole document. Writers send only fields the schema of their own release names.
+3. The schemas serve both sides. A consumer validates in open mode (or not at all) and keeps going on unknown fields, so it reads documents from newer producers. A producer, a fixture or a backend's test validates in closed mode against the schema of the same release, in which every object schema that declares `"type": "object"` rejects a property it does not list, so a misspelt field fails at once; because additive changes update that schema in the same change (rule 1), closed mode never rejects a field the release meant to send. Rules that bind one major only, such as the two-file rule of a v1 bundle entry, are conditioned on that major in the schema, so a v1 reader still accepts a document that also lists a later major.
+4. A fixture is changed only together with the spec and the reference implementation, and the tests rebuild or recompute every fixture they can, so a fixture can never drift from the code that claims to produce it.
+
+## How the apps and the other tiers use these files
+
+- **Native apps (Kotlin Multiplatform shared core).** The `kotlinx.serialization` model types follow the schemas, with `ignoreUnknownKeys = true`. The common tests load `contracts/fixtures/**` as test resources and must reproduce: the effective capabilities of each tier fixture and the legacy set; the fixture bundle's verification, its int8 rows, cosines and related talks; the reference embeddings of `contracts/fixtures/embedding/reference.v1.json` within its tolerance, through the on-device model; every token, key and key id of `golden-vectors.v1.json` and every case of `resolution-cases.v1.json`; and the decoding of every People API example response.
+- **Tier 2 (Cloudflare Worker).** Its tests answer the People API routes and validate each answer with `validator('people-api.v1', <response def>)` from `contracts/js/schemas.mjs` in closed mode, as `test/contracts-people-conformance.test.mjs` does for tier 3. Its Bluetooth resolver must pass `resolution-cases.v1.json`, and its Workers AI query embeddings (`pooling: "cls"`) must match `contracts/fixtures/embedding/reference.v1.json` within its tolerance. Its `GET /api/capabilities` must validate against the capabilities schema in closed mode.
+- **Tier 1 and the bundle pipeline (GitHub Action).** The Action builds each bundle with `buildBundle` from `contracts/js/bundle.mjs` (or an equivalent that produces identical bytes), runs `verifyBundle` on the result and validates `bundle.json` and `conferences.json` against their schemas before publishing.
+- **Tier 3 (this server).** Phase 1 adds `GET /api/capabilities` answering `contracts/fixtures/capabilities/tier3-transition.json` (Bluetooth still `server-rotate`), and Phase 4 switches it to the shape of `tier3-paid.json` (`derived-v1`).
+
+## Running the checks
+
+`npm test` runs every `test/contracts-*.test.mjs` with `node:test` and no dependency: the validator's own tests, every schema and fixture, capabilities negotiation and discovery against a stand-in `fetch`, the bundle rebuild and verification, the People API route table against the server's route tables and the real handlers against an in-memory Elasticsearch stand-in, and the Bluetooth vectors through node:crypto, an independent SHA-256 and HMAC written in the test, and `openssl` when it is installed. After a deliberate change to the bundle format, `node contracts/js/fixtures.mjs --write` rebuilds the fixture bundle.
+
+The validator in `contracts/js/validate.mjs` implements the subset of JSON Schema draft 2020-12 these schemas use and refuses any other keyword, so a schema cannot silently depend on a keyword it ignores. The schemas are written in standard draft 2020-12, but the checks these tests rely on are this repository's validator: its closed mode and its asserted `format` keyword are extensions, so another validator accepts more (it treats `format` as an annotation and unknown properties as allowed).

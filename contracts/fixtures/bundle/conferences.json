@@ -1,0 +1,72 @@
+{
+  "index_version": 1,
+  "generated_at": "2026-11-10T00:00:00Z",
+  "publisher": {
+    "name": "Caddie fixture publisher",
+    "takedown": "https://example.org/caddie-fixture/takedown"
+  },
+  "conferences": [
+    {
+      "slug": "caddie-fixture-2099",
+      "name": "Caddie Fixture Conference",
+      "start_date": "2099-03-02",
+      "end_date": "2099-03-02",
+      "time_zone": "Europe/Amsterdam",
+      "location": {
+        "city": "Amsterdam",
+        "region": "",
+        "country": "Netherlands",
+        "virtual": false
+      },
+      "status": "searchable",
+      "official_schedule_url": "https://example.org/caddie-fixture/schedule/",
+      "source": "sessionize",
+      "has_level": true,
+      "track_group": "Track",
+      "tag_groups": [
+        "Format"
+      ],
+      "talk_count": 3,
+      "bundle": {
+        "bundle_version": 1,
+        "content_hash": "af85300cea6e89c95f44e71c5a2c5302ccd6cda0cdf35586e1c03cf8bc2f0cf9",
+        "path": "caddie-fixture-2099/af85300cea6e89c9/",
+        "model": "BAAI/bge-small-en-v1.5",
+        "dims": 384,
+        "talk_count": 3,
+        "vector_count": 3,
+        "files": {
+          "bundle.json": {
+            "bytes": 5655,
+            "sha256": "2d779cce49b72c5b419b010f3f5ec5d0a462abd117f7aeefc99de7fd3421d405"
+          },
+          "vectors.i8": {
+            "bytes": 1152,
+            "sha256": "e9a59e1175adf3e679f65296842af976cc7962c0459f884e39d013ef99d5c1f5"
+          }
+        }
+      }
+    },
+    {
+      "slug": "caddie-unavailable-2099",
+      "name": "Caddie Unavailable Fixture",
+      "start_date": "2099-04-01",
+      "end_date": "2099-04-02",
+      "time_zone": null,
+      "location": {
+        "city": "",
+        "region": "",
+        "country": "",
+        "virtual": true
+      },
+      "status": "unavailable",
+      "official_schedule_url": "https://example.org/caddie-unavailable/",
+      "source": "sessionize",
+      "has_level": false,
+      "track_group": null,
+      "tag_groups": [],
+      "talk_count": 0,
+      "bundle": null
+    }
+  ]
+}

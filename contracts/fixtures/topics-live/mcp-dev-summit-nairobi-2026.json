@@ -1,0 +1,62 @@
+{
+  "snapshot": {
+    "taken_on": "2026-11-10",
+    "fetched_at": "2026-11-10T08:51:35Z",
+    "source": "GET https://conference-caddie-265846417372.us-west1.run.app/api/topics?event=mcp-dev-summit-nairobi-2026",
+    "status": 200,
+    "note": "Public data from the live tier 3 service, captured once for the Phase 1 topics port: the Node topics builder is diffed against these lists before Elasticsearch is decommissioned. A snapshot, not a contract: it is never refreshed automatically."
+  },
+  "event": "mcp-dev-summit-nairobi-2026",
+  "topics": [
+    {
+      "topic_id": "mcp",
+      "label": "MCP",
+      "talk_count": 39
+    },
+    {
+      "topic_id": "agents",
+      "label": "Agents",
+      "talk_count": 21
+    },
+    {
+      "topic_id": "ai",
+      "label": "AI",
+      "talk_count": 9
+    },
+    {
+      "topic_id": "ai-agents",
+      "label": "AI Agents",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "tools",
+      "label": "Tools",
+      "talk_count": 4
+    },
+    {
+      "topic_id": "enterprise",
+      "label": "Enterprise",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "integration",
+      "label": "Integration",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "payment",
+      "label": "Payment",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "stateless",
+      "label": "Stateless",
+      "talk_count": 3
+    },
+    {
+      "topic_id": "systems",
+      "label": "Systems",
+      "talk_count": 3
+    }
+  ]
+}
