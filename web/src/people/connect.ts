@@ -1,7 +1,7 @@
 // Find & connect state shared across screens: the inbox poll, what this device has asked,
 // which people it has seen (for the opener and about after a meet), and the block action.
 import { useEffect } from 'preact/hooks';
-import { blockPerson, fetchInbox, isAbort, PeopleApiError, unblockPerson } from './api';
+import { blockPerson, errorField, fetchInbox, isAbort, PeopleApiError, unblockPerson } from './api';
 import { nudgeTick } from './nudges';
 import { addBlock, getPresence, isBlocked, notify, removeBlock, usePeopleStore } from './storage';
 import type { Inbox, InboxIncoming, InboxOutgoing, MeetState, PersonResult } from './types';
@@ -15,8 +15,12 @@ export const OPEN_STATES: MeetState[] = ['requested', 'active'];
 let inboxSlug: string | null = null;
 let inbox: Inbox = { incoming: [], outgoing: [] };
 let inboxLoaded = false;
-// Requests this device just sent, so a card says "No reply yet" before the next poll.
-const asked = new Map<string, string>();
+/** An ask runs out 15 minutes after it was made, so a note of one is never kept longer. */
+const ASKED_MAX_MS = 15 * 60_000;
+// Requests this device just sent (or its own open meet a 409 meet_open named), by ref, so a card
+// says "No reply yet" until the next poll, whose list then decides: the card follows an open
+// request of ours the server lists, and with none there is nothing to wait for.
+const asked = new Map<string, { meetId: string; at: number }>();
 // meet_id -> ref of the other person, from the inbox and from requests sent here.
 const meetRefs = new Map<string, string>();
 // People this device has seen, by ref: the match card (opener, reasons) or the inbox card (about).
@@ -43,9 +47,16 @@ export function personForMeet(meetId: string) {
 
 export function noteSentRequest(slug: string, ref: string, meetId: string): void {
   if (inboxSlug !== slug) resetInbox(slug);
-  asked.set(ref, meetId);
   meetRefs.set(meetId, ref);
+  // A 409 that names their ask to me: it waits in my inbox for my answer, not for theirs.
+  if (!inbox.incoming.some((r) => r.meet_id === meetId)) asked.set(ref, { meetId, at: Date.now() });
   notify();
+}
+
+/** The meet_id a 409 meet_open names: the meet already open between the two people. */
+export function openMeetId(err: unknown): string | null {
+  if (!(err instanceof PeopleApiError) || err.status !== 409 || err.code !== 'meet_open') return null;
+  return errorField(err, 'meet_id');
 }
 
 function resetInbox(slug: string) {
@@ -73,7 +84,8 @@ export function inboxCount(slug: string): number {
 export function requestTo(slug: string, ref: string): MeetState | null {
   const out = getInbox(slug).outgoing.find((r) => r.to.ref === ref && OPEN_STATES.includes(r.state));
   if (out) return out.state;
-  return asked.has(ref) ? 'requested' : null;
+  const a = asked.get(ref);
+  return a && Date.now() - a.at <= ASKED_MAX_MS ? 'requested' : null;
 }
 
 export function outgoingTo(slug: string, ref: string): InboxOutgoing | null {
@@ -88,6 +100,7 @@ export async function refreshInbox(slug: string): Promise<void> {
   inflight?.abort();
   const ctl = new AbortController();
   inflight = ctl;
+  const startedAt = Date.now();
   try {
     const res = await fetchInbox(slug, ctl.signal);
     if (ctl.signal.aborted || inboxSlug !== slug) return;
@@ -97,17 +110,19 @@ export async function refreshInbox(slug: string): Promise<void> {
       meetRefs.set(r.meet_id, r.from.ref);
       rememberIncoming(r);
     }
-    for (const r of inbox.outgoing) {
-      meetRefs.set(r.meet_id, r.to.ref);
-      // The server knows about it now, so the optimistic note is no longer needed.
-      if (asked.get(r.to.ref) === r.meet_id) asked.delete(r.to.ref);
-    }
+    for (const r of inbox.outgoing) meetRefs.set(r.meet_id, r.to.ref);
+    // The server's list decides now: an open request of ours is in `outgoing` and the card follows
+    // it; otherwise it is over (or it was their ask), so nothing waits. A note made after this
+    // poll set out stays until the next one, which is sure to see it.
+    for (const [ref, a] of asked) if (a.at < startedAt) asked.delete(ref);
     notify();
   } catch (err) {
     if (isAbort(err)) return;
-    if (err instanceof PeopleApiError && err.code === 'no_device') {
+    // No device, or no profile at this conference any more: there is nothing to ask about.
+    if (err instanceof PeopleApiError && (err.code === 'no_device' || err.code === 'profile_required')) {
       inbox = { incoming: [], outgoing: [] };
       inboxLoaded = true;
+      asked.clear();
       notify();
     }
   }
@@ -117,12 +132,15 @@ export async function refreshInbox(slug: string): Promise<void> {
 export function dropIncoming(slug: string, meetId: string): void {
   if (inboxSlug !== slug) return;
   inbox = { ...inbox, incoming: inbox.incoming.filter((r) => r.meet_id !== meetId) };
+  // A wave that met this open request (409 meet_open) waits for nothing any more.
+  for (const [ref, a] of asked) if (a.meetId === meetId) asked.delete(ref);
   notify();
 }
 
 export function setIncomingState(slug: string, meetId: string, state: MeetState): void {
   if (inboxSlug !== slug) return;
   inbox = { ...inbox, incoming: inbox.incoming.map((r) => (r.meet_id === meetId ? { ...r, state } : r)) };
+  for (const [ref, a] of asked) if (a.meetId === meetId) asked.delete(ref);
   notify();
 }
 

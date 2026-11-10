@@ -745,6 +745,8 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
   if (path === '/api/meet/inbox' && method === 'GET') {
     const id = device(headers);
     const conf = conferenceOf(query.get('event'));
+    // As connect.mjs requireProfile: no document at this conference, no inbox.
+    if (!readStore()[`${conf.slug}:${id}`]) throw new HttpError(403, { error: 'profile_required' });
     const c = readConnect();
     advanceMeets(c, conf.slug, id);
     writeConnect(c);
