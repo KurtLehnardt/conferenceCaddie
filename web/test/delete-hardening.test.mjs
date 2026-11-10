@@ -107,6 +107,30 @@ test('Turning both choices off stops Bluetooth for that conference and ends its 
   assert.equal(getPresence(SLUG).on, false, 'presence is off on the device even though the delete failed');
 });
 
+test('A refused delete that changed nothing says that presence was turned off, only when it was on', async () => {
+  for (const presenceOn of [true, false]) {
+    clearAllPeopleData();
+    published(SLUG);
+    if (presenceOn) setPresence(SLUG, { on: true, zone: 'Expo hall', until: new Date(Date.now() + HOUR).toISOString() });
+    onFetch(() => json(429, { error: 'Too many requests' }));
+    const message = await changeVisibility(SLUG, { open_to_meet: false });
+    assert.match(message, /^Too many requests right now, so nothing changed\./);
+    assert.equal(getVisibility(SLUG).open_to_meet, true, 'the switch stays on');
+    assert.equal(getDeletePending(SLUG), null, 'nothing is left to retry');
+    if (presenceOn) assert.match(message, /Your presence was turned off\. You can turn it on again\.$/);
+    else assert.doesNotMatch(message, /presence/);
+  }
+});
+
+test('A refused "Delete my profile" says that presence is off until the delete is done', async () => {
+  published(SLUG);
+  setPresence(SLUG, { on: true, zone: 'Expo hall', until: new Date(Date.now() + HOUR).toISOString() });
+  onFetch((call) => (call.path.startsWith('/api/presence') ? json(200, { ok: true }) : json(429, { error: 'Too many requests' })));
+  const result = await deleteMyProfile();
+  assert.match(result.message, /^Too many requests right now, so your profile was not deleted yet\..*Your presence was turned off until the delete is done\.$/);
+  assert.equal(getPresence(SLUG).on, false);
+});
+
 test('While a delete is unfinished, presence, Bluetooth, push and asks are refused without a request', async () => {
   published(SLUG);
   onFetch(() => json(502, { error: 'x' }));

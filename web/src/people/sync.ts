@@ -773,8 +773,9 @@ export function registerRuntimeStop(fn: (slug: string | null) => Promise<void>):
  * ends on the device for each conference concerned and a presence DELETE goes to the server for
  * those where it was on (a DELETE can create nothing), and Bluetooth stops. Until the delete is
  * done, presence, Bluetooth, push and ask writes are refused on the device (deleteCovers).
+ * Returns true when presence was on at one of them, so a refusal can say that it was turned off.
  */
-async function stopActivity(slugs: string[], all: boolean): Promise<void> {
+async function stopActivity(slugs: string[], all: boolean): Promise<boolean> {
   try {
     await stopRuntime(all ? null : (slugs[0] ?? null));
   } catch {
@@ -783,7 +784,16 @@ async function stopActivity(slugs: string[], all: boolean): Promise<void> {
   const live = slugs.filter((slug) => getPresence(slug).on);
   for (const slug of slugs) presenceEndedOnServer(slug);
   await Promise.allSettled(live.map((slug) => deletePresence(slug)));
+  return live.length > 0;
 }
+
+/**
+ * Added to a refusal that left the profile in place when presence had been on: presence (and the
+ * Bluetooth signal, which needs it) stopped before the DELETE was sent. After turning visibility
+ * off the person can turn it on again at once; after "Delete my profile" not until it is done.
+ */
+const PRESENCE_STOPPED = ' Your presence was turned off. You can turn it on again.';
+const PRESENCE_STOPPED_UNTIL_DONE = ' Your presence was turned off until the delete is done.';
 
 /* ---------- Deletes: sending them ---------- */
 
@@ -867,6 +877,7 @@ async function removeFromServer(slug: string, patch: Partial<Visibility>): Promi
   const earlier = getDeletePending(slug) !== null;
   if (!earlier) setDeletePending(slug, newRetry());
   let outcome: 'removed' | 'share';
+  let presenceStopped = false;
   try {
     outcome = await runDelete([slug], async (certain) => {
       // A write answered while this delete waited may have changed the choices. The state as
@@ -875,13 +886,14 @@ async function removeFromServer(slug: string, patch: Partial<Visibility>): Promi
         if (!earlier) setDeletePending(slug, null);
         return 'share';
       }
-      await stopActivity([slug], false);
+      presenceStopped = await stopActivity([slug], false);
       await deleteOnServer(slug, certain, earlier);
       return 'removed';
     });
   } catch (err) {
     const partlyDone = getDeletePending(slug) !== null;
-    const message = visibilityFailureMessage(failureKind(err), partlyDone);
+    // A refusal changed nothing on the server, but presence had already stopped: the message says so.
+    const message = visibilityFailureMessage(failureKind(err), partlyDone) + (!partlyDone && presenceStopped ? PRESENCE_STOPPED : '');
     // The server copy may already be hidden. The user's choice applies on the device and the
     // delete is tried again; until it is done, nothing is written for this conference. After a
     // refusal nothing changed on the server, so the device keeps the earlier state too.
@@ -914,7 +926,7 @@ async function deleteEverywhere(certain: boolean): Promise<DeleteResult> {
     return { done: true, message: DELETED_MESSAGE };
   }
   const targets = [...new Set([...slugsMaybeOnServer(), ...slugsDeletePending()])];
-  await stopActivity(targets, true);
+  const presenceStopped = await stopActivity(targets, true);
   let worst: DeleteFailure | null = null;
   let retryAfter = 0;
   let noKey = false;
@@ -933,7 +945,7 @@ async function deleteEverywhere(certain: boolean): Promise<DeleteResult> {
     const r = getDeleteAll();
     if (r) updateDeleteAll(afterFailure(r, worst, retryAfter));
     const progress: Progress = slugsDeletePending().length ? 'partial' : deleted ? 'some' : 'none';
-    return { done: false, message: profileFailureMessage(worst, progress) };
+    return { done: false, message: profileFailureMessage(worst, progress) + (presenceStopped ? PRESENCE_STOPPED_UNTIL_DONE : '') };
   }
   if (slugsDeletePending().length || slugsMaybeOnServer().length) {
     updateDeleteAll({ next_at: Date.now() + RETRY_FIRST_MS, last: null });
