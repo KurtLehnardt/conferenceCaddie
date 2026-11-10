@@ -156,10 +156,13 @@ jobs:
           rm -f "$ks"
 
           "$tools/apksigner" verify --print-certs "$APK" > "$RUNNER_TEMP/certs.txt"
-          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/certs.txt")
+          # apksigner labels signers differently across versions ("Signer #1 ..." in
+          # 36, "V3.0 Signer: ..." in 37), so match any certificate SHA-256 line and
+          # require that they all agree on one digest.
+          actual=$(sed -n 's/^.*certificate SHA-256 digest: *//p' "$RUNNER_TEMP/certs.txt" | tr -d ': \r' | tr 'A-F' 'a-f' | sort -u)
           expected=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ': ' | tr 'A-F' 'a-f')
-          if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
-            echo "::error title=Wrong signing key::The APK's certificate SHA-256 is $actual, not the ANDROID_RELEASE_CERT_SHA256 variable."
+          if [ -z "$expected" ] || [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+            echo "::error title=Wrong signing key::The APK's certificate SHA-256 is '$(printf '%s' "$actual" | tr '\n' ' ')', not the ANDROID_RELEASE_CERT_SHA256 variable."
             exit 1
           fi
           echo "Release APK signed by certificate SHA-256 $actual" >> "$GITHUB_STEP_SUMMARY"
