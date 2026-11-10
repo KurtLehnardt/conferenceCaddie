@@ -1,6 +1,8 @@
 # Builds the Android companion's debug APK and keeps it as a workflow artifact (visible to the
 # repository's collaborators under the Actions tab) for sideloading. This is the project's
 # Android build tool, not a test suite: the Kotlin plugin cannot be compiled without the SDK.
+# When the ANDROID_KEYSTORE_* secrets exist it also builds a release APK signed with the project's
+# release key, the same key the native app in native/ uses, so every release can update the last.
 name: Android APK
 
 on:
@@ -24,6 +26,8 @@ jobs:
     env:
       # The API origin the native app talks to. The bundled web app is the same as the PWA.
       VITE_API_ORIGIN: https://conference-caddie-265846417372.us-west1.run.app
+      # Secrets cannot be read in an `if:`, so expose only whether all four are present.
+      HAS_RELEASE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,3 +72,37 @@ jobs:
           name: ${{ steps.apk.outputs.file }}
           path: ${{ steps.apk.outputs.file }}
           retention-days: 14
+
+      # The Capacitor project has no release signing config, so Gradle builds an unsigned release
+      # APK and apksigner signs it here. The keystore lives in the runner's temp directory only for
+      # this step, and apksigner reads the passwords from the environment, not the command line.
+      - name: Assemble and sign the release APK
+        id: release_apk
+        if: env.HAS_RELEASE_KEY == 'true'
+        working-directory: web/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon assembleRelease
+          ks="$RUNNER_TEMP/release.jks"
+          trap 'rm -f "$ks"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ks"
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          out="conference-caddie-$(git rev-parse --short HEAD)-release.apk"
+          "$tools/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign --ks "$ks" --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+            --out "$GITHUB_WORKSPACE/$out" "$RUNNER_TEMP/aligned.apk"
+          fingerprint=$("$tools/apksigner" verify --print-certs "$GITHUB_WORKSPACE/$out" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n 1)
+          echo "Release APK signed by certificate SHA-256 $fingerprint" >> "$GITHUB_STEP_SUMMARY"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.release_apk.outcome == 'success'
+        with:
+          name: ${{ steps.release_apk.outputs.file }}
+          path: ${{ steps.release_apk.outputs.file }}
+          retention-days: 30
