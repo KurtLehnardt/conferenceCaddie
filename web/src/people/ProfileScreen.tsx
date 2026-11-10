@@ -15,7 +15,6 @@ import {
   usePeopleStore,
 } from './storage';
 import {
-  canStopTrying,
   changeVisibility,
   deleteMyProfile,
   finishPendingDeletes,
@@ -24,6 +23,7 @@ import {
   LINKEDIN_RE,
   scheduleProfileSync,
   stopTrying,
+  stopTryingReason,
   unshareAll,
 } from './sync';
 import { TopicPicker } from './TopicPicker';
@@ -92,17 +92,21 @@ function SaveStatus() {
 }
 
 /** Explains the notice for a delete the server has not confirmed yet. */
-export const PENDING_DELETE_COPY = 'The app will not share your profile while the delete is unfinished, and it tries again by itself.';
+export const PENDING_DELETE_COPY =
+  'Until the delete is done, the app does not share your profile, presence or Bluetooth signal, and sends no requests to talk shop. It tries again by itself.';
 
 /** Opens that explanation when a delete may have done part of its work. */
 export const PENDING_HIDDEN_COPY = 'It may already be hidden from other attendees.';
 
-/** Offered once the server has refused this device's key three times in a row. */
-export const STOP_TRYING_COPY = "Our server keeps refusing this device's key, so trying again will not help.";
+/** Why "Stop trying" is offered: the server keeps refusing this device's key, or the delete keeps failing. */
+export const STOP_FORBIDDEN_COPY = "Our server keeps refusing this device's key, so trying again will not help.";
+export const STOP_FAILING_COPY = 'Deleting has not worked after several tries.';
 
 /** What stopping does, after "Delete my profile" and after turning visibility off. */
-export const STOP_ALL_COPY = 'If you stop, your profile is deleted from this phone only; anything our server still holds is removed after the conference ends.';
-export const STOP_ONE_COPY = 'If you stop, this phone stops trying; anything our server still holds is removed after the conference ends.';
+export const STOP_ALL_COPY =
+  'If you stop, your profile is deleted from this phone only. What our server holds may stay visible to other attendees until the conference ends, and this phone can no longer delete it.';
+export const STOP_ONE_COPY =
+  'If you stop, this phone stops trying. What our server holds may stay visible to other attendees until the conference ends, and this phone will not try to remove it again.';
 
 /**
  * Shown while a profile delete has not been confirmed by the server, with a way to try again and,
@@ -115,6 +119,7 @@ function PendingDelete({ conference, onResult }: { conference: ConferenceLike; o
   const pending = slugsDeletePending();
   if (!all && !pending.length) return null;
   const detail = getPendingDeleteDetail();
+  const reason = stopTryingReason();
   const where =
     pending.length > 1
       ? `${pending.length} conferences`
@@ -140,16 +145,16 @@ function PendingDelete({ conference, onResult }: { conference: ConferenceLike; o
         </p>
       </div>
       {detail && <p class="pp-error pp-banner-actions">{detail}</p>}
-      {canStopTrying() && (
+      {reason && (
         <p class="pp-hint pp-banner-actions">
-          {STOP_TRYING_COPY} {all ? STOP_ALL_COPY : STOP_ONE_COPY}
+          {reason === 'forbidden' ? STOP_FORBIDDEN_COPY : STOP_FAILING_COPY} {all ? STOP_ALL_COPY : STOP_ONE_COPY}
         </p>
       )}
       <div class="pp-banner-actions pp-actions">
         <button type="button" class="btn btn-tonal btn-small" disabled={busy} onClick={retry}>
           {busy ? 'Working…' : 'Try again'}
         </button>
-        {canStopTrying() && (
+        {reason && (
           <button type="button" class="btn btn-text btn-small pp-danger" disabled={busy} onClick={() => run(stopTrying)}>
             Stop trying on this device
           </button>

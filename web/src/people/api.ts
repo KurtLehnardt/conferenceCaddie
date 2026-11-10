@@ -1,7 +1,7 @@
 // Calls to the people, circles, recommendations and topics endpoints of CONTRACT3.
 // The X-Caddie-Device header goes only to /api/people/*, /api/circles/members, /api/presence,
 // /api/meet/* and /api/push/subscription. This is the only place that reads the device secret.
-import { getDevice } from './storage';
+import { deleteCovers, getDevice } from './storage';
 import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
 // The fields are assigned by hand rather than as constructor parameter properties, so Node can run
@@ -81,7 +81,24 @@ function friendly(status: number, code: string | null = null, message: string | 
   return 'That could not be saved. Check your details and try again.';
 }
 
-async function call<T>(path: string, init: RequestInit & { device?: boolean } = {}): Promise<T> {
+/** Shown when a request waited too long for the server's answer. */
+export const TIMEOUT_MESSAGE = 'The server did not answer in time. Try again.';
+
+/** How long a profile write or delete waits for the server's answer before it counts as failed. */
+export const WRITE_TIMEOUT_MS = 20_000;
+
+/**
+ * Shown when a write that could make the device visible again is asked for while a delete covers
+ * its conference (see deleteCovers in storage.ts).
+ */
+export const DELETE_UNFINISHED_MESSAGE = 'Removing your profile has not finished. Finish it first with Try again at the top of your profile.';
+
+/** The refusal for such a write; status 403 like the server's own answer for a profile being deleted. */
+function deleteUnfinished(): Promise<never> {
+  return Promise.reject(new PeopleApiError(DELETE_UNFINISHED_MESSAGE, 403, 'delete_pending'));
+}
+
+async function call<T>(path: string, init: RequestInit & { device?: boolean; timeoutMs?: number } = {}): Promise<T> {
   const headers: Record<string, string> = {};
   if (init.body) headers['Content-Type'] = 'application/json';
   if (init.device) {
@@ -89,12 +106,29 @@ async function call<T>(path: string, init: RequestInit & { device?: boolean } = 
     if (!d) throw new PeopleApiError(friendly(403), 403, 'no_device');
     headers['X-Caddie-Device'] = `${d.profile_id}.${d.secret}`;
   }
+  // A request with a time limit gets its own signal, aborted when the time is up (and when the
+  // caller's own signal aborts). The global timer works on every WebView, unlike AbortSignal.timeout.
+  let signal = init.signal ?? undefined;
+  let timedOut = false;
+  let limit: ReturnType<typeof setTimeout> | undefined;
+  if (init.timeoutMs) {
+    const ctrl = new AbortController();
+    limit = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, init.timeoutMs);
+    init.signal?.addEventListener('abort', () => ctrl.abort());
+    signal = ctrl.signal;
+  }
   let res: Response;
   try {
-    res = await fetch(path, { method: init.method ?? 'GET', headers, body: init.body, signal: init.signal });
+    res = await fetch(path, { method: init.method ?? 'GET', headers, body: init.body, signal });
   } catch (err) {
+    if (timedOut) throw new PeopleApiError(TIMEOUT_MESSAGE, 0, 'timeout');
     if ((err as Error).name === 'AbortError') throw err;
     throw new PeopleApiError(friendly(0), 0);
+  } finally {
+    clearTimeout(limit);
   }
   if (!res.ok) {
     let code: string | null = null;
@@ -150,6 +184,7 @@ export function putProfile(body: ProfileBody) {
     method: 'PUT',
     body: JSON.stringify(body),
     device: true,
+    timeoutMs: WRITE_TIMEOUT_MS,
   });
 }
 
@@ -157,6 +192,7 @@ export function deleteProfile(slug: string) {
   return call<{ ok: boolean }>(`/api/people/profile?event=${encodeURIComponent(slug)}`, {
     method: 'DELETE',
     device: true,
+    timeoutMs: WRITE_TIMEOUT_MS,
   });
 }
 
@@ -214,6 +250,7 @@ export function fetchBlocks(slug: string, signal?: AbortSignal) {
  * 'day' runs presence to the end of the conference day instead of an hour.
  */
 export function putPresence(slug: string, zone: string, spot: string, location: Position | null = null, until: PresenceMode = 'hour') {
+  if (deleteCovers(slug)) return deleteUnfinished();
   return call<{ ok: boolean; presence_until: string; located?: boolean }>('/api/presence', {
     method: 'PUT',
     body: JSON.stringify(presenceBody(slug, zone, spot, location, until)),
@@ -229,7 +266,7 @@ function presenceBody(slug: string, zone: string, spot: string, location: Positi
 }
 
 export function deletePresence(slug: string) {
-  return call<{ ok: boolean }>(`/api/presence?event=${encodeURIComponent(slug)}`, { method: 'DELETE', device: true });
+  return call<{ ok: boolean }>(`/api/presence?event=${encodeURIComponent(slug)}`, { method: 'DELETE', device: true, timeoutMs: WRITE_TIMEOUT_MS });
 }
 
 /* ---------- Web Push nudges ---------- */
@@ -246,6 +283,7 @@ export function fetchVapidKey(signal?: AbortSignal) {
 }
 
 export function putPushSubscription(slug: string, subscription: PushSubscriptionBody) {
+  if (deleteCovers(slug)) return deleteUnfinished();
   return call<{ ok: boolean }>('/api/push/subscription', {
     method: 'PUT',
     body: JSON.stringify({ event: slug, subscription }),
@@ -276,6 +314,7 @@ export interface BleToken {
  * without them would shorten a day-long presence to an hour and clear the stored position.
  */
 export function putPresenceBle(slug: string, zone: string, spot: string, ble: boolean, location: Position | null = null, until: PresenceMode = 'hour') {
+  if (deleteCovers(slug)) return deleteUnfinished();
   return call<{ ok: boolean; presence_until: string; ble?: BleToken }>('/api/presence', {
     method: 'PUT',
     body: JSON.stringify({ ...presenceBody(slug, zone, spot, location, until), ble }),
@@ -284,6 +323,7 @@ export function putPresenceBle(slug: string, zone: string, spot: string, ble: bo
 }
 
 export function rotateBleToken(slug: string) {
+  if (deleteCovers(slug)) return deleteUnfinished();
   return call<{ ok: boolean; ble: BleToken }>('/api/presence/ble/rotate', post({ event: slug }, undefined, true));
 }
 
@@ -307,6 +347,7 @@ export function postSightings(slug: string, sightings: Sighting[], signal?: Abor
 }
 
 export function requestMeet(slug: string, ref: string, topicId: string | null, note: string) {
+  if (deleteCovers(slug)) return deleteUnfinished();
   return call<{ meet_id: string; state: MeetState }>(
     '/api/meet',
     post({ event: slug, ref, topic_id: topicId, note: note.trim().slice(0, 140) }, undefined, true),

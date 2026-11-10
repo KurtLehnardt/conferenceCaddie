@@ -41,7 +41,7 @@ import {
   getProfile,
   getPush,
   getVisibility,
-  NEW_RETRY,
+  newRetry,
   setDeletePending,
   setPresence,
   setProfile,
@@ -54,6 +54,7 @@ import {
   DELETE_PENDING_MESSAGE,
   DELETED_HERE_MESSAGE,
   DELETED_MESSAGE,
+  DELETED_NO_KEY_MESSAGE,
   deleteMyProfile,
   finishPendingDeletes,
   getPendingDeleteDetail,
@@ -80,9 +81,14 @@ function published(...slugs) {
   for (const slug of slugs) setVisibility(slug, { open_to_meet: true, on_server: true });
 }
 
+/** The API's own error body for a status: its 403 is `forbidden`, as for a wrong device key. */
+function apiError(status) {
+  return { error: status === 403 ? 'forbidden' : status === 429 ? 'Too many requests' : 'x' };
+}
+
 /** Answers DELETE with `status` and every PUT with what it asked for. */
 function server(deleteStatus = 200) {
-  onFetch((call) => (call.method === 'PUT' ? putAnswer(call) : json(deleteStatus, deleteStatus === 200 ? { ok: true } : { error: 'x' })));
+  onFetch((call) => (call.method === 'PUT' ? putAnswer(call) : json(deleteStatus, deleteStatus === 200 ? { ok: true } : apiError(deleteStatus))));
 }
 
 function edit(name) {
@@ -360,9 +366,9 @@ test('The device keeps its data and key until the server confirms the delete', a
 test('The device keeps its key while any conference still holds the profile', async () => {
   published(SLUG, OTHER);
   // The first conference fails part-way; the second refuses the key, now and on the retry.
-  onFetch((call) => json(call.path.includes(SLUG) ? 502 : 403, { error: 'x' }));
+  onFetch((call) => (call.path.includes(SLUG) ? json(502, { error: 'x' }) : json(403, { error: 'forbidden' })));
   await deleteMyProfile();
-  onFetch((call) => json(call.path.includes(SLUG) ? 200 : 403, { error: 'x' }));
+  onFetch((call) => (call.path.includes(SLUG) ? json(200, { ok: true }) : json(403, { error: 'forbidden' })));
   assert.equal(await finishPendingDeletes(), false);
   assert.equal(getDeletePending(SLUG), null, 'the first conference is done');
   assert.equal(getVisibility(OTHER).on_server, true);
@@ -372,24 +378,25 @@ test('The device keeps its key while any conference still holds the profile', as
 test('Without the device key nothing can be deleted from here: the device is cleared and says so', async () => {
   setProfile({ ...EMPTY_PROFILE, display_name: 'Sam' });
   setVisibility(SLUG, { open_to_meet: true, on_server: true });
-  setDeletePending(SLUG, NEW_RETRY);
-  assert.deepEqual(await deleteMyProfile(), { done: true, message: DELETED_HERE_MESSAGE });
+  setDeletePending(SLUG, newRetry());
+  assert.deepEqual(await deleteMyProfile(), { done: true, message: DELETED_NO_KEY_MESSAGE });
+  assert.match(DELETED_NO_KEY_MESSAGE, /may stay visible to other attendees until the conference ends/);
   assert.deepEqual(requests(), []);
   assert.equal(hasUnfinishedDelete(), false);
   assert.equal(getProfile(), null);
 });
 
-test('A 404 from the API itself counts as already deleted; any other 404 does not', async () => {
-  published(SLUG);
-  onFetch(() => json(404, { error: 'Not found' }));
-  assert.equal((await deleteMyProfile()).done, true);
-
-  published(SLUG);
-  onFetch(() => new Response('<html><body>Not Found</body></html>', { status: 404, headers: { 'Content-Type': 'text/html' } }));
-  const result = await deleteMyProfile();
-  assert.equal(result.done, false);
-  assert.match(result.message, /could not handle the request/);
-  assert.ok(getDevice());
+test('A 404 is a failure, from the API or from anything in between: the API answers 200 for a missing profile', async () => {
+  for (const answer of [() => json(404, { error: 'Not found' }), () => new Response('<html>Not Found</html>', { status: 404, headers: { 'Content-Type': 'text/html' } })]) {
+    clearAllPeopleData();
+    published(SLUG);
+    onFetch(answer);
+    const result = await deleteMyProfile();
+    assert.equal(result.done, false);
+    assert.match(result.message, /could not handle the request/);
+    assert.ok(getDevice(), 'the key stays');
+    assert.ok(getDeleteAll(), 'and the delete is retried');
+  }
 });
 
 /* ---------- Unfinished deletes: nothing is undone, and they finish by themselves ---------- */
@@ -570,6 +577,7 @@ test('After three refusals of the device key in a row, the user may stop trying'
   assert.equal(canStopTrying(), true);
   assert.match(getPendingDeleteDetail(), /not allowed/);
   assert.equal(await stopTrying(), DELETED_HERE_MESSAGE);
+  assert.match(DELETED_HERE_MESSAGE, /may stay visible to other attendees until the conference ends, and this phone can no longer delete it/);
   assert.equal(getDevice(), null);
   assert.equal(hasUnfinishedDelete(), false);
 });
@@ -589,7 +597,7 @@ test('The save status does not stay on "Saving" when nothing is left to send', a
   published(SLUG);
   edit('Sam Q');
   assert.equal(getSyncStatus().state, 'saving');
-  setDeletePending(SLUG, NEW_RETRY);
+  setDeletePending(SLUG, newRetry());
   edit('Sam R');
   assert.equal(getSyncStatus().state, 'idle');
 });
@@ -616,6 +624,7 @@ for (const [status, pattern, pending] of [
   [429, /Too many requests right now, so your profile was not deleted yet. Wait a minute/, false],
   [403, /not allowed to delete your profile, so it was not deleted/, false],
   [400, /could not handle the request, so your profile was not deleted yet/, false],
+  [404, /could not handle the request, so your profile was not deleted yet/, false],
 ]) {
   test(`Delete my profile, answered ${status}: the message fits`, async () => {
     published(SLUG);

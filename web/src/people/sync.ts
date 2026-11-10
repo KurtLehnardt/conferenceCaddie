@@ -15,19 +15,22 @@
 // automatic share goes to it; while "Delete my profile" is stored, none goes anywhere. Unfinished
 // deletes are tried again at start-up, when the app comes back to the foreground or back online,
 // and on a timer that waits longer after each failure. Only one tab retries at a time.
-import { deleteProfile, fetchTopics, PeopleApiError, putProfile, type ProfileBody } from './api';
+import { DELETE_UNFINISHED_MESSAGE, deletePresence, deleteProfile, fetchTopics, PeopleApiError, putProfile, type ProfileBody } from './api';
 import { presenceEndedOnServer } from './presence';
 import { forgetPush, pushDeletedOnServer } from './push';
 import {
   clearAllPeopleData,
+  deleteCovers,
   deviceRemovedElsewhere,
   ensureDevice,
   getDeleteAll,
   getDeletePending,
   getDevice,
+  getPresence,
   getProfile,
   getVisibility,
-  NEW_RETRY,
+  getVisibilityFresh,
+  newRetry,
   notify,
   setDeleteAll,
   setDeletePending,
@@ -98,6 +101,7 @@ function bodyFor(slug: string, p: Profile, v: Visibility): ProfileBody {
 // when the app knows how to put it in words, otherwise a generic line.
 function messageFor(err: unknown): string {
   if (err instanceof WritesHeldError) return WRITES_HELD_MESSAGE;
+  if (err instanceof LockWaitError) return LOCK_WAIT_MESSAGE;
   if (err instanceof PeopleApiError) return err.message;
   return 'That could not be saved. Please try again.';
 }
@@ -141,13 +145,24 @@ async function retireTopics(slug: string, p: Profile): Promise<Profile | null> {
   return next;
 }
 
+/** Computes the visibility a write sends from what storage holds now, or null to send nothing. */
+type VisibilityFor = (fresh: Visibility) => Visibility | null;
+
+/** For an edit: the stored choices, and only while the conference still holds a document. */
+const storedChoices: VisibilityFor = (fresh) => (fresh.on_server ? fresh : null);
+
 /**
- * Sends one profile write, or fails with WritesHeldError while a delete covers its conference or
- * another tab has removed the device's identity. The check and the request start in the same turn,
- * so a delete that holds writes from then on either sees this write in flight or stops it.
+ * Sends one profile write, or fails with WritesHeldError while a delete covers its conference,
+ * another tab has removed or replaced the device's identity, or `visibility` sends nothing. It
+ * runs under the shared write lock. The visibility is read from storage at this moment, not from
+ * this tab's copy: another tab may just have turned it off. The checks and the request start in
+ * the same turn, so a delete that holds writes from then on either sees this write in flight or
+ * stops it.
  */
-function sendProfile(slug: string, p: Profile, v: Visibility) {
+function sendProfile(slug: string, p: Profile, visibility: VisibilityFor) {
   if (writesHeld(slug) || deviceRemovedElsewhere()) return Promise.reject(new WritesHeldError());
+  const v = visibility(getVisibilityFresh(slug));
+  if (!v) return Promise.reject(new WritesHeldError());
   return putProfile(bodyFor(slug, p, v));
 }
 
@@ -159,20 +174,26 @@ function sendProfile(slug: string, p: Profile, v: Visibility) {
  * The whole exchange counts as one write in flight and runs under the shared write lock, so a
  * delete waits for both requests.
  */
-function putChecked(slug: string, p: Profile, v: Visibility) {
-  return track(withWriteLock(() => putCheckedNow(slug, p, v)));
+function putChecked(slug: string, p: Profile, visibility: VisibilityFor) {
+  return track(
+    withWriteLock((exclusive) => {
+      // Another tab has held the lock too long: the save gives up with a message to try again.
+      if (!exclusive) return Promise.reject(new LockWaitError());
+      return putCheckedNow(slug, p, visibility);
+    }, SAVE_LOCK_WAIT_MS),
+  );
 }
 
-async function putCheckedNow(slug: string, p: Profile, v: Visibility) {
+async function putCheckedNow(slug: string, p: Profile, visibility: VisibilityFor) {
   retiredNotice = null;
   let res;
   try {
-    res = await sendProfile(slug, p, v);
+    res = await sendProfile(slug, p, visibility);
   } catch (err) {
     const retired = err instanceof PeopleApiError && err.status === 400 && /_topics contains an unknown topic/.test(err.code ?? '');
     const fixed = retired ? await retireTopics(slug, p) : null;
     if (!fixed) throw err;
-    res = await sendProfile(slug, fixed, v);
+    res = await sendProfile(slug, fixed, visibility);
   }
   if (res.degraded?.semantic === true) scheduleDegradedResend();
   return res;
@@ -207,7 +228,7 @@ async function resendProfile(): Promise<void> {
     // A conference that a delete covers gets no write.
     if (writesHeld(slug)) continue;
     try {
-      const res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
+      const res = await putChecked(slug, getProfile() ?? p, storedChoices);
       if ((res.hidden_for_owner === true) !== getVisibility(slug).hidden_for_owner) setVisibility(slug, { hidden_for_owner: res.hidden_for_owner === true });
     } catch {
       // Quiet: the next edit or presence write sends the text again.
@@ -236,9 +257,9 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>,
   // A delete that is running finishes first, so this change starts from the state it left.
   await deletesSettled();
   if (auto && (!getVisibility(slug).share_new || writesBlocked(slug))) return null;
-  let current = getVisibility(slug);
-  let next = { ...current, ...patch };
-  if (!wantsServer(next)) {
+  // As storage holds it now: another tab may have changed it.
+  let current = getVisibilityFresh(slug);
+  if (!wantsServer({ ...current, ...patch })) {
     if (!current.on_server && !current.maybe_on_server) {
       setVisibility(slug, { ...patch, on_server: false });
       return null;
@@ -248,8 +269,7 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>,
     const removed = await removeFromServer(slug, patch);
     if (removed !== SHARE_INSTEAD) return removed;
     setStatus({ state: 'idle' });
-    current = getVisibility(slug);
-    next = { ...current, ...patch };
+    current = getVisibilityFresh(slug);
   }
   // A write now would bring back a profile whose delete has not finished.
   if (writesBlocked(slug)) return DELETE_PENDING_MESSAGE;
@@ -265,7 +285,8 @@ export async function changeVisibility(slug: string, patch: Partial<Visibility>,
   const flaggedHere = creating && !current.maybe_on_server;
   if (creating) setVisibility(slug, { maybe_on_server: true });
   try {
-    const res = await putChecked(slug, p as Profile, next);
+    // The choices sent are those stored when the write gets the lock, with this change on top.
+    const res = await putChecked(slug, p as Profile, (fresh) => ({ ...fresh, ...patch }));
     setVisibility(slug, {
       ...patch,
       open_to_meet: res.open_to_meet,
@@ -403,13 +424,13 @@ export function scheduleProfileSync(current?: string): void {
     let failure: string | null = null;
     let sent = 0;
     for (const slug of slugsOnServer().sort((a, b) => Number(b === current) - Number(a === current))) {
-      if (writesBlocked(slug)) continue;
+      if (writesBlocked(slug) || !getVisibilityFresh(slug).on_server) continue;
       if (heldNow(slug)) {
         syncDeferred = true;
         continue;
       }
       try {
-        const res = await putChecked(slug, getProfile() ?? p, getVisibility(slug));
+        const res = await putChecked(slug, getProfile() ?? p, storedChoices);
         sent++;
         // The server says whether this profile is hidden after reports; the profile screen shows it.
         if ((res.hidden_for_owner === true) !== getVisibility(slug).hidden_for_owner) setVisibility(slug, { hidden_for_owner: res.hidden_for_owner === true });
@@ -437,26 +458,36 @@ export function scheduleProfileSync(current?: string): void {
 /* ---------- Deletes: holding writes, and the shared lock ---------- */
 
 /** Shown when the user asks to share while a delete covers the conference. */
-export const DELETE_PENDING_MESSAGE =
-  'Removing your profile has not finished. Finish it first with Try again at the top of your profile.';
+export const DELETE_PENDING_MESSAGE = DELETE_UNFINISHED_MESSAGE;
 
 /** Shown in the rare case a write is stopped because a delete started at the same moment. */
 const WRITES_HELD_MESSAGE = 'Your profile is being removed, so that was not saved.';
 
+/** Shown when a save waited too long for another tab's write or delete. */
+const LOCK_WAIT_MESSAGE = 'Saving had to wait too long for another tab or a slow connection. Try again in a moment.';
+
 /** Thrown instead of sending a profile write while writes for its conference are held. */
 class WritesHeldError extends Error {}
+
+/** Thrown when a save gave up waiting for the shared write lock. */
+class LockWaitError extends Error {}
 
 // Each running or queued delete holds the profile writes for its conferences (null: all of them).
 const holds = new Set<{ slugs: string[] | null }>();
 // Profile writes that have been started and not yet answered.
 const inFlight = new Set<Promise<unknown>>();
-// Every delete asked for so far; a new one waits for the earlier ones, within its time budget.
-let deleteChain: Promise<unknown> = Promise.resolve();
+// Deletes that have been asked for and are not over; each one leaves the set when it settles.
+const activeDeletes = new Set<Promise<unknown>>();
 // Set when a profile edit was held back by a running delete; it is sent once no delete holds writes.
 let syncDeferred = false;
 
 /** How long a delete waits for earlier deletes, writes in flight and the lock, in all. */
 const WAIT_MS = 15_000;
+/**
+ * How long a save waits for the lock. Longer than a request may take (WRITE_TIMEOUT_MS), so a save
+ * waiting behind a delete that never gets an answer still goes once that request times out.
+ */
+const SAVE_LOCK_WAIT_MS = 25_000;
 const WRITE_LOCK = 'caddie-people-writes';
 const RETRY_LOCK = 'caddie-people-delete-retry';
 
@@ -467,7 +498,7 @@ function heldNow(slug: string): boolean {
 
 /** True while an unfinished delete covers this conference, or "Delete my profile" is unfinished. */
 function writesBlocked(slug: string): boolean {
-  return getDeleteAll() !== null || getDeletePending(slug) !== null;
+  return deleteCovers(slug);
 }
 
 /** True while no profile write may go to this conference: a delete for it is running or unfinished. */
@@ -497,7 +528,7 @@ function settlesBy(p: Promise<unknown>, deadline: number): Promise<boolean> {
 
 /** Resolves once every delete asked for so far is over, or after the wait limit. */
 function deletesSettled(): Promise<void> {
-  return settlesBy(deleteChain, Date.now() + WAIT_MS).then(() => undefined);
+  return settlesBy(Promise.allSettled([...activeDeletes]), Date.now() + WAIT_MS).then(() => undefined);
 }
 
 interface Locks {
@@ -513,14 +544,13 @@ function webLocks(): Locks | null {
 
 /**
  * Runs `fn` holding the lock that every tab takes for profile writes and deletes. Without Web
- * Locks, `fn` runs at once. With `waitMs`, waiting gives up after that long and `fn` runs without
- * the lock. `fn` learns whether nothing else can be writing: true when it holds the lock or there
- * is no lock to take.
+ * Locks, `fn` runs at once. Waiting gives up after `waitMs` and `fn` runs without the lock. `fn`
+ * learns whether nothing else can be writing: true when it holds the lock or there is no lock to
+ * take.
  */
-async function withWriteLock<T>(fn: (exclusive: boolean) => Promise<T>, waitMs?: number): Promise<T> {
+async function withWriteLock<T>(fn: (exclusive: boolean) => Promise<T>, waitMs: number): Promise<T> {
   const locks = webLocks();
   if (!locks) return fn(true);
-  if (waitMs === undefined) return (await locks.request(WRITE_LOCK, {}, () => fn(true))) as T;
   const ctrl = new AbortController();
   let granted = false;
   const t = setTimeout(() => ctrl.abort(), Math.max(0, waitMs));
@@ -555,7 +585,7 @@ function runDelete<T>(slugs: string[] | null, fn: (certain: boolean) => Promise<
     syncDeferred = true;
     if (status.state === 'saving' && !inFlight.size) setStatus({ state: 'idle' });
   }
-  const earlier = deleteChain;
+  const earlier = Promise.allSettled([...activeDeletes]);
   const run = async () => {
     const deadline = Date.now() + WAIT_MS;
     try {
@@ -580,7 +610,9 @@ function runDelete<T>(slugs: string[] | null, fn: (certain: boolean) => Promise<
     }
   };
   const p = run();
-  deleteChain = Promise.allSettled([earlier, p]);
+  activeDeletes.add(p);
+  const done = () => void activeDeletes.delete(p);
+  p.then(done, done);
   return p;
 }
 
@@ -589,11 +621,16 @@ function runDelete<T>(slugs: string[] | null, fn: (certain: boolean) => Promise<
 // When deletes for several conferences fail differently, the message speaks about the worst.
 const FAILURE_RANK: Record<DeleteFailure, number> = { partial: 4, offline: 3, forbidden: 2, rate: 1, bad: 0 };
 
+/**
+ * How a failed delete went. Only the API's own 403 `forbidden` means the server refused this
+ * device's key; another 403 (a proxy, a firewall, a cross-origin refusal) and a request that ran
+ * out of time say nothing certain, so they count like a 5xx.
+ */
 function failureKind(err: unknown): DeleteFailure {
   if (err instanceof PeopleApiError) {
-    if (err.status === 0) return 'offline';
+    if (err.status === 0) return err.code === 'timeout' ? 'partial' : 'offline';
     if (err.status === 429) return 'rate';
-    if (err.status === 403) return 'forbidden';
+    if (err.status === 403) return err.code === 'forbidden' ? 'forbidden' : 'partial';
     if (err.status >= 400 && err.status < 500) return 'bad';
   }
   return 'partial';
@@ -601,30 +638,31 @@ function failureKind(err: unknown): DeleteFailure {
 
 /**
  * Whether a failed delete may have done part of its work. The server hides the profile first and
- * answers 502 when a later step fails, and a lost connection can hide any answer. A 400, 403 or
- * 429 comes before the server changes anything.
+ * answers 502 when a later step fails, and a lost connection can hide any answer. A 400, 404, its
+ * own 403 or a 429 comes before the server changes anything. The API answers 200 for a profile it
+ * does not hold, so a 404 means the request did not reach the delete at all.
  */
 function mayBePartlyDone(err: unknown): boolean {
   const kind = failureKind(err);
   return kind === 'partial' || kind === 'offline';
 }
 
-/**
- * A 404 counts as "already gone" only when it is the API's own JSON answer. A 404 page from
- * something in between (a proxy, a wrong origin) says nothing about the profile.
- */
-function isGone(err: unknown): boolean {
-  return err instanceof PeopleApiError && err.status === 404 && err.code !== null;
-}
-
+/** Seconds of the server's Retry-After, at most an hour, so a wrong header cannot stop the retries. */
 function retryAfterOf(err: unknown): number {
-  return err instanceof PeopleApiError && err.retryAfter !== null ? err.retryAfter : 0;
+  return err instanceof PeopleApiError && err.retryAfter !== null ? Math.min(err.retryAfter, 3600) : 0;
 }
 
 const RETRY_FIRST_MS = 30_000;
 const RETRY_MAX_MS = 30 * 60_000;
 /** After this many refusals of the device's key in a row, the user can stop the retries. */
 const STOP_AFTER_FORBIDDEN = 3;
+/** After this many failed attempts of any kind, or this long, the user can stop too. */
+const STOP_AFTER_ATTEMPTS = 5;
+const STOP_AFTER_MS = 24 * 60 * 60_000;
+/** A retry pass that takes longer than this is no longer waited for. */
+const RETRY_PASS_MAX_MS = 120_000;
+/** The longest delay a browser timer takes (about 24.8 days). */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** A record after one more failed attempt: the wait doubles from 30 seconds up to 30 minutes, or follows a longer Retry-After. */
 function afterFailure(r: DeleteRetry, kind: DeleteFailure, retryAfterSec: number): Partial<DeleteRetry> {
@@ -636,54 +674,65 @@ function afterFailure(r: DeleteRetry, kind: DeleteFailure, retryAfterSec: number
 /** Shown once "Delete my profile" has finished. */
 export const DELETED_MESSAGE = 'Your profile was deleted from this phone and from our server.';
 
-/** Shown when the device's data went but the server copy could not be deleted from this device. */
-export const DELETED_HERE_MESSAGE =
-  'Your profile was deleted from this phone. This phone could not delete what our server still holds; that is removed after the conference ends.';
+/** What may be left on the server when this device can no longer delete it. */
+const LEFT_ON_SERVER =
+  'What our server holds may stay visible to other attendees until the conference ends, and this phone can no longer delete it.';
+
+/** Shown when the device's data went but this device had no key to delete the server copy with. */
+export const DELETED_NO_KEY_MESSAGE = `Your profile was deleted from this phone, which no longer had the key needed to delete it from our server. ${LEFT_ON_SERVER}`;
+
+/** Shown when the user stopped trying after "Delete my profile". */
+export const DELETED_HERE_MESSAGE = `Your profile was deleted from this phone only. ${LEFT_ON_SERVER}`;
 
 /** Shown when every delete went through while a profile write may still have been in flight. */
 const ALMOST_DONE_MESSAGE =
   'Your profile was deleted from our server. A change sent just before may still arrive, so the app deletes it once more shortly and then clears this phone.';
 
-type Refusal = 'rate' | 'forbidden' | 'bad';
+/**
+ * How far a failed pass got, for the message: nothing was deleted anywhere, some conferences were
+ * deleted and the rest refused, or something may be partly deleted.
+ */
+type Progress = 'none' | 'some' | 'partial';
 
 /** What "Delete my profile" tells the user when it did not finish. */
-const PROFILE_DELETE_FAILED: Record<DeleteFailure, string> = {
-  partial: 'Your profile may be partly deleted: it may already be hidden from other attendees, but deleting it did not finish. Try again to finish.',
-  offline: 'You appear to be offline. Your profile may be partly deleted. Try again to finish once you are online.',
-  rate: 'Too many requests right now, so your profile was not deleted yet. Wait a minute and try again.',
-  forbidden: 'This device is not allowed to delete your profile, so it was not deleted.',
-  bad: 'Our server could not handle the request, so your profile was not deleted yet. Try again later, or update the app.',
-};
-
-/** The same, for a refusal after an earlier attempt may have done part of the work. */
-const PROFILE_DELETE_UNFINISHED: Record<Refusal, string> = {
-  rate: 'Too many requests right now, so deleting your profile has not finished. It may be partly deleted. Wait a minute and try again.',
-  forbidden: 'This device is not allowed to finish deleting your profile. It may be partly deleted.',
-  bad: 'Our server could not handle the request, so deleting your profile has not finished. It may be partly deleted. Try again later, or update the app.',
-};
+function profileFailureMessage(kind: DeleteFailure, progress: Progress): string {
+  const partly = progress === 'partial' ? ' It may be partly deleted.' : '';
+  const notYet = progress === 'none' ? 'your profile was not deleted yet' : 'deleting your profile has not finished';
+  switch (kind) {
+    case 'partial':
+      return 'Your profile may be partly deleted: it may already be hidden from other attendees, but deleting it did not finish. Try again to finish.';
+    case 'offline':
+      return 'You appear to be offline. Your profile may be partly deleted. Try again to finish once you are online.';
+    case 'rate':
+      return `Too many requests right now, so ${notYet}.${partly} Wait a minute and try again.`;
+    case 'forbidden':
+      return progress === 'none'
+        ? 'This device is not allowed to delete your profile, so it was not deleted.'
+        : `This device is not allowed to finish deleting your profile.${partly}`;
+    case 'bad':
+      return `Our server could not handle the request, so ${notYet}.${partly} Try again later, or update the app.`;
+  }
+}
 
 /** What turning both visibility choices off tells the user when removing the server copy failed. */
-const VISIBILITY_DELETE_FAILED: Record<DeleteFailure, string> = {
-  partial:
-    'Your profile may already be hidden from others at this conference, but removing it did not finish. The app will try again, or you can finish it from your profile.',
-  offline:
-    'You appear to be offline, so removing your profile did not finish. It may already be hidden from others at this conference. The app will try again once you are online.',
-  rate: 'Too many requests right now, so nothing changed. Wait a minute and try again.',
-  forbidden: 'This device is not allowed to remove your profile, so nothing changed.',
-  bad: 'Our server could not handle the request, so nothing changed. Try again later, or update the app.',
-};
-
-/** The same, for a refusal after an earlier attempt may have done part of the work. */
-const VISIBILITY_DELETE_UNFINISHED: Record<Refusal, string> = {
-  rate: 'Too many requests right now, so removing your profile has not finished. It may already be hidden from others at this conference. Wait a minute and try again.',
-  forbidden: 'This device is not allowed to finish removing your profile. It may already be hidden from others at this conference.',
-  bad: 'Our server could not handle the request, so removing your profile has not finished. It may already be hidden from others at this conference.',
-};
-
-function failureMessage(kind: DeleteFailure, partlyDone: boolean, all: boolean): string {
-  const unfinished = all ? PROFILE_DELETE_UNFINISHED : VISIBILITY_DELETE_UNFINISHED;
-  if (partlyDone && (kind === 'rate' || kind === 'forbidden' || kind === 'bad')) return unfinished[kind];
-  return (all ? PROFILE_DELETE_FAILED : VISIBILITY_DELETE_FAILED)[kind];
+function visibilityFailureMessage(kind: DeleteFailure, partlyDone: boolean): string {
+  const hidden = ' It may already be hidden from others at this conference.';
+  switch (kind) {
+    case 'partial':
+      return 'Your profile may already be hidden from others at this conference, but removing it did not finish. The app will try again, or you can finish it from your profile.';
+    case 'offline':
+      return `You appear to be offline, so removing your profile did not finish.${hidden} The app will try again once you are online.`;
+    case 'rate':
+      return partlyDone
+        ? `Too many requests right now, so removing your profile has not finished.${hidden} Wait a minute and try again.`
+        : 'Too many requests right now, so nothing changed. Wait a minute and try again.';
+    case 'forbidden':
+      return partlyDone ? `This device is not allowed to finish removing your profile.${hidden}` : 'This device is not allowed to remove your profile, so nothing changed.';
+    case 'bad':
+      return partlyDone
+        ? `Our server could not handle the request, so removing your profile has not finished.${hidden}`
+        : 'Our server could not handle the request, so nothing changed. Try again later, or update the app.';
+  }
 }
 
 /** The extra line the unfinished-delete notice shows after an attempt failed for a known reason. */
@@ -707,6 +756,35 @@ export function getPendingDeleteDetail(): string | null {
   return last ? PENDING_DETAIL[last] : null;
 }
 
+/* ---------- Deletes: what else stops on the device ---------- */
+
+// Stops the Bluetooth scan (and, for "Delete my profile", every presence timer and the position
+// watch) on the device. Those modules pull in the native bridge, so people/index.ts registers this
+// instead of sync.ts importing them; that keeps sync.ts runnable under node --test.
+let stopRuntime: (slug: string | null) => Promise<void> = async () => undefined;
+
+/** Sets what a delete stops on the device before its first request: for one conference, or all with null. */
+export function registerRuntimeStop(fn: (slug: string | null) => Promise<void>): void {
+  stopRuntime = fn;
+}
+
+/**
+ * Before the first delete request: nothing that keeps the person findable carries on. Presence
+ * ends on the device for each conference concerned and a presence DELETE goes to the server for
+ * those where it was on (a DELETE can create nothing), and Bluetooth stops. Until the delete is
+ * done, presence, Bluetooth, push and ask writes are refused on the device (deleteCovers).
+ */
+async function stopActivity(slugs: string[], all: boolean): Promise<void> {
+  try {
+    await stopRuntime(all ? null : (slugs[0] ?? null));
+  } catch {
+    // Stopping is best effort; the server ends presence and Bluetooth with the profile anyway.
+  }
+  const live = slugs.filter((slug) => getPresence(slug).on);
+  for (const slug of slugs) presenceEndedOnServer(slug);
+  await Promise.allSettled(live.map((slug) => deletePresence(slug)));
+}
+
 /* ---------- Deletes: sending them ---------- */
 
 /** The device stops treating this conference as holding its profile. */
@@ -716,38 +794,36 @@ function forgetServerCopy(slug: string): void {
 }
 
 /**
- * Sends the delete for one conference. The conference is marked on the device first, so profile
- * writes stay off for it until the server confirms, even if the app is closed in the middle. The
- * mark goes on success, or when the server refused before changing anything (400, 403, 429) and
- * no earlier attempt had left it; any other failure keeps it, with the time of the next attempt.
- * A mark that another tab removed meanwhile is never written back. With `certain` false, a write
- * may still land after the delete, so the mark stays even on success and the delete runs again.
- * Returns 'no_key' when the device has no identity: nothing on the server can be deleted from
- * here, so the mark goes too. Throws the request's error. Callers run it inside runDelete.
+ * Sends the delete for one conference. The conference is marked on the device first (unless the
+ * caller already did, `earlier` telling whether a mark was there before it), so profile writes stay
+ * off for it until the server confirms, even if the app is closed in the middle. The mark goes on
+ * success, or when the server refused before changing anything (400, 403 `forbidden`, 404, 429)
+ * and no earlier attempt had left it; any other failure keeps it, with the time of the next
+ * attempt. A mark that another tab removed meanwhile is never written back. With `certain` false, a
+ * write may still land after the delete, so the mark stays even on success and the delete runs
+ * again. Returns 'no_key' when the device has no identity: nothing on the server can be deleted
+ * from here, so the mark goes too. Throws the request's error. Callers run it inside runDelete.
  */
-async function deleteOnServer(slug: string, certain: boolean): Promise<'deleted' | 'no_key'> {
+async function deleteOnServer(slug: string, certain: boolean, earlier = getDeletePending(slug) !== null): Promise<'deleted' | 'no_key'> {
   if (!getDevice()) {
     forgetServerCopy(slug);
     return 'no_key';
   }
-  const earlier = getDeletePending(slug);
-  if (!earlier) setDeletePending(slug, NEW_RETRY);
+  if (!getDeletePending(slug)) setDeletePending(slug, newRetry());
   try {
     await deleteProfile(slug);
   } catch (err) {
-    if (!isGone(err)) {
-      const kind = failureKind(err);
-      if (!earlier && !mayBePartlyDone(err)) setDeletePending(slug, null);
-      else {
-        const r = getDeletePending(slug);
-        if (r) updateDeletePending(slug, afterFailure(r, kind, retryAfterOf(err)));
-      }
-      throw err;
+    const kind = failureKind(err);
+    if (!earlier && !mayBePartlyDone(err)) setDeletePending(slug, null);
+    else {
+      const r = getDeletePending(slug);
+      if (r) updateDeletePending(slug, afterFailure(r, kind, retryAfterOf(err)));
     }
+    throw err;
   }
   // on_server goes first: if the app stops between the two writes, the mark is still there and the
-  // next attempt only repeats a delete that is done.
-  setVisibility(slug, { on_server: false, maybe_on_server: false, hidden_for_owner: false });
+  // next attempt only repeats a delete that is done. The switches go off with the document.
+  setVisibility(slug, { on_server: false, maybe_on_server: false, hidden_for_owner: false, open_to_meet: false, shared_talk_ids: [] });
   // The server deleted the document with its presence and push subscription.
   presenceEndedOnServer(slug);
   pushDeletedOnServer(slug);
@@ -757,9 +833,8 @@ async function deleteOnServer(slug: string, certain: boolean): Promise<'deleted'
 }
 
 // Stops what runs in memory for the people features: the position watch and presence timers, the
-// Bluetooth scan, the inbox poll's state, the nudges and the watch list. Those modules pull in the
-// native bridge, so people/index.ts registers this instead of sync.ts importing them; that keeps
-// sync.ts runnable under node --test.
+// Bluetooth scan, the inbox poll's state, the nudges and the watch list. Registered by
+// people/index.ts, for the same reason as registerRuntimeStop.
 let resetRuntime: () => Promise<void> = async () => undefined;
 
 /** Sets what "Delete my profile" stops in memory before it clears the device's stored data. */
@@ -787,18 +862,26 @@ const SHARE_INSTEAD = Symbol('share instead');
 
 /** The both-off branch of changeVisibility: removes the server copy for one conference. */
 async function removeFromServer(slug: string, patch: Partial<Visibility>): Promise<string | null | typeof SHARE_INSTEAD> {
+  // The mark goes on before anything waits for the lock, so a write another tab has queued for
+  // the lock finds it there and is dropped.
+  const earlier = getDeletePending(slug) !== null;
+  if (!earlier) setDeletePending(slug, newRetry());
   let outcome: 'removed' | 'share';
   try {
     outcome = await runDelete([slug], async (certain) => {
-      // A write answered while this delete waited may have changed the choices. The state as it
-      // is now decides whether there is anything to remove.
-      if (wantsServer({ ...getVisibility(slug), ...patch })) return 'share';
-      await deleteOnServer(slug, certain);
+      // A write answered while this delete waited may have changed the choices. The state as
+      // storage holds it now decides whether there is anything to remove.
+      if (wantsServer({ ...getVisibilityFresh(slug), ...patch })) {
+        if (!earlier) setDeletePending(slug, null);
+        return 'share';
+      }
+      await stopActivity([slug], false);
+      await deleteOnServer(slug, certain, earlier);
       return 'removed';
     });
   } catch (err) {
     const partlyDone = getDeletePending(slug) !== null;
-    const message = failureMessage(failureKind(err), partlyDone, false);
+    const message = visibilityFailureMessage(failureKind(err), partlyDone);
     // The server copy may already be hidden. The user's choice applies on the device and the
     // delete is tried again; until it is done, nothing is written for this conference. After a
     // refusal nothing changed on the server, so the device keeps the earlier state too.
@@ -831,12 +914,15 @@ async function deleteEverywhere(certain: boolean): Promise<DeleteResult> {
     return { done: true, message: DELETED_MESSAGE };
   }
   const targets = [...new Set([...slugsMaybeOnServer(), ...slugsDeletePending()])];
+  await stopActivity(targets, true);
   let worst: DeleteFailure | null = null;
   let retryAfter = 0;
   let noKey = false;
+  let deleted = 0;
   for (const slug of targets) {
     try {
       if ((await deleteOnServer(slug, certain)) === 'no_key') noKey = true;
+      else deleted++;
     } catch (err) {
       const kind = failureKind(err);
       if (!worst || FAILURE_RANK[kind] > FAILURE_RANK[worst]) worst = kind;
@@ -846,14 +932,15 @@ async function deleteEverywhere(certain: boolean): Promise<DeleteResult> {
   if (worst) {
     const r = getDeleteAll();
     if (r) updateDeleteAll(afterFailure(r, worst, retryAfter));
-    return { done: false, message: failureMessage(worst, slugsDeletePending().length > 0, true) };
+    const progress: Progress = slugsDeletePending().length ? 'partial' : deleted ? 'some' : 'none';
+    return { done: false, message: profileFailureMessage(worst, progress) };
   }
   if (slugsDeletePending().length || slugsMaybeOnServer().length) {
     updateDeleteAll({ next_at: Date.now() + RETRY_FIRST_MS, last: null });
     return { done: false, message: ALMOST_DONE_MESSAGE };
   }
   await wipeDevice();
-  return { done: true, message: noKey ? DELETED_HERE_MESSAGE : DELETED_MESSAGE };
+  return { done: true, message: noKey ? DELETED_NO_KEY_MESSAGE : DELETED_MESSAGE };
 }
 
 /**
@@ -862,7 +949,7 @@ async function deleteEverywhere(certain: boolean): Promise<DeleteResult> {
  * device forget it: the retries carry on until every conference is done.
  */
 export function deleteMyProfile(): Promise<DeleteResult> {
-  if (!getDeleteAll()) setDeleteAll(NEW_RETRY);
+  if (!getDeleteAll()) setDeleteAll(newRetry());
   return runDelete(null, deleteEverywhere);
 }
 
@@ -872,7 +959,11 @@ function isDue(r: DeleteRetry | null): boolean {
   return r !== null && r.next_at <= Date.now();
 }
 
-/** One retry pass. With `onlyDue`, deletes whose next attempt is not due yet are left alone. */
+/**
+ * One retry pass. With `onlyDue`, deletes whose next attempt is not due yet are left alone. A pass
+ * that has not finished after two minutes is no longer waited for (every request has its own time
+ * limit, so this only guards against the unforeseen).
+ */
 function retryPass(onlyDue: boolean): Promise<boolean> {
   if (retrying) return retrying;
   const run = (async () => {
@@ -896,12 +987,13 @@ function retryPass(onlyDue: boolean): Promise<boolean> {
     }
     return !hasUnfinishedDelete();
   })();
-  retrying = run;
+  const bounded = settlesBy(run, Date.now() + RETRY_PASS_MAX_MS).then((settled) => (settled ? run : false));
+  retrying = bounded;
   const clear = () => {
-    if (retrying === run) retrying = null;
+    if (retrying === bounded) retrying = null;
   };
-  run.then(clear, clear);
-  return run;
+  bounded.then(clear, clear);
+  return bounded;
 }
 
 /** Tries every unfinished delete again now, as the Try again button does. Resolves to true when nothing is left unfinished. */
@@ -909,20 +1001,32 @@ export function finishPendingDeletes(): Promise<boolean> {
   return retryPass(false);
 }
 
+/** Why a record may be given up: the key keeps being refused, or the delete keeps failing. */
+function stuck(r: DeleteRetry | null): 'forbidden' | 'failing' | null {
+  if (!r) return null;
+  if (r.forbidden >= STOP_AFTER_FORBIDDEN) return 'forbidden';
+  if (r.attempts >= STOP_AFTER_ATTEMPTS || Date.now() - r.since >= STOP_AFTER_MS) return 'failing';
+  return null;
+}
+
 /**
- * True after the server refused this device's key three times in a row for every unfinished
- * delete: trying again will not help, and the user may stop.
+ * Why the user may stop trying, or null: after three refusals of the device's key in a row, five
+ * failed attempts of any kind, or a day of trying.
  */
-export function canStopTrying(): boolean {
+export function stopTryingReason(): 'forbidden' | 'failing' | null {
   const all = getDeleteAll();
-  if (all) return all.forbidden >= STOP_AFTER_FORBIDDEN;
-  const pending = slugsDeletePending();
-  return pending.length > 0 && pending.every((s) => (getDeletePending(s)?.forbidden ?? 0) >= STOP_AFTER_FORBIDDEN);
+  if (all) return stuck(all);
+  const reasons = slugsDeletePending().map((s) => stuck(getDeletePending(s)));
+  return reasons.includes('forbidden') ? 'forbidden' : reasons.includes('failing') ? 'failing' : null;
+}
+
+export function canStopTrying(): boolean {
+  return stopTryingReason() !== null;
 }
 
 /**
  * Gives up on unfinished deletes. After "Delete my profile" the device's data goes; otherwise the
- * device stops treating those conferences as holding the profile. Returns the message for the
+ * device stops treating the stuck conferences as holding the profile. Returns the message for the
  * user after "Delete my profile", else null.
  */
 export function stopTrying(): Promise<string | null> {
@@ -931,7 +1035,7 @@ export function stopTrying(): Promise<string | null> {
       await wipeDevice();
       return DELETED_HERE_MESSAGE;
     }
-    for (const slug of slugsDeletePending()) forgetServerCopy(slug);
+    for (const slug of slugsDeletePending()) if (stuck(getDeletePending(slug))) forgetServerCopy(slug);
     return null;
   });
 }
@@ -939,7 +1043,10 @@ export function stopTrying(): Promise<string | null> {
 let retriesStarted = false;
 let retryTimer: number | undefined;
 
-/** Starts the retry the browser can run on its own: only one tab at a time, and only when due. */
+/**
+ * Starts the retry the browser can run on its own: only when due, and in one tab at a time. A tab
+ * that finds another one retrying does not poll; it waits for its timer, at least 30 seconds.
+ */
 function backgroundRetry(): void {
   window.clearTimeout(retryTimer);
   retryTimer = undefined;
@@ -947,21 +1054,33 @@ function backgroundRetry(): void {
   // Offline, nothing is sent; the 'online' event starts the next attempt.
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
   const locks = webLocks();
-  const pass = locks
-    ? locks.request(RETRY_LOCK, { ifAvailable: true }, (lock) => (lock ? retryPass(true) : Promise.resolve(false)))
-    : retryPass(true);
-  pass.then(scheduleRetryTimer, scheduleRetryTimer);
+  if (!locks) {
+    retryPass(true).then(() => scheduleRetryTimer(), () => scheduleRetryTimer());
+    return;
+  }
+  let busy = false;
+  locks
+    .request(RETRY_LOCK, { ifAvailable: true }, (lock) => {
+      if (lock) return retryPass(true);
+      busy = true;
+      return Promise.resolve(false);
+    })
+    .then(
+      () => scheduleRetryTimer(busy ? RETRY_FIRST_MS : 0),
+      () => scheduleRetryTimer(RETRY_FIRST_MS),
+    );
 }
 
-/** Sets the timer for the next due retry, while the app is open and retries have started. */
-function scheduleRetryTimer(): void {
+/** Sets the timer for the next due retry, at least `floorMs` away, while the app is open and retries have started. */
+function scheduleRetryTimer(floorMs = 0): void {
   if (!retriesStarted) return;
   window.clearTimeout(retryTimer);
   retryTimer = undefined;
   const all = getDeleteAll();
   const times = all ? [all.next_at] : slugsDeletePending().map((s) => getDeletePending(s)?.next_at ?? 0);
   if (!times.length) return;
-  retryTimer = window.setTimeout(backgroundRetry, Math.max(5_000, Math.min(...times) - Date.now()));
+  const delay = Math.max(5_000, floorMs, Math.min(...times) - Date.now());
+  retryTimer = window.setTimeout(backgroundRetry, Math.min(delay, MAX_TIMER_MS));
 }
 
 /**

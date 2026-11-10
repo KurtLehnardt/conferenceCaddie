@@ -63,7 +63,18 @@ export function onFetch(fn) {
 globalThis.fetch = async (path, init = {}) => {
   const call = { method: init.method ?? 'GET', path: String(path), body: init.body ? JSON.parse(init.body) : null };
   calls.push(call);
-  return handler(call);
+  const answer = Promise.resolve(handler(call));
+  const signal = init.signal;
+  if (!signal) return answer;
+  // An aborted request fails at once, as the browser's fetch does, even if the fake never answers.
+  return Promise.race([
+    answer,
+    new Promise((_, reject) => {
+      const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort);
+    }),
+  ]);
 };
 
 export function json(status, body, headers = {}) {

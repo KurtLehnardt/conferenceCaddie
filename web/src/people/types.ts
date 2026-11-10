@@ -242,6 +242,8 @@ export interface DeleteRetry {
   forbidden: number;
   /** How the last attempt failed, or null before the first failure. */
   last: DeleteFailure | null;
+  /** Time in epoch milliseconds the delete was first asked for. */
+  since: number;
 }
 
 /** Report: what a report is about and why. */

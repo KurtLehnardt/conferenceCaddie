@@ -80,8 +80,8 @@ export function getDevice(): Device | null {
 }
 
 /**
- * True when another tab removed this device's identity (after "Delete my profile") since this tab
- * read it. The cached copies are dropped then, so this tab reads what is stored now.
+ * True when another tab removed this device's identity (after "Delete my profile") or replaced it
+ * since this tab read it. The cached copies are dropped then, so this tab reads what is stored now.
  */
 export function deviceRemovedElsewhere(): boolean {
   if (!deviceMem || unsaved.has(DEVICE_KEY)) return false;
@@ -91,7 +91,13 @@ export function deviceRemovedElsewhere(): boolean {
   } catch {
     return false;
   }
-  if (raw !== null) return false;
+  let stored: Partial<Device> | null = null;
+  try {
+    stored = raw === null ? null : (JSON.parse(raw) as Partial<Device>);
+  } catch {
+    // An unreadable identity counts as replaced.
+  }
+  if (stored?.profile_id === deviceMem.profile_id) return false;
   deviceMem = undefined;
   profileMem = undefined;
   visMem.clear();
@@ -182,24 +188,52 @@ const EMPTY_VIS: Visibility = {
   hidden_for_owner: false,
 };
 
+function parseVisibility(raw: Partial<Visibility>): Visibility {
+  const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i): i is string => typeof i === 'string') : []);
+  return {
+    open_to_meet: raw.open_to_meet === true,
+    shared_talk_ids: ids(raw.shared_talk_ids).slice(0, 50),
+    on_server: raw.on_server === true,
+    maybe_on_server: raw.maybe_on_server === true,
+    share_notice_seen: raw.share_notice_seen === true,
+    banner_seen: ids(raw.banner_seen).slice(-200),
+    share_new: raw.share_new === true,
+    hidden_for_owner: raw.hidden_for_owner === true,
+  };
+}
+
 export function getVisibility(slug: string): Visibility {
   let v = visMem.get(slug);
   if (!v) {
-    const raw = read<Partial<Visibility>>(VIS_PREFIX + slug) ?? {};
-    const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i): i is string => typeof i === 'string') : []);
-    v = {
-      open_to_meet: raw.open_to_meet === true,
-      shared_talk_ids: ids(raw.shared_talk_ids).slice(0, 50),
-      on_server: raw.on_server === true,
-      maybe_on_server: raw.maybe_on_server === true,
-      share_notice_seen: raw.share_notice_seen === true,
-      banner_seen: ids(raw.banner_seen).slice(-200),
-      share_new: raw.share_new === true,
-      hidden_for_owner: raw.hidden_for_owner === true,
-    };
+    v = parseVisibility(read<Partial<Visibility>>(VIS_PREFIX + slug) ?? {});
     visMem.set(slug, v);
   }
   return v ?? EMPTY_VIS;
+}
+
+/**
+ * The visibility of one conference as storage holds it now, not as this tab cached it: another
+ * tab may have changed it a moment ago and its storage event may not have arrived yet. Writes that
+ * could make a profile visible read it this way, under the shared write lock.
+ */
+export function getVisibilityFresh(slug: string): Visibility {
+  const key = VIS_PREFIX + slug;
+  if (unsaved.has(key)) return getVisibility(slug);
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(key);
+  } catch {
+    return getVisibility(slug);
+  }
+  let parsed: Partial<Visibility> = {};
+  try {
+    parsed = raw ? (JSON.parse(raw) as Partial<Visibility>) : {};
+  } catch {
+    // Unreadable: as good as empty.
+  }
+  const v = parseVisibility(parsed && typeof parsed === 'object' ? parsed : {});
+  visMem.set(slug, v);
+  return v;
 }
 
 export function setVisibility(slug: string, patch: Partial<Visibility>): Visibility {
@@ -243,13 +277,24 @@ export function slugsMaybeOnServer(): string[] {
 const retryMem = new Map<string, DeleteRetry | null>();
 const FAILURES: DeleteFailure[] = ['partial', 'offline', 'rate', 'forbidden', 'bad'];
 
+// No automatic attempt waits longer than this; a stored time further ahead is corrupt or from a
+// clock that has since been set back.
+const LONGEST_WAIT_MS = 60 * 60_000;
+
 function parseRetry(raw: string | null): DeleteRetry | null {
   if (raw === null) return null;
   try {
     const r = JSON.parse(raw) as Partial<DeleteRetry> | null;
     if (!r || typeof r !== 'object') return null;
     const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : 0);
-    return { attempts: n(r.attempts), next_at: n(r.next_at), forbidden: n(r.forbidden), last: FAILURES.includes(r.last as DeleteFailure) ? (r.last as DeleteFailure) : null };
+    const now = Date.now();
+    return {
+      attempts: n(r.attempts),
+      next_at: Math.min(n(r.next_at), now + LONGEST_WAIT_MS),
+      forbidden: n(r.forbidden),
+      last: FAILURES.includes(r.last as DeleteFailure) ? (r.last as DeleteFailure) : null,
+      since: Math.min(n(r.since) || now, now),
+    };
   } catch {
     return null;
   }
@@ -274,7 +319,9 @@ function writeRetry(key: string, value: DeleteRetry | null): void {
 }
 
 /** A fresh record, for a delete that is about to be sent for the first time. */
-export const NEW_RETRY: DeleteRetry = { attempts: 0, next_at: 0, forbidden: 0, last: null };
+export function newRetry(): DeleteRetry {
+  return { attempts: 0, next_at: 0, forbidden: 0, last: null, since: Date.now() };
+}
 
 /** The unfinished profile delete for one conference, or null when there is none. */
 export function getDeletePending(slug: string): DeleteRetry | null {
@@ -321,6 +368,16 @@ export function getDeleteAll(): DeleteRetry | null {
 
 export function setDeleteAll(value: DeleteRetry | null): void {
   writeRetry(DELETE_ALL_KEY, value);
+}
+
+/**
+ * True while a delete covers this conference: "Delete my profile" is unfinished, or the delete of
+ * this conference's copy is. Nothing that could make the device visible again is sent then: no
+ * profile write, presence, Bluetooth token, push subscription or ask. Read from storage, so
+ * another tab's delete counts at once.
+ */
+export function deleteCovers(slug: string): boolean {
+  return getDeleteAll() !== null || getDeletePending(slug) !== null;
 }
 
 /** Changes the stored "Delete my profile" record, only if it is still stored. */
