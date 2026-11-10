@@ -30,11 +30,14 @@ VITE_MOCK=1 npm --prefix web run dev     # http://localhost:5173 with fixture co
 
 ```sh
 npm ci && npm --prefix web ci
+export ES_URL="https://<your-deployment>.es.io:443"   # required: the scripts default to the maintainer's cluster otherwise
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run es:setup         # talks, conferences, topics
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run people:setup     # people, presence, meets, blocks
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run ingest -- --event kubecon-cloudnativecon-north-america-2026
 npm run deploy                                                          # Cloud Run; see the checklist for every step
 ```
+
+Set `ES_URL` before running any of the scripts, because they fall back to the maintainer's Elasticsearch cluster and would send your API key there. `scripts/deploy.sh` hard-codes `PROJECT`, `REGION` and `ES_URL` for the maintainer's deployment (the service name comes from `SERVICE`, default `conference-caddie`), so edit `PROJECT`, `REGION` and `ES_URL` in that file before you run `npm run deploy`.
 
 [docs/OPERATOR_CHECKLIST.md](docs/OPERATOR_CHECKLIST.md) lists every setup step in order (reports, moderation rules, push keys, the smoke test), with the environment variables each one reads.
 
