@@ -72,7 +72,7 @@ class CaddieCoreTest {
     private suspend fun stopAll() {
         scopes.forEach { it.coroutineContext.job.cancelAndJoin() }
         scopes.clear()
-        databases.forEach { it.close() }
+        databases.forEach { it.closeWhenIdle() }
         databases.clear()
     }
 
@@ -90,11 +90,11 @@ class CaddieCoreTest {
 
     private fun offline(vararg urls: String) = FakeHttp(urls.associateWith { IllegalStateException("offline") })
 
-    private suspend fun launch(http: FakeHttp, chooseBackend: Boolean = true): CaddieCore {
+    private suspend fun launch(http: FakeHttp, chooseBackend: Boolean = true, allowLocalHttp: Boolean = false): CaddieCore {
         val database = CaddieDatabase.open(dbPath).also { databases += it }
         if (chooseBackend) database.setSetting("backend", backend)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { scopes += it }
-        return CaddieCore(database, files, http, scope, allowLocalHttp = false, clock = clock).also { it.start() }
+        return CaddieCore(database, files, http, scope, allowLocalHttp = allowLocalHttp, clock = clock).also { it.start() }
     }
 
     private suspend fun CaddieCore.until(timeoutMs: Long = 20_000, predicate: (CoreState) -> Boolean): CoreState =
@@ -312,35 +312,74 @@ class CaddieCoreTest {
         val count = { url: String -> http.calls.count { it == url } }
         val caps = "$backend/capabilities.json"
         val list = "${bundleBase}conferences.json"
-        suspend fun waitFor(url: String, n: Int) =
-            withContext(Dispatchers.Default) { withTimeout(10_000) { while (count(url) < n) kotlinx.coroutines.delay(10) } }
+        // Each refresh is waited for until it has finished, not only until its request went out:
+        // a refresh made while another runs does nothing.
+        core.awaitIdle()
         assertEquals(1, count(caps))
         // Half an hour later the list is due (15 minutes) but the capabilities are not (an hour).
         nowMs += 30 * 60 * 1000L
         core.refresh()
-        waitFor(list, 2)
-        core.until { it.settled() }
+        core.awaitIdle()
+        assertEquals(2, count(list))
         assertEquals(1, count(caps), "inside the default max-age of an hour")
         nowMs += 31 * 60 * 1000L
         core.refresh()
-        waitFor(caps, 2)
+        core.awaitIdle()
         assertEquals(2, count(caps))
     }
 
     @Test
     fun myScheduleShowsTheCopyOfATalkTheBundleDropped() {
         val bundle = TalkBundle.decode(Fixtures.HASH, Fixtures.files.getValue("bundle.json"))!!
+        val memory = CaddieDatabase.open(":memory:").also { databases += it }
         val gone = InterestedTalk.from(bundle.talksById.getValue(Fixtures.A)).copy(talkId = "${Fixtures.SLUG}:9999", title = "Dropped talk")
         val state = CoreState(
             backend = BackendUrl.normalise(backend) as BackendUrl.Valid,
             isDefaultBackend = false,
             selectedSlug = Fixtures.SLUG,
-            bundle = BundleState.Ready(bundle, TalkSearch(bundle, scopeA, CaddieDatabase.open(":memory:"))),
+            bundle = BundleState.Ready(bundle, TalkSearch(bundle, scopeA, memory)),
             interested = listOf(Fixtures.B, gone.talkId, "${Fixtures.SLUG}:no-copy"),
             interestedSnapshots = mapOf(gone.talkId to gone),
         )
         assertEquals(listOf(Fixtures.B, gone.talkId), state.interestedTalks().map { it.talkId }, "a talk with neither is left out")
         assertEquals("Dropped talk", state.interestedTalks()[1].title)
+    }
+
+    @Test
+    fun aServerThatNeedsANewerAppWithNothingSavedSaysSo() = runTest {
+        val core = launch(FakeHttp(mapOf("$backend/capabilities.json" to FakeHttp.json(200, Fixtures.text("capabilities/too-new-v2.json")))))
+        core.awaitIdle()
+        val s = core.state.value
+        assertEquals(CapabilitiesState.UpdateApp, s.capabilities)
+        assertEquals(ConferencesState.Failed("update_app"), s.conferences)
+    }
+
+    @Test
+    fun onlyATypedServerMayNameALocalHttpBundleBase() = runTest {
+        // An https server whose document names a plain http bundle base on this machine, as a
+        // developer's would; the build is a debug build.
+        val local = "http://127.0.0.1:8710/bundles/"
+        val http = online(base = local)
+        val core = launch(http, chooseBackend = false, allowLocalHttp = true)
+        core.awaitIdle()
+        val server = BackendUrl.normalise(backend) as BackendUrl.Valid
+        core.setBackend(server, typed = false)
+        core.awaitIdle()
+        assertEquals(ConferencesState.NoBundles, core.state.value.conferences, "from a link, the http bundle base is refused")
+        assertTrue(http.calls.none { it.startsWith(local) })
+        core.setBackend(server, typed = true)
+        core.awaitIdle()
+        assertIs<ConferencesState.Ready>(core.state.value.conferences, "typed in Settings, it is used")
+        assertTrue(http.calls.contains("${local}conferences.json"))
+    }
+
+    @Test
+    fun aDismissedResetNoticeStaysDismissed() = runTest {
+        val core = launch(online())
+        core.dismissStorageReset()
+        core.awaitIdle()
+        assertEquals(false, core.state.value.storageReset)
+        assertEquals(false, core.state.value.storageInMemory)
     }
 
     @Test

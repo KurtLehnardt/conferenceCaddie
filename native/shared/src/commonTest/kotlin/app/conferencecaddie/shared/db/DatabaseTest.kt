@@ -35,37 +35,68 @@ class DatabaseTest {
     private fun write(path: String, bytes: ByteArray) = SystemFileSystem.sink(Path(path)).buffered().use { it.write(bytes) }
 
     @Test
-    fun aDatabaseFromANewerAppIsRefusedByOpenAndSetAsideByOpenLazily() = runTest {
+    fun aDatabaseFromANewerAppIsLeftForItAndThisLaunchRunsInMemory() = runTest {
         CaddieDatabase.open(path).apply {
             setSetting("backend", "https://a.example")
             run { it.execSQL("PRAGMA user_version = 99") }
             close()
         }
         val e = assertFailsWith<IllegalArgumentException> { CaddieDatabase.open(path) }
-        assertTrue(CaddieDatabase.isUnusableFile(e))
+        assertTrue(CaddieDatabase.isNewerSchema(e))
 
         val lazy = CaddieDatabase.openLazily(path)
         assertTrue(lazy.wasReset(), "the person is told once")
         assertFalse(lazy.wasReset())
-        assertNull(lazy.setting("backend"), "a new, empty database")
+        assertTrue(lazy.runsInMemory(), "marks made now are not kept")
+        assertNull(lazy.setting("backend"))
         lazy.setSetting("backend", "https://b.example")
         assertEquals("https://b.example", lazy.setting("backend"))
         lazy.close()
-        assertTrue(SystemFileSystem.exists(Path("$path.unreadable")), "the old file is kept aside, not deleted")
+        assertTrue(unreadable().isEmpty(), "nothing is moved aside")
+        // The newer app's file is untouched, so an upgrade opens it again.
+        BundledSQLiteDriver().open(path).apply {
+            assertEquals(99, CaddieDatabase.version(this))
+            close()
+        }
+        val again = CaddieDatabase.openLazily(path)
+        assertTrue(again.runsInMemory(), "every launch of this older app runs in memory")
+        again.close()
+    }
+
+    // The moved-aside main files (their -wal and -shm, if any, go with them).
+    private fun unreadable(): List<String> = SystemFileSystem.list(dir).map { it.name }
+        .filter { it.startsWith("caddie.db.unreadable-") && !it.endsWith("-wal") && !it.endsWith("-shm") }.sorted()
+
+    @Test
+    fun aCorruptDatabaseIsMovedAsideAndReplaced() = runTest {
+        write(path, ByteArray(4096) { 'x'.code.toByte() })
+        val lazy = CaddieDatabase.openLazily(path, nowMs = { 1_000 })
+        assertTrue(lazy.wasReset())
+        assertFalse(lazy.runsInMemory(), "a new file replaced it")
+        lazy.setInterested("s", "conf:1", true, 1)
+        assertEquals(listOf("conf:1"), lazy.interested("s"))
+        lazy.close()
+        assertEquals(listOf("caddie.db.unreadable-1000"), unreadable())
         val again = CaddieDatabase.openLazily(path)
         assertFalse(again.wasReset(), "the next start opens the new database normally")
-        assertEquals("https://b.example", again.setting("backend"))
+        assertEquals(listOf("conf:1"), again.interested("s"))
         again.close()
     }
 
     @Test
-    fun aCorruptDatabaseIsReplaced() = runTest {
-        write(path, ByteArray(4096) { 'x'.code.toByte() })
-        val lazy = CaddieDatabase.openLazily(path)
-        assertTrue(lazy.wasReset())
-        lazy.setInterested("s", "conf:1", true, 1)
-        assertEquals(listOf("conf:1"), lazy.interested("s"))
-        lazy.close()
+    fun onlyTheNewestThreeUnreadableCopiesAreKept() = runTest {
+        for (t in 1L..5L) {
+            write(path, ByteArray(4096) { t.toByte() })
+            SystemFileSystem.delete(Path("$path-wal"), mustExist = false)
+            SystemFileSystem.delete(Path("$path-shm"), mustExist = false)
+            val db = CaddieDatabase.openLazily(path, nowMs = { t * 1_000 })
+            assertTrue(db.wasReset())
+            db.close()
+        }
+        assertEquals(
+            listOf("caddie.db.unreadable-3000", "caddie.db.unreadable-4000", "caddie.db.unreadable-5000"),
+            unreadable(),
+        )
     }
 
     @Test

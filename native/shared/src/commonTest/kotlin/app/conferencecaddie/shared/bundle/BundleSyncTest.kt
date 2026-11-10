@@ -183,6 +183,45 @@ class BundleSyncTest {
         assertEquals(listOf("vectors.i8: larger than the index says"), r.problems)
     }
 
+    private fun entryWith(vararg changes: Pair<String, kotlinx.serialization.json.JsonElement>): BundleEntry =
+        BundleEntry.read(JsonObject(Fixtures.entry + changes))!!
+
+    private fun filesWith(name: String, bytes: Long): JsonObject {
+        val files = Fixtures.entry["files"] as JsonObject
+        val file = files[name] as JsonObject
+        return JsonObject(files + (name to JsonObject(file + ("bytes" to JsonPrimitive(bytes)))))
+    }
+
+    @Test
+    fun filesLargerThanTheirCapsAreRefusedBeforeAnyDownload() = runTest {
+        val bigJson = entryWith("files" to filesWith("bundle.json", BundleSync.MAX_BUNDLE_JSON_BYTES + 1))
+        val r = assertIs<BundleSync.InstallResult.Failed>(sync.install(base, scope, bundleBase, Fixtures.SLUG, bigJson))
+        assertEquals(listOf("bundle.json: larger than the app accepts"), r.problems)
+        val rows = BundleSync.MAX_VECTOR_BYTES / 384 + 1
+        val bigVectors = entryWith(
+            "files" to filesWith("vectors.i8", rows * 384),
+            "vector_count" to JsonPrimitive(rows),
+        )
+        val v = assertIs<BundleSync.InstallResult.Failed>(sync.install(base, scope, bundleBase, Fixtures.SLUG, bigVectors))
+        assertEquals(listOf("vectors.i8: larger than the app accepts"), v.problems)
+        assertTrue(http.calls.none { it.startsWith(dir) }, "nothing was downloaded")
+    }
+
+    @Test
+    fun aVectorFileWhoseSizeIsNotCountTimesDimsIsRefusedBeforeAnyDownload() = runTest {
+        val wrong = entryWith("files" to filesWith("vectors.i8", 3 * 384 + 1))
+        val r = assertIs<BundleSync.InstallResult.Failed>(sync.install(base, scope, bundleBase, Fixtures.SLUG, wrong))
+        assertEquals(listOf("vectors.i8: size is not the vector count times the dimensions"), r.problems)
+        assertTrue(http.calls.none { it.startsWith(dir) })
+    }
+
+    @Test
+    fun theIndexFetchTimeIsReadWithoutItsBody() = runTest {
+        assertNull(sync.indexFetchedAt(bundleBase))
+        sync.index(bundleBase, refresh = true)
+        assertEquals(1_000L, sync.indexFetchedAt(bundleBase))
+    }
+
     @Test
     fun aBundleOfAnotherConferenceIsRefused() = runTest {
         val r = assertIs<BundleSync.InstallResult.Failed>(sync.install(base, BundleSync.scope(base, "other"), bundleBase, "other-2099", entry))
