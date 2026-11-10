@@ -19,8 +19,14 @@ package app.conferencecaddie.shared
  * `@`) where WHATWG would quietly repair the input:
  * whitespace, control characters or backslashes anywhere (WHATWG reads `\` as `/`, a known way to
  * disguise the host); a missing or extra slash after the scheme; `.` or `..` path segments;
- * characters WHATWG would percent-encode; non-ASCII hosts; IPv4 shorthand such as `127.1`; and any
+ * characters WHATWG would percent-encode; non-ASCII hosts and underscores in host names; and any
  * IPv6 literal other than `[::1]`.
+ *
+ * IPv4 follows WHATWG's rule for when a host is an address: when the last label is a decimal number
+ * or `0x` followed by hex digits, the host is IPv4. WHATWG then rewrites shorthand such as `127.1`,
+ * `0x7f000001`, `1.2.3.0x4` or `01.2.3.4` to a dotted quad and drops a trailing dot; here only a
+ * canonical dotted quad without a trailing dot is accepted. A host such as `example.0x1`, which
+ * WHATWG refuses, is refused too.
  */
 sealed interface BackendUrl {
     /**
@@ -45,6 +51,7 @@ sealed interface BackendUrl {
         private val LOCAL_HOSTS = setOf("localhost", "127.0.0.1", "10.0.2.2", "[::1]")
         private val SCHEME = Regex("[A-Za-z][A-Za-z0-9+.-]*")
         private val HOST_CHARS = Regex("[a-z0-9.-]+")
+        private val IPV4_NUMBER = Regex("0[xX][0-9a-fA-F]*|[0-9]+")
         private const val PATH_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" +
             "-._~!$&'()*+,;=:@/%"
         private val DOT_SEGMENTS = setOf(".", "..", "%2e", ".%2e", "%2e.", "%2e%2e")
@@ -133,10 +140,11 @@ sealed interface BackendUrl {
             if (host.isEmpty() || host.length > 253 || !HOST_CHARS.matches(host)) return false
             val labels = host.removeSuffix(".").split('.')
             if (labels.any { it.isEmpty() }) return false
-            // WHATWG reads a host whose last label is a number as IPv4 and rewrites shorthand forms;
-            // only the canonical dotted quad is accepted here.
-            if (labels.last().all { it in '0'..'9' }) {
-                return labels.size == 4 && labels.all { label ->
+            // WHATWG reads a host whose last label is a number (decimal, or 0x and hex digits) as
+            // IPv4, rewrites shorthand forms and drops a trailing dot; only the canonical dotted quad
+            // without a trailing dot is accepted here, so the base never differs from the reference.
+            if (IPV4_NUMBER.matches(labels.last())) {
+                return !host.endsWith(".") && labels.size == 4 && labels.all { label ->
                     label.all { it in '0'..'9' } && label.length <= 3 &&
                         (label == "0" || !label.startsWith("0")) && label.toInt() <= 255
                 }

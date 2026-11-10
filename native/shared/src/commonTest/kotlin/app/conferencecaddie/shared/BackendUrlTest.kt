@@ -85,6 +85,31 @@ class BackendUrlTest {
         assertEquals(Reason.NotAUrl, reason("https://caddie.example/%zz"))
     }
 
+    // WHATWG treats a host whose last label is a number as IPv4. Each case either gives the
+    // reference's base or is refused; none gives a different base.
+    @Test
+    fun ipv4HostsMatchTheReferenceOrAreRefused() {
+        // The reference refuses these.
+        assertEquals(Reason.NotAUrl, reason("https://example.0x1"))
+        assertEquals(Reason.NotAUrl, reason("https://example.0x"))
+        assertEquals(Reason.NotAUrl, reason("https://foo.09"))
+        assertEquals(Reason.NotAUrl, reason("https://1.2.3.256"))
+        // The reference rewrites these to a dotted quad; only the canonical form is accepted here.
+        assertEquals(Reason.NotAUrl, reason("https://1.2.3.0x4"))
+        assertEquals(Reason.NotAUrl, reason("https://0x7f000001"))
+        assertEquals(Reason.NotAUrl, reason("https://0X7F.0.0.1"))
+        assertEquals(Reason.NotAUrl, reason("https://01.2.3.4"))
+        assertEquals(Reason.NotAUrl, reason("https://1.2.3.4."))
+        // The canonical dotted quad gives the reference's base.
+        val quad = valid("https://1.2.3.4/caddie/")
+        assertEquals("https://1.2.3.4/caddie", quad.base)
+        assertEquals("https://1.2.3.4", quad.origin)
+        // A domain may still end in a dot, as in the reference.
+        assertEquals("https://caddie.example.", valid("https://caddie.example.").base)
+        // Underscores in host names are refused, although the reference accepts them.
+        assertEquals(Reason.NotAUrl, reason("https://a_b.example"))
+    }
+
     @Test
     fun defaultPortsAreDroppedAndOthersKept() {
         assertEquals("https://caddie.example", valid("https://Caddie.Example:443/").base)
