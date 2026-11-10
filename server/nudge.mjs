@@ -30,7 +30,7 @@
 
 import {
   people, idx, NUDGES_INDEX, UpstreamError,
-  peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf,
+  peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf, SEMANTIC_FLOORS,
 } from './people.mjs';
 import { subscriptionsFor, deleteSubscriptionById } from './push.mjs';
 
@@ -143,10 +143,11 @@ export async function nudgeAfterPresence(me, conf) {
     if (!send) return;
     const blocked = await blockedIds(conf.slug, me.profile_id);
     // The same query the Around view runs, distance leg included when I sent a position; the
-    // distance leg never decides specificity (people.mjs), so it cannot create a nudge. When
-    // inference fails it falls back to keyword legs like the Around view (rankPeople).
+    // distance leg never decides specificity (people.mjs), so it cannot create a nudge. The
+    // semantic legs use the stricter push floor, so a text match must be close to nudge anyone.
+    // When inference fails it falls back to keyword legs like the Around view (rankPeople).
     const filters = [{ term: { open_to_meet: true } }, { range: { presence_until: { gt: 'now' } } }, { bool: { must_not: [{ term: { sample: true } }] } }];
-    const build = (semantic) => peopleQuery(me, filters, { size: CANDIDATES, blocked, explain: true, origin: cellOf(me), semantic });
+    const build = (semantic) => peopleQuery(me, filters, { size: CANDIDATES, blocked, explain: true, origin: cellOf(me), semantic, floor: SEMANTIC_FLOORS.push });
     const [ranked, topics] = await Promise.all([rankPeople(conf.slug, build), topicsOf(conf.slug)]);
     if (!ranked) return;
     const { json, q } = ranked;
