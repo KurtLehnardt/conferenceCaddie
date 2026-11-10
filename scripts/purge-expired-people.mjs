@@ -1,16 +1,21 @@
-// Deletes every people profile whose conference has ended, in every conference, clears presence
-// that has run out, deletes meets that have run out (a declined one once its day is over),
-// scrubs declined meets that have run out, and deletes push subscriptions and nudge records whose
-// conference has ended.
+// Finishes profile deletes that hid a profile and then failed, deletes every people profile whose
+// conference has ended, in every conference, clears presence that has run out, deletes meets that
+// have run out (a declined one once its day is over), scrubs declined meets that have run out,
+// and deletes push subscriptions, nudge records and blocks whose conference has ended.
 //
 // Usage: node scripts/purge-expired-people.mjs
 // Env:   ES_URL; ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY); ES_PEOPLE_INDEX (default caddie-people);
 //        ES_PEOPLE_MEETS_INDEX (default caddie-people-meets); ES_PEOPLE_PUSH_INDEX (default
-//        caddie-people-push); ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges).
+//        caddie-people-push); ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges);
+//        ES_PEOPLE_BLOCKS_INDEX (default caddie-people-blocks).
 //
 // The server runs the same steps when it starts and once an hour. This is the operator's
-// step for after a conference, when no instance may be running. It prints only counts. Blocks are
-// not purged here: they are deleted with the profile that made them.
+// step for after a conference, when no instance may be running. It prints only counts. A block
+// is deleted with the profile that made it and, once its conference has ended, here; a block
+// without expires_at is never deleted here (npm run people:setup gives one to every block of a
+// conference it can find).
+
+import { PRESENCE_OFF, PENDING_DELETE_QUERY, isPendingDelete } from '../server/people-shared.mjs';
 
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -18,7 +23,10 @@ const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
 const PUSH_INDEX = process.env.ES_PEOPLE_PUSH_INDEX || 'caddie-people-push';
 const NUDGES_INDEX = process.env.ES_PEOPLE_NUDGES_INDEX || 'caddie-people-nudges';
+const BLOCKS_INDEX = process.env.ES_PEOPLE_BLOCKS_INDEX || 'caddie-people-blocks';
 const PRESENCE_PAGE = 500;
+const PENDING_PAGE = 1000;
+const enc = encodeURIComponent;
 
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -40,6 +48,74 @@ async function es(method, path, body, ndjson = false) {
   return json;
 }
 
+// A realtime read of one people document (GET, so the search's refresh interval does not delay
+// it): { found, source, seqNo, primaryTerm }.
+async function getProfile(id) {
+  const res = await fetch(`${ES_URL}/${enc(PEOPLE_INDEX)}/_doc/${enc(id)}?_source_includes=open_to_meet,shared_talk_ids`, {
+    headers: { Authorization: `ApiKey ${API_KEY}` },
+    signal: AbortSignal.timeout(60_000),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (res.status === 404) return { found: false };
+  if (!res.ok) {
+    console.error(`Reading a pending profile failed with status ${res.status}.`);
+    process.exit(1);
+  }
+  return json.found ? { found: true, source: json._source ?? {}, seqNo: json._seq_no, primaryTerm: json._primary_term } : { found: false };
+}
+
+// Profile deletes that hid the profile (open_to_meet false, no shared talk) and then failed, and
+// were never tried again: the same steps as finishPendingDelete in server/people.mjs, which says
+// why each is there, with the same query (PENDING_DELETE_QUERY). For each one, in pages sorted by
+// updated_at and profile_id: a realtime read, and nothing is touched unless the document is
+// still a pending delete with the sequence number the search returned; then its meets, push
+// subscriptions and nudge records; then the document, guarded by the sequence number of the read
+// (a 409 means it changed, or that it is gone, which a second read tells apart); then the blocks
+// it made, unless that second read finds a profile re-created from the same device. This runs
+// first, so a pending delete whose conference has also ended loses its connections too.
+let finished = 0;
+let kept = 0;
+let after;
+for (;;) {
+  const page = { size: PENDING_PAGE, _source: ['event_id', 'profile_id'], query: PENDING_DELETE_QUERY, sort: [{ updated_at: 'asc' }, { profile_id: 'asc' }] };
+  if (after) page.search_after = after;
+  const pending = await es('POST', `/${enc(PEOPLE_INDEX)}/_search?seq_no_primary_term=true`, page);
+  const hits = pending.hits?.hits ?? [];
+  for (const h of hits) {
+    const { event_id: eventId, profile_id: profileId } = h._source ?? {};
+    if (typeof eventId !== 'string' || typeof profileId !== 'string' || h._id !== `${eventId}:${profileId}`) continue;
+    const own = await getProfile(h._id);
+    if (!own.found || !isPendingDelete(own.source) || own.seqNo !== h._seq_no || own.primaryTerm !== h._primary_term) {
+      kept++;
+      continue;
+    }
+    const of = (field) => ({ bool: { filter: [{ term: { event_id: eventId } }, { term: { [field]: profileId } }] } });
+    for (const [name, field] of [[MEETS_INDEX, 'participants'], [PUSH_INDEX, 'profile_id'], [NUDGES_INDEX, 'profile_ids']]) {
+      await es('POST', `/${enc(name)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, { query: of(field) });
+    }
+    const res = await fetch(`${ES_URL}/${enc(PEOPLE_INDEX)}/_doc/${enc(h._id)}?if_seq_no=${own.seqNo}&if_primary_term=${own.primaryTerm}&refresh=wait_for`, {
+      method: 'DELETE',
+      headers: { Authorization: `ApiKey ${API_KEY}` },
+      signal: AbortSignal.timeout(60_000),
+    });
+    await res.body?.cancel();
+    if (!res.ok && res.status !== 404 && res.status !== 409) {
+      console.error(`Deleting a pending profile failed with status ${res.status}.`);
+      process.exit(1);
+    }
+    if ((await getProfile(h._id)).found) {
+      if (res.status === 409) kept++;
+      else finished++;
+      continue;
+    }
+    await es('POST', `/${enc(BLOCKS_INDEX)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, { query: of('blocker_id') });
+    finished++;
+  }
+  if (hits.length < PENDING_PAGE || !Array.isArray(hits[hits.length - 1].sort)) break;
+  after = hits[hits.length - 1].sort;
+}
+console.log(`Finished ${finished} pending profile deletes${kept ? `; kept ${kept} that changed since they were found` : ''}.`);
+
 // A profile is expired once visible_until has passed. A document without visible_until is never
 // shown, so it is deleted as well.
 const expiredProfiles = {
@@ -51,9 +127,9 @@ const expiredProfiles = {
 const profiles = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_delete_by_query?conflicts=proceed`, { query: expiredProfiles });
 console.log(`Deleted ${profiles.deleted ?? 0} expired profiles.`);
 
-// Presence that has run out is cleared with a Bulk partial update of its fields (the position,
-// its cell and its time among them), the same write the server uses, so nothing is re-embedded.
-const off = { presence_zone: null, presence_spot: null, presence_since: null, presence_until: null, presence_location: null, presence_accuracy: null, presence_cell: null, presence_located_at: null };
+// Presence that has run out is cleared with a Bulk partial update of the presence fields (the
+// position, its cell and its time, the held flag and the Bluetooth token among them,
+// PRESENCE_OFF), the same write the server uses, so nothing is re-embedded.
 let cleared = 0;
 for (;;) {
   const found = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_search`, {
@@ -63,7 +139,7 @@ for (;;) {
   });
   const ids = (found.hits?.hits ?? []).map((h) => h._id);
   if (!ids.length) break;
-  const body = ids.map((id) => `${JSON.stringify({ update: { _id: id } })}\n${JSON.stringify({ doc: off })}\n`).join('');
+  const body = ids.map((id) => `${JSON.stringify({ update: { _id: id } })}\n${JSON.stringify({ doc: PRESENCE_OFF })}\n`).join('');
   const res = await es('POST', `/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, body, true);
   const ok = (res.items ?? []).filter((i) => i.update?.status >= 200 && i.update?.status < 300).length;
   cleared += ok;
@@ -98,8 +174,9 @@ const scrubbed = await es('POST', `/${encodeURIComponent(MEETS_INDEX)}/_update_b
 });
 console.log(`Scrubbed ${scrubbed.updated ?? 0} run-out declined meets.`);
 
-// Push subscriptions and nudge records expire with their conference (expires_at = visible_until).
-for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records']]) {
+// Push subscriptions, nudge records and blocks expire with their conference (expires_at =
+// visible_until).
+for (const [name, what] of [[PUSH_INDEX, 'push subscriptions'], [NUDGES_INDEX, 'nudge records'], [BLOCKS_INDEX, 'blocks']]) {
   const r = await es('POST', `/${encodeURIComponent(name)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, {
     query: { range: { expires_at: { lt: 'now' } } },
   });

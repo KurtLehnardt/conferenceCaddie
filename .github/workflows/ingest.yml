@@ -1,0 +1,87 @@
+# Refreshes the talks on the free Worker stack. It discovers the upcoming Linux Foundation events
+# and their Sessionize schedules (scripts/ingest.mjs --dry-run, which needs no Elasticsearch) and
+# pushes the result to the Worker's admin routes (worker/ingest/push-ingest.mjs). Nothing is
+# committed. The Worker embeds only talks whose text changed.
+#
+# Set once in the repository settings:
+#   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it)
+#   variable CADDIE_API_BASE     the Worker's URL, for example https://conference-caddie-api.<subdomain>.workers.dev
+#
+# GitHub disables scheduled workflows after 60 days without repository activity. Run this workflow
+# by hand to enable it again. Until both values are set, a scheduled run only logs a notice and
+# succeeds, so the schedule does not fail every week before the Worker is deployed; a manual run
+# fails instead.
+# Purging expired profiles does not depend on it (the Worker's cron does).
+name: Ingest
+
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      events:
+        description: 'Conference slugs to refresh, separated by spaces. Empty means every upcoming event.'
+        required: false
+        default: ''
+      rebuild_topics:
+        description: 'Rebuild each topic list from the titles instead of keeping the stored one (changes topic ids).'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      EVENTS: ${{ inputs.events }}
+      REBUILD_TOPICS: ${{ inputs.rebuild_topics }}
+      ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+      CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+    steps:
+      - name: Check the configuration
+        id: config
+        run: |
+          missing=""
+          if [ -z "$ADMIN_TOKEN" ]; then missing="the CADDIE_ADMIN_TOKEN secret"; fi
+          if [ -z "$CADDIE_API_BASE" ]; then missing="${missing:+$missing and }the CADDIE_API_BASE variable"; fi
+          if [ -z "$missing" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then echo "::error::$missing is not set."; exit 1; fi
+          echo "::notice::Skipping the ingest: $missing is not set (the Worker is not deployed yet)."
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Discover events and build the talk files
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          set -u
+          args=()
+          for slug in $EVENTS; do args+=(--event "$slug"); done
+          if [ "${#args[@]}" -eq 0 ]; then args=(--all-upcoming); fi
+          # Exit code 2 means some event ended partial or could not be fetched; the others are still pushed.
+          status=0
+          node scripts/ingest.mjs "${args[@]}" --dry-run --skip-topics || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then exit "$status"; fi
+
+      - name: Push to the Worker
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          set -u
+          args=()
+          for slug in $EVENTS; do args+=(--event "$slug"); done
+          if [ "$REBUILD_TOPICS" = "true" ]; then args+=(--rebuild-topics); fi
+          node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" "${args[@]}"

@@ -1,0 +1,22 @@
+{
+  "route": "presence.delete",
+  "examples": [
+    {
+      "name": "end presence",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "query": {
+          "event": "kubecon-cloudnativecon-north-america-2026"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    }
+  ]
+}

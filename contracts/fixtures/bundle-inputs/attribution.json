@@ -1,0 +1,7 @@
+{
+  "publisher": { "name": "Caddie fixture publisher", "takedown": "https://example.org/caddie-fixture/takedown" },
+  "licensor": "Example Events (fixture data)",
+  "license": "CC BY 3.0",
+  "license_url": "https://creativecommons.org/licenses/by/3.0/",
+  "changes": "Reformatted; speaker data trimmed to names and taglines; talk text embedded for search."
+}

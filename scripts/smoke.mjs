@@ -2,8 +2,28 @@
 //
 // Usage: BASE_URL=http://localhost:8080 node scripts/smoke.mjs
 //
+// It tests two stacks. The Cloud Run server serves the web app and the API from one origin. The free
+// stack serves the web app from GitHub Pages under a base path and the API from a Cloudflare Worker
+// on another origin, so the script separates the two addresses and adds the cross-origin checks.
+//
 // Env:
-//   BASE_URL             default http://localhost:8080.
+//   BASE_URL             the web app, including its base path, for example
+//                        https://kurtlehnardt.github.io/conferenceCaddie. Default http://localhost:8080.
+//   API_BASE             the API origin. Default: the origin of BASE_URL, so the Cloud Run command line
+//                        stays BASE_URL=... node scripts/smoke.mjs. When it differs from BASE_URL's
+//                        origin, the API is taken to be the Worker.
+//   SMOKE_API            worker or cloudrun: which API this is. Default: worker when API_BASE differs
+//                        from BASE_URL's origin or an admin token is set, otherwise cloudrun. A local
+//                        Worker on the same origin as BASE_URL needs SMOKE_API=worker (or a token).
+//   SMOKE_ORIGIN         the Origin that browser-like requests send, and that the CORS checks use.
+//                        Default: the origin of BASE_URL. A local Worker allows only the origins in its
+//                        ALLOWED_ORIGINS, so use SMOKE_ORIGIN=http://localhost:5173 against one.
+//   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token (the file's first line is used). With it
+//                        the three Elasticsearch helpers below are replaced by the Worker's test
+//                        fixtures: POST /admin/test/profile (the expired profile),
+//                        POST /admin/test/age-presence (the aged presence) and GET /admin/stats (the
+//                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
+//                        The token is only ever sent as an Authorization header to API_BASE.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -11,16 +31,21 @@
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
-//   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only to write and remove one
-//                        expired test profile directly, because the API can never create one, and to
-//                        age one test profile's presence, because the API can never set it in the
-//                        past. Without a key those two checks are skipped.
-//   ELASTISEARCH_API_KEY used also to compare index document counts before and after the schedule
-//                        imports (the import must store nothing). Without it that check is skipped.
+//   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only against Cloud Run, and only
+//                        when there is no admin token, to write and remove one expired test profile
+//                        directly, because the API can never create one, and to age one test profile's
+//                        presence, because the API can never set it in the past. Without a key (or an
+//                        admin token) those two checks are skipped.
+//   ELASTISEARCH_API_KEY used also, against Cloud Run, to compare index document counts before and
+//                        after the schedule imports (the import must store nothing). Without it, or an
+//                        admin token, that check is skipped.
 //
 // The script creates its own temporary test profiles, each with a random device secret, and
 // deletes them at the end, together with the blocks and meets they made. It never changes the
-// seeded sample profiles. Key values are compared in-process and never printed.
+// seeded sample profiles. Key values and the admin token are compared in-process and never printed.
+// The test profiles' words are synthetic and carry the run's tag, so they share no word with a
+// real attendee of the live conference, and no nudge can pair one with a real attendee (see
+// SMOKE_SUBJECT below).
 //
 // Each check prints one PASS, FAIL or SKIP line. The script exits 1 if any check fails. A request
 // that answers 5xx or fails on its first attempt is retried once, and prints a NOTE line either way;
@@ -31,7 +56,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 
-const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
+const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const REQUEST_TIMEOUT_MS = 30000;
 const PRIMARY = process.env.SMOKE_CONFERENCE || 'kubecon-cloudnativecon-north-america-2026';
@@ -39,6 +64,77 @@ const EXTRA = (process.env.SMOKE_EXTRA ?? 'mcp-dev-summit-nairobi-2026,pytorch-d
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
 const ES_WRITE_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY || '';
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
+
+// The web app address, the API address and the browser origin. Anything printed about an address is
+// its origin only, never a user name, password or query, so a token in a URL cannot reach the log.
+function parseAddress(value, name) {
+  try {
+    return new URL(value);
+  } catch {
+    console.log(`FAIL config: ${name} is not a valid URL`);
+    process.exit(1);
+  }
+}
+const BASE_ORIGIN = parseAddress(BASE_URL, 'BASE_URL').origin;
+const API_BASE = (process.env.API_BASE || BASE_ORIGIN).replace(/\/+$/, '');
+const API_ORIGIN = parseAddress(API_BASE, 'API_BASE').origin;
+const SMOKE_ORIGIN = (process.env.SMOKE_ORIGIN || BASE_ORIGIN).replace(/\/+$/, '');
+const BASE_PATH = new URL(BASE_URL).pathname.replace(/\/+$/, ''); // '' at the root, else '/conferenceCaddie'
+const CROSS_ORIGIN_API = API_ORIGIN !== BASE_ORIGIN;
+const EVIL_ORIGIN = 'https://evil.example';
+
+// The admin token comes from the environment or from the first line of a file, and is never printed.
+function readAdminToken() {
+  if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN.trim();
+  const file = process.env.ADMIN_TOKEN_FILE;
+  if (!file) return '';
+  try {
+    return readFileSync(file, 'utf8').split('\n')[0].trim();
+  } catch {
+    console.log('FAIL config: ADMIN_TOKEN_FILE cannot be read');
+    process.exit(1);
+  }
+}
+const ADMIN_TOKEN = readAdminToken();
+
+// Which API this is. The Worker needs the CORS checks, the admin fixtures and text-only imports;
+// Cloud Run serves everything from one origin and keeps the Elasticsearch helpers.
+const API_KIND_ENV = (process.env.SMOKE_API || '').toLowerCase();
+if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
+  console.log('FAIL config: SMOKE_API must be worker or cloudrun');
+  process.exit(1);
+}
+const IS_WORKER = API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API || Boolean(ADMIN_TOKEN);
+// A browser sends its Origin on every call to a Worker on another origin, so the run does too. Against
+// Cloud Run no Origin is sent, as before.
+const SEND_ORIGIN = IS_WORKER && (CROSS_ORIGIN_API || Boolean(process.env.SMOKE_ORIGIN));
+
+// Where the three helpers that reach behind the API get their way in: the Worker's admin fixtures,
+// Elasticsearch (Cloud Run only), or nowhere, in which case the checks that need them are skipped.
+const WRITE_MODE = ADMIN_TOKEN ? 'admin' : !IS_WORKER && ES_WRITE_KEY ? 'es' : 'none';
+const COUNT_MODE = ADMIN_TOKEN ? 'admin' : !IS_WORKER && process.env.ELASTISEARCH_API_KEY ? 'es' : 'none';
+const NO_WRITE_WHY = IS_WORKER ? 'no ADMIN_TOKEN or ADMIN_TOKEN_FILE in the environment' : 'no Elasticsearch write key in the environment';
+const NO_COUNT_WHY = IS_WORKER ? 'no ADMIN_TOKEN or ADMIN_TOKEN_FILE in the environment' : 'ELASTISEARCH_API_KEY is not set';
+
+// Fail fast when the API cannot be reached, with a message that names the origin and nothing else.
+{
+  let failure = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(10000) });
+      await res.arrayBuffer();
+      failure = res.status === 200 ? '' : `health answered ${res.status}`;
+      break;
+    } catch (err) {
+      failure = `no connection (${err.cause?.code ?? err.name ?? 'error'})`;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  if (failure) {
+    console.log(`FAIL api: ${API_ORIGIN} is not reachable or not healthy: ${failure}. Check API_BASE and BASE_URL.`);
+    process.exit(1);
+  }
+}
 
 // Attendee-style queries and the talk each one should surface in the top five. The first three
 // share no useful words with their talk's title or abstract, so they pass only through semantic
@@ -57,20 +153,40 @@ const NON_TALK_QUERIES = ['lunch', 'coffee break', 'registration', 'opening rema
 // A talk that the seeded samples share for, used as the test circle.
 const CIRCLE_TALK_TITLE = 'From Bytes to Traces: A Deep Dive into OpenTelemetry eBPF Instrumentation Internals';
 
-// Topics the test profiles use. The requester wants to learn all three, and exactly one test
-// profile can speak to all three, which no sample does.
+// Topics a talk recommendations request asks for. That request stores nothing; no test profile
+// carries these topics.
 const LEARN = ['ebpf', 'gpu', 'llm'];
 
-// Find & connect. The passage is specific enough that its author ranks first for the query, and
-// the common topic is the one everyone at this conference matches on.
-const FIND_PASSAGE = 'ran Postgres operators on bare metal for three years and debugged WAL corruption after a power cut';
-const FIND_QUERY = 'postgres operators on bare metal';
+// The test profiles run against the live conference, and the server nudges two people who are a
+// specific match and around in the same zone. So every test profile's words are synthetic: made-up
+// tokens with this run's tag, which no real attendee's text or search can share. No test profile
+// carries a topic except the common one, which only ever makes a broad match, and broad matches
+// are never nudged. The profiles that go around (A, F and K) also keep interests and expertise
+// empty while they are around: a nudge is looked for without a search text, so it reads topics,
+// interests and expertise and never about, and a semantic neighbour cannot pick them either.
+const runTag = crypto.randomBytes(4).toString('hex');
+// What A wants to learn (A's interests) and B, C, R and the expired profile have worked on (their
+// expertise; B also wants it, so B finds R).
+const SMOKE_SUBJECT = `zqvsmoke${runTag} vexmorlith quabbit flarnishing`;
+const SMOKE_EXPERTISE = `tuned ${SMOKE_SUBJECT} rigs for three yonders`;
+// Find & connect. F's about line is specific enough that F ranks first for the query, and the
+// common topic is the one everyone at this conference matches on.
+const FIND_WORD = `zqvfind${runTag}`;
+const FIND_PASSAGE = `plonkered gravitronic snorbels on ${FIND_WORD} lattices for three yonders and debugged a wibblecorn after a glimmerfault`;
+const FIND_QUERY = `gravitronic snorbels on ${FIND_WORD} lattices`;
+// A's about line, which F and N search for.
+const ASKER_WORD = `zqvasker${runTag}`;
+const ASKER_ABOUT = `sprocketeer of hummable glintwork at ${ASKER_WORD}`;
+const ASKER_QUERY = `hummable glintwork ${ASKER_WORD}`;
 const COMMON_TOPIC = 'kubernetes';
+// A's two profiles: with interests while A is not around, about and the common topic only while it is.
+const A_LEARNING = { about: ASKER_ABOUT, interests: SMOKE_SUBJECT, speak: [COMMON_TOPIC] };
+const A_AROUND = { about: ASKER_ABOUT, speak: [COMMON_TOPIC] };
 const ZONE_A = 'Registration';
 const ZONE_F = 'Expo hall';
 const WORDLIST = JSON.parse(readFileSync(join(ROOT, 'config', 'moderation-words.json'), 'utf8')).words ?? [];
 
-const BUNDLE_SECRET_VARS = ['ELASTISEARCH_API_KEY', 'GC_API_KEY', 'ES_READONLY_KEY', 'ES_PEOPLE_API_KEY'];
+const BUNDLE_SECRET_VARS = ['ELASTISEARCH_API_KEY', 'GC_API_KEY', 'ES_READONLY_KEY', 'ES_PEOPLE_API_KEY', 'ADMIN_TOKEN', 'CLOUDFLARE_API_TOKEN', 'VAPID_PRIVATE_KEY', 'REF_SALT'];
 const BUNDLE_PATTERNS = ['ApiKey ', '.es.io', 'AIza', 'BEGIN PRIVATE KEY', 'MOCK_FIXTURE_DO_NOT_SHIP'];
 
 // Wording that must never appear in a response the app generates.
@@ -94,6 +210,9 @@ async function check(name, fn) {
 
 // Every response seen, with a label naming who asked, for the leak checks at the end.
 const responses = [];
+// Page and admin responses, which the leak check scans for secret values only.
+const otherResponses = [];
+const headerText = (headers) => [...headers].map(([k, v]) => `${k}: ${v}`).join('\n');
 // Every search result seen, for the evidence check.
 const allResults = [];
 // The talks each test device shares for, per conference: device -> Map(event -> talk ids). A
@@ -120,7 +239,7 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
   let result;
   let readBackJob = null;
   let rateWaits = 0;
-  const url = new URL(path, BASE_URL);
+  const url = new URL(path, API_BASE);
   const event = body?.event ?? url.searchParams.get('event');
   const sharedTalks = [...(device && event ? sharing.get(device)?.get(event) ?? [] : [])];
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -129,7 +248,8 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       if (body !== undefined) headers['Content-Type'] = 'application/json';
       if (device) headers['X-Caddie-Device'] = `${device.profileId}.${device.secret}`;
       if (origin) headers.Origin = origin;
-      const res = await fetch(`${BASE_URL}${path}`, {
+      else if (SEND_ORIGIN) headers.Origin = SMOKE_ORIGIN;
+      const res = await fetch(`${API_BASE}${path}`, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -175,7 +295,7 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
         }
         if (method === 'DELETE') sharing.get(device).delete(event);
       }
-      responses.push({ path, label, status: res.status, text, json, request: body, sharedTalks });
+      responses.push({ path, label, status: res.status, text, headersText: headerText(res.headers), json, request: body, sharedTalks });
       result = { status: res.status, json, headers: res.headers };
       break;
     } catch (err) {
@@ -217,6 +337,57 @@ async function readBackShared(device, event, requested, before, label) {
   }
 }
 
+// The Worker's admin routes. The token goes only in the Authorization header, and no Origin header
+// is sent, because the Worker answers 404 to an admin request that carries one. Nothing here prints
+// the token, a request body or a response body.
+async function admin(method, path, body) {
+  const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const text = await res.text();
+  let json = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* keep {} */
+  }
+  otherResponses.push({ label: 'admin', path: path.split('?')[0], text, headersText: headerText(res.headers) });
+  return { status: res.status, json, headers: res.headers };
+}
+
+// A page of the web app, relative to BASE_URL (which includes the base path).
+async function staticPage(path) {
+  const res = await fetch(`${BASE_URL}${path}`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const text = await res.text();
+  otherResponses.push({ label: 'page', path, text, headersText: headerText(res.headers) });
+  return { status: res.status, text, headers: res.headers };
+}
+
+// Moves one test profile's presence end into the past, which the API can never do. On the Worker this
+// is the admin fixture. On Cloud Run it is a Bulk partial update (the write the server itself uses, so
+// nothing is re-embedded). Both leave the profile's meets open, as lapsing does.
+async function agePresence(device, who) {
+  if (WRITE_MODE === 'admin') {
+    const r = await admin('POST', `/admin/test/age-presence?event=${encodeURIComponent(PRIMARY)}`, { profile_id: device.profileId, until_ms: Date.now() - 60_000 });
+    if (r.status !== 200) throw new Error(`aging ${who}'s presence gave ${r.status}`);
+    return;
+  }
+  const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
+    method: 'POST',
+    headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
+    body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${device.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const aged = res.ok ? await res.json().catch(() => ({})) : {};
+  if (!res.ok) await res.body?.cancel();
+  if (!res.ok || aged.errors) throw new Error(`aging ${who}'s presence gave ${res.status}`);
+}
+
 async function search(body) {
   const r = await api('POST', '/api/search', { conference: PRIMARY, ...body });
   if (r.status === 200) allResults.push(...(r.json.results ?? []));
@@ -246,14 +417,13 @@ function newDevice() {
   return { profileId: crypto.randomBytes(16).toString('base64url'), secret: crypto.randomBytes(32).toString('base64url') };
 }
 
-const runTag = crypto.randomBytes(4).toString('hex');
 const testName = (who) => `Smoke test ${who} ${runTag}`;
 const contactMarker = (who) => `smoke-contact-${who}-${runTag}`;
 
-function profileBody(event, who, { learn = [], speak = [], interests = '', expertise = '' } = {}) {
+function profileBody(event, who, { learn = [], speak = [], about = '', interests = '', expertise = '' } = {}) {
   return {
     display_name: testName(who),
-    about: '',
+    about,
     interests,
     expertise,
     learn_topics: learn,
@@ -288,6 +458,79 @@ await check('conf: GET /api/conferences lists the conferences', async () => {
     missing.length ? `not searchable: ${missing.join(', ')}` : leakedKeys.length ? `internal keys: ${[...new Set(leakedKeys)].join(', ')}` : `${searchable.length} searchable, ${conferences.length - searchable.length} unavailable`);
 });
 const confBySlug = new Map(conferences.map((c) => [c.slug, c]));
+
+// ---------------------------------------------------------------------------------------------
+// Cross-origin behaviour of the Worker. Cloud Run serves the app and the API from one origin and sends
+// no CORS headers, so the checks that need the Worker are skipped there.
+
+const NOT_WORKER_WHY = 'the API is not the Worker (same-origin, no CORS)';
+const listHas = (value, item) => (value ?? '').split(',').map((x) => x.trim().toLowerCase()).includes(item.toLowerCase());
+const hasCorsHeader = (headers) => [...headers.keys()].some((k) => k.toLowerCase().startsWith('access-control-'));
+
+// A preflight for the profile write, the way a browser sends it from a page at the given origin.
+async function preflight(origin) {
+  const res = await fetch(`${API_BASE}/api/people/profile`, {
+    method: 'OPTIONS',
+    headers: { Origin: origin, 'Access-Control-Request-Method': 'PUT', 'Access-Control-Request-Headers': 'content-type, x-caddie-device' },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  await res.arrayBuffer();
+  return res;
+}
+
+if (!IS_WORKER) {
+  skip('cors1: a preflight from the app origin is allowed and permits the device header', NOT_WORKER_WHY);
+  skip('cors2: a preflight from another origin gets no CORS headers', NOT_WORKER_WHY);
+} else {
+  await check('cors1: a preflight from the app origin is allowed and permits the device header', async () => {
+    const res = await preflight(SMOKE_ORIGIN);
+    const h = res.headers;
+    const problems = [];
+    if (![200, 204].includes(res.status)) problems.push(`status ${res.status}`);
+    if (h.get('access-control-allow-origin') !== SMOKE_ORIGIN) problems.push('Access-Control-Allow-Origin is not the request origin');
+    const allowHeaders = h.get('access-control-allow-headers');
+    if (!listHas(allowHeaders, 'x-caddie-device') && (allowHeaders ?? '').trim() !== '*') problems.push('X-Caddie-Device is not an allowed header');
+    const allowMethods = h.get('access-control-allow-methods');
+    if (!listHas(allowMethods, 'PUT') && (allowMethods ?? '').trim() !== '*') problems.push('PUT is not an allowed method');
+    if (!(Number(h.get('access-control-max-age')) > 0)) problems.push('no Access-Control-Max-Age, so every call would be preflighted');
+    if (!listHas(h.get('vary'), 'origin')) problems.push('no Vary: Origin');
+    report(problems.length === 0, 'cors1: a preflight from the app origin is allowed and permits the device header', problems.length ? problems.join('; ') : `status ${res.status}, max-age ${h.get('access-control-max-age')}`);
+  });
+
+  await check('cors2: a preflight from another origin gets no CORS headers', async () => {
+    const res = await preflight(EVIL_ORIGIN);
+    const problems = [];
+    if (res.status !== 403) problems.push(`status ${res.status}, not 403`);
+    if (hasCorsHeader(res.headers)) problems.push('the answer carries Access-Control headers');
+    report(problems.length === 0, 'cors2: a preflight from another origin gets no CORS headers', problems.length ? problems.join('; ') : `status ${res.status}, no Access-Control headers`);
+  });
+}
+
+// The admin routes are never advertised: without a valid token, or with an Origin header, they answer 404
+// and send no CORS headers. The wrong token is random, so no real token is ever tried.
+if (!IS_WORKER) {
+  skip('adm1: the admin routes answer 404 without a valid token and send no CORS headers', NOT_WORKER_WHY);
+} else {
+  await check('adm1: the admin routes answer 404 without a valid token and send no CORS headers', async () => {
+    const probe = async (label, headers) => {
+      const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      const text = await res.text();
+      otherResponses.push({ label: 'admin-probe', path: '/admin/stats', text, headersText: headerText(res.headers) });
+      const bad = [];
+      if (res.status !== 404) bad.push(`${label} gave ${res.status}`);
+      if (hasCorsHeader(res.headers)) bad.push(`${label} carries Access-Control headers`);
+      if (/"usage"|"talks"|"people"/.test(text)) bad.push(`${label} returned counts`);
+      return bad;
+    };
+    const problems = [
+      ...(await probe('no token', {})),
+      ...(await probe('a wrong token', { Authorization: `Bearer ${crypto.randomBytes(32).toString('hex')}` })),
+    ];
+    // With the real token, an Origin header must still be refused, because a browser page must never reach admin.
+    if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { Authorization: `Bearer ${ADMIN_TOKEN}`, Origin: SMOKE_ORIGIN })));
+    report(problems.length === 0, 'adm1: the admin routes answer 404 without a valid token and send no CORS headers', problems.length ? problems.join('; ') : `${ADMIN_TOKEN ? 3 : 2} requests, all 404 without CORS headers`);
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // KubeCon search checks from the MVP, now with a conference.
@@ -736,6 +979,11 @@ function makePdf(lines) {
   return Buffer.from(out, 'latin1');
 }
 
+// The text of the PDF that makePdf builds, as a browser would extract it: the Worker takes text only.
+function extractPdfText(pdf) {
+  return [...pdf.toString('latin1').matchAll(/\(((?:\\.|[^\\)])*)\) Tj/g)].map((m) => m[1].replace(/\\([\\()])/g, '$1')).join('\n');
+}
+
 // Document counts of every non-hidden index, except caddie-people, where live attendees may save
 // profiles at any moment (the import's key cannot touch it). Needs ELASTISEARCH_API_KEY.
 // The deployed import key cannot write any index at all; scripts/create-es-keys.mjs checks that.
@@ -749,14 +997,28 @@ async function indexCounts() {
   return new Map(rows.filter((r) => !r.index.startsWith('.') && !r.index.startsWith('caddie-people')).map((r) => [r.index, r['docs.count']]));
 }
 
+// The same comparison through the Worker's admin stats: row counts of the two conferences the imports
+// touch. Only these four say anything is stored for the import; people and meets change with live use.
+const ADMIN_COUNT_KEYS = ['talks', 'vectors', 'topics', 'facets', 'people', 'shared_talks', 'presence', 'blocks', 'meets', 'reports', 'push_subs', 'nudges'];
+async function adminCounts() {
+  const out = new Map();
+  for (const slug of [PRIMARY, IMPORT_OTHER]) {
+    const r = await admin('GET', `/admin/stats?event=${encodeURIComponent(slug)}`);
+    if (r.status !== 200) throw new Error(`stats for ${slug} gave ${r.status}`);
+    for (const key of ADMIN_COUNT_KEYS) out.set(`${slug} ${key}`, r.json[key]);
+  }
+  return out;
+}
+const takeCounts = () => (COUNT_MODE === 'admin' ? adminCounts() : indexCounts());
+
 const IMPORT_OTHER = EXTRA[0];
 const picks = importPicks(PRIMARY, 5);
 const pickIds = new Set(picks.map((t) => t.talk_id));
 const importBody = scheduleText(picks, confBySlug.get(PRIMARY)?.time_zone ?? 'UTC');
 let countsBefore = null;
-if (process.env.ELASTISEARCH_API_KEY) {
+if (COUNT_MODE !== 'none') {
   try {
-    countsBefore = await indexCounts();
+    countsBefore = await takeCounts();
   } catch (err) {
     report(false, 'im5: an import adds nothing to any index', err.message);
   }
@@ -783,6 +1045,18 @@ await check(`im2: the same file against ${IMPORT_OTHER} gets none of the first c
 
 await check('im3: a PDF goes through the attachment processor and finds the same talks', async () => {
   const pdf = makePdf(importBody.split('\n'));
+  if (IS_WORKER) {
+    // The Worker has no attachment processor: it answers 415 to a PDF, and the free stack's web app
+    // extracts the text in the browser and sends that. So send the file once to see the refusal, then
+    // send the text the browser would extract.
+    const refused = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'schedule.pdf', mime: 'application/pdf', content_base64: pdf.toString('base64') });
+    const sent = await api('POST', '/api/import/schedule', { event: PRIMARY, text: extractPdfText(pdf) });
+    if (sent.status !== 200) throw new Error(`status ${sent.status}${sent.json.error ? `: ${sent.json.error}` : ''}`);
+    const exact = exactHits(sent.json);
+    report(exact >= 4 && refused.status === 415, 'im3: a PDF goes through the attachment processor and finds the same talks',
+      `the PDF itself ${refused.status}, its extracted text: ${exact} of ${picks.length} at exact title, ${sent.json.extracted_chars} characters`);
+    return;
+  }
   const { status, json } = await api('POST', '/api/import/schedule', { event: PRIMARY, filename: 'schedule.pdf', mime: 'application/pdf', content_base64: pdf.toString('base64') });
   if (status !== 200) throw new Error(`status ${status}${json.error ? `: ${json.error}` : ''}`);
   const exact = exactHits(json);
@@ -799,40 +1073,46 @@ await check('im4: a 6 MB upload gets 413, and unknown keys, binary files and unk
     `6 MB ${big.status}, unknown key ${unknownKey.status}, binary ${binary.status}, unknown conference ${unknownEvent.status}`);
 });
 
-if (!process.env.ELASTISEARCH_API_KEY) {
-  skip('im5: an import adds nothing to any index', 'ELASTISEARCH_API_KEY is not set');
+if (COUNT_MODE === 'none') {
+  skip('im5: an import adds nothing to any index', NO_COUNT_WHY);
 } else if (countsBefore) {
   await check('im5: an import adds nothing to any index', async () => {
-    // A write would be searchable after the one-second refresh interval.
-    await new Promise((r) => setTimeout(r, 1500));
-    const after = await indexCounts();
+    // A write would be searchable after the one-second refresh interval (Elasticsearch only; the
+    // Worker's storage is consistent at once).
+    if (COUNT_MODE === 'es') await new Promise((r) => setTimeout(r, 1500));
+    const after = await takeCounts();
     const changed = [...new Set([...countsBefore.keys(), ...after.keys()])].filter((i) => countsBefore.get(i) !== after.get(i));
     const describe = (list) => list.map((i) => `${i}: ${countsBefore.get(i) ?? 'none'} -> ${after.get(i) ?? 'none'}`).join('; ');
     // The indices the import reads must not change at all, and no new index may appear under their
     // names. Other sessions and operators share the cluster and may build their own indices during
     // the run, so a change elsewhere is listed but not judged.
-    const judged = changed.filter((i) => /^caddie-(talks|conferences|topics)/.test(i));
+    const worker = COUNT_MODE === 'admin';
+    const judged = changed.filter((i) => (worker ? /\s(talks|vectors|topics|facets)$/ : /^caddie-(talks|conferences|topics)/).test(i));
     const others = changed.filter((i) => !judged.includes(i));
     report(judged.length === 0, 'im5: an import adds nothing to any index',
-      judged.length ? describe(judged) : `${after.size} indices compared, the talks, conferences and topics indices unchanged${others.length ? `; changed by other writers: ${describe(others)}` : ', and every other index unchanged too'}`);
+      judged.length ? describe(judged) : worker
+        ? `${after.size} counters compared, the talks, vectors, topics and facets counts unchanged${others.length ? `; changed by other writers: ${describe(others)}` : ', and every other counter unchanged too'}`
+        : `${after.size} indices compared, the talks, conferences and topics indices unchanged${others.length ? `; changed by other writers: ${describe(others)}` : ', and every other index unchanged too'}`);
   });
 }
 
 // ---------------------------------------------------------------------------------------------
 // People, circles and talks for you. Every test profile is created here and deleted at the end.
 
-const A = newDevice(); // the requester: chips only, visible, shares for the circle talk
-const B = newDevice(); // can speak to everything A wants to learn, visible
-const C = newDevice(); // can speak to the same, but only shares for the circle talk
-const D = newDevice(); // visible at another conference, with the same topics where possible
-const N = newDevice(); // visible, but never shares for the circle talk
+const A = newDevice(); // the requester: wants to learn SMOKE_SUBJECT, visible, shares for the circle talk
+const B = newDevice(); // has worked on what A wants to learn, visible
+const C = newDevice(); // has worked on the same, but only shares for the circle talk
+const D = newDevice(); // visible at another conference, wanting what B, C and R have worked on
+const N = newDevice(); // visible, but never shares for the circle talk; no words
 const E = newDevice(); // shares through the exact writes the Interested screen's auto-share switch sends
-const F = newDevice(); // Find & connect: the person with the specific passage, can speak to LEARN
+const F = newDevice(); // Find & connect: the person with the specific passage, in about only
 const K = newDevice(); // Find & connect: shares only the common topic with A, no text
 const X = newDevice(); // Find & connect: never gets a profile
-const R = newDevice(); // Report: visible and in the circle, reported by A and B
+const R = newDevice(); // Report: visible and in the circle, has worked on what A wants, reported by A and B
 const spotMarker = `smoke-spot-${runTag}`;
 const expiredId = `${PRIMARY}:${crypto.randomBytes(16).toString('base64url')}`;
+const expiredProfileId = expiredId.split(':')[1];
+const expiredSecretHash = crypto.randomBytes(32).toString('hex');
 let expiredWritten = false;
 let circleTalk = null;
 
@@ -850,20 +1130,32 @@ try {
 
   await check('p1: test profiles are created', async () => {
     const results = [
-      await putProfile(A, PRIMARY, 'A', { learn: LEARN, speak: ['kubernetes'] }, { open: true, shared: [T] }),
-      await putProfile(B, PRIMARY, 'B', { speak: LEARN, learn: ['kubernetes'] }, { open: true }),
-      await putProfile(C, PRIMARY, 'C', { speak: LEARN }, { open: false, shared: [T] }),
-      await putProfile(N, PRIMARY, 'N', { speak: ['kubernetes'] }, { open: true }),
+      await putProfile(A, PRIMARY, 'A', A_LEARNING, { open: true, shared: [T] }),
+      await putProfile(B, PRIMARY, 'B', { interests: SMOKE_SUBJECT, expertise: SMOKE_EXPERTISE }, { open: true }),
+      await putProfile(C, PRIMARY, 'C', { expertise: SMOKE_EXPERTISE }, { open: false, shared: [T] }),
+      await putProfile(N, PRIMARY, 'N', {}, { open: true }),
     ];
-    const extraTopics = (topicsBySlug.get(EXTRA[0]) ?? []).slice(0, 3).map((t) => t.topic_id);
-    results.push(await putProfile(D, EXTRA[0], 'D', { speak: extraTopics, learn: extraTopics }, { open: true }));
+    // D wants what B, C and R have worked on, so any of them crossing conferences would match D.
+    results.push(await putProfile(D, EXTRA[0], 'D', { interests: SMOKE_SUBJECT }, { open: true }));
     const statuses = results.map((r) => r.status);
     report(statuses.every((s) => s === 200), 'p1: test profiles are created', statuses.join(','));
   });
 
-  // The expired profile is written straight to Elasticsearch, because the API always sets
-  // visible_until to the end of the conference.
-  if (ES_WRITE_KEY) {
+  // The expired profile is written behind the API's back (through the Worker's admin fixture, or
+  // straight to Elasticsearch on Cloud Run), because the API always sets visible_until to the end of
+  // the conference.
+  if (WRITE_MODE === 'admin') {
+    const r = await admin('POST', `/admin/test/profile?event=${encodeURIComponent(PRIMARY)}`, {
+      profile_id: expiredProfileId,
+      secret_hash: expiredSecretHash,
+      display_name: testName('Expired'),
+      visible_until_ms: Date.now() - 3600_000,
+      open_to_meet: true,
+      shared_talk_ids: [T],
+    });
+    expiredWritten = r.status === 200;
+    if (!expiredWritten) report(false, 'p1b: the expired test profile is written', `status ${r.status}`);
+  } else if (WRITE_MODE === 'es') {
     const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'PUT',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/json' },
@@ -871,8 +1163,8 @@ try {
         event_id: PRIMARY,
         profile_id: expiredId.split(':')[1],
         display_name: testName('Expired'),
-        about: '', interests: '', expertise: '',
-        learn_topics: LEARN, speak_topics: LEARN,
+        about: '', interests: '', expertise: SMOKE_EXPERTISE,
+        learn_topics: [], speak_topics: [],
         open_to_meet: true, sample: false,
         shared_talk_ids: [T],
         visible_until: new Date(Date.now() - 3600_000).toISOString(),
@@ -888,20 +1180,20 @@ try {
   }
 
   let matchesA = null;
-  await check('p2: wanting to learn a topic ranks a person who can speak to it near the top', async () => {
+  await check('p2: wanting to learn something ranks a person who has worked on it near the top', async () => {
     const { status, json } = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
     if (status !== 200) throw new Error(`status ${status}`);
     matchesA = json.results ?? [];
     const rank = names(matchesA).indexOf(testName('B'));
     const b = matchesA[rank];
-    const named = b && b.reasons.some((r) => r.startsWith('They can speak to') && r.includes('eBPF')) && b.opener === b.reasons[0];
-    report(rank !== -1 && rank < 5 && named, 'p2: wanting to learn a topic ranks a person who can speak to it near the top', rank === -1 ? 'not returned' : `rank ${rank + 1}, reason "${b.reasons[0]}"`);
+    const named = b && b.reasons.some((r) => r.startsWith('Ask them about') && r.includes('vexmorlith')) && b.opener === b.reasons[0];
+    report(rank !== -1 && rank < 5 && named, 'p2: wanting to learn something ranks a person who has worked on it near the top', rank === -1 ? 'not returned' : `rank ${rank + 1}, reason "${b.reasons[0]}"`);
   });
 
-  await check('p3: a chips-only profile gets people and talk suggestions', async () => {
+  await check('p3: a profile gets people suggestions, and chips alone get talk suggestions', async () => {
     const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: LEARN, interests: '', interested_talk_ids: [] }, { label: 'recs' });
     const ok = (matchesA?.length ?? 0) > 0 && recs.status === 200 && (recs.json.results ?? []).length > 0;
-    report(ok, 'p3: a chips-only profile gets people and talk suggestions', `${matchesA?.length ?? 0} people, ${(recs.json.results ?? []).length} talks`);
+    report(ok, 'p3: a profile gets people suggestions, and chips alone get talk suggestions', `${matchesA?.length ?? 0} people, ${(recs.json.results ?? []).length} talks`);
   });
 
   await check('p4: sharing for one talk does not put a profile in conference-wide matches', async () => {
@@ -932,9 +1224,27 @@ try {
     report(problems.length === 0, 'p6: a circle is returned only to a device that shared for that talk', problems.length ? problems.join('; ') : `${members.length} members, ${(shared.json.speakers ?? []).length} speakers, everyone else sees the count ${count}`);
   });
 
+  // The app reads share_required, blocked and Retry-After from error bodies and headers, so an
+  // error answer sent to the app's origin must carry the CORS headers and expose the two headers.
+  if (!IS_WORKER) {
+    skip('cors3: an error response to the app origin carries the CORS headers and exposes Retry-After and X-Caddie-Pace', NOT_WORKER_WHY);
+  } else {
+    await check('cors3: an error response to the app origin carries the CORS headers and exposes Retry-After and X-Caddie-Pace', async () => {
+      const r = await api('POST', '/api/circles/members', { event: PRIMARY, talk_id: T }, { device: N, origin: SMOKE_ORIGIN, label: 'N-members' });
+      const problems = [];
+      if (r.status !== 403 || r.json.error !== 'share_required') problems.push(`status ${r.status} ${r.json.error ?? ''}`.trim());
+      if (r.headers.get('access-control-allow-origin') !== SMOKE_ORIGIN) problems.push('no Access-Control-Allow-Origin on the error answer');
+      const exposed = r.headers.get('access-control-expose-headers');
+      if (!listHas(exposed, 'retry-after')) problems.push('Retry-After is not exposed');
+      if (!listHas(exposed, 'x-caddie-pace')) problems.push('X-Caddie-Pace is not exposed');
+      if (!listHas(r.headers.get('vary'), 'origin')) problems.push('no Vary: Origin');
+      report(problems.length === 0, 'cors3: an error response to the app origin carries the CORS headers and exposes Retry-After and X-Caddie-Pace', problems.length ? problems.join('; ') : '403 share_required with the CORS headers, both headers exposed');
+    });
+  }
+
   await check('p7: expired profiles never appear', async () => {
     if (!expiredWritten) {
-      skip('p7: expired profiles never appear', 'no Elasticsearch write key in the environment');
+      skip('p7: expired profiles never appear', NO_WRITE_WHY);
       return;
     }
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
@@ -964,7 +1274,7 @@ try {
     if (wrongTopic.status !== 400) problems.push(`an unknown topic gave ${wrongTopic.status}`);
     const otherTalk = [...ownTalks.get(EXTRA[0])][0];
     if (otherTalk) {
-      const wrongTalk = await putProfile(A, PRIMARY, 'A', { learn: LEARN, speak: ['kubernetes'] }, { open: true, shared: [T, otherTalk] });
+      const wrongTalk = await putProfile(A, PRIMARY, 'A', A_LEARNING, { open: true, shared: [T, otherTalk] });
       if (wrongTalk.status !== 400) problems.push(`sharing another conference's talk gave ${wrongTalk.status}`);
     }
     const counts = await api('POST', '/api/circles/counts', { event: EXTRA[0], talk_ids: [T] }, { label: 'public-counts' });
@@ -974,7 +1284,7 @@ try {
 
   await check('p9: a write or read with the wrong secret is rejected', async () => {
     const wrong = { profileId: A.profileId, secret: crypto.randomBytes(32).toString('base64url') };
-    const put = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'Intruder', { learn: [] }), open_to_meet: true, shared_talk_ids: [] }, { device: wrong, label: 'wrong-put' });
+    const put = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'Intruder', {}), open_to_meet: true, shared_talk_ids: [] }, { device: wrong, label: 'wrong-put' });
     const del = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: wrong, label: 'wrong-delete' });
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: wrong, label: 'wrong-matches' });
     const c = await api('POST', '/api/circles/members', { event: PRIMARY, talk_id: T }, { device: wrong, label: 'wrong-members' });
@@ -985,8 +1295,18 @@ try {
   });
 
   await check('p10: a cross-origin write is rejected', async () => {
-    const r = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'A', { learn: LEARN }), open_to_meet: true, shared_talk_ids: [T] }, { device: A, origin: 'https://evil.example', label: 'cross-origin' });
+    const r = await api('PUT', '/api/people/profile', { event: PRIMARY, profile: profileBody(PRIMARY, 'A', A_LEARNING), open_to_meet: true, shared_talk_ids: [T] }, { device: A, origin: 'https://evil.example', label: 'cross-origin' });
     report(r.status === 403, 'p10: a cross-origin write is rejected', `status ${r.status}`);
+  });
+
+  // The same refusal on a read route that takes the device header, and no CORS grant for the origin.
+  await check('cors4: a device route called from another origin gets 403 and no CORS headers', async () => {
+    const r = await api('POST', '/api/circles/members', { event: PRIMARY, talk_id: T }, { device: A, origin: EVIL_ORIGIN, label: 'cross-origin' });
+    const problems = [];
+    if (r.status !== 403) problems.push(`status ${r.status}`);
+    if (hasCorsHeader(r.headers)) problems.push('the refusal carries Access-Control headers');
+    if (r.json.members) problems.push('the refusal carries members');
+    report(problems.length === 0, 'cors4: a device route called from another origin gets 403 and no CORS headers', problems.length ? problems.join('; ') : `status ${r.status}, no Access-Control headers`);
   });
 
   // ---------------------------------------------------------------------------------------------
@@ -1008,7 +1328,7 @@ try {
   let refA = null;
 
   await check('q1: a specific query ranks the person with the matching passage first and returns it as evidence', async () => {
-    const f = await putProfile(F, PRIMARY, 'F', { speak: LEARN, expertise: FIND_PASSAGE }, { open: true });
+    const f = await putProfile(F, PRIMARY, 'F', { about: FIND_PASSAGE }, { open: true });
     const k = await putProfile(K, PRIMARY, 'K', { learn: [COMMON_TOPIC] }, { open: true });
     if (f.status !== 200 || k.status !== 200) throw new Error(`profiles gave ${f.status}/${k.status}`);
     const r = await findMatches(A, 'A-find');
@@ -1018,7 +1338,7 @@ try {
     refF = p?.ref ?? null;
     const problems = [];
     if (rank !== 0) problems.push(rank === -1 ? 'F not returned' : `F at rank ${rank + 1}`);
-    if (!p?.evidence || !/postgres/i.test(p.evidence.replace(/<\/?mark>/g, ''))) problems.push(`evidence "${p?.evidence}"`);
+    if (!p?.evidence || !/gravitronic/i.test(p.evidence.replace(/<\/?mark>/g, ''))) problems.push(`evidence "${p?.evidence}"`);
     if (!p?.reasons?.[0]?.startsWith("They've worked on")) problems.push(`first reason "${p?.reasons?.[0]}"`);
     if (p && (p.around !== false || p.zone !== null)) problems.push('around or zone set before anyone is around');
     if (r.json.from !== 0 || r.json.size !== 20 || typeof r.json.has_more !== 'boolean') problems.push('paging fields missing');
@@ -1032,11 +1352,16 @@ try {
     if (plain.status !== 200 || text.status !== 200) throw new Error(`status ${plain.status}/${text.status}`);
     if (names(plain.json.results).includes(testName('K'))) problems.push('K in profile matches');
     if (names(text.json.results).includes(testName('K'))) problems.push('K in text matches');
-    if (!names(plain.json.results).includes(testName('F'))) problems.push('F (specific topics) missing from profile matches');
+    if (!names(plain.json.results).includes(testName('B'))) problems.push('B (a specific match) missing from profile matches');
     const whenBad = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [], when: 'soon' }, { device: A, label: 'A-matches' });
     if (whenBad.status !== 400) problems.push(`when=soon gave ${whenBad.status}`);
-    report(problems.length === 0, 'q2: a result sharing only the common topic is dropped', problems.length ? problems.join('; ') : `K absent, F present among ${plain.json.results.length}`);
+    report(problems.length === 0, 'q2: a result sharing only the common topic is dropped', problems.length ? problems.join('; ') : `K absent, B present among ${plain.json.results.length}`);
   });
+
+  // A is around from q4 to q9, so its interests go first (see SMOKE_SUBJECT); without that no
+  // presence check runs.
+  const quiet = await putProfile(A, PRIMARY, 'A', A_AROUND, { open: true, shared: [T] });
+  if (quiet.status !== 200) throw new Error(`A without interests gave ${quiet.status}, so the presence checks cannot run`);
 
   await check('q3: presence needs a visible profile', async () => {
     const none = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: X, label: 'X-presence' });
@@ -1094,7 +1419,7 @@ try {
     const anyoneView = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
     const fromN = await findMatches(N, 'N-find');
     const f3 = personIn(fromN, 'F');
-    refA = personIn(await findMatches(F, 'F-find', { query: 'eBPF GPU LLM', when: 'around_now' }), 'A')?.ref ?? null;
+    refA = personIn(await findMatches(F, 'F-find', { query: ASKER_QUERY, when: 'around_now' }), 'A')?.ref ?? null;
     const problems = [];
     if (!f1 || f1.around !== false || f1.zone !== null) problems.push('F not around yet shows around or a zone');
     if (!f2 || f2.around !== true || f2.zone !== ZONE_F) problems.push(`both around: F around ${f2?.around}, zone ${f2?.zone}`);
@@ -1114,7 +1439,8 @@ try {
   await check('q6: a third device gets 403 from a meet, and 410 after found', async () => {
     if (!refF) throw new Error('F has no ref');
     const noted = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: `see ${WORDLIST[0] ?? 'example.com'}` }, { device: A, label: 'A-meet' });
-    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: 'ebpf', note: 'compare notes on Postgres operators' }, { device: A, label: 'A-meet' });
+    // A topic on an ask is only its label; it never takes part in matching.
+    const r = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: 'ebpf', note: `compare notes on ${FIND_WORD}` }, { device: A, label: 'A-meet' });
     if (r.status !== 200) throw new Error(`request gave ${r.status} ${r.json.error ?? ''}`);
     meetId = r.json.meet_id;
     const again = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
@@ -1192,24 +1518,14 @@ try {
   });
 
   await check('q7: presence expires', async () => {
-    if (!ES_WRITE_KEY) {
-      skip('q7: presence expires', 'no Elasticsearch write key in the environment');
+    if (WRITE_MODE === 'none') {
+      skip('q7: presence expires', NO_WRITE_WHY);
       return;
     }
-    // Aged directly with a Bulk partial update (the write the server itself uses, so nothing is
-    // re-embedded), because the API always sets presence_until an hour ahead.
-    const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
-      method: 'POST',
-      headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
-      body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${A.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    const aged = res.ok ? await res.json().catch(() => ({})) : {};
-    if (!res.ok) await res.body?.cancel();
-    if (!res.ok || aged.errors) throw new Error(`aging A's presence gave ${res.status}`);
+    await agePresence(A, 'A');
     const r = await findMatches(A, 'A-find');
     const f = personIn(r, 'F');
-    const fromF = await findPerson(F, 'F-find', 'A', { query: 'eBPF GPU LLM' });
+    const fromF = await findPerson(F, 'F-find', 'A', { query: ASKER_QUERY });
     const ok = f && f.around === true && f.zone === null && fromF && fromF.around === false;
     report(Boolean(ok), 'q7: presence expires', ok ? 'an aged presence_until hides the zone and shows A as not around' : `F zone ${f?.zone}, A around ${fromF?.around}`);
   });
@@ -1222,7 +1538,7 @@ try {
     if (back.status !== 200) throw new Error(`A presence gave ${back.status}`);
     const blk = await api('POST', '/api/people/block', { event: PRIMARY, ref: refF }, { device: A, label: 'A-block' });
     const fromA = await findMatches(A, 'A-find');
-    const fromF = await findMatches(F, 'F-find', { query: 'eBPF GPU LLM', when: 'around_now' });
+    const fromF = await findMatches(F, 'F-find', { query: ASKER_QUERY, when: 'around_now' });
     const aToF = await api('POST', '/api/meet', { event: PRIMARY, ref: refF, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
     const fToA = await api('POST', '/api/meet', { event: PRIMARY, ref: refA, topic_id: null, note: '' }, { device: F, label: 'F-meet' });
     const list = await api('GET', `/api/people/blocks?event=${PRIMARY}`, undefined, { device: A, label: 'A-blocks' });
@@ -1262,8 +1578,8 @@ try {
   });
 
   await check('q8b: the inbox omits the spot-me line once a presence lapses', async () => {
-    if (!ES_WRITE_KEY) {
-      skip('q8b: the inbox omits the spot-me line once a presence lapses', 'no Elasticsearch write key in the environment');
+    if (WRITE_MODE === 'none') {
+      skip('q8b: the inbox omits the spot-me line once a presence lapses', NO_WRITE_WHY);
       return;
     }
     if (!refA) throw new Error('A has no ref');
@@ -1277,15 +1593,7 @@ try {
     const details = await api('PUT', `/api/meet/${id}/details`, { spot_me: kSpot }, { device: K, label: 'K-meet' });
     if (accept.status !== 200 || details.status !== 200) throw new Error(`accept ${accept.status}, details ${details.status}`);
     const before = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: A, label: 'A-inbox' });
-    const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
-      method: 'POST',
-      headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
-      body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${K.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    const aged = res.ok ? await res.json().catch(() => ({})) : {};
-    if (!res.ok) await res.body?.cancel();
-    if (!res.ok || aged.errors) throw new Error(`aging K's presence gave ${res.status}`);
+    await agePresence(K, 'K');
     const inbox = await api('GET', `/api/meet/inbox?event=${PRIMARY}`, undefined, { device: A, label: 'A-inbox' });
     const meet = await api('GET', `/api/meet/${id}`, undefined, { device: A, label: 'A-meet' });
     const problems = [];
@@ -1313,17 +1621,22 @@ try {
     if ((inbox.json.outgoing ?? []).some((m) => m.meet_id === r.json.meet_id)) problems.push('the meet is still in A\'s inbox');
     if (names(found.json.results).includes(testName('F'))) problems.push('F still found');
     // A blocked by F: F's block went with F's profile, so A is not hidden from anyone now.
-    const fromN = await findMatches(N, 'N-find', { query: 'eBPF GPU LLM' });
+    const fromN = await findMatches(N, 'N-find', { query: ASKER_QUERY });
     if (fromN.status !== 200) problems.push(`N's search gave ${fromN.status}`);
     report(problems.length === 0, 'q9: delete removes everything', problems.length ? problems.join('; ') : 'profile, meet and block gone');
   });
 
   await check('q10: two reports hide a profile from everyone but its owner', async () => {
-    // B shares for the circle talk too, so both reporters see the circle. R is the reported person.
-    const shareB = await putProfile(B, PRIMARY, 'B', { speak: LEARN, learn: ['kubernetes'] }, { open: true, shared: [T] });
+    // A leaves presence for good and takes its interests back, so R is in A's matches. B shares
+    // for the circle talk too, so both reporters see the circle. R is the reported person.
+    const away = await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: A, label: 'A-presence' });
+    if (away.status !== 200) throw new Error(`A presence off gave ${away.status}`);
+    const learning = await putProfile(A, PRIMARY, 'A', A_LEARNING, { open: true, shared: [T] });
+    if (learning.status !== 200) throw new Error(`A with interests gave ${learning.status}`);
+    const shareB = await putProfile(B, PRIMARY, 'B', { interests: SMOKE_SUBJECT, expertise: SMOKE_EXPERTISE }, { open: true, shared: [T] });
     if (shareB.status !== 200) throw new Error(`B sharing gave ${shareB.status}`);
     const countBeforeR = await countOf();
-    const r = await putProfile(R, PRIMARY, 'R', { speak: LEARN, learn: LEARN }, { open: true, shared: [T] });
+    const r = await putProfile(R, PRIMARY, 'R', { expertise: SMOKE_EXPERTISE }, { open: true, shared: [T] });
     if (r.status !== 200) throw new Error(`R gave ${r.status}`);
     const seenBy = async (device, who) => {
       const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device, label: `${who}-matches` });
@@ -1343,7 +1656,7 @@ try {
     const afterA = await seenBy(A, 'A');
     const afterB = await seenBy(B, 'B');
     const meet = await api('POST', '/api/meet', { event: PRIMARY, ref: refR, topic_id: null, note: '' }, { device: A, label: 'A-meet' });
-    const owner = await putProfile(R, PRIMARY, 'R', { speak: LEARN, learn: LEARN }, { open: true, shared: [T] });
+    const owner = await putProfile(R, PRIMARY, 'R', { expertise: SMOKE_EXPERTISE }, { open: true, shared: [T] });
     const count = await countOf();
     const problems = [];
     if (!beforeA.matches || !beforeA.circle || !beforeB.matches || !beforeB.circle) problems.push('R not visible to both before the reports');
@@ -1362,7 +1675,7 @@ try {
     const del = await api('DELETE', `/api/people/profile?event=${PRIMARY}`, undefined, { device: B, label: 'B-delete' });
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [] }, { device: A, label: 'A-matches' });
     const gone = del.status === 200 && m.status === 200 && !names(m.json.results).includes(testName('B'));
-    const off = await putProfile(C, PRIMARY, 'C', { speak: LEARN }, { open: false, shared: [] });
+    const off = await putProfile(C, PRIMARY, 'C', { expertise: SMOKE_EXPERTISE }, { open: false, shared: [] });
     const count = await countOf();
     const ok = gone && off.status === 200 && count === (countBefore ?? 0) + 1;
     report(ok, 'p11: a deleted profile disappears at once', `delete ${del.status}, B ${gone ? 'gone' : 'still there'}; turning both choices off leaves the count at ${count}`);
@@ -1583,7 +1896,9 @@ try {
   for (const { device, event } of created) {
     await api('DELETE', `/api/people/profile?event=${encodeURIComponent(event)}`, undefined, { device, label: 'cleanup' }).catch(() => {});
   }
-  if (expiredWritten) {
+  if (expiredWritten && WRITE_MODE === 'admin') {
+    await admin('DELETE', `/admin/test/profile?event=${encodeURIComponent(PRIMARY)}&profile_id=${encodeURIComponent(expiredProfileId)}`).catch(() => {});
+  } else if (expiredWritten) {
     const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'DELETE',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}` },
@@ -1679,12 +1994,21 @@ await check('rel2: GET /api/related validates its input', async () => {
 // minute per address), so no other check here is affected.
 
 await check('rl1: a burst of requests gets 429 with Retry-After, and the other endpoints still answer', async () => {
-  const burst = await Promise.all(Array.from({ length: 80 }, () =>
-    fetch(`${BASE_URL}/api/rate-limit-probe`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(async (r) => { await r.arrayBuffer(); return r; })));
+  const headers = SEND_ORIGIN ? { Origin: SMOKE_ORIGIN } : {};
+  const fire = (path, n) => Promise.all(Array.from({ length: n }, () =>
+    fetch(`${API_BASE}${path}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(async (r) => { await r.arrayBuffer(); return r; })));
+  let burst = await fire('/api/rate-limit-probe', 80);
+  let accepted = [404, 429];
+  // The Worker's router answers an unknown /api path without touching a Durable Object, so it may have
+  // no bucket for it; its per-address read bucket (90 a minute) is then the one to burst.
+  if (IS_WORKER && !burst.some((r) => r.status === 429)) {
+    burst = await fire(`/api/topics?event=${encodeURIComponent(PRIMARY)}&size=1`, 130);
+    accepted = [200, 429];
+  }
   const limited = burst.filter((r) => r.status === 429);
   const retryAfter = Number(limited[0]?.headers.get('retry-after'));
-  const health = await fetch(`${BASE_URL}/api/health`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  const ok = limited.length >= 1 && burst.every((r) => r.status === 404 || r.status === 429) && Number.isInteger(retryAfter) && retryAfter >= 1 && health.status === 200;
+  const health = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const ok = limited.length >= 1 && burst.every((r) => accepted.includes(r.status)) && Number.isInteger(retryAfter) && retryAfter >= 1 && health.status === 200;
   report(ok, 'rl1: a burst of requests gets 429 with Retry-After, and the other endpoints still answer',
     `${limited.length} of ${burst.length} limited, Retry-After ${retryAfter}, health ${health.status}`);
 });
@@ -1692,12 +2016,35 @@ await check('rl1: a burst of requests gets 429 with Retry-After, and the other e
 // Install onboarding.
 
 await check('inst1: the manifest makes the app installable and the page links it', async () => {
-  const m = await fetch(`${BASE_URL}/manifest.webmanifest`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  const manifest = await m.json();
-  const page = await (await fetch(`${BASE_URL}/`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })).text();
+  const m = await staticPage('/manifest.webmanifest');
+  const manifest = JSON.parse(m.text);
+  const page = (await staticPage('/')).text;
   const icons = manifest.icons ?? [];
   const ok = m.status === 200 && manifest.display === 'standalone' && manifest.start_url && icons.some((i) => i.sizes === '192x192') && icons.some((i) => i.sizes === '512x512') && /rel="manifest"/.test(page);
-  report(ok, 'inst1: the manifest makes the app installable and the page links it', `display ${manifest.display}, ${icons.length} icons`);
+  // Under a base path (GitHub Pages project site) the start URL, the scope and the icons must resolve
+  // inside the base, or the installed app would start outside the site. The service worker is served
+  // as JavaScript, and a deep link boots the app: 200, or 404 with the app shell when there is a base
+  // path (Pages serves 404.html, a copy of index.html, for a path it does not have).
+  const manifestUrl = `${BASE_URL}/manifest.webmanifest`;
+  const inside = (ref) => {
+    const u = new URL(ref, manifestUrl);
+    return u.origin === BASE_ORIGIN && (u.pathname === BASE_PATH || u.pathname.startsWith(`${BASE_PATH}/`));
+  };
+  const problems = [];
+  if (!ok) problems.push('the manifest or the page link is not installable');
+  if (manifest.start_url && !inside(manifest.start_url)) problems.push(`start_url ${manifest.start_url} is outside ${BASE_PATH || '/'}`);
+  if (manifest.scope && !inside(manifest.scope)) problems.push(`scope ${manifest.scope} is outside ${BASE_PATH || '/'}`);
+  const outsideIcon = icons.find((i) => !inside(i.src));
+  if (outsideIcon) problems.push(`icon ${outsideIcon.src} is outside ${BASE_PATH || '/'}`);
+  const sw = await staticPage('/sw.js');
+  if (sw.status !== 200 || !/javascript/i.test(sw.headers.get('content-type') ?? '') || !sw.text.trim()) problems.push(`sw.js gave ${sw.status} ${sw.headers.get('content-type')}`);
+  const deep = await staticPage(`/e/${encodeURIComponent(PRIMARY)}`);
+  // At the root, a server that has no /e/ route (Cloud Run's) answers 404 with no shell, which is not
+  // judged here; only a 200 must be the app shell.
+  const isShell = deep.text.trim() === page.trim();
+  const deepOk = BASE_PATH === '' ? deep.status === 404 || (deep.status === 200 && isShell) : (deep.status === 200 || deep.status === 404) && isShell;
+  if (!deepOk) problems.push(`the deep link /e/${PRIMARY} gave ${deep.status}${isShell ? '' : ' and is not the app shell'}`);
+  report(problems.length === 0, 'inst1: the manifest makes the app installable and the page links it', problems.length ? problems.join('; ') : `display ${manifest.display}, ${icons.length} icons, sw.js ${sw.status}, deep link ${deep.status}`);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -1734,9 +2081,18 @@ await check('inst1: the manifest makes the app installable and the page links it
   const hits = [];
   const secrets = [A, B, C, D, N, F, K, X, R].flatMap((d) => [d.secret, d.profileId]);
   const hashes = [A, B, C, D, N, F, K, X, R].map((d) => crypto.createHash('sha256').update(d.secret).digest('hex'));
+  // The expired fixture's id and hash, and the admin token, may appear in no response body or header.
+  const fixtureSecrets = [expiredProfileId, expiredSecretHash, ...(ADMIN_TOKEN ? [ADMIN_TOKEN] : [])];
+  for (const r of otherResponses) {
+    const hay = `${r.text}\n${r.headersText}`;
+    if (hay.includes('secret_hash')) hits.push(`secret_hash in ${r.label} ${r.path}`);
+    for (const s of [...secrets, ...hashes, ...fixtureSecrets]) if (hay.includes(s)) hits.push(`a device secret, id, hash or the admin token in ${r.label} ${r.path}`);
+  }
   for (const r of responses) {
+    const hay = `${r.text}\n${r.headersText}`;
     for (const word of ['secret_hash', 'text_hash', '"profile_id"', '_semantic', 'presence_spot', 'blocker_id', 'blocked_id']) if (r.text.includes(word)) hits.push(`${word} in ${r.path}`);
-    for (const s of [...secrets, ...hashes]) if (r.text.includes(s)) hits.push(`a device secret, id or hash in ${r.path}`);
+    if (r.headersText.includes('secret_hash')) hits.push(`secret_hash in a header of ${r.path}`);
+    for (const s of [...secrets, ...hashes, ...fixtureSecrets]) if (hay.includes(s)) hits.push(`a device secret, id, hash or the admin token in ${r.path}`);
     // Spot lines and spot-me lines leave the server only to the meet's two participants, inside the meet.
     if (r.text.includes(spotMarker) && !(['A-meet', 'F-meet'].includes(r.label) && r.path.startsWith('/api/meet/')) && !['A-presence', 'F-presence'].includes(r.label)) hits.push(`a spot line in ${r.label} ${r.path}`);
     // C shared only for the circle talk, so C's contact may appear only in that circle's member
@@ -1761,7 +2117,7 @@ await check('inst1: the manifest makes the app installable and the page links it
     ...(echoChecked > 0 && storedChecked === 0 ? ['no stored profile was read back'] : []),
   ];
   report(l0Problems.length === 0, 'l0: every accepted profile write echoes and stores the shared talks it sent', l0Problems.length ? l0Problems.join('; ') : `${echoChecked} writes checked, ${storedChecked} talks read back`);
-  report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked`);
+  report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked${IS_WORKER ? `, plus ${otherResponses.length} page and admin responses` : ''}`);
 }
 
 {
@@ -1782,6 +2138,7 @@ await check('inst1: the manifest makes the app installable and the page links it
     };
     walk(dist);
     const secrets = BUNDLE_SECRET_VARS.filter((v) => process.env[v]).map((v) => ({ label: `the value of ${v}`, bytes: Buffer.from(process.env[v]) }));
+    if (ADMIN_TOKEN && !process.env.ADMIN_TOKEN) secrets.push({ label: 'the value of ADMIN_TOKEN', bytes: Buffer.from(ADMIN_TOKEN) });
     const patterns = BUNDLE_PATTERNS.map((p) => ({ label: `"${p}"`, bytes: Buffer.from(p) }));
     const hits = [];
     for (const file of files) {
@@ -1793,6 +2150,8 @@ await check('inst1: the manifest makes the app installable and the page links it
     }
     // i. The install card ships in the bundle with its Android and iOS wording.
     const js = files.filter((f) => f.endsWith('.js')).map((f) => readFileSync(f, 'utf8')).join('\n');
+    // A build for another API origin has that origin baked in (VITE_API_BASE), or the app would call its own host.
+    if (CROSS_ORIGIN_API && !js.includes(API_BASE)) hits.push(`the API base ${API_ORIGIN} is not in the bundle`);
     const wording = ['beforeinstallprompt', 'Add to Home screen', 'Add to Home Screen', 'caddie.install.offered.v1'].filter((w) => !js.includes(w));
     report(wording.length === 0, 'inst2: the bundle ships the install card with the Android and iOS wording', wording.length ? `missing ${wording.join(', ')}` : 'all four strings found');
     report(hits.length === 0, 'e: bundle holds no keys, key-shaped strings or scheduling wording', hits.length ? hits.join('; ') : `${files.length} files, ${secrets.length} key values and ${patterns.length} patterns checked`);

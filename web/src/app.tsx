@@ -25,6 +25,7 @@ import {
   type Tab,
   type TabParams,
 } from './lib/route';
+import { appPath } from './lib/apiBase';
 import { visit } from './lib/trail';
 import { useFocusTrap } from './lib/focus';
 import { AppBar, ConfirmDialog, NavBar, OverflowMenu, Segmented, Toast, type ConfirmData, type ToastData } from './components/common';
@@ -445,7 +446,7 @@ export function App() {
   };
 
   const interestedIds = new Set(talks.map((t) => t.talk_id));
-  const base = slug ? `/e/${encodeURIComponent(slug)}` : '';
+  const base = slug ? appPath(`e/${encodeURIComponent(slug)}`) : '';
   const isTabScreen = isTab(tab);
   const navTab = tab === 'here' || tab === 'inbox' || tab === 'meet' ? 'people' : tab;
 

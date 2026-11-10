@@ -9,6 +9,7 @@
 // every 15 s, only while the page is visible, stopped when it is hidden and when presence turns
 // off. Denied or unavailable means zone-only, silently.
 import { useEffect, useState } from 'preact/hooks';
+import { pacedMs } from '../lib/pace';
 import { loadSchedule } from '../offline/status';
 import { deletePresence, PeopleApiError, putPresence } from './api';
 import { getPresence, onPresenceFromOtherTab, setPresence } from './storage';
@@ -40,7 +41,9 @@ function zoneConfirmMs(): number {
   }
 }
 /** The spec's ceiling: at most one position update per 15 s. */
-export const POSITION_MIN_INTERVAL_MS = 15_000;
+// A position is sent at most this often at pace 1 (and only when the device has moved, because the
+// geolocation watch reports changes); the wait is stretched by the pace the API reports.
+export const POSITION_MIN_INTERVAL_MS = 30_000;
 const POSITION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge: 10_000, timeout: 30_000 };
 
 /** Zones every conference has, after its room names. */
@@ -194,8 +197,9 @@ async function sendFix(slug: string) {
     });
   } catch (err) {
     // A profile that is gone, or presence the server no longer accepts: stop sending positions;
-    // the zone-only timers decide the rest.
-    if (err instanceof PeopleApiError && err.status >= 400 && err.status < 500 && err.status !== 429) stopPositionWatch();
+    // the zone-only timers decide the rest. A 409 means the profile changed while the server
+    // wrote, and 429 a short limit: the next fix tries again.
+    if (err instanceof PeopleApiError && err.status >= 400 && err.status < 500 && err.status !== 429 && err.status !== 409) stopPositionWatch();
   } finally {
     sending = false;
   }
@@ -206,7 +210,7 @@ function onFix(slug: string, pos: GeolocationPosition) {
   const fix = toPosition(pos);
   if (!fix) return;
   pendingFix = fix;
-  const wait = lastSentAt + POSITION_MIN_INTERVAL_MS - Date.now();
+  const wait = lastSentAt + pacedMs(POSITION_MIN_INTERVAL_MS) - Date.now();
   if (wait <= 0) void sendFix(slug);
   else if (sendTimer === undefined) sendTimer = window.setTimeout(() => void sendFix(slug), wait);
 }
@@ -425,6 +429,9 @@ export function resetPresence(): void {
 export function presenceProblem(err: unknown): string {
   if (err instanceof PeopleApiError) {
     if (err.code === 'profile_required' || err.code === 'no_device') return 'Make your profile visible first.';
+    // The profile changed while the server wrote presence (another device or tab, a report): the
+    // same tap works a moment later.
+    if (err.status === 409) return 'That did not go through. Try again.';
     return err.message;
   }
   return 'That could not be saved. Please try again.';

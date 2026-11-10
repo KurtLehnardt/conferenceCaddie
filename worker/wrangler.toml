@@ -1,0 +1,42 @@
+name = "conference-caddie-api"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+# account_id is not set here; wrangler reads CLOUDFLARE_ACCOUNT_ID from the environment.
+
+[ai]
+binding = "AI"
+# Workers AI has no local simulator. `wrangler dev --local` cannot call it at all ("Binding AI
+# needs to be run remotely"), so local runs set EMBED_FAKE=1 in .dev.vars (scripts/dev-vars.mjs)
+# and the binding is never called; real embeddings are exercised on the deployed Worker.
+
+[[durable_objects.bindings]]
+name = "CONFERENCE"
+class_name = "ConferenceDO"
+
+[[durable_objects.bindings]]
+name = "DIRECTORY"
+class_name = "DirectoryDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ConferenceDO", "DirectoryDO"]
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[vars]
+ALLOWED_ORIGINS = "https://kurtlehnardt.github.io,http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173,http://127.0.0.1:4173"
+EMBED_MODEL = "@cf/baai/bge-small-en-v1.5"
+VAPID_SUBJECT = "https://github.com/KurtLehnardt/conferenceCaddie"
+DAILY_REQUEST_BUDGET = "70000"
+ROWS_READ_SOFT_CAP = "3500000"
+ROWS_WRITTEN_SOFT_CAP = "85000"
+
+[observability]
+enabled = true
+
+# Invocation logs record the request and its metadata, which can include the X-Caddie-Device
+# header (a device secret). Only the Worker's own one-line console logs are kept.
+[observability.logs]
+invocation_logs = false
