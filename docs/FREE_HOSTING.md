@@ -43,14 +43,18 @@ GitHub Actions: weekly ingest ──admin routes──> Worker
 - **One Worker.** `worker/src/index.js` routes the 31 API routes. All heavy work runs in Durable Objects, because the Free plan allows 10 ms of CPU per Worker request.
 - **Storage: SQLite-backed Durable Objects only.** There is one `ConferenceDO` per conference slug and one `DirectoryDO` named `global`. D1, KV, Vectorize and Pages (Cloudflare's) are not used.
 - **Keyword search:** SQLite FTS5 with the porter and unicode61 tokenizer.
-- **Semantic search:** vectors from `@cf/baai/bge-small-en-v1.5` (384 dimensions), L2-normalised, stored as float32 BLOBs, with a brute-force dot product over vectors held in Durable Object memory. The model is set by the `EMBED_MODEL` variable. No generative LLM is called anywhere.
-- **Ranking:** reciprocal rank fusion in code (rank constant 60). The old "Elasticsearch does all ranking" rule is lifted. People matching also applies a cosine floor of 0.55 to each semantic leg for bge-small, set by `PEOPLE_SEMANTIC_FLOOR`; lower it if recall feels low.
+- **Semantic search:** vectors from `@cf/baai/bge-small-en-v1.5` (384 dimensions), called with CLS pooling, L2-normalised, stored as float32 BLOBs, with a brute-force dot product over vectors held in Durable Object memory. The model is set by the `EMBED_MODEL` variable. No generative LLM is called anywhere.
+- **Ranking:** reciprocal rank fusion in code (rank constant 60). The old "Elasticsearch does all ranking" rule is lifted. People matching also applies a cosine floor of 0.61 to each semantic leg for bge-small with CLS pooling (re-measured on 2026-11-10, see `worker/src/people/rank.js`), set by `PEOPLE_SEMANTIC_FLOOR`; lower it if recall feels low.
 - **Auth:** the device header `X-Caddie-Device: {profile_id}.{secret}`. Only `sha256(secret)` is stored, and the compare is constant time. There are no cookies.
 - **CORS:** the Worker allows only the origins in `ALLOWED_ORIGINS` (`https://kurtlehnardt.github.io` and the localhost dev ports) plus requests with no `Origin` header (Node, curl, the Android app).
 - **Push:** VAPID Web Push is sent from the Worker with Web Crypto (RFC 8291 and 8292). The VAPID pair is stored as Worker secrets.
 - **Privacy rules are unchanged:** reciprocity, circles gated by sharing, presence and zone visibility, symmetric block, silent decline, expiry, delete everywhere, device-secret ownership, and contact shown only to entitled viewers. The UI shows no raw IDs.
 - **Schedule import:** the Pages build (`VITE_CLIENT_EXTRACT=1`) reads PDF, DOCX and ODT files in the browser, with pdf.js and fflate loaded on demand, and sends only text to the Worker. The Cloud Run build still sends files to Elasticsearch. This reverses the 2026-11-09 choice for the free stack only.
 - **Web build:** `VITE_BASE` sets the path base and `VITE_API_BASE` sets the API address. The Cloud Run build uses neither (base `/`, same origin). The Pages build uses `/conferenceCaddie/`, copies `index.html` to `404.html` so deep links work, and adds a Content-Security-Policy tag naming the Worker.
+- **Embedding parity with the talk bundles.** The Worker embeds under the model block of the bundles ([contracts/talk-bundle.md](contracts/talk-bundle.md), Embedding conventions): CLS pooling, a talk as `title + "\n" + abstract` with no instruction, and talk search queries with the query instruction. Profile text and people queries are embedded as documents on both sides. `worker/ingest/push-ingest.mjs` refuses to push when the Worker's conventions differ from the bundle model block, and a change of conventions re-embeds every stored vector through the cron and `POST /admin/embed-pending`. Checked against `contracts/fixtures/embedding/reference.v1.json` through the Worker's own code: maximum cosine difference 0.0003 (tolerance 0.02).
+- **Contracts v1.** `GET /api/capabilities` serves a tier 2 document (`worker/src/capabilities.js`, public, `max-age=300`). With the `BLE_MASTER_KEYRING` Worker secret, Bluetooth is `derived-v1`: presence with `ble: true` returns `ble_key` and `ble_key_id` once, sightings resolve windows w-1 to w+1 through the reference code in `contracts/js/ble-token.mjs`, answer with `ble_key_id`, and give 403 `ble_rekey` for a retired master. Without the secret it is `server-rotate`. The Phase 4 mitigations (co-location, 10 new people per window and 30 per hour per device, kept in the conference object's SQLite, and a zone only in the requester's own zone) apply to both kinds of token. `node worker/scripts/ble-parity.mjs` checks the Worker's code against the golden vectors and resolution cases in `contracts/fixtures/ble/`.
+- **Blocks** belong to the blocker, as on Cloud Run: deleting the blocked profile does not lift a block, the blocks list shows it with `display_name: null`, unblocking by `ref` still works, and the purge removes a block at its `expires_at` (the latest end of the conference and of the two profiles).
+- **Unavailable conferences.** When a conference turns unavailable (for example after a failed schedule fetch), its owners can still delete their profile, presence, push subscription and blocks, the admin routes still reach it, and the cron keeps purging its object until it holds no personal data. `push-ingest.mjs` keeps a searchable conference searchable when the weekly fetch of its schedule fails.
 - **Source layout:** the backend is `worker/` (`src/`, `ingest/`, `scripts/`, `wrangler.toml`). The Cloud Run server in `server/` is unchanged, and `worker/` is excluded from its image.
 
 ## How data stays fresh
@@ -79,7 +83,7 @@ GitHub Actions: weekly ingest ──admin routes──> Worker
 
    ```sh
    bash worker/scripts/deploy.sh                          # prints the subdomain and the Worker URL
-   node worker/scripts/setup-secrets.mjs --only-missing   # ADMIN_TOKEN, REF_SALT, VAPID pair
+   node worker/scripts/setup-secrets.mjs --only-missing   # ADMIN_TOKEN, REF_SALT, VAPID pair, first BLE_MASTER_KEYRING
    export CADDIE_API_BASE=https://conference-caddie-api.<subdomain>.workers.dev
    export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
    node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE"
@@ -96,7 +100,9 @@ GitHub Actions: weekly ingest ──admin routes──> Worker
 
 **Redeploy the Worker.** From the repository root: `bash worker/scripts/deploy.sh`. It is safe to repeat and keeps secrets and data. Durable Object migrations are declared in `worker/wrangler.toml`; add a new `[[migrations]]` tag for any new class or schema change, and never edit the `v1` tag.
 
-**Redeploy the web app.** Push to `main` (any change under `web/`) or run `gh workflow run pages.yml`. The build reads the repository variable `CADDIE_API_BASE`.
+**Redeploy the web app and the talk bundles.** Push to `main` (any change under `web/`, `data/`, `contracts/`, the bundle builder or `tools/bundles/`) or run `gh workflow run pages.yml`. The build reads the repository variable `CADDIE_API_BASE`. It builds the web app into `dist-pages/`, then the bundles with `scripts/build-bundles.mjs` (the embedding model is cached by its pinned revision, and a cache miss downloads it once), carries forward the bundle directories the live `conferences.json` names (`scripts/carry-forward-bundles.mjs`), and uploads `dist-pages/`. A weekly run on Mondays rebuilds every vector with `--reuse-from none`.
+
+**Rotate the Bluetooth master keyring.** Follow the three steps of [contracts/ble-tokens.md](contracts/ble-tokens.md) (Keys): add the new key as not current, make it current, then retire the old one, each with `npx wrangler secret put BLE_MASTER_KEYRING` (value on standard input only, the JSON `{ "current": "<id>", "keys": { ... } }`). `setup-secrets.mjs` only creates the first keyring and never replaces one.
 
 **Rotate `ADMIN_TOKEN`.** `setup-secrets.mjs` has no flag for rotating only this secret, and running it without `--only-missing` would also replace the VAPID pair, which ends every push subscription. Rotate the token by hand instead, from the repository root, with the value on standard input only:
 
@@ -123,11 +129,12 @@ Never print the file. The old token stops working as soon as the Worker secret i
 ## Known gaps
 
 - **Not deployed yet.** See the status section above. No live smoke run, CPU reading on the deployed Worker or live usage meter exists yet.
-- **Contracts v1 conformance is partial.** The Worker does not serve `GET /api/capabilities`, and its Bluetooth support is the legacy client-supplied token, not the derived `ble_key` and `token_w` scheme with co-location checks and caps. The Pages build does not publish `capabilities.json` or the talk bundles (`scripts/build-bundles.mjs`, [docs/BUNDLES.md](BUNDLES.md)), because the Pages workflow does not run the bundle step yet. Native apps that depend on the contracts need that work.
+- **People vectors are server-side.** The capabilities document says `people.semantic: server` and `people.live: poll`: client-computed profile vectors and the WebSocket channel of the tier 2 fixture are not implemented.
+- **The import body cap is 1 MB** in the Worker, while the web app allows files up to 5 MB. Text files between about 750 KB and 5 MB get 413.
 - **Shared github.io origin.** Every project site of the account shares `https://kurtlehnardt.github.io`. Another site there could read the device secret in `localStorage`, and the origin is an allowed CORS origin. A custom domain or a dedicated GitHub account removes the risk.
 - **Four real profiles were not migrated.** The owners' device secrets live on the Cloud Run origin, so they make a new profile on Pages.
 - **English-only embeddings.** bge-small is English-only. If non-English talks matter, set `EMBED_MODEL` to `@cf/baai/bge-m3`, clear the vectors and run the admin re-embed.
-- **Ranking differs from Elasticsearch.** FTS5 BM25 and the 0.55 people floor order results a little differently from the E5 and Lucene setup, and the smoke is the only gate.
+- **Ranking differs from Elasticsearch.** FTS5 BM25 and the 0.61 people floor order results a little differently from the E5 and Lucene setup, and the smoke is the only gate.
 - **The Cache API does nothing on `workers.dev`.** Public routes are cached in memory and by browser and service-worker headers only.
 - **GitHub import** can answer 429 often, because GitHub's anonymous limit is shared by Cloudflare's egress addresses. A `GITHUB_TOKEN` Worker secret would fix it.
 - **Android APK.** `.github/workflows/android-apk.yml` still sets `VITE_API_ORIGIN` to the Cloud Run address. Change it to the Worker URL and rebuild before the paid stack is shut down, or installed APKs break.

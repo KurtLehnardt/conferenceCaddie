@@ -1,14 +1,18 @@
 name = "conference-caddie-api"
 main = "src/index.js"
 compatibility_date = "2026-11-01"
+# node:crypto and Buffer for the Bluetooth derived-token reference code (contracts/js/ble-token.mjs).
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 # account_id is not set here; wrangler reads CLOUDFLARE_ACCOUNT_ID from the environment.
 
 [ai]
 binding = "AI"
 # Workers AI has no local simulator. `wrangler dev --local` cannot call it at all ("Binding AI
-# needs to be run remotely"), so local runs set EMBED_FAKE=1 in .dev.vars (scripts/dev-vars.mjs)
-# and the binding is never called; real embeddings are exercised on the deployed Worker.
+# needs to be run remotely"), so local runs either set EMBED_FAKE=1 in .dev.vars (the binding is
+# never called) or, with `scripts/dev-vars.mjs --real-ai`, set EMBED_PROXY to the local
+# scripts/dev-ai-proxy.mjs, which calls the Workers AI REST API exactly as the binding would
+# (pooling "cls", see src/lib/embed.js).
 
 [[durable_objects.bindings]]
 name = "CONFERENCE"

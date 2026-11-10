@@ -23,16 +23,22 @@
 //   (push/nudge.js afterPresence, which never throws). A position-only update cannot change who
 //   is in the same zone, so it does not run the rule.
 // - Turning presence off closes the person's active meets.
-// - Bluetooth: ble: true mints a 22-character token valid 10 minutes (never past the presence),
-//   ble: false clears it, and a write that says nothing leaves it as it was. The rotate route
-//   mints a fresh one while presence is on.
+// - Bluetooth (lib/ble.js, docs/contracts/ble-tokens.md): ble: true starts a new session. It
+//   always mints a legacy 22-character token valid 10 minutes (never past the presence) for the
+//   old Android companion, and with the master keyring (derived-v1) also a fresh 16-byte
+//   presence_nonce under the current master, whose ble_key and ble_key_id go back in this
+//   response only; the key is never stored. ble: false ends the session, and a write that says
+//   nothing leaves a live session as it was, except that one starting a new presence session
+//   clears whatever an ended one left, because one nonce is one presence session. The rotate
+//   route mints a fresh legacy token while presence is on and leaves a derived session alone.
 // - Nothing from a request body, header or row is logged.
 
 import { HttpError, bad, json, readJson } from '../lib/http.js';
 import { dayBounds } from '../lib/time.js';
 import { afterPresence } from '../push/nudge.js';
 import { closeActiveMeetsOf } from './meets.js';
-import { HOUR_MS, iso, profileRequired, writer, line, randomId, distanceM } from './common.js';
+import { HOUR_MS, iso, profileRequired, writer, line, distanceM } from './common.js';
+import { bleConfig, mintBleSession, mintBleToken, bleView, derivedSession, addSession, BLE_SESSION_OFF } from '../lib/ble.js';
 
 const PRESENCE_MS = HOUR_MS;
 const SPOT_MAX = 60;
@@ -42,8 +48,6 @@ const COORD_DECIMALS = 5;
 const JUMP_WINDOW_MS = 10 * 60_000;
 // ... and dropped when it implies a faster move than this: a brisk run, never walking in a hall.
 const JUMP_MAX_MPS = 7;
-const BLE_TOKEN_MS = 10 * 60_000;
-const BLE_TOKEN_BYTES = 16;
 
 const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until', 'ble']);
 const PRESENCE_MODES = new Set(['hour', 'day']);
@@ -76,13 +80,6 @@ function implausibleJump(prev, next, nowMs) {
   if (nowMs - prev.at >= JUMP_WINDOW_MS) return false;
   return distanceM(prev, next) / Math.max(1, (nowMs - prev.at) / 1000) > JUMP_MAX_MPS;
 }
-
-// The token fields for a presence write at nowMs; the token never outlives the presence.
-function mintBleToken(nowMs, presenceUntilMs) {
-  return { ble_token: randomId(BLE_TOKEN_BYTES), ble_token_until_ms: Math.min(nowMs + BLE_TOKEN_MS, presenceUntilMs) };
-}
-
-const bleView = (fields) => ({ token: fields.ble_token, rotate_at: iso(fields.ble_token_until_ms) });
 
 // The caller's live, conference-wide visible profile, else 403 profile_required.
 async function visibleProfile(ctx, device) {
@@ -122,23 +119,24 @@ async function putPresence(ctx, req) {
   // The mode is not stored: a presence whose end is today's end of day was set with 'day'.
   const curMode = cur ? (cur.until_ms === dayUntil ? 'day' : 'hour') : null;
   const explicit = body.location === undefined || body.location === null;
-  const bleChange = body.ble === true || (body.ble === false && Boolean(cur?.ble_token));
+  const bleChange = body.ble === true || (body.ble === false && Boolean(cur?.ble_token || cur?.presence_nonce));
   const changed = !cur || explicit || bleChange || cur.zone !== zone || (cur.spot ?? null) !== storedSpot
     || Boolean(cur.spot_pending) !== held || curMode !== mode;
 
   let presence = cur;
-  let ble = null;
+  let session = null;
   if (changed) {
     // Turning it on again while it is on extends it; since keeps the first time.
     const since = cur && Number.isFinite(cur.since_ms) ? cur.since_ms : now;
     const fields = { zone, spot: storedSpot, spot_pending: held, since_ms: since, until_ms: untilMs };
-    if (body.ble === true) ble = mintBleToken(now, untilMs);
-    if (ble) Object.assign(fields, ble);
-    else if (body.ble === false) Object.assign(fields, { ble_token: null, ble_token_until_ms: null });
+    if (body.ble === true) session = mintBleSession(bleConfig(ctx.env), me.profile_id, now, untilMs);
+    if (session) Object.assign(fields, session.fields);
+    else if (body.ble === false || !cur) Object.assign(fields, BLE_SESSION_OFF);
     // A token kept from before never outlives the presence.
     else if (cur?.ble_token && Number.isFinite(cur.ble_token_until_ms) && cur.ble_token_until_ms > untilMs) fields.ble_token_until_ms = untilMs;
-    else if (!cur) Object.assign(fields, { ble_token: null, ble_token_until_ms: null });
     presence = store.setPresence(me.profile_id, fields);
+    // The conference's cached token table learns the new session at once.
+    if (session?.fields.presence_nonce) addSession(store, bleConfig(ctx.env), derivedSession(me), now);
   }
   // The position, in memory only. A write without a usable position clears the previous one, so
   // the presence is zone-only again; so does a fix that jumped implausibly far since the last one
@@ -156,7 +154,7 @@ async function putPresence(ctx, req) {
     presence_since: iso(presence.since_ms),
     presence_until: iso(presence.until_ms),
     located: fix !== null,
-    ...(body.ble === true && ble ? { ble: bleView(ble) } : {}),
+    ...(session ? session.view : {}),
   });
   // After the answer: the push nudge for strong matches in this zone (it never throws).
   if (changed) ctx.waitUntil(new Promise((resolve) => setTimeout(resolve, 0)).then(() => afterPresence(ctx, me)));
@@ -180,8 +178,11 @@ async function rotate(ctx, req) {
   await readJson(req, ROTATE_KEYS);
   const me = await visibleProfile(ctx, device);
   if (!ctx.store.isAround(me)) throw new HttpError(403, { error: 'presence_required' });
+  // A new legacy token; a derived session is left as it was. Only the old Android app calls this
+  // route, so a rotated token marks a session of an old app (sightings answers it under a retired
+  // master instead of asking it to re-key, as server/ble.mjs does).
   const fields = mintBleToken(Date.now(), me.presence.until_ms);
-  ctx.store.setPresence(me.profile_id, fields);
+  ctx.store.setPresence(me.profile_id, { ...fields, ble_rotated: true });
   return json(200, { ok: true, ble: bleView(fields) });
 }
 

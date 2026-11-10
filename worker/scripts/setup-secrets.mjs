@@ -15,6 +15,12 @@
 //   VAPID_PUBLIC_KEY   The base64url 65-byte uncompressed public point. It is not secret (every
 //                      browser receives it) but is stored as a secret so the pair stays together.
 //                      The two VAPID keys are always set together, from one generated pair.
+//   BLE_MASTER_KEYRING The Bluetooth master keyring of derived tokens v1 (src/lib/ble.js): JSON
+//                      { "current": "<id>", "keys": { "<id>": "<32 random bytes, base64url>" } }.
+//                      Only the first keyring is generated here, when the Worker has none; an
+//                      existing keyring is never replaced, because that would retire every live
+//                      session at once. Rotate it by hand in the three steps of
+//                      docs/contracts/ble-tokens.md (Keys) with `npx wrangler secret put`.
 //
 // Every value is generated with Web Crypto and written to the standard input of
 // `npx wrangler secret put NAME` (and `gh secret set NAME`); no value is ever put on a command
@@ -45,7 +51,7 @@ import { parseArgs } from 'node:util';
 const WORKER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TOKEN_FILE = process.env.ADMIN_TOKEN_FILE || join(homedir(), '.config', 'conference-caddie', 'admin-token');
 const GH_REPO = process.env.CADDIE_GH_REPO || 'KurtLehnardt/conferenceCaddie';
-const NAMES = ['ADMIN_TOKEN', 'REF_SALT', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY'];
+const NAMES = ['ADMIN_TOKEN', 'REF_SALT', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY', 'BLE_MASTER_KEYRING'];
 // The repository secret that holds ADMIN_TOKEN for the ingest workflow.
 const GH_SECRET = 'CADDIE_ADMIN_TOKEN';
 
@@ -82,6 +88,15 @@ const base64url = (bytes) => Buffer.from(bytes).toString('base64url');
 function randomHex(n) {
   const value = hex(crypto.getRandomValues(new Uint8Array(n)));
   generated.push(value);
+  return value;
+}
+
+// The first Bluetooth master keyring: one key, current, with an id that tells keys apart by age.
+function firstKeyring() {
+  const secret = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const id = `${new Date().toISOString().slice(0, 10)}-${hex(crypto.getRandomValues(new Uint8Array(2)))}`;
+  const value = JSON.stringify({ current: id, keys: { [id]: secret } });
+  generated.push(secret, value);
   return value;
 }
 
@@ -210,6 +225,10 @@ for (const name of NAMES) {
     console.log('Keeping the existing REF_SALT (changing it changes every ref; pass --rotate-ref-salt to replace it).');
     continue;
   }
+  if (name === 'BLE_MASTER_KEYRING' && has(name)) {
+    console.log('Keeping the existing BLE_MASTER_KEYRING (rotate it by hand, see docs/contracts/ble-tokens.md).');
+    continue;
+  }
   plan.add(name);
 }
 // The VAPID keys are one pair: when either is set, both are.
@@ -257,4 +276,5 @@ if (plan.has('VAPID_PRIVATE_KEY')) {
   await putWorkerSecret('VAPID_PRIVATE_KEY', privateKey);
   await putWorkerSecret('VAPID_PUBLIC_KEY', publicKey);
 }
+if (plan.has('BLE_MASTER_KEYRING')) await putWorkerSecret('BLE_MASTER_KEYRING', firstKeyring());
 if (!plan.size && !syncGithubFromFile) console.log('Nothing to set.');

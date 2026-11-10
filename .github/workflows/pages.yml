@@ -1,11 +1,21 @@
-name: Deploy web app to GitHub Pages
+name: Deploy web app and talk bundles to GitHub Pages
 
-# Builds the web app for https://kurtlehnardt.github.io/conferenceCaddie/ and publishes it with the
-# official Pages actions. The app calls the Cloudflare Worker API cross-origin; its address is the
-# repository variable CADDIE_API_BASE (Settings, Secrets and variables, Actions, Variables). The
-# variable holds a public address, not a secret. A build without an API address would call the
-# wrong host, so while the variable is empty a push to main only logs a notice and publishes
-# nothing (the Worker is not deployed yet), and a manual run fails.
+# Builds https://kurtlehnardt.github.io/conferenceCaddie/ and publishes it with the official Pages
+# actions. The site holds two things:
+# - the web app, built with base /conferenceCaddie/. It calls the Cloudflare Worker API
+#   cross-origin; its address is the repository variable CADDIE_API_BASE (Settings, Secrets and
+#   variables, Actions, Variables), a public address, not a secret;
+# - the talk bundles of tier 1 (docs/BUNDLES.md, docs/contracts/talk-bundle.md): bundles/<slug>/<hash16>/
+#   {bundle.json, vectors.i8}, bundles/conferences.json (with a copy at conferences.json) and the
+#   tier 1 capabilities.json, built by scripts/build-bundles.mjs from the committed data/.
+#
+# A build without an API address would call the wrong host, so while the variable is empty a push
+# or a scheduled run only logs a notice and publishes nothing (the Worker is not deployed yet), and
+# a manual run fails.
+#
+# Triggers: a push to main that changes the web app, the conference data or the bundle builder; a
+# weekly scheduled full rebuild that recomputes every vector (--reuse-from none), so nothing that
+# was ever published persists unnoticed (docs/BUNDLES.md); and a manual run.
 #
 # Pages must be enabled once with the source set to "GitHub Actions" (Settings, Pages).
 
@@ -14,7 +24,16 @@ on:
     branches: [main]
     paths:
       - 'web/**'
+      - 'data/**'
+      - 'contracts/**'
+      - 'scripts/build-bundles.mjs'
+      - 'scripts/carry-forward-bundles.mjs'
+      - 'scripts/lib/**'
+      - 'tools/bundles/**'
       - '.github/workflows/pages.yml'
+  schedule:
+    # Mondays, after the weekly ingest (ingest.yml, 09:17 UTC) has had time to commit new data.
+    - cron: '47 11 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -25,6 +44,11 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: false
+
+env:
+  BUNDLE_BASE: https://kurtlehnardt.github.io/conferenceCaddie/bundles/
+  TAKEDOWN: https://github.com/KurtLehnardt/conferenceCaddie/issues
+  PUBLISHER: Conference Caddie
 
 jobs:
   build:
@@ -53,14 +77,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+            tools/bundles/package-lock.json
 
       - name: Install
         if: steps.config.outputs.ready == 'true'
-        working-directory: web
-        run: npm ci
+        run: |
+          npm ci
+          npm --prefix web ci
 
-      - name: Build
+      - name: Build the web app
         if: steps.config.outputs.ready == 'true'
         working-directory: web
         env:
@@ -69,13 +97,62 @@ jobs:
           VITE_CLIENT_EXTRACT: '1'
         run: npm run build
 
+      - name: Put the web app in dist-pages
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          rm -rf dist-pages
+          mkdir -p dist-pages
+          cp -R web/dist/. dist-pages/
+
+      # The embedding library, with no install script: onnxruntime-node's postinstall would
+      # download an unverified CUDA provider, and the CPU binaries ship in the package.
+      - name: Install the bundle tools
+        if: steps.config.outputs.ready == 'true'
+        run: npm --prefix tools/bundles ci --ignore-scripts
+
+      - name: Read the pinned model revision
+        if: steps.config.outputs.ready == 'true'
+        id: model
+        run: |
+          rev=$(grep -oE "ONNX_REVISION = '[0-9a-f]+'" scripts/lib/embedder.mjs | grep -oE "[0-9a-f]{40}")
+          if [ -z "$rev" ]; then echo "::error::ONNX_REVISION not found in scripts/lib/embedder.mjs"; exit 1; fi
+          echo "revision=$rev" >> "$GITHUB_OUTPUT"
+
+      # The model files are SHA-256 pinned and fail closed. With a warm cache the build refuses to
+      # download (--no-model-download), so a missing or altered file fails it; on a cache miss it
+      # downloads once and the cache is saved at the end of the job.
+      - name: Cache the embedding model
+        if: steps.config.outputs.ready == 'true'
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/model
+          key: bundle-model-${{ steps.model.outputs.revision }}
+
+      - name: Build the talk bundles
+        if: steps.config.outputs.ready == 'true'
+        env:
+          MODEL_FLAG: ${{ steps.model-cache.outputs.cache-hit == 'true' && '--no-model-download' || '' }}
+          REUSE_FLAG: ${{ github.event_name == 'schedule' && '--reuse-from none' || '' }}
+        run: |
+          # Never --offline here: it would also forbid reusing the published vectors.
+          node scripts/build-bundles.mjs --out dist-pages --base-url "$BUNDLE_BASE" $MODEL_FLAG $REUSE_FLAG \
+            --takedown "$TAKEDOWN" --publisher-name "$PUBLISHER"
+
+      # A deploy replaces the whole site, but clients may still be fetching the bundle directories
+      # the live conferences.json names, so those are copied into this build first (verified by
+      # size and SHA-256). A 404 on the first deploy is fine.
+      - name: Carry forward the live bundle directories
+        if: steps.config.outputs.ready == 'true'
+        run: node scripts/carry-forward-bundles.mjs --out dist-pages --base-url "$BUNDLE_BASE"
+
       - if: steps.config.outputs.ready == 'true'
         uses: actions/configure-pages@v5
 
       - if: steps.config.outputs.ready == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web/dist
+          path: dist-pages
 
   deploy:
     needs: build

@@ -52,7 +52,7 @@ export const talkVecs = (store) => memo(store, 'vecs', () => {
   const out = new Map();
   for (const [id, e] of store.talkVectors()) {
     const list = [];
-    if (e.title) list.push(e.title);
+    if (e.doc) list.push(e.doc);
     const chunks = [];
     for (const c of e.chunks) {
       if (!c.vec) continue;

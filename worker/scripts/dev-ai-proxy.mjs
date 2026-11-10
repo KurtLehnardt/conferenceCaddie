@@ -3,7 +3,7 @@
 //
 // Workers AI has no local simulator, and a remote dev session cannot be authenticated with an
 // account API token, so the AI binding does not work in a local run. Instead, the Worker's
-// embed.js posts `{model, text}` to the URL in env.EMBED_PROXY (written to the git-ignored
+// embed.js posts `{model, text, pooling}` to the URL in env.EMBED_PROXY (written to the git-ignored
 // .dev.vars by `node scripts/dev-vars.mjs --real-ai`), and this proxy forwards the call to the
 // Workers AI REST API with CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID from its own
 // environment. The token therefore never enters the Worker or .dev.vars.
@@ -46,11 +46,14 @@ const server = createServer(async (req, res) => {
   if (!MODEL_RE.test(body?.model ?? '') || !Array.isArray(body?.text) || body.text.length > 100) {
     return reply(400, { error: 'expected {model, text[]} for a bge embedding model' });
   }
+  // The pooling the Worker asks for (the embedding conventions need "cls"; Workers AI's default
+  // is mean), forwarded as is so a local run embeds exactly as the deployed Worker does.
+  if (body.pooling !== undefined && body.pooling !== 'cls' && body.pooling !== 'mean') return reply(400, { error: 'pooling must be cls or mean' });
   try {
     const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${body.model}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: body.text }),
+      body: JSON.stringify(body.pooling ? { text: body.text, pooling: body.pooling } : { text: body.text }),
     });
     const j = await r.json().catch(() => ({}));
     console.log(`embed ${body.text.length} text(s) -> ${r.status}`);
