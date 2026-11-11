@@ -83,7 +83,7 @@ class BundleSync(
     suspend fun installed(backend: String, scope: String): TalkBundle? {
         val hash = database.installedBundle(scope) ?: return null
         val bytes = files.read(backend, hash) ?: return null
-        return TalkBundle.decode(hash, bytes.getValue(BundleVerifier.BUNDLE_FILE))
+        return TalkBundle.decode(hash, bytes.getValue(BundleVerifier.BUNDLE_FILE), bytes[BundleVerifier.VECTOR_FILE])
     }
 
     /**
@@ -170,7 +170,11 @@ class BundleSync(
         }
         val problems = BundleVerifier.verify(entry.raw, downloaded)
         if (problems.isNotEmpty()) return Problems(problems)
-        val bundle = TalkBundle.decode(entry.contentHash, downloaded.getValue(BundleVerifier.BUNDLE_FILE))
+        val bundle = TalkBundle.decode(
+            entry.contentHash,
+            downloaded.getValue(BundleVerifier.BUNDLE_FILE),
+            downloaded.getValue(BundleVerifier.VECTOR_FILE),
+        )
             ?: return Problems(listOf("${BundleVerifier.BUNDLE_FILE}: does not match the schema"))
         if (bundle.conference.slug != slug) return Problems(listOf("${BundleVerifier.BUNDLE_FILE}: belongs to another conference"))
         return Verified(bundle, downloaded)

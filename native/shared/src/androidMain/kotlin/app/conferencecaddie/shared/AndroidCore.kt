@@ -38,4 +38,7 @@ object AndroidCore {
             }
         }
     }
+
+    /** The process's core if something has created it, for callers that must not create it, such as onTrimMemory. */
+    fun existing(): CaddieCore? = instance
 }

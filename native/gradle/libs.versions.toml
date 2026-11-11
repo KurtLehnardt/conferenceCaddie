@@ -19,6 +19,13 @@
 #   "today in the conference's time zone".
 # Lifecycle's ViewModel for Compose (phase 2a review, 2026-11-10) keeps the Search screen's state
 # across an Android configuration change; it is the same Lifecycle 2.11.0 release as the runtime.
+# Phase 2b (2026-11-10) adds ONNX Runtime for the on-device query embedding (bge-small-en-v1.5):
+# - 1.30.0 on every platform, so Android, iOS and the JVM tests run the same runtime. 1.31.1 exists
+#   on Maven Central, but Microsoft has published no iOS archive for 1.31 (the download of
+#   pod-archive-onnxruntime-c-1.31.x.zip answers 404), and 1.30.0 is the newest release with one.
+# - onnxruntime-android (the full build, with every operator) on Android, the CPU package
+#   onnxruntime on the JVM, where only the tests use it, and the C API static xcframework on iOS
+#   through cinterop (gradle/pinned-downloads.properties pins that archive).
 # UI tests (added 2026-11-10 with the design system): Compose Multiplatform's ui-test runs the same
 # commonTest UI tests on the iOS simulator and, through the Android device test source set, on an
 # Android emulator. Its Android side is Jetpack Compose ui-test 1.12.1, the Jetpack release that
@@ -50,6 +57,7 @@ kotlinx-datetime = "0.7.1"
 kotlinx-io = "0.9.1"
 ktor = "3.6.1"
 androidx-sqlite = "2.7.1"
+onnxruntime = "1.30.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
@@ -82,6 +90,8 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "androidx-sqlite" }
+onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime" }
+onnxruntime-jvm = { module = "com.microsoft.onnxruntime:onnxruntime", version.ref = "onnxruntime" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

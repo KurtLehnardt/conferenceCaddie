@@ -9,6 +9,9 @@
 # unsigned. A separate job, in the `release` environment (secrets for main only), signs that file
 # without checking out or running any project code.
 #
+# The Capacitor APK has no native code, so one APK serves every phone. The native app's APK carries
+# ONNX Runtime's native library, so native.yml builds one APK per ABI and signs the arm64-v8a one.
+#
 # Every action is pinned to a full commit SHA; Dependabot (.github/dependabot.yml) proposes updates.
 name: Android APK
 

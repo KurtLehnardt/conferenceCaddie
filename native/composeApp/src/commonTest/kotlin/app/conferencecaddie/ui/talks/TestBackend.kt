@@ -15,14 +15,15 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
  * A tier 1 backend for the UI tests, served from memory: a capabilities document, a
  * conferences.json and one valid talk bundle per conference, built here with the contract's
  * rules (canonical JSON, text hashes, the content hash), so the shared core verifies and installs
- * them exactly as it would real ones. The vectors are all zero; keyword search does not use them.
+ * them exactly as it would real ones. Each talk carries a unit vector (`vector`, the index of its
+ * one non-zero component, or null for none) and topics, so meaning-based search and For you can be
+ * checked by hand with a fake embedder.
  *
  * The failure states are switches: [offline] fails every request, [unreachableBundles] fails the
  * bundle files of the named conferences, [corruptBundles] serves their bundle.json with one byte
@@ -42,6 +43,8 @@ class TestBackend : Http {
         val track: String?,
         val room: String?,
         val hasSlides: Boolean = false,
+        val topics: List<String> = emptyList(),
+        val vector: Int? = null,
     )
 
     class TestConference(val slug: String, val name: String, val day: String, val talks: List<TestTalk>) {
@@ -49,6 +52,10 @@ class TestBackend : Http {
     }
 
     val base = "https://caddie.test"
+
+    companion object {
+        val TOPIC_LABELS = mapOf("ebpf" to "eBPF", "kubernetes" to "Kubernetes", "scheduling" to "Scheduling")
+    }
     private val bundleBase = "$base/bundles/"
     private val routes = AtomicReference(emptyMap<String, ByteArray>())
     private val offlineFlag = AtomicReference(false)
@@ -75,10 +82,10 @@ class TestBackend : Http {
         "Alpha Conference",
         "2099-03-03",
         listOf(
-            TestTalk("1", "talk", "Intro to eBPF tracing", "Probes and maps.", listOf("Ada Lovelace" to "Engineer, Example Org"), "2099-03-03", 600, 630, "Observability", "Hall A", hasSlides = true),
+            TestTalk("1", "talk", "Intro to eBPF tracing", "Probes and maps.", listOf("Ada Lovelace" to "Engineer, Example Org"), "2099-03-03", 600, 630, "Observability", "Hall A", hasSlides = true, topics = listOf("ebpf"), vector = 0),
             TestTalk("2", "break", "Lunch", "", emptyList(), "2099-03-03", 720, 780, "Breaks", "Foyer"),
-            TestTalk("3", "talk", "Kubernetes scheduling deep dive", "How the scheduler places pods.", listOf("Grace Hopper" to "Maintainer"), "2099-03-03", 810, 840, "Kubernetes", "Hall B"),
-            TestTalk("4", "talk", "Kubernetes networking basics", "Services and ingress.", listOf("Linus Example" to null), "2099-03-03", 900, 930, "Kubernetes", "Hall B"),
+            TestTalk("3", "talk", "Kubernetes scheduling deep dive", "How the scheduler places pods.", listOf("Grace Hopper" to "Maintainer"), "2099-03-03", 810, 840, "Kubernetes", "Hall B", topics = listOf("kubernetes", "scheduling"), vector = 1),
+            TestTalk("4", "talk", "Kubernetes networking basics", "Services and ingress.", listOf("Linus Example" to null), "2099-03-03", 900, 930, "Kubernetes", "Hall B", topics = listOf("kubernetes"), vector = 2),
         ),
     )
 
@@ -187,6 +194,23 @@ class TestBackend : Http {
         put("talk_count", c.talks.count { it.kind == "talk" })
     }
 
+    // The topics of a conference by how many talks carry them, then id, as the builder ranks them.
+    private fun topicsJson(c: TestConference): JsonArray {
+        val counts = c.talks.filter { it.kind == "talk" }.flatMap { it.topics }.groupingBy { it }.eachCount()
+        val ordered = counts.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+        return JsonArray(
+            ordered.mapIndexed { i, (id, n) ->
+                buildJsonObject {
+                    put("topic_id", id)
+                    put("label", TOPIC_LABELS[id] ?: id)
+                    put("talk_count", n)
+                    put("rank", i + 1)
+                    put("aliases", JsonArray(if (id == "kubernetes") listOf(JsonPrimitive("k8s")) else emptyList()))
+                }
+            },
+        )
+    }
+
     private fun hhmm(minutes: Int) = "${(minutes / 60).toString().padStart(2, '0')}:${(minutes % 60).toString().padStart(2, '0')}"
 
     private fun publish(c: TestConference, routes: MutableMap<String, ByteArray>): JsonObject {
@@ -212,7 +236,7 @@ class TestBackend : Http {
                 put("day", t.day)
                 put("start_minutes", t.start)
                 put("end_minutes", t.end)
-                put("topics", JsonArray(emptyList()))
+                put("topics", JsonArray(t.topics.map { JsonPrimitive(it) }))
                 put("text_hash", BundleVerifier.textHash(t.title, t.abstract))
             }
         }
@@ -254,15 +278,19 @@ class TestBackend : Http {
                 put("rows", JsonArray(rows.map { JsonPrimitive(it) }))
             }
             put("talks", JsonArray(talks))
-            putJsonArray("topics") {}
+            put("topics", topicsJson(c))
             put("facets", JsonArray(facets))
             putJsonObject("related") {
                 for (id in talkIds) put(id, JsonArray(talkIds.filter { it != id }.take(5).map { JsonPrimitive(it) }))
             }
         }
+        val vectors = ByteArray(rows.size * 384)
+        c.talks.filter { it.kind == "talk" || it.kind == "ambient" }.forEachIndexed { row, t ->
+            t.vector?.let { vectors[row * 384 + it] = 127 }
+        }
         val files = mapOf(
             "bundle.json" to CanonicalJson.encode(bundle).encodeToByteArray(),
-            "vectors.i8" to ByteArray(rows.size * 384),
+            "vectors.i8" to vectors,
         )
         val hash = BundleVerifier.contentHash(files)
         val path = "${c.slug}/${hash.substring(0, 16)}/"
