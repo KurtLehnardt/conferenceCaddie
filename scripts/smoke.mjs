@@ -1626,18 +1626,21 @@ try {
       const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
       const sub = (endpoint) => api('PUT', '/api/push/subscription', { event: PRIMARY, subscription: { endpoint, keys } }, { device: P, label: 'P-push' });
       const problems = [];
-      for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x']) {
+      for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x', 'https://x.jmt17.google.com/fcm/send/x', 'https://jmt17.google.com.evil.com/fcm/send/x', 'https://jmt17.google.com:8443/fcm/send/x']) {
         const r = await sub(endpoint);
         if (r.status !== 400) problems.push(`${new URL(endpoint).host} gave ${r.status}`);
       }
-      const good = `https://fcm.googleapis.com/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
-      const ok = await sub(good);
-      if (ok.status !== 200) problems.push(`fcm.googleapis.com gave ${ok.status}`);
-      const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
-      if (del.status !== 200) problems.push(`delete gave ${del.status}`);
+      // fcm.googleapis.com is Chrome Stable; jmt17.google.com is Chrome Beta, Dev, Canary and Chromium.
+      for (const host of ['fcm.googleapis.com', 'jmt17.google.com']) {
+        const good = `https://${host}/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
+        const ok = await sub(good);
+        if (ok.status !== 200) problems.push(`${host} gave ${ok.status}`);
+        const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
+        if (del.status !== 200) problems.push(`delete of ${host} gave ${del.status}`);
+      }
       const gone = await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: P, label: 'P-delete' });
       if (gone.status !== 200) problems.push(`profile delete gave ${gone.status}`);
-      report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals and other ports refused; fcm.googleapis.com accepted and removed');
+      report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals, subdomain and look-alike hosts and other ports refused; fcm.googleapis.com and jmt17.google.com accepted and removed');
     });
   }
 

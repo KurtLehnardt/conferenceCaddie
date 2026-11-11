@@ -45,7 +45,7 @@ export { onInterestedChanged, startDeleteRetries } from './sync';
 export { importProfile } from './import';
 export { registerPeopleUi } from './ui';
 export { usePresenceWatch } from './presence';
-export { forgetPush } from './push';
+export { forgetPush, resyncPush } from './push';
 export { useInboxWatch, useInboxCount } from './connect';
 export { useProfileName } from './storage';
 export type { ConferenceLike, InterestedProp, TalkLike } from './types';
