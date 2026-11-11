@@ -31,7 +31,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { cmp, compareTopics } from '../../scripts/lib/topics.mjs';
+import { cmp, compareTopics, mergeTargets } from '../../scripts/lib/topics.mjs';
 import { ROOT, UsageError, adminClient, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson } from './lib.mjs';
 
 export const MIN_TALKS = 3;
@@ -118,6 +118,8 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .slice(0, CANDIDATES)
     .map(([term, count]) => ({ term, count }));
+  // A merge target that reaches MIN_TALKS only with its aliases stays a candidate (mergeTargets).
+  candidates.push(...mergeTargets(perTalk.map((p) => p.terms), counts, fixups.merge, new Set(candidates.map((c) => c.term))));
   if (candidates.length === 0) throw new Error('No term occurs in at least three talk titles.');
 
   // Alias terms are counted even when they occur in fewer than three talks.
@@ -144,7 +146,8 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || cmp(a[0], b[0]))[0][0];
   };
 
-  // Fix-ups. A fix-up never adds a topic: a merge needs its canonical topic to be a candidate.
+  // Fix-ups. A fix-up never adds a topic: a merge needs its canonical topic to be a candidate, alone
+  // or together with its aliases (mergeTargets).
   const topicIds = new Map(); // topic_id -> { term, label, aliases:Set<topic_id>, members:Set<term> }
   for (const c of candidates) topicIds.set(idOf(c.term), { term: c.term, label: labelOf(c.term), aliases: new Set(), members: new Set([c.term]) });
   for (const id of fixups.remove) {
