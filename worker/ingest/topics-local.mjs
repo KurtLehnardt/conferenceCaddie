@@ -31,6 +31,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { cmp, compareTopics } from '../../scripts/lib/topics.mjs';
 import { ROOT, UsageError, adminClient, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson } from './lib.mjs';
 
 export const MIN_TALKS = 3;
@@ -94,8 +95,11 @@ export function titleTerms(title, stop) {
 }
 
 // The order of the topic list: most talks first, then label, then topic id. Both the builder and a
-// frozen list (assignFrozen) rank by this rule, and rank 1 is the first topic in this order.
-export const compareTopics = (a, b) => b.talk_count - a.talk_count || a.label.localeCompare(b.label) || a.topic_id.localeCompare(b.topic_id);
+// frozen list (assignFrozen) rank by this rule, and rank 1 is the first topic in this order. It is
+// the comparator of scripts/lib/topics.mjs (the builder behind the bundles and the contract
+// fixtures), which orders by UTF-16 code unit and so does not depend on the ICU version, instead
+// of String.prototype.localeCompare, which orders accented and kana labels differently.
+export { compareTopics };
 
 const idOf = (term) => term.replace(/ /g, '-');
 const termOf = (topicId) => topicId.replace(/-/g, ' ');
@@ -137,7 +141,7 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     const m = casings.get(term);
     if (!m) return term;
     // Most common casing; ties go to the casing that has a capital letter, then alphabetical.
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || a[0].localeCompare(b[0]))[0][0];
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || cmp(a[0], b[0]))[0][0];
   };
 
   // Fix-ups. A fix-up never adds a topic: a merge needs its canonical topic to be a candidate.

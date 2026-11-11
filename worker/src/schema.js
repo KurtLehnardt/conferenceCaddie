@@ -12,6 +12,10 @@
 // - indexes on the expiry columns, so the purge every 10 minutes reads only expired rows instead
 //   of scanning whole tables (rows read are a daily cap).
 // - a partial index on people.text_pending, so the embedding retry reads only pending rows.
+//
+// Not here: the usage_days table of the daily usage meter. lib/meter.js creates it (and folds in
+// the totals older versions kept in meta.usage) when each instance's meter starts, outside
+// SCHEMA_VERSION, so the meter's storage stays in one file with the code that writes it.
 
 export const SCHEMA_VERSION = 2;
 
