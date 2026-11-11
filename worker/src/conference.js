@@ -39,12 +39,18 @@ const HELD_TABLES = ['people', 'presence', 'blocks', 'meets', 'push_subs', 'nudg
 // schema.js and the meter's usage_days, so nothing of the conference is left, and only admin_nonces
 // is kept, because it holds the wipe's own nonce and the replay check needs it. The full-text
 // tables are emptied through their virtual tables, never their shadow tables. meta keeps its
-// schema_version row (the database's shape, not conference data). storage.deleteAll() is not
-// used, so the tables and their indexes stay and the object can take the conference again.
+// schema_version row (the database's shape, not conference data) and gets the retired_at marker
+// (META_KEPT). storage.deleteAll() is not used, so the tables and their indexes stay and the
+// object can take the conference again.
 const WIPE_TABLES = [
   'talks_fts', 'talk_vectors', 'talks', 'topics', 'facets', 'people_fts', 'shared_talks', 'presence', 'blocks', 'meets',
   'reports', 'push_subs', 'nudges', 'nudge_sends', 'ble_caps', 'people', 'usage_days', 'meta',
 ];
+// The meta rows a wipe keeps. retired_at (the time of the first wipe since the conference was last
+// given back) marks a removed object: while it is set, PUT /internal/conference is refused unless
+// the directory's fan-out says the conference was unretired, so a fan-out that left the Worker
+// before the removal cannot make the object searchable again; admin writes are refused too.
+const META_KEPT = "('schema_version', 'retired_at')";
 
 function matchRoute(routes, method, path) {
   const allowed = new Set();
@@ -84,6 +90,8 @@ export class ConferenceDO extends DurableObject {
     this.embedState = newEmbedState();
     this.conf = null;
     this.slug = null;
+    // meta retired_at as a number, or null when the object was never removed (or was given back).
+    this.retiredAt = null;
     this.store = new Store(this);
     // How many times this instance was wiped. A request's ctx remembers the value it started with,
     // and its SQL throws once the value has moved (#ctx), so a request that was waiting on an await
@@ -121,6 +129,8 @@ export class ConferenceDO extends DurableObject {
   }
 
   #loadConf() {
+    const retired = this.state.storage.sql.exec("SELECT v FROM meta WHERE k = 'retired_at'").toArray()[0];
+    this.retiredAt = retired ? Number(retired.v) : null;
     const row = this.state.storage.sql.exec("SELECT v FROM meta WHERE k = 'conference'").toArray()[0];
     if (!row) return;
     try {
@@ -256,7 +266,12 @@ export class ConferenceDO extends DurableObject {
         res = allowed.size
           ? json(405, { error: 'Method not allowed' }, { Allow: [...allowed].join(', ') })
           : json(404, { error: 'Not found' });
-      } else if (!admin && (!this.conf || (this.conf.status !== 'searchable' && !OWNER_ROUTES.has(`${route.method} ${path}`)))) {
+      } else if (!admin && (!this.conf || this.retiredAt !== null || (this.conf.status !== 'searchable' && !OWNER_ROUTES.has(`${route.method} ${path}`)))) {
+        res = json(400, { error: 'conference is not available' });
+      } else if (admin && request.method !== 'GET' && request.method !== 'HEAD' && (!this.conf || this.retiredAt !== null)) {
+        // An object without its conference document (never given one, or wiped) takes no admin
+        // write: nothing would ever purge what it wrote, because the cron visits only conferences
+        // the directory lists. Reads still answer.
         res = json(400, { error: 'conference is not available' });
       } else {
         res = await route.handler(this.#ctx(request, now), request, params);
@@ -288,30 +303,38 @@ export class ConferenceDO extends DurableObject {
     return out;
   }
 
-  // POST /internal/wipe (DELETE /admin/conference in the Worker): the only internal route that
-  // takes the admin nonce the Worker forwards, which is recorded first, as for every /admin/*
+  // POST /internal/wipe (step 2 of DELETE /admin/conference in the Worker): the only internal route
+  // that takes the admin nonce the Worker forwards, which is recorded first, as for every /admin/*
   // request (W2): missing headers are 404, a timestamp past the object's clock window 401
   // admin_skew, a nonce seen before 401 admin_replay, and nothing is deleted for any of them. Then
-  // every row of WIPE_TABLES goes, in one transaction, and the caches, the conference document
-  // (this.conf) and the query-vector cache are dropped. Answers {ok, deleted: {table: rows}}; a
-  // second wipe answers zero counts.
+  // every row of WIPE_TABLES goes and the retired_at marker is written (kept if already there), in
+  // one transaction, and the caches, the conference document (this.conf), the query-vector cache
+  // and the rate-limit buckets (keyed by client addresses) are dropped. Answers
+  // {ok, deleted: {table: rows}}; a second wipe answers zero counts.
   #wipe(request) {
-    const nonce = consumeAdminNonce((q, ...b) => this.exec(q, ...b), request.headers, Date.now());
+    const now = Date.now();
+    const nonce = consumeAdminNonce((q, ...b) => this.exec(q, ...b), request.headers, now);
     if (nonce === 'missing') return json(404, { error: 'Not found' });
     if (nonce === 'skew') return json(401, { error: 'admin_skew' });
     if (nonce === 'replay') return json(401, { error: 'admin_replay' });
     const deleted = {};
+    let retiredAt = null;
     this.state.storage.transactionSync(() => {
       for (const t of WIPE_TABLES) {
-        const where = t === 'meta' ? " WHERE k != 'schema_version'" : '';
+        const where = t === 'meta' ? ` WHERE k NOT IN ${META_KEPT}` : '';
         deleted[t] = Number(this.exec(`SELECT COUNT(*) AS n FROM ${t}${where}`).one().n);
         if (deleted[t]) this.exec(`DELETE FROM ${t}${where}`);
       }
+      this.exec("INSERT INTO meta (k, v) VALUES ('retired_at', ?) ON CONFLICT(k) DO NOTHING", String(now));
+      retiredAt = Number(this.exec("SELECT v FROM meta WHERE k = 'retired_at'").one().v);
     });
     this.wipes += 1;
+    this.retiredAt = retiredAt;
     this.store.close();
     this.store = new Store(this);
     this.embedState = newEmbedState();
+    this.buckets.clear();
+    this.limitCalls = 0;
     this.conf = null;
     return json(200, { ok: true, deleted });
   }
@@ -319,10 +342,18 @@ export class ConferenceDO extends DurableObject {
   async #internal(request, path) {
     if (path === '/internal/wipe' && request.method === 'POST') return this.#wipe(request);
     if (path === '/internal/conference' && request.method === 'PUT') {
-      const body = await readJson(request, new Set(['doc', 'route_prefix']));
+      const body = await readJson(request, new Set(['doc', 'route_prefix', 'unretired']));
       if (!body.doc || typeof body.doc.slug !== 'string' || typeof body.route_prefix !== 'string') throw new HttpError(400, { error: 'doc and route_prefix are required' });
+      // A removed object takes its document back only from the fan-out of the upsert that removed
+      // its tombstone (unretired: true), which also drops the marker. Any other fan-out, such as
+      // one that left the Worker before the removal, is refused.
+      if (this.retiredAt !== null && body.unretired !== true) return json(409, { error: 'conference_retired' });
       const doc = { ...body.doc, route_prefix: body.route_prefix };
-      this.exec("INSERT INTO meta (k, v) VALUES ('conference', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(doc));
+      this.state.storage.transactionSync(() => {
+        this.exec("INSERT INTO meta (k, v) VALUES ('conference', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(doc));
+        if (body.unretired === true) this.exec("DELETE FROM meta WHERE k = 'retired_at'");
+      });
+      if (body.unretired === true) this.retiredAt = null;
       this.#setConf(doc);
       return json(200, { ok: true });
     }

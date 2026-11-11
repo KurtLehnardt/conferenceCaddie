@@ -172,9 +172,10 @@ export function accessHeaders(env = process.env) {
 // leaves this process; no Authorization header is sent. It retries network failures, 429 and 5xx
 // up to `retries` times (honouring Retry-After), signing each attempt afresh: a nonce is
 // single-use on the Worker and the timestamp must be within five minutes of its clock, so a retry
-// is a new request, which every admin route handles idempotently, with two exceptions on POST
-// /admin/moderation: action "delete" answers 404 when the target is already gone, and action
-// "unhide" of a target that no longer exists answers 404 once its reports are gone, so either,
+// is a new request, which every admin route handles idempotently, with three exceptions: on POST
+// /admin/moderation, action "delete" answers 404 when the target is already gone and action
+// "unhide" of a target that no longer exists answers 404 once its reports are gone, and POST
+// /admin/people/block with action "unblock" answers 404 once the operator report is gone; each,
 // when its first answer was lost, reports 404 on the retry. It stops at once on a 503
 // daily_limit, because retrying cannot help before the quota resets. Any other status throws an
 // AdminError that carries the status. A redirect is never followed and is an AdminError at once,

@@ -437,9 +437,9 @@ function queryOf(req, allowed) {
 }
 
 // q64: base64url without padding of 1 to 200 bytes of UTF-8 (the signer's query charset has no
-// room for free text). Anything else is a 400.
+// room for free text), with no NUL. Anything else is a 400.
 function decodeQ64(value) {
-  const fail = () => bad(`q64 must be base64url without padding of 1 to ${Q64_MAX_BYTES} bytes of UTF-8`);
+  const fail = () => bad(`q64 must be base64url without padding of 1 to ${Q64_MAX_BYTES} bytes of UTF-8 with no NUL`);
   if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1 || value.length > Math.ceil((Q64_MAX_BYTES * 4) / 3)) throw fail();
   let bin;
   try {
@@ -447,7 +447,8 @@ function decodeQ64(value) {
   } catch {
     throw fail();
   }
-  if (bin.length === 0 || bin.length > Q64_MAX_BYTES) throw fail();
+  // A NUL would end the text early in SQLite's string functions, so q64=AA would match everyone.
+  if (bin.length === 0 || bin.length > Q64_MAX_BYTES || bin.includes('\0')) throw fail();
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
   } catch {
@@ -469,15 +470,24 @@ const searchRow = (r) => ({
 });
 const SEARCH_COLUMNS = 'ref, display_name, hidden, spot_hidden, open_to_meet, sample, visible_until_ms';
 
-// GET /admin/people/search?event=&q64=<base64url>|&ref=<ref>[&limit=<n>][&include_hidden=1]:
-// {people: [rows], matched}. With ref, the one person with that ref, hidden or not (404 when there
-// is none). With q64, the people whose display_name holds the decoded text as a substring,
-// case-insensitive for ASCII letters (SQLite's LIKE), hidden ones only with include_hidden=1,
-// ordered by display_name, at most limit (default 50, at most 200); matched counts every match
-// before the limit. A % or _ in the text matches itself (LIKE ... ESCAPE '\').
+// GET /admin/people/search?event=&q64=<base64url>|&ref=<ref>[&limit=<n>][&include_hidden=0|1]:
+// {people: [rows], matched}. limit and include_hidden are checked in both forms. With ref, the
+// one person with that ref, hidden or not (404 when there is none). With q64, the people whose
+// display_name holds the decoded text as a substring, case-insensitive for ASCII letters (SQLite's
+// lower()), hidden ones only with include_hidden=1, ordered by display_name, at most limit
+// (default 50, at most 200); matched counts every match before the limit. instr() matches the text
+// literally, so %, _ and \ are plain characters, and a stored name with a NUL in it is still
+// searched past the NUL.
 function searchPeople(ctx, req) {
   const q = queryOf(req, new Set(['event', 'q64', 'ref', 'limit', 'include_hidden']));
   if (q.has('q64') === q.has('ref')) throw bad('give exactly one of q64 and ref');
+  let limit = SEARCH_DEFAULT;
+  if (q.has('limit')) {
+    if (!/^[1-9][0-9]{0,2}$/.test(q.get('limit')) || Number(q.get('limit')) > SEARCH_MAX) throw bad(`limit must be an integer from 1 to ${SEARCH_MAX}`);
+    limit = Number(q.get('limit'));
+  }
+  const inc = q.get('include_hidden');
+  if (inc !== undefined && inc !== '0' && inc !== '1') throw bad('include_hidden must be 0 or 1');
   if (q.has('ref')) {
     const ref = q.get('ref');
     if (!REF_RE.test(ref)) throw bad('ref must be a ref');
@@ -486,19 +496,11 @@ function searchPeople(ctx, req) {
     return json(200, { people: [searchRow(row)], matched: 1 });
   }
   const text = decodeQ64(q.get('q64'));
-  let limit = SEARCH_DEFAULT;
-  if (q.has('limit')) {
-    if (!/^[1-9][0-9]{0,2}$/.test(q.get('limit')) || Number(q.get('limit')) > SEARCH_MAX) throw bad(`limit must be an integer from 1 to ${SEARCH_MAX}`);
-    limit = Number(q.get('limit'));
-  }
-  const inc = q.get('include_hidden');
-  if (inc !== undefined && inc !== '0' && inc !== '1') throw bad('include_hidden must be 0 or 1');
-  const pattern = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   const rows = ctx.sql.exec(
     `SELECT ${SEARCH_COLUMNS}, COUNT(*) OVER () AS matched FROM people
-     WHERE display_name LIKE ? ESCAPE '\\'${inc === '1' ? '' : ' AND hidden = 0'}
+     WHERE instr(lower(display_name), lower(?)) > 0${inc === '1' ? '' : ' AND hidden = 0'}
      ORDER BY display_name, ref LIMIT ?`,
-    pattern, limit,
+    text, limit,
   ).toArray();
   return json(200, { people: rows.map(searchRow), matched: Number(rows[0]?.matched ?? 0) });
 }
@@ -512,8 +514,9 @@ function cut(value) {
 }
 
 // The meets of a person by state, as the operator reads them: requested; accepted (an accepted
-// meet is stored as active); declined; ended (cancelled or expired, and an open meet whose time
-// ran out, which its participants already see as expired); other (any other stored state).
+// meet is stored as active); declined; ended (found, which is how a meet that worked ends,
+// connect/meets.js; cancelled; expired; accepted, a state older versions stored; and an open meet
+// whose time ran out, which its participants already see as expired); other (any other state).
 function meetCounts(ctx, profileId) {
   const out = { requested: 0, accepted: 0, declined: 0, ended: 0, other: 0 };
   const rows = ctx.sql.exec(
@@ -521,7 +524,7 @@ function meetCounts(ctx, profileId) {
      FROM meets WHERE requester_id = ? OR recipient_id = ? GROUP BY s`,
     ctx.now, profileId, profileId,
   );
-  const bucket = { requested: 'requested', active: 'accepted', declined: 'declined', cancelled: 'ended', expired: 'ended' };
+  const bucket = { requested: 'requested', active: 'accepted', declined: 'declined', found: 'ended', cancelled: 'ended', expired: 'ended', accepted: 'ended' };
   for (const r of rows) out[bucket[r.s] ?? 'other'] += Number(r.n);
   return out;
 }
@@ -596,28 +599,39 @@ function viewPerson(ctx, req) {
   return json(200, { person });
 }
 
-// POST /admin/people/block?event= {ref, action: "block" | "unblock"}: {ok, hidden}.
+// POST /admin/people/block?event= {ref, action: "block" | "unblock"}.
 //   block    files the operator's report on the profile (id profile:<ref>:operator, reporter and
-//            reason 'operator') with ON CONFLICT DO NOTHING and hides the profile. The report
-//            reaches HIDE_AT on its own, and reports outlive the profile row, so the hide survives
-//            a profile write and a re-creation from the same device (store.reportFlags and
-//            insertPerson). A new device is a new person and is not covered.
-//   unblock  deletes that report and sets hidden to what the remaining reports say (two other
-//            distinct reporters keep the profile hidden). Without an operator's report nothing
-//            changes, and the answer is the current flag.
-// 404 not_found when no person has the ref (to lift the block of a profile that was deleted
-// since, unhide profile:<ref> through POST /admin/moderation, which deletes its reports).
+//            reason 'operator') with ON CONFLICT DO NOTHING and hides the profile: {ok, hidden:
+//            true}; 404 not_found when no person has the ref. The report reaches HIDE_AT on its
+//            own, and reports outlive the profile row, so the hide survives a profile write and a
+//            re-creation from the same device (store.reportFlags and insertPerson). A new device is
+//            a new person and is not covered.
+//   unblock  deletes that one report, and no other:
+//            - the person exists: hidden is set to what the remaining reports say (two other
+//              distinct reporters keep the profile hidden): {ok, hidden, found: true, removed: true};
+//            - the person is gone (a deleted profile, whose reports are kept): {ok, hidden: null,
+//              found: false, removed: true}, so a profile made again from that device is not hidden;
+//            - the person exists without an operator's report: 404 no_operator_block, nothing
+//              changes;
+//            - neither: 404 not_found.
+//            A retried unblock whose first answer was lost therefore answers 404 the second time.
 async function blockPerson(ctx, req) {
   const body = await readJson(req, new Set(['ref', 'action']));
   if (typeof body.ref !== 'string' || !REF_RE.test(body.ref)) throw bad('ref must be a ref');
   if (body.action !== 'block' && body.action !== 'unblock') throw bad("action must be 'block' or 'unblock'");
   const p = ctx.store.personByRef(body.ref);
-  if (!p) throw new HttpError(404, { error: 'not_found' });
   if (body.action === 'block') {
+    if (!p) throw new HttpError(404, { error: 'not_found' });
     ctx.store.operatorHide('profile', p);
     return json(200, { ok: true, hidden: true });
   }
-  return json(200, { ok: true, hidden: ctx.store.operatorUnhide(p) });
+  if (!p) {
+    if (!ctx.store.removeOperatorReport('profile', body.ref)) throw new HttpError(404, { error: 'not_found' });
+    return json(200, { ok: true, hidden: null, found: false, removed: true });
+  }
+  const { removed, hidden } = ctx.store.operatorUnhide(p);
+  if (!removed) throw new HttpError(404, { error: 'no_operator_block' });
+  return json(200, { ok: true, hidden, found: true, removed: true });
 }
 
 // ---------------------------------------------------------------------------------------------

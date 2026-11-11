@@ -22,6 +22,7 @@
 
 import { HttpError, bad, json, readJson, text, idList, isPlainObject, TALK_ID_RE, TOPIC_ID_RE, LINKEDIN_RE, REF_RE, MEET_ID_RE } from '../lib/http.js';
 import { requireDevice, refFor } from '../lib/device.js';
+import { stripControls } from '../lib/text.js';
 import { rankPeople } from './rank.js';
 import { toPerson, cellOf } from './view.js';
 import { applyCaps, RESOLVE_CAPS } from '../../../contracts/js/ble-token.mjs';
@@ -75,15 +76,17 @@ function validateProfile(p) {
     }
     linkedin = p.linkedin_url.trim();
   }
+  // Control characters are stripped before the length and required checks (lib/text.js
+  // stripControls), so a name of controls only is refused as empty.
   return {
-    display_name: text(p.display_name, 'display_name', 60, { required: true }),
-    about: text(p.about, 'about', 280),
-    interests: text(p.interests, 'interests', 500),
-    expertise: text(p.expertise, 'expertise', 500),
+    display_name: text(stripControls(p.display_name), 'display_name', 60, { required: true }),
+    about: text(stripControls(p.about), 'about', 280),
+    interests: text(stripControls(p.interests), 'interests', 500),
+    expertise: text(stripControls(p.expertise), 'expertise', 500),
     learn_topics: idList(p.learn_topics, 'learn_topics', 30, TOPIC_ID_RE),
     speak_topics: idList(p.speak_topics, 'speak_topics', 30, TOPIC_ID_RE),
     linkedin_url: linkedin,
-    contact_note: text(p.contact_note, 'contact_note', 120) || null,
+    contact_note: text(stripControls(p.contact_note), 'contact_note', 120) || null,
   };
 }
 

@@ -1,5 +1,19 @@
 // Text helpers for search, evidence and snippets.
 
+// The control characters people text may not hold: C0 controls other than tab and newline, DEL,
+// and the C1 controls U+0080 to U+009F (0x9B is a one-byte CSI). Bidirectional marks and isolates
+// are not controls in this sense and stay, because right-to-left text needs them.
+const CONTROLS_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
+
+// People text as it is stored (profile fields, a spot line, a meet note): CRLF and a lone CR
+// become a newline, then every control character above is dropped. Stripped rather than refused,
+// so a pasted line with a stray control still saves, and a terminal or a log that shows the text
+// to the operator never gets an escape sequence. A value that is not a string is returned as it
+// is, for the caller's own type check.
+export function stripControls(value) {
+  return typeof value === 'string' ? value.replace(/\r\n?/g, '\n').replace(CONTROLS_RE, '') : value;
+}
+
 export const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 export const unescapeHtml = (s) => String(s).replace(/<\/?mark>/g, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 

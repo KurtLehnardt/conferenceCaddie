@@ -15,6 +15,7 @@ import { hashSecret, secretMatches, refFor, sha256Hex } from './lib/device.js';
 import { toBlob, fromBlob } from './lib/vectors.js';
 import { embedPassages, semanticAvailable, EmbedUnavailable, conventionsId, documentText } from './lib/embed.js';
 import { visibleUntilMs } from './lib/time.js';
+import { stripControls } from './lib/text.js';
 
 // Zones a person can say they are in, besides the conference's room names.
 export const FIXED_ZONES = ['Expo hall', 'Registration', 'Food and coffee', 'Hallway', 'Outside'];
@@ -62,17 +63,20 @@ export function chunkWords(textValue, max = CHUNK_WORDS) {
 }
 
 // The columns of a people row that savePerson may change: [to the SQL value, to the cached value].
-const str = (v) => String(v ?? '');
+// The text columns drop control characters here too (lib/text.js stripControls), whatever path
+// wrote them: the people routes, the migration, a fixture.
 const orNull = (v) => (v ? String(v) : null);
+const txt = (v) => stripControls(String(v ?? ''));
+const txtOrNull = (v) => (v ? stripControls(String(v)) || null : null);
 const PERSON_COLUMNS = {
-  display_name: [str, str],
-  about: [str, str],
-  interests: [str, str],
-  expertise: [str, str],
+  display_name: [txt, txt],
+  about: [txt, txt],
+  interests: [txt, txt],
+  expertise: [txt, txt],
   learn_topics: [(v) => JSON.stringify(arr(v)), arr],
   speak_topics: [(v) => JSON.stringify(arr(v)), arr],
   linkedin_url: [orNull, orNull],
-  contact_note: [orNull, orNull],
+  contact_note: [txtOrNull, txtOrNull],
   open_to_meet: [b, Boolean],
   sample: [b, Boolean],
   hidden: [b, Boolean],
@@ -447,14 +451,14 @@ export class Store {
       profile_id: doc.profile_id,
       ref: await refFor(this.owner.env, this.slug, doc.profile_id),
       secret_hash: doc.secret_hash,
-      display_name: String(doc.display_name ?? ''),
-      about: String(doc.about ?? ''),
-      interests: String(doc.interests ?? ''),
-      expertise: String(doc.expertise ?? ''),
+      display_name: txt(doc.display_name),
+      about: txt(doc.about),
+      interests: txt(doc.interests),
+      expertise: txt(doc.expertise),
       learn_topics: arr(doc.learn_topics),
       speak_topics: arr(doc.speak_topics),
       linkedin_url: doc.linkedin_url || null,
-      contact_note: doc.contact_note || null,
+      contact_note: txtOrNull(doc.contact_note),
       open_to_meet: doc.open_to_meet === true || doc.open_to_meet === 1,
       sample: doc.sample === true || doc.sample === 1,
       hidden: doc.hidden === true || doc.hidden === 1,
@@ -652,6 +656,7 @@ export class Store {
       if (k in fields && fields[k] !== undefined) n[k] = fields[k];
       else if (k in cur) n[k] = cur[k];
     }
+    if (typeof n.spot === 'string') n.spot = stripControls(n.spot) || null;
     if (!Number.isFinite(n.until_ms)) throw new TypeError('setPresence needs until_ms');
     this.sql(
       `INSERT INTO presence (profile_id, zone, spot, spot_pending, since_ms, until_ms, ble_token, ble_token_until_ms, presence_nonce, ble_master_id, ble_rotated)
@@ -889,17 +894,23 @@ export class Store {
     this.hideTarget(kind, p.ref, p.profile_id);
   }
 
+  // Deletes the operator's report of this kind on the ref, whether or not the person still exists.
+  // Returns whether there was one.
+  removeOperatorReport(kind, ref) {
+    return this.#count('DELETE FROM reports WHERE id = ? RETURNING 1', `${kind}:${ref}:${OPERATOR}`) > 0;
+  }
+
   // Removes the operator's report on a person's profile and, when there was one, sets the hidden
   // flag to what the remaining reports say (HIDE_AT distinct reporters). Without an operator's
-  // report nothing changes. Returns the person's hidden flag as it now stands.
+  // report nothing changes. Returns { removed, hidden }, hidden being the flag as it now stands.
   operatorUnhide(p) {
-    const removed = this.#count('DELETE FROM reports WHERE id = ? RETURNING 1', `profile:${p.ref}:${OPERATOR}`);
+    const removed = this.removeOperatorReport('profile', p.ref);
     if (removed) {
       const hidden = this.reportHides('profile', p.ref);
       this.sql('UPDATE people SET hidden = ? WHERE profile_id = ?', b(hidden), p.profile_id);
       p.hidden = hidden;
     }
-    return p.hidden;
+    return { removed, hidden: p.hidden };
   }
 
   // Removes a target: a profile everywhere, a meet row, or the spot line (which stays hidden).

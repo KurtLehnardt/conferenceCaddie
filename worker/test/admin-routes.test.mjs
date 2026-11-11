@@ -73,18 +73,52 @@ function signed(method, path, { body, now, nonce } = {}) {
 }
 
 async function call(env, req) {
-  const log = console.log;
+  const { log, error } = console;
   console.log = () => {};
+  console.error = () => {};
   try {
     const res = await worker.fetch(req, env);
-    return { status: res.status, json: await res.json().catch(() => null) };
+    return { status: res.status, json: await res.json().catch(() => null), headers: res.headers };
   } finally {
     console.log = log;
+    console.error = error;
   }
 }
 
+// A Durable Object namespace whose first call matching `match(path, method)` fails: it answers
+// respond() when given, or throws as a network failure would (the Worker's callDo turns that into
+// a 502). Every later call goes through to the same objects.
+function failOnce(ns, match, respond = null) {
+  let failed = false;
+  return {
+    ...ns,
+    get: (id) => {
+      const stub = ns.get(id);
+      return {
+        fetch: async (url, init) => {
+          if (!failed && match(new URL(url).pathname, init?.method ?? 'GET')) {
+            failed = true;
+            if (respond) return respond();
+            throw new Error('network failure');
+          }
+          return stub.fetch(url, init);
+        },
+      };
+    },
+  };
+}
+const dailyLimit = () => new Response(JSON.stringify({ error: 'daily_limit' }), { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '60' } });
+
+// An admin request sent straight to an object, with the headers the Worker forwards.
+const toObject = (o, method, path, body) => o.fetch(new Request(`https://do.internal${path}`, {
+  method,
+  headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': newId(), 'x-caddie-admin-ts': String(Math.floor(Date.now() / 1000)) },
+  body: body === undefined ? undefined : JSON.stringify(body),
+}));
+
 // One signed request, signed afresh (a retry is a new signature).
 const send = (ctx, method, path, body) => call(ctx.env, signed(method, path, { body }).build());
+const pair = (r) => [r.status, r.json];
 const ok = (r) => assert.ok(r.status === 200, `status ${r.status} ${JSON.stringify(r.json)}`);
 
 async function withConferences(ctx, slugs = [SLUG]) {
@@ -193,10 +227,26 @@ describe('people search (W7.1)', { skip }, () => {
       '', `q64=${q64('a')}&ref=${NO_REF}`, 'q64=', 'q64=ab.c', 'q64=abcde', `q64=${q64('a'.repeat(201))}`, `q64=${q64('é'.repeat(101))}`,
       `q64=${Buffer.from([0xff, 0xfe]).toString('base64url')}`, `q64=${q64('a')}&limit=0`, `q64=${q64('a')}&limit=201`, `q64=${q64('a')}&limit=1.5`,
       `q64=${q64('a')}&limit=010`, `q64=${q64('a')}&include_hidden=true`, `q64=${q64('a')}&name=x`, `q64=${q64('a')}&q64=${q64('b')}`, 'ref=ABCDEF0123456789',
+      'q64=AA', `q64=${q64('Spam\u0000mer')}`, `ref=${NO_REF}&limit=0`, `ref=${NO_REF}&limit=500`, `ref=${NO_REF}&include_hidden=yes`,
     ]) {
       const r = await send(ctx, 'GET', `/admin/people/search?event=${SLUG}${query ? `&${query}` : ''}`);
       assert.equal(r.status, 400, `${query} -> ${JSON.stringify(r.json)}`);
     }
+  });
+
+  test('a stored name with a NUL in it is still found past the NUL; a q64 of a NUL is 400, never everyone', async () => {
+    const { ctx, o } = await setup();
+    // Written straight to SQL: every write path now strips controls, but older rows may hold one.
+    const id = newId();
+    o.exec("INSERT INTO people (profile_id, ref, secret_hash, display_name, visible_until_ms, updated_at_ms) VALUES (?, 'aaaabbbbccccdddd', ?, ?, ?, ?)",
+      id, sha(id), 'Nice\u0000Spammer McSpam', Date.now() + HOUR, Date.now());
+    o.store.invalidatePeople();
+    await person(o, { name: 'Spammer Two' });
+    const r = await send(ctx, 'GET', `/admin/people/search?event=${SLUG}&q64=${q64('spammer')}`);
+    assert.deepEqual([r.status, r.json.matched, r.json.people.map((p) => p.ref).includes('aaaabbbbccccdddd')], [200, 2, true]);
+    const nul = await send(ctx, 'GET', `/admin/people/search?event=${SLUG}&q64=AA`);
+    assert.equal(nul.status, 400);
+    assert.match(nul.json.error, /no NUL/);
   });
 
   test('applied twice: the same answer and no change', async () => {
@@ -237,6 +287,8 @@ describe('people view (W7.2)', { skip }, () => {
     meet('declined', now - 1);
     meet('cancelled', now - 1);
     meet('expired', now - 1);
+    meet('found', now - 1); // a meet that worked
+    meet('accepted', now + HOUR); // a state older versions stored
     meet('weird', now + HOUR, c);
     o.store.addBlock(a.profile_id, b.profile_id, b.ref, now + HOUR);
     o.store.addBlock(c.profile_id, a.profile_id, a.ref, now + HOUR);
@@ -276,7 +328,7 @@ describe('people view (W7.2)', { skip }, () => {
         visible_until: new Date(a.visible_until_ms).toISOString(), updated_at: 'string', presence: 'on',
         counts: {
           shared_talks: 2,
-          meets: { requested: 1, accepted: 1, declined: 1, ended: 3, other: 1 },
+          meets: { requested: 1, accepted: 1, declined: 1, ended: 5, other: 1 },
           blocks_made: 1,
           blocks_received: 1,
           push: { web: 2 },
@@ -380,7 +432,7 @@ describe('the operator block (W7.3) and the hide rule', { skip }, () => {
     assert.equal(o.store.person(id), null);
     assert.equal(await put(), true, 'a re-creation from the same device is hidden again');
     // Unblocking lifts it: the next re-creation is visible.
-    assert.deepEqual((await block(ctx, ref, 'unblock')).json, { ok: true, hidden: false });
+    assert.deepEqual((await block(ctx, ref, 'unblock')).json, { ok: true, hidden: false, found: true, removed: true });
     assert.equal((await api('DELETE')).status, 200);
     assert.equal(await put(), false);
   });
@@ -397,7 +449,7 @@ describe('the operator block (W7.3) and the hide rule', { skip }, () => {
     assert.equal(o.store.reportHides('profile', q.ref), false);
   });
 
-  test('unblock removes only the operator report; the profile stays hidden while two other people reported it; applied twice it leaves the same state', async () => {
+  test('unblock removes only the operator report; the profile stays hidden while two other people reported it; a retry is 404 no_operator_block and changes nothing', async () => {
     const { ctx, o } = await setup();
     const p = await person(o, { name: 'Pat' });
     const others = [await person(o, { name: 'R1' }), await person(o, { name: 'R2' })];
@@ -405,25 +457,52 @@ describe('the operator block (W7.3) and the hide rule', { skip }, () => {
     const fileReport = (r) => o.exec("INSERT INTO reports (id, target_kind, target_id, target_profile_id, reporter_id, reason, created_at_ms) VALUES (?, 'profile', ?, ?, ?, 'spam', ?)",
       `profile:${p.ref}:${r.profile_id}`, p.ref, p.profile_id, r.profile_id, Date.now());
     fileReport(others[0]);
-    const [one] = await twice(ctx, 'POST', `/admin/people/block?event=${SLUG}`, { ref: p.ref, action: 'unblock' });
-    assert.deepEqual(one, { ok: true, hidden: false }, 'one other reporter is not enough');
+    const one = await block(ctx, p.ref, 'unblock');
+    assert.deepEqual(pair(one), [200, { ok: true, hidden: false, found: true, removed: true }], 'one other reporter is not enough');
+    const after = state(ctx);
+    assert.deepEqual(pair(await block(ctx, p.ref, 'unblock')), [404, { error: 'no_operator_block' }], 'the retry of a lost answer');
+    assert.deepEqual(state(ctx), after);
     assert.deepEqual(rows(ctx.db(`conference:${SLUG}`), 'SELECT reporter_id FROM reports').map((r) => r.reporter_id), [others[0].profile_id]);
     ok(await block(ctx, p.ref));
     fileReport(others[1]);
-    assert.deepEqual((await block(ctx, p.ref, 'unblock')).json, { ok: true, hidden: true }, 'two other reporters keep it hidden');
+    assert.deepEqual((await block(ctx, p.ref, 'unblock')).json, { ok: true, hidden: true, found: true, removed: true }, 'two other reporters keep it hidden');
     assert.equal(storedHidden(ctx, p.profile_id), 1);
   });
 
-  test('unblock of a profile with no operator report changes nothing, also a hide from elsewhere', async () => {
+  test('unblock of a profile with no operator report is 404 no_operator_block and changes nothing, also a hide from elsewhere', async () => {
     const { ctx, o } = await setup();
     const p = await person(o, { name: 'Pat', hidden: true });
-    assert.deepEqual((await block(ctx, p.ref, 'unblock')).json, { ok: true, hidden: true });
+    const r1 = await person(o, { name: 'R1' });
+    o.exec("INSERT INTO reports (id, target_kind, target_id, target_profile_id, reporter_id, reason, created_at_ms) VALUES (?, 'profile', ?, ?, ?, 'spam', ?)",
+      `profile:${p.ref}:${r1.profile_id}`, p.ref, p.profile_id, r1.profile_id, Date.now());
+    const before = state(ctx);
+    assert.deepEqual(pair(await block(ctx, p.ref, 'unblock')), [404, { error: 'no_operator_block' }]);
+    assert.deepEqual(state(ctx), before);
     assert.equal(storedHidden(ctx, p.profile_id), 1);
+  });
+
+  test('unblock of a deleted profile removes only its stale operator report: hidden null, found false; a retry is 404 not_found', async () => {
+    const { ctx, o } = await setup();
+    const p = await person(o, { name: 'Pat' });
+    const r1 = await person(o, { name: 'R1' });
+    ok(await block(ctx, p.ref));
+    o.exec("INSERT INTO reports (id, target_kind, target_id, target_profile_id, reporter_id, reason, created_at_ms) VALUES (?, 'profile', ?, ?, ?, 'spam', ?)",
+      `profile:${p.ref}:${r1.profile_id}`, p.ref, p.profile_id, r1.profile_id, Date.now());
+    assert.equal(o.store.deletePersonEverywhere(p.profile_id), true);
+    assert.deepEqual(pair(await block(ctx, p.ref, 'unblock')), [200, { ok: true, hidden: null, found: false, removed: true }]);
+    // The user's own report stays (unhide would have deleted it too).
+    assert.deepEqual(rows(ctx.db(`conference:${SLUG}`), 'SELECT reporter_id FROM reports').map((r) => r.reporter_id), [r1.profile_id]);
+    assert.deepEqual(pair(await block(ctx, p.ref, 'unblock')), [404, { error: 'not_found' }]);
+    // A re-creation from the same device is no longer hidden by the operator (one user report is not enough).
+    await o.store.insertPerson({ profile_id: p.profile_id, secret_hash: p.secret_hash, display_name: 'Pat', visible_until_ms: Date.now() + HOUR });
+    assert.equal(o.store.person(p.profile_id).hidden, false);
+    // block of a ref without a person is 404 and files nothing.
+    assert.deepEqual(pair(await block(ctx, NO_REF)), [404, { error: 'not_found' }]);
   });
 
   test('an unknown ref is 404 for both actions; a bad body is 400', async () => {
     const { ctx, o } = await setup();
-    for (const action of ['block', 'unblock']) assert.deepEqual(Object.values(await block(ctx, NO_REF, action)), [404, { error: 'not_found' }]);
+    for (const action of ['block', 'unblock']) assert.deepEqual(pair(await block(ctx, NO_REF, action)), [404, { error: 'not_found' }]);
     const p = await person(o, { name: 'Pat' });
     for (const body of [{ ref: p.ref }, { ref: p.ref, action: 'hide' }, { ref: 'x', action: 'block' }, { ref: p.ref, action: 'block', reason: 'spam' }]) {
       assert.equal((await send(ctx, 'POST', `/admin/people/block?event=${SLUG}`, body)).status, 400, JSON.stringify(body));
@@ -470,7 +549,7 @@ describe('moderation hide (W7.6) and unhide (W6)', { skip }, () => {
 
   test('hide: an unknown ref is 404, kind meet is 400, a bad id is 400', async () => {
     const { ctx } = await setup();
-    assert.deepEqual(Object.values(await mod(ctx, { action: 'hide', kind: 'profile', id: NO_REF })), [404, { error: 'not_found' }]);
+    assert.deepEqual(pair(await mod(ctx, { action: 'hide', kind: 'profile', id: NO_REF })), [404, { error: 'not_found' }]);
     assert.equal((await mod(ctx, { action: 'hide', kind: 'meet', id: 'A'.repeat(22) })).status, 400);
     assert.equal((await mod(ctx, { action: 'hide', kind: 'spot', id: 'nope' })).status, 400);
     assert.deepEqual(reportsOf(ctx), []);
@@ -480,9 +559,9 @@ describe('moderation hide (W7.6) and unhide (W6)', { skip }, () => {
     const { ctx, o } = await setup();
     stale(o, 'profile', 'aaaaaaaaaaaaaaaa', 2);
     const before = reportsOf(ctx);
-    assert.deepEqual(Object.values(await mod(ctx, { action: 'unhide', kind: 'profile', id: NO_REF })), [404, { error: 'not_found' }]);
-    assert.deepEqual(Object.values(await mod(ctx, { action: 'unhide', kind: 'spot', id: 'aaaaaaaaaaaaaaaa' })), [404, { error: 'not_found' }], 'another kind of the same ref');
-    assert.deepEqual(Object.values(await mod(ctx, { action: 'unhide', kind: 'meet', id: 'M'.repeat(22) })), [404, { error: 'not_found' }]);
+    assert.deepEqual(pair(await mod(ctx, { action: 'unhide', kind: 'profile', id: NO_REF })), [404, { error: 'not_found' }]);
+    assert.deepEqual(pair(await mod(ctx, { action: 'unhide', kind: 'spot', id: 'aaaaaaaaaaaaaaaa' })), [404, { error: 'not_found' }], 'another kind of the same ref');
+    assert.deepEqual(pair(await mod(ctx, { action: 'unhide', kind: 'meet', id: 'M'.repeat(22) })), [404, { error: 'not_found' }]);
     assert.deepEqual(reportsOf(ctx), before);
   });
 
@@ -490,7 +569,7 @@ describe('moderation hide (W7.6) and unhide (W6)', { skip }, () => {
     const { ctx, o } = await setup();
     stale(o, 'profile', 'bbbbbbbbbbbbbbbb', 2);
     stale(o, 'profile', 'cccccccccccccccc', 1);
-    assert.deepEqual(Object.values(await mod(ctx, { action: 'unhide', kind: 'profile', id: 'bbbbbbbbbbbbbbbb' })), [200, { ok: true, found: false, removed: 2 }]);
+    assert.deepEqual(pair(await mod(ctx, { action: 'unhide', kind: 'profile', id: 'bbbbbbbbbbbbbbbb' })), [200, { ok: true, found: false, removed: 2 }]);
     assert.equal(reportsOf(ctx).length, 1, 'only that target\'s reports went');
     // Nothing is left, so a retry is the 404 of an unknown target (an exception to idempotency
     // the README names).
@@ -540,7 +619,7 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
   const retiredOf = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug, at_ms FROM retired ORDER BY slug');
   const directoryRows = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug FROM conferences ORDER BY slug').map((r) => r.slug);
 
-  test('the wipe empties every table but admin_nonces, keeps its own nonce, removes the directory row and leaves a tombstone', async () => {
+  test('the removal empties every table but admin_nonces, keeps the nonce in both objects, marks the object retired, removes the directory row and leaves a tombstone', async () => {
     const ctx = realEnv();
     await withConferences(ctx, [SLUG, OTHER]);
     await populate(ctx);
@@ -553,15 +632,16 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
     const r = await call(ctx.env, del.build());
     ok(r);
     const expected = Object.fromEntries(Object.entries(before).filter(([t]) => t !== 'admin_nonces').map(([t, n]) => [t, t === 'meta' ? n - 1 : n]));
-    assert.deepEqual(r.json, { ok: true, deleted: expected, directory: 1, retired: true });
+    assert.deepEqual(r.json, { ok: true, deleted: expected, directory: 1, retired: true, already_retired_at: null });
     const after = counts(db);
     for (const [t, n] of Object.entries(after)) {
       if (t === 'admin_nonces') continue;
-      assert.equal(n, t === 'meta' ? 1 : 0, `${t} after the wipe`);
+      assert.equal(n, t === 'meta' ? 2 : 0, `${t} after the wipe`);
     }
-    assert.deepEqual(rows(db, 'SELECT k FROM meta'), [{ k: 'schema_version' }], 'meta keeps only the schema version');
+    assert.deepEqual(rows(db, 'SELECT k FROM meta ORDER BY k').map((x) => x.k), ['retired_at', 'schema_version'], 'meta keeps the schema version and gets the marker');
+    assert.ok(Math.abs(Number(rows(db, "SELECT v FROM meta WHERE k = 'retired_at'")[0].v) - Date.now()) < 60_000);
     assert.ok(rows(db, 'SELECT nonce, ts_ms FROM admin_nonces').some((x) => x.nonce === del.nonce && x.ts_ms === del.ts * 1000), 'the wipe recorded its nonce');
-    assert.ok(!rows(ctx.db('directory:global'), 'SELECT nonce FROM admin_nonces').some((x) => x.nonce === del.nonce), 'the directory step takes no nonce');
+    assert.ok(rows(ctx.db('directory:global'), 'SELECT nonce FROM admin_nonces').some((x) => x.nonce === del.nonce), 'the tombstone step recorded it too');
     assert.deepEqual(directoryRows(ctx), [OTHER]);
     assert.deepEqual(retiredOf(ctx).map((x) => x.slug), [SLUG]);
     assert.deepEqual(counts(ctx.db(`conference:${OTHER}`)).talks, otherBefore.talks, 'the other conference is untouched');
@@ -571,7 +651,7 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
     assert.equal(o.conf, null);
     const pub = await o.fetch(new Request(`https://do.internal/api/topics?event=${SLUG}`, { headers: { 'x-caddie-slug': SLUG } }));
     assert.deepEqual([pub.status, await pub.json()], [400, { error: 'conference is not available' }]);
-    assert.deepEqual(Object.values(await send(ctx, 'GET', `/admin/stats?event=${SLUG}`)), [400, { error: 'conference is not available' }]);
+    assert.deepEqual(pair(await send(ctx, 'GET', `/admin/stats?event=${SLUG}`)), [400, { error: 'conference is not available' }]);
   });
 
   test('the wipe applied twice: 200 with zero counts, the same state, the tombstone refreshed', async () => {
@@ -585,8 +665,10 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
       assert.ok(Object.values(second.deleted).every((n) => n === 0), JSON.stringify(second.deleted));
       assert.deepEqual(Object.keys(second.deleted), Object.keys(first.deleted));
       assert.deepEqual([second.ok, second.directory, second.retired], [true, 0, true]);
+      assert.deepEqual([first.already_retired_at, second.already_retired_at], [null, new Date(T).toISOString()], 'a retry says the removal had already happened');
       setNow(T + 60_000);
-      ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+      const third = await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`);
+      assert.equal(third.json.already_retired_at, new Date(T).toISOString());
       assert.deepEqual(retiredOf(ctx), [{ slug: SLUG, at_ms: T + 60_000 }]);
     });
   });
@@ -614,8 +696,8 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
     assert.equal(r.json.retired, true);
     assert.ok(Object.values(r.json.deleted).every((n) => n === 0));
     assert.deepEqual(retiredOf(ctx).map((x) => x.slug), ['never-added-2099']);
-    assert.deepEqual(Object.values(await send(ctx, 'GET', `/admin/conference?event=${SLUG}`)), [405, { error: 'Method not allowed' }]);
-    assert.deepEqual(Object.values(await send(ctx, 'DELETE', '/admin/conference')), [400, { error: 'event must be a conference slug' }]);
+    assert.deepEqual(pair(await send(ctx, 'GET', `/admin/conference?event=${SLUG}`)), [405, { error: 'Method not allowed' }]);
+    assert.deepEqual(pair(await send(ctx, 'DELETE', '/admin/conference')), [400, { error: 'event must be a conference slug' }]);
     assert.equal((await send(ctx, 'DELETE', '/admin/conference?event=Bad_Slug')).status, 400);
     // Unsigned, it is the 404 of every admin path and reaches no object.
     const calls = ctx.CONFERENCE.calls.length + ctx.DIRECTORY.calls.length;
@@ -725,6 +807,213 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
     ok(await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(OTHER, { name: 'renamed' }), unretire: true }] }));
     const other = JSON.parse(rows(ctx.db('directory:global'), 'SELECT doc FROM conferences WHERE slug = ?', OTHER)[0].doc);
     assert.deepEqual([other.name, 'unretire' in other], ['renamed', false]);
+  });
+});
+
+describe('removal order, failures and the retired marker (review round 1)', { skip }, () => {
+  const peopleIn = (ctx) => rows(ctx.db(`conference:${SLUG}`), 'SELECT COUNT(*) AS n FROM people')[0].n;
+  const retiredOf = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug FROM retired').map((x) => x.slug);
+  const directoryRows = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug FROM conferences ORDER BY slug').map((r) => r.slug);
+  async function setup() {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    await person(ctx.obj(), { name: 'Ann' });
+    return ctx;
+  }
+
+  test('the tombstone step fails: its answer as it is, nothing changed; the retry removes', async () => {
+    const ctx = await setup();
+    const env = { ...ctx.env, DIRECTORY: failOnce(ctx.DIRECTORY, (p) => p === '/admin/conference/retire', dailyLimit) };
+    const r = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.deepEqual(pair(r), [503, { error: 'daily_limit' }]);
+    assert.deepEqual([retiredOf(ctx), peopleIn(ctx), ctx.obj().conf?.status, directoryRows(ctx)], [[], 1, 'searchable', [SLUG]]);
+    const retry = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.deepEqual([retry.status, retry.json.directory, retry.json.deleted.people, retry.json.already_retired_at], [200, 1, 1, null]);
+  });
+
+  test('the wipe fails after the tombstone: removal_incomplete, the next ingest skips the slug, and the retry finishes', async () => {
+    const ctx = await setup();
+    const env = { ...ctx.env, CONFERENCE: failOnce(ctx.CONFERENCE, (p) => p === '/internal/wipe') };
+    const r = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.deepEqual(pair(r), [502, { error: 'removal_incomplete', step: 'wipe', retired: true, wiped: false, cause: 'Service is temporarily unavailable' }]);
+    assert.deepEqual([retiredOf(ctx), peopleIn(ctx), directoryRows(ctx)], [[SLUG], 1, [SLUG]]);
+    const weekly = await send(ctx, 'PUT', '/admin/conferences', { conferences: [conf(SLUG)] });
+    assert.deepEqual(weekly.json, { upserted: 0, searchable: 0, synced: 0, skipped_retired: [SLUG] });
+    const retry = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    ok(retry);
+    assert.deepEqual([retry.json.deleted.people, retry.json.directory, typeof retry.json.already_retired_at], [1, 1, 'string']);
+    assert.deepEqual([peopleIn(ctx), directoryRows(ctx), retiredOf(ctx)], [0, [], [SLUG]]);
+  });
+
+  test('the directory row delete fails after the wipe: removal_incomplete with the counts and Retry-After; admin writes are refused meanwhile; the retry finishes', async () => {
+    const ctx = await setup();
+    const env = { ...ctx.env, DIRECTORY: failOnce(ctx.DIRECTORY, (p, m) => p === `/internal/conference/${SLUG}` && m === 'DELETE', dailyLimit) };
+    const r = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.equal(r.status, 503);
+    assert.equal(r.headers.get('retry-after'), '60');
+    assert.deepEqual({ ...r.json, deleted: r.json.deleted.people }, { error: 'removal_incomplete', step: 'directory', retired: true, wiped: true, deleted: 1, cause: 'daily_limit' });
+    assert.deepEqual([retiredOf(ctx), peopleIn(ctx), directoryRows(ctx)], [[SLUG], 0, [SLUG]]);
+    // The directory still lists the slug, so admin requests reach the wiped object: a write is
+    // refused there (a migration landing now would otherwise leave people no cron ever purges).
+    const late = await send(ctx, 'POST', `/admin/people?event=${SLUG}`, { people: [{ profile_id: newId(), secret_hash: sha('x'), display_name: 'Late', visible_until: new Date(Date.now() + HOUR).toISOString() }] });
+    assert.deepEqual(pair(late), [400, { error: 'conference is not available' }]);
+    for (const [path, body] of [[`/admin/people/block?event=${SLUG}`, { ref: NO_REF, action: 'block' }], [`/admin/talks?event=${SLUG}`, { generation: 1, talks: [] }], [`/admin/embed-pending?event=${SLUG}`, {}]]) {
+      assert.deepEqual(pair(await send(ctx, 'POST', path, body)), [400, { error: 'conference is not available' }], path);
+    }
+    assert.equal(peopleIn(ctx), 0);
+    ok(await send(ctx, 'GET', `/admin/stats?event=${SLUG}`)); // reads still answer
+    const retry = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    ok(retry);
+    // Only the meter's row, which the stats read above wrote again, is left to delete.
+    assert.deepEqual(Object.entries(retry.json.deleted).filter(([, n]) => n > 0), [['usage_days', 1]]);
+    assert.deepEqual([retry.json.directory, typeof retry.json.already_retired_at, directoryRows(ctx)], [1, 'string', []]);
+  });
+
+  test('a fan-out that left the Worker before the removal cannot make the wiped object searchable again; unretire can', async () => {
+    const ctx = await setup();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let started;
+    const waiting = new Promise((resolve) => { started = resolve; });
+    const held = {
+      ...ctx.CONFERENCE,
+      get: (id) => {
+        const stub = ctx.CONFERENCE.get(id);
+        return {
+          fetch: async (url, init) => {
+            if (new URL(url).pathname === '/internal/conference') {
+              started();
+              await gate;
+            }
+            return stub.fetch(url, init);
+          },
+        };
+      },
+    };
+    const pendingPut = call({ ...ctx.env, CONFERENCE: held }, signed('PUT', '/admin/conferences', { body: { conferences: [conf(SLUG, { name: 'renamed' })] } }).build());
+    await waiting;
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    release();
+    const put = await pendingPut;
+    assert.deepEqual(pair(put), [200, { upserted: 1, searchable: 1, synced: 0, skipped_retired: [] }]);
+    const o = ctx.obj();
+    assert.deepEqual([o.conf, typeof o.retiredAt], [null, 'number']);
+    const late = await o.fetch(new Request('https://do.internal/internal/conference', {
+      method: 'PUT', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG }, body: JSON.stringify({ doc: conf(SLUG), route_prefix: 'abcdef' }),
+    }));
+    assert.deepEqual([late.status, await late.json()], [409, { error: 'conference_retired' }]);
+    assert.equal(o.conf, null);
+    // A public request still answers 400 from the object.
+    const pub = await o.fetch(new Request(`https://do.internal/api/topics?event=${SLUG}`, { headers: { 'x-caddie-slug': SLUG } }));
+    assert.equal(pub.status, 400);
+    // Unretire gives the document back and drops the marker.
+    const back = await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(SLUG), unretire: true }] });
+    assert.deepEqual(back.json, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] });
+    assert.deepEqual([o.conf?.status, o.retiredAt, rows(ctx.db(`conference:${SLUG}`), "SELECT COUNT(*) AS n FROM meta WHERE k = 'retired_at'")[0].n], ['searchable', null, 0]);
+  });
+
+  test('unretire with an unavailable document still clears the marker, so a later searchable upsert reaches the object', async () => {
+    const ctx = await setup();
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    const back = await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(SLUG, { status: 'unavailable', status_reason: 'operator_removed' }), unretire: true }] });
+    assert.deepEqual(back.json, { upserted: 1, searchable: 0, synced: 1, skipped_retired: [] });
+    const o = ctx.obj();
+    assert.deepEqual([o.conf?.status, o.retiredAt], ['unavailable', null]);
+    assert.equal(rows(ctx.db('directory:global'), 'SELECT has_object FROM conferences WHERE slug = ?', SLUG)[0].has_object, 1);
+    const refresh = await send(ctx, 'PUT', '/admin/conferences', { conferences: [conf(SLUG)] });
+    assert.deepEqual(refresh.json, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] });
+    assert.equal(o.conf?.status, 'searchable');
+  });
+
+  test('a slug sent twice in one batch, plain then with unretire, is unretired once and never reported as skipped', async () => {
+    const ctx = await setup();
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    const r = await send(ctx, 'PUT', '/admin/conferences', { conferences: [conf(SLUG), { ...conf(SLUG), unretire: true }] });
+    assert.deepEqual([r.json.upserted, r.json.skipped_retired, r.json.synced], [2, [], 2]);
+    assert.deepEqual([retiredOf(ctx), directoryRows(ctx), ctx.obj().conf?.status], [[], [SLUG], 'searchable']);
+  });
+
+  test('an object without its conference document takes no admin write, reads still answer; the wipe clears the rate-limit buckets', async () => {
+    const o = new ConferenceDO(fakeState(), { EMBED_FAKE: '1' });
+    assert.deepEqual([(await toObject(o, 'POST', `/admin/people?event=${SLUG}`, { people: [] })).status, (await toObject(o, 'GET', `/admin/stats?event=${SLUG}`)).status], [400, 200]);
+    assert.equal((await o.fetch(new Request('https://do.internal/internal/conference', {
+      method: 'PUT', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG }, body: JSON.stringify({ doc: conf(SLUG), route_prefix: 'abcdef' }),
+    }))).status, 200);
+    assert.equal((await toObject(o, 'POST', `/admin/people?event=${SLUG}`, { people: [] })).status, 200);
+    o.buckets.set('people-read:ip:198.51.100.7', { tokens: 1, at: Date.now() });
+    const wipe = await o.fetch(new Request('https://do.internal/internal/wipe', {
+      method: 'POST', headers: { 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': newId(), 'x-caddie-admin-ts': String(Math.floor(Date.now() / 1000)) },
+    }));
+    assert.equal(wipe.status, 200);
+    assert.equal(o.buckets.size, 0);
+    assert.equal((await toObject(o, 'POST', `/admin/people?event=${SLUG}`, { people: [] })).status, 400);
+  });
+
+  test('GET /admin/stats without event refuses any query key, so a misspelt event never answers the totals', async () => {
+    const ctx = await setup();
+    for (const q of ['evnt=x', 'foo=1', 'event2=x']) assert.equal((await send(ctx, 'GET', `/admin/stats?${q}`)).status, 400, q);
+    ok(await send(ctx, 'GET', '/admin/stats'));
+  });
+});
+
+describe('people text drops control characters (review round 1)', { skip }, () => {
+  async function setup() {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    const o = ctx.obj();
+    const id = newId();
+    const secret = randomBytes(32).toString('base64url');
+    const put = (profile) => o.fetch(new Request('https://do.internal/api/people/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-ip': '192.0.2.9', 'x-caddie-device': `${id}.${secret}` },
+      body: JSON.stringify({ event: SLUG, profile, open_to_meet: true, shared_talk_ids: [] }),
+    }));
+    return { ctx, o, id, put };
+  }
+
+  test('a profile write strips NUL, ESC, an OSC sequence\'s controls, C1 (0x9B) and DEL, turns CR into newlines, and keeps tabs, newlines and bidi marks', async () => {
+    const { o, id, put } = await setup();
+    const r = await put({
+      display_name: 'A\u0000B\u001b[31mC\u001b]0;t\u0007D\u009bE\u007fF',
+      about: 'one\r\ntwo\rthree\tfour\nfive',
+      interests: 'שלום‏ עולם',
+      expertise: '⁧abc⁩ é 😀',
+      contact_note: '\u0085note\u0080',
+    });
+    assert.equal(r.status, 200);
+    const p = o.store.person(id);
+    assert.deepEqual([p.display_name, p.about, p.interests, p.expertise, p.contact_note], ['AB[31mC]0;tDEF', 'one\ntwo\nthree\tfour\nfive', 'שלום‏ עולם', '⁧abc⁩ é 😀', 'note']);
+    // A name of controls only is empty, so it is refused as missing.
+    const empty = await put({ display_name: '\u0000\u001b\u009b' });
+    assert.deepEqual([empty.status, await empty.json()], [400, { error: 'display_name is required' }]);
+  });
+
+  test('the web app\'s ordinary writes are stored as they are', async () => {
+    const { o, id, put } = await setup();
+    const profile = {
+      display_name: 'Zoë O\'Brien-Ångström', about: 'Kubernetes & eBPF — “quotes”, emoji 🚀\nsecond line', interests: 'tabs\tare kept', expertise: 'C++, Go, Rust',
+      contact_note: 'Find me at booth 12', linkedin_url: 'https://www.linkedin.com/in/zoe-example',
+    };
+    assert.equal((await put(profile)).status, 200);
+    const p = o.store.person(id);
+    for (const [k, v] of Object.entries(profile)) assert.equal(p[k], v, k);
+  });
+
+  test('every store write path strips too: insertPerson, savePerson and the spot line', async () => {
+    const { o } = await setup();
+    const p = await o.store.insertPerson({ profile_id: newId(), secret_hash: sha('s'), display_name: 'X\u001bY', about: 'a\u0000b', contact_note: '\u0007', visible_until_ms: Date.now() + HOUR });
+    assert.deepEqual([p.display_name, p.about, p.contact_note], ['XY', 'ab', null]);
+    await o.store.savePerson(p.profile_id, { display_name: 'Q\u009bR', contact_note: 'c\u0001d' });
+    assert.deepEqual([o.store.person(p.profile_id).display_name, o.store.person(p.profile_id).contact_note], ['QR', 'cd']);
+    o.store.setPresence(p.profile_id, { zone: 'Hallway', spot: 'by\u0000 the\r\ndoor', until_ms: Date.now() + HOUR });
+    assert.equal(o.store.person(p.profile_id).presence.spot, 'by the\ndoor');
+  });
+
+  test('a spot line or meet note is stripped before the word filter, so a control cannot split a listed word', async () => {
+    const { line } = await import('../src/connect/common.js');
+    assert.deepEqual(line('meet\u0000 me by\r\nthe door\u009b', 'spot', 120), { text: 'meet me by\nthe door', pending: false });
+    assert.throws(() => line('fu\u0000ck', 'spot', 120), (err) => err.status === 400 && err.body?.error === 'filtered');
+    assert.throws(() => line('fu\u001bck', 'note', 120), (err) => err.status === 400);
   });
 });
 

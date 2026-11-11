@@ -11,7 +11,7 @@ import { utcDay } from './lib/time.js';
 
 const CONFERENCES_PER_MIN = 120;
 const CRON_DAYS_AFTER_END = 3;
-// DELETE /internal/conference/<slug>: the Worker's second step of DELETE /admin/conference.
+// DELETE /internal/conference/<slug>: the Worker's last step of DELETE /admin/conference.
 const RETIRE_PATH_RE = /^\/internal\/conference\/([a-z0-9][a-z0-9-]{0,119})$/;
 
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -116,10 +116,11 @@ export class DirectoryDO extends DurableObject {
       }
       if (path === '/admin/conferences' && request.method === 'PUT') return await this.#upsert(request);
       if (path === '/admin/stats' && (request.method === 'GET' || request.method === 'HEAD')) return this.#stats();
-      // The directory half of a conference removal. The Worker calls it only after the object's
-      // /internal/wipe accepted the request's nonce, so it records none of its own (W2).
-      const retire = RETIRE_PATH_RE.exec(path);
-      if (retire && request.method === 'DELETE') return this.#retire(retire[1]);
+      if (path === '/admin/conference/retire' && request.method === 'POST') return this.#retireFirst(new URL(request.url));
+      // The last step of a conference removal. The Worker calls it only after the tombstone step
+      // and the object's /internal/wipe accepted the request's nonce, so it records none (W2).
+      const drop = RETIRE_PATH_RE.exec(path);
+      if (drop && request.method === 'DELETE') return this.#dropRow(drop[1]);
       if (path === '/internal/cron-targets') return this.#cronTargets();
       if (path === '/internal/usage' && request.method === 'PUT') {
         const body = await readJson(request, new Set(['day', 'usage', 'holds']));
@@ -152,67 +153,109 @@ export class DirectoryDO extends DurableObject {
   // unavailable and still serves its owners' deletes.
   //
   // A slug with a retired row (DELETE /admin/conference) is skipped and listed in skipped_retired,
-  // unless its document carries the top-level key "unretire": true, which deletes the row first.
-  // The key is never stored. It must be a boolean when present (400 otherwise, before anything is
-  // written); it lives in the body, never the query, so the signature's body hash covers it.
+  // unless a document of that slug in the batch carries the top-level key "unretire": true (read
+  // in a first pass, so the order of duplicates does not matter). Then the row is deleted in the
+  // same transaction as the upsert, after it, and the slug's fan-out entry carries unretired: true
+  // (sent whatever the status, and has_object set), which is the only fan-out a removed object
+  // accepts (conference.js, retired_at). The key is never stored. It must be a
+  // boolean when present (400 otherwise, before anything is written); it lives in the body, never
+  // the query, so the signature's body hash covers it. The route prefixes are computed first (an
+  // await), then every write runs in one transaction against the tombstones as they are at that
+  // moment, so a removal that ran meanwhile is honoured.
   async #upsert(request) {
     const body = await readJson(request, new Set(['conferences']));
     if (!Array.isArray(body.conferences) || body.conferences.length > 5000) throw bad('conferences must be an array');
+    const unretiring = new Set();
     for (const raw of body.conferences) {
-      if (isPlainObject(raw) && raw.unretire !== undefined && typeof raw.unretire !== 'boolean') throw bad('unretire must be a boolean');
+      if (!isPlainObject(raw)) continue;
+      if (raw.unretire !== undefined && typeof raw.unretire !== 'boolean') throw bad('unretire must be a boolean');
+      if (raw.unretire === true && typeof raw.slug === 'string') unretiring.add(raw.slug);
     }
-    const existing = new Map(this.sql.exec('SELECT slug, doc, route_prefix, has_object FROM conferences').toArray().map((r) => [r.slug, r]));
-    const retired = new Set(this.sql.exec('SELECT slug FROM retired').toArray().map((r) => r.slug));
-    const used = new Set([...existing.values()].map((r) => r.route_prefix));
-    const now = Date.now();
-    let upserted = 0;
-    const searchable = [];
-    const skipped = [];
+    const existing = new Map(this.sql.exec('SELECT slug, route_prefix FROM conferences').toArray().map((r) => [r.slug, r.route_prefix]));
+    const used = new Set(existing.values());
+    const planned = [];
     for (const raw of body.conferences) {
       if (!isPlainObject(raw) || typeof raw.slug !== 'string' || !SLUG_RE.test(raw.slug)) continue;
       const { _id, unretire, ...doc } = raw;
-      if (retired.has(doc.slug)) {
-        if (unretire !== true) {
-          if (!skipped.includes(doc.slug)) skipped.push(doc.slug);
-          continue;
-        }
-        this.sql.exec('DELETE FROM retired WHERE slug = ?', doc.slug);
-        retired.delete(doc.slug);
-      }
-      const text = JSON.stringify(doc);
-      const prev = existing.get(doc.slug);
-      let prefix = prev?.route_prefix;
+      let prefix = existing.get(doc.slug);
       if (!prefix) {
         for (let i = 0; ; i++) {
           prefix = await prefixFor(doc.slug, i ? String(i) : '');
           if (!used.has(prefix)) break;
         }
         used.add(prefix);
+        existing.set(doc.slug, prefix);
       }
-      const status = doc.status === 'searchable' ? 'searchable' : 'unavailable';
-      const hasObject = status === 'searchable' || prev?.has_object === 1;
-      if (!prev || prev.doc !== text || (hasObject && prev.has_object !== 1)) {
-        this.sql.exec(
-          `INSERT INTO conferences (slug, doc, status, start_date, end_date, name, route_prefix, updated_at_ms, has_object, holds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(slug) DO UPDATE SET doc = excluded.doc, status = excluded.status, start_date = excluded.start_date,
-             end_date = excluded.end_date, name = excluded.name, updated_at_ms = excluded.updated_at_ms, has_object = excluded.has_object,
-             holds = MAX(holds, excluded.holds)`,
-          // A new object is assumed to hold data until the cron has looked (holds).
-          doc.slug, text, status, doc.start_date ?? null, doc.end_date ?? null, doc.name ?? null, prefix, now, hasObject ? 1 : 0, hasObject && prev?.has_object !== 1 ? 1 : 0,
-        );
-      }
-      upserted += 1;
-      if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix });
+      planned.push({ doc, prefix });
     }
+    const now = Date.now();
+    let upserted = 0;
+    const searchable = [];
+    const skipped = [];
+    this.state.storage.transactionSync(() => {
+      const retired = new Set(this.sql.exec('SELECT slug FROM retired').toArray().map((r) => r.slug));
+      const current = new Map(this.sql.exec('SELECT slug, doc, route_prefix, has_object FROM conferences').toArray().map((r) => [r.slug, r]));
+      for (const { doc, prefix: plannedPrefix } of planned) {
+        const wasRetired = retired.has(doc.slug);
+        if (wasRetired && !unretiring.has(doc.slug)) {
+          if (!skipped.includes(doc.slug)) skipped.push(doc.slug);
+          continue;
+        }
+        const text = JSON.stringify(doc);
+        const prev = current.get(doc.slug);
+        const prefix = prev?.route_prefix ?? plannedPrefix;
+        const status = doc.status === 'searchable' ? 'searchable' : 'unavailable';
+        // An unretired conference's object is sent its document whatever the status, so it drops
+        // the removal marker; it then holds a document, which is what has_object records.
+        const hasObject = status === 'searchable' || prev?.has_object === 1 || wasRetired;
+        if (!prev || prev.doc !== text || (hasObject && prev.has_object !== 1)) {
+          this.sql.exec(
+            `INSERT INTO conferences (slug, doc, status, start_date, end_date, name, route_prefix, updated_at_ms, has_object, holds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(slug) DO UPDATE SET doc = excluded.doc, status = excluded.status, start_date = excluded.start_date,
+               end_date = excluded.end_date, name = excluded.name, updated_at_ms = excluded.updated_at_ms, has_object = excluded.has_object,
+               holds = MAX(holds, excluded.holds)`,
+            // A new object is assumed to hold data until the cron has looked (holds).
+            doc.slug, text, status, doc.start_date ?? null, doc.end_date ?? null, doc.name ?? null, prefix, now, hasObject ? 1 : 0, hasObject && prev?.has_object !== 1 ? 1 : 0,
+          );
+          current.set(doc.slug, { slug: doc.slug, doc: text, route_prefix: prefix, has_object: hasObject ? 1 : 0 });
+        }
+        if (wasRetired) {
+          this.sql.exec('DELETE FROM retired WHERE slug = ?', doc.slug);
+          retired.delete(doc.slug);
+        }
+        upserted += 1;
+        if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(wasRetired ? { unretired: true } : {}) });
+      }
+    });
     this.docs = null;
     return json(200, { upserted, searchable, skipped_retired: skipped });
   }
 
-  // DELETE /internal/conference/<slug>: deletes the conference row (removed: 1, or 0 when the
-  // directory did not know it) and writes or refreshes its tombstone. Idempotent.
-  #retire(slug) {
-    const removed = this.sql.exec('DELETE FROM conferences WHERE slug = ? RETURNING 1', slug).toArray().length;
-    this.sql.exec('INSERT INTO retired (slug, at_ms) VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET at_ms = excluded.at_ms', slug, Date.now());
+  // POST /admin/conference/retire?event=<slug> (step 1 of DELETE /admin/conference): writes or
+  // refreshes the slug's tombstone and keeps its conferences row. Reached through the /admin/*
+  // check above, so the request's nonce is recorded first and a replay is 401 before any write.
+  // Answers {ok, already_retired_at}: the time of the earlier tombstone (ISO), or null, so a removal
+  // retried after its first answer was lost can say it had already happened.
+  #retireFirst(url) {
+    const slug = url.searchParams.get('event');
+    if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw bad('event must be a conference slug');
+    let before = null;
+    this.state.storage.transactionSync(() => {
+      before = this.sql.exec('SELECT at_ms FROM retired WHERE slug = ?', slug).toArray()[0]?.at_ms ?? null;
+      this.sql.exec('INSERT INTO retired (slug, at_ms) VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET at_ms = excluded.at_ms', slug, Date.now());
+    });
+    return json(200, { ok: true, already_retired_at: before === null ? null : new Date(Number(before)).toISOString() });
+  }
+
+  // DELETE /internal/conference/<slug> (step 3, after the object's wipe): deletes the conference row
+  // (removed: 1, or 0 when the directory did not know it) and keeps a tombstone, writing one only
+  // if step 1's is somehow missing. Idempotent.
+  #dropRow(slug) {
+    let removed = 0;
+    this.state.storage.transactionSync(() => {
+      removed = this.sql.exec('DELETE FROM conferences WHERE slug = ? RETURNING 1', slug).toArray().length;
+      this.sql.exec('INSERT INTO retired (slug, at_ms) VALUES (?, ?) ON CONFLICT(slug) DO NOTHING', slug, Date.now());
+    });
     this.docs = null;
     return json(200, { ok: true, removed });
   }

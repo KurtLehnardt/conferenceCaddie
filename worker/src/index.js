@@ -419,7 +419,7 @@ async function handleAdmin(request, env, url, header) {
   const body = raw && raw.byteLength > 0 ? raw : undefined;
   const verified = { nonce: header.nonce, ts: header.ts };
   if (path === '/admin/conference') return removeConference(request, env, url, verified);
-  if (path === '/admin/stats' && !url.searchParams.has('event')) return directoryStats(request, env, verified);
+  if (path === '/admin/stats' && !url.searchParams.has('event')) return directoryStats(request, env, url, verified);
 
   if (path === '/admin/conferences') {
     if (method !== 'PUT') throw reply(405, { error: 'Method not allowed' }, { Allow: 'PUT' });
@@ -441,7 +441,7 @@ async function handleAdmin(request, env, url, header) {
       const r = await callDo(conferenceStub(env, c.slug), 'https://conference.internal/internal/conference', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Caddie-Slug': c.slug },
-        body: JSON.stringify({ doc: c.doc, route_prefix: c.route_prefix }),
+        body: JSON.stringify({ doc: c.doc, route_prefix: c.route_prefix, ...(c.unretired === true ? { unretired: true } : {}) }),
       });
       if (r.ok) synced += 1;
     }
@@ -463,37 +463,71 @@ async function handleAdmin(request, env, url, header) {
   });
 }
 
-// DELETE /admin/conference?event=<slug> (W7.4): removes a conference. First the conference's object
-// wipes itself (POST /internal/wipe, which records this request's nonce before it deletes
-// anything, so a replay is 401 admin_replay and deletes nothing), then the directory deletes the
-// conference row and writes its tombstone (retired), which keeps PUT /admin/conferences from
-// bringing the slug back. The slug need not be in the directory: an unknown one still has its
-// object wiped and gets a tombstone. Answers {ok, deleted: {<table>: rows}, directory: 1 | 0,
-// retired: true}. A second removal answers zero counts and refreshes the tombstone.
+// DELETE /admin/conference?event=<slug> (W7.4): removes a conference, in three steps.
+//   1. The DirectoryDO records the request's nonce (a replay is 401 admin_replay and nothing is
+//      written) and writes or refreshes the slug's tombstone (retired), keeping its row. From now
+//      on PUT /admin/conferences skips the slug, so a failure in a later step cannot let the next
+//      ingest revive it.
+//   2. The conference's object records the nonce in its own table, deletes every row it holds but
+//      its nonces, and sets its retired_at marker (POST /internal/wipe).
+//   3. The DirectoryDO deletes the conference row (DELETE /internal/conference/<slug>, no nonce).
+// The slug need not be in the directory: an unknown one still gets its tombstone and its object
+// wiped. Answers {ok, deleted: {<table>: rows}, directory: 1 | 0, retired: true,
+// already_retired_at: <ISO of the earlier tombstone> | null}; a second removal answers zero counts.
+// A failure of step 1 is answered as it is (nothing changed). A failure of step 2 or 3 is answered
+// with that step's status (and Retry-After) and {error: "removal_incomplete", step: "wipe" |
+// "directory", retired: true, wiped, deleted?, cause?}: the tombstone holds, and the same removal
+// sent again finishes the work.
 async function removeConference(request, env, url, verified) {
   if (request.method !== 'DELETE') throw reply(405, { error: 'Method not allowed' }, { Allow: 'DELETE' });
   const slug = url.searchParams.get('event');
   if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw reply(400, { error: 'event must be a conference slug' });
-  const wiped = await callDo(conferenceStub(env, slug), 'https://conference.internal/internal/wipe', {
-    method: 'POST',
-    headers: forwardHeaders(request, slug, verified),
-  });
-  if (!wiped.ok) return wiped;
-  const { deleted } = await wiped.json();
-  const dir = await callDo(directoryStub(env), `https://directory.internal/internal/conference/${slug}`, {
-    method: 'DELETE',
-    headers: forwardHeaders(request, null),
-  });
-  directory = null;
-  if (!dir.ok) return dir;
-  const { removed } = await dir.json();
-  return json(200, { ok: true, deleted, directory: removed, retired: true });
+  try {
+    const retire = await callDo(directoryStub(env), `https://directory.internal/admin/conference/retire?event=${slug}`, {
+      method: 'POST',
+      headers: forwardHeaders(request, null, verified),
+    });
+    if (!retire.ok) return retire;
+    const { already_retired_at: alreadyRetiredAt = null } = await retire.json();
+    const wiped = await callDo(conferenceStub(env, slug), 'https://conference.internal/internal/wipe', {
+      method: 'POST',
+      headers: forwardHeaders(request, slug, verified),
+    });
+    if (!wiped.ok) return removalIncomplete(wiped, { step: 'wipe', retired: true, wiped: false });
+    const { deleted } = await wiped.json();
+    const dir = await callDo(directoryStub(env), `https://directory.internal/internal/conference/${slug}`, {
+      method: 'DELETE',
+      headers: forwardHeaders(request, null),
+    });
+    if (!dir.ok) return removalIncomplete(dir, { step: 'directory', retired: true, wiped: true, deleted });
+    const { removed } = await dir.json();
+    return json(200, { ok: true, deleted, directory: removed, retired: true, already_retired_at: alreadyRetiredAt });
+  } finally {
+    directory = null;
+  }
+}
+
+// The answer to a removal that stopped after its tombstone: the failing step's status and
+// Retry-After, what was done, and the step's own short error code as cause.
+async function removalIncomplete(res, done) {
+  let cause = null;
+  try {
+    const e = (await res.json())?.error;
+    if (typeof e === 'string' && /^[A-Za-z0-9_ .:-]{1,60}$/.test(e)) cause = e;
+  } catch {
+    /* not JSON */
+  }
+  const retry = res.headers.get('retry-after');
+  return json(res.status, { error: 'removal_incomplete', ...done, ...(cause ? { cause } : {}) }, retry ? { 'Retry-After': retry } : {});
 }
 
 // GET /admin/stats without event (W7.5): the cross-conference usage totals and holds the cron
-// stores, from the DirectoryDO, which records the nonce first.
-async function directoryStats(request, env, verified) {
+// stores, from the DirectoryDO, which records the nonce first. Any query key is a 400, so a
+// misspelt event= never answers the totals instead.
+async function directoryStats(request, env, url, verified) {
   if (request.method !== 'GET' && request.method !== 'HEAD') throw reply(405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' });
+  const key = [...url.searchParams.keys()][0];
+  if (key !== undefined || url.search !== '') throw reply(400, { error: `Unknown parameter: ${String(key ?? '').slice(0, 40)}` });
   return callDo(directoryStub(env), 'https://directory.internal/admin/stats', {
     method: request.method,
     headers: forwardHeaders(request, null, verified),

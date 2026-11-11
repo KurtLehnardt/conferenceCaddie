@@ -270,10 +270,11 @@ the signed header and the Access secret to another origin; a 3xx answer is an er
 headers arrive, never retried. The smoke (`scripts/smoke.mjs`) still follows redirects until its own
 change lands, so point it only at the Worker's own origin. A retry is signed afresh with a new nonce
 and timestamp, so it is a new request to the Worker, and every admin route handles a repeated
-request idempotently, with two exceptions on `POST /admin/moderation`: `"action": "delete"` answers
-404 when the target is already gone, and `"action": "unhide"` of a target that no longer exists
-answers 404 once its reports are gone, so either, when its first answer was lost, reports 404 on
-the retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `adminClient` and
+request idempotently, with three exceptions: on `POST /admin/moderation`, `"action": "delete"`
+answers 404 when the target is already gone, and `"action": "unhide"` of a target that no longer
+exists answers 404 once its reports are gone; and `POST /admin/people/block` with
+`"action": "unblock"` answers 404 once the operator report is gone. Each, when its first answer was
+lost, reports 404 on the retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `adminClient` and
 `moderation.mjs` also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
 Cloudflare Access application in front of `/admin/*`; the Worker does not check them, and the
 signature stays the check that matters. To rotate the token without an outage, see
@@ -337,75 +338,110 @@ deploy.
 These admin routes serve the `caddie-admin` CLI's Worker backend. Each is an admin request like any
 other ([Admin requests](#admin-requests)): signed, its nonce recorded by the Durable Object that
 serves it before anything runs, and safe to repeat, because a client signs every retry afresh;
-applying the same request twice answers success both times and leaves the same stored state. The
-answers name people by `ref` and display name only: none carries a `profile_id`, a secret hash, a
-reporter id, a push endpoint or key, a zone, a position, a cell or any Bluetooth field. An unknown
-`ref` answers `404 {"error":"not_found"}`, and a malformed parameter, an unknown or repeated query
-parameter, or an unknown body key answers 400. Nothing here is logged beyond the Worker's usual
-line (method, path template, status, duration).
+applying the same request twice answers success both times and leaves the same stored state, except
+where a route below says a retry answers 404. The answers name people by `ref` and display name
+only: none carries a `profile_id`, a secret hash, a reporter id, a push endpoint or key, a zone, a
+position, a cell or any Bluetooth field. An unknown `ref` answers `404 {"error":"not_found"}`, and
+a malformed parameter, an unknown or repeated query parameter, or an unknown body key answers 400.
+Nothing here is logged beyond the Worker's usual line (method, path template, status, duration).
 
-- `GET /admin/people/search?event=<slug>&q64=<text>[&limit=<n>][&include_hidden=1]` finds people by
-  name. `q64` is the search text as base64url without padding, 1 to 200 bytes of UTF-8, because the
-  signer allows no free text in a query string. The text matches anywhere in `display_name`,
-  ignoring case for ASCII letters only (SQLite's `LIKE`, so `É` does not match `é`), and `%`, `_` and
-  `\` match themselves. Hidden profiles are left out unless `include_hidden=1`. The answer is
-  `{"people": [{"ref", "display_name", "hidden", "spot_hidden", "open_to_meet", "sample",
-  "visible_until"}], "matched": <n>}`, in `display_name` order, at most `limit` rows (default 50, at
-  most 200); `matched` counts every match before the limit. With `ref=<ref>` instead of `q64`, the
-  answer holds that one person, hidden or not, and an unknown ref is 404.
+- `GET /admin/people/search?event=<slug>&q64=<text>[&limit=<n>][&include_hidden=0|1]` finds people
+  by name. `q64` is the search text as base64url without padding, 1 to 200 bytes of UTF-8 with no
+  NUL, because the signer allows no free text in a query string. The text matches anywhere in
+  `display_name` (`instr(lower(display_name), lower(text))`), ignoring case for ASCII letters only
+  (`É` does not match `é`); every character, `%`, `_` and `\` included, matches itself. Hidden
+  profiles are left out unless `include_hidden=1`. The answer is `{"people": [{"ref",
+  "display_name", "hidden", "spot_hidden", "open_to_meet", "sample", "visible_until"}], "matched":
+  <n>}`, in `display_name` order, at most `limit` rows (default 50, at most 200); `matched` counts
+  every match before the limit. With `ref=<ref>` instead of `q64`, the answer holds that one
+  person, hidden or not, and an unknown ref is 404; `limit` and `include_hidden` are checked in both
+  forms.
 - `GET /admin/people/view?event=<slug>&ref=<ref>[&fields=text,contact]` answers `{"person": {...}}`
   with `ref`, `display_name`, `hidden`, `spot_hidden`, `open_to_meet`, `sample`, `visible_until`,
   `updated_at`, `presence` (`"on"` or `"off"`, never where) and `counts`: `shared_talks`; `meets` as
-  `requested`, `accepted` (stored as active), `declined`, `ended` (cancelled, expired, or open past
-  their time) and `other`; `blocks_made` and `blocks_received` that have not run out; `push.web`
-  (live Web Push subscriptions, the only channel the Worker stores); and `reports` as `total` and
-  `reasons` (reports on the profile, the spot line and the meets the person took part in, the
-  operator's included as reason `operator`). `fields=text` adds `about`, `interests`, `expertise`,
-  `contact_note`, `spot` (the spot line while the person is around) and `pending` (an object of the
-  lines held back for moderation, `{}` when there is none), each cut to 300 characters;
-  `fields=contact` adds `linkedin_url`.
+  `requested`, `accepted` (stored as active), `declined`, `ended` (found, which is how a meet that
+  worked ends, cancelled, expired, an open meet past its time, and the `accepted` state older
+  versions stored) and `other`; `blocks_made` and `blocks_received` that have not run out;
+  `push.web` (live Web Push subscriptions, the only channel the Worker stores); and `reports` as
+  `total` and `reasons` (reports on the profile, the spot line and the meets the person took part
+  in, the operator's included as reason `operator`). `fields=text` adds `about`, `interests`,
+  `expertise`, `contact_note`, `spot` (the spot line while the person is around) and `pending` (an
+  object of the lines held back for moderation, `{}` when there is none), each cut to 300
+  characters; `fields=contact` adds `linkedin_url`.
 - `POST /admin/people/block?event=<slug>` with `{"ref": "<ref>", "action": "block"}` files the
   operator's report on the profile (id `profile:<ref>:operator`, reporter and reason `operator`) and
-  hides it; `{"action": "unblock"}` deletes that report and sets `hidden` to what the remaining
-  reports say, so two other reporters keep the profile hidden. Both answer `{"ok": true, "hidden":
-  <bool>}`; an unblock without an operator's report changes nothing. One operator report reaches the
-  hide threshold on its own and reports outlive the profile row, so a blocked profile stays hidden
-  through the owner's profile writes and when the same device makes it again. A new device is a new
-  person. To lift the block of a profile that was deleted since (unblock answers 404 then), unhide
-  `profile:<ref>` through `POST /admin/moderation`, which deletes its reports.
+  hides it: `{"ok": true, "hidden": true}`, or 404 `not_found` when no person has the ref. One
+  operator report reaches the hide threshold on its own and reports outlive the profile row, so a
+  blocked profile stays hidden through the owner's profile writes and when the same device makes it
+  again. A new device is a new person. `{"action": "unblock"}` deletes that one report and no other:
+  - the person exists: `hidden` becomes what the remaining reports say (two other distinct
+    reporters keep the profile hidden), and the answer is `{"ok": true, "hidden": <bool>, "found":
+    true, "removed": true}`;
+  - the profile was deleted since and its operator report is left: the report is deleted, so a
+    profile made again from that device is not hidden by it, and the answer is `{"ok": true,
+    "hidden": null, "found": false, "removed": true}`;
+  - the person exists without an operator report: `404 {"error":"no_operator_block"}`, nothing
+    changes;
+  - neither: `404 {"error":"not_found"}`.
+
+  An unblock retried after its first answer was lost therefore answers 404 the second time.
 - `POST /admin/moderation?event=<slug>` with `{"action": "hide", "kind": "profile" | "spot", "id":
   "<ref>"}` hides the profile or the spot line (which it also clears) and files the operator's
   report of that kind, so the hide survives in the same way; it answers `{"ok": true}`. `kind`
   `meet` is 400. For `profile` it is the same operator report as a block.
-- `DELETE /admin/conference?event=<slug>` removes a conference. The Worker sends the conference's
-  object `POST /internal/wipe` with the request's nonce, and the object records the nonce first, so
-  a replayed removal is `401 admin_replay` and deletes nothing. The object then deletes every row of
-  every table except `admin_nonces` (talks, vectors, topics, facets, people and everything that
-  hangs off them, reports, the meter's `usage_days`, and `meta` but for its `schema_version` row),
-  drops its caches and its conference document, and answers the per-table counts. A request to the
-  object that was waiting on an await when the wipe ran writes nothing afterwards: it answers `400
-  conference is not available`. Then the DirectoryDO deletes the conference row and writes the
-  tombstone `retired(slug, at_ms)`. The answer is `{"ok": true, "deleted": {"<table>": <rows>},
-  "directory": 1 | 0, "retired": true}`; `directory` is 0 when the directory did not know the slug,
-  whose object is wiped and tombstoned all the same. A second removal answers zero counts and
-  refreshes `at_ms`. The tables stay (no `storage.deleteAll()`), so the object can take the
-  conference again. Until the Worker's directory cache expires (5 minutes), a public request for
-  the slug reaches the empty object and answers `400 conference is not available`; afterwards the
-  Worker answers the same from the directory.
+- `DELETE /admin/conference?event=<slug>` removes a conference in three steps, so that no failure
+  can let it come back:
+  1. The DirectoryDO records the request's nonce (a replayed removal is `401 admin_replay` and
+     writes nothing) and writes or refreshes the tombstone `retired(slug, at_ms)`, keeping the
+     conference row. From here on `PUT /admin/conferences` skips the slug.
+  2. The conference's object records the nonce in its own table, deletes every row of every table
+     except `admin_nonces` (talks, vectors, topics, facets, people and everything that hangs off
+     them, reports, the meter's `usage_days`, and `meta` but for `schema_version`), writes the
+     marker `meta.retired_at`, and drops its caches, its conference document and its rate-limit
+     buckets. A request that was waiting on an await when the wipe ran writes nothing afterwards:
+     it answers `400 conference is not available`.
+  3. The DirectoryDO deletes the conference row.
+
+  The answer is `{"ok": true, "deleted": {"<table>": <rows>}, "directory": 1 | 0, "retired": true,
+  "already_retired_at": "<ISO>" | null}`. `directory` is 0 when the directory did not know the
+  slug, whose object is tombstoned and wiped all the same. `already_retired_at` is the time of an
+  earlier removal of the same slug, so a removal retried after its first answer was lost, whose
+  counts are all zero, says it had already happened. A failure of step 1 is answered as it is, and
+  nothing changed. A failure of step 2 or 3 answers that step's status (with its `Retry-After`)
+  and `{"error": "removal_incomplete", "step": "wipe" | "directory", "retired": true, "wiped":
+  <bool>, "deleted": {...} (after the wipe), "cause": "<the step's error>"}`: the tombstone holds,
+  and sending the removal again finishes it. The tables stay (no `storage.deleteAll()`), so the
+  object can take the conference again. While `retired_at` is set, the object refuses a conference
+  document from the fan-out of `PUT /admin/conferences` (`409 conference_retired`) unless that
+  fan-out unretired it, so an ingest that read the directory before the removal cannot make the
+  object searchable again, and it refuses every admin write with `400 conference is not available`
+  (an object without a conference document always does); admin reads still answer. Until the
+  Worker's directory cache expires (5 minutes), a public request for the slug reaches the empty
+  object and answers `400 conference is not available`; afterwards the Worker answers the same
+  from the directory.
 - `GET /admin/stats` without `event` is served by the DirectoryDO, which records the nonce: it
   answers `{"day": "<UTC day>" | null, "usage": {"<slug>": {"requests", "rows_read",
   "rows_written"}}, "holds": {"<slug>": true}}` from what the cron stored on its last run (every 10
   minutes): the day's totals of each conference and the conferences whose object still held
-  personal data. Totals of another UTC day than the cron's are left out. With `event` the route is
-  the conference's own, as before.
+  personal data. Totals of another UTC day than the cron's are left out. Any query parameter is
+  400, so a misspelt `event` never answers the totals. With `event` the route is the conference's
+  own, as before.
 - `PUT /admin/conferences` skips a slug that has a tombstone and answers it in `skipped_retired`
   (beside `upserted`, `searchable` and `synced`; the list is empty when nothing was skipped), so the
-  weekly ingest cannot bring a removed conference back. A document with the top-level key
-  `"unretire": true` deletes the tombstone and is upserted as usual; the key is never stored, it
+  weekly ingest cannot bring a removed conference back. When any document of that slug in the
+  request carries the top-level key `"unretire": true`, the tombstone is deleted, in the same
+  transaction as the upsert and after it, and the conference's object is sent the document whatever
+  its status, with the flag that lets it drop its `retired_at` marker. The key is never stored, it
   must be a boolean when present (otherwise the whole request is 400 and nothing is written), and
-  on a slug without a tombstone it changes nothing. `push-ingest.mjs` logs each skipped slug by
-  name, pushes none of its talks, and lists it under `skipped_retired` in its `--report`, not under
-  `upserted`.
+  on a slug without a tombstone it changes nothing. `push-ingest.mjs` and
+  `migrate-from-backup.mjs` log each skipped slug by name and send nothing more for it, and
+  `push-ingest.mjs` lists it under `skipped_retired` in its `--report`, not under `upserted`.
+
+People text is stored without control characters: every write of a display name, profile text, a
+contact note, a spot line, a meet note or a how-to-spot-me line drops the C0 controls except tab
+and newline, DEL and the C1 controls (U+0080 to U+009F), after turning CRLF and a lone CR into a
+newline. Bidirectional marks stay. The line filter sees the text after this, so a control
+character cannot split a listed word.
 
 To bring a removed conference back, clear its tombstone with a signed `PUT /admin/conferences`
 whose document carries `"unretire": true`, then push the conference again. The CLI does both with
@@ -428,6 +464,11 @@ gh workflow run ingest.yml -f events=<slug>
 ```
 
 The tombstone is the `retired` table of the DirectoryDO; nothing else reads or writes it.
+
+Before removing a conference: do it well away from the daily written-rows limit, because a wipe
+deletes every row of the conference (several thousand for a large one) and every deleted row is a
+written row; do not remove it while an ingest run is pushing it; and if the answer is
+`removal_incomplete`, send the same removal again (the CLI re-signs it) until it answers 200.
 
 ## Logs and CPU
 

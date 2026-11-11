@@ -191,6 +191,21 @@ export async function upsertConferences(admin, docs, log = console.log) {
   return skipped;
 }
 
+/**
+ * What follows the conference upsert, as data: `sent` the conference documents the upsert sent,
+ * `searchable` those of them with talks to push, `skipped` the slugs the Worker answered as
+ * skipped_retired. Returns { upserted, skipped_retired, push }: the slugs whose document was
+ * stored, the skipped ones, and the conferences whose talks to push, never a skipped one.
+ */
+export function planPush({ sent, searchable, skipped }) {
+  const retired = new Set(skipped);
+  return {
+    upserted: sent.map((c) => c.slug).filter((s) => !retired.has(s)),
+    skipped_retired: [...retired],
+    push: searchable.filter((c) => !retired.has(c.slug)),
+  };
+}
+
 // The slugs the Worker lists as searchable (GET /api/conferences), or an empty set when it cannot
 // say, in which case nothing is kept back.
 async function liveSearchable(api) {
@@ -274,11 +289,11 @@ async function main() {
     const kept = confs.filter((c) => c.status !== 'searchable' && c.status_reason === 'fetch_failed' && live.has(c.slug));
     for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
     const sent = confs.filter((c) => !kept.includes(c));
-    const retired = new Set(await upsertConferences(admin, sent.map(forWorker)));
+    const plan = planPush({ sent, searchable, skipped: await upsertConferences(admin, sent.map(forWorker)) });
     report.kept = kept.map((c) => c.slug);
-    report.skipped_retired = [...retired];
-    report.upserted = sent.map((c) => c.slug).filter((s) => !retired.has(s));
-    searchable = searchable.filter((c) => !retired.has(c.slug));
+    report.skipped_retired = plan.skipped_retired;
+    report.upserted = plan.upserted;
+    searchable = plan.push;
   }
 
   let pushed = 0;

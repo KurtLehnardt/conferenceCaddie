@@ -32,7 +32,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, normalizeApiBase,
+  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase,
   parseArgs, readAdminToken, readNdjson, withTopics,
 } from './lib.mjs';
 
@@ -154,18 +154,29 @@ function describePlan(p, { dryRun, includeReal }) {
   return lines;
 }
 
-async function send(p, admin) {
+// Sends the plan. A conference the Worker skipped as removed (skipped_retired in the answer to
+// PUT /admin/conferences, a tombstone of DELETE /admin/conference) is logged by name and none of
+// its talks, topics, facets, people or reports is sent, because a removal must not be undone by a
+// re-run of the migration. Returns the lines to print.
+export async function send(p, admin) {
   const generation = Date.now();
   const q = (slug) => `?event=${encodeURIComponent(slug)}`;
   const lines = [];
+  const retired = new Set();
+  const live = (map) => [...map].filter(([slug]) => !retired.has(slug));
 
   if (p.conferences) {
     const r = await admin('PUT', '/admin/conferences', { conferences: p.conferences.send });
     lines.push(`conferences: upserted ${r.upserted ?? '?'}`);
+    for (const slug of Array.isArray(r.skipped_retired) ? r.skipped_retired : []) {
+      if (typeof slug !== 'string' || !isSlug(slug) || retired.has(slug)) continue;
+      retired.add(slug);
+      lines.push(`${slug}: skipped, the Worker holds it as removed (DELETE /admin/conference); nothing of it is sent. To bring it back, run caddie-admin conferences unretire --event ${slug}.`);
+    }
   }
   if (p.talks) {
     const sum = { upserted: 0, unchanged: 0, embedded: 0, pending: 0, deleted: 0 };
-    for (const [slug, talks] of p.talks.byConf) {
+    for (const [slug, talks] of live(p.talks.byConf)) {
       for (const batch of chunk(talks, TALK_BATCH)) {
         const r = await admin('POST', `/admin/talks${q(slug)}`, { generation, talks: batch });
         for (const k of ['upserted', 'unchanged', 'embedded', 'pending']) sum[k] += Number(r[k]) || 0;
@@ -178,17 +189,17 @@ async function send(p, admin) {
   }
   if (p.topics) {
     let stored = 0;
-    for (const [slug, topics] of p.topics.byConf) stored += Number((await admin('PUT', `/admin/topics${q(slug)}`, { topics })).topics) || 0;
+    for (const [slug, topics] of live(p.topics.byConf)) stored += Number((await admin('PUT', `/admin/topics${q(slug)}`, { topics })).topics) || 0;
     lines.push(`topics: stored ${stored}`);
   }
   if (p.facets) {
     let stored = 0;
-    for (const [slug, facets] of p.facets.byConf) stored += Number((await admin('PUT', `/admin/facets${q(slug)}`, { facets })).facets) || 0;
+    for (const [slug, facets] of live(p.facets.byConf)) stored += Number((await admin('PUT', `/admin/facets${q(slug)}`, { facets })).facets) || 0;
     lines.push(`facets: stored ${stored}`);
   }
   if (p.people) {
     const sum = { upserted: 0, skipped: 0, embedded: 0, pending: 0 };
-    for (const [slug, people] of p.people.byEvent) {
+    for (const [slug, people] of live(p.people.byEvent)) {
       for (const batch of chunk(people, PEOPLE_BATCH)) {
         const r = await admin('POST', `/admin/people${q(slug)}`, { people: batch });
         for (const k of Object.keys(sum)) sum[k] += Number(r[k]) || 0;
@@ -199,7 +210,7 @@ async function send(p, admin) {
   }
   if (p.reports) {
     const sum = { inserted: 0, skipped: 0 };
-    for (const [slug, reports] of p.reports.byEvent) {
+    for (const [slug, reports] of live(p.reports.byEvent)) {
       for (const batch of chunk(reports, REPORT_BATCH)) {
         const r = await admin('POST', `/admin/reports${q(slug)}`, { reports: batch });
         for (const k of Object.keys(sum)) sum[k] += Number(r[k]) || 0;

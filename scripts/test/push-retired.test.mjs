@@ -1,11 +1,14 @@
-// worker/ingest/push-ingest.mjs and the Worker's tombstones (W7.7, W8): PUT /admin/conferences
-// answers the slugs it skipped because the operator removed them (skipped_retired), and the push
-// logs each one by name, so an operator sees why a conference did not come back. A recording
-// stand-in for the admin routes; no network, no Worker.
+// worker/ingest/push-ingest.mjs, worker/ingest/migrate-from-backup.mjs and the Worker's tombstones
+// (W7.7, W8): PUT /admin/conferences answers the slugs it skipped because the operator removed them
+// (skipped_retired); both scripts log each one by name and send nothing more for it, so an operator
+// sees why a conference did not come back and a re-run cannot undo a removal. A recording stand-in
+// for the admin routes; no network, no Worker.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { upsertConferences } from '../../worker/ingest/push-ingest.mjs';
+import { upsertConferences, planPush, pushEvent } from '../../worker/ingest/push-ingest.mjs';
+import { send as migrate } from '../../worker/ingest/migrate-from-backup.mjs';
+import { loadStoplist } from '../../worker/ingest/topics-local.mjs';
 
 // A stand-in for the admin routes that records every call and answers PUT /admin/conferences with
 // `answer`.
@@ -55,4 +58,66 @@ test('only well-formed slugs are logged or returned, each once', async () => {
   assert.deepEqual(skipped, ['gone-fixture-2099']);
   assert.equal(lines.length, 2);
   assert.ok(!lines.some((l) => l.includes('FAKE LOG LINE') || l.includes('Bad Slug') || l.includes('../etc')));
+});
+
+// The admin routes push-ingest and the migration call, answering PUT /admin/conferences with
+// `skipped` as skipped_retired, and the rest with plausible counts.
+function recordingAdmin(skipped) {
+  const calls = [];
+  const admin = async (method, url, body) => {
+    calls.push({ method, url, body });
+    if (url === '/admin/conferences') return { upserted: body.conferences.length - skipped.length, searchable: 0, synced: 0, skipped_retired: skipped };
+    if (method === 'GET') return { topics: [] };
+    if (url.startsWith('/admin/talks/finalize')) return { talks: 1, deleted: 0, unshared: 0 };
+    if (url.startsWith('/admin/talks')) return { upserted: body.talks.length, unchanged: 0, embedded: body.talks.length, pending: 0 };
+    if (url.startsWith('/admin/topics')) return { topics: body.topics.length };
+    if (url.startsWith('/admin/facets')) return { facets: body.facets.length };
+    if (url.startsWith('/admin/people')) return { upserted: body.people.length, skipped: 0, embedded: 0, pending: 0 };
+    return { inserted: (body.reports ?? []).length, skipped: 0 };
+  };
+  return { admin, calls };
+}
+
+const talk = (slug, n) => ({
+  talk_id: `${slug}:${n}`, conference: slug, kind: 'talk', title: `Talk ${n} about Kubernetes scheduling`, abstract: 'An abstract.', speakers: [], speaker_taglines: [],
+  speaker_profiles: [], tags: [], tag_keys: [], start: '2099-06-01T10:00:00Z', end: '2099-06-01T10:30:00Z',
+});
+
+test('planPush: a retired slug is neither upserted nor pushed, and is reported as skipped', () => {
+  const sent = [{ slug: 'kept-2099', status: 'searchable' }, { slug: 'gone-2099', status: 'searchable' }, { slug: 'also-gone-2099', status: 'unavailable' }];
+  const plan = planPush({ sent, searchable: sent.slice(0, 2), skipped: ['gone-2099', 'also-gone-2099'] });
+  assert.deepEqual(plan, { upserted: ['kept-2099'], skipped_retired: ['gone-2099', 'also-gone-2099'], push: [sent[0]] });
+  assert.deepEqual(planPush({ sent, searchable: sent.slice(0, 2), skipped: [] }).push, sent.slice(0, 2));
+});
+
+test('push-ingest never posts /admin/talks, topics or facets for a retired slug', async () => {
+  const sent = [{ slug: 'kept-2099', status: 'searchable' }, { slug: 'gone-2099', status: 'searchable' }];
+  const { admin, calls } = recordingAdmin(['gone-2099']);
+  const lines = [];
+  const plan = planPush({ sent, searchable: sent, skipped: await upsertConferences(admin, sent, (l) => lines.push(l)) });
+  for (const conf of plan.push) await pushEvent(conf, { talks: [talk(conf.slug, 1), talk(conf.slug, 2), talk(conf.slug, 3)], dropped: 0, redacted: 0, entries: 0 }, { admin, dryRun: false, generation: 1, rebuild: false, stop: loadStoplist() });
+  assert.ok(calls.some((c) => c.url === '/admin/talks?event=kept-2099'));
+  assert.deepEqual(calls.filter((c) => c.url.includes('gone-2099')), []);
+  assert.deepEqual([plan.upserted, plan.skipped_retired], [['kept-2099'], ['gone-2099']]);
+  assert.ok(lines.some((l) => l.startsWith('gone-2099: skipped')));
+});
+
+test('migrate-from-backup sends nothing more for a slug the Worker skipped as retired, and names it', async () => {
+  const byConf = (make) => new Map(['kept-2099', 'gone-2099'].map((slug) => [slug, make(slug)]));
+  const plan = {
+    conferences: { send: [{ slug: 'kept-2099' }, { slug: 'gone-2099' }] },
+    talks: { byConf: byConf((slug) => [talk(slug, 1)]) },
+    topics: { byConf: byConf((slug) => [{ topic_id: 'k8s', conference: slug }]) },
+    facets: { byConf: byConf((slug) => [{ id: 'room:a', kind: 'room', conference: slug }]) },
+    people: { byEvent: byConf((slug) => [{ profile_id: 'A'.repeat(22), event_id: slug }]) },
+    reports: { byEvent: byConf((slug) => [{ target_kind: 'profile', event_id: slug }]) },
+  };
+  const { admin, calls } = recordingAdmin(['gone-2099', 'Bad\nslug', 7]);
+  const lines = await migrate(plan, admin);
+  assert.deepEqual(calls.filter((c) => c.url.includes('gone-2099')), []);
+  for (const route of ['/admin/talks?', '/admin/talks/finalize?', '/admin/topics?', '/admin/facets?', '/admin/people?', '/admin/reports?']) {
+    assert.ok(calls.some((c) => c.url === `${route}event=kept-2099`), route);
+  }
+  assert.equal(lines.filter((l) => l.startsWith('gone-2099: skipped')).length, 1);
+  assert.ok(!lines.some((l) => l.includes('Bad')));
 });

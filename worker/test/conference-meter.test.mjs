@@ -125,6 +125,9 @@ test('usage() counts the rows of the request so far before it reads the meter', 
 
 test('GET /admin/stats reports a stored total, and a restarted meter never reports less', { skip }, async () => {
   const { obj, row } = newObject();
+  // An object takes admin writes (the meter restart) only once it holds its conference document.
+  const doc = { slug: 'test-conf', name: 'Fixture', status: 'searchable', start_date: '2099-06-01', end_date: '2099-06-02', time_zone: 'UTC' };
+  assert.equal((await obj.fetch(jsonRequest('PUT', '/internal/conference', { doc, route_prefix: 'abcdef' }))).status, 200);
   const stats = async () => (await (await obj.fetch(jsonRequest('GET', '/admin/stats'))).json()).usage;
   const first = await stats();
   for (let i = 0; i < 3; i++) await obj.fetch(jsonRequest('GET', '/api/no-such-route'));
