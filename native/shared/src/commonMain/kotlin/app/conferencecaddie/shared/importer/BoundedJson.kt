@@ -29,6 +29,14 @@ internal class BoundedJson(
     var built = 0
         private set
 
+    /**
+     * The characters examined for the last text read, for the tests. The reader moves forward only,
+     * so this stays a small multiple of the text's length; a second pass, or work per value that
+     * grows with the text, would show here whatever the machine's speed.
+     */
+    var steps = 0
+        private set
+
     /** The parsed value of [text], or null when it is not JSON (or nested too deeply). */
     fun parse(text: String): JsonElement? = try {
         Reader(text).read()
@@ -50,6 +58,7 @@ internal class BoundedJson(
 
         fun read(): JsonElement? {
             built = 0
+            steps = 0
             var root: JsonElement? = null
             var rootSet = false
             skipSpace()
@@ -168,16 +177,21 @@ internal class BoundedJson(
             return true
         }
 
-        private fun peek(): Char? = if (i < s.length) s[i] else null
+        private fun peek(): Char? {
+            steps++
+            return if (i < s.length) s[i] else null
+        }
 
         private fun skipSpace() {
             while (i < s.length) {
+                steps++
                 val c = s[i]
                 if (c == ' ' || c == '\t' || c == '\n' || c == '\r') i++ else return
             }
         }
 
         private fun literal(word: String) {
+            steps += word.length
             if (!s.startsWith(word, i)) throw NotJson()
             i += word.length
         }
@@ -211,6 +225,7 @@ internal class BoundedJson(
             val sb = if (keep) StringBuilder() else null
             while (true) {
                 if (i >= s.length) throw NotJson()
+                steps++
                 val c = s[i++]
                 when {
                     c == '"' -> return sb?.toString()
@@ -240,6 +255,7 @@ internal class BoundedJson(
                                     code = code * 16 + d
                                 }
                                 i += 4
+                                steps += 4
                                 // Lone surrogates are kept, as JSON.parse keeps them.
                                 sb?.append(code.toChar())
                             }

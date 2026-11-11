@@ -104,16 +104,21 @@ class TalkSmokeTest {
         File(embeddingDir, "vocab.txt").readText(),
     )
     private val database = CaddieDatabase.open(":memory:")
+    private val conferences: Map<String, Conf> = runBlocking { load() }
 
     /**
-     * 09:00 on the second day of the primary conference, in its own zone. The first day has ended,
-     * so "never an ended talk" (r1) is checked against talks that really ended, while the day's first
-     * talks are about to start, so Happening now (n2) has a window with talks in it; the other
-     * conferences have not started, so n1 sees both answers.
+     * 09:00 on the second day of the primary conference, in its own zone, from the bundle's own
+     * dates. The first day has ended, so "never an ended talk" (r1) is checked against talks that
+     * really ended, while the day's first talks are about to start, so Happening now (n2) has a
+     * window with talks in it; the other conferences have not started, so n1 sees both answers.
+     * Each of those checks fails when the data no longer gives it that, so none passes vacuously.
      */
-    private val now: JavaInstant = java.time.OffsetDateTime.parse("2026-11-10T09:00:00-07:00").toInstant()
-    private val nowMs = now.toEpochMilli()
-    private val conferences: Map<String, Conf> = runBlocking { load() }
+    private val now: JavaInstant by lazy {
+        val c = conf(primary).bundle.conference
+        val start = java.time.LocalDate.parse(c.startDate ?: error("$primary has no start date"))
+        start.plusDays(1).atTime(9, 0).atZone(ZoneId.of(c.timeZone ?: error("$primary has no time zone"))).toInstant()
+    }
+    private val nowMs: Long get() = now.toEpochMilli()
 
     private suspend fun load(): Map<String, Conf> {
         val bundles = File(site, "bundles")
@@ -291,6 +296,7 @@ class TalkSmokeTest {
                 seen += expected
                 if (r.happeningNowAvailable != expected) problems += "$slug: expected $expected on $today"
             }
+            if (true !in seen) problems += "no conference has talks on the pinned day, so the check proves nothing"
             report(problems.isEmpty(), "n1: Happening now is available exactly when the conference has talks today in its own zone", if (problems.isEmpty()) "checked 2 conferences against the local date in their zones: available ${seen.joinToString()}" else problems.joinToString())
         }
         check("n2: Happening now keeps only talks in progress or starting within 60 minutes") {
@@ -304,8 +310,11 @@ class TalkSmokeTest {
                 val end = JavaInstant.parse(OffsetIso.toInstant(it.str("end")!!)).toEpochMilli()
                 end > at + slack && start < at + 3_600_000 - slack
             }
-            val ok = outside.isEmpty() && r.total >= expected && r.total <= all.total
-            report(ok, "n2: Happening now keeps only talks in progress or starting within 60 minutes", "${r.total} of ${all.total} talks, at least $expected expected from the data, ${outside.size} outside the window")
+            val problems = ArrayList<String>()
+            if (outside.isNotEmpty()) problems += "${outside.size} outside the window, for example \"${outside[0].title}\""
+            if (r.total < expected || r.total > all.total) problems += "${r.total} talks, at least $expected expected from the data and at most ${all.total}"
+            if (expected == 0) problems += "no talk in the window at the pinned instant, so the check proves nothing"
+            report(problems.isEmpty(), "n2: Happening now keeps only talks in progress or starting within 60 minutes", if (problems.isEmpty()) "${r.total} of ${all.total} talks, at least $expected expected from the data, ${outside.size} outside the window" else problems.joinToString())
         }
         check("m2: \"after lunch day 2\" uses that day's lunch break and an empty remainder browses") {
             val day2 = "2026-11-10"
@@ -464,6 +473,8 @@ class TalkSmokeTest {
                 if (r.talk.talkId in marked) problems += "marked talk \"${r.talk.title}\""
                 if (r.talk.talkId !in own) problems += "foreign talk \"${r.talk.title}\""
             }
+            val ended = conf(primary).data.filter { it.kind() == "talk" }.count { JavaInstant.parse(OffsetIso.toInstant(it.str("end")!!)).toEpochMilli() <= nowMs }
+            if (ended == 0) problems += "no talk has ended at the pinned instant, so the check proves nothing"
             val empty = runBlocking { conf(primary).forYou.recommend(ForYou.Request(), nowMs) }
             if (empty != ForYou.Result.NeedsInput) problems += "an empty request does not need input"
             report(problems.isEmpty(), "r1: For you puts talks with a wanted topic first and never an ended or marked one", if (problems.isEmpty()) "${results.size} suggestions, first \"${top?.talk?.title}\"" else problems.distinct().take(3).joinToString())
