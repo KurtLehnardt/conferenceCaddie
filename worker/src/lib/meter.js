@@ -221,7 +221,9 @@ export class Meter {
   // account's daily written-rows limit is reached), the deltas stay in memory and are left out
   // of the reading, because an eviction could still lose them: the reading is the day's row
   // read back, or, if that read fails too, the last stored total this instance saw, with
-  // stale: true (another instance may have stored more since).
+  // stale: true (another instance may have stored more since). Under that limit only the cron
+  // still gets here: GET /admin/stats records its signed request's nonce first, a written row,
+  // so it answers 503 daily_limit before this runs (conference.js; admin requests fail closed).
   report(now = Date.now()) {
     try {
       this.flush(now, { force: true });

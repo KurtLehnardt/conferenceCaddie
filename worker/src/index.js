@@ -14,6 +14,7 @@ import { ConferenceDO } from './conference.js';
 import { DirectoryDO } from './directory.js';
 import { CONFERENCE_ADMIN_PATHS } from './admin.js';
 import { capabilitiesDocument, CAPABILITIES_MAX_AGE_S } from './capabilities.js';
+import { HEADER_NAME, NONCE_HEADER, TS_HEADER, adminKeys, bodyMatches, verifyAdminHeader, withinSkew } from './lib/admin-auth.js';
 import { json, isPlainObject, SLUG_RE, dailyLimitResponse, isDailyLimitError } from './lib/http.js';
 import { utcDay } from './lib/time.js';
 
@@ -30,6 +31,9 @@ const HEALTH_PER_MIN = 600;
 const VAPID_PER_MIN = 60;
 // Polled at every cold start of every app behind one venue address, so as generous as health.
 const CAPABILITIES_PER_MIN = 600;
+// Failed admin signatures per minute per address before the Worker stops computing HMACs for it
+// (W4). It protects CPU, not the key.
+const ADMIN_FAIL_PER_MIN = 10;
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -90,17 +94,21 @@ class Reply extends Error {
 const reply = (status, body, headers) => new Reply(json(status, body, headers));
 
 // ---------------------------------------------------------------------------------------------
-// Isolate-level state: the directory cache and two small rate limits.
+// Isolate-level state: the directory cache and the small rate limits (health, VAPID key,
+// capabilities and failed admin signatures).
 
 let directory = null; // { at, bySlug: Map, byPrefix: Map }
 let directoryPending = null;
 let lastEarlyRefresh = 0;
 const buckets = new Map();
 
-function take(key, perMin) {
+// The bucket of key, refilled at perMin tokens a minute up to perMin. A key without a bucket is
+// full: take() creates its bucket, peek() leaves it out of the map and gets null.
+function refill(key, perMin, create) {
   const now = Date.now();
   let bk = buckets.get(key);
   if (!bk) {
+    if (!create) return null;
     if (buckets.size > 10_000) buckets.clear();
     bk = { tokens: perMin, at: now };
     buckets.set(key, bk);
@@ -108,11 +116,24 @@ function take(key, perMin) {
     bk.tokens = Math.min(perMin, bk.tokens + ((now - bk.at) * perMin) / 60_000);
     bk.at = now;
   }
+  return bk;
+}
+
+// Takes one token: 0 when there was one, else the seconds until there is.
+function take(key, perMin) {
+  const bk = refill(key, perMin, true);
   if (bk.tokens >= 1) {
     bk.tokens -= 1;
     return 0;
   }
   return Math.max(1, Math.ceil(((1 - bk.tokens) * 60_000) / perMin / 1000));
+}
+
+// Whether take() would find a token now. It refills exactly as take() does and takes nothing, so
+// a check that runs on every request charges no one.
+function peek(key, perMin) {
+  const bk = refill(key, perMin, false);
+  return !bk || bk.tokens >= 1;
 }
 
 const directoryStub = (env) => env.DIRECTORY.get(env.DIRECTORY.idFromName('global'));
@@ -191,11 +212,11 @@ function originIsAllowed(origin, url, env) {
   return origin === url.origin || allowedOrigins(env).has(origin);
 }
 
-// Reads the body as text, refusing more than cap bytes (413).
-async function readCapped(request, cap) {
+// Reads the body as bytes, refusing more than cap bytes (413).
+async function readCappedBytes(request, cap) {
   const declared = Number(request.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > cap) throw reply(413, { error: 'Request body is too large' });
-  if (!request.body) return '';
+  if (!request.body) return new Uint8Array(0);
   const reader = request.body.getReader();
   const chunks = [];
   let size = 0;
@@ -215,7 +236,12 @@ async function readCapped(request, cap) {
     all.set(c, off);
     off += c.byteLength;
   }
-  return new TextDecoder().decode(all);
+  return all;
+}
+
+// Reads the body as text, refusing more than cap bytes (413).
+async function readCapped(request, cap) {
+  return new TextDecoder().decode(await readCappedBytes(request, cap));
 }
 
 function parseJsonBody(request, raw) {
@@ -232,8 +258,10 @@ function parseJsonBody(request, raw) {
 }
 
 // The header set a Durable Object receives: nothing the client chose except Content-Type and the
-// device header, so rate-limit keys cannot be spoofed.
-function forwardHeaders(request, slug) {
+// device header, so rate-limit keys cannot be spoofed. An admin request also carries the nonce and
+// timestamp of its verified X-Caddie-Admin header, for the object's replay check; a client's own
+// X-Caddie-Admin-Nonce or X-Caddie-Admin-Ts is never copied, as no other client header is.
+function forwardHeaders(request, slug, admin = null) {
   const h = new Headers();
   const type = request.headers.get('content-type');
   if (type) h.set('Content-Type', type);
@@ -241,6 +269,10 @@ function forwardHeaders(request, slug) {
   if (device) h.set('X-Caddie-Device', device);
   h.set('X-Caddie-IP', (request.headers.get('cf-connecting-ip') || 'unknown').slice(0, 45));
   if (slug) h.set('X-Caddie-Slug', slug);
+  if (admin) {
+    h.set(NONCE_HEADER, admin.nonce);
+    h.set(TS_HEADER, admin.ts);
+  }
   return h;
 }
 
@@ -330,31 +362,69 @@ async function handleApi(request, env, url, originAllowed) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Admin routes: bearer token compared on SHA-256 digests in constant time; any failure, a missing
-// or short token, or an Origin header gives 404, so the endpoint is never advertised.
+// Admin routes: every /admin/* request carries X-Caddie-Admin: v1 <ts> <nonce> <bodySha256> <sig>,
+// an HMAC-SHA256 made with ADMIN_TOKEN (or ADMIN_TOKEN_NEXT during a rotation) over the method, the
+// path and query, the body hash, the timestamp and the nonce (lib/admin-auth.js). The checks run in
+// this order, and every failure before the clock check answers 404, so the routes are never
+// advertised and a 401 needs a valid signature (a key holder's, or a captured header's while its
+// timestamp is fresh):
+//   1. an Origin header (a browser is never an admin client): 404;
+//   2. no ADMIN_TOKEN of at least 32 characters after trimming: 404;
+//   3. the header absent or malformed: 404;
+//   4. GET, HEAD or DELETE with a body hash other than the empty body's: 404;
+//   5. ten failed signatures from this address within the last minute (peek, nothing computed): 404;
+//   6. no key reproduces the signature: one token taken from that bucket, 404;
+//   7. the timestamp more than 300 seconds from the Worker's clock: 401 admin_skew;
+//   8. only now the body is read (4 MB cap); the clock is checked again, because the body may
+//      take any time to arrive (401 admin_skew); then the body is hashed, and another hash than
+//      the signed one is 401 admin_body;
+//   9. the buffered bytes are forwarded with the verified nonce and timestamp; the Durable Object
+//      checks the timestamp against its own clock (305 seconds, 401 admin_skew) and refuses a
+//      nonce it has seen (401 admin_replay, schema.js admin_nonces).
+// The Authorization header is not read here.
 
-async function adminAuthorized(request, env) {
-  if (request.headers.has('origin')) return false;
-  const token = env.ADMIN_TOKEN;
-  if (typeof token !== 'string' || token.length < 32) return false;
-  const m = /^Bearer (\S+)$/.exec(request.headers.get('authorization') || '');
-  if (!m) return false;
-  const enc = new TextEncoder();
-  const [a, b] = await Promise.all([crypto.subtle.digest('SHA-256', enc.encode(m[1])), crypto.subtle.digest('SHA-256', enc.encode(token))]);
-  return crypto.subtle.timingSafeEqual(a, b);
+const timingSafeEqual = (a, b) => crypto.subtle.timingSafeEqual(a, b);
+
+// Steps 1 to 7. Returns the verified header ({ ts, nonce, bodySha256, sig }, as strings).
+async function adminAuth(request, env, url) {
+  if (request.headers.has('origin')) throw reply(404, { error: 'Not found' });
+  const failKey = `admin-fail:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
+  const v = await verifyAdminHeader({
+    headerValue: request.headers.get(HEADER_NAME),
+    method: request.method,
+    pathWithQuery: url.pathname + url.search,
+    keys: adminKeys(env),
+    nowMs: Date.now(),
+    timingSafeEqual,
+    mayTry: () => peek(failKey, ADMIN_FAIL_PER_MIN),
+  });
+  if (v.ok) return v.header;
+  if (v.reason === 'signature') take(failKey, ADMIN_FAIL_PER_MIN);
+  if (v.reason === 'skew') throw reply(401, { error: 'admin_skew' });
+  throw reply(404, { error: 'Not found' });
 }
 
-async function handleAdmin(request, env, url) {
+// Steps 8 and 9, then the route.
+async function handleAdmin(request, env, url, header) {
   const path = url.pathname;
   const method = request.method;
-  const raw = method === 'GET' || method === 'HEAD' ? null : await readCapped(request, CAP_ADMIN);
+  let raw = null;
+  if (method !== 'GET' && method !== 'HEAD') {
+    raw = await readCappedBytes(request, CAP_ADMIN);
+    // A body held back past the window would otherwise reach the object with a stale timestamp.
+    if (!withinSkew(header.ts, Date.now())) throw reply(401, { error: 'admin_skew' });
+    if (!(await bodyMatches(header.bodySha256, raw, timingSafeEqual))) throw reply(401, { error: 'admin_body' });
+  }
+  // The bytes that were hashed, never request.body (already consumed).
+  const body = raw && raw.byteLength > 0 ? raw : undefined;
+  const verified = { nonce: header.nonce, ts: header.ts };
 
   if (path === '/admin/conferences') {
     if (method !== 'PUT') throw reply(405, { error: 'Method not allowed' }, { Allow: 'PUT' });
     const res = await callDo(directoryStub(env), 'https://directory.internal/admin/conferences', {
       method: 'PUT',
-      headers: forwardHeaders(request, null),
-      body: raw ?? '',
+      headers: forwardHeaders(request, null, verified),
+      body,
     });
     if (!res.ok) return res;
     // searchable: the documents to copy into each conference's object (searchable ones, and those
@@ -384,8 +454,8 @@ async function handleAdmin(request, env, url) {
   if (!known) throw reply(400, { error: 'conference is not available' });
   return callDo(conferenceStub(env, slug), `https://conference.internal${path}${url.search}`, {
     method,
-    headers: forwardHeaders(request, slug),
-    body: raw === null || raw === '' ? undefined : raw,
+    headers: forwardHeaders(request, slug, verified),
+    body,
   });
 }
 
@@ -412,10 +482,7 @@ function finish(response, { origin, originAllowed, admin }) {
 
 async function route(request, env, url, originAllowed) {
   const path = url.pathname;
-  if (path.startsWith('/admin/')) {
-    if (!(await adminAuthorized(request, env))) return json(404, { error: 'Not found' });
-    return handleAdmin(request, env, url);
-  }
+  if (path.startsWith('/admin/')) return handleAdmin(request, env, url, await adminAuth(request, env, url));
   if (path === '/api' || path.startsWith('/api/')) return handleApi(request, env, url, originAllowed);
   return json(404, { error: 'Not found' });
 }

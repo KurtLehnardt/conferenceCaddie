@@ -13,8 +13,12 @@
 # (bundles/sources.json) that stops a later build from the older committed data from replacing them.
 #
 # Set once in the repository settings:
-#   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it)
+#   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it);
+#                                push-ingest.mjs signs every admin request with it and never sends it
 #   variable CADDIE_API_BASE     the Worker's URL (the app's URL too), for example https://conference-caddie.<subdomain>.workers.dev
+# Optional, only when a Cloudflare Access application with a service token guards /admin/* (empty
+# by default; the client sends the two Access headers only when both are set):
+#   secret   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
 #
 # GitHub disables scheduled workflows after 60 days without repository activity. Run this workflow
 # by hand to enable it again. Until both values are set, a scheduled run only logs a notice and
@@ -66,11 +70,16 @@ jobs:
       REBUILD_TOPICS: ${{ inputs.rebuild_topics }}
       ALLOW_SHRINK: ${{ inputs.allow_shrink }}
       ALLOW_EMPTY: ${{ inputs.allow_empty }}
-      ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+    # The admin token and the optional Access token are set only in the environment of the two
+    # steps that need them (the configuration check and the push), not the job's, so the discovery
+    # step, which fetches third-party feeds, does not receive them in its environment. The steps
+    # still share the runner and its workspace, so this narrows the exposure; it is not isolation.
     steps:
       - name: Check the configuration
         id: config
+        env:
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
         run: |
           missing=""
           if [ -z "$ADMIN_TOKEN" ]; then missing="the CADDIE_ADMIN_TOKEN secret"; fi
@@ -109,6 +118,10 @@ jobs:
       - name: Push to the Worker
         id: push
         if: steps.config.outputs.ready == 'true'
+        env:
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -u
           args=(--events-from "$RUNNER_TEMP/ingest-report.json")
