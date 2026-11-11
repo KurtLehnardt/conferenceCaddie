@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -135,8 +136,12 @@ fun ForYouScreen(
     onOpenUrl: (String) -> Unit,
     onPickTopics: () -> Unit,
     peopleControls: (@Composable (Talk) -> Unit)? = null,
+    prefetchCounts: ((List<String>) -> Unit)? = null,
 ) {
     val d = Caddie.dimens
+    // One counts request for the suggestions, so the cards below read the controller's cache.
+    val suggestedIds = (model.result as? ForYou.Result.Ready)?.items?.map { it.talk.talkId }.orEmpty()
+    LaunchedEffect(prefetchCounts, suggestedIds) { if (suggestedIds.isNotEmpty()) prefetchCounts?.invoke(suggestedIds) }
     when (val r = model.result) {
         ForYou.Result.NeedsInput -> Column(Modifier.fillMaxSize().padding(start = d.gutter, end = d.gutter, top = 4.dp).testTag("for-you-screen")) {
             PickTopicsPrompt(onPickTopics)

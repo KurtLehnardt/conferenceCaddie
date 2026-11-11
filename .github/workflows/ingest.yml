@@ -1,11 +1,24 @@
-# Refreshes the talks on the free Worker stack. It discovers the upcoming Linux Foundation events
-# and their Sessionize schedules (scripts/ingest.mjs --dry-run, which needs no Elasticsearch) and
-# pushes the result to the Worker's admin routes (worker/ingest/push-ingest.mjs). Nothing is
-# committed. The Worker embeds only talks whose text changed.
+# Refreshes the talks on the free Worker stack and the talk bundles on GitHub Pages from one fetch.
+# It discovers the upcoming Linux Foundation events and their Sessionize schedules
+# (scripts/ingest.mjs --dry-run, which needs no Elasticsearch) and pushes the result to the Worker's
+# admin routes (worker/ingest/push-ingest.mjs). The Worker embeds only talks whose text changed.
+# Only the conferences this run fetched are pushed (the "processed" list of ingest.mjs --report):
+# ended events drop off the upcoming list, and their data/ folders hold only the committed seed,
+# which must not replace what the Worker and the bundles already have.
+# Then it publishes the talk bundles of the conferences it pushed, built from the same fetched files:
+# scripts/stage-ingest-data.mjs stages exactly what reached the Worker, and the publish job calls
+# pages.yml with that artifact, which builds from the current main, verifies and deploys the Pages
+# site under the "pages" concurrency group (docs/FREE_HOSTING.md, How data stays fresh). Nothing is committed to the
+# repository: data/ in the repository stays a seed, and the live bundles carry a source record
+# (bundles/sources.json) that stops a later build from the older committed data from replacing them.
 #
 # Set once in the repository settings:
-#   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it)
+#   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it);
+#                                push-ingest.mjs signs every admin request with it and never sends it
 #   variable CADDIE_API_BASE     the Worker's URL (the app's URL too), for example https://conference-caddie.<subdomain>.workers.dev
+# Optional, only when a Cloudflare Access application with a service token guards /admin/* (empty
+# by default; the client sends the two Access headers only when both are set):
+#   secret   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
 #
 # GitHub disables scheduled workflows after 60 days without repository activity. Run this workflow
 # by hand to enable it again. Until both values are set, a scheduled run only logs a notice and
@@ -28,6 +41,16 @@ on:
         type: boolean
         required: false
         default: false
+      allow_shrink:
+        description: 'Let the Worker delete more than 10 talks and more than 10% of a conference (it refuses otherwise, so a short feed cannot erase people sharing for those talks).'
+        type: boolean
+        required: false
+        default: false
+      allow_empty:
+        description: 'With rebuild_topics, let an empty topic list replace a stored one (the Worker refuses otherwise, since people store topic ids). It applies to every conference in the run, so name the conference in events.'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -40,14 +63,23 @@ jobs:
   ingest:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    outputs:
+      staged: ${{ steps.stage.outputs.staged }}
     env:
       EVENTS: ${{ inputs.events }}
       REBUILD_TOPICS: ${{ inputs.rebuild_topics }}
-      ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+      ALLOW_SHRINK: ${{ inputs.allow_shrink }}
+      ALLOW_EMPTY: ${{ inputs.allow_empty }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+    # The admin token and the optional Access token are set only in the environment of the two
+    # steps that need them (the configuration check and the push), not the job's, so the discovery
+    # step, which fetches third-party feeds, does not receive them in its environment. The steps
+    # still share the runner and its workspace, so this narrows the exposure; it is not isolation.
     steps:
       - name: Check the configuration
         id: config
+        env:
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
         run: |
           missing=""
           if [ -z "$ADMIN_TOKEN" ]; then missing="the CADDIE_ADMIN_TOKEN secret"; fi
@@ -76,14 +108,74 @@ jobs:
           if [ "${#args[@]}" -eq 0 ]; then args=(--all-upcoming); fi
           # Exit code 2 means some event ended partial or could not be fetched; the others are still pushed.
           status=0
-          node scripts/ingest.mjs "${args[@]}" --dry-run --skip-topics || status=$?
+          node scripts/ingest.mjs "${args[@]}" --dry-run --skip-topics --report "$RUNNER_TEMP/ingest-report.json" || status=$?
           if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then exit "$status"; fi
 
+      # Only the conferences the step above fetched (--events-from its report), never every folder in
+      # data/: the others are the committed seed. The push writes a report of what reached the
+      # Worker, also when it fails part way, and its exit status is kept for the last step, so the
+      # conferences that were pushed still get their bundles.
       - name: Push to the Worker
+        id: push
         if: steps.config.outputs.ready == 'true'
+        env:
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -u
-          args=()
-          for slug in $EVENTS; do args+=(--event "$slug"); done
+          args=(--events-from "$RUNNER_TEMP/ingest-report.json")
           if [ "$REBUILD_TOPICS" = "true" ]; then args+=(--rebuild-topics); fi
-          node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" "${args[@]}"
+          if [ "$ALLOW_SHRINK" = "true" ]; then args+=(--allow-shrink); fi
+          if [ "$ALLOW_EMPTY" = "true" ]; then args+=(--allow-empty); fi
+          status=0
+          node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --report "$RUNNER_TEMP/push-report.json" "${args[@]}" || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Stage the pushed conference files for the talk bundles
+        id: stage
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          if [ ! -f "$RUNNER_TEMP/push-report.json" ]; then
+            echo "::warning::The push wrote no report; no talk bundles are published from this run."
+            echo "staged=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/stage-ingest-data.mjs --report "$RUNNER_TEMP/push-report.json" --fetched "$RUNNER_TEMP/ingest-report.json" --out "$RUNNER_TEMP/ingest-data"
+
+      - name: Upload the staged conference files
+        if: steps.stage.outputs.staged != '' && steps.stage.outputs.staged != '0'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ingest-data
+          path: ${{ runner.temp }}/ingest-data
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Fail when the push failed
+        if: steps.push.outputs.status != '' && steps.push.outputs.status != '0'
+        env:
+          PUSH_STATUS: ${{ steps.push.outputs.status }}
+        run: |
+          echo "::error::push-ingest.mjs exited with $PUSH_STATUS; the conferences it did push still get their talk bundles."
+          exit "$PUSH_STATUS"
+
+  # Builds and deploys the talk bundles of the conferences the ingest job pushed, from the same files,
+  # through pages.yml (its build, verify and deploy jobs, under its "pages" concurrency group, which
+  # pages.yml's own runs share, so two Pages deploys never overlap). The called build checks out the
+  # current main, not this run's commit, so a takedown merged while the ingest ran is applied and
+  # an older commit never deploys after a newer one. It runs also when the push failed for some
+  # conferences, as long as others were staged. The permissions are the ceiling for the called
+  # jobs, which narrow them: only the deploy job gets pages: write and the OIDC token, and the build
+  # job reads the Pages deployments (deployments: read) to know when the live site is current.
+  publish:
+    needs: ingest
+    if: ${{ !cancelled() && needs.ingest.outputs.staged != '' && needs.ingest.outputs.staged != '0' }}
+    permissions:
+      contents: read
+      deployments: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+    with:
+      ingest_artifact: ingest-data

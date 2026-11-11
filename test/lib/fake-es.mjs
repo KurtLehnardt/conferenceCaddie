@@ -118,7 +118,9 @@ function aggregate(name, entries, aggs) {
   const out = {};
   for (const [k, a] of Object.entries(aggs)) {
     if (a.top_hits) {
-      const { size = 3, sort, _source: source, seq_no_primary_term: withSeq } = a.top_hits;
+      const { from = 0, size = 3, sort, _source: source, seq_no_primary_term: withSeq } = a.top_hits;
+      // Elasticsearch refuses from + size over index.max_inner_result_window, 100 by default.
+      if (from + size > 100) throw new Error(`fake Elasticsearch: top_hits from + size ${from + size} is over index.max_inner_result_window 100`);
       const hits = sorted(entries, sort).slice(0, size).map(([id, d]) => ({ _index: name, _id: id, _source: pick(d.source, source), ...(withSeq === true ? { _seq_no: d.seq, _primary_term: 1 } : {}) }));
       out[k] = { hits: { total: { value: entries.length, relation: 'eq' }, hits } };
       continue;
@@ -225,7 +227,9 @@ function bulk(name, text) {
   for (let i = 0; i < lines.length; i++) {
     const [op, meta] = Object.entries(lines[i])[0];
     if (op === 'delete') {
-      items.push({ delete: { status: fake.store(name).delete(meta._id) ? 200 : 404 } });
+      const cur = fake.store(name).get(meta._id);
+      if (cur && meta.if_seq_no !== undefined && cur.seq !== meta.if_seq_no) items.push({ delete: { status: 409 } });
+      else items.push({ delete: { status: fake.store(name).delete(meta._id) ? 200 : 404 } });
       continue;
     }
     const payload = lines[++i];

@@ -9,13 +9,15 @@ import app.conferencecaddie.shared.people.BackgroundNudges
 import app.conferencecaddie.shared.people.PeopleAvailability
 import app.conferencecaddie.shared.people.PeopleUiState
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Keeps one periodic [BackgroundNudgeJobService] job scheduled exactly while
@@ -28,8 +30,7 @@ import kotlinx.coroutines.launch
  * permission, which the manifest removes on purpose (ONNX Runtime's telemetry, see the manifest and
  * DECISIONS.md, phase 2b). Offline, the check's one request fails at once and the job ends.
  *
- * The job is changed only when the decision changes, and an already pending job is left alone, so
- * an app start does not restart the period.
+ * An already pending job is left alone, so an app start does not restart the period.
  *
  * [jobId] is [JOB_ID] in the app. The instrumented tests give their scheduler another id, because
  * they run in the app's process, where the process's own scheduler ([CaddiePeople]) and a run of
@@ -46,6 +47,7 @@ class BackgroundNudgeScheduler(
     private val app = context.applicationContext
     private val jobs = app.getSystemService(JobScheduler::class.java)
     private var job: Job? = null
+    private val applyLock = Mutex()
 
     /** Starts following the state. */
     fun start() {
@@ -55,9 +57,14 @@ class BackgroundNudgeScheduler(
             // no conference while the core restores its selection; cancelling then would drop a job
             // that is still wanted. A job that is no longer wanted for those reasons cancels itself
             // the next time it runs.
+            //
+            // Every ready state applies the decision again, rather than only a changed one: the job
+            // cancels itself when it finds it is not wanted (notifications switched off in the
+            // system, a backend without people features), which this flow cannot see, so a later
+            // state that wants it again must schedule it again. apply() leaves a pending job alone,
+            // so its period is not restarted.
             state.filter { it.availability == PeopleAvailability.Ready }
                 .map { BackgroundNudges.wanted(it, now(), notificationsAllowed()) }
-                .distinctUntilChanged()
                 .collect { apply(it) }
         }
     }
@@ -67,17 +74,35 @@ class BackgroundNudgeScheduler(
         job = null
     }
 
-    private fun apply(wanted: Boolean) {
-        if (!wanted) {
-            jobs.cancel(jobId)
-            return
-        }
-        if (jobs.getPendingJob(jobId) != null) return
-        val info = JobInfo.Builder(jobId, ComponentName(app, BackgroundNudgeJobService::class.java))
-            .setPeriodic(PERIOD_MS)
-            .setPersisted(false)
-            .build()
-        jobs.schedule(info)
+    /**
+     * Applies the decision to the current state again, for a change no state shows: the person
+     * may have switched the app's notifications on in the system settings, after the job had
+     * cancelled itself for that. The app calls it when it comes back to the foreground.
+     */
+    fun recheck() {
+        val s = state.value
+        if (s.availability != PeopleAvailability.Ready) return
+        scope.launch { apply(BackgroundNudges.wanted(s, now(), notificationsAllowed())) }
+    }
+
+    /**
+     * Serialised, because the [start] collector and a [recheck] can run at the same time. A
+     * JobScheduler call that throws (the system's job limit, a state it refuses) must not end the
+     * collector: the next ready state applies the decision again.
+     */
+    private suspend fun apply(wanted: Boolean) = applyLock.withLock {
+        runCatching {
+            if (!wanted) {
+                if (jobs.getPendingJob(jobId) != null) jobs.cancel(jobId)
+            } else if (jobs.getPendingJob(jobId) == null) {
+                val info = JobInfo.Builder(jobId, ComponentName(app, BackgroundNudgeJobService::class.java))
+                    .setPeriodic(PERIOD_MS)
+                    .setPersisted(false)
+                    .build()
+                jobs.schedule(info)
+            }
+        }.onFailure { if (it is CancellationException) throw it }
+        Unit
     }
 
     companion object {

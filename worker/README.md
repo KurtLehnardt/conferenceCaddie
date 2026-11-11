@@ -76,6 +76,10 @@ Worker allows through `ALLOWED_ORIGINS`).
   development `BLE_MASTER_KEYRING`; without it the local Worker serves legacy tokens only
   (`ble.mode: server-rotate` in `GET /api/capabilities`). `node scripts/ble-parity.mjs` checks the
   Worker's Bluetooth code against `contracts/fixtures/ble/` with no Worker running.
+- `npm test` in `worker/` runs the Worker's unit tests (`test/*.test.mjs`, node:test with
+  node:sqlite and no Worker running), such as the usage meter's test with several instances
+  sharing one database. They need Node 22.13 or later (node:sqlite without a flag). The root
+  `npm test` also runs them, and CI runs the root `npm test` in `test.yml`.
 - Parallel local runs use port 8787 plus a task number, so they do not collide.
 - To exercise the Cron Trigger, start with `npx wrangler dev --local --port 8787 --test-scheduled`
   and request `http://localhost:8787/__scheduled?cron=*/10+*+*+*+*`.
@@ -87,6 +91,8 @@ Worker allows through `ALLOWED_ORIGINS`).
   ```
 
   Then load data with the migration script below, pointing `--api` at `http://localhost:8787`.
+  The scripts sign every admin request with the token ([Admin requests](#admin-requests)); the
+  token itself is never sent, and a request that carries it as a bearer gets 404.
 - Without the backup (which holds personal data and should not be loaded on a laptop), load the
   committed talk data instead. Leave out `--event`, so every conference document is pushed: the
   smoke's check `u` needs the conferences that are not searchable. The test profiles the smoke
@@ -193,6 +199,7 @@ The smoke script in `scripts/smoke.mjs` is the only verification. Against the fr
 ```sh
 BASE_URL="$CADDIE_APP_URL" \
 ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token \
+SMOKE_ADMIN_AUTH=signed \
 node scripts/smoke.mjs
 ```
 
@@ -204,14 +211,100 @@ it). For a local run, build the app with `npm --prefix web run build:worker`, st
 `npx wrangler dev --local --port 8787` as above, load the data, and use
 `BASE_URL=http://localhost:8787`.
 
+`SMOKE_ADMIN_AUTH=signed` makes the smoke sign its admin calls ([Admin requests](#admin-requests)).
+Its default is still the old bearer, which this Worker answers with 404, until the smoke's own
+change makes signing the default.
+
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
+
+## Admin requests
+
+Every request to an `/admin/*` route carries one header and no other credential:
+
+```
+X-Caddie-Admin: v1 <ts> <nonce> <bodySha256> <sig>
+```
+
+`ts` is the Unix time in seconds, `nonce` 16 random bytes as base64url (22 characters),
+`bodySha256` the lowercase hex SHA-256 of the body bytes (for GET, HEAD and DELETE the hash of the
+empty body), and `sig` the lowercase hex HMAC-SHA256, keyed with the admin token after trimming,
+over the lines `caddie-admin-v1`, the method, the path with its query, `bodySha256`, `ts` and
+`nonce`, each followed by a newline. The token never travels. A header that leaks from a log can
+be used at most once, for the same method, path, query and body, and only while its timestamp is
+within five minutes of the Worker's clock. `scripts/lib/admin-sign.mjs` signs and
+`src/lib/admin-auth.js` verifies; both are tested against `test/fixtures/admin-sign.v1.json`. The
+signer refuses a path or query that would be percent-encoded, so both sides always sign the same
+bytes, and flags such as `allow_shrink` travel in the JSON body, which the hash covers.
+
+The Worker checks, in this order: an `Origin` header, an `ADMIN_TOKEN` of at least 32 characters,
+the shape of the header, the empty-body hash on GET, HEAD and DELETE, the failed-auth limit of the
+caller's address, and the signature, which it compares in constant time with `ADMIN_TOKEN` and,
+during a rotation, `ADMIN_TOKEN_NEXT`. Any failure so far answers `404 {"error":"Not found"}`, as
+an unknown path does, and the body has not been read. A valid signature whose timestamp is more
+than 300 seconds from the Worker's clock answers `401 admin_skew`. Only then does the Worker read
+the body (at most 4 MB). It checks the clock again once the body is in, because a body can be
+held back for any time, and answers `401 admin_skew` for a timestamp that has left the window
+meanwhile. Then it hashes the body: another hash than the signed one answers `401 admin_body`.
+It forwards the bytes it read, with the verified nonce and timestamp, to the Durable Object. The
+object refuses a timestamp more than 305 seconds from its own clock (`401 admin_skew`), then
+records the nonce in its own `admin_nonces` table before any handler runs and answers
+`401 admin_replay` to a nonce it has seen; it keeps nonces for 15 minutes from their signed time,
+so every nonce it accepts is one it would still remember. A 401 needs a valid signature: it
+comes back to a key holder, or to someone replaying a captured header while its timestamp is
+still fresh, who can see `admin_skew`, `admin_body` or `admin_replay`; everyone else gets 404.
+The `Authorization` header is not read.
+
+Recording the nonce writes a row, so once the account's daily written-rows limit is reached every
+admin request, `GET /admin/stats` and `GET /admin/moderation` included, answers
+`503 {"error":"daily_limit"}` until 00:00 UTC. The check fails closed: a read does not skip the
+nonce. The cron records no nonce and keeps its meter readings (`src/lib/meter.js`).
+
+The clients that sign are `worker/ingest/push-ingest.mjs`, `topics-local.mjs` and
+`migrate-from-backup.mjs` (through `adminClient` in `worker/ingest/lib.mjs`),
+`worker/scripts/moderation.mjs` and the smoke (with `SMOKE_ADMIN_AUTH=signed`); the `caddie-admin`
+CLI signs with the same module once it gains its Worker backend. They read the token from
+`ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`, and their `--api` base must be the Worker's origin, with no
+path, over https (plain http for localhost only). `adminClient` and `moderation.mjs` never follow a
+redirect: fetch drops only `Authorization` on a cross-origin redirect, so following one would hand
+the signed header and the Access secret to another origin; a 3xx answer is an error as soon as its
+headers arrive, never retried. The smoke (`scripts/smoke.mjs`) still follows redirects until its own
+change lands, so point it only at the Worker's own origin. A retry is signed afresh with a new nonce
+and timestamp, so it is a new request to the Worker, and every admin route handles a repeated
+request idempotently, with one exception: `POST /admin/moderation` with `"action": "delete"` answers
+404 when the target is already gone, so a delete whose first answer was lost reports 404 on the
+retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `adminClient` and
+`moderation.mjs` also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
+Cloudflare Access application in front of `/admin/*`; the Worker does not check them, and the
+signature stays the check that matters. To rotate the token without an outage, see
+docs/FREE_HOSTING.md (Operations runbook).
+
+A failed signature takes one token from a bucket of ten per minute per `CF-Connecting-IP`, and an
+empty bucket makes the Worker answer 404 before it computes anything; valid requests never take
+from it. The buckets live in each Worker isolate and protect CPU, not the key. The symptom to
+recognise: if a CI runner's address sends ten bad signatures within a minute, for example with a
+stale `CADDIE_ADMIN_TOKEN` after a rotation, every admin call from it, valid or not, answers 404
+until the bucket refills (one failure's worth every six seconds, all ten within a minute), so
+`push-ingest.mjs` reports 404s on every admin call. A clock far off shows up as `401 admin_skew`
+instead, because the timestamp is checked only after a valid signature. Either way the fix is the
+secret or the clock, not the Worker.
+
+A Worker from before signed admin requests reads only the bearer, and the clients from that change
+on send only the signature, so rolling the Worker back means rolling the clients back too: run
+`push-ingest.mjs`, `migrate-from-backup.mjs`, `topics-local.mjs` and `moderation.mjs` from the
+commit before the merge (and revert the merge on `main`, so the weekly ingest sends the bearer
+again), and run the smoke with `SMOKE_ADMIN_AUTH=bearer`. Otherwise every ingest and moderation call
+gets a 404 that looks like a wrong token. The `admin_nonces` table and its index stay in the objects
+and are harmless to the older code, which never reads them. After a rollback the conference objects
+stay at `schema_version` 3, so the next schema change must use version 4: a later change that bumps
+to 3 again would be skipped silently, because `migrate()` in `src/schema.js` does nothing when the
+stored version is at least `SCHEMA_VERSION`.
 
 ## Moderation
 
 Two reports from different people hide a profile, a spot line or a meet. The operator reviews and
 undoes or confirms hides with `worker/scripts/moderation.mjs`, which calls
-`GET` and `POST /admin/moderation` with the admin token from `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`
-(default `~/.config/conference-caddie/admin-token`):
+`GET` and `POST /admin/moderation`, signing each request with the admin token from `ADMIN_TOKEN`
+or `ADMIN_TOKEN_FILE` (default `~/.config/conference-caddie/admin-token`):
 
 ```sh
 export CADDIE_API_BASE=https://conference-caddie.krlehnardt.workers.dev

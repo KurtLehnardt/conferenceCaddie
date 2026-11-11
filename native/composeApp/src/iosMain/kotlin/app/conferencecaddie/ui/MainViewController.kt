@@ -50,9 +50,9 @@ fun MainViewController(): UIViewController {
     }
     val version = NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: ""
     // The people features, next to the core, with the platform services: the Keychain, location,
-    // notifications and APNs registration. Created here on the main thread, never in tests.
-    val peopleServices = IosPeopleServices.create()
-    val people = IosCore.people(peopleServices, allowLocalHttp = isDebugBuild)
+    // notifications and APNs registration. Created on the main thread by the first call only (a
+    // second call reuses the controller and makes no second set), never in tests.
+    val people = IosCore.people({ IosPeopleServices.create() }, allowLocalHttp = isDebugBuild)
     return ComposeUIViewController(
         configure = {
             // The screens keep their fields above the keyboard themselves (imePadding), as on

@@ -14,6 +14,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -95,6 +96,25 @@ class PeopleControllerTest {
         c.updateProfile { it.copy(displayName = "Caddie Native Test A") }
         assertNull(c.setOpenToMeet(true))
         assertEquals(1, h.sent("PUT", "/api/people/profile").size)
+        c.close()
+    }
+
+    @Test
+    fun aSessionThatCouldNotBeOpenedIsReportedAndRetrySessionOpensIt() = runTest {
+        val h = PeopleHarness(this)
+        val kv = FlakyKeyValue().apply { failReads = true }
+        val c = controllerOver(kv, h)
+        c.updateContext(h.context())
+        runCurrent()
+        assertEquals(PeopleAvailability.Loading, c.state.value.availability)
+        assertTrue(c.state.value.sessionFailed, "the records could not be opened")
+        assertFalse(c.retrySession(), "still failing")
+        assertTrue(c.state.value.sessionFailed)
+        kv.failReads = false
+        assertTrue(c.retrySession())
+        runCurrent()
+        assertEquals(PeopleAvailability.Ready, c.state.value.availability)
+        assertFalse(c.state.value.sessionFailed)
         c.close()
     }
 
@@ -312,7 +332,7 @@ class PeopleControllerTest {
     // ---------------------------------------------------------------------------------------------
     // Circle counts
 
-    private fun countsServer(h: PeopleHarness, answer: (SentRequest) -> app.conferencecaddie.shared.net.HttpResponse = { r -> counted(r) }) {
+    private fun countsServer(h: PeopleHarness, answer: suspend (SentRequest) -> app.conferencecaddie.shared.net.HttpResponse = { r -> counted(r) }) {
         h.server.other = { r -> if (r.path == "/api/circles/counts") answer(r) else FakeApiHttp.json(404, """{"error":"Not found"}""") }
     }
 
@@ -341,6 +361,32 @@ class PeopleControllerTest {
         val counts = h.controller.circleCounts(many)
         assertEquals(listOf(100, 50), countRequests(h).drop(1).map { idsOf(it).size })
         assertEquals(many.associateWith { countOf(it) }, counts)
+    }
+
+    @Test
+    fun whileOneCountsRequestIsUnderWayTheNextBatchWaitsForIt() = runTest {
+        val h = PeopleHarness(this)
+        // The server takes 400 ms to answer: longer than many batch windows.
+        countsServer(h) { r ->
+            delay(400)
+            counted(r)
+        }
+        h.start()
+        // A list that is flung: a card asks every 60 ms for its own talk, over about a second.
+        val ids = (3001..3016).map { talk(it) }
+        val results = ids.map { id ->
+            val d = async { h.controller.circleCounts(listOf(id)) }
+            advanceTimeBy(PeopleController.COUNT_BATCH_MS)
+            d
+        }.awaitAll()
+        results.forEachIndexed { i, m -> assertEquals(mapOf(ids[i] to countOf(ids[i])), m, "each card gets its own talk") }
+        // The first card's batch goes out at 60 ms and answers at 460; every card asked for while it
+        // was under way shares the next one, which goes out at 460 and answers at 860, and so on:
+        // four requests for sixteen cards over 900 ms, one per round trip, never one per window.
+        val sent = countRequests(h)
+        assertEquals(4, sent.size, "one request per round trip")
+        assertEquals(ids, sent.flatMap { idsOf(it) })
+        assertEquals(listOf(1, 7, 7, 1), sent.map { idsOf(it).size })
     }
 
     @Test
@@ -465,5 +511,45 @@ class PeopleControllerTest {
         val notice = h.state.notice!!
         assertTrue(notice.opensProfile, notice.message)
         assertFalse(notice.message.contains("profile"))
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // People seen
+
+    @Test
+    fun aPersonSeenInASearchIsKnownByRefFromAnyThread() = runTest {
+        val h = PeopleHarness(this)
+        val c = h.controller
+        h.start()
+        h.visible()
+        assertNull(c.knownPerson("3f2a9c0d1e4b5a68"))
+        h.server.matches = {
+            FakeApiHttp.json(
+                200,
+                """{"results":[{"ref":"3f2a9c0d1e4b5a68","display_name":"Ana","about":"SRE","reasons":[],"around":false}],"from":0,"size":20,"has_more":false}""",
+            )
+        }
+        assertTrue(c.searchPeople("kubernetes", around = false) is ApiResult.Ok)
+        assertEquals("Ana", c.knownPerson("3f2a9c0d1e4b5a68")?.displayName)
+        assertNull(c.knownPerson("9b1c7e5d3a2f4c60"))
+    }
+
+    @Test
+    fun aBlockAndDeleteMyProfileForgetThePeopleSeen() = runTest {
+        val h = PeopleHarness(this)
+        val c = h.controller
+        h.start()
+        h.visible()
+        h.server.other = { FakeApiHttp.json(200, """{"ok":true}""") }
+        h.server.matches = { page(person("3f2a9c0d1e4b5a68", "Ana"), person("9b1c7e5d3a2f4c60", "Ben")) }
+        assertTrue(c.searchPeople("kubernetes", around = false) is ApiResult.Ok)
+        assertEquals("Ben", c.knownPerson("9b1c7e5d3a2f4c60")?.displayName)
+
+        assertNull(c.block("9b1c7e5d3a2f4c60", "Ben"))
+        assertNull(c.knownPerson("9b1c7e5d3a2f4c60"), "a blocked person's card is not found again")
+        assertEquals("Ana", c.knownPerson("3f2a9c0d1e4b5a68")?.displayName)
+
+        assertTrue(c.deleteMyProfile().done)
+        assertNull(c.knownPerson("3f2a9c0d1e4b5a68"), "Delete my profile forgets everyone this phone saw")
     }
 }

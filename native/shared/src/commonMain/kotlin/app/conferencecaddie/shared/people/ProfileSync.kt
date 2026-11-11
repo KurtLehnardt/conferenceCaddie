@@ -682,9 +682,11 @@ internal class ProfileSync(
     /**
      * How a failed delete went. Only the API's own 403 `forbidden` means the server refused this
      * device's key; another 403 and a request that ran out of time say nothing certain, so they
-     * count like a 5xx.
+     * count like a 5xx. A device credential the secure store cannot read now is its own kind: no
+     * request was sent, and offline is not the reason.
      */
     private fun failureKind(e: PeopleError): DeleteFailure = when {
+        e.status == 0 && e.code == "secure_store" -> DeleteFailure.Store
         e.status == 0 -> if (e.kind == PeopleError.Kind.Offline) DeleteFailure.Offline else DeleteFailure.Partial
         e.status == 429 -> DeleteFailure.Rate
         e.status == 403 -> if (e.code == "forbidden") DeleteFailure.Forbidden else DeleteFailure.Partial
@@ -694,9 +696,11 @@ internal class ProfileSync(
 
     /**
      * Whether a failed delete may have done part of its work. A 400, 404, its own 403 or a 429 comes
-     * before the server changes anything.
+     * before the server changes anything. An unreadable secure store counts like being offline: the
+     * mark stays, so the delete runs again once the store can be read.
      */
-    private fun mayBePartlyDone(e: PeopleError): Boolean = failureKind(e).let { it == DeleteFailure.Partial || it == DeleteFailure.Offline }
+    private fun mayBePartlyDone(e: PeopleError): Boolean =
+        failureKind(e).let { it == DeleteFailure.Partial || it == DeleteFailure.Offline || it == DeleteFailure.Store }
 
     /** Seconds of the server's Retry-After, at most an hour, so a wrong header cannot stop the retries. */
     private fun retryAfterOf(e: PeopleError): Long = min(e.retryAfterSeconds ?: 0, 3600)
@@ -788,7 +792,7 @@ internal class ProfileSync(
             // again later, and never treat this as "nothing on the server".
             DeviceCredentials.Lookup.Unavailable -> {
                 if (store.deletePending(slug) == null) store.setDeletePending(slug, newRetry())
-                store.updateDeletePending(slug) { afterFailure(it, DeleteFailure.Offline, 0) }
+                store.updateDeletePending(slug) { afterFailure(it, DeleteFailure.Store, 0) }
                 host.changed()
                 return Deleted.Failed(PeopleError.secureStoreUnavailable())
             }
@@ -956,7 +960,7 @@ internal class ProfileSync(
         when (key) {
             // The key may be there but cannot be read: nothing is cleared, and nothing is claimed.
             DeviceCredentials.Lookup.Unavailable -> {
-                store.updateDeleteAll { afterFailure(it, DeleteFailure.Offline, 0) }
+                store.updateDeleteAll { afterFailure(it, DeleteFailure.Store, 0) }
                 host.changed()
                 return DeleteResult(false, PeopleError.SECURE_STORE_MESSAGE)
             }
@@ -1249,6 +1253,7 @@ internal class ProfileSync(
         private val FAILURE_RANK = mapOf(
             DeleteFailure.Partial to 4,
             DeleteFailure.Offline to 3,
+            DeleteFailure.Store to 3,
             DeleteFailure.Forbidden to 2,
             DeleteFailure.Rate to 1,
             DeleteFailure.Bad to 0,
@@ -1258,6 +1263,7 @@ internal class ProfileSync(
         val PENDING_DETAIL: Map<DeleteFailure, String?> = mapOf(
             DeleteFailure.Partial to null,
             DeleteFailure.Offline to "You appear to be offline.",
+            DeleteFailure.Store to PeopleError.SECURE_STORE_MESSAGE,
             DeleteFailure.Rate to "Too many requests right now. Wait a minute and try again.",
             DeleteFailure.Forbidden to "This device is not allowed to delete your profile.",
             DeleteFailure.Bad to "Our server could not handle the request. Try again later, or update the app.",
@@ -1271,6 +1277,7 @@ internal class ProfileSync(
                 DeleteFailure.Partial ->
                     "Your profile may be partly deleted: it may already be hidden from other attendees, but deleting it did not finish. Try again to finish."
                 DeleteFailure.Offline -> "You appear to be offline. Your profile may be partly deleted. Try again to finish once you are online."
+                DeleteFailure.Store -> PeopleError.SECURE_STORE_MESSAGE
                 DeleteFailure.Rate -> "Too many requests right now, so $notYet.$partly Wait a minute and try again."
                 DeleteFailure.Forbidden ->
                     if (progress == Progress.None) {
@@ -1296,6 +1303,7 @@ internal class ProfileSync(
                 DeleteFailure.Partial ->
                     "Your profile may already be hidden from others at this conference, but removing it did not finish. The app will try again, or you can finish it from your profile."
                 DeleteFailure.Offline -> "You appear to be offline, so removing your profile did not finish.$hidden The app will try again once you are online."
+                DeleteFailure.Store -> PeopleError.SECURE_STORE_MESSAGE
                 DeleteFailure.Rate ->
                     if (partlyDone) {
                         "Too many requests right now, so removing your profile has not finished.$hidden Wait a minute and try again."

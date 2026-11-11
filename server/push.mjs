@@ -29,18 +29,33 @@
 // - A native registration for a platform this server does not push to (push.apns or push.fcm
 //   false, also after native-push.mjs turned the channel off at runtime) is refused with 404
 //   push_unavailable and nothing is stored. Removing one always works.
-// - Nothing from a request body or header is logged.
+// - A new subscription's endpoint must be https, on a known browser push service host
+//   (PUSH_SERVICE_HOSTS in push-hosts.mjs, the same list as the Worker's), on the default port,
+//   with no user name or password; any other is refused with 400 "endpoint must be a push service
+//   URL", so a profile can never make this server send signed requests to a host of its choosing.
+//   Removing a subscription needs only a well-formed https endpoint, so a row stored before this
+//   rule can still be removed by its owner, and pushTargetsFor skips such a row, never sends to it.
+// - Nothing from a request body or header is logged, except the host (never the endpoint) of a
+//   push endpoint refused at subscribe time or skipped at send time, so a push service missing
+//   from the list shows up in the logs.
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
 import { NATIVE_PUSH, nativeTokenOf } from './native-push.mjs';
+import { isPushServiceEndpoint } from './push-hosts.mjs';
 import {
   people, idx, PUSH_INDEX, LIMITS,
   HttpError, UpstreamError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
   conferenceFor, authenticated, dispatch, deleteWhere,
 } from './people.mjs';
 
-const ENDPOINT_MAX = 2048;
+// The Worker's limits: an endpoint of at most 1,000 characters, and at most 10 Web Push
+// subscriptions per profile and conference (its SUBS_PER_PROFILE); a new one removes the oldest.
+const ENDPOINT_MAX = 1000;
+export const SUBS_PER_PROFILE = 10;
+// How many of a profile's push documents the trim after a subscribe reads: the 10 it keeps, its
+// native registrations and rows stored before the cap existed.
+const TRIM_READ = 100;
 const KEY_RE = /^[A-Za-z0-9_-]{16,256}$/;
 const SUBSCRIPTION_KEYS = new Set(['event', 'subscription']);
 const SUBSCRIPTION_FIELDS = new Set(['endpoint', 'keys', 'expirationTime']);
@@ -69,7 +84,10 @@ function writer(req) {
   return device;
 }
 
-function endpointOf(value) {
+// A push endpoint: a https URL of at most ENDPOINT_MAX characters. forWrite (a new subscription)
+// also requires a known browser push service host (isPushServiceEndpoint); a delete does not, so
+// a row stored before that rule can still be removed.
+function endpointOf(value, { forWrite = false } = {}) {
   if (typeof value !== 'string' || !value || value.length > ENDPOINT_MAX) throw bad('endpoint must be a push service URL');
   let u;
   try {
@@ -78,6 +96,11 @@ function endpointOf(value) {
     throw bad('endpoint must be a push service URL');
   }
   if (u.protocol !== 'https:') throw bad('endpoint must be a https URL');
+  if (forWrite && !isPushServiceEndpoint(value)) {
+    // Only the host is logged, never the endpoint, so a push service missing from the list shows up.
+    console.warn(`push subscription refused: host ${u.hostname.toLowerCase().slice(0, 64)}`);
+    throw bad('endpoint must be a push service URL');
+  }
   return value;
 }
 
@@ -86,7 +109,7 @@ function endpointOf(value) {
 function subscriptionOf(value) {
   if (!isPlainObject(value)) throw bad('subscription must be an object');
   for (const k of Object.keys(value)) if (!SUBSCRIPTION_FIELDS.has(k)) throw bad(`Unknown key: subscription.${k.slice(0, 40)}`);
-  const endpoint = endpointOf(value.endpoint);
+  const endpoint = endpointOf(value.endpoint, { forWrite: true });
   if (!isPlainObject(value.keys)) throw bad('subscription.keys must be an object');
   for (const k of Object.keys(value.keys)) if (!KEYS_FIELDS.has(k)) throw bad(`Unknown key: subscription.keys.${k.slice(0, 40)}`);
   const { p256dh, auth } = value.keys;
@@ -119,14 +142,45 @@ async function requireProfile(device, slug) {
   return me;
 }
 
+// Keeps a profile's newest SUBS_PER_PROFILE Web Push subscriptions at one conference and deletes
+// the others, as the Worker does after each subscribe. Native registrations (no endpoint) are not
+// counted and not touched. Each delete is guarded by the _seq_no and _primary_term it was read
+// with, so a subscription written again in the meantime (a re-subscribe moves it to the front)
+// stays; 404 and 409 leave nothing to do. A Bulk delete with refresh=wait_for needs only the
+// write privilege the people key has (DECISIONS.md, "Deletes without the refresh privilege").
+// A failure is one log line: the subscription is stored, and the next subscribe trims again.
+export async function trimSubscriptions(eventId, profileId) {
+  try {
+    const { json } = await people('POST', `${idx(PUSH_INDEX)}/_search?ignore_unavailable=true&seq_no_primary_term=true`, {
+      size: TRIM_READ,
+      _source: ['endpoint'],
+      query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } },
+      sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }],
+    });
+    const old = (json.hits?.hits ?? []).filter((h) => h._source?.endpoint).slice(SUBS_PER_PROFILE);
+    if (!old.length) return;
+    const body = old.map((h) => `${JSON.stringify({ delete: { _id: h._id, if_seq_no: h._seq_no, if_primary_term: h._primary_term } })}\n`).join('');
+    const { json: result } = await people('POST', `${idx(PUSH_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
+    for (const item of result.items ?? []) {
+      const status = item.delete?.status ?? 500;
+      if (status !== 404 && status !== 409 && (status < 200 || status > 299)) throw new UpstreamError(`bulk item status ${status}`);
+    }
+  } catch (err) {
+    console.error(`Push subscription trim failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
+  }
+}
+
 async function putSubscription(req, res) {
   const device = writer(req);
   const body = await jsonBody(req, SUBSCRIPTION_KEYS);
-  const sub = subscriptionOf(body.subscription);
+  // The conference comes first, so an unknown or ended one is the answer even when the endpoint
+  // would be refused too: the web app's re-sync turns its switch off for good on those two answers
+  // and on profile_required, and must not mistake a refused endpoint for them.
   const conf = await conferenceFor(body.event);
-  const me = await requireProfile(device, conf.slug);
   const now = Date.now();
   if (Date.parse(conf.visibleUntil) <= now) throw bad('conference has ended');
+  const sub = subscriptionOf(body.subscription);
+  const me = await requireProfile(device, conf.slug);
   const { status } = await people('PUT', `${idx(PUSH_INDEX)}/_doc/${subscriptionId(sub.endpoint)}?refresh=wait_for`, {
     event_id: conf.slug,
     profile_id: me.profile_id,
@@ -137,6 +191,7 @@ async function putSubscription(req, res) {
     expires_at: conf.visibleUntil,
   });
   if (status < 200 || status > 299) throw new UpstreamError(`status ${status}`);
+  await trimSubscriptions(conf.slug, me.profile_id);
   sendJson(res, 200, { ok: true });
 }
 
@@ -209,18 +264,32 @@ async function vapid(req, res) {
 // The most subscriptions and registrations one receiver is pushed to per nudge: the newest ones. A
 // device has at most one registration per platform; a browser normally one subscription.
 export const TARGETS_PER_PROFILE = 10;
+// How many of each receiver's newest documents the search reads before the unusable ones are
+// dropped and the rest are cut to TARGETS_PER_PROFILE. A profile holds at most SUBS_PER_PROFILE
+// subscriptions and one registration per platform at a conference, 12 documents, so 20 leaves room
+// for rows stored before the cap that its next subscribe has not trimmed yet.
+export const TARGETS_READ_PER_PROFILE = 20;
+// How many distinct hosts the skip log line of one receiver names.
+const SKIP_HOSTS_LOGGED = 5;
 
-// Every live Web Push subscription and native registration of these people at one conference,
-// as [{ id, profile_id, subscription: { endpoint, keys: { p256dh, auth } } }] for a subscription
-// and [{ id, profile_id, native: { platform, token, environment }, guard: { seqNo, primaryTerm } }]
-// for a registration. Used by nudge.mjs. One search per nudge, as before native push: a terms
-// aggregation on profile_id gives one bucket per person (at most 21: the writer and the 20
-// candidates), and its top_hits the newest TARGETS_PER_PROFILE documents of each (created_at
-// descending). So one person's many subscriptions can never crowd another person's out, and the
-// pushes one nudge sends stay bounded. A person over the cap is one log line, without an id. A
-// registration's guard is the _seq_no and _primary_term it was read with, so that one APNs or FCM
-// reports gone is deleted only while it is still that document (deleteRegistrationIfUnchanged).
-export async function pushTargetsFor(eventId, profileIds) {
+// Every live Web Push subscription and native registration of these people at one conference
+// that the caller can use, as
+// [{ id, profile_id, subscription: { endpoint, keys: { p256dh, auth } } }] for a subscription and
+// [{ id, profile_id, native: { platform, token, environment }, guard: { seqNo, primaryTerm } }]
+// for a registration. Used by nudge.mjs, which passes usable (the
+// channels it sends on). One search per nudge: a terms aggregation on profile_id gives one bucket
+// per person (at most 21: the writer and the 20 candidates), and its top_hits the newest
+// TARGETS_READ_PER_PROFILE documents of each (created_at descending). Of those, a subscription
+// whose endpoint is not on a known push service host (one stored before that rule), a malformed
+// registration and a target on a channel usable refuses are dropped first, and the newest
+// TARGETS_PER_PROFILE of the rest are kept. So an unusable row takes none of the ten places, one
+// person's many subscriptions can never crowd another person's out, and the pushes one nudge sends
+// stay bounded. Off-list rows are never sent to and never deleted: one log line per receiver gives
+// their count and hosts (never an endpoint), with the Worker's "push skipped: endpoint host not
+// allowed:". A person over the cap is one log line, without an id. A registration's guard is the
+// _seq_no and _primary_term it was read with, so that one APNs or FCM reports gone is deleted only
+// while it is still that document (deleteRegistrationIfUnchanged).
+export async function pushTargetsFor(eventId, profileIds, { usable = () => true } = {}) {
   const ids = [...new Set(profileIds)].filter(Boolean);
   if (!ids.length) return [];
   const { json } = await people('POST', `${idx(PUSH_INDEX)}/_search?ignore_unavailable=true`, {
@@ -232,7 +301,7 @@ export async function pushTargetsFor(eventId, profileIds) {
         aggs: {
           newest: {
             top_hits: {
-              size: TARGETS_PER_PROFILE,
+              size: TARGETS_READ_PER_PROFILE,
               sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }],
               _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth', 'platform', 'token', 'environment'],
               seq_no_primary_term: true,
@@ -243,21 +312,55 @@ export async function pushTargetsFor(eventId, profileIds) {
     },
   });
   const buckets = json.aggregations?.receivers?.buckets ?? [];
+  const targets = [];
   for (const b of buckets) {
-    if (b.doc_count > TARGETS_PER_PROFILE) console.error(`Push targets capped: one receiver has ${b.doc_count}, the newest ${TARGETS_PER_PROFILE} are used`);
-  }
-  return buckets.flatMap((b) => b.newest?.hits?.hits ?? []).flatMap((h) => {
-    const source = h._source ?? {};
-    if (!source.profile_id) return [];
-    if (source.endpoint && source.keys_p256dh && source.keys_auth) {
-      return [{ id: h._id, profile_id: source.profile_id, subscription: { endpoint: source.endpoint, keys: { p256dh: source.keys_p256dh, auth: source.keys_auth } } }];
+    const offList = [];
+    const kept = (b.newest?.hits?.hits ?? []).flatMap((h) => targetOf(h, offList)).filter(usable);
+    if (offList.length) logSkipped(offList);
+    if (kept.length > TARGETS_PER_PROFILE) {
+      console.error(`Push targets capped: one receiver has ${b.doc_count}, the newest ${TARGETS_PER_PROFILE} are used`);
+    } else if (b.doc_count > TARGETS_READ_PER_PROFILE) {
+      console.error(`Push targets cut short: one receiver has ${b.doc_count}, the newest ${TARGETS_READ_PER_PROFILE} were read and ${kept.length} of them are used`);
     }
-    const token = nativeTokenOf(source.platform, source.token);
-    if (!token) return [];
-    const environment = source.platform === 'apns' && source.environment === 'sandbox' ? 'sandbox' : 'production';
-    const guard = Number.isInteger(h._seq_no) && Number.isInteger(h._primary_term) ? { seqNo: h._seq_no, primaryTerm: h._primary_term } : null;
-    return [{ id: h._id, profile_id: source.profile_id, native: { platform: source.platform, token, environment }, guard }];
-  });
+    targets.push(...kept.slice(0, TARGETS_PER_PROFILE));
+  }
+  return targets;
+}
+
+// The host of an endpoint for a log line, never its path or query, which are the secret part.
+function hostOf(endpoint) {
+  try {
+    return new URL(endpoint).hostname.toLowerCase().slice(0, 64);
+  } catch {
+    return 'unparseable';
+  }
+}
+
+// One line for one receiver's skipped subscriptions: their count and their distinct hosts, at most
+// SKIP_HOSTS_LOGGED of them.
+function logSkipped(endpoints) {
+  const hosts = [...new Set(endpoints.map(hostOf))];
+  const named = hosts.slice(0, SKIP_HOSTS_LOGGED).join(', ') + (hosts.length > SKIP_HOSTS_LOGGED ? `, and ${hosts.length - SKIP_HOSTS_LOGGED} more` : '');
+  console.warn(`push skipped: endpoint host not allowed: ${named} (${endpoints.length} subscription${endpoints.length === 1 ? '' : 's'} of one receiver)`);
+}
+
+// One search hit of pushTargetsFor as [target], or [] when it cannot be used. The endpoint of a
+// subscription off the push service list is added to offList.
+function targetOf(h, offList) {
+  const source = h._source ?? {};
+  if (!source.profile_id) return [];
+  if (source.endpoint && source.keys_p256dh && source.keys_auth) {
+    if (!isPushServiceEndpoint(source.endpoint)) {
+      offList.push(source.endpoint);
+      return [];
+    }
+    return [{ id: h._id, profile_id: source.profile_id, subscription: { endpoint: source.endpoint, keys: { p256dh: source.keys_p256dh, auth: source.keys_auth } } }];
+  }
+  const token = nativeTokenOf(source.platform, source.token);
+  if (!token) return [];
+  const environment = source.platform === 'apns' && source.environment === 'sandbox' ? 'sandbox' : 'production';
+  const guard = Number.isInteger(h._seq_no) && Number.isInteger(h._primary_term) ? { seqNo: h._seq_no, primaryTerm: h._primary_term } : null;
+  return [{ id: h._id, profile_id: source.profile_id, native: { platform: source.platform, token, environment }, guard }];
 }
 
 // Removes a subscription the push service said is gone (404 or 410). Its id is the hash of its

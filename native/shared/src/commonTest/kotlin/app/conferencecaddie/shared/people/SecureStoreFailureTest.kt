@@ -77,6 +77,25 @@ class SecureStoreFailureTest {
     }
 
     @Test
+    fun aDeleteWhileTheStoreFailsSaysTheStoreIsUnavailableNotOffline() = runTest {
+        val store = FlakySecureStore()
+        val h = PeopleHarness(this, secure = store)
+        h.start()
+        h.visible()
+        h.controller.close()
+
+        store.failing = true
+        val again = PeopleController(h.kv, h.http, PeopleServices(store), backgroundScope, allowLocalHttp = false, clock = h.clock, timeZone = TimeZone.UTC)
+        again.updateContext(h.context())
+        runCurrent()
+        val result = again.deleteMyProfile()
+        runCurrent()
+        assertFalse(result.done)
+        assertEquals(PeopleError.SECURE_STORE_MESSAGE, result.message)
+        assertEquals(PeopleError.SECURE_STORE_MESSAGE, again.state.value.deletes.detail)
+    }
+
+    @Test
     fun aSearchWhileTheStoreFailsLeavesVisibilityAlone() = runTest {
         val store = FlakySecureStore()
         val h = PeopleHarness(this, secure = store)

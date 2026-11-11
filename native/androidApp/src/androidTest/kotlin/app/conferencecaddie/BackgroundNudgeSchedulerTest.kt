@@ -31,8 +31,7 @@ import org.junit.runner.RunWith
 /**
  * The scheduler keeps the periodic nudge job scheduled exactly while a background check is wanted.
  * The tests schedule under [TEST_JOB_ID], not the app's job id: they run in the app's process, where
- * the activity of other tests has made the process's own controller and scheduler, and where the
- * system may run the job at once, whose service then cancels the app's job for the real state.
+ * the system may run the job at once, whose service then cancels the app's job for the real state.
  */
 @RunWith(AndroidJUnit4::class)
 class BackgroundNudgeSchedulerTest {
@@ -123,6 +122,32 @@ class BackgroundNudgeSchedulerTest {
         state.value = wanted().copy(saveCount = 1)
         runBlocking { delay(300) }
         assertEquals(first, jobs.getPendingJob(TEST_JOB_ID))
+    }
+
+    @Test
+    fun aJobThatCancelledItselfIsScheduledAgainByTheNextReadyState() {
+        scheduler().start()
+        awaitPending(true)
+        // The job found itself unwanted when it ran (say notifications were off) and cancelled
+        // itself; the scheduler did not see that. A later state that wants it schedules it again,
+        // although the decision did not change in between.
+        jobs.cancel(TEST_JOB_ID)
+        assertNull(awaitPending(false))
+        state.value = wanted().copy(saveCount = 3)
+        assertNotNull(awaitPending(true))
+    }
+
+    @Test
+    fun aRecheckSchedulesTheJobAgainWithoutAStateChange() {
+        notifications = false
+        val s = scheduler().also { it.start() }
+        runBlocking { delay(300) }
+        assertNull(jobs.getPendingJob(TEST_JOB_ID))
+        // Notifications switched on in the system settings: no people state changes, the app's
+        // return to the foreground rechecks.
+        notifications = true
+        s.recheck()
+        assertNotNull(awaitPending(true))
     }
 
     private companion object {

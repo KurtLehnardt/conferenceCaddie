@@ -56,8 +56,12 @@ import kotlinx.serialization.json.putJsonArray
  * conference's bundle, a real [app.conferencecaddie.shared.people.PeopleController] that follows
  * that core and talks to [server], the in-memory People API, and the toasts a [host] showed.
  */
-internal class U1Fixture {
-    val backend = TestBackend(people = true)
+internal class U1Fixture(
+    /** Replaces the Alpha conference of the backend before the app first asks for it, as the one the fake People server knows too ([fakeConference]). */
+    testConference: TestBackend.TestConference? = null,
+    fakeConference: FakeConference = FakeConference.alpha(),
+) {
+    val backend = TestBackend(people = true).also { b -> testConference?.let { b.publish(listOf(it, b.beta)) } }
     private val root = Path(SystemTemporaryDirectory, "caddie-u1-${Random.nextLong().toULong()}")
     private val database = CaddieDatabase.open(":memory:")
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -66,7 +70,7 @@ internal class U1Fixture {
         it.setBackend(BackendUrl.normalise(backend.base) as BackendUrl.Valid)
     }
     val clock = TestClock()
-    val server = FakePeopleServer({ clock.ms }, FakeConference.alpha())
+    val server = FakePeopleServer({ clock.ms }, fakeConference)
     val controller = testPeopleController(server, scope, clock).also { it.bind(core.state) }
     val toasts = ArrayList<String>()
     val openedTalks = ArrayList<String>()

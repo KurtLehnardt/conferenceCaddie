@@ -60,6 +60,7 @@ import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, 
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 import { reportCountsFor, HIDE_AT } from './report.mjs';
 import { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds } from './people-shared.mjs';
+import { createProfileDelete, ownBlocksQuery } from './people-delete.mjs';
 
 // Re-exported, so the other server modules and the scripts that import them from here keep working.
 export { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds };
@@ -844,110 +845,26 @@ export async function blockedBetween(eventId, a, b) {
 // The filter clause that hides blocked pairs from a people query.
 const notBlocked = (eventId, ids) => (ids.size ? [{ ids: { values: [...ids].map((id) => docId(eventId, id)) } }] : []);
 
-const DELETE_BATCH = 1000;
-const DELETE_ROUNDS = 20;
-
-// Deletes every document of one event's index that matches the query, so the next request already
-// sees them gone. The people key holds read and write but not the refresh privilege that
-// _delete_by_query?refresh=true needs (it answers 403 after deleting), so the ids are searched for
-// and removed with a Bulk delete and refresh=wait_for, which write covers.
-export async function deleteWhere(index, eventId, query) {
-  for (let round = 0; round < DELETE_ROUNDS; round++) {
-    const { json } = await people('POST', withPreference(`${idx(index)}/_search?ignore_unavailable=true`, peoplePreference(eventId)), {
-      size: DELETE_BATCH,
-      _source: false,
-      query,
-    });
-    const ids = (json.hits?.hits ?? []).map((h) => h._id);
-    if (!ids.length) return;
-    const body = ids.map((id) => `${JSON.stringify({ delete: { _id: id } })}\n`).join('');
-    const { json: result } = await people('POST', `${idx(index)}/_bulk?refresh=wait_for`, body, { ndjson: true });
-    for (const item of result.items ?? []) {
-      const status = item.delete?.status ?? 500;
-      if (status !== 404 && (status < 200 || status > 299)) throw new UpstreamError(`bulk item status ${status}`);
-    }
-    if (ids.length < DELETE_BATCH) return;
-  }
-  throw new UpstreamError('too many documents to delete');
-}
-
+// The profile delete lives in server/people-delete.mjs, a module with no side effect at import
+// that the caddie-admin CLI (scripts/caddie-admin.mjs) runs too with the operator's admin key,
+// so one implementation serves DELETE /api/people/profile, the profile write with both choices
+// off, and the operator's delete, and test/delete-profile.test.mjs is the one oracle for the
+// order and the retry safety. It is built here with this module's transport.
 const errorText = (err) => (err instanceof UpstreamError ? err.message : (err?.name ?? 'error'));
-
-// Every meet a person takes part in, their push subscriptions and the nudge records they were
-// part of, at one conference. The three indices are cleared concurrently; a failure is thrown only
-// once all three have finished, so nothing is still deleting when the caller answers or retries.
-async function deleteMeetsPushAndNudges(eventId, profileId) {
-  const results = await Promise.allSettled([
-    deleteWhere(MEETS_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { participants: profileId } }] } }),
-    deleteWhere(PUSH_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }] } }),
-    deleteWhere(NUDGES_INDEX, eventId, { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_ids: profileId } }] } }),
-  ]);
-  const failed = results.find((r) => r.status === 'rejected');
-  if (failed) throw failed.reason;
-}
-
-// The blocks a person made at one conference. Blocks other people made of them are not touched.
-export const ownBlocksQuery = (eventId, profileId) => ({ bool: { filter: [{ term: { event_id: eventId } }, { term: { blocker_id: profileId } }] } });
-const deleteOwnBlocks = (eventId, profileId) => deleteWhere(BLOCKS_INDEX, eventId, ownBlocksQuery(eventId, profileId));
-
-// Everything that connects a person to others at one conference and goes with their profile:
-// meets, push subscriptions and nudge records, then the blocks they made
-// (deleteProfileAndConnections says why those go last). Blocks others made of this person stay
-// until the conference ends, so deleting and re-creating the profile from the same device never
-// lifts them. Runs when the profile is deleted, and the next request already sees them gone.
-export async function deleteConnections(eventId, profileId) {
-  await deleteMeetsPushAndNudges(eventId, profileId);
-  await deleteOwnBlocks(eventId, profileId);
-}
-
-// The partial update that hides a profile while it is being deleted. Matches, the Around view,
-// nudges and Bluetooth sightings require open_to_meet; circle members, circle counts and For
-// you's circle counts require a shared talk; asks (personByRef) require either. Presence and the
-// Bluetooth token are cleared as a presence delete clears them. The result is the state
-// isPendingDelete recognises. visible_until is left alone, so the hourly purge does not take the
-// document for an expired one; it finishes the delete instead (finishPendingDeletes).
-const HIDE_FOR_DELETE = { open_to_meet: false, shared_talk_ids: [], ...PRESENCE_OFF };
-// A presence write or a report landing on the document at the same moment is a version conflict
-// that Elasticsearch retries itself, instead of failing the delete with a 502.
-const HIDE_RETRIES = 3;
-
-// Deletes a profile and everything that connects it to others, in an order that keeps every
-// failure safe to retry:
-// 1. One partial update hides the profile and waits for the refresh, so from then on no match,
-//    circle, ask, nudge or Bluetooth sighting finds the person, whatever happens next. A 404 means
-//    the document went between the caller's read and this write, and the delete answers 200 as
-//    it does when the read finds no document. It is a plain update (no upsert), so it never
-//    creates a document.
-// 2. Meets, push subscriptions and nudge records are deleted concurrently, and then the blocks
-//    this person made. Blocks go last because a delete that fails part-way leaves a hidden
-//    profile that its owner can make visible again with a profile write, and it must still carry
-//    every block when that happens.
-// 3. The document is deleted last. Until then, any failed step answers 502, and trying again
-//    authenticates against the document and runs the whole delete again. A delete that is never
-//    tried again is finished by the hourly purge (finishPendingDeletes); until then the hidden
-//    document is found by nothing, every route but this one and the profile write treat it as no
-//    profile (authenticated), and the export leaves it out.
-// The hide stops new lookups, not requests already under way: an ask that passed personByRef just
-// before the hide, a nudge that was already ranking, or the owner's own device blocking someone
-// or subscribing to push, can still write a meet, a nudge record, a block or a push subscription
-// after step 2 has finished with that index. The second pass, after the document is gone, removes
-// what has landed by then. It is best effort: a failure there is logged and the delete still
-// answers 200, because trying again would find no profile and change nothing. A write that lands
-// even later stays: the purge removes such a meet once it runs out, and a push subscription, a
-// nudge record or a block once the conference ends.
-async function deleteProfileAndConnections(eventId, profileId) {
-  const id = docId(eventId, profileId);
-  const status = await bulkOne({ update: { _id: id, retry_on_conflict: HIDE_RETRIES } }, { doc: HIDE_FOR_DELETE });
-  if (status === 404) return;
-  if (status < 200 || status > 299) throw new UpstreamError(`bulk item status ${status}`);
-  await deleteConnections(eventId, profileId);
-  await deleteDoc(id);
-  try {
-    await deleteConnections(eventId, profileId);
-  } catch (err) {
-    console.error(`Deleting a deleted profile's connections again failed: ${errorText(err)}`);
-  }
-}
+const profileDelete = createProfileDelete({
+  people,
+  bulkOne,
+  deleteDoc,
+  withPreference,
+  peoplePreference,
+  indices: { people: PEOPLE_INDEX, meets: MEETS_INDEX, push: PUSH_INDEX, nudges: NUDGES_INDEX, blocks: BLOCKS_INDEX },
+  UpstreamError,
+  log: (message) => console.error(message),
+});
+const { deleteMeetsPushAndNudges, deleteOwnBlocks, deleteProfileAndConnections } = profileDelete;
+// Exported as before, for connect.mjs (a block delete) and push.mjs (a subscription delete).
+export const { deleteWhere, deleteConnections } = profileDelete;
+export { ownBlocksQuery };
 
 // Finishes one pending delete the purge found (finishPendingDeletes). Returns 'finished', 'kept'
 // when the profile changed since the search, or 'skipped' for a hit that is not a profile.
@@ -1215,8 +1132,15 @@ export function evidenceFor(hit) {
   return plain ? escapeHtml(plain) : null;
 }
 
+// Closes a reason with a period, unless its inserted text already ends a sentence (a talk title
+// such as "... Here's What the Data Says." or "Why Not?", or a cut passage ending in an ellipsis),
+// so no reason ends in "..", "?." or "!.". Closing quotes, brackets and highlight tags after the
+// punctuation are allowed. The same rule as sentence() in worker/src/people/view.js.
+const ENDS_SENTENCE = /[.!?\u2026]["'\u2019\u201d)\]]*(?:<\/?[a-z]+>)*\s*$/i;
+const sentence = (text) => (ENDS_SENTENCE.test(text) ? text.trimEnd() : `${text}.`);
+
 // The reason templates of the product brief, filled from this result's own fields.
-function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evidence = null, zone = null } = {}) {
+export function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evidence = null, zone = null } = {}) {
   const reasons = [];
   const named = (ids) => ids.filter((id) => labels.has(id)).map((id) => labels.get(id));
   const theirSpeak = new Set(them.speak_topics ?? []);
@@ -1224,13 +1148,13 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
   const theirShared = new Set(them.shared_talk_ids ?? []);
   const canSpeak = named((me.learn_topics ?? []).filter((t) => theirSpeak.has(t)));
   const wantLearn = named((me.speak_topics ?? []).filter((t) => theirLearn.has(t)));
-  if (evidence) reasons.push(`They've worked on ${cutText(unescapeHtml(evidence), PASSAGE_MAX)}.`);
+  if (evidence) reasons.push(sentence(`They've worked on ${cutText(unescapeHtml(evidence), PASSAGE_MAX)}`));
   if (canSpeak.length) reasons.push(`They can speak to ${listFormat.format(canSpeak.slice(0, 4))}, which you want to learn about.`);
   if (wantLearn.length) reasons.push(`They want to learn about ${listFormat.format(wantLearn.slice(0, 4))}, which you can speak to.`);
   const both = [...talkTitles.keys()].filter((id) => id !== circleTalkId && theirShared.has(id));
-  if (both.length) reasons.push(`You are both interested in ${listFormat.format(both.slice(0, 2).map((id) => talkTitles.get(id)))}.`);
-  if (passage && !evidence) reasons.push(`Ask them about ${passage}.`);
-  if (circleTalkId && talkTitles.has(circleTalkId)) reasons.push(`You are both interested in ${talkTitles.get(circleTalkId)}.`);
+  if (both.length) reasons.push(sentence(`You are both interested in ${listFormat.format(both.slice(0, 2).map((id) => talkTitles.get(id)))}`));
+  if (passage && !evidence) reasons.push(sentence(`Ask them about ${passage}`));
+  if (circleTalkId && talkTitles.has(circleTalkId)) reasons.push(sentence(`You are both interested in ${talkTitles.get(circleTalkId)}`));
   if (zone) reasons.push(`They're in ${zone} right now.`);
   return reasons;
 }

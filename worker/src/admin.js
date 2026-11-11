@@ -134,23 +134,57 @@ async function postTalks(ctx, req) {
   return json(200, { upserted, unchanged, skipped, embedded, pending });
 }
 
-// POST /admin/talks/finalize?event= {generation}: deletes talks of other generations with their
+const FINALIZE_MAX_DELETE = 10;
+const FINALIZE_MAX_DELETE_SHARE = 0.1;
+
+// POST /admin/talks/finalize?event= {generation, allow_shrink?}: deletes talks of other generations with their
 // FTS rows and vectors, and bumps talks_version.
+//
+// People who shared for a deleted talk (a cancelled session, a takedown) stop sharing for it, so no
+// circle is left for a talk that no longer exists: its shared_talks rows go. A profile that is then
+// neither open to meet nor sharing for any talk is deleted, as a profile write with both choices off
+// would delete it (docs/CONTRACT.md: a profile exists only while one of them holds). The app then
+// learns it on its next write, which drops the unknown talk (people/routes.js checkSharedTalks).
+//
+// Because people's sharing is not restored when a talk comes back, a finalize that would delete
+// more than FINALIZE_MAX_DELETE talks and more than FINALIZE_MAX_DELETE_SHARE of the conference's
+// talks is refused with 409, and nothing is deleted. A feed that came back short for a moment
+// (a Sessionize outage, a wrong group filter) therefore leaves both the talks and the people as
+// they were. An operator who means it passes allow_shrink: true (push-ingest.mjs --allow-shrink).
+// Returns { talks, deleted, unshared, profiles_deleted }.
 async function finalizeTalks(ctx, req) {
-  const body = await readJson(req, new Set(['generation']));
+  const body = await readJson(req, new Set(['generation', 'allow_shrink']));
   const generation = Number(body.generation);
   if (!Number.isSafeInteger(generation)) throw bad('generation must be an integer');
+  if (body.allow_shrink !== undefined && typeof body.allow_shrink !== 'boolean') throw bad('allow_shrink must be a boolean');
+  if (!body.allow_shrink) {
+    const stale = Number(ctx.sql.exec('SELECT COUNT(*) AS n FROM talks WHERE generation != ?', generation).one().n);
+    const all = Number(ctx.sql.exec('SELECT COUNT(*) AS n FROM talks').one().n);
+    if (stale > FINALIZE_MAX_DELETE && stale > all * FINALIZE_MAX_DELETE_SHARE) {
+      throw new HttpError(409, { error: `finalize would delete ${stale} of ${all} talks; nothing was deleted. Re-run with allow_shrink if the schedule really shrank.` });
+    }
+  }
   let deleted = 0;
+  let unshared = 0;
+  let orphans = [];
   ctx.store.tx(() => {
     ctx.sql.exec('DELETE FROM talks_fts WHERE rowid IN (SELECT rowid FROM talks WHERE generation != ?)', generation);
     ctx.sql.exec('DELETE FROM talk_vectors WHERE talk_id IN (SELECT talk_id FROM talks WHERE generation != ?)', generation);
     deleted = ctx.sql.exec('DELETE FROM talks WHERE generation != ? RETURNING 1', generation).toArray().length;
+    if (deleted) {
+      orphans = ctx.sql.exec(
+        'SELECT DISTINCT s.profile_id AS id FROM shared_talks s JOIN people p ON p.profile_id = s.profile_id WHERE p.open_to_meet = 0 AND s.talk_id NOT IN (SELECT talk_id FROM talks) AND NOT EXISTS (SELECT 1 FROM shared_talks k WHERE k.profile_id = s.profile_id AND k.talk_id IN (SELECT talk_id FROM talks))',
+      ).toArray().map((r) => r.id);
+      unshared = ctx.sql.exec('DELETE FROM shared_talks WHERE talk_id NOT IN (SELECT talk_id FROM talks) RETURNING 1').toArray().length;
+    }
     const v = Number(ctx.sql.exec("SELECT v FROM meta WHERE k = 'talks_version'").toArray()[0]?.v ?? 0);
     setMeta(ctx, 'talks_version', v + 1);
   });
   ctx.store.invalidateTalks();
+  if (unshared) ctx.store.invalidatePeople();
+  for (const id of orphans) ctx.store.deletePersonEverywhere(id);
   const talks = ctx.sql.exec('SELECT COUNT(*) AS n FROM talks').one().n;
-  return json(200, { talks, deleted });
+  return json(200, { talks, deleted, unshared, profiles_deleted: orphans.length });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -162,9 +196,16 @@ function getTopics(ctx) {
 }
 
 async function putTopics(ctx, req) {
-  const body = await readJson(req, new Set(['topics']));
+  const body = await readJson(req, new Set(['topics', 'allow_empty']));
   if (!Array.isArray(body.topics) || body.topics.length > 5000) throw bad('topics must be an array');
+  if (body.allow_empty !== undefined && typeof body.allow_empty !== 'boolean') throw bad('allow_empty must be a boolean');
   const rows = body.topics.filter((t) => isPlainObject(t) && typeof t.topic_id === 'string' && t.topic_id && (t.conference === undefined || t.conference === ctx.slug));
+  // Topic ids live in people's profiles and every talk is tagged with them, so an empty list never
+  // replaces a stored one by accident (a rebuild from a broken feed); allow_empty says it is meant.
+  if (rows.length === 0 && !body.allow_empty) {
+    const stored = Number(ctx.sql.exec('SELECT COUNT(*) AS n FROM topics').one().n);
+    if (stored > 0) throw new HttpError(409, { error: `this would replace the ${stored} stored topics with none; nothing was changed. Re-send with allow_empty if the conference really has no topics.` });
+  }
   ctx.store.tx(() => {
     ctx.sql.exec('DELETE FROM topics');
     for (const t of rows) {
@@ -407,6 +448,15 @@ function deleteTestProfile(ctx, req) {
   return json(200, { ok: true });
 }
 
+// The smoke's meter check (meter1): starts a new usage meter from the stored totals, as a new
+// instance of the object would after an eviction, and drops the old meter's unwritten counts
+// (at most 100 requests or 15 seconds of them). Nothing else in the object is touched.
+async function restartMeter(ctx, req) {
+  await readJson(req, new Set());
+  ctx.restartMeter();
+  return json(200, { ok: true });
+}
+
 const FAIL = 'Admin request failed';
 export default [
   { method: 'POST', path: '/admin/talks', fail: FAIL, handler: postTalks },
@@ -423,6 +473,7 @@ export default [
   { method: 'POST', path: '/admin/test/profile', fail: FAIL, handler: testProfile },
   { method: 'DELETE', path: '/admin/test/profile', fail: FAIL, handler: deleteTestProfile },
   { method: 'POST', path: '/admin/test/age-presence', fail: FAIL, handler: agePresence },
+  { method: 'POST', path: '/admin/test/meter-restart', fail: FAIL, handler: restartMeter },
 ];
 
 // The admin paths the Worker may forward to a ConferenceDO (PUT /admin/conferences goes to the
@@ -430,4 +481,5 @@ export default [
 export const CONFERENCE_ADMIN_PATHS = new Set([
   '/admin/talks', '/admin/talks/finalize', '/admin/topics', '/admin/facets', '/admin/people', '/admin/reports',
   '/admin/moderation', '/admin/embed-pending', '/admin/stats', '/admin/test/profile', '/admin/test/age-presence',
+  '/admin/test/meter-restart',
 ]);

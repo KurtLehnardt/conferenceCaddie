@@ -62,6 +62,7 @@ fun SearchScreen(
     onOpenUrl: (String) -> Unit,
     openRank: String? = null,
     peopleControls: (@Composable (Talk) -> Unit)? = null,
+    prefetchCounts: ((List<String>) -> Unit)? = null,
 ) {
     val result = model.result
     val conference = bundle.conference
@@ -82,6 +83,9 @@ fun SearchScreen(
             listState.scrollToItem(headers + at, scrollOffset = RANK_SCROLL_PX)
         }
     }
+    // One counts request for the result set, so the cards below read the controller's cache.
+    val resultIds = remember(result?.talks) { result?.talks?.map { it.talkId }.orEmpty() }
+    LaunchedEffect(prefetchCounts, resultIds) { if (resultIds.isNotEmpty()) prefetchCounts?.invoke(resultIds) }
     Column(Modifier.fillMaxSize().testTag("search-screen")) {
         SearchField(
             value = model.input,
@@ -241,6 +245,8 @@ internal fun TalkResult(
         onClick = { onOpenTalk(talk) },
         // Under the actions, as on the web: the ranking drawer of a text search, the web's
         // TalkPeopleControls, then related talks.
+        // The web (talk.tsx) and TalkSheet show the people controls for every kind; the ranking
+        // drawer and related talks stay with kind "talk" and the ranked results.
         extra = when {
             talk.kind == "talk" -> {
                 {
@@ -249,8 +255,11 @@ internal fun TalkResult(
                     RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, onOpenUrl = onOpenUrl)
                 }
             }
-            rank != null -> {
-                { rank() }
+            rank != null || peopleControls != null -> {
+                {
+                    rank?.invoke()
+                    peopleControls?.invoke(talk)
+                }
             }
             else -> null
         },

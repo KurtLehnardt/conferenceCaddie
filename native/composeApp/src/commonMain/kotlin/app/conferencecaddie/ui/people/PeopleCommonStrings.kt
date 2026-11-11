@@ -10,6 +10,12 @@ package app.conferencecaddie.ui.people
 object PeopleCommonStrings {
     // NeedsConnection (app.tsx) uses Strings.Offline.PEOPLE_TITLE and NEEDS_CONNECTION_BODY.
 
+    /** The People tab while the people records could not be opened. */
+    const val SESSION_FAILED = "The people features could not be opened on this phone."
+
+    /** The button under [SESSION_FAILED]. */
+    const val TRY_AGAIN = "Try again"
+
     /** The link after a message that names the profile (PeopleScreen, PresenceControls, PushControls, ShareAll, TalkPeopleControls). */
     const val OPEN_MY_PROFILE = "Open my profile"
 

@@ -38,6 +38,9 @@ class DeviceCredential internal constructor(
         private val PROFILE_ID = Regex("^[A-Za-z0-9_-]{22}$")
         private val SECRET = Regex("^[A-Za-z0-9_-]{43}$")
 
+        /** True when [profileId] and [secret] have exactly the shapes the contract gives them (22 and 43 base64url characters). */
+        fun wellFormed(profileId: String, secret: String): Boolean = PROFILE_ID.matches(profileId) && SECRET.matches(secret)
+
         /** The secure store name of the credential, under [SecureStore.scopedKey] of its backend. */
         const val STORE_NAME = "people.device.v1"
 
@@ -68,7 +71,12 @@ class DeviceCredentials(private val store: SecureStore, private val backend: Bac
     private var cached: DeviceCredential? = null
     private var loaded = false
 
-    private val key: String get() = SecureStore.scopedKey(backend, DeviceCredential.STORE_NAME)
+    private val key: String get() = storeKey(backend)
+
+    companion object {
+        /** The secure store key of [backend]'s credential. */
+        fun storeKey(backend: BackendUrl.Valid): String = SecureStore.scopedKey(backend, DeviceCredential.STORE_NAME)
+    }
 
     /**
      * The stored credential, or null when this device has none for the backend yet, or when the
@@ -123,6 +131,42 @@ class DeviceCredentials(private val store: SecureStore, private val backend: Bac
         } catch (e: Exception) {
             throw SecureStoreUnavailable(e)
         }
+    }
+
+    /**
+     * Takes over a `{profile_id}.{secret}` that an earlier app on this phone held for the backend
+     * (the Capacitor app's WebView storage, read once by the Android migration). The credential
+     * this app already holds wins: when there is one, nothing is written and [Adopted.Kept] comes
+     * back, so a profile made in this app is never cut off from its key. A value without exactly
+     * the contract's shape is refused before the store is touched ([Adopted.Malformed]). Throws
+     * [SecureStoreUnavailable] when the store cannot be read or written now, so the caller tries
+     * again later instead of counting the hand-over done. Nothing here logs any part of the value.
+     */
+    suspend fun adopt(header: String): Adopted = mutex.withLock {
+        val parsed = DeviceCredential.parse(backend, header) ?: return@withLock Adopted.Malformed
+        try {
+            if (load() != null) return@withLock Adopted.Kept
+            store.put(key, parsed.header())
+            cached = parsed
+            loaded = true
+            Adopted.Stored
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw SecureStoreUnavailable(e)
+        }
+    }
+
+    /** What [adopt] did with a credential handed over from an earlier app. */
+    enum class Adopted {
+        /** The credential is now this device's credential for the backend. */
+        Stored,
+
+        /** This device already had a credential for the backend, which stays. */
+        Kept,
+
+        /** The value did not have the contract's shape; nothing was stored. */
+        Malformed,
     }
 
     /**

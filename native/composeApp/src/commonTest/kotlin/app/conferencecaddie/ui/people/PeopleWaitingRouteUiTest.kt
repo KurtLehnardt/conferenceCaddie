@@ -156,4 +156,43 @@ class PeopleWaitingRouteUiTest {
         waitForIdle()
         onNodeWithTag("page-inbox").assertDoesNotExist()
     }
+
+    @Test
+    fun aWaitingRouteIsGivenUpWithAToastWhenPeopleFeaturesAreOff() = runComposeUiTest {
+        val controller = testController(scope)
+        lateinit var nav: ShellNavigation
+        val toasts = mutableListOf<String>()
+        var request by mutableStateOf<ShellRequest?>(ShellRequest(1, Tab.People, people = AppLink.PeopleRoute.Meet("m-42")))
+        val restoration = Restoration(this)
+        restoration.setContent {
+            nav = rememberShellNavigation()
+            val ui = rememberPeopleUi(controller, nav, talks, true, true, null, { message, _, _ -> toasts += message }, {}, {}, request)!!
+            TestPhone { App(ui.shellState(shellState()), content = content(ui), navigation = nav, request = request) }
+        }
+        waitForIdle()
+        runOnIdle { assertTrue(toasts.isEmpty(), "the route waits while the answer is coming") }
+
+        // The backend answers with people features off: the route is given up with the toast.
+        val off = peopleContext().copy(capabilities = Capabilities(people = Capabilities.People(enabled = false)))
+        scope.launch { controller.updateContext(off) }
+        waitUntil(timeoutMillis = 20_000) { toasts.isNotEmpty() }
+        runOnIdle {
+            assertEquals(listOf(Strings.Blockers.NOT_AVAILABLE_HERE), toasts)
+            assertTrue(nav.pages.isEmpty())
+        }
+        onNodeWithTag("page-meet").assertDoesNotExist()
+
+        // It does not come back after a re-creation, nor when people features turn on later.
+        runOnIdle { request = null }
+        restoration.emulateSaveAndRestore()
+        waitForIdle()
+        scope.launch { controller.updateContext(peopleContext()) }
+        waitForTag("tab-People")
+        waitForIdle()
+        onNodeWithTag("page-meet").assertDoesNotExist()
+        runOnIdle {
+            assertTrue(nav.pages.isEmpty())
+            assertEquals(1, toasts.size)
+        }
+    }
 }

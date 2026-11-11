@@ -2,7 +2,7 @@
 
 Talk data now comes from any Linux Foundation event whose schedule page embeds Sessionize. `scripts/ingest.mjs` discovers events, fetches each source once per run, writes the raw responses under `data/raw/{slug}/`, and builds `data/{slug}/talks.ndjson` and `data/{slug}/conference.json`. `node scripts/ingest.mjs --no-fetch --event <slug> --dry-run` rebuilds both files from the committed raw files with no network call; the output is byte-identical to the fetching run. The MVP's `scripts/build-data.mjs`, `data/raw/schedule.json` and `data/talks.ndjson` are gone.
 
-Raw data was fetched on 2026-11-09 with the User-Agent `ConferenceCaddie-ingest/0.2 (+https://github.com/KurtLehnardt/conferenceCaddie)`, one request per URL and a one-second pause between requests.
+Raw data was fetched on 2026-11-09, and KubeCon's again on 2026-11-11 (`raw_fetched_at` 2026-11-11T07:04:14.947Z, PR #50), with the User-Agent `ConferenceCaddie-ingest/0.2 (+https://github.com/KurtLehnardt/conferenceCaddie)`, one request per URL and a one-second pause between requests.
 
 ## Sources and how they chain
 
@@ -46,13 +46,15 @@ An organiser renaming a group between runs changes that conference's chips on th
 
 ## Counts per conference
 
+The table counts the talk files committed in `data/` at the time of the last refresh, not the live schedule. A schedule moves during an event, so a fresh ingest or the Worker can differ by a few talks, and the table can lag the live schedule until the next data refresh. Recount from `data/<slug>/talks.ndjson` after a refresh rather than trusting these numbers.
+
 | Conference | Sessions | talk | ambient | break | housekeeping | With slides | Sponsor |
 |---|---|---|---|---|---|---|---|
-| kubecon-cloudnativecon-north-america-2026 | 600 | 484 | 76 | 21 | 19 | 114 | 72 |
+| kubecon-cloudnativecon-north-america-2026 | 600 | 484 | 76 | 21 | 19 | 130 | 72 |
 | mcp-dev-summit-nairobi-2026 | 60 | 46 | 2 | 10 | 2 | 1 | 0 |
 | pytorch-day-japan-2026 | 19 | 13 | 1 | 5 | 0 | 0 | 0 |
 
-KubeCon: `track` is never "Not specified". Levels over all 600: Not specified 381, Any Level 131, Advanced 61, Beginner 27. Tags: End User Talk 81, Learning Lounge 12. Days: 2026-11-08 (4), 11-09 (78), 11-10 (194), 11-11 (203), 11-12 (121). All five smoke-test titles are present as talks.
+KubeCon: `track` is never "Not specified". Levels over all 600: Not specified 382, Any Level 130, Advanced 61, Beginner 27. Tags: End User Talk 81, Learning Lounge 12. Days: 2026-11-08 (4), 11-09 (78), 11-10 (192), 11-11 (205), 11-12 (121). All five smoke-test titles are present as talks.
 
 MCP Dev Summit Nairobi: tracks over all 60 are Building with MCP 11, Agent Architecture + Orchestration 10, Keynote Sessions 8, Breaks + Meals + Special Events 8, Enterprise Adoption + Integration 7, Security, Identity + Trust 7, Workshops 6, Registration 2, MCP Protocol in Depth 1. Levels: Intermediate 29, Not specified 16, Any 7, Advanced 5, Beginner 3. Days 2026-11-19 (31) and 11-20 (29).
 

@@ -109,10 +109,16 @@ class PeopleScreenUiTest {
         u2WaitForText(PeopleStrings.PEOPLE_WHO_MATCH)
         u2WaitForTag("person-${people.first().ref}")
 
-        // The evidence, with "Kubernetes" marked, shown once (the opener and reason repeat it).
-        val evidence = onNode(u2InCard(people.first().ref, "Ran Kubernetes upgrades for 1 clusters.")).assertIsDisplayed()
-        val shown = evidence.fetchSemanticsNode().config[SemanticsProperties.Text].single()
-        assertTrue(shown.spanStyles.any { shown.text.substring(it.start, it.end) == "Kubernetes" }, "Kubernetes is highlighted")
+        // The evidence, with "Kubernetes" marked, shown once (the opener and reason repeat it). The
+        // heading changes as the text is typed, and the cards of the list before the search can
+        // still show until the search answers, so this waits for the search's own card.
+        fun highlighted(): Boolean = runCatching {
+            val shown = onNode(u2InCard(people.first().ref, "Ran Kubernetes upgrades for 1 clusters.")).fetchSemanticsNode().config[SemanticsProperties.Text].single()
+            shown.spanStyles.any { shown.text.substring(it.start, it.end) == "Kubernetes" }
+        }.getOrDefault(false)
+        waitUntil(timeoutMillis = 20_000) { highlighted() }
+        onNode(u2InCard(people.first().ref, "Ran Kubernetes upgrades for 1 clusters.")).assertIsDisplayed()
+        assertTrue(highlighted(), "Kubernetes is highlighted")
         val first = matchesBodies().last()
         assertEquals("kubernetes", first["query"]?.jsonPrimitive?.content)
         assertEquals("anyone", first["when"]?.jsonPrimitive?.content)

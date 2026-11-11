@@ -67,6 +67,14 @@ class PeopleHost(
     /** Profile (#/profile), from "Create my profile" or "Open my profile". */
     fun openProfile() = navigator.openPage(PeoplePage.Profile)
 
+    /** True when the controller says the fix for an action's [message] is on the profile screen, so the screen offers "Open my profile" with it. */
+    fun opensProfile(message: String): Boolean = controller.opensProfile(message)
+
+    /** "Try again" on the People tab when the records could not be opened: asks the controller to open them now. */
+    fun retrySession() {
+        scope.launch { controller.retrySession() }
+    }
+
     /** Requests (#/inbox). */
     fun openInbox() = navigator.openPage(PeoplePage.Inbox)
 
@@ -106,21 +114,23 @@ class PeopleHost(
     // Sheets and dialogs that more than one screen opens
 
     // The person asked of is kept by ref only; the object is the one given to ask(), or, after the
-    // activity was re-created, the person found again among the people the controller holds.
+    // activity was re-created, the person found again among the people the controller has seen.
     private var askedPerson: Person? = null
 
     /** The ref "Ask to talk shop" is open for, or null. */
     val askingRef: String? get() = memory.askingRef
 
     /**
-     * The person "Ask to talk shop" is open for, or null. After a re-creation it is looked up in the
-     * controller's state (the people around); null while the ref is open but the person is not known.
+     * The person "Ask to talk shop" is open for, or null. After a re-creation it is looked up among
+     * the people around and then among everyone the controller has seen while the app ran (a search,
+     * a talk circle: [PeopleController.knownPerson]); null while the ref is open but the person is not
+     * known, as after the process was ended.
      */
     val asking: Person?
         get() {
             val ref = memory.askingRef ?: return null
             askedPerson?.takeIf { it.ref == ref }?.let { return it }
-            return controller.state.value.around.people.firstOrNull { it.ref == ref }
+            return controller.state.value.around.people.firstOrNull { it.ref == ref } ?: controller.knownPerson(ref)
         }
 
     /** Opens AskSheet for [person]. */

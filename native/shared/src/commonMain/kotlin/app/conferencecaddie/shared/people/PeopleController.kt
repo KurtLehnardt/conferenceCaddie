@@ -119,6 +119,7 @@ class PeopleController(
     val systemSettings: SystemSettings? get() = services.systemSettings
 
     private var context: PeopleContext? = null
+    @kotlin.concurrent.Volatile
     private var session: Session? = null
 
     // One session per backend base for the life of the controller. Coming back to a backend takes
@@ -303,6 +304,33 @@ class PeopleController(
         }
     }
 
+    /**
+     * Takes over, once, what an earlier app on this phone kept for [backend] ([LegacyPeople]): its
+     * device [credential] (`{profile_id}.{secret}`), so the profile it made on the server stays this
+     * phone's to change and delete, and its [profile], so nothing is typed again. A credential this
+     * app already holds is kept ([DeviceCredentials.adopt]), and so is a profile it already holds or
+     * an unfinished "Delete my profile". Returns true when the hand-over is settled (stored, kept, or
+     * refused as malformed) and false when the secure store or the records could not be used now, so
+     * the caller tries again at a later start. The backend's session, when it is open, sees the
+     * credential at once, so a visible write made after this never generates a second one.
+     */
+    suspend fun adoptLegacy(backend: BackendUrl.Valid, credential: String?, profile: Profile?): Boolean = write(false) {
+        contextLock.withLock {
+            val s = sessions[backend.base]
+            if (credential != null) (s?.credentials ?: DeviceCredentials(services.secureStore, backend)).adopt(credential)
+            if (profile != null) {
+                val store = s?.store ?: PeopleStore(keyValue, backend.base)
+                store.load()
+                if (store.profile == null && store.deleteAll == null) store.setProfile(profile.sanitized())
+            }
+            if (s != null && session === s) {
+                refreshDevice(s)
+                publish()
+            }
+            true
+        }
+    }
+
     /** "Try again" on an unfinished delete. True when nothing is left unfinished. */
     suspend fun finishPendingDeletes(): Boolean = write(false) {
         val s = session ?: return@write false
@@ -471,7 +499,9 @@ class PeopleController(
      * talks. Answers are kept for [COUNT_TTL_MS] (stretched by the API's pace), and so are failures,
      * so a talk whose count failed is not asked for again by every card; a talk that had a count
      * keeps showing it. After a 429, or a 503 that says when to come back, nothing is asked for
-     * until that time has passed. A caller that stops waiting does not stop the request that others
+     * until that time has passed. While one request is under way, the next batch keeps forming and
+     * goes out only when that one has answered, so a fling through a long list costs one request
+     * per round trip at most. A caller that stops waiting does not stop the request that others
      * are waiting for.
      */
     suspend fun circleCounts(talkIds: List<String>): Map<String, Int> = read(emptyMap()) {
@@ -613,6 +643,13 @@ class PeopleController(
 
     /** The open-meet poll interval now: 15 seconds, stretched by the API's pace up to three times. */
     suspend fun meetPollIntervalMs(): Long = read(MEET_POLL_MS) { session?.pace?.pacedMeetMs(MEET_POLL_MS) ?: MEET_POLL_MS }
+
+    /**
+     * The person with [ref] as this device last saw them at the current backend (Around, a search,
+     * a talk circle) while the app has run, or null. Not a suspend function, so a screen can call it
+     * while it draws: after an activity re-creation it finds the person a sheet was open for again.
+     */
+    fun knownPerson(ref: String): Person? = session?.connect?.knownPerson(ref)
 
     /** What this device knows of the other person of [meetId] (their opener and about), for after a meet. */
     suspend fun personForMeet(meetId: String): SeenPerson? = read(null) { session?.connect?.personForMeet(meetId) }
@@ -800,6 +837,12 @@ class PeopleController(
      * Actions still start one at a time in the order they were called. Called from the
      * controller's own work, it runs in place. A failure the action does not expect returns [failed].
      */
+    /**
+     * "Try again" for records that could not be opened: opens the current backend's session now.
+     * True when the session is open now.
+     */
+    suspend fun retrySession(): Boolean = write(false) { session != null }
+
     private suspend fun <T> write(failed: T, block: suspend () -> T): T {
         if (currentCoroutineContext()[Owner]?.controller === this) return guarded(failed, block)
         return scope.async { guarded(failed, block) }.await()
@@ -832,6 +875,7 @@ class PeopleController(
     // After a failure the screens see the state as it now is, and a session that could not be
     // opened is tried again later.
     private fun afterFailure() {
+        openFailed = sessionMissing()
         publish()
         retrySessionLater()
     }
@@ -839,8 +883,19 @@ class PeopleController(
     /** Opens the current backend's session when an earlier attempt could not read its records. */
     private suspend fun openSession() {
         if (!sessionMissing()) return
-        contextLock.withLock { context?.takeIf { sessionMissing() }?.let { applyContext(it) } }
+        // On the controller's own scope, like [write]: openSession can be called from a read that
+        // its caller cancels, and a cancel between `session = s` and the timers, watch and poll
+        // being installed would leave a session with none of them. The caller's cancellation only
+        // stops the waiting.
+        if (currentCoroutineContext()[Owner]?.controller === this) {
+            contextLock.withLock { context?.takeIf { sessionMissing() }?.let { applyContext(it) } }
+        } else {
+            scope.async { contextLock.withLock { context?.takeIf { sessionMissing() }?.let { applyContext(it) } } }.await()
+        }
     }
+
+    /** True after an attempt to open the current backend's session failed, until a session is registered. */
+    private var openFailed = false
 
     private fun sessionMissing(): Boolean = context?.let { session == null && backendAllowed(it.backend) } == true
 
@@ -904,7 +959,7 @@ class PeopleController(
 
         override fun selectedSlug(): String? = context?.takeIf { it.backend == backend }?.conference?.slug
 
-        override fun listedConferences(): List<ConferenceInfo>? = context?.takeIf { it.backend == backend }?.listed?.takeIf { it.isNotEmpty() }
+        override fun listedConferences(): List<ConferenceInfo>? = context?.takeIf { it.backend == backend }?.takeIf { it.listKnown }?.listed
 
         override suspend fun presenceEndedOnServer(slug: String) = presenceRuntime.presenceEndedOnServer(slug)
 
@@ -1053,6 +1108,7 @@ class PeopleController(
                 s.hasDevice = s.credentials.get() != null
                 s.sync.livePresence = { slug -> s.presenceRuntime.get(slug).on }
                 sessions[next.backend.base] = s
+                openFailed = false
                 session = s
                 s.sync.reconcileCredential()?.let { setNotice(it) }
                 s.sync.startDeleteRetries()
@@ -1126,10 +1182,14 @@ class PeopleController(
         publish()
     }
 
-    // The web offers "Open profile" when the message speaks of the profile (followShare in
-    // web/src/app.tsx). A profile problem is fixed there too, even when its words do not say so
-    // (the malformed LinkedIn link).
-    private fun opensProfile(message: String): Boolean =
+    /**
+     * True when the fix for [message], as an action returned it or a notice carries it, is on the
+     * profile screen, so the screen offers "Open profile" next to it. The web offers it when the
+     * message speaks of the profile (followShare in web/src/app.tsx); a profile problem is fixed
+     * there too, even when its words do not say so (the malformed LinkedIn link). The controller
+     * decides this in one place, so no screen reads the wording.
+     */
+    fun opensProfile(message: String): Boolean =
         message.contains("profile", ignoreCase = true) || message == ProfileSync.profileProblem(session?.store?.profile)
 
     private suspend fun applyForeground(fg: Boolean) {
@@ -1231,6 +1291,13 @@ class PeopleController(
         scope.launch {
             try {
                 delay(COUNT_BATCH_MS)
+                // One request at a time per backend: while another batch is under way, this one
+                // keeps forming and goes out when that one has answered, so a list that scrolls
+                // through many cards sends at most one request per round trip, not one per window.
+                while (true) {
+                    val underWay = countBatches.firstOrNull { it !== b && it.s === b.s && it.sent } ?: break
+                    underWay.done.await()
+                }
                 b.sent = true
                 fetchCounts(b)
             } finally {
@@ -1255,8 +1322,9 @@ class PeopleController(
                     b.s.countsNotBefore = max(b.s.countsNotBefore, now + wait)
                 }
             }
-            // Counts read from another backend's session are not this one's.
-            if (session !== b.s) continue
+            // Counts read from another backend's session are not this one's, and neither are the rest of
+            // the batch's chunks: the session changed, so the batch ends here.
+            if (session !== b.s) return
             for (id in chunk) {
                 val key = countKey(b.slug, id)
                 countCache[key] = when (res) {
@@ -1296,7 +1364,7 @@ class PeopleController(
         }
         if (s == null) {
             // The records could not be read yet; they are tried again.
-            _state.value = PeopleUiState(availability = PeopleAvailability.Loading, backend = ctx.backend.base, features = features)
+            _state.value = PeopleUiState(availability = PeopleAvailability.Loading, backend = ctx.backend.base, features = features, sessionFailed = openFailed)
             return
         }
         val store = s.store

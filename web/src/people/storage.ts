@@ -437,7 +437,7 @@ export function setPresence(slug: string, patch: Partial<Presence>): Presence {
   return next;
 }
 
-const EMPTY_PUSH: PushState = { on: false, endpoint: null, notice_seen: false };
+const EMPTY_PUSH: PushState = { on: false, endpoint: null, notice_seen: false, synced_at: null };
 const pushMem = new Map<string, PushState>();
 
 /** Whether this browser gets push nudges for one conference, and the subscription's endpoint. */
@@ -446,7 +446,8 @@ export function getPush(slug: string): PushState {
   if (!p) {
     const raw = read<Partial<PushState>>(PUSH_PREFIX + slug) ?? {};
     const endpoint = typeof raw.endpoint === 'string' && raw.endpoint.startsWith('https://') ? raw.endpoint.slice(0, 2048) : null;
-    p = { on: raw.on === true && endpoint !== null, endpoint, notice_seen: raw.notice_seen === true };
+    const syncedAt = typeof raw.synced_at === 'number' && Number.isFinite(raw.synced_at) ? raw.synced_at : null;
+    p = { on: raw.on === true && endpoint !== null, endpoint, notice_seen: raw.notice_seen === true, synced_at: syncedAt };
     pushMem.set(slug, p);
   }
   return p ?? EMPTY_PUSH;

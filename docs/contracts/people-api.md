@@ -88,9 +88,9 @@ Request and response shapes are the named `$defs` entries; the route table lists
 | `POST /api/meet/{meet_id}/found` | device | `EmptyRequest` or no body → `MeetActionResponse` | Either participant, active meets. |
 | `POST /api/meet/{meet_id}/cancel` | device | `EmptyRequest` or no body → `MeetActionResponse` | Either participant, any open state. |
 | `PUT /api/meet/{meet_id}/details` | device | `MeetDetailsRequest` → `MeetActionResponse` | My spot-me line and the meeting point. |
-| `POST /api/people/report` | device | `ReportRequest` → `ReportResponse` | Two reports hide a target from everyone but its owner. |
+| `POST /api/people/report` | device | `ReportRequest` → `ReportResponse` | Two reports hide a target from everyone but its owner. The server may also hold operator-filed reports (`reporter_id` `operator`) that count as the hide threshold on their own; nothing about them is returned to clients. |
 | `GET /api/push/vapid` | none | → `PushVapidResponse` | `publicKey` null when Web Push is not configured. |
-| `PUT /api/push/subscription` | device | `PushSubscriptionPutRequest` → `Ok` | A backend may refuse an endpoint that is not on a known browser push service with 400 `endpoint must be a push service URL`. The Worker does; the frozen fixture's `push.example.org` endpoint is therefore refused there. |
+| `PUT /api/push/subscription` | device | `PushSubscriptionPutRequest` → `Ok` | A backend may refuse an endpoint that is not on a known browser push service with 400 `endpoint must be a push service URL`. Both the Worker and the tier 3 server do, with the same host list, so the fixture's endpoint is on `fcm.googleapis.com`. |
 | `DELETE /api/push/subscription` | device | `PushSubscriptionDeleteRequest` → `Ok` | Answers 200 whether or not anything was removed. |
 | `PUT /api/push/native` | device | `PushNativePutRequest` → `Ok` | **Optional**, gated by `push.apns` or `push.fcm` (below). |
 | `DELETE /api/push/native` | device | `PushNativeDeleteRequest` → `Ok` | **Optional**. Answers 200 whether or not anything was removed, also when the backend no longer pushes to the platform. |

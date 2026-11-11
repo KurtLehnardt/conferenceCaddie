@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -347,18 +348,25 @@ fun CaddieApp(
     val shell = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast)
         .copy(importNote = if (ready == null) Strings.Settings.IMPORT_NEEDS_CONFERENCE else null)
     // The People home's For you row: like the For you tab, it asks again only while it is on screen.
-    val peopleForYouRow: (@Composable () -> Unit)? = if (ready != null) {
-        {
-            LaunchedEffect(forYouInputs) { forYouRow.refresh(state.selectedSlug, forYouInputs) }
-            ForYouRow(
-                model = forYouRow,
-                onOpenTalk = { openTalk = it.talkId },
-                onSeeAll = { navigation.selectTab(Tab.ForYou) },
-                onPickTopics = { pickerOpen = true },
-            )
+    // One lambda for as long as a conference is ready, reading the latest inputs itself, so the
+    // people inputs it travels in (PeopleTalks) stay equal between compositions that change nothing.
+    val latestForYouInputs by rememberUpdatedState(forYouInputs)
+    val latestSlug by rememberUpdatedState(state.selectedSlug)
+    val peopleForYouRow: (@Composable () -> Unit)? = remember(ready != null, forYouRow, navigation) {
+        if (ready != null) {
+            {
+                val inputs = latestForYouInputs
+                LaunchedEffect(inputs) { forYouRow.refresh(latestSlug, inputs) }
+                ForYouRow(
+                    model = forYouRow,
+                    onOpenTalk = { openTalk = it.talkId },
+                    onSeeAll = { navigation.selectTab(Tab.ForYou) },
+                    onPickTopics = { pickerOpen = true },
+                )
+            }
+        } else {
+            null
         }
-    } else {
-        null
     }
     // The people screens (ui/people/PeopleTab.kt); null without a controller.
     val peopleUi = rememberPeopleUi(
@@ -430,6 +438,7 @@ fun CaddieApp(
                         onOpenUrl = openUrl,
                         onPickTopics = { pickerOpen = true },
                         peopleControls = peopleUi?.talkControls,
+                        prefetchCounts = peopleUi?.prefetchCounts,
                     )
                 }
             },
@@ -443,6 +452,7 @@ fun CaddieApp(
                                 search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl,
                                 openRank = talkLaunch.rank,
                                 peopleControls = peopleUi?.talkControls,
+                                prefetchCounts = peopleUi?.prefetchCounts,
                             )
                         },
                         schedule = {
@@ -457,6 +467,7 @@ fun CaddieApp(
                         r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl, state.interestedSnapshots,
                         shareAll = peopleUi?.shareAll,
                         peopleControls = peopleUi?.talkControls,
+                        prefetchCounts = peopleUi?.prefetchCounts,
                         view = myView,
                         onView = {
                             myView = it

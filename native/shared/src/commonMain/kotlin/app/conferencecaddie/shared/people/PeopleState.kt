@@ -39,6 +39,13 @@ data class PeopleContext(
      * device's records were lost, and the Android background check reads the selected one's dates.
      */
     val listed: List<ConferenceInfo> = emptyList(),
+    /**
+     * True when [listed] is the backend's list as read, even when that list is empty, and false
+     * while it is not known (not loaded yet, or it failed). A backend that lists no conference is a
+     * known answer: "Delete my profile" then has no other conference to reach. [fromCore] sets it
+     * from the core's conference state; a context built by hand counts a list it was given as known.
+     */
+    val listKnown: Boolean = listed.isNotEmpty(),
 ) {
     companion object {
         /**
@@ -67,6 +74,7 @@ data class PeopleContext(
                 if (conference != null) state.interested else emptyList(),
                 storageInMemory = state.storageInMemory,
                 listed = all.map { ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate) },
+                listKnown = state.conferences is ConferencesState.Ready,
             )
         }
     }
@@ -248,6 +256,11 @@ data class PeopleUiState(
     val backend: String? = null,
     val conference: ConferenceInfo? = null,
     val features: PeopleFeatures = PeopleFeatures.OFF,
+    /**
+     * True while the backend offers people features but its records could not be opened on the last
+     * try; the controller tries again on a timer, on the next action and on `retrySession`.
+     */
+    val sessionFailed: Boolean = false,
     /** True once this device has a credential for the backend (after the first visible write). */
     val hasDevice: Boolean = false,
     /** The profile on this device, or [Profile.EMPTY]. */

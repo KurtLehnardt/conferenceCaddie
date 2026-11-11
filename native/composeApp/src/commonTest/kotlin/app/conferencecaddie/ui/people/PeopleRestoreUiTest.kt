@@ -144,4 +144,36 @@ class PeopleRestoreUiTest {
         waitUntil(timeoutMillis = 20_000) { host.askingRef == null }
         runOnIdle { assertNull(host.asking) }
     }
+
+    @Test
+    fun theAskSheetForSomeoneFoundInASearchComesBackAfterARecreation() = runComposeUiTest {
+        val rig = rig()
+        val found = u3Await(rig) {
+            rig.controller.updateContext(rig.context())
+            rig.makeVisible()
+            val ada = rig.seedAda("Hallway")
+            // Found in the people to meet, not in Around, which is not open.
+            rig.controller.searchPeople(null, around = false).valueOrNull?.results?.firstOrNull { it.ref == ada.ref }
+                ?: error("Ada is not among the people to meet")
+        }
+        lateinit var host: PeopleHost
+        val restoration = Restoration(this)
+        restoration.setContent {
+            val nav = rememberShellNavigation()
+            val ui = rememberPeopleUi(rig.controller, nav, talks, true, true, null, { _, _, _ -> }, {}, {})!!
+            host = ui.host
+            TestPhone { CaddieTheme { Box(Modifier.fillMaxSize()); ui.Sheets() } }
+        }
+        runOnIdle { host.ask(found) }
+        u3WaitForTag("ask-sheet")
+        runOnIdle { assertNull(rig.state.around.people.firstOrNull { it.ref == found.ref }, "not in Around: the sheet must come back from what the controller has seen") }
+
+        restoration.emulateSaveAndRestore()
+
+        u3WaitForTag("ask-sheet")
+        runOnIdle {
+            assertEquals(found.ref, host.askingRef)
+            assertEquals(found.displayName, host.asking?.displayName)
+        }
+    }
 }

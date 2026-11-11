@@ -10,7 +10,11 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.core.CaddieCore
+import app.conferencecaddie.shared.core.Defaults
+import app.conferencecaddie.shared.people.LegacyPeople
+import app.conferencecaddie.shared.people.PeopleController
 import java.io.File
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -20,24 +24,30 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Keeps the Interested lists of the Capacitor app (v0.3.0 and earlier) when the native app is
- * installed over it: same application id, same key, so the same data directory, where the old app's
- * WebView kept its local storage. Android's WebView reads that storage itself: a hidden WebView loads
- * a page the app serves at the old app's origin (`https://localhost`, Capacitor's default), whose
- * script hands the `caddie.interested.v1.*` keys to [CaddieCore.importLegacyInterested]. Nothing is
- * fetched: network loads are blocked, every request the page could make is answered here (the page
- * itself, else 404), Safe Browsing is off for this WebView and the manifest opts out of WebView
- * metrics.
+ * Keeps what the Capacitor app (v0.3.0 and earlier) stored when the native app is installed over
+ * it: same application id, same key, so the same data directory, where the old app's WebView kept
+ * its local storage. Android's WebView reads that storage itself: a hidden WebView loads a page the
+ * app serves at the old app's origin (`https://localhost`, Capacitor's default), whose script hands
+ * over the `caddie.interested.v1.*` keys, for [CaddieCore.importLegacyInterested], and the people
+ * keys of [LegacyPeople] (the device credential and the profile), for
+ * [PeopleController.adoptLegacy]. Nothing is fetched: network loads are blocked, every request the
+ * page could make is answered here (the page itself, else 404), Safe Browsing is off for this
+ * WebView and the manifest opts out of WebView metrics.
  *
- * It runs only when the old app's WebView data exists, after the first frame, until the core has
- * kept the lists (the marker is written with the marks, in one transaction) or three tries have
- * come back empty-handed (no WebView, a crashed renderer, a timeout). The people profile and the
- * device secret in the same storage are left for phase 3, which can read them the same way.
+ * It runs only when the old app's WebView data exists, after the first frame, until everything is
+ * kept or three tries have come back empty-handed (no WebView, a crashed renderer, a timeout). The
+ * people keys go first, to the backend the old app was built against ([Defaults.BACKEND], its
+ * `VITE_API_ORIGIN`): a credential this app already holds is kept, a malformed one is refused, and
+ * a secure store that cannot be used now leaves the whole run for the next start. Only then are
+ * the lists kept, and the marker is written with the marks, in one transaction, so a run that
+ * stops anywhere before that is simply made again; every step is idempotent. No value read here is
+ * ever logged.
  */
 internal object CapacitorMigration {
     const val DONE = "legacy.capacitor.interested.v1"
@@ -47,12 +57,23 @@ internal object CapacitorMigration {
     internal const val PAGE = "$ORIGIN/__caddie_native_migration__"
     private const val TIMEOUT_MS = 15_000L
 
+    /** The storage keys of the people features, which are handed to the people controller, not to the core. */
+    internal val PEOPLE_KEYS = setOf(LegacyPeople.DEVICE_KEY, LegacyPeople.PROFILE_KEY)
+
+    /** The backend the Capacitor app was built against (its `VITE_API_ORIGIN`): the default backend, normalised the way the app keys it. */
+    internal val LEGACY_BACKEND: BackendUrl.Valid = BackendUrl.normalise(Defaults.BACKEND) as BackendUrl.Valid
+
     /**
      * Starts the migration if it is due, and returns its job (null when the old app's data is not
      * there). [dataDir] is the app's data directory; tests pass another. A failure is never thrown:
      * it is tried again at the next start.
      */
-    fun maybeRun(context: Context, core: CaddieCore, dataDir: File = File(context.applicationInfo.dataDir)): Job? {
+    fun maybeRun(
+        context: Context,
+        core: CaddieCore,
+        dataDir: File = File(context.applicationInfo.dataDir),
+        people: suspend () -> PeopleController = { withContext(Dispatchers.IO) { CaddiePeople.controller(context) } },
+    ): Job? {
         if (!File(dataDir, "app_webview").isDirectory) return null
         val app = context.applicationContext
         val handler = CoroutineExceptionHandler { _, _ -> /* tried again at the next start */ }
@@ -60,19 +81,31 @@ internal object CapacitorMigration {
             if (core.uiSetting(DONE) != null) return@launch
             val attempts = core.uiSetting(ATTEMPTS)?.toIntOrNull() ?: 0
             if (attempts >= MAX_ATTEMPTS) return@launch
-            val lists = suspendCancellableCoroutine { cont ->
+            val stored = suspendCancellableCoroutine { cont ->
                 // After the first frame, when the main thread is idle: a WebView takes a moment to start.
                 Looper.myQueue().addIdleHandler {
                     read(app) { if (cont.isActive) cont.resume(it) }
                     false
                 }
             }
-            if (lists != null) {
-                core.importLegacyInterested(lists, DONE)
-            } else {
+            if (stored == null || !adoptPeople(stored, people)) {
                 core.setUiSetting(ATTEMPTS, (attempts + 1).toString())
+                return@launch
             }
+            core.importLegacyInterested(stored.filterKeys { it !in PEOPLE_KEYS }, DONE)
         }
+    }
+
+    /**
+     * Hands the old app's device credential and profile, when the storage holds them, to the
+     * people controller for [LEGACY_BACKEND]. True when there was nothing to hand over or the
+     * hand-over is settled; false when it must be tried again at a later start.
+     */
+    internal suspend fun adoptPeople(stored: Map<String, String>, people: suspend () -> PeopleController): Boolean {
+        val credential = stored[LegacyPeople.DEVICE_KEY]?.let { LegacyPeople.credentialHeader(it) }
+        val profile = stored[LegacyPeople.PROFILE_KEY]?.let { LegacyPeople.profile(it) }
+        if (credential == null && profile == null) return true
+        return people().adoptLegacy(LEGACY_BACKEND, credential, profile)
     }
 
     /**
@@ -142,7 +175,7 @@ internal object CapacitorMigration {
             }
     }
 
-    /** The lists the page found: storage keys and their values, at most 100 keys and [MAX_JSON] characters. */
+    /** What the page found: storage keys and their values, at most 100 keys and [MAX_JSON] characters. */
     internal fun parse(json: String): Map<String, String>? {
         if (json.length > MAX_JSON) return null
         val o = runCatching { Json.parseToJsonElement(json) as? JsonObject }.getOrNull() ?: return null
@@ -153,10 +186,10 @@ internal object CapacitorMigration {
 
     internal const val MAX_JSON = 4_500_000
 
-    // Collects the lists and hands them over as one JSON object. Sizes are measured as they will be
-    // sent, escapes included: a list longer than 2.1 MB that way is left out, and so is any list
-    // that would take the whole past 4.4 MB, so one large list never fails the hand-over of the
-    // others.
+    // Collects the lists and the people keys and hands them over as one JSON object. Sizes are
+    // measured as they will be sent, escapes included: a value longer than 2.1 MB that way is left
+    // out, and so is any value that would take the whole past 4.4 MB, so one large list never fails
+    // the hand-over of the others.
     internal val SCRIPT_PAGE = """
         <!doctype html><meta charset="utf-8"><script>
         (function () {
@@ -164,7 +197,7 @@ internal object CapacitorMigration {
           try {
             for (var i = 0; i < localStorage.length && n < 100; i++) {
               var k = localStorage.key(i);
-              if (!k || k.indexOf('caddie.interested.v1.') !== 0) continue;
+              if (!k || (k.indexOf('caddie.interested.v1.') !== 0 && k !== 'caddie.device.v1' && k !== 'caddie.profile.v1')) continue;
               var v = localStorage.getItem(k) || '';
               var size = JSON.stringify(k).length + JSON.stringify(v).length + 2;
               if (size > 2100000 || total + size > 4400000) continue;
