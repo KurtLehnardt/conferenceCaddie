@@ -30,6 +30,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
@@ -53,7 +54,8 @@ enum class ChipKind {
  * the accent tint and drops the border, as on the web. [onClear] adds the separate clear button (×) an
  * active chip has, named [clearLabel] for screen readers. [leadingIcon] replaces the check of a
  * toggle chip (the Filters and Happening now chips have their own icons). [disabled] is the dashed,
- * faded look of an unavailable chip.
+ * faded look of an unavailable chip. [height] is the pill's least height (40 dp in the People
+ * search, .pp-search .chip); it still grows with large text.
  */
 @Composable
 fun CaddieChip(
@@ -68,13 +70,14 @@ fun CaddieChip(
     badge: Int = 0,
     disabled: Boolean = false,
     accessibilityLabel: String? = null,
+    height: Dp = Caddie.dimens.chipHeight,
 ) {
     val c = Caddie.colors
     val shape = Pill
     Row(
         modifier
             .minimumInteractiveComponentSize()
-            .heightIn(min = Caddie.dimens.chipHeight)
+            .heightIn(min = height)
             // Both tap areas (the chip and its clear button) fill the pill's height, whatever the
             // text size makes it.
             .height(IntrinsicSize.Min)
