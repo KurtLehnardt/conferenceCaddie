@@ -180,7 +180,10 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       // finishes it, so the operator is told to run it again rather than the client retrying blind.
       if (json?.error === 'removal_incomplete') {
         const step = typeof json.step === 'string' && /^[a-z_]{1,20}$/.test(json.step) ? json.step : 'unknown';
-        throw new AdminError(`${where}: removal incomplete at step ${step} (status ${res.status}; retired ${json.retired === true}, wiped ${json.wiped === true}); run the removal again`);
+        const cause = typeof json.cause === 'string' && /^[A-Za-z0-9_ .:,'-]{1,120}$/.test(json.cause) ? `; cause: ${json.cause}` : '';
+        const after = Number(res.headers.get('retry-after'));
+        const hint = Number.isFinite(after) && after > 0 ? `run the removal again after ${after} seconds (Retry-After)` : 'run the removal again (after the Retry-After the Worker sent, if any)';
+        throw new AdminError(`${where}: removal incomplete at step ${step} (status ${res.status}; retired ${json.retired === true}, wiped ${json.wiped === true}${cause}); ${hint}`);
       }
       // A conference the Worker does not route: never added, or removed (its object refuses admin
       // requests after a wipe until an unretire puts the directory row back).
@@ -576,8 +579,9 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       for (const [table, n] of Object.entries(json.deleted && typeof json.deleted === 'object' ? json.deleted : {})) if (/^[A-Za-z0-9_]{1,40}$/.test(table)) counts[table] = int(n);
       counts.directory = int(json.directory);
       const what = Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}`).join(', ');
-      // A removal run again (for example after a lost answer) finds the tombstone already there.
-      const already = Number.isFinite(json.already_retired_at) ? ` (it was retired already, at ${new Date(json.already_retired_at).toISOString()})` : '';
+      // A removal run again (for example after a lost answer) finds the tombstone already there:
+      // already_retired_at is an ISO instant then, and null otherwise.
+      const already = typeof json.already_retired_at === 'string' && Number.isFinite(Date.parse(json.already_retired_at)) ? ` (it was retired already, at ${new Date(json.already_retired_at).toISOString()})` : '';
       return { counts, ...(already ? { note: 'already_retired' } : {}), summary: `wiped ${slug} from the Worker${what ? `: ${what}` : ' (nothing was left to delete)'}; tombstone ${json.retired === true ? 'left' : 'not confirmed'}${already}, so the weekly ingest skips it until conferences unretire` };
     },
 

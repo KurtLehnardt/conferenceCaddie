@@ -130,7 +130,7 @@ function stubWorker() {
       // Tombstone first (its nonce check refuses a replay before any write), then the wipe, then
       // the directory row; a second removal reports already_retired_at.
       const known = state.conferences.some((c) => c.slug === event);
-      const already = state.retired.has(event) ? { already_retired_at: 1762819200000 } : {};
+      const already = { already_retired_at: state.retired.has(event) ? '2025-11-11T00:00:00.000Z' : null };
       state.retired.add(event);
       const deleted = state.wiped.includes(event) ? Object.fromEntries(Object.keys(state.tables).map((k) => [k, 0])) : { talks_fts: 3, ...state.tables, usage_days: 1, meta: 2 };
       delete deleted.vectors;
@@ -1073,11 +1073,15 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
 
   test('a removal that stopped between its steps exits 1 naming the step, is not retried blind, and leaves the local files alone', async () => {
     seedConferenceFiles(EVENT);
-    stub.forced.push({ status: 502, body: { error: 'removal_incomplete', step: 'wipe', retired: true, wiped: false } });
+    stub.forced.push({ status: 502, headers: { 'retry-after': '5' }, body: { error: 'removal_incomplete', step: 'wipe', retired: true, wiped: false, cause: 'object \u001b[2J unreachable: Error 1102' } });
     const r = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
     assert.equal(r.code, 1);
     assert.equal(admins(r.requests).length, 1, 'not retried by the client');
-    assert.match(r.stderr, /DELETE \/admin\/conference: removal incomplete at step wipe \(status 502; retired true, wiped false\); run the removal again/);
+    assert.match(r.stderr, /DELETE \/admin\/conference: removal incomplete at step wipe \(status 502; retired true, wiped false\); run the removal again after 5 seconds \(Retry-After\)/);
+    assert.ok(!r.stderr.includes('\u001b') && !r.stderr.includes('1102'), 'a cause outside the plain charset is dropped, not echoed');
+    stub.forced.push({ status: 502, body: { error: 'removal_incomplete', step: 'directory', retired: true, wiped: true, deleted: { talks: 3 }, cause: 'directory request failed: Error' } });
+    const plain = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.match(plain.stderr, /at step directory \(status 502; retired true, wiped true; cause: directory request failed: Error\); run the removal again \(after the Retry-After/);
     assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'searchable');
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
     assert.equal(r.audit.at(-1).result, 'failed');
@@ -1125,6 +1129,16 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     assert.match(r.stdout, /sent testconf-2099 with unretire: true; the Worker dropped its tombstone \(upserted 1\); commit data\/conference-operator\.json; run conferences refresh --event testconf-2099 next/);
     assert.deepEqual(r.audit.at(-1).counts, { upserted: 1, searchable: 1, synced: 1 });
     assert.equal((await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT))).code, 4);
+  });
+
+  test('unretire of an unavailable local document renders the counts as the Worker returns them (synced 1, searchable 0)', async () => {
+    seedConferenceFiles(EVENT, { status: 'unavailable', statusReason: 'operator_removed' });
+    stub.state.retired.add(EVENT);
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT, '--json'], EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(r.json().result.counts, { upserted: 1, searchable: 0, synced: 1 });
+    assert.ok(!stub.state.retired.has(EVENT));
   });
 
   test('unretire without a local file sends the slug alone', async () => {
