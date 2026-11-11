@@ -3,6 +3,7 @@ package app.conferencecaddie.ui.people
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import app.conferencecaddie.shared.ble.BlePermissionKind
 
 // What the parity screenshots ([PeopleParityShots]) need from each platform: whether they were asked
 // for, a window of a given size at three pixels per dp (the web screenshots' scale), the system's
@@ -31,3 +32,6 @@ internal expect fun runParityShot(window: ParityWindow, block: ComposeUiTest.(Pa
 /** Draws [content] as the system's dark theme ([dark]) or light theme would. */
 @Composable
 internal expect fun ParitySystemTheme(dark: Boolean, content: @Composable () -> Unit)
+
+/** The Bluetooth permission this platform's radio asks for, so the Bluetooth states show each platform's own words. */
+internal expect val parityBlePermission: BlePermissionKind

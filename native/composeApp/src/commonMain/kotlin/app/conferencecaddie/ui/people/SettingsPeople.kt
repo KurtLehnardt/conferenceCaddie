@@ -27,8 +27,8 @@ import kotlinx.coroutines.launch
 /**
  * The people groups of Settings (web SettingsPeople.tsx and NudgeBanner.tsx, spec section 14), in
  * the web's order, between You and Appearance: Blocked people, People I met (only when there are
- * any), People I'm watching (only when there are any), Nudges, and Push (only when
- * `state.push.available`). The shell draws them only while a searchable conference is selected and
+ * any), People I'm watching (only when there are any), Nudges, Push (only when
+ * `state.push.available`) and, native only, Bluetooth (only when `state.ble.available`). The shell draws them only while a searchable conference is selected and
  * people features are on. Each group goes straight into the Settings column, which spaces them
  * 24 dp apart, so this emits SettingsGroups without a container of its own.
  */
@@ -142,8 +142,13 @@ fun PeopleIWatch(state: PeopleUiState, host: PeopleHost) {
 /**
  * The Nudges group (heading "Nudges") holding U3's [NudgeSetting] rows, then, when
  * `state.push.available`, the Push group (heading "Push") holding U3's [PushControls] in the
- * [PushVariant.Settings] variant. Nudges come only while I am around, so neither group shows when
- * the backend offers no presence.
+ * [PushVariant.Settings] variant, then, when `state.ble.available`, the Bluetooth group (heading
+ * "Bluetooth") holding [BleControls] in the [BleVariant.Settings] variant. Nudges come only while I
+ * am around, so none of the groups shows when the backend offers no presence.
+ *
+ * The web has no Bluetooth group: there the switch lives only in the presence card. Here it is in
+ * Settings too, under a heading named after what it uses, as Push is, so it can be found and turned
+ * off without the People tab.
  */
 @Composable
 fun NudgeSettings(state: PeopleUiState, host: PeopleHost) {
@@ -151,6 +156,9 @@ fun NudgeSettings(state: PeopleUiState, host: PeopleHost) {
     SettingsGroup(ProfileStrings.NUDGES, Modifier.testTag("set-nudges")) { NudgeSetting(state, host) }
     if (state.push.available) {
         SettingsGroup(ProfileStrings.PUSH, Modifier.testTag("set-push")) { PushControls(state, host, PushVariant.Settings) }
+    }
+    if (state.ble.available) {
+        SettingsGroup(BleStrings.SETTINGS_GROUP, Modifier.testTag("set-ble")) { BleControls(state, host, BleVariant.Settings) }
     }
 }
 
