@@ -43,7 +43,7 @@ on:
         required: false
         default: false
       allow_empty:
-        description: 'With rebuild_topics, let an empty topic list replace a stored one (the Worker refuses otherwise, since people store topic ids).'
+        description: 'With rebuild_topics, let an empty topic list replace a stored one (the Worker refuses otherwise, since people store topic ids). It applies to every conference in the run, so name the conference in events.'
         type: boolean
         required: false
         default: false
