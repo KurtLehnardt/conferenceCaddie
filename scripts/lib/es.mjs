@@ -1,6 +1,7 @@
 // Elasticsearch calls for the ingestion CLI. The key is read from the environment and never printed.
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrl } from './es-url.mjs';
+
 const API_KEY = process.env.ES_API_KEY || process.env.ELASTISEARCH_API_KEY || '';
 
 export const hasKey = () => Boolean(API_KEY);
@@ -8,7 +9,7 @@ export const hasKey = () => Boolean(API_KEY);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function es(method, path, body, { ndjson = false, timeout = 120_000 } = {}) {
-  const res = await fetch(ES_URL + path, {
+  const res = await fetch(esUrl() + path, {
     method,
     headers: {
       Authorization: `ApiKey ${API_KEY}`,

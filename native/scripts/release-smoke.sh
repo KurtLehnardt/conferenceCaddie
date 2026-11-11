@@ -28,9 +28,13 @@ APK="${1:-androidApp/build/outputs/apk/release/androidApp-$ABI-release.apk}"
 # Letters that are in no talk, so keyword search finds nothing and every result comes from meaning.
 MEANING_ONLY_QUERY="qzxv wplkj"
 # What the search step needs: the official server and the published bundles.
+# CADDIE_BACKEND is the server's base URL and CADDIE_BUNDLE_BASE the bundles' base URL ending in "/";
+# neither has a default, so a fork never probes the maintainer's servers.
+: "${CADDIE_BACKEND:?Set CADDIE_BACKEND to the server's base URL, for example https://caddie.example.workers.dev}"
+: "${CADDIE_BUNDLE_BASE:?Set CADDIE_BUNDLE_BASE to the published bundles' base URL, ending in /}"
 NETWORK_URLS=(
-  "https://conference-caddie-265846417372.us-west1.run.app/api/capabilities"
-  "https://kurtlehnardt.github.io/conferenceCaddie/bundles/conferences.json"
+  "${CADDIE_BACKEND%/}/api/capabilities"
+  "${CADDIE_BUNDLE_BASE%/}/conferences.json"
 )
 
 fail() {

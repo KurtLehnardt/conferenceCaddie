@@ -64,7 +64,7 @@ import { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDIN
 // Re-exported, so the other server modules and the scripts that import them from here keep working.
 export { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds };
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { ES_URL } from './es-url.mjs';
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
 const READ_KEY = process.env.ES_API_KEY || '';
 export const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';

@@ -53,8 +53,34 @@
 # touching the live one.
 set -euo pipefail
 
-PROJECT="project-9205d6eb-366e-4844-b77"
-REGION="us-west1"
+# Deployment settings come from the environment or, for the ones not set there, from an optional
+# local file of KEY=VALUE lines (never committed; override the path with CADDIE_DEPLOY_ENV):
+#   ${XDG_CONFIG_HOME:-~/.config}/conference-caddie/deploy.env
+# Only these keys are read from it, as plain text (the file is not executed):
+#   GC_PROJECT          Google Cloud project id (required)
+#   GC_REGION           Cloud Run region (default us-west1)
+#   ES_URL              the Elasticsearch address, https://<deployment>.es.io:443 (required, no default)
+#   CADDIE_BUNDLE_BASE  the published talk bundles' base URL, an https URL ending in "/" (optional;
+#                       passed to the service as TALKS_BUNDLE_BASE, empty keeps the server's default)
+DEPLOY_ENV_FILE="${CADDIE_DEPLOY_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie/deploy.env}"
+if [ -f "$DEPLOY_ENV_FILE" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      GC_PROJECT=*|GC_REGION=*|ES_URL=*|CADDIE_BUNDLE_BASE=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        value="${value%\"}"; value="${value#\"}"
+        # The environment wins over the file.
+        if [ -z "${!key:-}" ]; then export "$key=$value"; fi
+        ;;
+    esac
+  done < "$DEPLOY_ENV_FILE"
+fi
+: "${GC_PROJECT:?Set GC_PROJECT to your Google Cloud project id (environment or $DEPLOY_ENV_FILE).}"
+: "${ES_URL:?Set ES_URL to your Elasticsearch address, https://<deployment>.es.io:443 (environment or $DEPLOY_ENV_FILE).}"
+PROJECT="$GC_PROJECT"
+REGION="${GC_REGION:-us-west1}"
+TALKS_BUNDLE_BASE="${CADDIE_BUNDLE_BASE:-}"
 # The Cloud Run service name; SERVICE=conference-caddie-test npm run deploy deploys a second
 # service for testing without touching the live one.
 SERVICE="${SERVICE:-conference-caddie}"
@@ -82,7 +108,6 @@ PEOPLE_SEMANTIC_MIN_SIMILARITY="${PEOPLE_SEMANTIC_MIN_SIMILARITY:-}"
 PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY:-}"
 PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY:-}"
 VAPID_SUBJECT="${VAPID_SUBJECT:-https://github.com/KurtLehnardt/conferenceCaddie}"
-ES_URL="https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443"
 ES_INDEX="caddie-talks"
 
 # Filter (server/moderation.mjs). The rules index is read with the people key, so it stays
@@ -134,7 +159,7 @@ newest_enabled_version() {
 # Messaging API Admin on the Firebase project (step 7a of docs/OPERATOR_CHECKLIST.md), nothing else.
 RUNTIME_SA="caddie-runtime@$PROJECT.iam.gserviceaccount.com"
 
-ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI,PEOPLE_SEMANTIC_MIN_SIMILARITY=$PEOPLE_SEMANTIC_MIN_SIMILARITY,PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY,PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY"
+ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI,PEOPLE_SEMANTIC_MIN_SIMILARITY=$PEOPLE_SEMANTIC_MIN_SIMILARITY,PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY,PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY,TALKS_BUNDLE_BASE=$TALKS_BUNDLE_BASE"
 SECRETS="ES_API_KEY=$READ_SECRET:latest,ES_PEOPLE_API_KEY=$PEOPLE_SECRET:latest"
 RUNTIME_SECRETS=("$READ_SECRET" "$PEOPLE_SECRET")
 

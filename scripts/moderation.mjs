@@ -24,7 +24,7 @@
 // printed; the key is never printed. Hides and unhides are Bulk partial updates of the flag
 // fields, so nothing is re-embedded.
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ELASTISEARCH_API_KEY || process.env.ES_PEOPLE_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
@@ -97,7 +97,7 @@ function parseTarget(value) {
 async function es(method, path, body, { ndjson = false, okStatuses = [] } = {}) {
   let res;
   try {
-    res = await fetch(ES_URL + path, {
+    res = await fetch(esUrlOrExit() + path, {
       method,
       headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json' },
       body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),

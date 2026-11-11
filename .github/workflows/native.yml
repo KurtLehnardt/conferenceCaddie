@@ -353,6 +353,13 @@ jobs:
           key: ${{ steps.avd.outputs.cache-primary-key }}
 
       - name: Run the UI tests and the release smoke test on an emulator
+        # The release smoke test probes the server and bundles the app is built to use; they have no
+        # default in the script. A fork sets the repository variables CADDIE_BACKEND and
+        # CADDIE_BUNDLE_BASE; the fallbacks are the official values the app itself ships with
+        # (native/shared/.../core/CaddieCore.kt).
+        env:
+          CADDIE_BACKEND: ${{ vars.CADDIE_BACKEND || 'https://conference-caddie-265846417372.us-west1.run.app' }}
+          CADDIE_BUNDLE_BASE: ${{ vars.CADDIE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/' }}
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34

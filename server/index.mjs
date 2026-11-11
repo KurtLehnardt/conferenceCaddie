@@ -1,6 +1,6 @@
 // Conference Caddie HTTP server: serves the built web app and the search API from one origin.
 //
-// Env: PORT (default 8080), ES_URL, ES_API_KEY, ES_INDEX (default caddie-talks),
+// Env: PORT (default 8080), ES_URL (required, no default; the server does not start without it), ES_API_KEY, ES_INDEX (default caddie-talks),
 //      ES_CONFERENCES_INDEX (default caddie-conferences), ES_TOPICS_INDEX (default caddie-topics),
 //      STATIC_DIR (default web/dist), ES_PEOPLE_API_KEY (people, circles and circle counts only),
 //      ES_PEOPLE_INDEX (default caddie-people), ES_PEOPLE_BLOCKS_INDEX (default
@@ -21,8 +21,9 @@
 // The log has one line per request with the method, path, status and duration. It never
 // contains headers, bodies, search text or credentials.
 
-// First, so that an unusable BLE_MASTER_KEYRING or TALKS_BUNDLE_BASE stops the server before any
-// other module runs (people.mjs starts its purge when it is imported).
+// First, so that a missing ES_URL or an unusable BLE_MASTER_KEYRING or TALKS_BUNDLE_BASE stops the
+// server before any other module runs (people.mjs starts its purge when it is imported).
+import './es-url.mjs';
 import { handleCapabilities } from './capabilities.mjs';
 import http from 'node:http';
 import fs from 'node:fs';

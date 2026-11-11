@@ -72,7 +72,7 @@ import { buildTopics, readFixups } from './lib/topics.mjs';
 import { SOURCES_FILE, parseSources, planBuild, serializeSources, sourceSha256, takedownsMatching } from './lib/bundle-sources.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DEFAULT_BASE_URL = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+export const DEFAULT_BASE_URL = process.env.CADDIE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
 export const DEFAULT_OUT = 'dist-pages';
 export const PUBLISHER = Object.freeze({
   name: 'Conference Caddie (Kurt Lehnardt)',

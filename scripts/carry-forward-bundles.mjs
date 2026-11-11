@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { readConferenceIndex } from '../contracts/js/bundle.mjs';
 
-const DEFAULT_BASE = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+const DEFAULT_BASE = process.env.CADDIE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
 const PATH_RE = /^[a-z0-9][a-z0-9-]{0,99}\/[0-9a-f]{16}\/$/;
 const FILE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TIMEOUT_MS = 60_000;
