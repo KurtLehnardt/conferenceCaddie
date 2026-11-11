@@ -32,3 +32,6 @@ data/exports/
 # Output of scripts/build-bundles.mjs and the embedding model cache
 dist-pages/
 .cache/
+
+# Python bytecode caches (native/scripts and elsewhere)
+__pycache__/

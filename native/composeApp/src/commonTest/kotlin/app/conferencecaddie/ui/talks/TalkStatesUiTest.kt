@@ -57,12 +57,13 @@ class TalkStatesUiTest {
 
     @AfterTest
     fun cleanUp() = runTest {
-        // Every job must have stopped before the database closes.
+        // Every job must have stopped before the database closes, the screens' searches included:
+        // closeWhenIdle waits for any statement a search still has queued.
         scopes.forEach { it.coroutineContext.job.cancelAndJoin() }
         files.clear()
         SystemFileSystem.delete(Path(root, "bundles"), mustExist = false)
         SystemFileSystem.delete(root, mustExist = false)
-        database.close()
+        database.closeWhenIdle()
     }
 
     /** A core on [backend]; [relaunch] starts one from what the previous one stored instead. */

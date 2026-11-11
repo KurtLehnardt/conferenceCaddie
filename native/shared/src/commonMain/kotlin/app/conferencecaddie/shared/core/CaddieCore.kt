@@ -25,6 +25,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,6 +74,12 @@ data class CoreState(
      * without it. The screens tell the person once and call [CaddieCore.dismissStorageReset].
      */
     val storageReset: Boolean = false,
+    /**
+     * True when this launch keeps its data in memory only, because the stored database could not
+     * be opened (one from a newer version of the app, or a disk that refuses it): marks made now are
+     * lost when the app closes. The screens tell the person with the reset notice.
+     */
+    val storageInMemory: Boolean = false,
 ) {
     /**
      * The marked talks My schedule shows, in marking order: each from the bundle while it holds the
@@ -198,8 +206,9 @@ class CaddieCore(
     /** Shows what is stored, then fetches everything again behind it. Call once at start-up. */
     fun start() = command {
         val reset = database.wasReset()
+        val inMemory = database.runsInMemory()
         val chosen = database.setting(KEY_BACKEND)?.let { BackendUrl.normalise(it, allowLocalHttp) as? BackendUrl.Valid }
-        openBackend(chosen ?: defaultBackend, storageReset = reset)
+        openBackend(chosen ?: defaultBackend, storageReset = reset, storageInMemory = inMemory)
     }
 
     /**
@@ -225,9 +234,14 @@ class CaddieCore(
      * Switches to [backend] after the person confirmed it (Settings, or the confirmation screen of a
      * connect link). Everything stored for the previous backend stays, so switching back finds it.
      * Null returns to the build's default backend.
+     *
+     * [typed] is false for a server that came from a link or QR code. Only a typed server (in a
+     * debug build, where [allowLocalHttp] is true) may name a plain http bundle base on a local
+     * host; the mark is kept per backend base, so a link can never turn it on.
      */
-    fun setBackend(backend: BackendUrl.Valid?) = command {
+    fun setBackend(backend: BackendUrl.Valid?, typed: Boolean = true) = command {
         database.setSetting(KEY_BACKEND, backend?.base)
+        if (backend != null) database.setSetting(KEY_TYPED + backend.base, if (typed) "1" else null)
         openBackend(backend ?: defaultBackend)
     }
 
@@ -239,12 +253,14 @@ class CaddieCore(
     fun selectConference(slug: String) = command {
         val s = _state.value
         database.setSetting(KEY_CONFERENCE + s.backend.base, slug)
-        if (s.selectedSlug != slug || s.bundle !is BundleState.Ready) {
+        val selected = if (s.selectedSlug != slug || s.bundle !is BundleState.Ready) {
             bundleJob?.cancel()
             bundleJobKey = null
-            _state.value = withSelection(s, slug)
+            withSelection(s, slug)
+        } else {
+            s
         }
-        ensureBundle()
+        _state.value = ensureBundle(selected)
     }
 
     suspend fun search(request: SearchRequest): SearchResult? =
@@ -259,9 +275,22 @@ class CaddieCore(
     /** As [setInterested], keeping a copy of [talk] with the mark. */
     fun setInterested(talk: Talk, interested: Boolean) = mark(talk.talkId, talk, interested)
 
-    /** Clears [CoreState.storageReset] once the person has been told. */
-    fun dismissStorageReset() {
-        _state.update { it.copy(storageReset = false) }
+    /** Clears [CoreState.storageReset] once the person has been told, in order with every other call. */
+    fun dismissStorageReset() = command {
+        _state.value = _state.value.copy(storageReset = false)
+    }
+
+    /**
+     * Waits until every call made before it has run and every fetch they started has finished, as
+     * the next call would see it. For tests, and for a host that must close the database.
+     */
+    suspend fun awaitIdle() {
+        while (true) {
+            // Through the same queue and lock as the calls, so the ones made earlier run first.
+            val running = withContext(serial) { mutex.withLock { listOfNotNull(backendJob, bundleJob).filter { it.isActive } } }
+            if (running.isEmpty()) return
+            running.joinAll()
+        }
     }
 
     /** A setting of the screens (such as the theme), kept on this device for every backend. */
@@ -303,8 +332,9 @@ class CaddieCore(
                 mutex.withLock { block() }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                // The next call or refresh starts again from the stored state.
+            } catch (_: Throwable) {
+                // The next call or refresh starts again from the stored state. Errors are caught
+                // too: an allocation a hostile bundle makes fail must not end the app at every start.
             }
         }
     }
@@ -314,20 +344,30 @@ class CaddieCore(
             block()
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             // As in command(): the state stays as it was.
         }
     }
 
     /** Shows what is stored for [backend], then starts fetching it again. */
-    private suspend fun openBackend(backend: BackendUrl.Valid, storageReset: Boolean = _state.value.storageReset) {
+    private suspend fun openBackend(
+        backend: BackendUrl.Valid,
+        storageReset: Boolean = _state.value.storageReset,
+        storageInMemory: Boolean = _state.value.storageInMemory,
+    ) {
         backendJob?.cancel()
         bundleJob?.cancel()
         bundleJobKey = null
         session++
         val id = session
         val caps = storedCapabilities(backend.base)?.state?.copy(checking = true)
-        var s = CoreState(backend, isDefault(backend), capabilities = caps ?: CapabilitiesState.Loading, storageReset = storageReset)
+        var s = CoreState(
+            backend,
+            isDefault(backend),
+            capabilities = caps ?: CapabilitiesState.Loading,
+            storageReset = storageReset,
+            storageInMemory = storageInMemory,
+        )
         val index = caps?.let { bundleBase(it, backend) }?.let { sync.cachedIndex(it) }
         if (index != null) {
             val list = index.conferences
@@ -356,14 +396,15 @@ class CaddieCore(
     }
 
     /**
-     * Brings the selected conference's bundle in line with the conference list: uses the installed
-     * one when it is current or cannot be replaced, else starts its download (once per bundle).
+     * [s] with the selected conference's bundle in line with the conference list: the installed
+     * one when it is current or cannot be replaced, else its download is started (once per bundle).
+     * The caller publishes the result in one write, so no one sees a list and a bundle that
+     * disagree.
      */
-    private fun ensureBundle() {
-        val s = _state.value
-        val slug = s.selectedSlug ?: return
+    private fun ensureBundle(s: CoreState): CoreState {
+        val slug = s.selectedSlug ?: return s
         val conferences = s.conferences
-        if (conferences is ConferencesState.Loading) return
+        if (conferences is ConferencesState.Loading) return s
         val list = conferences as? ConferencesState.Ready
         val key = BundleSync.scope(s.backend.base, slug)
         val installed = s.bundle as? BundleState.Ready
@@ -383,17 +424,16 @@ class CaddieCore(
         if (next != null) {
             bundleJob?.cancel()
             bundleJobKey = null
-            _state.value = s.copy(bundle = next)
-            return
+            return s.copy(bundle = next)
         }
         val bundle = entry!!.bundle!!
         val jobKey = key + "\n" + bundle.contentHash
-        if (bundleJobKey == jobKey && bundleJob?.isActive == true) return
+        if (bundleJobKey == jobKey && bundleJob?.isActive == true) return s
         bundleJob?.cancel()
         bundleJobKey = jobKey
-        _state.value = s.copy(bundle = installed?.copy(offline = offline, updateApp = false) ?: BundleState.Loading(slug))
         val id = session
         bundleJob = launchGuarded { download(id, s.backend, slug, bundleBase!!, bundle, installed, offline, jobKey) }
+        return s.copy(bundle = installed?.copy(offline = offline, updateApp = false) ?: BundleState.Loading(slug))
     }
 
     private fun mark(talkId: String, talk: Talk?, on: Boolean) = command {
@@ -427,13 +467,17 @@ class CaddieCore(
         }
         val bundleBase = bundleBase(caps, backend)
         if (bundleBase == null) {
-            val conferences = if (caps is CapabilitiesState.Ready) ConferencesState.NoBundles else ConferencesState.Failed("offline")
+            val conferences = when (caps) {
+                is CapabilitiesState.Ready -> ConferencesState.NoBundles
+                CapabilitiesState.UpdateApp -> ConferencesState.Failed("update_app")
+                else -> ConferencesState.Failed("offline")
+            }
             publish(id) { it.copy(conferences = conferences, bundle = BundleState.None) }
             return
         }
         val baseChanged = bundleBase != bundleBase(before.capabilities, backend)
         if (!refreshIndex && !baseChanged && before.conferences is ConferencesState.Ready) {
-            mutex.withLock { if (session == id) ensureBundle() }
+            mutex.withLock { if (session == id) _state.value = ensureBundle(_state.value) }
             return
         }
         val result = sync.index(bundleBase, refresh = true)
@@ -456,8 +500,7 @@ class CaddieCore(
                     interestedSnapshots = selection.interestedSnapshots,
                 )
             }
-            _state.value = next
-            ensureBundle()
+            _state.value = ensureBundle(next)
         }
     }
 
@@ -538,7 +581,7 @@ class CaddieCore(
         val base = backend.base
         val hadDocument = database.setting(KEY_HAD_DOCUMENT + base) == "1"
         val cached = storedCapabilities(base)?.state
-        return when (val r = CapabilitiesDiscovery.discover(base, http, hadDocument, allowLocalHttp)) {
+        return when (val r = CapabilitiesDiscovery.discover(base, http, hadDocument, localBundleBase(base))) {
             is CapabilitiesDiscovery.Result.Found -> {
                 if (r.source != CapabilitiesDiscovery.Source.Legacy) database.setSetting(KEY_HAD_DOCUMENT + base, "1")
                 database.setSetting(KEY_CAPABILITIES + base, encode(r.source, r.document, fallback = false, r.maxAgeSeconds))
@@ -576,7 +619,7 @@ class CaddieCore(
         } else {
             val doc = o["document"] as? JsonObject ?: return null
             if (Capabilities.negotiate(doc) !is Capabilities.Negotiation.Ok) return null
-            if (fallback) fallbackCapabilities(Capabilities.effective(doc)) else Capabilities.effective(doc, allowLocalHttp)
+            if (fallback) fallbackCapabilities(Capabilities.effective(doc)) else Capabilities.effective(doc, localBundleBase(base))
         }
         return Stored(
             CapabilitiesState.Ready(caps, source, cached = true, updateApp = false, usingFallback = fallback),
@@ -584,6 +627,10 @@ class CaddieCore(
             maxAgeSeconds = o["max_age"].asLong(),
         )
     }
+
+    // A plain http bundle base on a local host: debug builds only, and only for a server typed in
+    // Settings (or passed as a debug launch option), never for one from a link.
+    private suspend fun localBundleBase(base: String): Boolean = allowLocalHttp && database.setting(KEY_TYPED + base) == "1"
 
     private suspend fun capabilitiesExpired(base: String): Boolean {
         val stored = storedCapabilities(base) ?: return true
@@ -613,6 +660,7 @@ class CaddieCore(
         private const val KEY_CONFERENCE = "conference:"
         private const val KEY_CAPABILITIES = "capabilities:"
         private const val KEY_HAD_DOCUMENT = "had_document:"
+        private const val KEY_TYPED = "typed:"
         private const val KEY_UI = "ui:"
 
         /** The conference list is fetched at most this often in the foreground. */

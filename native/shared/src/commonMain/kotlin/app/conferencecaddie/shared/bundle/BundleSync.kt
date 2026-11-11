@@ -77,7 +77,7 @@ class BundleSync(
         database.cachedResponse("${bundleBase}conferences.json")?.let { parse(it.body) }?.takeIf { it.ok }
 
     /** When `conferences.json` at [bundleBase] was last fetched or confirmed, or null. */
-    suspend fun indexFetchedAt(bundleBase: String): Long? = database.cachedResponse("${bundleBase}conferences.json")?.fetchedAtMs
+    suspend fun indexFetchedAt(bundleBase: String): Long? = database.cachedFetchedAt("${bundleBase}conferences.json")
 
     /** The bundle installed for [scope], read from disk, or null when there is none or its files are gone. */
     suspend fun installed(backend: String, scope: String): TalkBundle? {
@@ -113,33 +113,24 @@ class BundleSync(
         // The previous bundle, read only when a failure needs it.
         suspend fun kept(): TalkBundle? = have ?: if (installedHash != null) installed(backend, scope) else null
 
-        val downloaded = HashMap<String, ByteArray>()
-        for (name in BundleVerifier.BUNDLE_FILES) {
-            val expected = entry.files[name]?.bytes ?: return InstallResult.Failed(listOf("$name: not listed"), kept())
-            if (expected > MAX_FILE_BYTES) return InstallResult.Failed(listOf("$name: larger than the app accepts"), kept())
-            val response = try {
-                http.get("$bundleBase${entry.path}$name", ifNoneMatch = null, maxBytes = expected)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: ResponseTooLarge) {
-                return InstallResult.Failed(listOf("$name: larger than the index says"), kept())
-            } catch (e: Exception) {
-                return InstallResult.Failed(listOf("$name: $DOWNLOAD_FAILED"), kept())
-            }
-            if (response.status != 200) return InstallResult.Failed(listOf("$name: status ${response.status}"), kept())
-            downloaded[name] = response.body
+        // Everything the index promises is checked before a byte is downloaded, so a hostile index
+        // cannot make the app hold more than the caps below.
+        sizeProblem(entry)?.let { return InstallResult.Failed(listOf(it), kept()) }
+        val checked = try {
+            downloadAndVerify(bundleBase, slug, entry)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // An allocation the device cannot make (OutOfMemoryError on Android) or any other
+            // failure while checking: the bundle is refused, the app keeps running.
+            Problems(listOf("${BundleVerifier.BUNDLE_FILE}: could not be checked on this device"))
         }
-        val problems = BundleVerifier.verify(entry.raw, downloaded)
-        if (problems.isNotEmpty()) return InstallResult.Failed(problems, kept())
-        val bundle = TalkBundle.decode(entry.contentHash, downloaded.getValue(BundleVerifier.BUNDLE_FILE))
-            ?: return InstallResult.Failed(listOf("${BundleVerifier.BUNDLE_FILE}: does not match the schema"), kept())
-        if (bundle.conference.slug != slug) {
-            return InstallResult.Failed(listOf("${BundleVerifier.BUNDLE_FILE}: belongs to another conference"), kept())
-        }
+        if (checked is Problems) return InstallResult.Failed(checked.problems, kept())
+        val (decoded, downloaded) = checked as Verified
         val stored = commit.withLock {
             try {
                 files.write(backend, entry.contentHash, downloaded)
-                database.install(scope, bundle, nowMs())
+                database.install(scope, decoded, nowMs())
                 val keep = database.installedBundles().filterKeys { it.startsWith(scopePrefix(backend)) }.values.toSet()
                 files.prune(backend, keep)
                 true
@@ -150,7 +141,39 @@ class BundleSync(
             }
         }
         if (!stored) return InstallResult.Failed(listOf("the bundle could not be stored"), kept())
-        return InstallResult.Installed(bundle, updated = true)
+        return InstallResult.Installed(decoded, updated = true)
+    }
+
+    private sealed interface Checked
+
+    private class Problems(val problems: List<String>) : Checked
+
+    private data class Verified(val bundle: TalkBundle, val files: Map<String, ByteArray>) : Checked
+
+    // Downloads the entry's files one after the other, each no longer than the index says, then
+    // verifies and decodes them.
+    private suspend fun downloadAndVerify(bundleBase: String, slug: String, entry: BundleEntry): Checked {
+        val downloaded = HashMap<String, ByteArray>()
+        for (name in BundleVerifier.BUNDLE_FILES) {
+            val expected = entry.files.getValue(name).bytes
+            val response = try {
+                http.get("$bundleBase${entry.path}$name", ifNoneMatch = null, maxBytes = expected)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ResponseTooLarge) {
+                return Problems(listOf("$name: larger than the index says"))
+            } catch (e: Exception) {
+                return Problems(listOf("$name: $DOWNLOAD_FAILED"))
+            }
+            if (response.status != 200) return Problems(listOf("$name: status ${response.status}"))
+            downloaded[name] = response.body
+        }
+        val problems = BundleVerifier.verify(entry.raw, downloaded)
+        if (problems.isNotEmpty()) return Problems(problems)
+        val bundle = TalkBundle.decode(entry.contentHash, downloaded.getValue(BundleVerifier.BUNDLE_FILE))
+            ?: return Problems(listOf("${BundleVerifier.BUNDLE_FILE}: does not match the schema"))
+        if (bundle.conference.slug != slug) return Problems(listOf("${BundleVerifier.BUNDLE_FILE}: belongs to another conference"))
+        return Verified(bundle, downloaded)
     }
 
     private fun parse(body: ByteArray): ConferenceIndex? = try {
@@ -165,11 +188,47 @@ class BundleSync(
         /** The problem an install reports when a file could not be downloaded. */
         const val DOWNLOAD_FAILED = "download failed"
 
-        /** conferences.json lists every conference; a few hundred KB at most. */
-        const val MAX_INDEX_BYTES = 8L * 1024 * 1024
+        /**
+         * conferences.json lists every conference in about 1.3 KB each, so this holds some 750; it
+         * also keeps the list's request timeout at about two minutes (KtorHttp.requestTimeoutFor).
+         */
+        const val MAX_INDEX_BYTES = 1L * 1024 * 1024
 
-        /** No bundle file is expected to come near this; KubeCon's bundle.json is about 1.3 MB. */
-        const val MAX_FILE_BYTES = 64L * 1024 * 1024
+        /**
+         * The largest bundle.json the app reads. KubeCon North America's, with 484 talks, is about
+         * 1.3 MB; the cap leaves room for ten times that. Reading one means its bytes, its text
+         * and its JSON tree at once, so the cap is what keeps a hostile index from exhausting memory.
+         */
+        const val MAX_BUNDLE_JSON_BYTES = 16L * 1024 * 1024
+
+        /** The largest vectors.i8: 384 bytes a row, so some 87,000 rows. KubeCon's is 215 KB. */
+        const val MAX_VECTOR_BYTES = 32L * 1024 * 1024
+
+        /** The cap of each bundle file, by name. */
+        fun maxBytes(name: String): Long? = when (name) {
+            BundleVerifier.BUNDLE_FILE -> MAX_BUNDLE_JSON_BYTES
+            BundleVerifier.VECTOR_FILE -> MAX_VECTOR_BYTES
+            else -> null
+        }
+
+        /**
+         * Why the sizes [entry] lists cannot be downloaded, or null: a file missing from the list,
+         * one larger than its cap, or a vector file whose size is not the entry's vector count times
+         * its dimensions (which the verifier would refuse after the download anyway).
+         */
+        fun sizeProblem(entry: BundleEntry): String? {
+            for (name in BundleVerifier.BUNDLE_FILES) {
+                val bytes = entry.files[name]?.bytes ?: return "$name: not listed"
+                val cap = maxBytes(name) ?: return "$name: not a bundle file"
+                if (bytes > cap) return "$name: larger than the app accepts"
+            }
+            val count = entry.vectorCount?.toLong() ?: return "${BundleVerifier.VECTOR_FILE}: no vector count"
+            val dims = entry.dims?.toLong() ?: return "${BundleVerifier.VECTOR_FILE}: no dimensions"
+            if (entry.files.getValue(BundleVerifier.VECTOR_FILE).bytes != count * dims) {
+                return "${BundleVerifier.VECTOR_FILE}: size is not the vector count times the dimensions"
+            }
+            return null
+        }
 
         private val json = Json
 

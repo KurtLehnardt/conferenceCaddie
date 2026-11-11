@@ -121,7 +121,26 @@ class KtorHttpTest {
         assertEquals(KtorHttp.REQUEST_TIMEOUT_MS, KtorHttp.requestTimeoutFor(400_000))
         // KubeCon's bundle.json is about 1.3 MB: 2 minutes and 46 seconds at 8 KB/s.
         assertEquals(166_000L, KtorHttp.requestTimeoutFor(1_365_000))
-        // The largest file the app accepts may take over two hours at the slowest rate.
-        assertEquals(8_192_000L, KtorHttp.requestTimeoutFor(64L * 1024 * 1024))
+        // The conference list's cap keeps its timeout near two minutes.
+        assertEquals(128_000L, KtorHttp.requestTimeoutFor(app.conferencecaddie.shared.bundle.BundleSync.MAX_INDEX_BYTES))
+        // The largest file the app accepts (vectors.i8) may take over an hour at the slowest rate.
+        assertEquals(4_096_000L, KtorHttp.requestTimeoutFor(app.conferencecaddie.shared.bundle.BundleSync.MAX_VECTOR_BYTES))
+    }
+
+    @Test
+    fun aBodyOfTheDeclaredLengthIsReadIntoOneArray() = test {
+        val bytes = ByteArray(200_000) { (it % 251).toByte() }
+        val body = KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 200_000, declared = 200_000)
+        assertContentEquals(bytes, body)
+    }
+
+    @Test
+    fun aBodyLongerThanDeclaredGrowsUpToTheLimit() = test {
+        // A compressed body declares its compressed length; the read grows past it.
+        val bytes = ByteArray(300_000) { 7 }
+        assertContentEquals(bytes, KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 300_000, declared = 1_000))
+        assertContentEquals(bytes, KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 1_000_000, declared = null))
+        assertFailsWith<ResponseTooLarge> { KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 299_999, declared = 299_999) }
+        assertContentEquals(ByteArray(0), KtorHttp.readBounded(ByteReadChannel(ByteArray(0)), maxBytes = 10, declared = null))
     }
 }
