@@ -1,10 +1,10 @@
 {
   "snapshot": {
     "taken_on": "2026-11-11",
-    "fetched_at": "2026-11-11T07:19:04Z",
-    "source": "GET https://conference-caddie.krlehnardt.workers.dev/api/topics?event=kubecon-cloudnativecon-north-america-2026",
+    "fetched_at": "2026-11-11T08:23:27Z",
+    "source": "GET https://conference-caddie-265846417372.us-west1.run.app/api/topics?event=kubecon-cloudnativecon-north-america-2026",
     "status": 200,
-    "note": "Public data from the live tier 2 Worker, refreshed for the KubeCon North America 2026 data of 2026-11-11 (485 talks): the tier 3 service had not ingested that data yet. The Worker keeps each topic's rank from the first ingest and refreshes only talk_count, so the entries are put in the topics builder's order (talk_count descending, then label, then topic_id); ids, labels and counts are as served. The Node topics builder is diffed against these lists. A snapshot, not a contract: it is never refreshed automatically."
+    "note": "Public data from the live tier 3 service, taken again on 2026-11-11 after the KubeCon North America 2026 data of 2026-11-11 (485 talks) was ingested there; the first snapshot was taken on 2026-11-10. The Node topics builder is diffed against these lists before Elasticsearch is decommissioned. A snapshot, not a contract: it is never refreshed automatically."
   },
   "event": "kubecon-cloudnativecon-north-america-2026",
   "topics": [

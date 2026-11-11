@@ -78,6 +78,9 @@ test('BLE golden vectors and resolution cases match their schemas', () => {
   assertValid(validator('ble-fixtures.v1')(readJson(FIX, 'ble/golden-vectors.v1.json')), 'root oneOf');
 });
 
+// Every live topic snapshot is a response of the tier 3 service, where scripts/topics.mjs builds the lists.
+const SNAPSHOT_HOST = 'https://conference-caddie-265846417372.us-west1.run.app';
+
 test('live topic snapshots match the snapshot schema and the topics API rules', () => {
   const check = validator('topics-snapshot.v1');
   const files = jsonFiles(path.join(FIX, 'topics-live'));
@@ -94,7 +97,7 @@ test('live topic snapshots match the snapshot schema and the topics API rules', 
     // Taken on 2026-11-10; a snapshot refreshed for newer data says when (KubeCon NA on 2026-11-11).
     assert.equal(snap.snapshot.taken_on, snap.snapshot.fetched_at.slice(0, 10), `${f} taken_on`);
     assert.ok(snap.snapshot.taken_on >= '2026-11-10', `${f} taken_on`);
-    assert.ok(snap.snapshot.source.endsWith(`?event=${snap.event}`));
+    assert.equal(snap.snapshot.source, `GET ${SNAPSHOT_HOST}/api/topics?event=${snap.event}`, `${f} source`);
     // Sorted by rank: talk_count descending (CONTRACT.md: ties by label).
     for (let i = 1; i < snap.topics.length; i++) assert.ok(snap.topics[i - 1].talk_count >= snap.topics[i].talk_count, `${f} order at ${i}`);
     assert.equal(new Set(snap.topics.map((t) => t.topic_id)).size, snap.topics.length, `${f} duplicate topic`);
