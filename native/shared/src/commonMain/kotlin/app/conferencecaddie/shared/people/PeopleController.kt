@@ -9,7 +9,6 @@ import app.conferencecaddie.shared.PeopleServices
 import app.conferencecaddie.shared.PushToken
 import app.conferencecaddie.shared.SystemSettings
 import app.conferencecaddie.shared.core.CoreState
-import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.ApiHttp
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Clock
@@ -733,7 +732,7 @@ class PeopleController(
         var hasDevice = false
 
         override val clock: Clock get() = this@PeopleController.clock
-        override val recordsInMemory: Boolean get() = context?.storageInMemory == true
+        override val recordsInMemory: Boolean get() = context?.storageInMemory == true || keyValue.inMemory
         override val location: LocationProvider get() = services.location
         override val notifier: Notifier get() = services.notifier
         override val timeZone: TimeZone get() = this@PeopleController.timeZone
@@ -1091,18 +1090,19 @@ class PeopleController(
         const val COUNT_TTL_MS = 60_000L
 
         /**
-         * The controller for the app: its records in [database]'s settings table, its requests
-         * through [http] (the app's [app.conferencecaddie.shared.net.KtorHttp], which is also the
-         * core's [app.conferencecaddie.shared.net.Http]), and the platform's [services]. Bind it to
-         * the core with [bind].
+         * The controller for the app: its records in [records] (the app's [PeopleDatabase], which
+         * no backup carries), its requests through [http] (the app's
+         * [app.conferencecaddie.shared.net.KtorHttp], which is also the core's
+         * [app.conferencecaddie.shared.net.Http]), and the platform's [services]. Bind it to the
+         * core with [bind].
          */
         fun create(
-            database: CaddieDatabase,
+            records: PeopleKeyValue,
             http: ApiHttp,
             services: PeopleServices,
             scope: CoroutineScope,
             allowLocalHttp: Boolean,
-        ): PeopleController = PeopleController(PeopleKeyValue.forDatabase(database), http, services, scope, allowLocalHttp)
+        ): PeopleController = PeopleController(records, http, services, scope, allowLocalHttp)
 
         /** Returns a short message when [profile] cannot be sent (no name, a malformed LinkedIn link), else null. */
         fun profileProblem(profile: Profile?): String? = ProfileSync.profileProblem(profile)

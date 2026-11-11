@@ -5,9 +5,9 @@ import kotlinx.serialization.Serializable
 
 // The device-side records of the people features, as web/src/people/storage.ts keeps them (types.ts
 // names them). They are immutable values: the screens read them from PeopleUiState, and only the
-// controller writes them, through PeopleStore. Each is stored as JSON in the settings table of
-// CaddieDatabase, under keys scoped by the normalised backend base (and the conference slug where
-// the web scopes by slug).
+// controller writes them, through PeopleStore. Each is stored as JSON in PeopleDatabase, a file
+// that no backup carries, under keys scoped by the normalised backend base (and the conference slug
+// where the web scopes by slug).
 
 /** The topics chosen for one conference. */
 @Serializable
