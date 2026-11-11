@@ -284,7 +284,10 @@ async function storedTopics(admin, slug) {
   try {
     stored = (await admin('GET', `/admin/topics?event=${encodeURIComponent(slug)}`)).topics;
   } catch (e) {
-    // A conference the Worker does not know yet has no topics to freeze.
+    // A 404 is the Worker's answer to a failed admin authorization (an unknown conference answers 400
+    // instead), and in a dry run push-ingest's softAdmin turns any error into a 404. It means "nothing
+    // stored" and not an error because a real run has already sent PUT /admin/conferences with the same
+    // token, so a failed authorization would have stopped it there, and a dry run sends nothing.
     if (e.status !== 404) throw e;
     stored = [];
   }
@@ -295,7 +298,7 @@ async function storedTopics(admin, slug) {
 // Chooses between the stored list and a fresh one. `admin` is an adminClient or null.
 // Returns { mode, topics, assignments, warnings, collapsed } where mode is 'frozen', 'built'
 // (the Worker holds no topics yet, or --rebuild-topics), or 'built-offline' (no Worker to ask).
-// A rebuild that finds no topics while the Worker holds some throws before anything is sent,
+// A rebuild that finds no topics while the Worker holds some throws before any talk or topic is sent,
 // unless allowEmpty (--allow-empty) is given; PUT /admin/topics refuses that change too.
 export async function resolveTopics(talks, { slug, admin = null, rebuild = false, allowEmpty = false, stop = loadStoplist() }) {
   const topicTalks = talks.filter((t) => t.kind === 'talk');
@@ -307,7 +310,7 @@ export async function resolveTopics(talks, { slug, admin = null, rebuild = false
   const built = buildTopics(topicTalks, { slug, stop });
   if (admin && built.topics.length === 0 && !allowEmpty) {
     const n = (stored ?? await storedTopics(admin, slug)).length;
-    if (n > 0) throw new Error(`${slug}: the rebuilt topic list is empty and would replace the ${n} stored topics; nothing was sent. Re-run with --allow-empty if the conference really has no topics.`);
+    if (n > 0) throw new Error(`${slug}: the rebuilt topic list is empty and would replace the ${n} stored topics; no talk or topic was sent. Re-run with --allow-empty if the conference really has no topics.`);
   }
   return { mode: admin ? 'built' : 'built-offline', ...built };
 }

@@ -236,7 +236,9 @@ test('a rebuild that finds no topics never replaces a stored list unless allowEm
   await ingest(worker, talksWith({ alpha: 5, beta: 4 }));
   assert.deepEqual(worker.served(), ['alpha', 'beta']);
   const tiny = talksWith({ alpha: 1, beta: 2 });
-  await assert.rejects(resolveTopics(tiny, { slug: SLUG, admin: worker.admin, rebuild: true, stop }), /would replace the 2 stored topics; nothing was sent/);
+  await assert.rejects(resolveTopics(tiny, { slug: SLUG, admin: worker.admin, rebuild: true, stop }), /would replace the 2 stored topics; no talk or topic was sent/);
+  // resolveTopics only reads, so this holds with or without the refusal; the check that nothing was
+  // sent at all is in scripts/test/push-takedowns.test.mjs, at the pushEvent level.
   assert.deepEqual(worker.served(), ['alpha', 'beta']);
   // Without --rebuild-topics the stored list stays frozen, with the new counts.
   const frozen = await resolveTopics(tiny, { slug: SLUG, admin: worker.admin, stop });
