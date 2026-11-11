@@ -77,8 +77,10 @@ import app.conferencecaddie.ui.platform.PickedFile
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 
 /**
@@ -174,7 +176,9 @@ class ImportModel(
         job?.cancel()
         busy = true
         error = null
-        job = scope.launch {
+        // Started lazily, so [job] names this import before any of it runs: a cancelled earlier
+        // import, whose cleanup can run after this one started, then leaves the state alone.
+        val launched = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 when (val outcome = run(input)) {
                     is ImportOutcome.Done -> {
@@ -191,9 +195,11 @@ class ImportModel(
             } catch (_: Exception) {
                 error = Strings.Import.UNAVAILABLE
             } finally {
-                busy = false
+                if (job === coroutineContext.job) busy = false
             }
         }
+        job = launched
+        launched.start()
     }
 
     private fun message(r: ImportOutcome.Refused): String = when (r.reason) {
