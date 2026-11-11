@@ -29,7 +29,7 @@ Object.assign(process.env, {
 });
 
 const people = await import('../server/people.mjs');
-const { handlePushApi, registrationId, subscriptionId, pushTargetsFor, TARGETS_PER_PROFILE } = await import('../server/push.mjs');
+const { handlePushApi, registrationId, subscriptionId, pushTargetsFor, deleteRegistrationIfUnchanged, TARGETS_PER_PROFILE } = await import('../server/push.mjs');
 const { currentCapabilities } = await import('../server/capabilities.mjs');
 const CAPABILITIES = currentCapabilities();
 const { validator } = await import('../contracts/js/schemas.mjs');
@@ -283,9 +283,46 @@ test('pushTargetsFor reads subscriptions and registrations back for nudge.mjs, a
   const fcmId = registrationId(EVENT, device.profileId, 'fcm');
   assert.deepEqual(Object.keys(byId).sort(), [subscriptionId('https://push.example.test/sub'), apnsId, fcmId, othersId, 'sandbox'].sort());
   assert.deepEqual(byId[subscriptionId('https://push.example.test/sub')].subscription, { endpoint: 'https://push.example.test/sub', keys: { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) } });
-  assert.deepEqual(byId[apnsId], { id: apnsId, profile_id: device.profileId, native: { platform: 'apns', token: tokens.apns, environment: 'production' } });
+  const guardOf = (id) => ({ seqNo: cluster.docs(INDEX.push).get(id).seq, primaryTerm: 1 });
+  assert.deepEqual(byId[apnsId], { id: apnsId, profile_id: device.profileId, native: { platform: 'apns', token: tokens.apns, environment: 'production' }, guard: guardOf(apnsId) });
   assert.deepEqual(byId[fcmId].native, { platform: 'fcm', token: tokens.fcm, environment: 'production' });
+  assert.deepEqual(byId[fcmId].guard, guardOf(fcmId), 'a registration carries the version it was read at');
   assert.equal(byId.sandbox.native.environment, 'sandbox');
+  assert.equal(byId[subscriptionId('https://push.example.test/sub')].guard, undefined, 'a subscription is deleted by id alone');
+});
+
+test('a registration reported gone is deleted only while it is the document that was read', async () => {
+  const { cluster, device } = await withRegistrations();
+  const apnsId = registrationId(EVENT, device.profileId, 'apns');
+  const [read] = (await pushTargetsFor(EVENT, [device.profileId])).filter((t) => t.id === apnsId);
+  // The device registers a new token after the push went out: the document is rewritten.
+  const fresh = apnsToken();
+  assert.equal((await put(device, { event: EVENT, platform: 'apns', token: fresh })).status, 200);
+  await deleteRegistrationIfUnchanged(apnsId, read.guard);
+  assert.equal(cluster.source(INDEX.push, apnsId)?.token, fresh, 'the new token stays');
+  const attempt = cluster.log.findLast((e) => e.method === 'DELETE' && e.path === `/${INDEX.push}/_doc/${apnsId}`);
+  assert.equal(attempt.params.get('if_seq_no'), String(read.guard.seqNo));
+  assert.equal(attempt.params.get('if_primary_term'), '1');
+  // Unchanged since it was read: deleted. Already gone: nothing to do, and no error.
+  const [again] = (await pushTargetsFor(EVENT, [device.profileId])).filter((t) => t.id === apnsId);
+  await deleteRegistrationIfUnchanged(apnsId, again.guard);
+  assert.equal(cluster.source(INDEX.push, apnsId), null);
+  await deleteRegistrationIfUnchanged(apnsId, again.guard);
+  assert.ok(cluster.source(INDEX.push, registrationId(EVENT, device.profileId, 'fcm')), 'the other platform is untouched');
+});
+
+test('a delayed retry of an older PUT is the last write and wins until the device registers again (documented, DECISIONS.md)', async () => {
+  // The server can only order requests by arrival: a retry of the old token's PUT that arrives
+  // after the new token's is, to the server, the newer registration. The contract has the app
+  // send one registration call at a time and register its current token at every start.
+  const { cluster, device } = setup();
+  const [old, rotated] = [fcmToken(), fcmToken()];
+  const id = registrationId(EVENT, device.profileId, 'fcm');
+  for (const token of [old, rotated, old]) assert.equal((await put(device, { event: EVENT, platform: 'fcm', token })).status, 200);
+  assert.equal(cluster.source(INDEX.push, id).token, old, 'last write wins');
+  assert.equal((await put(device, { event: EVENT, platform: 'fcm', token: rotated })).status, 200, 'the next start');
+  assert.equal(cluster.source(INDEX.push, id).token, rotated);
+  assert.equal(cluster.ids(INDEX.push).length, 1);
 });
 
 test('pushTargetsFor reads every receiver in one search, so one receiver with many subscriptions cannot crowd another out', async () => {

@@ -34,13 +34,14 @@
 //   (peopleQuery drops hidden documents; sample ones are filtered here). So a hidden profile's
 //   text never reaches anyone through a push, and no sample profile can push a real attendee.
 // - A subscription the push service reports gone (404 or 410) is deleted, and so is a native
-//   registration that APNs or FCM reports gone (native-push.mjs says when).
+//   registration that APNs or FCM reports gone (native-push.mjs says when), but only while it is
+//   unchanged since it was read: a token the device rotated to in the meantime is kept.
 
 import {
   people, idx, NUDGES_INDEX, UpstreamError,
   peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf, SEMANTIC_FLOORS,
 } from './people.mjs';
-import { pushTargetsFor, deleteSubscriptionById } from './push.mjs';
+import { pushTargetsFor, deleteSubscriptionById, deleteRegistrationIfUnchanged } from './push.mjs';
 import { NATIVE_PUSH } from './native-push.mjs';
 
 const CANDIDATES = 20;
@@ -123,8 +124,10 @@ async function recentCount(eventId, profileId, nowMs) {
 
 // Sends one nudge to every subscription and native registration of one person: the Web Push
 // payload to each subscription, and the generic native alert, which takes no payload, to each
-// registration. A subscription the push service reports gone (404 or 410), or a registration APNs
-// or FCM reports gone, is deleted; the ids of those are returned so the caller stops using them.
+// registration. A subscription the push service reports gone (404 or 410) is deleted, and a
+// registration APNs or FCM reports gone is deleted only while it is unchanged since it was read
+// (its guard), so a token the device registered while the push was out stays; the ids of both are
+// returned so the caller stops using them.
 async function pushTo(send, subs, payload) {
   const data = JSON.stringify(payload);
   const gone = [];
@@ -132,7 +135,7 @@ async function pushTo(send, subs, payload) {
     if (s.native) {
       if ((await NATIVE_PUSH.send(s.native, { ttl: TTL_SECONDS })) === 'gone') {
         gone.push(s.id);
-        await deleteSubscriptionById(s.id).catch(() => undefined);
+        if (s.guard) await deleteRegistrationIfUnchanged(s.id, s.guard).catch(() => undefined);
       }
       continue;
     }

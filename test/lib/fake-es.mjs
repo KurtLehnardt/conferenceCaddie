@@ -287,6 +287,13 @@ globalThis.fetch = async (input, init = {}) => {
     return json({ result: s === 409 ? 'conflict' : 'ok' }, s === 409 ? 409 : 200);
   }
   if (op === '_doc' && method === 'DELETE') {
+    // A guarded delete (if_seq_no, if_primary_term) of a document that changed since, or of one
+    // that is missing, is a 409, as in Elasticsearch; every primary term here is 1.
+    const ifSeq = url.searchParams.get('if_seq_no');
+    if (ifSeq !== null) {
+      const cur = fake.store(index).get(id);
+      if (!cur || cur.seq !== Number(ifSeq) || Number(url.searchParams.get('if_primary_term')) !== 1) return json({ error: { type: 'version_conflict_engine_exception' } }, 409);
+    }
     const had = fake.store(index).delete(id);
     return json({ result: had ? 'deleted' : 'not_found' }, had ? 200 : 404);
   }

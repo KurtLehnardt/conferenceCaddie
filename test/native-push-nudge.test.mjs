@@ -27,7 +27,8 @@ const { nudgeAfterPresence } = await import('../server/nudge.mjs');
 const { registrationId } = await import('../server/push.mjs');
 const { refFor } = await import('../server/device.mjs');
 
-// Answers the stub gives for particular tokens ({ status, body }); every other push gets 201.
+// Answers the stub gives for particular tokens ({ status, body, meanwhile }); every other push gets
+// 201. meanwhile, when set, runs while the push is out, before the answer.
 const answers = new Map();
 const recorded = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
@@ -38,6 +39,7 @@ globalThis.fetch = async (input, init = {}) => {
     const answer = token ? answers.get(token) : undefined;
     if (answer) {
       fake.pushes.push(entry);
+      await answer.meanwhile?.();
       return new Response(JSON.stringify(answer.body), { status: answer.status });
     }
   }
@@ -251,5 +253,27 @@ describe('push nudge with native push', () => {
     assert.equal(store.has(registrationId(EVENT, w.profileId, 'apns')), true, 'APNs 400 DeviceTokenNotForTopic: kept, since a wrong topic gives it for every token');
     assert.equal(store.has(registrationId(EVENT, w.profileId, 'fcm')), true, 'FCM 429: kept');
     assert.deepEqual(lines.sort(), ['Native push failed: apns 400 DeviceTokenNotForTopic', 'Native push failed: fcm 429 QUOTA_EXCEEDED', 'Native push failed: fcm 503 UNAVAILABLE']);
+    const deletes = fake.calls.filter((c) => c.index === 'caddie-people-push' && c.method === 'DELETE');
+    assert.equal(deletes.length, 3);
+    assert.ok(deletes.every((c) => c.params.has('if_seq_no') && c.params.get('if_primary_term') === '1'), 'each delete is guarded by the version that was read');
+  });
+
+  test('a token reported gone after the device registered a new one: the new registration stays', async () => {
+    const [oldApns, newApns, oldFcm, newFcm] = [apnsToken(), apnsToken(), fcmToken(), fcmToken()];
+    const { t, v, me } = await pair({ apns: oldApns }, { fcm: oldFcm });
+    const fcmError = (code, status, errorCode) => ({ error: { code, status, details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode }] } });
+    // While each push is out, the device registers the token the platform rotated to, and then the
+    // platform answers that the old token is gone.
+    const rotate = (d, platform, token) => () => {
+      const id = registrationId(EVENT, d.profileId, platform);
+      fake.put('caddie-people-push', id, { ...fake.doc('caddie-people-push', id), token, created_at: new Date().toISOString() });
+    };
+    answers.set(oldApns, { status: 410, body: { reason: 'Unregistered', timestamp: Date.now() }, meanwhile: rotate(t, 'apns', newApns) });
+    answers.set(oldFcm, { status: 404, body: fcmError(404, 'NOT_FOUND', 'UNREGISTERED'), meanwhile: rotate(v, 'fcm', newFcm) });
+    await nudgeAfterPresence(me, CONF);
+    assert.equal(fake.pushes.length, 2);
+    assert.equal(fake.doc('caddie-people-push', registrationId(EVENT, t.profileId, 'apns'))?.token, newApns, 'APNs: the new token stays');
+    assert.equal(fake.doc('caddie-people-push', registrationId(EVENT, v.profileId, 'fcm'))?.token, newFcm, 'FCM: the new token stays');
+    assert.equal(fake.calls.filter((c) => c.index === 'caddie-people-push' && c.method === 'DELETE').length, 2, 'both deletes were tried, and refused');
   });
 });

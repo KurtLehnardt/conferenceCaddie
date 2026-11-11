@@ -212,12 +212,14 @@ export const TARGETS_PER_PROFILE = 10;
 
 // Every live Web Push subscription and native registration of these people at one conference,
 // as [{ id, profile_id, subscription: { endpoint, keys: { p256dh, auth } } }] for a subscription
-// and [{ id, profile_id, native: { platform, token, environment } }] for a registration. Used by
-// nudge.mjs. One search per nudge, as before native push: a terms aggregation on profile_id gives
-// one bucket per person (at most 21: the writer and the 20 candidates), and its top_hits the
-// newest TARGETS_PER_PROFILE documents of each (created_at descending). So one person's many
-// subscriptions can never crowd another person's out, and the pushes one nudge sends stay
-// bounded. A person over the cap is one log line, without an id.
+// and [{ id, profile_id, native: { platform, token, environment }, guard: { seqNo, primaryTerm } }]
+// for a registration. Used by nudge.mjs. One search per nudge, as before native push: a terms
+// aggregation on profile_id gives one bucket per person (at most 21: the writer and the 20
+// candidates), and its top_hits the newest TARGETS_PER_PROFILE documents of each (created_at
+// descending). So one person's many subscriptions can never crowd another person's out, and the
+// pushes one nudge sends stay bounded. A person over the cap is one log line, without an id. A
+// registration's guard is the _seq_no and _primary_term it was read with, so that one APNs or FCM
+// reports gone is deleted only while it is still that document (deleteRegistrationIfUnchanged).
 export async function pushTargetsFor(eventId, profileIds) {
   const ids = [...new Set(profileIds)].filter(Boolean);
   if (!ids.length) return [];
@@ -233,6 +235,7 @@ export async function pushTargetsFor(eventId, profileIds) {
               size: TARGETS_PER_PROFILE,
               sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }],
               _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth', 'platform', 'token', 'environment'],
+              seq_no_primary_term: true,
             },
           },
         },
@@ -252,14 +255,24 @@ export async function pushTargetsFor(eventId, profileIds) {
     const token = nativeTokenOf(source.platform, source.token);
     if (!token) return [];
     const environment = source.platform === 'apns' && source.environment === 'sandbox' ? 'sandbox' : 'production';
-    return [{ id: h._id, profile_id: source.profile_id, native: { platform: source.platform, token, environment } }];
+    const guard = Number.isInteger(h._seq_no) && Number.isInteger(h._primary_term) ? { seqNo: h._seq_no, primaryTerm: h._primary_term } : null;
+    return [{ id: h._id, profile_id: source.profile_id, native: { platform: source.platform, token, environment }, guard }];
   });
 }
 
-// Removes a subscription the push service said is gone (404 or 410), or a native registration
-// APNs or FCM said is gone.
+// Removes a subscription the push service said is gone (404 or 410). Its id is the hash of its
+// endpoint, and a gone endpoint stays gone, so it is deleted by id alone.
 export async function deleteSubscriptionById(id) {
   await people('DELETE', `${idx(PUSH_INDEX)}/_doc/${encodeURIComponent(id)}`, undefined, { okStatuses: [404] });
+}
+
+// Removes a native registration APNs or FCM said is gone, but only while it is unchanged since
+// pushTargetsFor read it (if_seq_no and if_primary_term): a registration is one document per
+// device, platform and conference, so a token the device registered in the meantime has rewritten
+// it, and stays. 404 (already removed) and 409 (rewritten since) both leave nothing to do, as in
+// deleteRegistration.
+export async function deleteRegistrationIfUnchanged(id, guard) {
+  await people('DELETE', `${idx(PUSH_INDEX)}/_doc/${encodeURIComponent(id)}?if_seq_no=${guard.seqNo}&if_primary_term=${guard.primaryTerm}`, undefined, { okStatuses: [404, 409] });
 }
 
 const ROUTES = {
