@@ -3,7 +3,9 @@
 //
 // Usage:
 //   node worker/ingest/push-ingest.mjs --api <base> [--event <slug> ... | --events-from <file>] [--dry-run]
-//                                      [--rebuild-topics] [--report <file>]
+//                                      [--rebuild-topics] [--allow-shrink] [--report <file>]
+// --allow-shrink lets finalize delete more than 10 talks and more than 10% of a conference's talks,
+// which the Worker otherwise refuses (409) so a short feed cannot erase people's sharing.
 // Env: ADMIN_TOKEN, or ADMIN_TOKEN_FILE naming a file that holds it (not needed with --dry-run).
 //
 // Steps:
@@ -23,6 +25,16 @@
 //    d. PUT /admin/topics and PUT /admin/facets.
 //    Finalize is skipped for an event whose batches did not all succeed, so a failed run never
 //    deletes talks.
+// Takedowns: data/takedowns.json is applied to every talk file before anything is computed from it,
+// with the bundle builder's own applyTakedowns (scripts/build-bundles.mjs), so a talk taken down is
+// not sent (finalize then deletes it from the Worker) and a speaker taken down is removed with their
+// tagline and profile, from the talks, the topics and the facets, exactly as in the talk bundles.
+// A redacted talk gets a new content_hash, so the Worker stores the change. The conference document's
+// counts follow the talks that remain. The file is validated as the bundle build validates it (a bad
+// file stops the run before anything is sent), and an entry that matches nothing in a conference's
+// talk file fails that conference, as it fails the bundle build. A takedown reaches the Worker the next
+// time the conference is pushed: for a conference the ingest no longer fetches, push it with --event
+// (docs/FREE_HOSTING.md, Operations runbook).
 // Output is counts only. Exit code: 0 when every event was pushed, 2 when one failed, 1 on a
 // usage error.
 //
@@ -43,6 +55,8 @@ import { resolveTopics, loadStoplist } from './topics-local.mjs';
 import { buildFacets, countByKind } from './facets-local.mjs';
 import { MODEL } from '../../contracts/js/bundle.mjs';
 import { CONVENTIONS } from '../src/lib/embed.js';
+import { applyTakedowns, loadTakedowns } from '../../scripts/build-bundles.mjs';
+import { contentHash } from '../../scripts/lib/hash.mjs';
 
 const DATA = join(ROOT, 'data');
 
@@ -84,10 +98,46 @@ function allSlugs() {
     .sort();
 }
 
-// Pushes one event. Returns a one-line summary. Throws on the first failure.
-async function pushEvent(conf, { admin, dryRun, generation, rebuild, stop }) {
+const SPEAKER_FIELDS = ['speakers', 'speaker_taglines', 'speaker_profiles'];
+
+/**
+ * The talks of one conference as the Worker gets them: the takedowns of data/takedowns.json applied
+ * with applyTakedowns, the function the bundle build uses. A talk whose speakers a takedown changed
+ * gets its content_hash recomputed, because the Worker skips a talk whose hash it already holds.
+ * Throws when an entry for this conference matches nothing (and is not marked purged).
+ * Returns { talks, dropped, redacted, entries }.
+ */
+export function workerTalks(slug, talks, takedowns) {
+  const entries = takedowns.filter((e) => e.slug === slug).length;
+  if (!entries) return { talks, dropped: 0, redacted: 0, entries };
+  const before = new Map(talks.map((t) => [t.talk_id, t]));
+  let redacted = 0;
+  const out = applyTakedowns(slug, talks, takedowns).talks.map((t) => {
+    const prev = before.get(t.talk_id);
+    if (SPEAKER_FIELDS.every((k) => JSON.stringify(prev[k]) === JSON.stringify(t[k]))) return prev;
+    redacted++;
+    return { ...t, content_hash: contentHash(t) };
+  });
+  return { talks: out, dropped: talks.length - out.length, redacted, entries };
+}
+
+/** The counts block of a conference document, recomputed over the talks that remain after takedowns. */
+export function countsAfterTakedowns(counts, talks) {
+  const next = { ...counts, sessions: talks.length, with_slides: 0, sponsor: 0 };
+  for (const kind of ['talk', 'ambient', 'break', 'housekeeping']) next[kind] = 0;
+  for (const t of talks) {
+    if (t.kind in next) next[t.kind]++;
+    if (t.has_slides) next.with_slides++;
+    if (t.sponsor) next.sponsor++;
+  }
+  return next;
+}
+
+// Pushes one event from its prepared talks (workerTalks). Returns a one-line summary. Throws on the
+// first failure.
+export async function pushEvent(conf, prepared, { admin, dryRun, generation, rebuild, stop, allowShrink = false }) {
   const slug = conf.slug;
-  const talks = readNdjson(join(DATA, slug, 'talks.ndjson'));
+  const { talks } = prepared;
   if (talks.length === 0) return `${slug}: skipped, the talk file is empty.`;
 
   const topicResult = await resolveTopics(talks, { slug, admin, rebuild, stop });
@@ -95,7 +145,8 @@ async function pushEvent(conf, { admin, dryRun, generation, rebuild, stop }) {
   const facets = buildFacets(slug, talks);
   const batches = chunk(payloadTalks, TALK_BATCH);
   const kinds = countByKind(facets);
-  const head = `${slug}: ${talks.length} talks in ${batches.length} batches, ${topicResult.topics.length} topics (${topicResult.mode}), ${facets.length} facets (${kinds.track} tracks, ${kinds.room} rooms, ${kinds.speaker} speakers, ${kinds.tag} tags)`;
+  const takedown = prepared.entries ? `, takedowns ${prepared.entries} (${prepared.dropped} talks dropped, ${prepared.redacted} redacted)` : '';
+  const head = `${slug}: ${talks.length} talks in ${batches.length} batches, ${topicResult.topics.length} topics (${topicResult.mode}), ${facets.length} facets (${kinds.track} tracks, ${kinds.room} rooms, ${kinds.speaker} speakers, ${kinds.tag} tags)${takedown}`;
   if (dryRun) return `${head}; dry run, nothing sent.`;
 
   const eventQuery = `?event=${encodeURIComponent(slug)}`;
@@ -105,10 +156,10 @@ async function pushEvent(conf, { admin, dryRun, generation, rebuild, stop }) {
     for (const k of Object.keys(total)) total[k] += Number(r[k]) || 0;
   }
   const pendingAfter = total.pending > 0 ? await drainPending(admin, slug) : 0;
-  const fin = await admin('POST', `/admin/talks/finalize${eventQuery}`, { generation });
+  const fin = await admin('POST', `/admin/talks/finalize${eventQuery}`, allowShrink ? { generation, allow_shrink: true } : { generation });
   const tp = await admin('PUT', `/admin/topics${eventQuery}`, { topics: topicResult.topics });
   const fc = await admin('PUT', `/admin/facets${eventQuery}`, { facets });
-  return `${head}; upserted ${total.upserted}, unchanged ${total.unchanged}, embedded ${total.embedded}, pending ${pendingAfter ?? '?'}; finalized ${fin.talks ?? '?'} talks, deleted ${fin.deleted ?? 0}; topics stored ${tp.topics ?? '?'}, facets stored ${fc.facets ?? '?'}.`;
+  return `${head}; upserted ${total.upserted}, unchanged ${total.unchanged}, embedded ${total.embedded}, pending ${pendingAfter ?? '?'}; finalized ${fin.talks ?? '?'} talks, deleted ${fin.deleted ?? 0}, unshared ${fin.unshared ?? 0}; topics stored ${tp.topics ?? '?'}, facets stored ${fc.facets ?? '?'}.`;
 }
 
 // The slugs the Worker lists as searchable (GET /api/conferences), or an empty set when it cannot
@@ -128,7 +179,7 @@ async function liveSearchable(api) {
 const report = { upserted: [], kept: [], pushed: [], failed: [], not_attempted: [] };
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics'], values: ['api', 'report', 'events-from'], multi: ['event'] });
+  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink'], values: ['api', 'report', 'events-from'], multi: ['event'] });
   reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
@@ -167,9 +218,25 @@ async function main() {
   assertModelBlock();
   const stop = loadStoplist();
   const generation = Date.now();
+  // Validated before anything is sent, as the bundle build validates it.
+  const takedowns = loadTakedowns(join(DATA, 'takedowns.json'), { dataDir: DATA });
 
   const searchable = confs.filter((c) => c.status === 'searchable' && existsSync(join(DATA, c.slug, 'talks.ndjson')));
   console.log(`Conferences: ${confs.length} selected, ${searchable.length} searchable with a talk file${dryRun ? ' (dry run)' : ''}.`);
+  // The talks each conference will get, with the takedowns applied. A conference whose takedown
+  // entries do not apply is not pushed (its talks stay as the Worker has them) and counts as failed.
+  const prepared = new Map();
+  for (const c of searchable) {
+    try {
+      prepared.set(c.slug, workerTalks(c.slug, readNdjson(join(DATA, c.slug, 'talks.ndjson')), takedowns));
+    } catch (e) {
+      prepared.set(c.slug, { error: e });
+    }
+  }
+  const forWorker = (c) => {
+    const p = prepared.get(c.slug);
+    return p?.dropped ? { ...c, counts: countsAfterTakedowns(c.counts ?? {}, p.talks) } : c;
+  };
   if (!dryRun) {
     // A schedule that could not be fetched this time (status_reason fetch_failed, which
     // scripts/ingest.mjs records on a transient error) must not take down a conference the Worker
@@ -177,7 +244,7 @@ async function main() {
     const live = await liveSearchable(api);
     const kept = confs.filter((c) => c.status !== 'searchable' && c.status_reason === 'fetch_failed' && live.has(c.slug));
     for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
-    const r = await admin('PUT', '/admin/conferences', { conferences: confs.filter((c) => !kept.includes(c)) });
+    const r = await admin('PUT', '/admin/conferences', { conferences: confs.filter((c) => !kept.includes(c)).map(forWorker) });
     console.log(`Conferences upserted: ${r.upserted ?? '?'}.`);
     report.kept = kept.map((c) => c.slug);
     report.upserted = confs.filter((c) => !kept.includes(c)).map((c) => c.slug);
@@ -187,7 +254,9 @@ async function main() {
   let failed = 0;
   for (const conf of searchable) {
     try {
-      console.log(await pushEvent(conf, { admin: softAdmin, dryRun, generation, rebuild: args['rebuild-topics'], stop }));
+      const p = prepared.get(conf.slug);
+      if (p.error) throw p.error;
+      console.log(await pushEvent(conf, p, { admin: softAdmin, dryRun, generation, rebuild: args['rebuild-topics'], stop, allowShrink: args['allow-shrink'] }));
       pushed++;
       if (!dryRun) report.pushed.push(conf.slug);
     } catch (e) {

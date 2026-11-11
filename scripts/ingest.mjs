@@ -217,6 +217,9 @@ async function processEvent(ev) {
   lines.push(
     `  feed ${ids.apiCode}: ${c.sessions} sessions (talk ${c.talk}, ambient ${c.ambient}, break ${c.break}, housekeeping ${c.housekeeping}), slides ${c.with_slides}, sponsor ${c.sponsor}`
   );
+  // Cancelled sessions are left out of the talk file, so the index, the Worker and the bundles drop
+  // them (the delete step below, finalize on the Worker, and the next bundle build).
+  if (built.cancelled.length) lines.push(`  dropped ${built.cancelled.length} cancelled session${built.cancelled.length === 1 ? '' : 's'}: ${built.cancelled.join(', ')}`);
   const m = built.mapping;
   lines.push(`  groups: track "${m.track_group}", level ${m.level_group ? `"${m.level_group}"` : 'none'}, tags [${m.tag_groups.join(', ')}], hidden [${m.hidden_groups.join(', ')}], slides question ${m.slides_question ? `"${m.slides_question}"` : 'none'}`);
 
