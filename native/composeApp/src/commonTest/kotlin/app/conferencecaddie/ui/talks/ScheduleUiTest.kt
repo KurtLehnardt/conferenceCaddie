@@ -105,7 +105,8 @@ class ScheduleUiTest {
         onNodeWithTag("schedule-screen").performScrollToNode(hasTestTag("schedule-footnote"))
         waitFor(text = Strings.Schedule.footnote("UTC"))
 
-        // The second day.
+        // The second day: back up to the day chips first, which a short screen scrolled away.
+        onNodeWithTag("schedule-screen").performScrollToNode(hasTestTag("day-chips"))
         onNodeWithTag("day-chip-2099-05-06").performClick()
         waitFor(text = Strings.Schedule.count(Format.day("2099-05-06"), 2, events = false))
         waitFor(tag = "sched-$gamma:5")
@@ -242,9 +243,15 @@ class ScheduleUiTest {
         waitFor(tag = "sched-$gamma:6")
         onNodeWithTag("schedule-screen").performScrollToNode(hasTestTag("sched-star-$gamma:6"))
         onNodeWithTag("sched-star-$gamma:6").assertIsDisplayed()
-        // The star keeps a whole touch target at twice the font size.
+        // The star keeps a whole touch target at twice the font size. TestDevice lowers the density
+        // to fit a 320 dp phone on a smaller screen, so sizes are compared in the device's own dp.
         val star = onNodeWithTag("sched-star-$gamma:6").getUnclippedBoundsInRoot()
-        assertTrue(star.right - star.left >= 44.dp && star.bottom - star.top >= 44.dp, "the star's touch target shrank")
+        val screen = onNodeWithTag("schedule-screen").getUnclippedBoundsInRoot()
+        val scale = (screen.right - screen.left) / 320.dp
+        assertTrue(
+            (star.right - star.left) / scale >= 43.5.dp && (star.bottom - star.top) / scale >= 43.5.dp,
+            "the star's touch target shrank: ${star.right - star.left} by ${star.bottom - star.top} at a scale of $scale",
+        )
         onNode(hasContentDescription(Strings.Schedule.interested("GitOps at scale"))).assertIsDisplayed()
     }
 }

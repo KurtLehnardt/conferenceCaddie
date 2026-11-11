@@ -97,6 +97,10 @@ class ImportUiTest {
         return if (tag != null) onNodeWithTag(tag) else onNodeWithText(text!!)
     }
 
+    /** The review's summary line as it reads. */
+    private fun ComposeUiTest.summary(): String =
+        waitFor(tag = "import-summary").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString("") { it.text }
+
     private fun ComposeUiTest.gone(tag: String) = waitUntil(timeoutMillis = 20_000) { onAllNodes(hasTestTag(tag)).fetchSemanticsNodes().isEmpty() }
 
     private fun ComposeUiTest.start(platform: PlatformActions = PlatformActions.None, size: DpSize? = null, fontScale: Float = 1f) {
@@ -129,7 +133,7 @@ class ImportUiTest {
 
         // Two exact titles ticked, the similar title left for the person to check.
         waitFor(tag = "import-review")
-        waitFor(text = Strings.Import.found(3, "Alpha Conference"))
+        assertEquals(Strings.Import.found(3, "Alpha Conference"), summary())
         waitFor(text = Strings.Import.HELP)
         onNodeWithTag("import-row-$alpha:1").assertIsOn()
         onNodeWithTag("import-row-$alpha:3").assertIsOn()
@@ -161,7 +165,7 @@ class ImportUiTest {
         onNodeWithTag("import-choose").performClick()
         waitFor(tag = "import-review")
         assertEquals(1, picker.asked)
-        waitFor(text = Strings.Import.found(2, "Alpha Conference"))
+        assertEquals(Strings.Import.found(2, "Alpha Conference"), summary())
         // The talk already marked is shown as such, ticked and not counted.
         onNodeWithTag("import-row-$alpha:3").assertIsOn().assertIsNotEnabled()
         onNodeWithText(Strings.Import.ALREADY).assertIsDisplayed()
@@ -209,7 +213,8 @@ class ImportUiTest {
         onNodeWithTag("import-paste-toggle").performClick()
         onNodeWithTag("import-paste").performTextReplacement("Rust for embedded devices\n\nWriting drivers in safe Rust\n")
         onNodeWithTag("import-find").performClick()
-        waitFor(text = Strings.Import.noneFound("Alpha Conference") + Strings.Import.unmatched(2))
+        waitFor(tag = "import-review")
+        assertEquals(Strings.Import.noneFound("Alpha Conference") + Strings.Import.unmatched(2), summary())
         waitFor(tag = "import-switch").performClick()
         gone("import-sheet")
         waitFor(text = "Beta Conference").performClick()
@@ -222,7 +227,7 @@ class ImportUiTest {
         IncomingHandoff.offerFile(PickedFile("Calendar.ics", "text/calendar", ics().encodeToByteArray()))
         waitFor(tag = "import-sheet")
         waitFor(tag = "import-review")
-        waitFor(text = Strings.Import.found(1, "Alpha Conference"))
+        assertEquals(Strings.Import.found(1, "Alpha Conference"), summary())
         // The start time in the file matches the talk's to the minute.
         onNodeWithText(Strings.Import.TITLE_AND_TIME).assertIsDisplayed()
         onNodeWithTag("import-row-$alpha:4").assertIsOn()
