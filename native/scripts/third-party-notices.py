@@ -12,6 +12,11 @@ Where the modules come from:
   lists. Those components are the table NATIVE_COMPONENTS below, which was read from the symbols of the
   linked release framework with nm.
 
+Two things ship that are not Gradle modules: the query model (a Compose resource on both platforms)
+and, on iOS, ONNX Runtime's C library, which shared links statically through a cinterop. They are the
+table SHIPPED_FILES below, with their versions read from gradle/pinned-downloads.properties and the
+version catalog.
+
 Every module group must be in LICENCE_TABLE, so a new dependency with an unknown licence fails the run
 until somebody has read its licence and added it. In the broad groups of ARTIFACT_APPROVAL_GROUPS
 (AndroidX, org.jetbrains, kotlinx) every artifact must also be in APPROVED_ARTIFACTS. A different Skiko version fails the run too, until the
@@ -56,6 +61,8 @@ LICENCES_BY_ID = {
     "wuffs": ("Wuffs (MIT or Apache License 2.0)", "wuffs.txt"),
     "dng-sdk": ("Adobe DNG SDK", "dng-sdk.txt"),
     "slf4j": ("SLF4J API (MIT)", "slf4j.txt"),
+    "onnxruntime": ("ONNX Runtime (MIT) and the components it includes", "onnxruntime.txt"),
+    "bge-small-en-v1.5": ("bge-small-en-v1.5 query model (MIT)", "bge-small-en-v1.5.txt"),
 }
 
 # Module group -> licence id. A pattern ending in ".*" matches that group and every group below it;
@@ -64,6 +71,7 @@ LICENCES_BY_ID = {
 LICENCE_TABLE = [
     ("androidx.*", "apache-2.0"),
     ("com.google.guava", "apache-2.0"),
+    ("com.microsoft.onnxruntime", "onnxruntime"),
     ("com.squareup.okhttp3", "apache-2.0"),
     ("com.squareup.okio", "apache-2.0"),
     ("io.ktor", "apache-2.0"),
@@ -244,6 +252,39 @@ NATIVE_COMPONENTS = [
     ("piex", "apache-2.0"),
 ]
 
+
+
+def pinned_model_revision():
+    """The model revision of gradle/pinned-downloads.properties (the part of the URL after /resolve/)."""
+    text = (NATIVE / "gradle/pinned-downloads.properties").read_text(encoding="utf-8")
+    found = re.search(r"^embedding\.model\.url=.*/resolve/([0-9a-f]{40})/", text, re.M)
+    if not found:
+        raise NoticeError("gradle/pinned-downloads.properties pins no embedding model revision")
+    return found.group(1)
+
+
+def catalog_version(name):
+    text = (NATIVE / "gradle/libs.versions.toml").read_text(encoding="utf-8")
+    found = re.search(rf'^{re.escape(name)} = "([^"]+)"', text, re.M)
+    if not found:
+        raise NoticeError(f"gradle/libs.versions.toml has no version {name}")
+    return found.group(1)
+
+
+def shipped_files():
+    """What ships outside Gradle's reports: (platform, name, version, licence id)."""
+    revision = pinned_model_revision()[:12]
+    return [
+        ("android", "BAAI/bge-small-en-v1.5 (Xenova ONNX export, int8)", f"revision {revision}", "bge-small-en-v1.5"),
+        ("ios", "BAAI/bge-small-en-v1.5 (Xenova ONNX export, int8)", f"revision {revision}", "bge-small-en-v1.5"),
+        ("ios", "ONNX Runtime C API (onnxruntime-c pod archive, linked statically)", catalog_version("onnxruntime"), "onnxruntime"),
+    ]
+
+
+# The longest licence text kept as one string constant (a class file allows 65,535 bytes, and the
+# escapes a raw string needs add a little).
+MAX_CONSTANT_BYTES = 60_000
+
 TREE_LINE = re.compile(r"^[| ]*[+\\]--- (.*)$")
 MODULE = re.compile(r"^([A-Za-z0-9_.\-]+):([A-Za-z0-9_.\-]+)(?::(\{[^}]*\}|\S+))?(?: -> (\S+))?")
 
@@ -319,6 +360,28 @@ def licence_text(licence_id):
     return text.strip("\n")
 
 
+def paragraphs(text):
+    """
+    The text as the screen shows it: hard line breaks inside a paragraph (and the indentation after
+    them) joined with a space so it wraps to the screen, blank-line-separated paragraphs kept apart
+    by exactly one blank line, and no empty paragraph. The app then only splits on "\n\n", so no
+    regular expression runs on the phone over the notices' hundreds of kilobytes.
+    """
+    joined = re.sub(r"(?<!\n)\n(?!\n)[ \t]*", " ", text)
+    return "\n\n".join(p.strip() for p in re.split(r"\n{2,}", joined) if p.strip())
+
+
+def check_onnxruntime_notices():
+    """licenses/onnxruntime.txt must be the notices of the ONNX Runtime the version catalog names."""
+    version = catalog_version("onnxruntime")
+    text = (LICENCES / "onnxruntime.txt").read_text(encoding="utf-8")
+    if f"/v{version}/ThirdPartyNotices.txt" not in text or f"ONNX Runtime {version}" not in text:
+        raise NoticeError(
+            f"licenses/onnxruntime.txt is not the notices of ONNX Runtime {version}, the version in gradle/libs.versions.toml.\n"
+            "Download that release's LICENSE and ThirdPartyNotices.txt into it (see its header) when the version changes."
+        )
+
+
 def kotlin_string(text):
     """A Kotlin raw string literal for text, with the characters a raw string cannot hold escaped."""
     escaped = text.replace("$", "${'$'}").replace('"""', "${'\"'}${'\"'}${'\"'}")
@@ -330,6 +393,7 @@ def const_name(licence_id):
 
 
 def generate(android, ios):
+    check_onnxruntime_notices()
     unknown = sorted({g for g, _, _ in android | ios if licence_for(g) is None})
     if unknown:
         lines = [f"  {g}: " + ", ".join(sorted({f"{n}:{v}" for gg, n, v in android | ios if gg == g})) for g in unknown]
@@ -370,6 +434,8 @@ def generate(android, ios):
     if bundled:
         for name, lid in NATIVE_COMPONENTS:
             per_licence[lid]["ios"].add((name, f"bundled in Skiko {SKIKO_VERIFIED}"))
+    for platform, name, version, lid in shipped_files():
+        per_licence[lid][platform].add((name, version))
 
     def module_list(modules):
         if not modules:
@@ -389,13 +455,33 @@ def generate(android, ios):
         "    /** A library as group:name (or a bundled component's name) and the version the apps ship. */",
         "    data class Module(val coordinate: String, val version: String)",
         "",
-        "    /** One licence: its title, the modules under it on each platform, and its full text. */",
+        "    /**",
+        "     * One licence: its title, the modules under it on each platform, and its full text, with its",
+        "     * paragraphs already joined into single lines and separated by one blank line.",
+        "     */",
         "    data class Notice(val id: String, val title: String, val android: List<Module>, val ios: List<Module>, val text: String)",
         "",
     ]
     used = [lid for lid in LICENCES_BY_ID if per_licence[lid]["android"] or per_licence[lid]["ios"]]
     for lid in used:
-        out.append(f"    private const val {const_name(lid)} = {kotlin_string(licence_text(lid))}")
+        text = paragraphs(licence_text(lid))
+        if len(text.encode("utf-8")) <= MAX_CONSTANT_BYTES:
+            out.append(f"    private const val {const_name(lid)} = {kotlin_string(text)}")
+        else:
+            # A class file holds string constants of at most 65,535 bytes, so a long text (ONNX
+            # Runtime's notices) is joined from pieces when the object is first used.
+            pieces = []
+            piece = ""
+            for line in text.splitlines(keepends=True):
+                if len((piece + line).encode("utf-8")) > MAX_CONSTANT_BYTES and piece:
+                    pieces.append(piece)
+                    piece = ""
+                piece += line
+            pieces.append(piece)
+            out.append(f"    private val {const_name(lid)} = listOf(")
+            for chunk in pieces:
+                out.append(f"        {kotlin_string(chunk)},")
+            out.append('    ).joinToString("")')
         out.append("")
     out.append("    val NOTICES: List<Notice> = listOf(")
     for lid in used:

@@ -6,8 +6,10 @@ import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.IosPeopleServices
 import app.conferencecaddie.shared.IosSelfTest
 import app.conferencecaddie.shared.core.IosCore
+import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
+import app.conferencecaddie.ui.talks.EmbeddingModel
 import app.conferencecaddie.ui.talks.TalkLaunch
 import app.conferencecaddie.ui.theme.HostController
 import kotlin.experimental.ExperimentalNativeApi
@@ -20,6 +22,8 @@ import platform.UIKit.UIViewController
 /** Called from Swift (ContentView.swift) to host the Compose UI in SwiftUI. */
 @OptIn(ExperimentalNativeApi::class)
 fun MainViewController(): UIViewController {
+    // First, on the main thread, before the core or ONNX Runtime start any thread (see OnnxRuntimeTelemetry).
+    OnnxRuntimeTelemetry.disableForProcess()
     // The Debug configuration links a debug framework, the Release configuration a release one.
     val isDebugBuild = Platform.isDebugBinary
     val core = IosCore.get(allowLocalHttp = isDebugBuild)
@@ -62,6 +66,7 @@ fun MainViewController(): UIViewController {
             launch = launch,
             initialQuery = query,
             talkLaunch = talkLaunch,
+            embedder = { EmbeddingModel.load() },
             people = people,
         )
     }.also { HostController.current = it }

@@ -199,8 +199,8 @@ class U1ProfileUiTest {
         type("profile-expertise", "Ran Argo CD rollouts")
         type("profile-linkedin", "https://www.linkedin.com/in/jordan-rivera")
         type("profile-contact", "@jordan on the CNCF Slack")
-        chip("picker-learn", "common", "eBPF, 0 talks").performScrollTo().performClick()
-        chip("picker-speak", "common", "Kubernetes, 0 talks").performScrollTo().performClick()
+        chip("picker-learn", "common", "eBPF, 1 talk").performScrollTo().performClick()
+        chip("picker-speak", "common", "Kubernetes, 2 talks").performScrollTo().performClick()
         u1WaitOrDump("the topics on the device") {
             val t = f.controller.state.value.topics
             t.learn.map { it.topicId } == listOf("ebpf") && t.speak.map { it.topicId } == listOf("kubernetes")
@@ -251,11 +251,11 @@ class U1ProfileUiTest {
         onNode(hasText(ProfileStrings.topicCount(0)) and hasAnyAncestor(hasTestTag("picker-learn"))).assertIsDisplayed()
 
         // Pick: the chip turns on where it is and joins the chosen row.
-        chip("picker-learn", "common", "eBPF, 0 talks").performScrollTo().performClick()
+        chip("picker-learn", "common", "eBPF, 1 talk").performScrollTo().performClick()
         u1WaitForNode(hasContentDescription("eBPF") and hasAnyAncestor(hasTestTag("picker-learn-chosen")))
         u1WaitOrDump("eBPF learned") { f.controller.state.value.topics.learn.map { it.topicId } == listOf("ebpf") }
         onNode(hasText(ProfileStrings.topicCount(1)) and hasAnyAncestor(hasTestTag("picker-learn"))).assertIsDisplayed()
-        chip("picker-learn", "common", "eBPF, 0 talks").assertIsDisplayed()
+        chip("picker-learn", "common", "eBPF, 1 talk").assertIsDisplayed()
 
         // Unpick from the chosen row: it lingers as a ghost, then the row settles.
         chip("picker-learn", "chosen", "eBPF").performClick()
@@ -264,7 +264,7 @@ class U1ProfileUiTest {
 
         // The search filters the bundle's topics on the device.
         onNodeWithTag("picker-learn-search").performScrollTo().typeText("kub")
-        u1WaitForNode(hasContentDescription("Kubernetes, 0 talks") and hasAnyAncestor(hasTestTag("picker-learn-matching")))
+        u1WaitForNode(hasContentDescription("Kubernetes, 2 talks") and hasAnyAncestor(hasTestTag("picker-learn-matching")))
         // Subheads are drawn in capitals, as the web's text-transform does.
         onNode(hasText(ProfileStrings.COMMON_AT_CONFERENCE.uppercase()) and hasAnyAncestor(hasTestTag("picker-learn"))).assertDoesNotExist()
         onNodeWithTag("picker-learn-search").typeText("zzzz")
@@ -274,7 +274,7 @@ class U1ProfileUiTest {
 
         // Free text suggests the topics it names.
         type("profile-interests", "Getting better at Kubernetes upgrades")
-        u1WaitForNode(hasContentDescription("Kubernetes, 0 talks") and hasAnyAncestor(hasTestTag("picker-learn-suggested")))
+        u1WaitForNode(hasContentDescription("Kubernetes, 2 talks") and hasAnyAncestor(hasTestTag("picker-learn-suggested")))
         onNode(hasText(ProfileStrings.SUGGESTED_FOR_YOU.uppercase()) and hasAnyAncestor(hasTestTag("picker-learn"))).assertExists()
     }
 
@@ -358,7 +358,7 @@ class U1ProfileUiTest {
         onNodeWithText(ProfileStrings.ABOUT_YOU).assertIsDisplayed()
         onNodeWithTag("profile-name").performScrollTo().assertIsDisplayed()
         onNodeWithText(ProfileStrings.LEARN_TITLE).performScrollTo().assertIsDisplayed()
-        chip("picker-learn", "common", "Security, 0 talks").performScrollTo().assertIsDisplayed()
+        chip("picker-learn", "common", "Scheduling, 1 talk").performScrollTo().assertIsDisplayed()
         onNodeWithText(ProfileStrings.REACH_TITLE).performScrollTo().assertIsDisplayed()
         onNodeWithText(visibleLabel).performScrollTo().assertIsDisplayed()
         onNodeWithTag("profile-delete").performScrollTo().assertIsDisplayed()

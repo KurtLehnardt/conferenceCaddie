@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -22,6 +23,7 @@ import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.bundle.TalkTime
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.search.SearchRequest
+import app.conferencecaddie.shared.search.Evidence
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.ui.components.CaddieChip
 import app.conferencecaddie.ui.components.ChipKind
@@ -56,14 +58,27 @@ fun SearchScreen(
     onToggleInterested: (Talk) -> Unit,
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
+    openRank: String? = null,
 ) {
     val result = model.result
     val conference = bundle.conference
     val listState = rememberLazyListState()
+    // The debug launch option caddie.rank: the result whose Why this rank starts open ("first" for
+    // the first result of a text search).
+    val rankOpen = if (openRank == "first") result?.talks?.firstOrNull()?.talkId?.takeIf { result.searchText.isNotBlank() } else openRank
     // A new result starts at the top, where its suggestions and chips are. Without this, the list
     // keeps its first visible item by key, and a "Did you mean" row that appears above it stays
-    // out of sight.
-    LaunchedEffect(result) { if (result != null) listState.scrollToItem(0) }
+    // out of sight. With caddie.rank, it starts at that result instead.
+    LaunchedEffect(result) {
+        if (result == null) return@LaunchedEffect
+        val at = rankOpen?.let { id -> result.talks.indexOfFirst { it.talkId == id } } ?: -1
+        if (at < 0) {
+            listState.scrollToItem(0)
+        } else {
+            val headers = listOf(result.suggestions.isNotEmpty(), true, !result.happeningNowAvailable, true, result.degraded).count { it }
+            listState.scrollToItem(headers + at, scrollOffset = RANK_SCROLL_PX)
+        }
+    }
     Column(Modifier.fillMaxSize().testTag("search-screen")) {
         SearchField(
             value = model.input,
@@ -128,6 +143,16 @@ fun SearchScreen(
                                 .semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
+                    if (result.degraded) {
+                        item("degraded") {
+                            Text(
+                                Strings.ForYou.DEGRADED_NATIVE,
+                                style = Caddie.type.meta,
+                                color = Caddie.colors.text2,
+                                modifier = Modifier.padding(horizontal = Caddie.dimens.gutter).testTag("search-degraded"),
+                            )
+                        }
+                    }
                     if (result.talks.isEmpty()) {
                         item("empty") {
                             StateView(
@@ -139,7 +164,15 @@ fun SearchScreen(
                     } else {
                         val terms = markTerms(result.searchText)
                         items(result.talks, key = { it.talkId }) { talk ->
-                            TalkResult(talk, bundle, terms, talk.talkId in interested, nowMs, onToggleInterested, onOpenTalk, onOpenUrl)
+                            TalkResult(
+                                talk, bundle, terms, talk.talkId in interested, nowMs, onToggleInterested, onOpenTalk, onOpenUrl,
+                                searchText = result.searchText,
+                                rank = if (browse) {
+                                    null
+                                } else {
+                                    { RankDrawer(talk.talkId, result.ranking[talk.talkId], result, conference, startOpen = talk.talkId == rankOpen) }
+                                },
+                            )
                         }
                     }
                 }
@@ -169,9 +202,13 @@ internal fun TalkResult(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     showEvidence: Boolean = true,
+    searchText: String = "",
+    rank: (@Composable () -> Unit)? = null,
     peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
+    // Keyed on the talk itself, so a newer bundle that edits a talk's abstract changes its passage too.
+    val passage = if (showEvidence) remember(talk, searchText) { Evidence.forTalk(talk, searchText) } else null
     TalkCard(
         title = talk.title,
         whenText = whenText(talk, bundle.conference),
@@ -179,7 +216,7 @@ internal fun TalkResult(
         speakers = talk.speakers.joinToString(", ").takeIf { it.isNotEmpty() },
         room = talk.room,
         tags = talkTags(talk),
-        evidence = if (showEvidence) evidenceText(talk)?.let { highlight(it, terms) } else null,
+        evidence = passage?.let { highlight(it, terms) },
         interested = interested,
         onToggleInterested = { onToggleInterested(talk) },
         ended = TalkTime.hasEnded(talk, nowMs),
@@ -187,17 +224,26 @@ internal fun TalkResult(
         links = cardLinks(talk),
         onOpenLink = onOpenUrl,
         onClick = { onOpenTalk(talk) },
-        extra = if (talk.kind == "talk") {
-            {
-                // The web's TalkPeopleControls sit between "I was there" and Related talks.
-                peopleControls?.invoke(talk)
-                RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk)
+        // Under the actions, as on the web: the ranking drawer of a text search, the web's
+        // TalkPeopleControls, then related talks.
+        extra = when {
+            talk.kind == "talk" -> {
+                {
+                    rank?.invoke()
+                    peopleControls?.invoke(talk)
+                    RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, onOpenUrl = onOpenUrl)
+                }
             }
-        } else {
-            null
+            rank != null -> {
+                { rank() }
+            }
+            else -> null
         },
     )
 }
+
+// How far into its card a result opened with caddie.rank is scrolled, so its panel shows.
+private const val RANK_SCROLL_PX = 700
 
 private fun suggestionKind(kind: String) = when (kind) {
     "track" -> Strings.Search.SUGGESTION_TRACK

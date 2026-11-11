@@ -8,7 +8,9 @@
      its database while it writes the database's files. E174.1 is the DiskSpace reason for checking
      disk space in order to write files; it is the one declared because these calls serve only
      SQLite's own writes, and the app never shows the result or sends it off the device.
-     No user-defaults API is linked. Check again with
+     Phase 2b links ONNX Runtime 1.30.0 statically, which adds no other required-reason API; its
+     telemetry, which would send usage data to Microsoft, is switched off (ORT_DISABLE_TELEMETRY, see
+     DECISIONS.md). No user-defaults API is linked. Check again with
      `nm -u ComposeApp.framework/ComposeApp` whenever dependencies change.
 
      Collected data: what the people features send to the official backend, all linked to the

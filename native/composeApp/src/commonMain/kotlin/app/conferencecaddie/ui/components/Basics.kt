@@ -102,8 +102,9 @@ enum class ButtonVariant { Primary, Tonal, Text, Danger }
 /**
  * .btn: a pill button at least 44 dp tall (.btn-primary, -tonal, -text, -danger; .btn-small). Its
  * touch target is at least the platform's minimum (48 dp on Android, 44 pt on iOS). [icon] goes
- * before the label and [trailingIcon] after it (a chevron that opens or closes something), both
- * [iconSize]: 18 dp, or 16 dp on a small button, as the web draws them.
+ * before the label, filled when [iconFilled] (the star of an "Interested" button), and
+ * [trailingIcon] after it (a chevron that opens or closes something), both [iconSize]: 18 dp, or
+ * 16 dp on a small button, as the web draws them.
  */
 @Composable
 fun CaddieButton(
@@ -114,6 +115,7 @@ fun CaddieButton(
     small: Boolean = false,
     enabled: Boolean = true,
     icon: LucideIcon? = null,
+    iconFilled: Boolean = false,
     trailingIcon: LucideIcon? = null,
     iconSize: Dp = if (small) 16.dp else 18.dp,
 ) {
@@ -135,7 +137,7 @@ fun CaddieButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
     ) {
-        if (icon != null) LucideImage(icon, null, size = iconSize, tint = fg)
+        if (icon != null) LucideImage(icon, null, size = iconSize, tint = fg, filled = iconFilled)
         // The web keeps a button on one line; here a long label may wrap instead, so it stays
         // readable at large system font sizes.
         Text(

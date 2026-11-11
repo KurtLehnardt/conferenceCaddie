@@ -60,7 +60,7 @@ fun TalkSheet(
             extra = if (talk.kind == "talk" || peopleControls != null) {
                 {
                     peopleControls?.invoke(talk)
-                    if (talk.kind == "talk") RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, startOpen = true)
+                    if (talk.kind == "talk") RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, startOpen = true, onOpenUrl = onOpenUrl)
                 }
             } else {
                 null
