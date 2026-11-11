@@ -1693,6 +1693,31 @@ mark {
   font-size: 13px;
 }
 
+/* The help icon at the very bottom of Settings. Its tooltip sits above it, centered, and is
+   shown by the component on mouse hover and keyboard focus only. */
+.settings-help {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.settings-tip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* ---------- Segmented control ---------- */
 
 .segmented {

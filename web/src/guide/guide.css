@@ -1,0 +1,134 @@
+/* The welcome guide's SweetAlert2 dialogs, themed with the app's own tokens (src/styles.css), so
+   they follow the light and dark themes, including the Theme setting. Loaded on demand with the
+   guide. The stock stylesheet is lower in specificity (:where), so these rules win. */
+
+:root {
+  --guide-backdrop: rgba(12, 14, 18, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --guide-backdrop: rgba(0, 0, 0, 0.38);
+  }
+}
+
+:root[data-theme='dark'] {
+  --guide-backdrop: rgba(0, 0, 0, 0.38);
+}
+
+.caddie-guide.swal2-container {
+  --swal2-backdrop: var(--guide-backdrop);
+  --swal2-backdrop-transition: none;
+  --swal2-background: var(--surface-raised);
+  --swal2-color: var(--text);
+  --swal2-width: 26rem;
+  --swal2-padding: 20px;
+  --swal2-border: 1px solid var(--border-strong);
+  --swal2-border-radius: 16px;
+  --swal2-title-padding: 0;
+  --swal2-html-container-padding: 0;
+  --swal2-action-button-transition: none;
+  --swal2-outline: 0 0 0 2px var(--accent);
+  font-family: inherit;
+  /* The dialog sits above the tab bar, so the screen's own navigation stays in view. */
+  padding: 12px var(--gutter) calc(var(--nav-h) + var(--safe-bottom) + 12px);
+}
+
+.caddie-guide.caddie-guide-top.swal2-container {
+  padding: calc(var(--safe-top) + 12px) var(--gutter) 12px;
+}
+
+@media (min-width: 768px) {
+  /* From 768px the tab bar is a rail on the left. */
+  .caddie-guide.swal2-container,
+  .caddie-guide.caddie-guide-top.swal2-container {
+    padding-left: calc(var(--rail-w) + var(--gutter));
+    padding-bottom: 24px;
+  }
+  .caddie-guide.caddie-guide-top.swal2-container {
+    padding-top: 24px;
+  }
+}
+
+.caddie-guide .caddie-guide-popup {
+  box-shadow: var(--shadow-lg);
+  text-align: left;
+}
+
+.caddie-guide .caddie-guide-title {
+  margin: 0 0 8px;
+  padding: 0;
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.caddie-guide .caddie-guide-text {
+  margin: 0;
+  padding: 0;
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+/* Progress steps as small dots: finished, current (a wider pill) and to come. */
+.caddie-guide .swal2-progress-steps {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.caddie-guide .swal2-progress-steps .swal2-progress-step {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+}
+
+.caddie-guide .swal2-progress-steps .swal2-progress-step.swal2-active-progress-step {
+  width: 22px;
+  background: var(--accent);
+}
+
+.caddie-guide .swal2-progress-steps .swal2-progress-step.swal2-active-progress-step ~ .swal2-progress-step {
+  background: var(--border-strong);
+}
+
+.caddie-guide .swal2-progress-steps .swal2-progress-step-line {
+  display: none;
+}
+
+/* Skip on the left, Back and Next on the right. */
+.caddie-guide .caddie-guide-actions {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  margin: 18px 0 0;
+}
+
+.caddie-guide .caddie-guide-actions .btn {
+  padding: 0 16px;
+}
+
+.caddie-guide .caddie-guide-actions .swal2-cancel {
+  margin-right: auto;
+  padding: 0 12px;
+  color: var(--text-2);
+}
+
+/* The dialog has no motion of its own; this also stills the button transitions. */
+@media (prefers-reduced-motion: reduce) {
+  .caddie-guide,
+  .caddie-guide * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
