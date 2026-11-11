@@ -33,6 +33,6 @@ object IosBle {
         // First, before the core or ONNX Runtime start any thread (see OnnxRuntimeTelemetry).
         OnnxRuntimeTelemetry.disableForProcess()
         IosBleRadio.shared.resumeAfterLaunch()
-        IosCore.people(IosPeopleServices.create(), allowLocalHttp = Platform.isDebugBinary)
+        IosCore.people({ IosPeopleServices.create() }, allowLocalHttp = Platform.isDebugBinary)
     }
 }
