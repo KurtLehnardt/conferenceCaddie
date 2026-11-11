@@ -110,7 +110,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-android-test-reports
-          path: native/shared/build/reports/tests/
+          path: |
+            native/shared/build/reports/tests/
+            native/shared/build/test-results/**/*.xml
           retention-days: 7
 
       - name: Name the debug APK after the commit
@@ -427,6 +429,18 @@ jobs:
       - name: UI tests on the iOS simulator
         run: ./gradlew :composeApp:iosSimulatorArm64Test
 
+      - name: Keep the test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-ios-test-reports
+          path: |
+            native/shared/build/test-results/
+            native/shared/build/reports/tests/
+            native/composeApp/build/test-results/
+            native/composeApp/build/reports/tests/
+          retention-days: 7
+
       # The licences shown in Settings must list every library both apps ship. The check needs the
       # iOS dependency graph, so it runs here on macOS; it fails on a new dependency until its
       # licence is in the script's table and the notices are regenerated.
@@ -738,6 +752,17 @@ jobs:
           echo "::add-mask::$keychain_password"
           printf '%s' "$IOS_DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
           printf '%s' "$IOS_APPSTORE_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/appstore.mobileprovision"
+
+          # Release builds are signed with the aps-environment (push) entitlement, so a profile
+          # without it makes the archive fail much later with a signing error that does not say why.
+          # Only pass or fail is printed, never the profile.
+          if ! security cms -D -i "$RUNNER_TEMP/appstore.mobileprovision" > "$RUNNER_TEMP/appstore-profile.plist" 2> /dev/null \
+            || ! /usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$RUNNER_TEMP/appstore-profile.plist" > /dev/null 2>&1; then
+            rm -f "$RUNNER_TEMP/appstore.mobileprovision" "$RUNNER_TEMP/appstore-profile.plist"
+            echo "::error title=Profile has no push entitlement::The App Store provisioning profile in IOS_APPSTORE_PROFILE_BASE64 is unreadable or has no aps-environment entitlement. Maintainer: enable Push Notifications on the app.conferencecaddie App ID in the Apple Developer portal, regenerate the App Store provisioning profile, and update the IOS_APPSTORE_PROFILE_BASE64 secret."
+            exit 1
+          fi
+          rm -f "$RUNNER_TEMP/appstore-profile.plist"
 
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
