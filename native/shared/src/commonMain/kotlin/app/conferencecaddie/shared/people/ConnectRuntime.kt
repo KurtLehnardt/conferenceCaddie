@@ -141,6 +141,7 @@ internal class ConnectRuntime(
         asked.clear()
         meetRefs.clear()
         seen.clear()
+        known = emptyMap()
         host.changed()
     }
 
@@ -288,6 +289,8 @@ internal class ConnectRuntime(
 
     suspend fun addBlock(slug: String, ref: String, displayName: String?) {
         store.update(slug) { r -> r.copy(blocks = r.blocks.filter { it.ref != ref } + BlockedPerson(ref, displayName?.take(60))) }
+        // A blocked person's card is not found again either (a sheet re-created after the block).
+        known = known - ref
         host.changed()
     }
 

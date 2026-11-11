@@ -487,4 +487,23 @@ class PeopleControllerTest {
         assertEquals("Ana", c.knownPerson("3f2a9c0d1e4b5a68")?.displayName)
         assertNull(c.knownPerson("9b1c7e5d3a2f4c60"))
     }
+
+    @Test
+    fun aBlockAndDeleteMyProfileForgetThePeopleSeen() = runTest {
+        val h = PeopleHarness(this)
+        val c = h.controller
+        h.start()
+        h.visible()
+        h.server.other = { FakeApiHttp.json(200, """{"ok":true}""") }
+        h.server.matches = { page(person("3f2a9c0d1e4b5a68", "Ana"), person("9b1c7e5d3a2f4c60", "Ben")) }
+        assertTrue(c.searchPeople("kubernetes", around = false) is ApiResult.Ok)
+        assertEquals("Ben", c.knownPerson("9b1c7e5d3a2f4c60")?.displayName)
+
+        assertNull(c.block("9b1c7e5d3a2f4c60", "Ben"))
+        assertNull(c.knownPerson("9b1c7e5d3a2f4c60"), "a blocked person's card is not found again")
+        assertEquals("Ana", c.knownPerson("3f2a9c0d1e4b5a68")?.displayName)
+
+        assertTrue(c.deleteMyProfile().done)
+        assertNull(c.knownPerson("3f2a9c0d1e4b5a68"), "Delete my profile forgets everyone this phone saw")
+    }
 }
