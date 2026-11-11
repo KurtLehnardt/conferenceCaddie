@@ -34,12 +34,13 @@
 //   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when the web app (SMOKE_DIST) has not been built.
 //   SMOKE_TALKS          bundle or data: where the checks that need a conference's own talks (d, e1,
 //                        e2, n1, n2, m2, x, o, sch1 and the import picks) take them from. bundle (the
-//                        default against the Worker) reads the published talk bundles, the ones native
+//                        default against a deployed Worker) reads the published talk bundles, the ones native
 //                        clients use: the ingest run publishes them from the same fetch it pushes to
 //                        the Worker, so a schedule change upstream moves both and passes, while a
 //                        Worker that serves other talks than the bundles fails. data (the default
-//                        against Cloud Run, whose index is loaded by hand) reads the committed data/
-//                        snapshot. Check bun1 compares every searchable conference with its bundle.
+//                        against Cloud Run, whose index is loaded by hand, and against an API on
+//                        localhost or 127.0.0.1, which is loaded from the seed) reads the committed
+//                        data/ snapshot. Check bun1 compares every searchable conference with its bundle.
 //   SMOKE_BUNDLE_BASE    the talk bundle base for SMOKE_TALKS=bundle, an https URL ending in "/" (or
 //                        http://localhost or http://127.0.0.1 for a local test). Default https://kurtlehnardt.github.io/conferenceCaddie/bundles/.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
@@ -140,8 +141,12 @@ const SEND_ORIGIN = IS_WORKER;
 // The Worker serving the web app itself, on BASE_URL's origin (the free stack as deployed).
 const WORKER_SERVES_APP = IS_WORKER && !CROSS_ORIGIN_API;
 const DIST_DIR = process.env.SMOKE_DIST || (WORKER_SERVES_APP ? 'web/dist-worker' : 'web/dist');
-// Where the expected talks of a conference come from (SMOKE_TALKS above).
-const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER ? 'bundle' : 'data')).toLowerCase();
+// A local API (wrangler dev or a local server) on this machine.
+// Where the expected talks of a conference come from (SMOKE_TALKS above). A Worker on this machine
+// is loaded from the committed data/, not from the schedules the ingest published, so it is compared
+// with data/ by default.
+const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER && !LOCAL_API ? 'bundle' : 'data')).toLowerCase();
 if (!['bundle', 'data'].includes(TALKS_FROM)) {
   console.log('FAIL config: SMOKE_TALKS must be bundle or data');
   process.exit(1);
@@ -209,9 +214,8 @@ const LEARN = ['ebpf', 'gpu', 'llm'];
 // empty while they are around: a nudge is looked for without a search text, so it reads topics,
 // interests and expertise and never about, and a semantic neighbour cannot pick them either.
 const runTag = crypto.randomBytes(4).toString('hex');
-// A local API (wrangler dev or a local server): checks that need test profiles with a specific match
-// to be around, or a conference to be flipped, run only here unless asked for.
-const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+// A local API (LOCAL_API, wrangler dev or a local server): checks that need test profiles with a
+// specific match to be around, or a conference to be flipped, run only there unless asked for.
 // What A wants to learn (A's interests) and B, C, R and the expired profile have worked on (their
 // expertise; B also wants it, so B finds R).
 const SMOKE_SUBJECT = `zqvsmoke${runTag} vexmorlith quabbit flarnishing`;

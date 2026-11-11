@@ -15,7 +15,7 @@ node scripts/build-bundles.mjs --takedown <contact> --publisher-name <name>   # 
 
 Cache `.cache/model` (or the directory named by `CADDIE_MODEL_CACHE`, resolved against the repository root) between runs, keyed on `ONNX_REVISION` in `scripts/lib/embedder.mjs`. A cold download is about 133 MB. With a warm cache add `--no-model-download`, so that a missing or altered model file fails the build instead of being downloaded. Do not use `--offline` for the normal Pages build: it also forbids reading the published bundles for vector reuse. `--offline` is for a run that must make no network request at all.
 
-**Run a scheduled full rebuild.** Vector reuse trusts the published bundles only as far as a sample check can see (below). A second workflow trigger, for example weekly, should run `node scripts/build-bundles.mjs --reuse-from none ...` so that every vector is recomputed from the committed data and nothing that was ever published can persist unnoticed. Use `--reuse-from none` for any build whose input you do not trust. `pages.yml` does this every Monday, and the scheduled ingest run does it for the conferences it refreshes; a bundle that a `pages.yml` run keeps from the live site (see [Which build publishes a conference](#which-build-publishes-a-conference)) is re-embedded by the next scheduled ingest instead.
+**Run a scheduled full rebuild.** Vector reuse trusts the published bundles only as far as a sample check can see (below). A second workflow trigger, for example weekly, should run `node scripts/build-bundles.mjs --reuse-from none ...` so that every vector is recomputed from the committed data and nothing that was ever published can persist unnoticed. Use `--reuse-from none` for any build whose input you do not trust. `pages.yml` does this every Monday, and the scheduled ingest run does it for the conferences it refreshes; a bundle that a `pages.yml` run keeps from the live site (see [Which build publishes a conference](#which-build-publishes-a-conference)) is re-embedded only when a scheduled ingest fetches that conference again, which never happens once the conference has ended and dropped off the upcoming list.
 
 Pass `--takedown` and `--publisher-name` explicitly in CI. The defaults are the repository's issue tracker (`https://github.com/KurtLehnardt/conferenceCaddie/issues`) and "Conference Caddie (Kurt Lehnardt)", which are public; the maintainer may prefer a private contact such as a `mailto:` address, and it ends up in every published bundle and in the index.
 
@@ -36,7 +36,9 @@ If a cached model fails verification (the build fails closed with `--no-model-do
 | `--offline` | No network at all: no model download and no `--reuse-from` URL. Implies `--no-model-download`. |
 | `--check` | Rebuild in memory and compare with the files already under `--out`; print every difference and exit 1 if there is one. `conferences.json` is compared without `generated_at`, and with `--only` only for the conferences rebuilt. Vector reuse is off unless `--reuse-from` is given, so `--check` tests the embedder. |
 | `--reuse-from <x>` | Where to take already computed vectors from: an https bundle base URL ending in `/`, a local directory (a bundle base, or a site root that holds `bundles/`), or `none`. Default: the `--base-url` bundles this build publishes to, and off for `--check`. |
-| `--live <x>` | The live site to compare with before building: an https bundle base URL ending in `/`, a local directory (a bundle base, or a site root holding `bundles/`), or `none` (the default). See [Which build publishes a conference](#which-build-publishes-a-conference). A live index that cannot be read fails the build, except a 404 (the first deploy). Not with `--only`. Both workflows pass the bundle base they publish to. |
+| `--live <x>` | The live site to compare with before building: an https bundle base URL ending in `/`, a local directory (a bundle base, or a site root holding `bundles/`), or `none` (the default). See [Which build publishes a conference](#which-build-publishes-a-conference). A live index that cannot be read fails the build, except a 404 (the first deploy). Not with `--only`. `pages.yml` passes the bundle base it publishes to on every run, also when `ingest.yml` calls it. |
+| `--live-since <iso>` | With an https `--live`: the time the latest successful Pages deployment was created. The live `conferences.json` and `sources.json` must carry a `Last-Modified` at least that new (Pages sets it to the deploy time), or they are read again every 30 seconds for up to 15 minutes, because the CDN can serve the previous deploy's files for up to ten; then the build fails. A sidecar whose `generated_at` differs from the index's is read again the same way. `pages.yml` reads the time from the Deployments API. |
+| `--fresh <slugs>` | With `--live`: comma-separated conferences that an ingest run has just fetched and pushed to the Worker. They always follow `data/` (built when searchable there, left out otherwise), whatever the live record says. `pages.yml` passes the conferences the ingest run staged. |
 | `--smoke` | Embed the five a-check queries of `scripts/smoke.mjs` and print where the expected KubeCon talk ranks. Informational only. |
 | `--publisher-name`, `--takedown` | The publisher named in the index and the takedown contact (an https URL or a `mailto:` address) carried by every bundle. |
 
@@ -60,16 +62,17 @@ Only conferences whose `data/{slug}/conference.json` says `searchable` are built
 
 ```json
 { "sources_version": 1,
+  "generated_at": "<the generated_at of the conferences.json written with it>",
   "conferences": { "<slug>": { "content_hash": "<the bundle's content_hash>",
                                "raw_fetched_at": "<raw_fetched_at of data/<slug>/conference.json>",
                                "source_sha256": "<SHA-256 of the public conference entry and talks.ndjson>" } } }
 ```
 
-A record counts only for the bundle whose `content_hash` it names.
+A record counts only for the bundle whose `content_hash` it names, and not at all when its `raw_fetched_at` lies more than ten minutes after the build's clock (`FUTURE_SKEW_MS`), so a bad deploy cannot pin a bundle with a fetch time no seed or ingest will ever pass.
 
 ### Which build publishes a conference
 
-Two workflows publish the site. The ingest run (`.github/workflows/ingest.yml`) fetches the schedules, pushes them to the Worker, and then calls `pages.yml` with the conference files it pushed laid over the committed `data/`; `pages.yml` also runs on its own, from the committed `data/` alone, which is only a seed. With `--live`, each conference is decided by `planBuild` in `scripts/lib/bundle-sources.mjs`, in this order:
+Two workflows publish the site. The ingest run (`.github/workflows/ingest.yml`) fetches the schedules, pushes the conferences it fetched to the Worker, and then calls `pages.yml`, which checks out the current `main` and lays the conference files the ingest pushed over its `data/`; `pages.yml` also runs on its own, from the committed `data/` alone, which is only a seed. With `--live`, each conference is decided by `planBuild` in `scripts/lib/bundle-sources.mjs`. A conference named by `--fresh` (one the ingest run has just pushed) is built when `data/` has it as searchable and left out otherwise, as the Worker now does. Every other conference is decided in this order:
 
 1. The live bundle has a source record with a later `raw_fetched_at` than `data/` (or `data/` does not have the conference): the live bundle is kept. Its two files are read, verified against the live index entry, and written to `--out` unchanged, with its index entry and source record.
 2. `data/` says the latest fetch failed (`status_reason: fetch_failed`) and a live bundle exists: the live bundle is kept, as `push-ingest.mjs` keeps the Worker's searchable document.
@@ -77,6 +80,10 @@ Two workflows publish the site. The ingest run (`.github/workflows/ingest.yml`) 
 4. Otherwise the conference is left out of the index (unavailable in `data/` with a fetch at least as new, or a live bundle with no source record and nothing in `data/`).
 
 A kept bundle that a takedown in `data/takedowns.json` still matches is rebuilt from `data/` instead (or left out when `data/` cannot build it), so a takedown always reaches the next deploy. A site built before `sources.json` existed has no records, so every searchable conference is built from `data/`, as before.
+
+### Retiring a conference
+
+Deleting `data/<slug>/` no longer removes a conference from the index: a live bundle with a source record and nothing in `data/` is kept (rule 1), and a takedown for a slug with no `data/<slug>/conference.json` fails the build. To retire one, commit a `data/<slug>/conference.json` that says `"status": "unavailable"` with a `status_reason` from `docs/CONTRACT.md` other than `fetch_failed` (`no_schedule_url` fits a conference that is gone) and a `raw_fetched_at` of the current time, which is later than the live record and not in the future. The next build leaves it out of the index (rule 4), and takedowns for that slug validate again. Keep the file for as long as the slug should stay retired; an ingest that fetches the conference again replaces it with what it finds.
 
 ### Carrying bundles forward (for the workflow)
 
@@ -133,4 +140,4 @@ Nothing in a bundle is a timestamp. Only `conferences.json` has one, `generated_
 
 `test/build-bundles.test.mjs` needs no network, no model and no `tools/bundles` install. It runs the builder on `contracts/fixtures/bundle-inputs/` with an embedder stub and requires the committed fixture bundle and index byte for byte, and it covers the flags and exit codes, speaker alignment on the real data (including talk 1289969), email redaction, takedowns, vector reuse, the topics port and its aliases, id pattern and Japanese titles, the embedder's pinned constants against the contract, and a whole write, check and tamper run on a temporary data directory.
 
-`scripts/test/bundle-publish.test.mjs` (also run by `npm test`) covers the publishing rule the same way: `planBuild` case by case, the `sources.json` round trip, takedowns against a kept bundle, a whole ingest build followed by a build from the older seed that keeps the ingest's bundle, a failed fetch and an unavailable conference, `--live` over https (a 404, a failure, a site without `sources.json`), and `scripts/stage-ingest-data.mjs`.
+`scripts/test/bundle-publish.test.mjs` (also run by `npm test`) covers the publishing rule the same way: `planBuild` case by case, including future-dated records and `--fresh`, the `sources.json` round trip, takedowns against a kept bundle, a whole ingest build followed by a build from the older seed that keeps the ingest's bundle, a failed fetch and an unavailable conference, `--live` over https (a 404, a failure, a site without `sources.json`), `--live-since` against a CDN that still serves the previous deploy or a mix of two, an ended conference whose seed is neither pushed (`push-ingest.mjs` `selectSlugs`) nor staged while its newer live bundle stays, and `scripts/stage-ingest-data.mjs`.

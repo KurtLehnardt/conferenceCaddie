@@ -2,10 +2,13 @@
 # It discovers the upcoming Linux Foundation events and their Sessionize schedules
 # (scripts/ingest.mjs --dry-run, which needs no Elasticsearch) and pushes the result to the Worker's
 # admin routes (worker/ingest/push-ingest.mjs). The Worker embeds only talks whose text changed.
+# Only the conferences this run fetched are pushed (the "processed" list of ingest.mjs --report):
+# ended events drop off the upcoming list, and their data/ folders hold only the committed seed,
+# which must not replace what the Worker and the bundles already have.
 # Then it publishes the talk bundles of the conferences it pushed, built from the same fetched files:
 # scripts/stage-ingest-data.mjs stages exactly what reached the Worker, and the publish job calls
-# pages.yml with that artifact, which builds, verifies and deploys the Pages site under the "pages"
-# concurrency group (docs/FREE_HOSTING.md, How data stays fresh). Nothing is committed to the
+# pages.yml with that artifact, which builds from the current main, verifies and deploys the Pages
+# site under the "pages" concurrency group (docs/FREE_HOSTING.md, How data stays fresh). Nothing is committed to the
 # repository: data/ in the repository stays a seed, and the live bundles carry a source record
 # (bundles/sources.json) that stops a later build from the older committed data from replacing them.
 #
@@ -84,19 +87,19 @@ jobs:
           if [ "${#args[@]}" -eq 0 ]; then args=(--all-upcoming); fi
           # Exit code 2 means some event ended partial or could not be fetched; the others are still pushed.
           status=0
-          node scripts/ingest.mjs "${args[@]}" --dry-run --skip-topics || status=$?
+          node scripts/ingest.mjs "${args[@]}" --dry-run --skip-topics --report "$RUNNER_TEMP/ingest-report.json" || status=$?
           if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then exit "$status"; fi
 
-      # The push writes a report of what reached the Worker, also when it fails part way, and its
-      # exit status is kept for the last step, so the conferences that were pushed still get their
-      # bundles.
+      # Only the conferences the step above fetched (--events-from its report), never every folder in
+      # data/: the others are the committed seed. The push writes a report of what reached the
+      # Worker, also when it fails part way, and its exit status is kept for the last step, so the
+      # conferences that were pushed still get their bundles.
       - name: Push to the Worker
         id: push
         if: steps.config.outputs.ready == 'true'
         run: |
           set -u
-          args=()
-          for slug in $EVENTS; do args+=(--event "$slug"); done
+          args=(--events-from "$RUNNER_TEMP/ingest-report.json")
           if [ "$REBUILD_TOPICS" = "true" ]; then args+=(--rebuild-topics); fi
           status=0
           node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --report "$RUNNER_TEMP/push-report.json" "${args[@]}" || status=$?
@@ -111,7 +114,7 @@ jobs:
             echo "staged=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          node scripts/stage-ingest-data.mjs --report "$RUNNER_TEMP/push-report.json" --out "$RUNNER_TEMP/ingest-data"
+          node scripts/stage-ingest-data.mjs --report "$RUNNER_TEMP/push-report.json" --fetched "$RUNNER_TEMP/ingest-report.json" --out "$RUNNER_TEMP/ingest-data"
 
       - name: Upload the staged conference files
         if: steps.stage.outputs.staged != '' && steps.stage.outputs.staged != '0'
@@ -132,14 +135,18 @@ jobs:
 
   # Builds and deploys the talk bundles of the conferences the ingest job pushed, from the same files,
   # through pages.yml (its build, verify and deploy jobs, under its "pages" concurrency group, which
-  # pages.yml's own runs share, so two Pages deploys never overlap). It runs also when the push failed
-  # for some conferences, as long as others were staged. The permissions are the ceiling for the
-  # called jobs, which narrow them: only the deploy job gets pages: write and the OIDC token.
+  # pages.yml's own runs share, so two Pages deploys never overlap). The called build checks out the
+  # current main, not this run's commit, so a takedown merged while the ingest ran is applied and
+  # an older commit never deploys after a newer one. It runs also when the push failed for some
+  # conferences, as long as others were staged. The permissions are the ceiling for the called
+  # jobs, which narrow them: only the deploy job gets pages: write and the OIDC token, and the build
+  # job reads the Pages deployments (deployments: read) to know when the live site is current.
   publish:
     needs: ingest
     if: ${{ !cancelled() && needs.ingest.outputs.staged != '' && needs.ingest.outputs.staged != '0' }}
     permissions:
       contents: read
+      deployments: read
       pages: write
       id-token: write
     uses: ./.github/workflows/pages.yml

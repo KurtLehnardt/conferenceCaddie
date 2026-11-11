@@ -2,13 +2,17 @@
 // touches no Elasticsearch) to the Worker's admin routes.
 //
 // Usage:
-//   node worker/ingest/push-ingest.mjs --api <base> [--event <slug> ...] [--dry-run] [--rebuild-topics]
-//                                      [--report <file>]
+//   node worker/ingest/push-ingest.mjs --api <base> [--event <slug> ... | --events-from <file>] [--dry-run]
+//                                      [--rebuild-topics] [--report <file>]
 // Env: ADMIN_TOKEN, or ADMIN_TOKEN_FILE naming a file that holds it (not needed with --dry-run).
 //
 // Steps:
-// 1. PUT /admin/conferences with the conference documents of the selected events (all events with
-//    a data/{slug}/conference.json when none is named).
+// 1. PUT /admin/conferences with the conference documents of the selected events: the --event slugs,
+//    or the "processed" list of the scripts/ingest.mjs --report file named by --events-from (the
+//    conferences that run fetched), or, when neither is given, every data/{slug}/conference.json.
+//    data/ also holds the committed seed of events that have ended and dropped off the upcoming list,
+//    so a run after a fetch passes --events-from: pushing every folder would put the old seed back on
+//    the Worker for those. An empty --events-from list pushes nothing and succeeds.
 // 2. For each searchable event that has a talk file:
 //    a. topics: the list stored on the Worker is frozen (GET /admin/topics) and each talk's topics
 //       are recomputed against it, unless there is none yet or --rebuild-topics is given, when the
@@ -28,7 +32,8 @@
 //     "pushed": [searchable slugs whose talks, topics and facets were all stored],
 //     "failed": [searchable slugs whose push failed], "not_attempted": [searchable slugs not tried] }
 // ingest.yml stages the talk files of exactly these conferences for the talk bundles
-// (scripts/stage-ingest-data.mjs), so the bundles never run ahead of the Worker.
+// (scripts/stage-ingest-data.mjs), so the bundles of the conferences this run fetched follow what the
+// Worker now serves.
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -54,6 +59,22 @@ function readConference(slug) {
   const path = join(DATA, slug, 'conference.json');
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+/**
+ * The slugs to push: the --event ones, else the "processed" list of an ingest report (the parsed
+ * JSON of scripts/ingest.mjs --report), else every conference folder (`all()`). Throws UsageError
+ * when both are given or the report is malformed.
+ */
+export function selectSlugs({ events = [], ingestReport = null, all = allSlugs }) {
+  if (events.length && ingestReport) throw new UsageError('Pass --event or --events-from, not both.');
+  if (events.length) return [...new Set(events)];
+  if (ingestReport) {
+    const list = ingestReport?.processed;
+    if (!Array.isArray(list) || list.some((s) => typeof s !== 'string' || !isSlug(s))) throw new UsageError('The --events-from report must hold a "processed" list of conference slugs.');
+    return [...new Set(list)].sort();
+  }
+  return all();
 }
 
 function allSlugs() {
@@ -107,7 +128,7 @@ async function liveSearchable(api) {
 const report = { upserted: [], kept: [], pushed: [], failed: [], not_attempted: [] };
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics'], values: ['api', 'report'], multi: ['event'] });
+  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics'], values: ['api', 'report', 'events-from'], multi: ['event'] });
   reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
@@ -115,7 +136,12 @@ async function main() {
   const token = readAdminToken();
   if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to push, or pass --dry-run.');
 
-  const slugs = args.event.length ? [...new Set(args.event)] : allSlugs();
+  const ingestReport = args['events-from'] ? JSON.parse(readFileSync(args['events-from'], 'utf8')) : null;
+  const slugs = selectSlugs({ events: args.event, ingestReport });
+  if (ingestReport && slugs.length === 0) {
+    console.log('The ingest run fetched no conference; nothing to push.');
+    return 0;
+  }
   const confs = [];
   for (const slug of slugs) {
     const conf = readConference(slug);

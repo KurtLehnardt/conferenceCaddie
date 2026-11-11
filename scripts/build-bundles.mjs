@@ -5,7 +5,7 @@
 //   node scripts/build-bundles.mjs [--out dist-pages] [--only slug,slug] [--base-url https://.../bundles/]
 //                                  [--offline] [--check] [--smoke] [--reuse-from <url|dir|none>]
 //                                  [--publisher-name "..."] [--takedown https://... | mailto:...]
-//                                  [--live <url|dir|none>]
+//                                  [--live <url|dir|none>] [--live-since <iso>] [--fresh slug,slug]
 // Options:
 //   --out <dir>        output directory (default dist-pages)
 //   --only <slugs>     comma-separated conference slugs; the index then lists only those
@@ -33,7 +33,15 @@
 //                      fetch failed (scripts/lib/bundle-sources.mjs, planBuild). Kept bundles are read,
 //                      verified against the live index and written to --out unchanged. A live index
 //                      that cannot be read fails the build, except a 404 (the first deploy), because
-//                      building without it could replace newer bundles. Not with --only.
+//                      building without it could replace newer bundles. Not with --only. A record
+//                      dated in the future (lib/bundle-sources.mjs FUTURE_SKEW_MS) counts for nothing.
+//   --live-since <iso> with an https --live: the time the latest successful Pages deployment was
+//                      created. The live conferences.json and sources.json must carry a Last-Modified at
+//                      least that new, or they are read again every 30 s for up to 15 minutes (the CDN
+//                      keeps the previous deploy's files for up to ten), then the build fails.
+//   --fresh <slugs>    with --live: comma-separated slugs that an ingest run has just fetched and pushed
+//                      to the Worker (pages.yml passes the staged ones). They always follow data/: built
+//                      when searchable there, left out otherwise, whatever the live record says.
 //   --smoke            after building, embed the a-check queries of scripts/smoke.mjs and print where
 //                      each expected KubeCon talk lands in the int8 cosine ranking (informational)
 // Env: CADDIE_MODEL_CACHE (model directory, resolved against the repository root, default .cache/model),
@@ -98,7 +106,7 @@ export class UsageError extends Error {}
 export function parseArgs(argv) {
   const opts = {
     out: DEFAULT_OUT, only: null, baseUrl: DEFAULT_BASE_URL, offline: false, noModelDownload: false, check: false, smoke: false,
-    reuseFrom: undefined, publisherName: PUBLISHER.name, takedown: PUBLISHER.takedown, live: null,
+    reuseFrom: undefined, publisherName: PUBLISHER.name, takedown: PUBLISHER.takedown, live: null, liveSince: null, fresh: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -114,6 +122,8 @@ export function parseArgs(argv) {
     } else if (a === '--base-url') opts.baseUrl = value();
     else if (a === '--reuse-from') opts.reuseFrom = value();
     else if (a === '--live') opts.live = value();
+    else if (a === '--live-since') opts.liveSince = value();
+    else if (a === '--fresh') opts.fresh = value().split(',').map((s) => s.trim()).filter(Boolean);
     else if (a === '--publisher-name') opts.publisherName = value();
     else if (a === '--takedown') opts.takedown = value();
     else if (a === '--offline') opts.offline = true;
@@ -136,6 +146,9 @@ export function parseArgs(argv) {
     throw new UsageError('--live must be "none", a local directory, or an https URL that ends in "/".');
   }
   if (opts.live !== null && opts.only) throw new UsageError('--live and --only cannot be combined: --live decides which conferences are rebuilt.');
+  if (opts.live === null && (opts.liveSince !== null || opts.fresh.length)) throw new UsageError('--live-since and --fresh need --live.');
+  if (opts.liveSince !== null && !Number.isFinite(Date.parse(opts.liveSince))) throw new UsageError('--live-since must be an ISO time.');
+  if (opts.fresh.some((s) => !SLUG_RE.test(s))) throw new UsageError('--fresh needs conference slugs, separated by commas.');
   return opts;
 }
 
@@ -362,7 +375,8 @@ async function readCapped(res, cap) {
  * A reader of the files under a bundle base: an https URL ending in "/" (fetched without following
  * redirects, with a byte cap per file) or a local directory (a bundle base, or a site root holding
  * bundles/). readFile(rel, cap) returns a Buffer, or throws; a missing file throws an error with
- * `missing: true` (HTTP 404, or no such local file).
+ * `missing: true` (HTTP 404, or no such local file). A Buffer read over https carries the response's
+ * Last-Modified header as `lastModified` (a string, or null).
  */
 export function sourceReader(source, { fetchFn = globalThis.fetch } = {}) {
   if (isUrl(source)) {
@@ -375,7 +389,9 @@ export function sourceReader(source, { fetchFn = globalThis.fetch } = {}) {
         await res.body?.cancel?.();
         throw Object.assign(new Error(`${url}: HTTP ${res.status}`), { missing: res.status === 404 });
       }
-      return readCapped(res, cap);
+      const bytes = await readCapped(res, cap);
+      bytes.lastModified = res.headers?.get?.('last-modified') ?? null;
+      return bytes;
     };
   }
   let base = path.resolve(source);
@@ -474,31 +490,76 @@ export async function loadReusableRows({ source, identity, embedder, offline = f
  * { conferences: [{ conference, bundle }] with usable bundles, sources: Map, readFile }. A missing or
  * malformed sources.json is an empty map (a site built before the sidecar existed). Any other failure
  * throws, because a build that cannot see the live site could replace newer bundles.
+ *
+ * The Pages CDN caches each file for up to ten minutes, and a query string does not get past it, so
+ * right after a deploy a read can return the previous deploy's files, or a mix of both. Two checks
+ * catch that, and a failed one means reading again every `retryMs` up to `waitMs`, then failing:
+ *   - `since` (an ISO time, over https only): the time the latest successful Pages deployment was
+ *     created (pages.yml reads it from the Deployments API). Pages sets Last-Modified to the time it
+ *     deployed a file, so conferences.json and sources.json must both be at least that new. With
+ *     `since` set a 404 is not taken as a first deploy, since a deployment exists.
+ *   - a sidecar that carries generated_at must carry the index's generated_at (the same build).
  */
-export async function loadLiveSite({ source, offline = false, fetchFn = globalThis.fetch, log = () => {} }) {
+export async function loadLiveSite({ source, offline = false, fetchFn = globalThis.fetch, log = () => {}, since = null, waitMs = 15 * 60_000, retryMs = 30_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   if (isUrl(source) && offline) throw new UsageError(`--offline forbids reading the live site ${source}`);
   const readFile = sourceReader(source, { fetchFn });
-  let indexDoc;
+  const sinceMs = since && isUrl(source) ? Date.parse(since) : null;
+  if (sinceMs !== null && !Number.isFinite(sinceMs)) throw new UsageError(`--live-since is not a time: ${since}`);
+  const attempts = Math.max(1, Math.floor(waitMs / retryMs) + 1);
+  for (let attempt = 1; ; attempt++) {
+    const got = await readLiveOnce({ source, readFile, sinceMs, log });
+    if (!got.stale) return got.live;
+    if (attempt >= attempts) throw new Error(`the live site at ${source} ${got.stale}, still after ${attempt} reads; a build from it could undo the latest deploy`);
+    log(`live: ${got.stale}; reading again in ${Math.round(retryMs / 1000)} s (the Pages CDN may still serve the previous deploy)`);
+    await sleep(retryMs);
+  }
+}
+
+// One read of the live index and sidecar. Returns { live } (null for a first deploy) or { stale: why }.
+async function readLiveOnce({ source, readFile, sinceMs, log }) {
+  const older = (bytes) => {
+    if (sinceMs === null || !bytes.lastModified) return false;
+    const ms = Date.parse(bytes.lastModified);
+    return Number.isFinite(ms) && ms < sinceMs;
+  };
+  let indexBytes;
   try {
-    indexDoc = JSON.parse((await readFile('conferences.json', REUSE_MAX_BYTES.index)).toString('utf8'));
+    indexBytes = await readFile('conferences.json', REUSE_MAX_BYTES.index);
   } catch (err) {
+    if (err.missing && sinceMs !== null) return { stale: 'serves no conferences.json although a deployment exists' };
     if (err.missing) {
       log(`live: no conferences.json at ${source} (first deploy); every searchable conference is built`);
-      return null;
+      return { live: null };
     }
     throw new Error(`could not read the live conferences.json at ${source} (${err.message})`);
   }
+  if (older(indexBytes)) return { stale: `serves a conferences.json older than the latest deployment (Last-Modified ${indexBytes.lastModified})` };
+  const indexDoc = JSON.parse(indexBytes.toString('utf8'));
   const index = readConferenceIndex(indexDoc);
   if (!index.ok) throw new Error(`the live conferences.json at ${source} is not a usable index (${index.reason})`);
   let sources = new Map();
+  let sourcesBytes = null;
   try {
-    sources = parseSources(JSON.parse((await readFile(SOURCES_FILE, REUSE_MAX_BYTES.sources)).toString('utf8')));
+    sourcesBytes = await readFile(SOURCES_FILE, REUSE_MAX_BYTES.sources);
   } catch (err) {
     if (!err.missing) throw new Error(`could not read the live ${SOURCES_FILE} at ${source} (${err.message})`);
     log(`live: no ${SOURCES_FILE} at ${source}; no live bundle counts as newer than data/`);
   }
+  if (sourcesBytes) {
+    if (older(sourcesBytes)) return { stale: `serves a ${SOURCES_FILE} older than the latest deployment (Last-Modified ${sourcesBytes.lastModified})` };
+    let doc = null;
+    try {
+      doc = JSON.parse(sourcesBytes.toString('utf8'));
+    } catch {
+      log(`live: ${SOURCES_FILE} at ${source} is not JSON; no live bundle counts as newer than data/`);
+    }
+    if (doc && typeof doc.generated_at === 'string' && doc.generated_at !== indexDoc.generated_at) {
+      return { stale: `serves a ${SOURCES_FILE} (generated ${doc.generated_at}) from another build than conferences.json (generated ${indexDoc.generated_at})` };
+    }
+    sources = parseSources(doc);
+  }
   const conferences = index.conferences.filter((c) => c.bundle_status === 'ok').map(({ conference, bundle }) => ({ conference, bundle }));
-  return { conferences, sources, readFile };
+  return { live: { conferences, sources, readFile } };
 }
 
 /**
@@ -661,7 +722,7 @@ export async function buildAll({ sources, kept = [], dataDir, embedder, baseUrl,
   files.set('conferences.json', indexBytes);
   files.set('capabilities.json', serializeCapabilities(capabilities));
   if (embedder.identity) files.set(`bundles/${BUILD_INFO_FILE}`, serializeBuildInfo(embedder.identity));
-  files.set(`bundles/${SOURCES_FILE}`, serializeSources(records));
+  files.set(`bundles/${SOURCES_FILE}`, serializeSources(records, generatedAt));
   return { bundles, index, files, records };
 }
 
@@ -682,9 +743,11 @@ const indexForCheck = (bytes, slugs) => {
   if (slugs) doc.conferences = (doc.conferences ?? []).filter((c) => slugs.has(c.slug));
   return JSON.stringify(doc);
 };
-// A source sidecar compared for --check: (for --only) only the records of the conferences in `slugs`.
+// A source sidecar compared for --check: without generated_at, and (for --only) only the records of
+// the conferences in `slugs`.
 const sourcesForCheck = (bytes, slugs) => {
   const doc = JSON.parse(Buffer.from(bytes).toString('utf8'));
+  delete doc.generated_at;
   if (slugs) doc.conferences = Object.fromEntries(Object.entries(doc.conferences ?? {}).filter(([slug]) => slugs.has(slug)));
   return JSON.stringify(doc);
 };
@@ -745,9 +808,9 @@ const fmt = (n) => n.toLocaleString('en-US');
  * it is rebuilt from data/ when data/ has the conference as searchable, and dropped otherwise.
  * Returns { sources: the searchable sources to build, kept: [{ conference, entry, files, record }] }.
  */
-export async function planAgainstLive({ live: liveSource, dataDir, sources, offline = false, fetchFn = globalThis.fetch, log = () => {} }) {
-  const live = await loadLiveSite({ source: liveSource, offline, fetchFn, log });
-  const plan = planBuild({ local: loadConferenceDocs(dataDir), live });
+export async function planAgainstLive({ live: liveSource, dataDir, sources, offline = false, fetchFn = globalThis.fetch, log = () => {}, liveSince = null, fresh = [], now = Date.now(), liveWait = {} }) {
+  const live = await loadLiveSite({ source: liveSource, offline, fetchFn, log, since: liveSince, ...liveWait });
+  const plan = planBuild({ local: loadConferenceDocs(dataDir), live, fresh: new Set(fresh), now });
   const takedowns = loadTakedowns(path.join(dataDir, 'takedowns.json'), { dataDir });
   const bySlug = new Map(sources.map((s) => [s.conference.slug, s]));
   const build = new Set();
@@ -773,13 +836,13 @@ export async function planAgainstLive({ live: liveSource, dataDir, sources, offl
   return { sources: sources.filter((s) => build.has(s.conference.slug)), kept };
 }
 
-export async function run(opts, { embedder = null, dataDir = path.join(ROOT, 'data'), log = (m) => console.log(m), now = () => new Date(), fetchFn = globalThis.fetch } = {}) {
+export async function run(opts, { embedder = null, dataDir = path.join(ROOT, 'data'), log = (m) => console.log(m), now = () => new Date(), fetchFn = globalThis.fetch, liveWait = {} } = {}) {
   const started = Date.now();
   // Inputs first, so that a wrong slug fails before a model is loaded or downloaded.
   let sources = loadSearchable(dataDir, opts.only);
   const kept = [];
   if (opts.live) {
-    const planned = await planAgainstLive({ live: opts.live, dataDir, sources, offline: opts.offline, fetchFn, log });
+    const planned = await planAgainstLive({ live: opts.live, dataDir, sources, offline: opts.offline, fetchFn, log, liveSince: opts.liveSince, fresh: opts.fresh, now: now().getTime(), liveWait });
     sources = planned.sources;
     kept.push(...planned.kept);
   }
