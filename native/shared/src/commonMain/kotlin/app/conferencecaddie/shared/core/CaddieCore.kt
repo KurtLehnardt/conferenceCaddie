@@ -502,24 +502,31 @@ class CaddieCore(
 
     /**
      * Keeps the Interested lists the Capacitor app left in its WebView's local storage ([lists]:
-     * each storage key with its value, as the host read them), once, when the native app is
-     * installed over it. That app always talked to the official server, so the marks go to the
-     * build's default backend, each conference's in the order they were made, and a talk already
-     * marked here keeps its own mark. Keys and values are untrusted; [LegacyInterested] checks and
-     * bounds them.
+     * each storage key with its value, as the host read them), then sets the UI setting [doneKey], so
+     * the host does not read them again. The marks and the setting are written in one transaction
+     * after everything was read, so the setting is never there without the marks: a failure (a full
+     * disk, a process ended midway) leaves neither, and the next start tries again.
+     *
+     * That app always talked to the official server, so the marks go to the build's default backend,
+     * each conference's in the order they were made and before the first mark made in this app; a
+     * talk already marked here keeps its own mark. Keys and values are untrusted; [LegacyInterested]
+     * checks and bounds them.
      */
-    fun importLegacyInterested(lists: Map<String, String>) = command {
+    fun importLegacyInterested(lists: Map<String, String>, doneKey: String) = command {
         val base = defaultBackend.base
-        var at = nowMs() - LegacyInterested.MAX_TALKS.toLong() * lists.size.coerceAtMost(100)
+        val now = nowMs()
+        val rows = ArrayList<CaddieDatabase.NewMark>()
         for ((key, value) in lists.entries.take(100)) {
             val slug = LegacyInterested.slugOf(key) ?: continue
             val scope = BundleSync.scope(base, slug)
             val have = database.interested(scope).toSet()
-            for (mark in LegacyInterested.read(slug, value)) {
-                if (mark.talkId in have) continue
-                database.setInterested(scope, mark.talkId, true, at++, mark.copy)
-            }
+            val marks = LegacyInterested.read(slug, value).filter { it.talkId !in have }
+            // Strictly before the first mark made in this app, one millisecond apart, in their order.
+            val first = database.firstInterestedAt(scope) ?: now
+            var at = first - marks.size
+            for (mark in marks) rows += CaddieDatabase.NewMark(scope, mark.talkId, at++, mark.copy)
         }
+        database.addMarksThenSet(rows, KEY_UI + doneKey, "1")
         val s = _state.value
         val selected = s.selectedSlug
         if (s.backend.base == base && selected != null) {

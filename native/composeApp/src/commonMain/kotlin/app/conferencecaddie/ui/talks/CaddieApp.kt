@@ -55,7 +55,6 @@ import app.conferencecaddie.ui.components.MenuItem
 import app.conferencecaddie.ui.components.OverflowMenu
 import app.conferencecaddie.ui.platform.Incoming
 import app.conferencecaddie.ui.platform.IncomingHandoff
-import app.conferencecaddie.ui.platform.PickedFile
 import app.conferencecaddie.ui.platform.PlatformActions
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.SkeletonCard
@@ -149,7 +148,7 @@ fun CaddieApp(
     SideEffect { importer.attach(scope) }
     var importOpen by rememberSaveable { mutableStateOf(false) }
     // A file opened in the app before its conference's schedule is ready waits for it.
-    var pendingFile by remember { mutableStateOf<PickedFile?>(null) }
+    var pendingFile by remember { mutableStateOf<Incoming.File?>(null) }
     var importSlug by remember { mutableStateOf<String?>(null) }
     var pendingOpen by remember { mutableStateOf<AppLink.Open?>(null) }
     val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
@@ -270,17 +269,25 @@ fun CaddieApp(
                 null -> Unit
             }
             // A file opened in or shared to the app opens Import my schedule with it.
-            is Incoming.File -> pendingFile = item.file
+            is Incoming.File -> pendingFile = item
         }
     }
     LaunchedEffect(pendingFile, ready != null) {
-        val file = pendingFile ?: return@LaunchedEffect
+        val item = pendingFile ?: return@LaunchedEffect
         if (ready == null) return@LaunchedEffect
         pendingFile = null
         toast = null
-        // The sheet opens with the file waiting; it is read only when the person taps Find talks.
-        importer.offer(file)
-        importOpen = true
+        if (item.picked) {
+            // Chosen in the app's own picker: read at once, as it would have been.
+            importer.reset()
+            importOpen = true
+            importer.runFile(item.file, state.interested.toSet())
+        } else {
+            // From another app: the sheet opens with the file waiting, read only when the person
+            // taps Find talks.
+            importer.offer(item.file)
+            importOpen = true
+        }
     }
     // Another conference closes Import my schedule, as a route change closes the web's sheet.
     LaunchedEffect(state.selectedSlug) {

@@ -144,9 +144,10 @@ class ImportModel(
         done = null
     }
 
-    /** Stops reading; the sheet stays open on its first page. */
+    /** Stops reading, and forgets a file another app handed over (the sheet closing calls it too). */
     fun cancel() {
         unfinished = null
+        offered = null
         job?.cancel()
         busy = false
     }

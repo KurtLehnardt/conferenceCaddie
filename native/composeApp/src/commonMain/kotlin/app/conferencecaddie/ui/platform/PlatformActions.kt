@@ -43,8 +43,12 @@ sealed interface Incoming {
     /** A `caddie://` link: from a QR code, another app, or a tap in the browser. */
     class Link(override val id: Long, val url: String) : Incoming
 
-    /** A schedule file shared to the app or opened in it ("Open in", "Share to"). */
-    class File(override val id: Long, val file: PickedFile) : Incoming
+    /**
+     * A schedule file shared to the app or opened in it ("Open in", "Share to"), which waits for the
+     * person's tap; or, when [picked], one the person chose in the app's own picker, handed over again
+     * because the screen that asked was recreated meanwhile, which is read at once.
+     */
+    class File(override val id: Long, val file: PickedFile, val picked: Boolean = false) : Incoming
 }
 
 /**
@@ -66,9 +70,9 @@ object IncomingHandoff {
         return true
     }
 
-    /** Hands over a file opened in or shared to the app. */
-    fun offerFile(file: PickedFile) {
-        pending.value = Incoming.File(id(), file)
+    /** Hands over a file opened in or shared to the app, or ([picked]) one chosen in its own picker. */
+    fun offerFile(file: PickedFile, picked: Boolean = false) {
+        pending.value = Incoming.File(id(), file, picked)
     }
 
     /** Marks [item] as handled, unless a newer one has replaced it meanwhile. */

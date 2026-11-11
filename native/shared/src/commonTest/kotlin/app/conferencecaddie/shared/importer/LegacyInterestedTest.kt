@@ -10,6 +10,7 @@ import app.conferencecaddie.shared.net.HttpResponse
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -84,6 +85,9 @@ class LegacyInterestedTest {
         assertEquals("$slug:1", marks[0].talkId)
         assertNull(marks[0].copy)
         assertNull(marks[1].copy?.url)
+        // An end two days on (still within 48 hours) is not a talk's: no copy either.
+        val long = LegacyInterested.read(slug, "[" + entry("1", "a", start = "2026-11-11T23:50:00-07:00", end = "2026-11-13T00:10:00-07:00") + "]")
+        assertNull(long.single().copy)
     }
 
     @Test
@@ -99,32 +103,77 @@ class LegacyInterestedTest {
         assertEquals(LegacyInterested.MAX_TALKS, LegacyInterested.read(slug, many).size)
     }
 
-    @Test
-    fun theCoreKeepsTheMarksUnderTheDefaultBackend() = runTest {
+    private class Harness {
         val root = Path(SystemTemporaryDirectory, "caddie-legacy-${Random.nextLong().toULong()}")
-        SystemFileSystem.createDirectories(Path(root, "bundles"))
         val database = CaddieDatabase.open(":memory:")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val core = CaddieCore(database, BundleFiles(Path(root, "bundles")), { _, _, _ -> HttpResponse(404, ByteArray(0)) }, scope, allowLocalHttp = false)
-        try {
-            val key = BundleSync.scope((BackendUrl.normalise(Defaults.BACKEND) as BackendUrl.Valid).base, slug)
-            database.setInterested(key, "$slug:2", true, 1L, null)
-            core.importLegacyInterested(
-                mapOf(
-                    "caddie.interested.v1.$slug" to "[" + entry("1", "a") + "," + entry("2", "b") + "]",
-                    "caddie.interested.v1.Bad Key" to "[" + entry("9", "a") + "]",
-                    "caddie.theme" to "dark",
-                ),
-            )
-            core.awaitIdle()
-            // The mark made in the app stays first; the old app's other mark joins it with its copy.
-            assertEquals(listOf("$slug:2", "$slug:1"), database.interested(key))
-            assertEquals("Talk 1", database.interestedSnapshots(key)["$slug:1"]?.title)
-        } finally {
+        val core: CaddieCore
+
+        init {
+            SystemFileSystem.createDirectories(Path(root, "bundles"))
+            core = CaddieCore(database, BundleFiles(Path(root, "bundles")), { _, _, _ -> HttpResponse(404, ByteArray(0)) }, scope, allowLocalHttp = false)
+        }
+
+        suspend fun close() {
             scope.coroutineContext.job.cancelAndJoin()
             database.closeWhenIdle()
             SystemFileSystem.delete(Path(root, "bundles"), mustExist = false)
             SystemFileSystem.delete(root, mustExist = false)
+        }
+    }
+
+    private val key = BundleSync.scope((BackendUrl.normalise(Defaults.BACKEND) as BackendUrl.Valid).base, slug)
+    private val done = "legacy.test"
+
+    @Test
+    fun theCoreKeepsTheMarksUnderTheDefaultBackendThenSetsTheMarker() = runTest {
+        val h = Harness()
+        try {
+            // A mark made in this app a moment ago: the old app's marks go before it all the same.
+            h.database.setInterested(key, "$slug:2", true, 4_000_000_000_000L, null)
+            h.database.setInterested(key, "$slug:7", true, 4_000_000_000_001L, null)
+            h.core.importLegacyInterested(
+                mapOf(
+                    "caddie.interested.v1.$slug" to "[" + entry("1", "a") + "," + entry("2", "b") + "," + entry("3", "c") + "]",
+                    "caddie.interested.v1.Bad Key" to "[" + entry("9", "a") + "]",
+                    "caddie.theme" to "dark",
+                ),
+                done,
+            )
+            h.core.awaitIdle()
+            assertEquals(listOf("$slug:1", "$slug:3", "$slug:2", "$slug:7"), h.database.interested(key))
+            assertEquals("Talk 1", h.database.interestedSnapshots(key)["$slug:1"]?.title)
+            assertEquals("1", h.core.uiSetting(done))
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun aFailedImportLeavesNeitherTheMarksNorTheMarker() = runTest {
+        val h = Harness()
+        try {
+            // A failure while the lists are read: nothing is written.
+            val failing = object : AbstractMap<String, String>() {
+                override val entries: Set<Map.Entry<String, String>> get() = throw IllegalStateException("the storage went away")
+            }
+            h.core.importLegacyInterested(failing, done)
+            h.core.awaitIdle()
+            assertNull(h.core.uiSetting(done))
+            // A failure inside the transaction, after the marks were written: they are rolled back
+            // with the marker.
+            val marks = listOf(CaddieDatabase.NewMark(key, "$slug:1", 1L, null))
+            assertFailsWith<IllegalStateException> {
+                h.database.addMarksThenSet(marks, "ui:$done", "1") { throw IllegalStateException("the disk is full") }
+            }
+            assertTrue(h.database.interested(key).isEmpty())
+            assertNull(h.core.uiSetting(done))
+            // And when it succeeds, both are there.
+            h.database.addMarksThenSet(marks, "ui:$done", "1")
+            assertEquals(listOf("$slug:1"), h.database.interested(key))
+            assertEquals("1", h.core.uiSetting(done))
+        } finally {
+            h.close()
         }
     }
 }

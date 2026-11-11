@@ -4,6 +4,8 @@ import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Parcel
+import android.os.Parcelable
 import android.provider.MediaStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -60,6 +62,53 @@ class IncomingIntentsTest {
         val seen = Seen()
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("caddie://e/kubecon-2026#/search")).addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)
         seen.handOff(intent)
+        assertTrue(seen.links.isEmpty())
+    }
+
+    /** A parcelable the platform cannot rebuild: its class is not one the system's class loader knows. */
+    class Hostile : Parcelable {
+        override fun writeToParcel(dest: Parcel, flags: Int) = dest.writeString("x")
+        override fun describeContents() = 0
+
+        companion object {
+            @JvmField
+            val CREATOR = object : Parcelable.Creator<Hostile> {
+                override fun createFromParcel(source: Parcel) = Hostile().also { source.readString() }
+                override fun newArray(size: Int) = arrayOfNulls<Hostile>(size)
+            }
+        }
+    }
+
+    /** [intent] as another app would deliver it: written to a parcel and read back, extras unread. */
+    private fun delivered(intent: Intent): Intent {
+        val p = Parcel.obtain()
+        try {
+            intent.writeToParcel(p, 0)
+            p.setDataPosition(0)
+            return Intent.CREATOR.createFromParcel(p)
+        } finally {
+            p.recycle()
+        }
+    }
+
+    @Test
+    fun extrasThatCannotBeReadAreIgnored() {
+        val hostile = Intent(Intent.ACTION_SEND).setType("text/csv").putExtra(Intent.EXTRA_STREAM, Hostile())
+        // Reading the extra itself fails, as it would in the app.
+        val direct = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                delivered(hostile).getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                delivered(hostile).getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+        }
+        assertTrue("the crafted extra was readable, so this test would show nothing", direct.isFailure)
+        assertTrue(direct.exceptionOrNull() is RuntimeException)
+        // The hand-off ignores the intent instead of failing.
+        val seen = Seen()
+        seen.handOff(delivered(hostile))
+        assertTrue(seen.files.isEmpty())
         assertTrue(seen.links.isEmpty())
     }
 

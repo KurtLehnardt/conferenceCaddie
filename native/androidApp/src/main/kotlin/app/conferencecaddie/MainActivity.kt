@@ -18,7 +18,9 @@ import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
 import app.conferencecaddie.ui.talks.EmbeddingModel
 import app.conferencecaddie.ui.talks.TalkLaunch
-import kotlin.concurrent.thread
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : ComponentActivity(), PlatformActions {
     // The file picker (the Storage Access Framework). The result comes back to whichever instance of
@@ -32,7 +34,9 @@ class MainActivity : ComponentActivity(), PlatformActions {
             callback?.invoke(null)
             return@registerForActivityResult
         }
-        readInBackground(uri, null) { file -> if (callback != null) callback(file) else IncomingHandoff.offerFile(file) }
+        // After a recreation the callback is gone: the file is handed over as one the person picked,
+        // which is read at once.
+        readInBackground(uri, null, supersede = false) { file -> if (callback != null) callback(file) else IncomingHandoff.offerFile(file, picked = true) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +48,8 @@ class MainActivity : ComponentActivity(), PlatformActions {
         // Debug launch options arrive as intent extras: am start -e caddie.tab Search ... Besides the
         // shell's options, caddie.backend points the app at a backend (plain http to this machine is
         // allowed in debug builds) and caddie.query types a search. Release builds ignore them all.
-        val get: (String) -> String? = { intent?.getStringExtra(it) }
+        // Extras another app crafted can fail to unparcel; such an option is simply absent.
+        val get: (String) -> String? = { name -> runCatching { intent?.getStringExtra(name) }.getOrNull() }
         val launch = if (isDebugBuild) DebugLaunch.from(get) else DebugLaunch()
         var query: String? = null
         val talkLaunch = if (isDebugBuild && savedInstanceState == null) TalkLaunch.from(get) else TalkLaunch()
@@ -87,7 +92,7 @@ class MainActivity : ComponentActivity(), PlatformActions {
         IncomingIntents.handOff(
             intent,
             onLink = { IncomingHandoff.offerLink(it) },
-            onFile = { uri, type -> readInBackground(uri, type, IncomingHandoff::offerFile) },
+            onFile = { uri, type -> readInBackground(uri, type) { IncomingHandoff.offerFile(it) } },
         )
     }
 
@@ -112,11 +117,25 @@ class MainActivity : ComponentActivity(), PlatformActions {
         runCatching { startActivity(Intent.createChooser(send, null)) }
     }
 
-    /** Reads [uri] off the main thread ([IncomingIntents.read]), then calls [deliver] on the main thread. */
-    private fun readInBackground(uri: Uri, typeHint: String?, deliver: (PickedFile) -> Unit) {
-        thread(name = "caddie-read-file") {
+    /**
+     * Reads [uri] on the app's one reading thread ([IncomingIntents.read]), then calls [deliver] on the
+     * main thread. With [supersede], a newer incoming file replaces this one: a read that has not
+     * started is skipped, and one that has finished is not delivered.
+     */
+    private fun readInBackground(uri: Uri, typeHint: String?, supersede: Boolean = true, deliver: (PickedFile) -> Unit) {
+        val generation = if (supersede) latestIncoming.incrementAndGet() else null
+        val current = { generation == null || generation == latestIncoming.get() }
+        reader.execute {
+            if (!current()) return@execute
             val file = IncomingIntents.read(contentResolver, uri, typeHint)
-            runOnUiThread { deliver(file) }
+            runOnUiThread { if (current()) deliver(file) }
         }
+    }
+
+    private companion object {
+        // One thread reads every file another app hands over, so a burst of intents holds at most
+        // one file in memory at a time.
+        val reader: ExecutorService = Executors.newSingleThreadExecutor { r -> Thread(r, "caddie-read-file") }
+        val latestIncoming = AtomicLong()
     }
 }

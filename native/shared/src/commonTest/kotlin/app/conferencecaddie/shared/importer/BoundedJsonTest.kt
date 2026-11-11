@@ -26,8 +26,10 @@ class BoundedJsonTest {
         val o = assertIs<JsonObject>(parse(" {\"a\": [1, -2.5e3, true, false, null, \"x\\\"y\\\\z\\/\\b\\f\\n\\r\\t\\u00e9\\ud83d\\ude00\"], \"b\": {}, \"c\": []}\n"))
         val a = o.getValue("a").jsonArray
         assertEquals(6, a.size)
-        assertEquals(1.0, a[0].jsonPrimitive.content.toDouble())
-        assertEquals(-2500.0, a[1].jsonPrimitive.content.toDouble())
+        // Numbers keep the text they were written with.
+        assertEquals("1", a[0].jsonPrimitive.content)
+        assertEquals("-2.5e3", a[1].jsonPrimitive.content)
+        assertTrue(!a[0].jsonPrimitive.isString)
         assertEquals(JsonPrimitive(true), a[2])
         assertEquals(JsonPrimitive(false), a[3])
         assertEquals(JsonNull, a[4])

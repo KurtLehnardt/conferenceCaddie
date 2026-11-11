@@ -29,6 +29,11 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Caddie">
+        <!-- The only WebView the app makes is CapacitorMigration's, which reads the old app's
+             storage once and fetches nothing; it sends no usage metrics either. -->
+        <meta-data
+            android:name="android.webkit.WebView.MetricsOptOut"
+            android:value="true" />
         <provider
             android:name="ai.onnxruntime.TelemetryInitializer"
             android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
@@ -55,7 +60,8 @@
                 <data android:scheme="caddie" android:host="e" />
             </intent-filter>
             <!-- "Open with" and "Share" for calendar and spreadsheet exports: the file opens Import
-                 my schedule. Only content: addresses are read (MainActivity.handOff). -->
+                 my schedule and waits for a tap. Only content: addresses are read, at most 5 MB
+                 (IncomingIntents). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />

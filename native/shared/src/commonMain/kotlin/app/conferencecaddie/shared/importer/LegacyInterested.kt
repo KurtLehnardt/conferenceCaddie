@@ -2,6 +2,9 @@ package app.conferencecaddie.shared.importer
 
 import app.conferencecaddie.shared.bundle.InterestedTalk
 import app.conferencecaddie.shared.bundle.IsoTime
+import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.plus
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -67,9 +70,12 @@ object LegacyInterested {
         val day = s.groupValues[1]
         val startMinutes = s.groupValues[2].toInt() * 60 + s.groupValues[3].toInt()
         // A talk past midnight ends on the next local day: its end minutes count from the start's day.
+        // An end on any other day than the start's or the next is not a talk's.
         val endDay = e.groupValues[1]
+        val nextDay = runCatching { LocalDate.parse(day).plus(1, DateTimeUnit.DAY).toString() }.getOrNull() ?: return null
+        if (endDay != day && endDay != nextDay) return null
         val endMinutes = e.groupValues[2].toInt() * 60 + e.groupValues[3].toInt() + if (endDay == day) 0 else 1440
-        if (startMinutes >= 1440 || endMinutes > 2880 || endDay < day) return null
+        if (startMinutes >= 1440 || endMinutes > 2880) return null
         return InterestedTalk(
             talkId = id,
             kind = "talk",

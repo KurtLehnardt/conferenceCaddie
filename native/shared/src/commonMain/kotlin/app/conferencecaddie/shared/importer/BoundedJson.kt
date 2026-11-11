@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonUnquotedLiteral
 
 /**
  * JSON text read with a bound on memory, for files a person or another app hands to the import.
@@ -18,6 +19,7 @@ import kotlinx.serialization.json.JsonPrimitive
  * The import's JSON walk reads at most 50,000 containers no deeper than 8 levels, plus the values
  * just under them, so for a schedule export the dropped part is never looked at.
  */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 internal class BoundedJson(
     private val maxValues: Int = MAX_VALUES,
     private val keepDepth: Int = KEEP_DEPTH,
@@ -80,8 +82,8 @@ internal class BoundedJson(
                         val raw = number()
                         if (keep) {
                             built++
-                            // Whole numbers keep their digits ("71", not "71.0"), as kotlinx's reader keeps them.
-                            value = raw.toLongOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(raw.toDouble())
+                            // The number as written, as kotlinx's own reader keeps it: no conversion here.
+                            value = JsonUnquotedLiteral(raw)
                         }
                     }
                     else -> throw NotJson()

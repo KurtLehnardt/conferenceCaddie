@@ -238,6 +238,27 @@ class ImportUiTest {
         onNodeWithTag("import-row-$alpha:4").assertIsOn()
     }
 
+    @Test
+    fun aFileChosenInTheAppsOwnPickerIsReadAtOnceAfterARecreation() = runComposeUiTest {
+        // The picker's answer reached a recreated screen, so it comes through the hand-off.
+        start()
+        IncomingHandoff.offerFile(PickedFile("Calendar.ics", "text/calendar", ics().encodeToByteArray()), picked = true)
+        waitFor(tag = "import-review")
+        onNodeWithTag("import-offered").assertDoesNotExist()
+        assertEquals(Strings.Import.found(1, "Alpha Conference"), summary())
+    }
+
+    @Test
+    fun closingTheSheetForgetsAFileWaitingForATap() = runComposeUiTest {
+        start()
+        IncomingHandoff.offerFile(PickedFile("Calendar.ics", "text/calendar", ics().encodeToByteArray()))
+        waitFor(tag = "import-offered")
+        onNodeWithTag("import-close").performClick()
+        gone("import-sheet")
+        openImport()
+        onNodeWithTag("import-offered").assertDoesNotExist()
+    }
+
     private fun ics() = listOf(
         "BEGIN:VCALENDAR",
         "VERSION:2.0",

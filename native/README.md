@@ -481,10 +481,12 @@ xcrun simctl openurl booted "caddie://connect?url=https%3A%2F%2Fkurtlehnardt.git
   levels is read as JSON. `ScheduleImport`'s tests include every case of `test/import-bounds.test.mjs` and 28 files
   whose candidates and matches equal the Worker's (`shared/scripts/generate-import-fixtures.mjs`).
 - **Updating from the Capacitor app.** The native Android app installs over the Capacitor app
-  v0.3.0 (same application id and key). Once, at its first start after that update, it reads the
-  old app's Interested lists from the old WebView's local storage (`CapacitorMigration`, through a
-  hidden WebView at the old origin, `https://localhost`; nothing is fetched) and keeps them for the
-  official server. The old app's people profile and device secret are not moved yet (phase 3), so
+  v0.3.0 (same application id and key). At its first start after that update it reads the old
+  app's Interested lists from the old WebView's local storage (`CapacitorMigration`, through a
+  hidden WebView at the old origin, `https://localhost`, made once the first frame is drawn; network
+  loads blocked, every request answered by the app, Safe Browsing and WebView metrics off) and keeps
+  them for the official server. The marks and the marker that stops it running again are written
+  in one transaction; it tries at most three times. The old app's people profile and device secret are not moved yet (phase 3), so
   delete a profile in the old app before updating if you made one.
 - **Storage.** SQLite through the bundled androidx.sqlite driver, in two files on one connection:
   the main database (settings and the marked talks) and a cache database attached as `cache` (the
