@@ -108,7 +108,10 @@ data class PeopleFeatures(
 
 /** Whether the people screens have anything to show. */
 enum class PeopleAvailability {
-    /** The backend's capabilities are not known yet. */
+    /**
+     * The backend's capabilities are not known yet, or the people records of this backend could not
+     * be read yet (the controller tries again on the next change, the next action and on a timer).
+     */
     Loading,
 
     /** The backend offers no people features: the People tab is hidden. */
@@ -218,5 +221,16 @@ data class PeopleUiState(
     val push: PushView = PushView(),
     val around: AroundView = AroundView(),
     /** A message from work the controller did on its own (an automatic share), for a toast; clear with [PeopleController.clearNotice]. */
-    val notice: String? = null,
+    val notice: PeopleNotice? = null,
+)
+
+/**
+ * A toast from work the controller did on its own, such as the automatic share of "sharing follows
+ * Interested". The controller decides whether the toast offers "Open profile", so no screen has to
+ * read the wording.
+ */
+data class PeopleNotice(
+    val message: String,
+    /** True when the fix is on the profile screen: the toast offers "Open profile" (web/src/app.tsx). */
+    val opensProfile: Boolean,
 )
