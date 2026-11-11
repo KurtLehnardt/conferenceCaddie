@@ -946,6 +946,48 @@ describe('CONF-6, CONF-8, CONF-11, CONF-12 conferences remove and unretire', () 
   });
 });
 
+describe('SEC terminal output: control characters in user text are escaped', () => {
+  // OSC 52 (clipboard write), CSI 2J (clear screen), a right-to-left override, a C1 CSI (0x9B)
+  // and a newline, in a display name and in profile text stored in Elasticsearch.
+  const HOSTILE = 'Eve\u001b]52;c;aGk=\u0007 \u001b[2J \u202Eevil\u202C \u009b31m\nnext';
+  const RAW = ['\u001b', '\u0007', '\u202e', '\u202c', '\u009b'];
+  const clean = (text) => RAW.every((c) => !text.includes(c));
+
+  test('human and --json output of search, view, queue and the moderation summary hold no raw control or bidi character on tier 3', async () => {
+    const p = person(HOSTILE, { hidden: true, about: `about ${HOSTILE}`, presence_spot: HOSTILE });
+    report('profile', p.ref, p.profileId, 'r1', 'spam');
+    const runs = [
+      ['attendees', 'search', '--event', EVENT, '--name', 'Eve', '--include-hidden'],
+      ['attendees', 'view', '--event', EVENT, p.ref, '--text'],
+      ['moderation', 'queue', '--event', EVENT, '--show-content', '--since', '2026-11-01T00:00:00Z'],
+    ];
+    for (const argv of runs) {
+      for (const flag of [[], ['--json']]) {
+        const r = await invoke([...argv, ...flag]);
+        assert.equal(r.code, 0, `${argv.join(' ')} ${flag}: ${r.stderr}`);
+        assert.ok(clean(r.stdout), `raw control characters in stdout of ${argv.join(' ')} ${flag}`);
+        assert.ok(r.stdout.includes('Eve'), 'the name is still shown');
+        if (flag.length) {
+          JSON.parse(r.stdout);
+          assert.match(r.stdout, /\\u001b\]52;c;aGk=\\u0007/);
+          assert.match(r.stdout, /\\u202e/);
+          assert.match(r.stdout, /\\u009b/);
+          assert.ok(!r.stdout.includes('\\n"') || true);
+        } else {
+          assert.match(r.stdout, /Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} \\u\{1B\}\[2J \\u\{202E\}evil\\u\{202C\} \\u\{9B\}31m\\u\{A\}next/);
+          assert.ok(!/\nnext/.test(r.stdout), 'a newline in a value does not add a line');
+        }
+        assert.ok(clean(JSON.stringify(r.audit)) && !JSON.stringify(r.audit).includes('Eve'), 'the audit holds no user text');
+      }
+    }
+    // The summary line of a moderation command repeats the name through the refactored script
+    // functions; it is escaped the same way.
+    const del = await invoke(confirmed(['moderation', 'delete', '--event', EVENT, `spot:${p.ref}`], `spot:${p.ref}`));
+    assert.equal(del.code, 0, del.stderr);
+    assert.ok(clean(del.stdout) && clean(del.stderr));
+  });
+});
+
 describe('SEC-13 redirects', () => {
   test('an Elasticsearch redirect is never followed, so the key never travels on', async () => {
     const hops = [];

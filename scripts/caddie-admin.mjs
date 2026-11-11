@@ -28,6 +28,16 @@
 // data/conference-operator.json, which the operator commits; CADDIE_ADMIN_ROOT points them at
 // another repository root (the tests use it).
 //
+// Tier 2 (Cloudflare Worker): the backend entry holds api, the Worker's own origin (https; plain
+// http for localhost only; no path). Every admin request is signed with the token (X-Caddie-Admin,
+// scripts/lib/admin-sign.mjs), re-signed on each retry, and never follows a redirect. The Worker
+// answers 404 to a missing target and to a refused signature alike, and the CLI says so. A 404
+// after a retried delete, unhide or unblock reads as "already done" and exits 0 with a note.
+// `conferences add` and `refresh` start the ingest workflow with `gh workflow run ingest.yml`;
+// `moderation purge-expired` and `moderation rules` exit 5 (the cron purges; the word list is
+// compiled into the Worker). When CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are both set,
+// admin requests also carry the Cloudflare Access headers.
+//
 // Privacy rules: a credential is never printed, logged or written to the audit log. The audit log
 // (<dir>/audit.jsonl, mode 0600) holds only times, the backend, the command, an id or slug, an enum
 // reason and counts. It never holds --note text, the --name search text, the moderation rules test

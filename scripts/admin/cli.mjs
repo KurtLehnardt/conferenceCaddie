@@ -14,7 +14,7 @@ import { configDir, loadConfig, selectBackend } from './config.mjs';
 import { resolveMode } from './confirm.mjs';
 import { CREDENTIAL_SOURCES, readCredential, redactor } from './credentials.mjs';
 import { AdminError, ConfirmError, NotFoundError, UnsupportedError, UsageError } from './errors.mjs';
-import { renderHuman, renderJson } from './output.mjs';
+import { escapeControls, escapeJsonControls, renderHuman, renderJson } from './output.mjs';
 
 const REF_RE = /^[0-9a-f]{16}$/;
 const MEET_ID_RE = /^[A-Za-z0-9_-]{22}$/;
@@ -488,11 +488,12 @@ export async function main(argv, deps = {}) {
   } catch (raw) {
     // A UsageError of the signer or another module carries its own exitCode (an integer of 1 or
     // more); anything else is 1. The code names the exit codes this CLI defines.
+    // A message can echo a value a backend answered with, so it is escaped like any output.
     const error = raw instanceof AdminError ? raw : foreignError(raw);
     const message = redact(error.message);
     stderr.write(json
-      ? `${JSON.stringify({ ok: false, error: error.code, message })}\n`
-      : `caddie-admin: ${message.split('\n')[0]}\n`);
+      ? `${escapeJsonControls(JSON.stringify({ ok: false, error: error.code, message }))}\n`
+      : `caddie-admin: ${escapeControls(message.split('\n')[0])}\n`);
     return error.exitCode;
   }
 }
@@ -590,7 +591,7 @@ async function run(argv, ctx) {
     stdout.write(redact(text));
     // A command that did its work but reports warnings (for example a delete whose best-effort
     // second pass failed) says so on stderr and exits 1, so a script notices.
-    for (const warning of warnings) stderr.write(redact(`caddie-admin: warning: ${warning}\n`));
+    for (const warning of warnings) stderr.write(redact(`caddie-admin: warning: ${escapeControls(warning)}\n`));
     return warnings.length ? 1 : 0;
   } catch (error) {
     writeAudit({ mode, result: auditResult(error) });

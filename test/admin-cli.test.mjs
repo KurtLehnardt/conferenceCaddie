@@ -173,20 +173,46 @@ describe('CLI-2 output', () => {
     assert.equal(r.stdout, '');
     assert.deepEqual(JSON.parse(r.stderr), { ok: false, error: 'not_found', message: 'gone' });
   });
+
+  test('control and bidi characters in any printed value are escaped, in human output, --json, errors and warnings', async () => {
+    // OSC 52, CSI 2J, a right-to-left override, a C1 CSI (0x9B), DEL and a newline; tab stays.
+    const hostile = 'Eve\u001b]52;c;aGk=\u0007 \u001b[2J \u202Eevil\u202C \u009b31m \u007f\tt\nnext';
+    const raw = ['\u001b', '\u0007', '\u202e', '\u202c', '\u009b', '\u007f'];
+    const clean = (text) => raw.every((c) => !text.includes(c));
+    const result = { items: [{ display_name: hostile, nested: { about: hostile }, [hostile]: 1 }], summary: `done ${hostile}`, warnings: [`careful ${hostile}`] };
+    const human = await invoke(['stats', 'usage'], { behavior: () => result });
+    assert.equal(human.code, 1, 'warnings exit 1');
+    assert.ok(clean(human.stdout) && clean(human.stderr));
+    assert.equal(human.stdout.trimEnd().split('\n').length, 2, 'the newline inside a value adds no line');
+    assert.match(human.stdout, /^display_name=Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} \\u\{1B\}\[2J \\u\{202E\}evil\\u\{202C\} \\u\{9B\}31m \\u\{7F\}\tt\\u\{A\}next nested=/);
+    assert.match(human.stdout, /\\u\{202E\}evil\\u\{202C\} \\u\{9B\}31m \\u\{7F\}\tt\\u\{A\}next=1\n/, 'keys too');
+    assert.match(human.stderr, /^caddie-admin: warning: careful Eve\\u\{1B\}/);
+    const asJson = await invoke(['stats', 'usage', '--json'], { behavior: () => result });
+    assert.ok(clean(asJson.stdout) && clean(asJson.stderr));
+    const parsed = JSON.parse(asJson.stdout);
+    assert.equal(parsed.result.items[0].display_name, hostile, 'the JSON is the same document once parsed');
+    assert.match(asJson.stdout, /\\u001b\]52;c;aGk=\\u0007 \\u001b\[2J \\u202eevil\\u202c \\u009b31m \\u007f\\tt\\nnext/);
+    const err = await invoke(['stats', 'usage'], { behavior: throwing(new NotFoundError(`gone ${hostile}`)) });
+    assert.ok(clean(err.stderr));
+    assert.match(err.stderr, /^caddie-admin: gone Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} /);
+    assert.equal(err.stderr.trimEnd().split('\n').length, 1, 'one line, so the newline in the message is escaped before the first-line cut');
+    const errJson = await invoke(['stats', 'usage', '--json'], { behavior: throwing(new NotFoundError(`gone ${hostile}`)) });
+    assert.ok(clean(errJson.stderr));
+    assert.equal(JSON.parse(errJson.stderr).message, `gone ${hostile}`);
+    assert.equal(readFileSync(join(home, 'audit.jsonl'), 'utf8').includes('Eve'), false, 'no free text in the audit');
+  });
 });
 
 describe('CLI-3 exit codes', () => {
   test('0 on success', async () => {
     assert.equal((await invoke(['stats', 'usage'])).code, 0);
   });
-  test('1 on a backend failure, and for the unimplemented real tier 2 adapter', async () => {
+  test('1 on a backend failure', async () => {
     const r = await invoke(['stats', 'usage'], { behavior: throwing(new AdminError('boom')) });
     assert.equal(r.code, 1);
-    // The real tier 2 adapter still throws (PR C); tier 3 is real now and is tested in admin-es.test.mjs.
-    const real = await invoke(['stats', 'usage', '--backend', 't2'], { noStub: true });
-    assert.equal(real.code, 1);
-    assert.match(real.stderr, /not implemented in this release/);
-    assert.equal(JSON.parse(real.audit.trim().split('\n').at(-1)).result, 'failed');
+    assert.equal(JSON.parse(r.audit.trim().split('\n').at(-1)).result, 'failed');
+    // The real adapters are tested against loopback stand-ins: tier 3 in admin-es.test.mjs, tier 2
+    // in admin-worker.test.mjs.
   });
   test('2 on usage', async () => {
     assert.equal((await invoke(['stats', 'usage'], { behavior: throwing(new UsageError('x')) })).code, 2);
