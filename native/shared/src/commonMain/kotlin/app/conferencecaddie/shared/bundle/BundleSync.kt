@@ -199,7 +199,7 @@ class BundleSync(
         const val MAX_INDEX_BYTES = 1L * 1024 * 1024
 
         /**
-         * The largest bundle.json the app reads. KubeCon North America's, with 484 talks, is about
+         * The largest bundle.json the app reads. KubeCon North America's, with 485 talks, is about
          * 1.3 MB; the cap leaves room for ten times that. Reading one means its bytes, its text
          * and its JSON tree at once, so the cap is what keeps a hostile index from exhausting memory.
          */

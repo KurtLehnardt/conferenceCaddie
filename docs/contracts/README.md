@@ -9,7 +9,7 @@ These four contracts are the plug between the native apps and every deployment t
 | People API v1 | [people-api.md](people-api.md) | `contracts/schema/people-api.v1.schema.json`, route table `contracts/routes/people-api.v1.json` | `contracts/fixtures/people-api/` | today's `server/` (all 26 routes checked by `test/contracts-people-conformance.test.mjs`) |
 | Bluetooth derived tokens v1 | [ble-tokens.md](ble-tokens.md) | `contracts/schema/ble-fixtures.v1.schema.json` (the vector files) | `contracts/fixtures/ble/` | `contracts/js/ble-token.mjs` |
 
-`contracts/fixtures/topics-live/` holds the live topic lists of the four searchable conferences, a snapshot taken on 2026-11-10 through the public `GET /api/topics?event={slug}`. They are not a contract: they are the reference that the Phase 1 Node port of the topics builder is diffed against before Elasticsearch is decommissioned.
+`contracts/fixtures/topics-live/` holds the live topic lists of the four searchable conferences, a snapshot taken on 2026-11-10 through the public `GET /api/topics?event={slug}` of tier 3. The KubeCon North America list was taken again on 2026-11-11 from the Worker's same route, for the refreshed 485-talk data, which tier 3 had not ingested yet; each file's `snapshot` says where and when. They are not a contract: they are the reference that the Phase 1 Node port of the topics builder is diffed against before Elasticsearch is decommissioned.
 
 ## What is frozen and what is new
 
