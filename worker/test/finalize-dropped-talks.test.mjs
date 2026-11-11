@@ -42,7 +42,10 @@ const skip = hooks ? false : 'module.registerHooks needs Node 22.15 or later';
 
 function fakeState() {
   const db = new DatabaseSync(':memory:');
-  const exec = (q, ...b) => {
+  const exec = (q, ...args) => {
+    // Node 22's node:sqlite binds typed arrays but not an ArrayBuffer (a stored vector); the Workers
+    // runtime and newer Node bind both.
+    const b = args.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const multi = b.length === 0 && /;\s*\S/.test(q.trim().replace(/;\s*$/, ''));
     let rows = [];
     if (multi) db.exec(q);
