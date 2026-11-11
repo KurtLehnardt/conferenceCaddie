@@ -55,6 +55,7 @@ LICENCES_BY_ID = {
     "expat": ("Expat (MIT)", "expat.txt"),
     "wuffs": ("Wuffs (MIT or Apache License 2.0)", "wuffs.txt"),
     "dng-sdk": ("Adobe DNG SDK", "dng-sdk.txt"),
+    "slf4j": ("SLF4J API (MIT)", "slf4j.txt"),
 }
 
 # Module group -> licence id. A pattern ending in ".*" matches that group and every group below it;
@@ -63,6 +64,9 @@ LICENCES_BY_ID = {
 LICENCE_TABLE = [
     ("androidx.*", "apache-2.0"),
     ("com.google.guava", "apache-2.0"),
+    ("com.squareup.okhttp3", "apache-2.0"),
+    ("com.squareup.okio", "apache-2.0"),
+    ("io.ktor", "apache-2.0"),
     ("org.jetbrains", "apache-2.0"),
     ("org.jetbrains.androidx.*", "apache-2.0"),
     ("org.jetbrains.compose.*", "apache-2.0"),
@@ -70,6 +74,8 @@ LICENCE_TABLE = [
     ("org.jetbrains.kotlinx", "apache-2.0"),
     ("org.jetbrains.skiko", "apache-2.0"),
     ("org.jspecify", "apache-2.0"),
+    # Ktor's logging facade; the POM names no licence, the jar carries the MIT text (licenses/slf4j.txt).
+    ("org.slf4j", "slf4j"),
 ]
 
 # Groups that publish, or could publish, artifacts under another licence than the one in LICENCE_TABLE
@@ -161,6 +167,7 @@ APPROVED_ARTIFACTS = {
     "androidx.lifecycle:lifecycle-viewmodel",
     "androidx.lifecycle:lifecycle-viewmodel-android",
     "androidx.lifecycle:lifecycle-viewmodel-compose",
+    "androidx.lifecycle:lifecycle-viewmodel-compose-android",
     "androidx.lifecycle:lifecycle-viewmodel-compose-iosarm64",
     "androidx.lifecycle:lifecycle-viewmodel-iosarm64",
     "androidx.lifecycle:lifecycle-viewmodel-ktx",
@@ -181,6 +188,14 @@ APPROVED_ARTIFACTS = {
     "androidx.savedstate:savedstate-compose-iosarm64",
     "androidx.savedstate:savedstate-iosarm64",
     "androidx.savedstate:savedstate-ktx",
+    "androidx.sqlite:sqlite",
+    "androidx.sqlite:sqlite-android",
+    "androidx.sqlite:sqlite-bundled",
+    "androidx.sqlite:sqlite-bundled-android",
+    "androidx.sqlite:sqlite-bundled-iosarm64",
+    "androidx.sqlite:sqlite-framework",
+    "androidx.sqlite:sqlite-framework-iosarm64",
+    "androidx.sqlite:sqlite-iosarm64",
     "androidx.startup:startup-runtime",
     "androidx.tracing:tracing",
     "androidx.versionedparcelable:versionedparcelable",
@@ -194,8 +209,16 @@ APPROVED_ARTIFACTS = {
     "org.jetbrains.kotlinx:kotlinx-coroutines-core",
     "org.jetbrains.kotlinx:kotlinx-coroutines-core-iosarm64",
     "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm",
+    "org.jetbrains.kotlinx:kotlinx-coroutines-slf4j",
     "org.jetbrains.kotlinx:kotlinx-datetime",
     "org.jetbrains.kotlinx:kotlinx-datetime-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-datetime-jvm",
+    "org.jetbrains.kotlinx:kotlinx-io-bytestring",
+    "org.jetbrains.kotlinx:kotlinx-io-bytestring-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm",
+    "org.jetbrains.kotlinx:kotlinx-io-core",
+    "org.jetbrains.kotlinx:kotlinx-io-core-iosarm64",
+    "org.jetbrains.kotlinx:kotlinx-io-core-jvm",
     "org.jetbrains.kotlinx:kotlinx-serialization-bom",
     "org.jetbrains.kotlinx:kotlinx-serialization-core",
     "org.jetbrains.kotlinx:kotlinx-serialization-core-iosarm64",

@@ -7,6 +7,18 @@
 # targetSdk stays at 36: compileSdk only decides which APIs the code can see, while targetSdk decides
 # which runtime behaviour changes the app opts in to.
 #
+# Phase 2a (2026-11-10) adds the network, storage and time libraries of the shared core:
+# - Ktor 3.6.1, the newest release, built against kotlinx.coroutines 1.11.0 like the rest of the
+#   app. The OkHttp engine serves Android and the JVM tests; the Darwin engine (NSURLSession) serves
+#   iOS, so App Transport Security applies there.
+# - kotlinx-io 0.9.1 is the version Ktor 3.6.1 itself depends on; the bundle cache uses its file
+#   system API.
+# - androidx.sqlite 2.7.1, the newest stable release. Its bundled driver compiles SQLite with FTS5
+#   for Android, iOS and the JVM, so search behaves the same everywhere.
+# - kotlinx-datetime 0.7.1 is the version Compose already brings in; it supplies time zones for
+#   "today in the conference's time zone".
+# Lifecycle's ViewModel for Compose (phase 2a review, 2026-11-10) keeps the Search screen's state
+# across an Android configuration change; it is the same Lifecycle 2.11.0 release as the runtime.
 # UI tests (added 2026-11-10 with the design system): Compose Multiplatform's ui-test runs the same
 # commonTest UI tests on the iOS simulator and, through the Android device test source set, on an
 # Android emulator. Its Android side is Jetpack Compose ui-test 1.12.1, the Jetpack release that
@@ -34,10 +46,15 @@ jetbrains-navigationevent = "1.1.0"
 kotlin = "2.4.21"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.12.0"
+kotlinx-datetime = "0.7.1"
+kotlinx-io = "0.9.1"
+ktor = "3.6.1"
+androidx-sqlite = "2.7.1"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
 androidx-lifecycle-runtimeCompose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-viewmodelCompose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose-multiplatform" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
 compose-material-icons-core = { module = "org.jetbrains.compose.material:material-icons-core", version.ref = "compose-material-icons" }
@@ -57,6 +74,14 @@ jetbrains-navigationevent-compose = { module = "org.jetbrains.androidx.navigatio
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "androidx-sqlite" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
