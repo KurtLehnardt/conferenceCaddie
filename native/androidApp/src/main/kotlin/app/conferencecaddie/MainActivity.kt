@@ -109,6 +109,13 @@ class MainActivity : ComponentActivity(), PlatformActions {
         handOff(intent)
     }
 
+    // The system's notification switch for the app may have changed while it was away, which no
+    // people state shows: the background nudge job is checked again.
+    override fun onResume() {
+        super.onResume()
+        CaddiePeople.recheckBackgroundNudges()
+    }
+
     override fun onDestroy() {
         AndroidPermissions.detach(permissionHost, finishing = isFinishing)
         super.onDestroy()
