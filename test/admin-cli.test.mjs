@@ -622,9 +622,29 @@ describe('round-1 fixes', () => {
     assert.deepEqual(JSON.parse(r.stderr), { ok: false, error: 'usage', message: 'The admin query string may hold only letters' });
     r = await invoke(['stats', 'usage'], { behavior: throwing(Object.assign(new Error('x'), { exitCode: 5 })) });
     assert.equal(r.code, 5);
-    for (const bad of [Object.assign(new Error('x'), { exitCode: 2.5 }), Object.assign(new Error('x'), { exitCode: '2' }), new Error('x')]) {
-      r = await invoke(['stats', 'usage'], { behavior: throwing(bad) });
+    for (const [exitCode, name] of [[3, 'confirm'], [4, 'not_found'], [5, 'unsupported'], [7, 'failed']]) {
+      r = await invoke(['stats', 'usage', '--json'], { behavior: throwing(Object.assign(new Error('x'), { exitCode })) });
+      assert.equal(r.code, exitCode);
+      assert.equal(JSON.parse(r.stderr).error, name);
+    }
+    for (const bad of [Object.assign(new Error('x'), { exitCode: 0 }), Object.assign(new Error('x'), { exitCode: -2 }), Object.assign(new Error('x'), { exitCode: 2.5 }), Object.assign(new Error('x'), { exitCode: '2' }), new Error('x')]) {
+      r = await invoke(['stats', 'usage', '--json'], { behavior: throwing(bad) });
       assert.equal(r.code, 1);
+      assert.equal(JSON.parse(r.stderr).error, 'failed');
+    }
+  });
+
+  test('SEC-13 for tier 3 too: es_url must be https, or http to this machine only', async () => {
+    for (const es_url of ['http://es.example.test:9200', 'http://10.0.0.5:9200']) {
+      writeConfig({ default: 't3', backends: { t3: { tier: 3, es_url } } });
+      const r = await invoke(['stats', 'usage']);
+      assert.equal(r.code, 2, es_url);
+      assert.ok(r.stderr.includes('needs an https es_url (http only for localhost)'), r.stderr);
+      assert.equal(r.calls.length, 0);
+    }
+    for (const es_url of ['http://localhost:9200', 'http://127.0.0.1:9200', 'https://es.example.test']) {
+      writeConfig({ default: 't3', backends: { t3: { tier: 3, es_url } } });
+      assert.equal((await invoke(['stats', 'usage'])).code, 0, es_url);
     }
   });
 

@@ -63,7 +63,8 @@ describe('the fixture file states the scheme the module implements', () => {
     assert.equal(fixture.query_re, QUERY_RE.source);
     assert.equal(fixture.path_re, PATH_RE.source);
     assert.ok(fixture.about.includes('Math.floor(Date.now() / 1000)'));
-    assert.ok(fixture.verify_reasons._note.includes('any listed reason is acceptable'));
+    assert.ok(fixture.about.includes('base is an origin'));
+    assert.ok(fixture.verify_reasons._note.includes('any one of those applying reasons is acceptable'));
     // The fixture names every code the module throws, and nothing else.
     const codes = Object.keys(fixture.reject_reasons).filter((k) => !k.startsWith('_')).sort();
     assert.deepEqual(codes, ['body_on_bodyless_method', 'body_type', 'key_too_short', 'method', 'nonce', 'path_charset', 'query_charset', 'ts', 'url']);
@@ -81,7 +82,7 @@ describe('the fixture file states the scheme the module implements', () => {
   });
 
   test('CLI-12: the required cases are present', () => {
-    for (const id of ['get-stats', 'post-moderation', 'get-since-iso', 'get-q64', 'post-non-ascii', 'post-four-bytes', 'delete-empty', 'head-empty', 'post-second-key', 'post-one-byte-diff', 'post-key-trimmed', 'put-body-flag', 'get-trailing-question', 'reject-query-percent', 'reject-query-space', 'reject-path-non-ascii', 'reject-path-space', 'reject-path-double-slash', 'reject-path-backslash', 'v-second-key-accepted', 'v-skew-plus-301', 'v-malformed-missing', 'v-malformed-ts-leading-zero', 'v-malformed-joined-twice', 'v-malformed-bodysha-uppercase']) {
+    for (const id of ['get-stats', 'post-moderation', 'get-since-iso', 'get-q64', 'post-non-ascii', 'post-four-bytes', 'delete-empty', 'head-empty', 'post-second-key', 'post-one-byte-diff', 'post-key-trimmed', 'put-body-flag', 'get-trailing-question', 'get-fields-comma', 'reject-query-percent', 'reject-path-empty-segment', 'reject-base-with-path', 'reject-query-space', 'reject-path-non-ascii', 'reject-path-space', 'reject-path-double-slash', 'reject-path-backslash', 'v-second-key-accepted', 'v-skew-plus-301', 'v-malformed-missing', 'v-malformed-ts-leading-zero', 'v-malformed-joined-twice', 'v-malformed-bodysha-uppercase']) {
       assert.ok(byId[id], `missing case ${id}`);
     }
     assert.ok(signCases.some((c) => c.path.includes('event=')));
@@ -269,13 +270,21 @@ describe('reject cases: the signer refuses before anything is sent', () => {
 
   test('SEC-14: the query charset, through canonicalUrl', () => {
     assert.equal(canonicalUrl('/admin/moderation?event=x-1&since=2026-11-10T08:00:00Z', 'https://caddie.example').pathWithQuery, '/admin/moderation?event=x-1&since=2026-11-10T08:00:00Z');
-    for (const q of ['q=a%20b', 'q=a b', 'q=a+b', 'q=a/b', 'q=a?b', 'q=%41', 'q=a;b', 'q=a,b', 'q=a@b', 'q=a~b', 'q="a"', "q='a'", 'q=Zoë']) {
+    assert.equal(canonicalUrl('/admin/people/view?event=x&ref=0123456789abcdef&fields=text,contact', 'https://caddie.example').pathWithQuery, '/admin/people/view?event=x&ref=0123456789abcdef&fields=text,contact');
+    for (const q of ['q=a%20b', 'q=a b', 'q=a+b', 'q=a/b', 'q=a?b', 'q=%41', 'q=a;b', 'q=a@b', 'q=a~b', 'q="a"', "q='a'", 'q=Zoë']) {
       assert.throws(() => canonicalUrl(`/admin/people/search?event=x&${q}`, 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'query_charset', q);
     }
     // The path charset: one leading slash, nothing that the URL parser would rewrite or encode.
-    for (const path of ['/admin/Zoë', '/admin/a b', '//admin/stats', '/admin\\stats', 'admin/stats', '', 'https://caddie.example/admin/stats', '/admin/%2e%2e', '/admin/st;ats', '/admin/st@ts', '/admin/st:ats', '/admin/st~ats', '/admin/x?a=1/b']) {
-      assert.throws(() => canonicalUrl(path, 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'path_charset' || e.code === 'query_charset', JSON.stringify(path));
+    for (const path of ['/admin/Zoë', '/admin/a b', '//admin/stats', '/admin//stats', '/admin/stats//', '/admin\\stats', 'admin/stats', '', 'https://caddie.example/admin/stats', '/admin/%2e%2e', '/admin/st;ats', '/admin/st@ts', '/admin/st:ats', '/admin/st~ats']) {
+      assert.throws(() => canonicalUrl(path, 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'path_charset', JSON.stringify(path));
     }
+    assert.throws(() => canonicalUrl('/admin/x?a=1/b', 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'query_charset');
+    // The base is an origin: a path, query or fragment on it is refused rather than silently dropped.
+    for (const base of ['https://caddie.example/prefix', 'https://caddie.example/?x=1', 'https://caddie.example/#f', 'not a url', '']) {
+      assert.throws(() => canonicalUrl('/admin/stats', base), (e) => e instanceof UsageError && e.code === 'url', base);
+    }
+    assert.equal(canonicalUrl('/admin/stats', 'https://caddie.example/').pathWithQuery, '/admin/stats');
+    assert.equal(canonicalUrl('/admin/stats/', 'https://caddie.example').pathWithQuery, '/admin/stats/');
     // A fragment is dropped before either check, so a bad fragment is neither sent nor refused.
     assert.equal(canonicalUrl('/admin/stats?x=1#/y z', 'https://caddie.example').pathWithQuery, '/admin/stats?x=1');
     assert.equal(canonicalUrl('/admin/people/search?event=x', 'https://caddie.example').pathWithQuery, '/admin/people/search?event=x');
@@ -291,7 +300,7 @@ describe('reject cases: the signer refuses before anything is sent', () => {
     // A fragment is not part of what is sent, so it is neither signed nor refused, and the base's
     // own query does not leak into the path.
     assert.equal(canonicalUrl('/admin/stats?event=x#frag', 'https://caddie.example').pathWithQuery, '/admin/stats?event=x');
-    assert.equal(canonicalUrl('/admin/stats?event=x', 'https://caddie.example/?other=1').pathWithQuery, '/admin/stats?event=x');
+    assert.throws(() => canonicalUrl('/admin/stats?event=x', 'https://caddie.example/?other=1'), (e) => e.code === 'url');
   });
 
   test('randomNonce: 22 base64url characters without padding, never repeating', () => {

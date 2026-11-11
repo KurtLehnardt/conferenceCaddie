@@ -1,12 +1,12 @@
 {
-  "about": "Test vectors for the X-Caddie-Admin v1 request signature (scripts/lib/admin-sign.mjs). The Worker verifier (worker/src/lib/admin-auth.js) and the CLI are tested against this one file. Three kinds of case: \"sign\" (signer input and the exact header it must produce), \"verify\" (what the verifier answers for a header, given the keys it holds and its clock) and \"reject\" (input the signer refuses before anything is sent). All times are Unix seconds; `now` is Math.floor(Date.now() / 1000). Keys are UTF-8 after trimming, never hex-decoded. The signed path is new URL(path, base).pathname + search: the path must match path_re (one leading \"/\", no \"//\", no \"\\\", nothing that would be percent-encoded) and the query must match query_re, so both sides see the same bytes without any escaping rule; free text travels base64url-encoded under a key ending in 64. ts has no leading zero (header_re), so a raw-string verifier and Number() agree.",
+  "about": "Test vectors for the X-Caddie-Admin v1 request signature (scripts/lib/admin-sign.mjs). The Worker verifier (worker/src/lib/admin-auth.js) and the CLI are tested against this one file. Three kinds of case: \"sign\" (signer input and the exact header it must produce), \"verify\" (what the verifier answers for a header, given the keys it holds and its clock) and \"reject\" (input the signer refuses before anything is sent). All times are Unix seconds; `now` is Math.floor(Date.now() / 1000). Keys are UTF-8 after trimming, never hex-decoded. The signed path is new URL(path, base).pathname + search, where base is an origin (no path, query or fragment): the path must match path_re (one leading \"/\", segments of letters, digits, \"_\", \".\" and \"-\", no empty segment so no \"//\" anywhere, no backslash, nothing that would be percent-encoded) and the query must match query_re (the comma is allowed for lists such as fields=text,contact), so both sides see the same bytes without any escaping rule; free text travels base64url-encoded under a key ending in 64. ts has no leading zero (header_re), so a raw-string verifier and Number() agree.",
   "version": "v1",
   "header_name": "X-Caddie-Admin",
   "header_format": "v1 <ts> <nonce> <bodySha256> <sig>",
   "header_re": "^v1 (0|[1-9]\\d{0,11}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$",
   "canonical_format": "caddie-admin-v1\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n",
-  "query_re": "^[A-Za-z0-9_.:=&-]*$",
-  "path_re": "^\\/[A-Za-z0-9\\/_.-]*$",
+  "query_re": "^[A-Za-z0-9_.:=&,-]*$",
+  "path_re": "^\\/(?:[A-Za-z0-9_.-]+\\/)*[A-Za-z0-9_.-]*$",
   "empty_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "bodyless_methods": [
     "GET",
@@ -20,7 +20,7 @@
     "key2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
   },
   "verify_reasons": {
-    "_note": "Reasons are checked in this order: malformed, bodyless_body_hash, no_key, signature, skew. When several apply, any listed reason is acceptable; all but skew map to 404, and skew is 401 admin_skew.",
+    "_note": "The verifier checks in this order: malformed, bodyless_body_hash, no_key, signature, skew, and reports the first that applies. When several reasons apply, any one of those applying reasons is acceptable; all map to 404, except skew, which is 401 admin_skew and can only follow a valid signature.",
     "malformed": "the header is absent or does not match header_re (Worker: 404)",
     "bodyless_body_hash": "GET, HEAD or DELETE with a bodySha256 other than empty_body_sha256 (Worker: 404)",
     "no_key": "the Worker holds no usable key: ADMIN_TOKEN missing or shorter than 32 after trimming (Worker: 404)",
@@ -29,7 +29,7 @@
   },
   "reject_reasons": {
     "_note": "Each reject case names the UsageError.code the signer throws. These are all the codes the signer has.",
-    "path_charset": "the path does not match path_re, starts with \"//\", holds a \"\\\", is not absolute, or resolves to another origin than base",
+    "path_charset": "the path does not match path_re (an empty segment, a backslash, a character that would be percent-encoded, or not absolute), or resolves to another origin than base",
     "query_charset": "the query string after \"?\" does not match query_re",
     "body_on_bodyless_method": "a body on GET, HEAD or DELETE",
     "key_too_short": "the key is missing or shorter than min_key_length after trimming",
@@ -37,7 +37,7 @@
     "method": "the method is missing",
     "nonce": "a nonce given to the signer (tests only) is not 22 base64url characters",
     "ts": "the signing time is negative or longer than 12 digits",
-    "url": "the base is not a URL"
+    "url": "the base is not a URL, or is not an origin (it has a path, query or fragment)"
   },
   "cases": [
     {
@@ -381,11 +381,30 @@
       "url": "https://caddie.example/admin/stats?",
       "path_with_query": "/admin/stats",
       "ts": 1762848000,
+      "nonce": "E0f1G2h3I4j5K6l7M8n9Op",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/stats\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nE0f1G2h3I4j5K6l7M8n9Op\n",
+      "sig": "d93458fb7377bfae2f3b88a55b85b020aad57489b51e7dd11b30f360e09c1ef9",
+      "header": "v1 1762848000 E0f1G2h3I4j5K6l7M8n9Op e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d93458fb7377bfae2f3b88a55b85b020aad57489b51e7dd11b30f360e09c1ef9"
+    },
+    {
+      "id": "get-fields-comma",
+      "kind": "sign",
+      "title": "GET /admin/people/view with fields=text,contact: the comma is in the query charset for lists",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/people/view?event=testconf-2099&ref=0123456789abcdef&fields=text,contact",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/people/view?event=testconf-2099&ref=0123456789abcdef&fields=text,contact",
+      "path_with_query": "/admin/people/view?event=testconf-2099&ref=0123456789abcdef&fields=text,contact",
+      "ts": 1762848000,
       "nonce": "T9u0V1w2X3y4Z5a6B7c8De",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "canonical": "caddie-admin-v1\nGET\n/admin/stats\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nT9u0V1w2X3y4Z5a6B7c8De\n",
-      "sig": "78c7a64b9d09af7fb4a8f52b79b8d62f2236971fa59ae50916346c27188a0fa6",
-      "header": "v1 1762848000 T9u0V1w2X3y4Z5a6B7c8De e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 78c7a64b9d09af7fb4a8f52b79b8d62f2236971fa59ae50916346c27188a0fa6"
+      "canonical": "caddie-admin-v1\nGET\n/admin/people/view?event=testconf-2099&ref=0123456789abcdef&fields=text,contact\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nT9u0V1w2X3y4Z5a6B7c8De\n",
+      "sig": "49830a1ba0c82d8d4277c4317c94ca5b94341db9e60f34e5e732db4a7e2dad48",
+      "header": "v1 1762848000 T9u0V1w2X3y4Z5a6B7c8De e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 49830a1ba0c82d8d4277c4317c94ca5b94341db9e60f34e5e732db4a7e2dad48"
     },
     {
       "id": "v-ok",
@@ -1152,6 +1171,19 @@
       "reject": "path_charset"
     },
     {
+      "id": "reject-path-empty-segment",
+      "kind": "reject",
+      "title": "An empty segment inside the path (\"/admin//stats\")",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin//stats"
+      },
+      "reject": "path_charset"
+    },
+    {
       "id": "reject-path-double-slash",
       "kind": "reject",
       "title": "A path starting with \"//\" (it would name another host)",
@@ -1234,6 +1266,7 @@
       "id": "reject-ts-bad",
       "kind": "reject",
       "title": "A signing time out of range (tests only)",
+      "note": "The signer takes now in milliseconds, as Date.now() gives it, and floors it to seconds for ts; -1000 ms is ts -1. Every other time in this file is seconds.",
       "input": {
         "base": "https://caddie.example",
         "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -1250,6 +1283,19 @@
       "title": "A base that is not a URL",
       "input": {
         "base": "not a url",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats"
+      },
+      "reject": "url"
+    },
+    {
+      "id": "reject-base-with-path",
+      "kind": "reject",
+      "title": "A base with a path: the base is an origin, because new URL(path, base) would drop that path",
+      "input": {
+        "base": "https://caddie.example/prefix",
         "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "body": null,
         "method": "GET",

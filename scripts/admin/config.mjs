@@ -24,7 +24,8 @@ export function configPath(env) {
 const LOOPBACK = ['localhost', '127.0.0.1', '[::1]'];
 
 // https, or plain http to this machine only (the rule of worker/ingest/lib.mjs normalizeApiBase),
-// so an admin credential never travels in clear to another host.
+// for the tier 2 api and the tier 3 es_url alike, so neither admin credential ever travels in
+// clear to another host.
 function isUrl(value, protocols) {
   if (typeof value !== 'string') return false;
   try {
@@ -60,7 +61,7 @@ export function loadConfig(env) {
   for (const [name, entry] of Object.entries(backends)) {
     if (!entry || typeof entry !== 'object') throw fail(`has a bad entry "${name}"`);
     if (entry.tier === 2 && !isUrl(entry.api, ['https:', 'http:'])) throw fail(`entry "${name}" needs an https api url (http only for localhost)`);
-    else if (entry.tier === 3 && !isUrl(entry.es_url, ['https:', 'http:'])) throw fail(`entry "${name}" needs an es_url`);
+    else if (entry.tier === 3 && !isUrl(entry.es_url, ['https:', 'http:'])) throw fail(`entry "${name}" needs an https es_url (http only for localhost)`);
     else if (entry.tier !== 2 && entry.tier !== 3) throw fail(`entry "${name}" needs tier 2 or 3`);
   }
   return config;

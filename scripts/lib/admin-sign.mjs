@@ -20,7 +20,8 @@
 //
 // Canonicalisation: the client builds new URL(path, base) and signs u.pathname + u.search; the
 // Worker does the same with new URL(request.url). The query string after "?" must match QUERY_RE
-// (letters, digits, "_", ".", ":", "=", "&", "-"), so the two sides never disagree on escaping:
+// (letters, digits, "_", ".", ":", "=", "&", ",", "-"; the comma for lists such as
+// fields=text,contact), so the two sides never disagree on escaping:
 // an ISO instant such as since=2026-11-10T08:00:00Z passes; "%", a space or "+" does not. A value
 // that needs other characters travels base64url-encoded under a key ending in "64" (q64 for the
 // search text). Flags such as allow_shrink go in the JSON body, never in the query, so the body
@@ -34,13 +35,14 @@ import { createHash, createHmac, randomBytes, timingSafeEqual as nodeTimingSafeE
 
 export const VERSION = 'v1';
 export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-export const QUERY_RE = /^[A-Za-z0-9_.:=&-]*$/;
+export const QUERY_RE = /^[A-Za-z0-9_.:=&,-]*$/;
 export const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
 // ts is a decimal integer without a leading zero, so a raw-string verifier and Number() agree.
 export const HEADER_RE = /^v1 (0|[1-9]\d{0,11}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$/;
-// The path of an admin request: absolute, one leading "/", and only letters, digits, "/", "_",
-// "." and "-", so nothing in it is ever percent-encoded, which keeps both sides byte-identical.
-export const PATH_RE = /^\/[A-Za-z0-9\/_.-]*$/;
+// The path of an admin request: absolute, one leading "/", segments of letters, digits, "_", "."
+// and "-" with no empty segment (so no "//" anywhere), so nothing in it is ever percent-encoded
+// or rewritten, which keeps both sides byte-identical.
+export const PATH_RE = /^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]*$/;
 export const HEADER_NAME = 'X-Caddie-Admin';
 export const SKEW_SECONDS = 300;
 export const MIN_KEY_LENGTH = 32;
@@ -91,19 +93,21 @@ export function canonicalUrl(path, base) {
   // The path is checked as given and again as parsed: "//host/x" would change the host, "\\" is a
   // slash to the URL parser, and a space or non-ASCII would come back percent-encoded.
   const rawPath = String(path ?? '').split(/[?#]/, 1)[0];
-  if (!PATH_RE.test(rawPath) || rawPath.startsWith('//')) {
-    throw new UsageError('The admin request path must start with one "/" and hold only letters, digits, "/", "_", "." and "-".', 'path_charset');
+  if (!PATH_RE.test(rawPath)) {
+    throw new UsageError('The admin request path must start with one "/" and hold segments of letters, digits, "_", "." and "-" only, with no empty segment.', 'path_charset');
   }
-  let u;
-  let origin;
+  // The base is an origin: a base with a path, query or fragment would be dropped by new URL(path,
+  // base) for an absolute path, so the Worker would see another path than the caller meant.
+  let b;
   try {
-    u = new URL(path, base);
-    origin = new URL(base).origin;
+    b = new URL(base);
   } catch {
-    throw new UsageError('The admin request path or base is not a valid URL.', 'url');
+    throw new UsageError('The admin request base is not a valid URL.', 'url');
   }
-  if (u.origin !== origin || !PATH_RE.test(u.pathname)) {
-    throw new UsageError('The admin request path must start with one "/" and hold only letters, digits, "/", "_", "." and "-".', 'path_charset');
+  if (b.pathname !== '/' || b.search !== '' || b.hash !== '') throw new UsageError('The admin request base must be an origin with no path, query or fragment.', 'url');
+  const u = new URL(path, b);
+  if (u.origin !== b.origin || !PATH_RE.test(u.pathname)) {
+    throw new UsageError('The admin request path must start with one "/" and hold segments of letters, digits, "_", "." and "-" only, with no empty segment.', 'path_charset');
   }
   if (!QUERY_RE.test(u.search.slice(1))) {
     throw new UsageError('The admin query string may hold only letters, digits, "_", ".", ":", "=", "&" and "-"; send other text base64url-encoded under a key ending in 64 (for example q64).', 'query_charset');

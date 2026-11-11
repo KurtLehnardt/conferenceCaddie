@@ -443,6 +443,16 @@ function readlinePrompt(stdin, stderr) {
   });
 }
 
+const EXIT_CODE_NAMES = { 2: 'usage', 3: 'confirm', 4: 'not_found', 5: 'unsupported' };
+function foreignError(raw) {
+  const error = new AdminError(raw?.message ?? String(raw));
+  if (Number.isInteger(raw?.exitCode) && raw.exitCode >= 1) {
+    error.exitCode = raw.exitCode;
+    error.code = EXIT_CODE_NAMES[raw.exitCode] ?? 'failed';
+  }
+  return error;
+}
+
 function auditResult(error) {
   if (error instanceof ConfirmError) return 'refused';
   if (error instanceof NotFoundError) return 'not_found';
@@ -470,8 +480,9 @@ export async function main(argv, deps = {}) {
   try {
     return await run(argv, { env, stdout, stderr, d, secrets, redact });
   } catch (raw) {
-    // A UsageError of the signer or another module carries its own exitCode; anything else is 1.
-    const error = raw instanceof AdminError ? raw : Object.assign(new AdminError(raw?.message ?? String(raw)), Number.isInteger(raw?.exitCode) ? { exitCode: raw.exitCode, code: raw.exitCode === 2 ? 'usage' : 'failed' } : {});
+    // A UsageError of the signer or another module carries its own exitCode (an integer of 1 or
+    // more); anything else is 1. The code names the exit codes this CLI defines.
+    const error = raw instanceof AdminError ? raw : foreignError(raw);
     const message = redact(error.message);
     stderr.write(json
       ? `${JSON.stringify({ ok: false, error: error.code, message })}\n`
