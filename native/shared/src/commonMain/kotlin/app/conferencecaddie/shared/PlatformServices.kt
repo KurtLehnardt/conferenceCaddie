@@ -61,14 +61,20 @@ interface LocationProvider {
     fun fixes(): Flow<GeoFix>
 }
 
-/** A native push token for the backend's native push registration route. */
+/**
+ * A native push token for the backend's native push registration route. The token addresses this
+ * device, so [toString] leaves it out: a log line or a failed assertion that prints a token shows
+ * only its channel, environment and length.
+ */
 data class PushToken(
     /** "apns" or "fcm". */
     val channel: String,
     val token: String,
     /** APNs only: "production" or "sandbox", from the build's signing. Null for FCM. */
     val environment: String? = null,
-)
+) {
+    override fun toString(): String = "PushToken(channel=$channel, token=<redacted, ${token.length} chars>, environment=$environment)"
+}
 
 /**
  * Native push (docs/NATIVE_PLAN.md, decision 3): only the official backend holds the APNs and FCM
