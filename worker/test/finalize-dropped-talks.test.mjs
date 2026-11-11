@@ -1,9 +1,10 @@
 // What happens to people when a re-ingest removes a talk they shared for (a cancelled session or a
 // takedown): POST /admin/talks/finalize removes the talk's shared_talks rows, so no circle is left
 // for it, and deletes a profile that is then neither open to meet nor sharing for any talk; a later
-// profile write that still names the talk drops it instead of failing. The object runs in Node on a
-// real SQLite database (node:sqlite) behind a small stand-in for state.storage, with fake embeddings
-// (EMBED_FAKE), as in conference-meter.test.mjs.
+// profile write that still names the talk drops it instead of failing. PUT /admin/topics likewise
+// never replaces a stored topic list with an empty one unless allow_empty is set. The object runs in
+// Node on a real SQLite database (node:sqlite) behind a small stand-in for state.storage, with fake
+// embeddings (EMBED_FAKE), as in conference-meter.test.mjs.
 //
 // module.registerHooks needs Node 22.15 or later; on older versions these tests are skipped.
 
@@ -192,4 +193,27 @@ test('a finalize that would delete many talks is refused unless allow_shrink is 
   assert.equal(allowed.status, 200);
   assert.equal(allowed.json.deleted, 15);
   assert.equal(allowed.json.profiles_deleted, 1);
+});
+
+test('PUT /admin/topics refuses to replace a stored list with an empty one unless allow_empty is set', { skip }, async () => {
+  const { obj } = await setup();
+  const topic = (id, rank) => ({ conference: SLUG, topic_id: id, label: id, label_exact: id, aliases: [], talk_count: 3, rank });
+  // Nothing stored yet: an empty list is accepted without the flag.
+  assert.deepEqual(await call(obj, 'PUT', '/admin/topics', { topics: [] }), { status: 200, json: { topics: 0 } });
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [topic('alpha', 1), topic('beta', 2)] })).status, 200);
+
+  const refused = await call(obj, 'PUT', '/admin/topics', { topics: [] });
+  assert.equal(refused.status, 409);
+  assert.match(refused.json.error, /replace the 2 stored topics with none; nothing was changed/);
+  // A list whose rows all belong to another conference counts as empty.
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [{ ...topic('gamma', 1), conference: 'other-2099' }] })).status, 409);
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [], allow_empty: 'yes' })).status, 400);
+  assert.deepEqual((await call(obj, 'GET', '/admin/topics')).json.topics.map((t) => t.topic_id), ['alpha', 'beta']);
+
+  // A non-empty replacement needs no flag, and allow_empty lets the empty list through.
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [topic('beta', 1)] })).status, 200);
+  assert.deepEqual(await call(obj, 'PUT', '/admin/topics', { topics: [], allow_empty: true }), { status: 200, json: { topics: 0 } });
+  assert.deepEqual((await call(obj, 'GET', '/admin/topics')).json.topics, []);
+  // Applying it twice is the same as once.
+  assert.deepEqual(await call(obj, 'PUT', '/admin/topics', { topics: [], allow_empty: true }), { status: 200, json: { topics: 0 } });
 });

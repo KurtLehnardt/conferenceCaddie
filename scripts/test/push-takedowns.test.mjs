@@ -112,16 +112,22 @@ test('countsAfterTakedowns recounts the conference document over the talks that 
   assert.deepEqual(countsAfterTakedowns(counts, talks), counts);
 });
 
-test('pushEvent sends the redacted talks, topics and facets, and finalize removes the dropped talk', async () => {
+// A stand-in for the admin routes that records every call. GET /admin/topics answers with `stored`.
+function recordingAdmin({ stored = [] } = {}) {
   const calls = [];
   const admin = async (method, url, body) => {
     calls.push({ method, url, body });
-    if (method === 'GET') return { topics: [] };
+    if (method === 'GET') return { topics: stored };
     if (url.startsWith('/admin/talks/finalize')) return { talks: 4, deleted: 1, unshared: 0 };
     if (url.startsWith('/admin/talks')) return { upserted: body.talks.length, unchanged: 0, embedded: body.talks.length, pending: 0 };
     if (url.startsWith('/admin/topics')) return { topics: body.topics.length };
     return { facets: body.facets.length };
   };
+  return { admin, calls };
+}
+
+test('pushEvent sends the redacted talks, topics and facets, and finalize removes the dropped talk', async () => {
+  const { admin, calls } = recordingAdmin();
   const prepared = workerTalks(SLUG, fixture(), TAKEDOWNS);
   const line = await pushEvent({ slug: SLUG }, prepared, { admin, dryRun: false, generation: 7, rebuild: false, stop: loadStoplist() });
   assert.match(line, /takedowns 2 \(1 talks dropped, 2 redacted\)/);
@@ -133,6 +139,65 @@ test('pushEvent sends the redacted talks, topics and facets, and finalize remove
   for (const c of calls) assert.ok(!JSON.stringify(c.body ?? {}).toLowerCase().includes('grace'), `${c.method} ${c.url}`);
   const facets = calls.find((c) => c.url.startsWith('/admin/facets')).body.facets;
   assert.ok(facets.some((f) => f.kind === 'speaker' && f.value === 'Ada Example'));
+});
+
+// Four talks whose titles share no term, so no term reaches three of them and the builder gives an
+// empty topic list.
+function noSharedTermTalks() {
+  return [talk(1, { title: 'Quokkas' }), talk(2, { title: 'Marmots' }), talk(3, { title: 'Narwhals' }), talk(4, { title: 'Pangolins' })];
+}
+
+const STORED = [
+  { conference: SLUG, topic_id: 'kubernetes', label: 'Kubernetes', label_exact: 'Kubernetes', aliases: [], talk_count: 3, rank: 1 },
+  { conference: SLUG, topic_id: 'ebpf', label: 'eBPF', label_exact: 'eBPF', aliases: [], talk_count: 3, rank: 2 },
+];
+
+const rebuildOptions = (admin, extra = {}) => ({ admin, dryRun: false, generation: 8, rebuild: true, stop: loadStoplist(), ...extra });
+const wrote = (calls) => calls.filter((c) => c.method !== 'GET');
+
+test('pushEvent stops a rebuild with an empty topic list before any talk or topic is sent while topics are stored', async () => {
+  const { admin, calls } = recordingAdmin({ stored: STORED });
+  const prepared = workerTalks(SLUG, noSharedTermTalks(), []);
+  await assert.rejects(pushEvent({ slug: SLUG }, prepared, rebuildOptions(admin)), /would replace the 2 stored topics; no talk or topic was sent/);
+  // Only the read of the stored list happened: no talks, no finalize, no topics, no facets.
+  assert.deepEqual(calls.map((c) => `${c.method} ${c.url.split('?')[0]}`), ['GET /admin/topics']);
+  assert.deepEqual(wrote(calls), []);
+});
+
+test('pushEvent with allowEmpty replaces the stored list with the empty one and says why there are no topics', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const { admin, calls } = recordingAdmin({ stored: STORED });
+  const prepared = workerTalks(SLUG, noSharedTermTalks(), []);
+  const line = await pushEvent({ slug: SLUG }, prepared, rebuildOptions(admin, { allowEmpty: true }));
+  assert.match(line, /0 topics \(built\)/);
+  const put = calls.find((c) => c.method === 'PUT' && c.url.startsWith('/admin/topics'));
+  assert.deepEqual(put.body, { topics: [], allow_empty: true });
+  // The talks went out before it, without topics.
+  const sent = calls.filter((c) => c.method === 'POST' && c.url.startsWith('/admin/talks?')).flatMap((c) => c.body.talks);
+  assert.equal(sent.length, 4);
+  assert.ok(sent.every((x) => !x.topics?.length));
+  // The reason for the empty list reaches the log, one line per warning, with the slug.
+  const lines = warn.mock.calls.map((c) => c.arguments[0]);
+  assert.deepEqual(lines, [`${SLUG}: No term occurs in at least three talk titles; the conference has no topics.`]);
+});
+
+test('pushEvent sends allow_empty only with an empty list, so an older Worker never gets the flag needlessly', async () => {
+  const { admin, calls } = recordingAdmin({ stored: STORED });
+  const prepared = workerTalks(SLUG, fixture(), []);
+  await pushEvent({ slug: SLUG }, prepared, rebuildOptions(admin, { allowEmpty: true }));
+  const put = calls.find((c) => c.method === 'PUT' && c.url.startsWith('/admin/topics'));
+  assert.ok(put.body.topics.length > 0, 'the rebuilt list is not empty');
+  assert.deepEqual(Object.keys(put.body), ['topics']);
+});
+
+test('pushEvent takes an empty rebuilt list for a conference with nothing stored, without the flag', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const { admin, calls } = recordingAdmin({ stored: [] });
+  const prepared = workerTalks(SLUG, noSharedTermTalks(), []);
+  await pushEvent({ slug: SLUG }, prepared, rebuildOptions(admin));
+  const put = calls.find((c) => c.method === 'PUT' && c.url.startsWith('/admin/topics'));
+  assert.deepEqual(put.body, { topics: [] });
+  assert.equal(warn.mock.callCount(), 1);
 });
 
 test('a takedown file is validated as the bundle build validates it, and a not re-fetched conference is pushed by --event', () => {
