@@ -26,6 +26,7 @@
 //                        fixtures: POST /admin/test/profile (the expired profile),
 //                        POST /admin/test/age-presence (the aged presence) and GET /admin/stats (the
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
+//                        Check meter1 also uses POST /admin/test/meter-restart (a new usage meter).
 //                        The reports the run makes are removed at the end with POST /admin/moderation.
 //                        The token is only ever sent as an Authorization header to API_BASE.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
@@ -748,18 +749,42 @@ if (!IS_WORKER) {
   });
 }
 
-// A sanity check of the daily meter behind X-Caddie-Pace and the soft caps: five requests must
-// raise the day's counts by at least five. One run does not replace the conference object, so
-// this does not prove that a replaced object keeps its counts.
+// The daily meter behind X-Caddie-Pace and the soft caps. Five requests must raise the day's
+// counts by at least five, and a reading must never go down within a UTC day, even across a new
+// meter. POST /admin/test/meter-restart starts a new meter from the stored totals and drops the
+// old one's unwritten counts, as an eviction of the object would (on a deployed Worker that loses
+// at most a few seconds of real counts). The second restart comes right after a reading taken
+// while the meter still held unwritten counts, so a meter that reports counts it has not stored
+// fails here whenever the run gets from the first reading to the last within its 15-second write
+// interval, which it does in well under a second.
 if (IS_WORKER && ADMIN_TOKEN) {
-  await check('meter1: the daily usage meter counts requests (sanity check)', async () => {
-    const usage = async () => (await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`)).json.usage ?? null;
+  await check('meter1: the daily usage meter counts requests and never goes down across a new meter', async () => {
+    const name = 'meter1: the daily usage meter counts requests and never goes down across a new meter';
+    const ev = encodeURIComponent(PRIMARY);
+    const usage = async () => (await admin('GET', `/admin/stats?event=${ev}`)).json.usage ?? null;
+    const restart = async () => (await admin('POST', `/admin/test/meter-restart?event=${ev}`, {})).status;
+    const started = Date.now();
+    const first = await restart();
     const before = await usage();
-    for (let i = 0; i < 5; i++) await api('GET', `/api/topics?event=${encodeURIComponent(PRIMARY)}`, undefined, { label: 'meter' });
+    for (let i = 0; i < 5; i++) await api('GET', `/api/topics?event=${ev}`, undefined, { label: 'meter' });
+    const middle = await usage();
+    const second = await restart();
     const after = await usage();
-    const sameDay = before && after && before.day === after.day;
-    const ok = Boolean(before && after) && (!sameDay || (after.requests >= before.requests + 5 && after.rows_read >= before.rows_read && after.rows_written >= before.rows_written));
-    report(ok, 'meter1: the daily usage meter counts requests (sanity check)', before && after ? `requests ${before.requests} then ${after.requests}, rows read ${before.rows_read} then ${after.rows_read}` : 'no usage in /admin/stats');
+    const took = Date.now() - started;
+    const problems = [];
+    if (first !== 200 || second !== 200) problems.push(`meter-restart gave ${first} and ${second}`);
+    if (!before || !middle || !after) problems.push('no usage in /admin/stats');
+    else if (before.day === middle.day && middle.day === after.day) {
+      if (middle.requests < before.requests + 5) problems.push(`five requests raised requests from ${before.requests} only to ${middle.requests}`);
+      if (after.requests < middle.requests + 1) problems.push(`requests went from ${middle.requests} to ${after.requests} across a new meter`);
+      for (const f of ['rows_read', 'rows_written']) {
+        if (middle[f] < before[f] || after[f] < middle[f]) problems.push(`${f} went ${before[f]}, ${middle[f]}, ${after[f]}`);
+      }
+    }
+    const detail = before && middle && after
+      ? `requests ${before.requests}, ${middle.requests}, then ${after.requests} after a new meter; rows written ${before.rows_written}, ${middle.rows_written}, ${after.rows_written}; ${took} ms`
+      : '';
+    report(problems.length === 0, name, problems.length ? problems.join('; ') : detail);
   });
 }
 
@@ -1626,18 +1651,21 @@ try {
       const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
       const sub = (endpoint) => api('PUT', '/api/push/subscription', { event: PRIMARY, subscription: { endpoint, keys } }, { device: P, label: 'P-push' });
       const problems = [];
-      for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x']) {
+      for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x', 'https://x.jmt17.google.com/fcm/send/x', 'https://jmt17.google.com.evil.com/fcm/send/x', 'https://jmt17.google.com:8443/fcm/send/x']) {
         const r = await sub(endpoint);
         if (r.status !== 400) problems.push(`${new URL(endpoint).host} gave ${r.status}`);
       }
-      const good = `https://fcm.googleapis.com/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
-      const ok = await sub(good);
-      if (ok.status !== 200) problems.push(`fcm.googleapis.com gave ${ok.status}`);
-      const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
-      if (del.status !== 200) problems.push(`delete gave ${del.status}`);
+      // fcm.googleapis.com is Chrome Stable; jmt17.google.com is Chrome Beta, Dev, Canary and Chromium.
+      for (const host of ['fcm.googleapis.com', 'jmt17.google.com']) {
+        const good = `https://${host}/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
+        const ok = await sub(good);
+        if (ok.status !== 200) problems.push(`${host} gave ${ok.status}`);
+        const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
+        if (del.status !== 200) problems.push(`delete of ${host} gave ${del.status}`);
+      }
       const gone = await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: P, label: 'P-delete' });
       if (gone.status !== 200) problems.push(`profile delete gave ${gone.status}`);
-      report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals and other ports refused; fcm.googleapis.com accepted and removed');
+      report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals, subdomain and look-alike hosts and other ports refused; fcm.googleapis.com and jmt17.google.com accepted and removed');
     });
   }
 

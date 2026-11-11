@@ -46,7 +46,7 @@ An organiser renaming a group between runs changes that conference's chips on th
 
 ## Counts per conference
 
-The table counts the talk files committed in `data/` at the time of the last refresh, not the live schedule. A schedule moves during an event, so a fresh ingest or the Worker can differ by a few talks: on 2026-11-11 KubeCon North America 2026 had 485 talks live, one more than the row below. Recount from `data/<slug>/talks.ndjson` after a refresh rather than trusting these numbers.
+The table counts the talk files committed in `data/` at the time of the last refresh, not the live schedule. A schedule moves during an event, so a fresh ingest or the Worker can differ by a few talks, and the table can lag the live schedule until the data refresh in draft PR #50 lands. Recount from `data/<slug>/talks.ndjson` after a refresh rather than trusting these numbers.
 
 | Conference | Sessions | talk | ambient | break | housekeeping | With slides | Sponsor |
 |---|---|---|---|---|---|---|---|

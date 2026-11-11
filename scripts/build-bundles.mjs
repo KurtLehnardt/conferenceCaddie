@@ -230,6 +230,23 @@ export function alignedTaglines(raw) {
 }
 
 /**
+ * The speaker profile objects of a talk, index-aligned with its speakers by the rule of
+ * alignedTaglines: the profile at the same index, else the one profile carrying that speaker's
+ * name, else an empty object.
+ */
+function alignedProfiles(raw) {
+  const speakers = raw.speakers ?? [];
+  const profiles = raw.speaker_profiles;
+  const obj = (p) => (p && typeof p === 'object' && !Array.isArray(p) ? p : {});
+  if (!Array.isArray(profiles) || profiles.length !== speakers.length) return speakers.map(() => ({}));
+  return profiles.map((p, i) => {
+    if (typeof p?.name !== 'string' || p.name === speakers[i]) return obj(p);
+    const byName = profiles.filter((q) => q?.name === speakers[i]);
+    return byName.length === 1 ? obj(byName[0]) : {};
+  });
+}
+
+/**
  * A talk as a public bundle will carry it, in the shape buildBundle (contracts/js/bundle.mjs
  * bundleTalk) takes: speaker data reduced to names and short taglines (carried in index-aligned
  * speaker_profiles stubs that the contract builder consumes and drops, never links or bios), email
@@ -290,6 +307,9 @@ export function loadTakedowns(file, { dataDir = null } = {}) {
  * meant to remove may still be published under another spelling, unless it is marked purged: true, which
  * says the content is already gone from data/ and the entry stays only as a guard against a later
  * re-ingest bringing it back (it still applies if it matches again). Returns { talks }.
+ *
+ * The same function decides what the Worker serves: worker/ingest/push-ingest.mjs applies it to the
+ * talks it sends, so a takedown removes the same things from the Worker as from the bundles.
  */
 export function applyTakedowns(slug, talks, takedowns) {
   let out = talks.map((t) => ({ ...t }));
@@ -308,8 +328,17 @@ export function applyTakedowns(slug, talks, takedowns) {
         if (keep.every(Boolean)) return t;
         hit++;
         const taglines = alignedTaglines(t).filter((_, i) => keep[i]);
+        const profiles = alignedProfiles(t).filter((_, i) => keep[i]);
         const names = speakers.filter((_, i) => keep[i]);
-        return { ...t, speakers: names, speaker_taglines: taglines, speaker_profiles: names.map((name, j) => ({ name, tagline: taglines[j] })) };
+        // The remaining speakers keep the rest of their profile (links), which the Worker serves;
+        // the bundles keep only the name and tagline either way (trimTalk). speaker_taglines takes
+        // the ingest's shape: the taglines that exist, in speaker order.
+        return {
+          ...t,
+          speakers: names,
+          speaker_taglines: taglines.filter((x) => x !== null),
+          speaker_profiles: names.map((name, j) => ({ ...profiles[j], name, tagline: taglines[j] })),
+        };
       });
     }
     if (!hit && !e.purged) throw new Error(`takedown for ${slug} (${e.talk_id ?? ''}${e.speaker ? ` speaker ${JSON.stringify(e.speaker)}` : ''}) matched nothing in the data; fix the entry or the data before publishing`);
