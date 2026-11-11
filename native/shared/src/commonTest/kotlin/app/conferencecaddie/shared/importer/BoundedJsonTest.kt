@@ -67,7 +67,9 @@ class BoundedJsonTest {
         val value = assertIs<JsonArray>(reader.parse(text))
         assertTrue(reader.built <= BoundedJson.MAX_VALUES, "built ${reader.built} values")
         assertTrue(value.size < BoundedJson.MAX_VALUES)
-        assertTrue(mark.elapsedNow().inWholeSeconds < 30, "took ${mark.elapsedNow()}")
+        // A hang or quadratic work shows as minutes; a debug build on a busy iOS simulator runner
+        // has taken 31 s on its own, so the bound is well clear of that.
+        assertTrue(mark.elapsedNow().inWholeSeconds < 180, "took ${mark.elapsedNow()}")
         // So the import reads it as JSON with nothing to find, as the Worker does.
         val prepared = ScheduleImport.Prepared(text, "big.json", "application/json", isFile = true)
         assertTrue(ScheduleImport.candidatesOf(prepared, ImportConference("x", "2026-11-10", "UTC")).isEmpty())
@@ -105,7 +107,7 @@ class BoundedJsonTest {
         // Five million levels: refused at once, without recursion.
         val mark = TimeSource.Monotonic.markNow()
         assertNull(parse("[".repeat(5_000_000)))
-        assertTrue(mark.elapsedNow().inWholeSeconds < 10)
+        assertTrue(mark.elapsedNow().inWholeSeconds < 60, "took ${mark.elapsedNow()}")
         // Objects count as levels too.
         assertNull(parse("{\"a\":".repeat(BoundedJson.MAX_NESTING_DEPTH + 1) + "1" + "}".repeat(BoundedJson.MAX_NESTING_DEPTH + 1)))
     }

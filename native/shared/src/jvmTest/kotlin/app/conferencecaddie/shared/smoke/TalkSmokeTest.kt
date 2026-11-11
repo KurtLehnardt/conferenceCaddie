@@ -23,7 +23,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.fail
-import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -42,6 +42,12 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * Checks of HTTP behaviour (status codes for malformed requests, paging with "from", rate limits) and
  * of people features have no on-device equivalent; they are listed as N/A with the reason.
+ *
+ * The checks run at one fixed instant, [now], never on the wall clock: the data is a real conference,
+ * and For you suggests only talks that have not ended, so on the wall clock the suggestions change
+ * with every hour of the conference (r1 failed on main on the afternoon of its third day, once the
+ * eBPF talks that fit "kernel level tracing and observability" had ended) and there is nothing to
+ * suggest once it is over. Happening now (n1, n2) reads the same instant.
  *
  * Run it with the bundles of `node scripts/build-bundles.mjs --out <dir> ...`:
  *   ./gradlew :shared:smokeTalks -Pcaddie.smokeSite=<dir>
@@ -98,8 +104,16 @@ class TalkSmokeTest {
         File(embeddingDir, "vocab.txt").readText(),
     )
     private val database = CaddieDatabase.open(":memory:")
+
+    /**
+     * 09:00 on the second day of the primary conference, in its own zone. The first day has ended,
+     * so "never an ended talk" (r1) is checked against talks that really ended, while the day's first
+     * talks are about to start, so Happening now (n2) has a window with talks in it; the other
+     * conferences have not started, so n1 sees both answers.
+     */
+    private val now: JavaInstant = java.time.OffsetDateTime.parse("2026-11-10T09:00:00-07:00").toInstant()
+    private val nowMs = now.toEpochMilli()
     private val conferences: Map<String, Conf> = runBlocking { load() }
-    private val nowMs get() = Clock.System.now().toEpochMilliseconds()
 
     private suspend fun load(): Map<String, Conf> {
         val bundles = File(site, "bundles")
@@ -115,7 +129,7 @@ class TalkSmokeTest {
             val bundle = checkNotNull(TalkBundle.decode(bundleEntry.getValue("content_hash").jsonPrimitive.content, files.getValue("bundle.json"), files.getValue("vectors.i8")))
             val scope = "https://smoke.example\n$slug"
             database.install(scope, bundle, 0)
-            val search = TalkSearch(bundle, scope, database, embedder = { embedder })
+            val search = TalkSearch(bundle, scope, database, now = { Instant.fromEpochMilliseconds(nowMs) }, embedder = { embedder })
             val data = File(dataDir, "$slug/talks.ndjson").readLines().filter { it.isNotBlank() }.map { json.parseToJsonElement(it).jsonObject }
             slug to Conf(bundle, search, ForYou(bundle, search), data)
         }
@@ -268,16 +282,16 @@ class TalkSmokeTest {
         }
         check("n1: Happening now is available exactly when the conference has talks today in its own zone") {
             val problems = ArrayList<String>()
+            val seen = ArrayList<Boolean>()
             for (slug in listOf(primary, extra[0])) {
                 val zone = ZoneId.of(conf(slug).bundle.conference.timeZone!!)
-                val before = JavaInstant.now().atZone(zone).toLocalDate().toString()
+                val today = now.atZone(zone).toLocalDate().toString()
                 val r = search(slug, SearchRequest())
-                val after = JavaInstant.now().atZone(zone).toLocalDate().toString()
-                if (before != after) continue
-                val expected = conf(slug).data.filter { it.kind() == "talk" }.any { it.str("day") == before }
-                if (r.happeningNowAvailable != expected) problems += "$slug: expected $expected on $before"
+                val expected = conf(slug).data.filter { it.kind() == "talk" }.any { it.str("day") == today }
+                seen += expected
+                if (r.happeningNowAvailable != expected) problems += "$slug: expected $expected on $today"
             }
-            report(problems.isEmpty(), "n1: Happening now is available exactly when the conference has talks today in its own zone", if (problems.isEmpty()) "checked 2 conferences against the local date in their zones" else problems.joinToString())
+            report(problems.isEmpty(), "n1: Happening now is available exactly when the conference has talks today in its own zone", if (problems.isEmpty()) "checked 2 conferences against the local date in their zones: available ${seen.joinToString()}" else problems.joinToString())
         }
         check("n2: Happening now keeps only talks in progress or starting within 60 minutes") {
             val slack = 2 * 60_000L
