@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.ui.components.LocalWideLayout
 import app.conferencecaddie.ui.components.NavRail
 import androidx.compose.foundation.layout.Column
@@ -278,9 +279,17 @@ fun App(
 /**
  * A move of the shell asked from outside it: show [tab] (leaving Settings), open [settings], or open
  * the conference [switcher]. [id] tells two equal requests apart, so a second link to the tab the
- * person has since left shows it again.
+ * person has since left shows it again. [people] is the People screen a link names (Requests, a
+ * meet, the profile, a zone, or the home with "Around now"), which comes with [tab] People; the
+ * shell shows the tab, and the People screens open the route.
  */
-data class ShellRequest(val id: Long, val tab: Tab? = null, val settings: Boolean = false, val switcher: Boolean = false)
+data class ShellRequest(
+    val id: Long,
+    val tab: Tab? = null,
+    val settings: Boolean = false,
+    val switcher: Boolean = false,
+    val people: AppLink.PeopleRoute? = null,
+)
 
 /** A server waiting for confirmation, and whether it came from a link (else from Settings). */
 private data class PendingServer(val base: String, val fromLink: Boolean)

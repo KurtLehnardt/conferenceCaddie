@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The app's entitlements. aps-environment is the Push Notifications capability (APNs, for the
+     people features' nudges on the official backend). Xcode writes "development" here; signing
+     with the App Store profile gives the archive and the exported IPA "production", the value in
+     that profile. The App ID and the App Store profile must include Push Notifications (see
+     native/README.md, iOS and TestFlight). -->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

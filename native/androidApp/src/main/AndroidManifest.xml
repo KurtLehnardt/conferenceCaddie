@@ -2,9 +2,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Bluetooth, notification and foreground-service permissions arrive with the BleRadio
-         implementation; the skeleton only talks to the network. -->
+    <!-- Bluetooth and foreground-service permissions arrive with the BleRadio implementation. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The people features: the device's position for presence ("Use my position too"), only
+         while the app is in use, so there is no background location and no foreground service.
+         Android 12 and newer need both location permissions in the same request; the person then
+         picks precise or approximate. POST_NOTIFICATIONS shows nudges on Android 13 and newer.
+         The background nudge check is a periodic JobScheduler job, which needs no permission of its
+         own. It is deliberately not persisted across a reboot: that would need
+         RECEIVE_BOOT_COMPLETED, and the app keeps its permissions minimal. The job is scheduled again
+         the next time the app starts. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The app works without location hardware; the position switch is then hidden. -->
+    <uses-feature android:name="android.hardware.location" android:required="false" />
 
     <!-- ONNX Runtime's AAR adds a telemetry uploader to Microsoft (a content provider that starts
          with the app) and the network-state permission it uses. The app sends nothing but to its
@@ -51,7 +65,10 @@
             </intent-filter>
             <!-- caddie://connect?url=... (an operator's server link or QR code, which the app only
                  ever offers to switch to after the person confirms) and caddie://e/<slug>#/<tab>,
-                 the web's routes. No https App Links: see DECISIONS.md, phase 2c. -->
+                 the web's routes, the people screens' among them (#/inbox, #/meet/<id>). No https
+                 App Links: see DECISIONS.md, phase 2c. The links of the app's own notifications
+                 (caddie://inbox and the like) are not listed: a tap brings its link as an extra
+                 with the install's tap key (AndroidNotifier). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -73,6 +90,10 @@
                 <data android:mimeType="text/tab-separated-values" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".BackgroundNudgeJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 
 </manifest>

@@ -54,7 +54,7 @@ In-memory buckets per instance, keyed by device and by client address, each answ
 |---|---|---|---|
 | `people-write` | 20 a minute | 60 a minute | profile writes, blocks, presence, every meet write, push subscriptions and native push registrations, the legacy rotate |
 | `people-read` | 30 a minute | 90 a minute | matches, circle members, the blocks list |
-| `people-poll` | 30 a minute | 1,200 a minute | the meet inbox and meet reads (polled every 20 and 10 seconds; their own buckets so a venue's shared address does not starve searches) |
+| `people-poll` | 30 a minute | 1,200 a minute | the meet inbox and meet reads (polled every 45 and 15 seconds, stretched by the API's pace; their own buckets so a venue's shared address does not starve searches) |
 | `public` | | 60 a minute | circle counts, the VAPID key |
 | `sightings` | 6 a minute | 300 a minute | Bluetooth sightings |
 | `report` | 20 an hour | 60 a minute | reports |
@@ -98,7 +98,7 @@ Request and response shapes are the named `$defs` entries; the route table lists
 ### Features built from these routes (no routes of their own)
 
 - **Wave.** A one-tap ask to someone in my zone: `POST /api/meet` with a note the client writes, today "I'm in {zone} too — want to talk shop?" (cut to 140 characters).
-- **In-app nudges and "Who's around".** `POST /api/people/matches` with `when: around_now`, polled while the app is open (every 20 seconds with the inbox, and every 60 seconds while the Around view is visible) when `people.live` is `poll`. The client rule (a strong match in my zone, at most once per person per day, recorded on the device) is unchanged.
+- **In-app nudges and "Who's around".** `POST /api/people/matches` with `when: around_now`, polled while the app is open (every 45 seconds with the inbox, and every 120 seconds while the Around view is visible, each stretched by the pace the API reports) when `people.live` is `poll`. The client rule (a strong match in my zone, at most once per person per day, recorded on the device) is unchanged.
 - **Push nudges.** The server runs the nudge rule after every successful `PUT /api/presence` and pushes through Web Push to the subscriptions above, and through APNs and FCM to the registrations of the optional native push routes (below), advertised by `push.apns` and `push.fcm`.
 - **Watch list.** Device-only, from the matches above.
 
