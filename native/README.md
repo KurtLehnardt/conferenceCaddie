@@ -184,12 +184,14 @@ host and anything presented from it follow it too.
   button with its badge, and the talk screens their slots (`TalkSheet`'s `peopleControls`,
   `InterestedScreen`'s `shareAll`). The People tab shows only when the backend's capabilities and
   the controller both have people features on. Offline, the People tab, Requests and Meet up show
-  the web's NeedsConnection; Profile and Settings still work. It also routes notification taps
-  (`NotificationTaps`: `caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`), shows
-  the controller's notices as toasts, and draws the sheets several screens share (Ask to talk shop,
-  Report, the block confirmation) once. Links from outside the app (`caddie://e/...`,
-  `caddie://connect`) take the other path, `IncomingHandoff` and `AppLink` in `CaddieApp`, which
-  moves the shell with a `ShellRequest`; a people route there only opens the People tab.
+  the web's NeedsConnection; Profile and Settings still work. It also shows the people route of
+  the shell's `ShellRequest` once people features are on: every `caddie://` link, a tapped
+  notification's (`caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`) included,
+  goes through `IncomingHandoff` and `AppLink` in `CaddieApp`, and a people route
+  (`AppLink.PeopleRoute`) opens People (with Around now), Requests, Meet up, Profile, or the
+  presence setup on a zone, which turns presence on only when the person taps "I'm around". It
+  shows the controller's notices as toasts, and draws the sheets several screens share (Ask to talk
+  shop, Report, the block confirmation) once.
 - Every screen takes the `PeopleUiState` it draws and a `PeopleHost`: the controller, moving
   around (`openProfile()`, `openInbox()`, `openMeet(id)`, `openPeople(request)`, `back()`), the
   shell's toast, those shared sheets, and opening talks and links. Nothing reaches the controller

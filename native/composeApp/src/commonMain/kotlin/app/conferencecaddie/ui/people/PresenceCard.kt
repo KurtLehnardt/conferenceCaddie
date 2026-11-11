@@ -76,7 +76,7 @@ private const val SPOT_MAX = 60
  * location, the card says so and offers the system settings ([PeopleHost.openAppSettings]); no position is
  * sent then.
  *
- * [hereZone] is a zone from a `caddie://here/{zone}` link (`controller.matchZone(raw)`; it opens the
+ * [hereZone] is the decoded zone of a `#/here/<zone>` link (`controller.matchZone(zone)`; it opens the
  * setup panel with that zone chosen and presence stays off until the person taps "I'm around"; an unknown
  * one says "That zone isn't on this conference's list. Pick one below."); call [onHereZoneHandled]
  * once it is taken. Owner U3.
@@ -118,19 +118,19 @@ fun PresenceControls(
         panel = true
     }
 
-    // caddie://here/{zone}: the link only opens the setup panel with the zone chosen (when the
+    // #/here/<zone>: the link only opens the setup panel with the zone chosen (when the
     // conference has that zone) so the person confirms with "I'm around". It never turns presence on
     // by itself, whatever the link says, because any app can open the link.
     var lastHere by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(hereZone) {
-        val raw = hereZone ?: return@LaunchedEffect
+        val linked = hereZone ?: return@LaunchedEffect
         // The same link again while the card is up is taken without opening the panel twice.
-        if (lastHere == raw) {
+        if (lastHere == linked) {
             handled()
             return@LaunchedEffect
         }
-        lastHere = raw
-        val match = controller.matchZone(raw)
+        lastHere = linked
+        val match = controller.matchZone(linked)
         unknownZone = match == null
         openPanel(match)
         handled()

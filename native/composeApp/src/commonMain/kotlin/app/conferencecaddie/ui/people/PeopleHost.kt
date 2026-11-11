@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.people.Person
 import app.conferencecaddie.shared.people.PeopleController
@@ -303,14 +304,15 @@ data class ReportTarget(
  */
 @Immutable
 data class PeopleRequest(
-    /** "Around now" on: `caddie://people?around=1` from a nudge (the web's `#/people?around=1`). */
+    /** "Around now" on: `caddie://people?around=1` from a nudge, or the web's `#/people?around=1`. */
     val aroundNow: Boolean = false,
     /** A search to run, with the search bar open (TopicPicker's "Find people who've done this"). */
     val query: String? = null,
     /**
-     * A zone from `caddie://here/{zone}` (not routed yet): People opens the presence setup with that
-     * zone chosen (PresenceControls, validated by `controller.matchZone`). Presence is never turned
-     * on by the request alone; the person taps "I'm around".
+     * A zone from a `#/here/<zone>` link (`AppLink.PeopleRoute.Here`, already percent-decoded):
+     * People opens the presence setup with that zone chosen (PresenceControls, validated by
+     * `controller.matchZone`). Presence is never turned on by the request alone; the person taps
+     * "I'm around".
      */
     val hereZone: String? = null,
     val id: Long = nextRequestId(),
@@ -340,50 +342,15 @@ data class PeopleTalks(
 )
 
 /**
- * A deep link from a tapped notification (NotificationTaps): the links the app writes are
- * `caddie://people?around=1`, `caddie://inbox` and `caddie://meet/{meet_id}`. Anything else is
- * ignored.
- */
-sealed interface PeopleLink {
-    /** The People tab, with "Around now" on when [aroundNow]. */
-    data class People(val aroundNow: Boolean) : PeopleLink
-
-    /** Requests. */
-    data object Inbox : PeopleLink
-
-    /** Meet up for [meetId]. */
-    data class Meet(val meetId: String) : PeopleLink
-
-    companion object {
-        private val MEET_ID = Regex("[A-Za-z0-9_-]{1,128}")
-
-        /** The screen [link] names, or null for anything the app does not write. */
-        fun parse(link: String): PeopleLink? {
-            val rest = link.trim().let { if (it.startsWith("caddie://", ignoreCase = true)) it.substring(9) else return null }
-            val path = rest.substringBefore('?').substringBefore('#').trimEnd('/')
-            val query = rest.substringAfter('?', "").substringBefore('#')
-            return when {
-                path.equals("people", ignoreCase = true) -> People(aroundNow = query.split('&').any { it == "around=1" })
-                path.equals("inbox", ignoreCase = true) -> Inbox
-                path.startsWith("meet/", ignoreCase = true) -> path.substring(5).takeIf { MEET_ID.matches(it) }?.let { Meet(it) }
-                else -> null
-            }
-        }
-    }
-}
-
-/**
  * The debug launch option `caddie.people` (DebugLaunch.people): a people screen to open once the
  * people features are known, for screenshots: `home`, `around`, `search:<text>`, `profile`,
- * `inbox`, `meet:<id>` or `settings-people` (Settings, whose people groups follow You).
+ * `inbox`, `meet:<id>` or `settings-people` (Settings, whose people groups follow You). The screens
+ * a link can name are shown as the link's [AppLink.PeopleRoute] is.
  */
 sealed interface PeopleLaunch {
-    data object Home : PeopleLaunch
-    data object Around : PeopleLaunch
+    /** A screen a link can name too. */
+    data class Route(val route: AppLink.PeopleRoute) : PeopleLaunch
     data class Search(val text: String) : PeopleLaunch
-    data object Profile : PeopleLaunch
-    data object Inbox : PeopleLaunch
-    data class Meet(val meetId: String) : PeopleLaunch
     data object SettingsPeople : PeopleLaunch
 
     companion object {
@@ -391,12 +358,12 @@ sealed interface PeopleLaunch {
         fun parse(value: String?): PeopleLaunch? {
             val v = value?.trim() ?: return null
             return when {
-                v.equals("home", ignoreCase = true) -> Home
-                v.equals("around", ignoreCase = true) -> Around
+                v.equals("home", ignoreCase = true) -> Route(AppLink.PeopleRoute.Home(aroundNow = false))
+                v.equals("around", ignoreCase = true) -> Route(AppLink.PeopleRoute.Home(aroundNow = true))
                 v.startsWith("search:", ignoreCase = true) -> v.substring(7).trim().takeIf { it.isNotEmpty() }?.let { Search(it) }
-                v.equals("profile", ignoreCase = true) -> Profile
-                v.equals("inbox", ignoreCase = true) -> Inbox
-                v.startsWith("meet:", ignoreCase = true) -> v.substring(5).trim().takeIf { it.isNotEmpty() }?.let { Meet(it) }
+                v.equals("profile", ignoreCase = true) -> Route(AppLink.PeopleRoute.Profile)
+                v.equals("inbox", ignoreCase = true) -> Route(AppLink.PeopleRoute.Inbox)
+                v.startsWith("meet:", ignoreCase = true) -> v.substring(5).trim().takeIf { it.isNotEmpty() }?.let { Route(AppLink.PeopleRoute.Meet(it)) }
                 v.equals("settings-people", ignoreCase = true) -> SettingsPeople
                 else -> null
             }

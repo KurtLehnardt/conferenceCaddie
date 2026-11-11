@@ -102,8 +102,8 @@ import kotlinx.coroutines.delay
  * ([IncomingHandoff]) are routed here: a `caddie://connect` link (or the QR code that holds one)
  * asks the shell's confirmation that names the server, a `caddie://e/...` link opens a conference's
  * tab, view and day as the web's routes do, a people route (`#/inbox`, `#/meet/<id>`, a tapped
- * notification's `caddie://inbox` and the like) opens the People tab with the route in the shell's
- * request, and a schedule file opens Import my schedule.
+ * notification's `caddie://inbox` and the like) goes in the shell's request to the People layer,
+ * which opens its page once people features are on, and a schedule file opens Import my schedule.
  */
 @Composable
 fun CaddieApp(
@@ -371,6 +371,7 @@ fun CaddieApp(
         showToast = showToast,
         openTalk = { openTalk = it },
         openUrl = openUrl,
+        request = shellRequest,
     )
 
     App(

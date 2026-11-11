@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared.people
 
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.db.CaddieDatabase
 import kotlin.test.Test
@@ -83,9 +84,23 @@ class PeopleRulesTest {
         assertEquals(listOf("Ballroom A", "Hall B", "Room 2", "Expo hall", "Registration", "Food and coffee", "Hallway", "Outside"), zones)
         assertEquals(PeopleZones.FIXED, PeopleZones.forBundle(null))
         assertEquals("Food and coffee", PeopleZones.match(zones, "food-and-coffee"))
-        assertEquals("Hall B", PeopleZones.match(zones, "hall%20b"))
+        assertEquals("Hall B", PeopleZones.match(zones, " hall+b "))
         assertNull(PeopleZones.match(zones, "Nowhere"))
+        assertNull(PeopleZones.match(zones, "  "))
+    }
+
+    @Test
+    fun aZoneFromALinkIsDecodedOnceOnly() {
+        // AppLink percent-decodes a #/here/<zone> link; the match takes its value as it is.
+        val zones = PeopleZones.forRooms(listOf("Hall B", "Room %41", "100% Hall"))
+        assertNull(PeopleZones.match(zones, "hall%20b"))
+        assertEquals("Room %41", PeopleZones.match(zones, "room %41"))
+        assertNull(PeopleZones.match(zones, "Room A"))
+        assertEquals("100% Hall", PeopleZones.match(zones, "100% hall"))
         assertNull(PeopleZones.match(zones, "%E0%A4%A"))
+        // Through the link parser, end to end.
+        val here = (AppLink.parse("caddie://e#/here/Room%20%2541") as AppLink.Open).people as AppLink.PeopleRoute.Here
+        assertEquals("Room %41", PeopleZones.match(zones, here.zone))
     }
 
     @Test

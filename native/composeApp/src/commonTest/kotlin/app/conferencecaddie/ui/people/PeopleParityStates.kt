@@ -13,7 +13,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
-import app.conferencecaddie.shared.NotificationTaps
+import app.conferencecaddie.ui.platform.IncomingHandoff
 import kotlin.time.Instant
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -459,7 +459,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
             devon = devonAsked()
         })
         settleCards()
-        NotificationTaps.deliver("caddie://meet/$devon")
+        IncomingHandoff.offerLink("caddie://meet/$devon")
         waitFor(hasTestTag("meet-screen"))
         waitFor(hasTestTag("meet-waiting"))
         pause(500)
@@ -529,7 +529,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
     ParityState("meet-error", 844, 700) {
         start()
         settleCards()
-        NotificationTaps.deliver("caddie://meet/doesnotexist")
+        IncomingHandoff.offerLink("caddie://meet/doesnotexist")
         waitFor(hasText(ConnectStrings.MEET_NOT_FOUND))
         pause(400)
         shoot()

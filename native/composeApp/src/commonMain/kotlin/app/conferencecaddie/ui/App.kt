@@ -148,10 +148,11 @@ fun App(
         shownConference = selected
     }
     // A link's tab leaves every page and shows the tab, as a tap on it would; a link to Settings opens
-    // it as the gear does. The switcher shows only when the request asks for it.
+    // it as the gear does. The switcher shows only when the request asks for it. A people route is
+    // the People layer's to show (see ShellRequest).
     LaunchedEffect(request) {
         val r = request ?: return@LaunchedEffect
-        r.tab?.let(navigation::selectTab)
+        if (r.people == null) r.tab?.let(navigation::selectTab)
         if (r.settings) navigation.openSettings()
         navigation.switcherOpen = r.switcher
     }
@@ -299,8 +300,10 @@ fun App(
  * A move of the shell asked from outside it: show [tab] (leaving Settings), open [settings], or open
  * the conference [switcher]. [id] tells two equal requests apart, so a second link to the tab the
  * person has since left shows it again. [people] is the People screen a link names (Requests, a
- * meet, the profile, a zone, or the home with "Around now"), which comes with [tab] People; the
- * shell shows the tab, and the People screens open the route.
+ * meet, the profile, a zone, or the home with "Around now"), which comes with [tab] People. The
+ * People layer (rememberPeopleUi) shows it, tab and page together, once people features are on;
+ * the shell leaves the tab alone for such a request, so the tab and the page change at once and a
+ * route that waits for the people features does not move the shell meanwhile.
  */
 data class ShellRequest(
     val id: Long,

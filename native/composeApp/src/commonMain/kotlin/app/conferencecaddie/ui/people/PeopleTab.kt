@@ -27,11 +27,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import app.conferencecaddie.shared.NotificationTaps
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.people.PeopleAvailability
 import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleUiState
+import app.conferencecaddie.ui.ShellRequest
 import app.conferencecaddie.ui.components.CaddieIconButton
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.NeedsConnection
@@ -255,9 +256,11 @@ internal class PeopleSlots(private val host: PeopleHost) {
 /**
  * The People layer for [controller], or null without one (no people features in this host). It
  * collects the controller's state; makes the [PeopleHost] (toasts through [showToast], talks
- * through [openTalk], links through [openUrl], moves through [navigation]); routes notification
- * taps (NotificationTaps: `caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`) and the
- * debug [launch] option once people features are on; and toasts the controller's notices.
+ * through [openTalk], links through [openUrl], moves through [navigation]); shows the people route
+ * of the shell's [request] (`ShellRequest.people`: a link from another app or a QR code, or a
+ * tapped notification's `caddie://people?around=1`, `caddie://inbox` or `caddie://meet/{id}`, all
+ * read by `AppLink`) and the debug [launch] option once people features are on; and toasts the
+ * controller's notices.
  */
 @Composable
 fun rememberPeopleUi(
@@ -270,6 +273,7 @@ fun rememberPeopleUi(
     showToast: (message: String, actionLabel: String?, action: (() -> Unit)?) -> Unit,
     openTalk: (talkId: String) -> Unit,
     openUrl: (url: String) -> Unit,
+    request: ShellRequest? = null,
 ): PeopleUi? {
     if (controller == null) return null
     val state by controller.state.collectAsState()
@@ -291,14 +295,17 @@ fun rememberPeopleUi(
     }
     val enabled by rememberUpdatedState(state.features.enabled)
 
-    // A tap waits until people features are on, so the tap that opened the app is not lost while
-    // the capabilities load; it is then handled once.
-    LaunchedEffect(host) {
-        NotificationTaps.taps.collect { link ->
-            snapshotFlow { enabled }.first { it }
-            PeopleLink.parse(link)?.let { route(it, host, navigation) }
-            NotificationTaps.handled()
-        }
+    // A people route waits until people features are on, so the notification tap or link that
+    // opened the app is not lost while the capabilities load; it is then shown once. The hand-off
+    // gave it up when the app took it, so it waits here; a newer request replaces one still waiting.
+    var routed by remember { mutableStateOf(0L) }
+    LaunchedEffect(host, request) {
+        val r = request ?: return@LaunchedEffect
+        val people = r.people ?: return@LaunchedEffect
+        if (r.id == routed) return@LaunchedEffect
+        snapshotFlow { enabled }.first { it }
+        routed = r.id
+        route(people, host, navigation)
     }
 
     var launched by rememberSaveable { mutableStateOf(false) }
@@ -307,12 +314,8 @@ fun rememberPeopleUi(
         snapshotFlow { enabled }.first { it }
         launched = true
         when (launch) {
-            PeopleLaunch.Home -> host.openPeople()
-            PeopleLaunch.Around -> host.openPeople(PeopleRequest(aroundNow = true))
+            is PeopleLaunch.Route -> route(launch.route, host, navigation)
             is PeopleLaunch.Search -> host.openPeople(PeopleRequest(query = launch.text))
-            PeopleLaunch.Profile -> host.openProfile()
-            PeopleLaunch.Inbox -> route(PeopleLink.Inbox, host, navigation)
-            is PeopleLaunch.Meet -> route(PeopleLink.Meet(launch.meetId), host, navigation)
             PeopleLaunch.SettingsPeople -> navigation.openSettings()
         }
     }
@@ -333,17 +336,23 @@ fun rememberPeopleUi(
     return PeopleUi(state, host, talks, online, searchable, slots)
 }
 
-/** Requests and Meet up open over the People tab, so Back returns there. */
-private fun route(link: PeopleLink, host: PeopleHost, navigation: ShellNavigation) {
-    when (link) {
-        is PeopleLink.People -> host.openPeople(if (link.aroundNow) PeopleRequest(aroundNow = true) else null)
-        PeopleLink.Inbox -> {
+/**
+ * Shows [route]. Requests and Meet up open over the People tab, so Back returns there; Profile opens
+ * over whatever shows, as from Settings on the web; a zone opens People with the presence setup on
+ * that zone, which turns nothing on until the person taps "I'm around" (PresenceControls).
+ */
+private fun route(route: AppLink.PeopleRoute, host: PeopleHost, navigation: ShellNavigation) {
+    when (route) {
+        is AppLink.PeopleRoute.Home -> host.openPeople(if (route.aroundNow) PeopleRequest(aroundNow = true) else null)
+        AppLink.PeopleRoute.Inbox -> {
             navigation.selectTab(Tab.People)
             host.openInbox()
         }
-        is PeopleLink.Meet -> {
+        is AppLink.PeopleRoute.Meet -> {
             navigation.selectTab(Tab.People)
-            host.openMeet(link.meetId)
+            host.openMeet(route.meetId)
         }
+        AppLink.PeopleRoute.Profile -> host.openProfile()
+        is AppLink.PeopleRoute.Here -> host.openPeople(PeopleRequest(hereZone = route.zone))
     }
 }

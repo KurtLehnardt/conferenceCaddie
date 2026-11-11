@@ -79,9 +79,9 @@ private const val REVEAL_WAIT_MS = 15_000L
  * quiet refresh of the same list does not dim it. `state.reveal` ("See who") opens the Around view,
  * scrolls its card to the middle and rings it for four seconds, then `controller.consumeReveal()`.
  *
- * [request] is what a notification or another screen asked for (`aroundNow`: the Around view;
- * `query`: a search with the bar open; `hereZone`: for PresenceControls); the screen does it, then
- * calls `host.requestHandled(request)`. Owner U2.
+ * [request] is what a link (a tapped notification among them) or another screen asked for
+ * (`aroundNow`: the Around view; `query`: a search with the bar open; `hereZone`: for
+ * PresenceControls); the screen does it, then calls `host.requestHandled(request)`. Owner U2.
  */
 @Composable
 fun PeopleScreen(

@@ -11,13 +11,15 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.v2.runComposeUiTest
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.Capabilities
-import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.ui.App
+import app.conferencecaddie.ui.ShellRequest
 import app.conferencecaddie.ui.shell.PeoplePage
 import app.conferencecaddie.ui.shell.SampleData
 import app.conferencecaddie.ui.shell.ShellNavigation
 import app.conferencecaddie.ui.shell.ShellState
+import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.shell.TabContent
 import app.conferencecaddie.ui.shell.rememberShellNavigation
 import app.conferencecaddie.ui.strings.Strings
@@ -32,14 +34,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-// The People layer in the shell: notification taps, the offline gate and the evidence text. The
-// controller is a real one over an in-memory API; the screens are their owners' (stubs for now), so
-// these tests look only at what the layer itself decides. Run on the iOS simulator and on Android.
+// The People layer in the shell: the people routes of the shell's requests (which links and
+// notification taps become, PeopleLinksUiTest), the offline gate and the evidence text. The
+// controller is a real one over an in-memory API, so these tests look only at what the layer itself
+// decides. Run on the iOS simulator and on Android.
 //
 // The tests use the v2 test API, which runs the composition's coroutines on the main thread. The
 // People tab first appears when the controller, on a background thread, says people features are
-// on, and taps arrive from the test's thread; the v1 API would compose on those threads, where an
-// Android lazy list cannot start.
+// on; the v1 API would compose on that thread, where an Android lazy list cannot start.
 @OptIn(ExperimentalTestApi::class)
 class PeopleShellUiTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -48,7 +50,6 @@ class PeopleShellUiTest {
     @AfterTest
     fun cleanUp() {
         scope.cancel()
-        NotificationTaps.handled()
     }
 
     private fun shellState(online: Boolean = true) = ShellState(
@@ -72,15 +73,20 @@ class PeopleShellUiTest {
         waitUntil(timeoutMillis = 20_000) { onAllNodes(hasTestTag(tag)).fetchSemanticsNodes().isNotEmpty() }
     }
 
+    private var lastId = 0L
+
+    /** The shell's request for [route], as CaddieApp makes it from a link. */
+    private fun requestFor(route: AppLink.PeopleRoute) = ShellRequest(++lastId, Tab.People, people = route)
+
     @Test
-    fun notificationTapsOpenTheirScreens() = runComposeUiTest {
-        NotificationTaps.handled()
+    fun peopleRoutesOpenTheirScreens() = runComposeUiTest {
         val controller = testController(scope)
         lateinit var nav: ShellNavigation
+        var request by mutableStateOf<ShellRequest?>(null)
         setContent {
             nav = rememberShellNavigation()
-            val ui = rememberPeopleUi(controller, nav, talks, true, true, null, { _, _, _ -> }, {}, {})!!
-            TestPhone { App(ui.shellState(shellState()), content = content(ui), navigation = nav) }
+            val ui = rememberPeopleUi(controller, nav, talks, true, true, null, { _, _, _ -> }, {}, {}, request)!!
+            TestPhone { App(ui.shellState(shellState()), content = content(ui), navigation = nav, request = request) }
         }
         // The People tab waits for the controller: no tab until its people features are on.
         onNodeWithTag("tab-People").assertDoesNotExist()
@@ -88,45 +94,53 @@ class PeopleShellUiTest {
         waitForTag("tab-People")
         onNodeWithTag("tab-People").assertIsSelected()
 
-        NotificationTaps.deliver("caddie://inbox")
+        request = requestFor(AppLink.PeopleRoute.Inbox)
         waitForTag("page-inbox")
         onNodeWithTag("tab-People").assertIsSelected()
-        waitUntil(timeoutMillis = 20_000) { NotificationTaps.taps.replayCache.isEmpty() }
 
         // A meet opens over the People tab, so Back returns there.
-        NotificationTaps.deliver("caddie://meet/m-42")
+        request = requestFor(AppLink.PeopleRoute.Meet("m-42"))
         waitForTag("page-meet")
         runOnIdle { assertEquals(listOf<PeoplePage>(PeoplePage.Meet("m-42")), nav.pages) }
 
         // A nudge opens People with Around now.
-        NotificationTaps.deliver("caddie://people?around=1")
+        request = requestFor(AppLink.PeopleRoute.Home(aroundNow = true))
         waitUntil(timeoutMillis = 20_000) { nav.pages.isEmpty() }
         onNodeWithTag("tab-People").assertIsSelected()
         waitForTag("people-home")
 
-        // Anything else is ignored, and handled so it is not replayed.
-        runOnIdle { nav.openPage(PeoplePage.Inbox) }
-        NotificationTaps.deliver("caddie://connect?url=https://elsewhere.example")
-        waitUntil(timeoutMillis = 20_000) { NotificationTaps.taps.replayCache.isEmpty() }
-        runOnIdle { assertEquals(listOf<PeoplePage>(PeoplePage.Inbox), nav.pages) }
+        // Profile opens over what shows, as from Settings.
+        runOnIdle { nav.openSettings() }
+        request = requestFor(AppLink.PeopleRoute.Profile)
+        waitForTag("page-profile")
+        runOnIdle { assertEquals(PeoplePage.Profile, nav.pages.last()) }
+
+        // A request is shown once: leaving its page, the same request does not open it again.
+        request = requestFor(AppLink.PeopleRoute.Inbox)
+        waitForTag("page-inbox")
+        runOnIdle { nav.back() }
+        waitForIdle()
+        runOnIdle { assertTrue(nav.pages.none { it == PeoplePage.Inbox }) }
     }
 
     @Test
-    fun aTapThatArrivesFirstWaitsForPeopleFeatures() = runComposeUiTest {
-        NotificationTaps.handled()
-        // The tap that opened the app is there before the screens are.
-        NotificationTaps.deliver("caddie://inbox")
+    fun aRouteThatArrivesFirstWaitsForPeopleFeatures() = runComposeUiTest {
+        // The tap that opened the app reaches the layer before people features are known.
+        val request = requestFor(AppLink.PeopleRoute.Inbox)
         val controller = testController(scope)
+        lateinit var nav: ShellNavigation
         setContent {
-            val nav = rememberShellNavigation()
-            val ui = rememberPeopleUi(controller, nav, talks, true, true, null, { _, _, _ -> }, {}, {})!!
-            TestPhone { App(ui.shellState(shellState()), content = content(ui), navigation = nav) }
+            nav = rememberShellNavigation()
+            val ui = rememberPeopleUi(controller, nav, talks, true, true, null, { _, _, _ -> }, {}, {}, request)!!
+            TestPhone { App(ui.shellState(shellState()), content = content(ui), navigation = nav, request = request) }
         }
         waitForIdle()
         onNodeWithTag("page-inbox").assertDoesNotExist()
-        assertTrue(NotificationTaps.taps.replayCache.isNotEmpty())
+        // The shell left the tab alone for it: nothing was picked meanwhile.
+        runOnIdle { assertEquals(null, nav.tab) }
         scope.launch { controller.updateContext(peopleContext()) }
         waitForTag("page-inbox")
+        onNodeWithTag("tab-People").assertIsSelected()
     }
 
     @Test

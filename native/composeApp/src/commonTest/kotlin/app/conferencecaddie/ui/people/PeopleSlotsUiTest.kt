@@ -5,7 +5,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.v2.runComposeUiTest
-import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.ui.shell.rememberShellNavigation
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -25,7 +24,6 @@ class PeopleSlotsUiTest {
     @AfterTest
     fun cleanUp() {
         scope.cancel()
-        NotificationTaps.handled()
     }
 
     @Test
