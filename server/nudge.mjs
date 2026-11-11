@@ -56,8 +56,10 @@ const PUSHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
 const TTL_SECONDS = 600;
 const TITLE = 'Conference Caddie';
-// How long one Web Push request may stay idle before it is abandoned, as the Worker's
-// PUSH_TIMEOUT_MS. web-push sends with https.request, which never follows a redirect, so the
+// How long one Web Push request's socket may stay idle before the request is abandoned: web-push's
+// timeout option, which it passes to https.request. The Worker's PUSH_TIMEOUT_MS is the same
+// number but a total timeout (AbortSignal.timeout), so a push service that keeps sending a byte
+// now and then can hold a request here longer. https.request never follows a redirect, so the
 // signed request cannot be forwarded to a host that is not on the push service list either.
 export const PUSH_TIMEOUT_MS = 10_000;
 // The longest pause between the pushes to the two people of a pair.
@@ -72,7 +74,8 @@ const iso = (ms) => new Date(ms).toISOString();
 
 let transportPromise = null;
 
-async function loadTransport() {
+// Exported for test/push-endpoint-allowlist.test.mjs, which runs it with https.request stubbed.
+export async function loadTransport() {
   if (process.env.PUSH_TRANSPORT === 'stub') {
     const url = process.env.PUSH_STUB_URL;
     if (!url) throw new Error('PUSH_STUB_URL is not set');
@@ -95,7 +98,7 @@ async function loadTransport() {
 }
 
 // The options of one web-push send: the caller's (TTL, urgency), the VAPID details and the timeout.
-export const webPushOptions = (options, vapidDetails) => ({ ...options, vapidDetails, timeout: PUSH_TIMEOUT_MS });
+const webPushOptions = (options, vapidDetails) => ({ ...options, vapidDetails, timeout: PUSH_TIMEOUT_MS });
 
 function transport() {
   if (!transportPromise) {

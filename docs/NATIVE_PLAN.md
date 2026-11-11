@@ -103,7 +103,7 @@ Every repository citation is `path:line` relative to the repository root. They w
 
   | Conference | Sessions | Talks (`kind: talk`) | Source |
   |---|---|---|---|
-  | KubeCon North America 2026 | 600 | 484 | `DATA_NOTES.md:51` |
+  | KubeCon North America 2026 | 602 | 485 | `data/kubecon-cloudnativecon-north-america-2026/conference.json` (`counts`, refreshed 2026-11-11) |
   | MCP Dev Summit Nairobi | 60 | 46 | `DATA_NOTES.md:52` |
   | PyTorch Day Japan | 19 | 13 | `DATA_NOTES.md:53` |
   | gRPConf India | 38 | 32 | measured |
@@ -115,7 +115,7 @@ Every repository citation is `path:line` relative to the repository root. They w
   - Each profile is about 0.5 to 1.5 KB of JSON.
   - The number of real profiles was not queried. ASSUMPTION: tens.
   - KubeCon has about twenty thousand attendees (`docs/FIND_AND_CONNECT_SPEC.md:9`).
-- **Talk embeddings.** 484 talks × 384 dimensions is 743 KB in float32 or 186 KB in int8.
+- **Talk embeddings.** 485 talks × 384 dimensions is 745 KB in float32 or 186 KB in int8.
 
 ### 4.4 Request profile of today's client
 

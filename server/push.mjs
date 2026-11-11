@@ -91,7 +91,7 @@ function endpointOf(value, { forWrite = false } = {}) {
   if (u.protocol !== 'https:') throw bad('endpoint must be a https URL');
   if (forWrite && !isPushServiceEndpoint(value)) {
     // Only the host is logged, never the endpoint, so a push service missing from the list shows up.
-    console.warn(`Push subscription refused: host ${u.hostname.toLowerCase().slice(0, 64)}`);
+    console.warn(`push subscription refused: host ${u.hostname.toLowerCase().slice(0, 64)}`);
     throw bad('endpoint must be a push service URL');
   }
   return value;
