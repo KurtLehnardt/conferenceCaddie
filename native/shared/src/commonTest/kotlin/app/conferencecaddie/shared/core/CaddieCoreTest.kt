@@ -26,6 +26,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.runTest
@@ -148,8 +149,16 @@ class CaddieCoreTest {
                 .associateWith { FakeHttp.Never },
         )
         val core = launch(never, chooseBackend = false)
-        // Well inside one request timeout: nothing waits for the network.
-        val s = core.until(timeoutMs = 5_000) { it.bundle is BundleState.Ready }
+        // Well inside one request timeout: nothing waits for the network. The state is waited for
+        // as a whole, because the parts arrive one after the other on a slow runner.
+        val s = core.until {
+            val caps = it.capabilities
+            it.bundle is BundleState.Ready &&
+                caps is CapabilitiesState.Ready && caps.cached && caps.checking &&
+                it.selectedSlug == Fixtures.SLUG &&
+                it.conferences is ConferencesState.Ready &&
+                it.interested == listOf(Fixtures.B)
+        }
         val caps = assertIs<CapabilitiesState.Ready>(s.capabilities)
         assertTrue(caps.cached && caps.checking, "the stored capabilities, marked as being checked")
         assertEquals(Fixtures.SLUG, s.selectedSlug)
@@ -163,6 +172,8 @@ class CaddieCoreTest {
         assertEquals(emptyList(), switched.interested)
         core.selectConference(Fixtures.SLUG)
         core.until(timeoutMs = 5_000) { it.selectedSlug == Fixtures.SLUG && it.bundle is BundleState.Ready }
+        // The request goes out on the core's own scope, so it may not have started yet.
+        withContext(Dispatchers.Default) { withTimeout(20_000) { while (never.calls.isEmpty()) delay(25) } }
         assertTrue(never.calls.isNotEmpty(), "the capabilities are still being asked for")
     }
 

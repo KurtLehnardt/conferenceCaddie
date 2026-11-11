@@ -118,12 +118,31 @@ class LostRecordsTest {
     }
 
     @Test
+    fun aKnownEmptyConferenceListLetsTheDeleteFinish() = runTest {
+        val h = madeVisible()
+        val key = assertNotNull(h.secure.get(credentialKey))
+
+        // The backend answered, and lists no conference: that is a known list, not a missing one.
+        val again = relaunch(h, MapKeyValue())
+        again.updateContext(h.context().copy(listed = emptyList(), listKnown = true))
+        runCurrent()
+        val result = again.deleteMyProfile()
+        runCurrent()
+
+        assertTrue(result.done, result.message)
+        assertEquals(listOf("event=$FIXTURE_SLUG"), deletes(h).map { it.query })
+        assertNull(h.secure.get(credentialKey))
+        assertFalse(again.state.value.deletes.unfinished)
+        assertNotNull(key)
+    }
+
+    @Test
     fun withTheListUnknownAndNoConferenceNothingIsSentAndTheKeyStays() = runTest {
         val h = madeVisible()
         val key = assertNotNull(h.secure.get(credentialKey))
 
         val again = relaunch(h, MapKeyValue())
-        again.updateContext(h.context().copy(conference = null, listed = emptyList()))
+        again.updateContext(h.context().copy(conference = null, listed = emptyList(), listKnown = false))
         runCurrent()
         val result = again.deleteMyProfile()
         runCurrent()
@@ -149,7 +168,7 @@ class LostRecordsTest {
         val key = assertNotNull(h.secure.get(credentialKey))
 
         val again = relaunch(h, MapKeyValue())
-        again.updateContext(h.context().copy(listed = emptyList()))
+        again.updateContext(h.context().copy(listed = emptyList(), listKnown = false))
         runCurrent()
         val result = again.deleteMyProfile()
         runCurrent()

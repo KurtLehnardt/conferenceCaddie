@@ -1,16 +1,25 @@
 package app.conferencecaddie
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.net.Uri
 import android.webkit.RenderProcessGoneDetail
+import app.conferencecaddie.shared.AndroidSecureStore
 import app.conferencecaddie.shared.BackendUrl
+import app.conferencecaddie.shared.PeopleServices
+import app.conferencecaddie.shared.SecureStore
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.bundle.BundleSync
 import app.conferencecaddie.shared.core.CaddieCore
 import app.conferencecaddie.shared.core.Defaults
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.HttpResponse
+import app.conferencecaddie.shared.people.DeviceCredentials
+import app.conferencecaddie.shared.people.LegacyPeople
+import app.conferencecaddie.shared.people.PeopleController
+import app.conferencecaddie.shared.people.PeopleKeyValue
 import java.io.File
+import java.security.KeyStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -86,7 +95,7 @@ class CapacitorMigrationTest {
     }
 
     @After
-    fun cleanUp() = inOldOrigin("localStorage.removeItem('$key');localStorage.removeItem('caddie.theme')")
+    fun cleanUp() = inOldOrigin("localStorage.removeItem('$key');localStorage.removeItem('caddie.theme');localStorage.removeItem('${LegacyPeople.DEVICE_KEY}');localStorage.removeItem('${LegacyPeople.PROFILE_KEY}')")
 
     @Test
     fun theOldAppsListsAreReadFromItsStorage() {
@@ -95,7 +104,7 @@ class CapacitorMigrationTest {
         val lists = read()
         assertNotNull(lists)
         assertEquals(list, lists!![key])
-        // Only the Interested lists are handed over.
+        // Only the Interested lists and the people keys are handed over.
         assertNull(lists["caddie.theme"])
     }
 
@@ -104,27 +113,146 @@ class CapacitorMigrationTest {
         assertEquals(emptyMap<String, String>(), read())
     }
 
-    /** A core of its own, in memory, so the test never touches the app's data. */
+    /**
+     * A core and a people controller of their own, so the test never touches the app's data: the
+     * core in memory, the people records in a map, and the credential in a Keystore-backed store of
+     * its own file and key alias, which [close] removes. [secureFailing] makes that store fail, as a
+     * Keystore error does.
+     */
     private class TestCore : AutoCloseable {
-        val dir = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "2c-migration-${System.nanoTime()}").also { File(it, "bundles").mkdirs() }
+        val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
+        val dir = File(context.cacheDir, "2c-migration-${System.nanoTime()}").also { File(it, "bundles").mkdirs() }
         val database = CaddieDatabase.open(":memory:")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val core = CaddieCore(database, BundleFiles(Path(File(dir, "bundles").path)), { _, _, _ -> HttpResponse(404, ByteArray(0)) }, scope, allowLocalHttp = false)
-        val key = BundleSync.scope((BackendUrl.normalise(Defaults.BACKEND) as BackendUrl.Valid).base, "kubecon-cloudnativecon-north-america-2026")
+        val backend = BackendUrl.normalise(Defaults.BACKEND) as BackendUrl.Valid
+        val key = BundleSync.scope(backend.base, "kubecon-cloudnativecon-north-america-2026")
+
+        val records = HashMap<String, String>()
+        val kv = object : PeopleKeyValue {
+            override suspend fun get(key: String): String? = synchronized(records) { records[key] }
+            override suspend fun set(key: String, value: String?) {
+                synchronized(records) { if (value == null) records.remove(key) else records[key] = value }
+            }
+        }
+        val storeFile = "2c-migration-store-${System.nanoTime()}"
+        val storeAlias = "caddie-migration-test"
+        val secure = AndroidSecureStore(context, fileName = storeFile, keyAlias = storeAlias)
+        @Volatile var secureFailing = false
+        private val flaky = object : SecureStore {
+            override suspend fun get(key: String): String? = if (secureFailing) error("keystore") else secure.get(key)
+            override suspend fun put(key: String, value: String) = if (secureFailing) error("keystore") else secure.put(key, value)
+            override suspend fun remove(key: String) = if (secureFailing) error("keystore") else secure.remove(key)
+        }
+        val people = PeopleController.create(kv, { _, _, _, _, _, _ -> HttpResponse(404, ByteArray(0)) }, PeopleServices(flaky), scope, allowLocalHttp = false)
 
         fun run(dataDir: File? = null): Boolean = runBlocking {
-            val context = InstrumentationRegistry.getInstrumentation().targetContext
-            val job = if (dataDir == null) CapacitorMigration.maybeRun(context, core) else CapacitorMigration.maybeRun(context, core, dataDir)
+            val job = if (dataDir == null) CapacitorMigration.maybeRun(context, core, people = { people }) else CapacitorMigration.maybeRun(context, core, dataDir, people = { people })
             job?.join()
             core.awaitIdle()
             job != null
         }
 
+        fun storedCredential(): String? = runBlocking { secure.get(DeviceCredentials.storeKey(backend)) }
+
+        fun storedProfile(): String? = synchronized(records) { records["people:v1:${backend.base}#profile"] }
+
         override fun close() = runBlocking {
+            people.close()
             scope.cancel()
             database.closeWhenIdle()
             dir.deleteRecursively()
+            context.deleteSharedPreferences(storeFile)
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(storeAlias)
             Unit
+        }
+    }
+
+    // Fake values of the contract's shape (22 and 43 base64url characters). The secret is unique to
+    // this test, so the log check below can look for it.
+    private val fakeId = "legacyProfileId0123456"
+    private val fakeSecret = "legacyTestSecret" + "0123456789".repeat(2) + "abcdefg"
+    private val fakeHeader = "$fakeId.$fakeSecret"
+    private val deviceJson = """{"profile_id":"$fakeId","secret":"$fakeSecret"}"""
+    private val profileJson = """{"display_name":"Ada","about":"Platform engineer","interests":"","expertise":"","linkedin_url":"","contact_note":"","topics":{}}"""
+
+    /** Seeds the old app's people keys, with a value under [LegacyPeople.DEVICE_KEY] when [device] is not null. */
+    private fun seedPeople(device: String?, profile: String? = profileJson) {
+        val set = StringBuilder()
+        if (device != null) set.append("localStorage.setItem('${LegacyPeople.DEVICE_KEY}', ${JSONObject.quote(device)});")
+        if (profile != null) set.append("localStorage.setItem('${LegacyPeople.PROFILE_KEY}', ${JSONObject.quote(profile)});")
+        inOldOrigin(set.toString())
+    }
+
+    /** This process's log, which the test can read because the app's own lines are visible to it. */
+    private fun logcat(): String = Runtime.getRuntime().exec(arrayOf("logcat", "-d")).inputStream.bufferedReader().use { it.readText() }
+
+    @Test
+    fun theOldAppsCredentialAndProfileAreTakenOverOnce() {
+        TestCore().use { t ->
+            assertEquals(fakeSecret.length, 43)
+            seedPeople(deviceJson)
+            inOldOrigin("localStorage.setItem('$key', ${JSONObject.quote("[" + entry("1") + "]")})")
+            assertTrue(t.run())
+            assertEquals(fakeHeader, t.storedCredential())
+            assertTrue("the profile is kept: ${t.storedProfile()}", t.storedProfile()?.contains("\"Ada\"") == true)
+            assertEquals("1", runBlocking { t.core.uiSetting(CapacitorMigration.DONE) })
+            assertEquals(listOf("kubecon-cloudnativecon-north-america-2026:1"), runBlocking { t.database.interested(t.key) })
+            // Neither the WebView, the controller nor the store wrote any part of the credential to the log.
+            val log = logcat()
+            assertTrue("the log could be read", log.isNotEmpty())
+            assertTrue("the credential is not in the log", !log.contains(fakeSecret) && !log.contains(fakeId))
+
+            // Once only: another value stored later is never read.
+            seedPeople("""{"profile_id":"anotherProfileId012345","secret":"${"z".repeat(43)}"}""")
+            t.run()
+            assertEquals(fakeHeader, t.storedCredential())
+        }
+    }
+
+    @Test
+    fun aCredentialThisAppAlreadyHoldsIsKept() {
+        TestCore().use { t ->
+            val own = "nativeProfileId0123456." + "n".repeat(43)
+            runBlocking { t.secure.put(DeviceCredentials.storeKey(t.backend), own) }
+            seedPeople(deviceJson)
+            assertTrue(t.run())
+            assertEquals(own, t.storedCredential())
+            assertEquals("1", runBlocking { t.core.uiSetting(CapacitorMigration.DONE) })
+        }
+    }
+
+    @Test
+    fun aMalformedCredentialIsRefusedAndTheListsStillCome() {
+        TestCore().use { t ->
+            seedPeople("""{"profile_id":"short","secret":"${"s".repeat(43)}"}""", profile = "not json")
+            inOldOrigin("localStorage.setItem('$key', ${JSONObject.quote("[" + entry("1") + "]")})")
+            assertTrue(t.run())
+            assertNull(t.storedCredential())
+            assertNull(t.storedProfile())
+            assertEquals("1", runBlocking { t.core.uiSetting(CapacitorMigration.DONE) })
+            assertEquals(1, runBlocking { t.database.interested(t.key) }.size)
+        }
+    }
+
+    @Test
+    fun aSecureStoreThatFailsLeavesTheWholeRunForTheNextStart() {
+        TestCore().use { t ->
+            t.secureFailing = true
+            seedPeople(deviceJson)
+            inOldOrigin("localStorage.setItem('$key', ${JSONObject.quote("[" + entry("1") + "]")})")
+            assertTrue(t.run())
+            assertNull(runBlocking { t.core.uiSetting(CapacitorMigration.DONE) })
+            assertEquals("1", runBlocking { t.core.uiSetting(CapacitorMigration.ATTEMPTS) })
+            assertTrue("the lists wait for the credential", runBlocking { t.database.interested(t.key) }.isEmpty())
+            assertNull("the profile waits with the credential", t.storedProfile())
+
+            // The next start finds the store working and finishes everything.
+            t.secureFailing = false
+            assertTrue(t.run())
+            assertEquals(fakeHeader, t.storedCredential())
+            assertEquals("1", runBlocking { t.core.uiSetting(CapacitorMigration.DONE) })
+            assertEquals(1, runBlocking { t.database.interested(t.key) }.size)
         }
     }
 
@@ -181,7 +309,8 @@ class CapacitorMigrationTest {
         val client = CapacitorMigration.MigrationClient { gone++ }
         val page = client.shouldInterceptRequest(view, request(CapacitorMigration.PAGE))
         assertEquals("text/html", page.mimeType)
-        assertTrue(page.data.readBytes().decodeToString().contains("caddie.interested.v1."))
+        val script = page.data.readBytes().decodeToString()
+        assertTrue(script.contains("caddie.interested.v1.") && script.contains(LegacyPeople.DEVICE_KEY) && script.contains(LegacyPeople.PROFILE_KEY))
         for (url in listOf("https://example.com/", "https://localhost/", "https://localhost/other", "http://localhost/__caddie_native_migration__")) {
             val r = client.shouldInterceptRequest(view, request(url))
             assertEquals(url, 404, r.statusCode)

@@ -9,12 +9,15 @@ import app.conferencecaddie.shared.people.BackgroundNudges
 import app.conferencecaddie.shared.people.PeopleAvailability
 import app.conferencecaddie.shared.people.PeopleUiState
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Keeps one periodic [BackgroundNudgeJobService] job scheduled exactly while
@@ -44,6 +47,7 @@ class BackgroundNudgeScheduler(
     private val app = context.applicationContext
     private val jobs = app.getSystemService(JobScheduler::class.java)
     private var job: Job? = null
+    private val applyLock = Mutex()
 
     /** Starts following the state. */
     fun start() {
@@ -81,17 +85,24 @@ class BackgroundNudgeScheduler(
         scope.launch { apply(BackgroundNudges.wanted(s, now(), notificationsAllowed())) }
     }
 
-    private fun apply(wanted: Boolean) {
-        if (!wanted) {
-            if (jobs.getPendingJob(jobId) != null) jobs.cancel(jobId)
-            return
-        }
-        if (jobs.getPendingJob(jobId) != null) return
-        val info = JobInfo.Builder(jobId, ComponentName(app, BackgroundNudgeJobService::class.java))
-            .setPeriodic(PERIOD_MS)
-            .setPersisted(false)
-            .build()
-        jobs.schedule(info)
+    /**
+     * Serialised, because the [start] collector and a [recheck] can run at the same time. A
+     * JobScheduler call that throws (the system's job limit, a state it refuses) must not end the
+     * collector: the next ready state applies the decision again.
+     */
+    private suspend fun apply(wanted: Boolean) = applyLock.withLock {
+        runCatching {
+            if (!wanted) {
+                if (jobs.getPendingJob(jobId) != null) jobs.cancel(jobId)
+            } else if (jobs.getPendingJob(jobId) == null) {
+                val info = JobInfo.Builder(jobId, ComponentName(app, BackgroundNudgeJobService::class.java))
+                    .setPeriodic(PERIOD_MS)
+                    .setPersisted(false)
+                    .build()
+                jobs.schedule(info)
+            }
+        }.onFailure { if (it is CancellationException) throw it }
+        Unit
     }
 
     companion object {

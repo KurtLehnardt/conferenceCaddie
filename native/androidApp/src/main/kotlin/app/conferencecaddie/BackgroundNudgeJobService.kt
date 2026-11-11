@@ -61,13 +61,20 @@ class BackgroundNudgeJobService : JobService() {
         // believing: without this its poll would keep running in the cached process. The activity
         // reports foreground itself when it starts.
         val controller = CaddiePeople.controller(app)
-        if (!CaddieApplication.hasStartedActivity) controller.setForeground(false)
+        if (!CaddieApplication.hasStartedActivity) {
+            controller.setForeground(false)
+            // An activity may have started between the check above and setForeground(false), and
+            // its own setForeground(true) would then have been overwritten. Reading again after the
+            // write closes that window: whichever order the two ran in, the last word is true.
+            if (CaddieApplication.hasStartedActivity) controller.setForeground(true)
+        }
         val ready = withTimeoutOrNull(READY_WAIT_MS) { controller.state.first { it.availability == PeopleAvailability.Ready } }
         if (ready == null) {
-            // The backend now offers no people features (another backend was chosen): the job is
-            // not wanted any more. Anything else (still loading, no conference yet) may pass, so the
-            // job stays for its next period.
-            if (controller.state.value.availability == PeopleAvailability.Off) getSystemService(JobScheduler::class.java).cancel(BackgroundNudgeScheduler.JOB_ID)
+            // The state did not become ready in time (still loading, no conference yet, or the
+            // backend now offers no people features): the job is not wanted right now. It is
+            // cancelled rather than left to wake every period; BackgroundNudgeScheduler schedules
+            // it again the next time a ready state wants it (see BackgroundNudgeScheduler.start).
+            getSystemService(JobScheduler::class.java).cancel(BackgroundNudgeScheduler.JOB_ID)
             return
         }
         val now = controller.clock.now().toEpochMilliseconds()

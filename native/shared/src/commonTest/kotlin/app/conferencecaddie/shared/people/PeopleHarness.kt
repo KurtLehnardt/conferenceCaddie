@@ -122,6 +122,7 @@ class PeopleHarness(
         bundle = bundle,
         interested = interested,
         listed = listOf(FIXTURE_CONFERENCE),
+        listKnown = true,
     )
 
     suspend fun start(caps: Capabilities = PEOPLE_ON, interested: List<String> = emptyList()) {

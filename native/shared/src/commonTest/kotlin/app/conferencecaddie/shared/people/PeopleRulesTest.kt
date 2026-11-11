@@ -5,6 +5,7 @@ import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.db.CaddieDatabase
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -173,6 +174,31 @@ class PeopleRulesTest {
         } finally {
             db.closeWhenIdle()
         }
+    }
+
+    @Test
+    fun aWipeThatFailsHalfWayLeavesTheDeleteMark() = runTest {
+        val kv = MapKeyValue()
+        val store = PeopleStore(kv, BACKEND.base)
+        store.load()
+        store.setProfile(Profile(displayName = "Ana"))
+        store.setVisibility(SLUG) { it.copy(openToMeet = true, onServer = true) }
+        store.setDeleteAll(DeleteRetry(since = 5))
+
+        // A key-value store that refuses to write a conference record, as a full disk would.
+        val failing = object : PeopleKeyValue by kv {
+            override suspend fun set(key: String, value: String?) {
+                if (key.contains("#conference:")) error("disk full")
+                kv.set(key, value)
+            }
+        }
+        val wiping = PeopleStore(failing, BACKEND.base)
+        wiping.load()
+        assertFailsWith<IllegalStateException> { wiping.clearAllPeopleData() }
+
+        val after = PeopleStore(kv, BACKEND.base)
+        after.load()
+        assertNotNull(after.deleteAll, "the delete mark outlives a wipe that did not finish")
     }
 
     @Test
