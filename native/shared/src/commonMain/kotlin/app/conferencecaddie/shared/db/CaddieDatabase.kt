@@ -273,6 +273,46 @@ class CaddieDatabase private constructor(private val opener: () -> Opened) {
         }
     }
 
+    /** A mark to add with [addMarksThenSet]. */
+    class NewMark(val scope: String, val talkId: String, val addedAtMs: Long, val snapshot: InterestedTalk?)
+
+    /** When the first mark of [scope] was made, or null when none is. */
+    suspend fun firstInterestedAt(scope: String): Long? = run { c ->
+        c.prepare("SELECT min(added_at) FROM interested WHERE scope = ?").use { s ->
+            s.bindText(1, scope)
+            if (s.step() && !s.isNull(0)) s.getLong(0) else null
+        }
+    }
+
+    /**
+     * Adds every mark of [marks] that is not there yet (a mark already made is left as it is), then
+     * sets the setting [key] to [value], in one transaction: all of it lands, or none of it does.
+     * [beforeCommit] runs last inside the transaction, for the tests.
+     */
+    suspend fun addMarksThenSet(marks: List<NewMark>, key: String, value: String, beforeCommit: () -> Unit = {}) = run { c ->
+        c.inTransaction { t ->
+            t.prepare(
+                "INSERT INTO interested (scope, talk_id, added_at, snapshot) VALUES (?, ?, ?, ?) ON CONFLICT(scope, talk_id) DO NOTHING",
+            ).use { s ->
+                for (m in marks) {
+                    s.reset()
+                    s.clearBindings()
+                    s.bindText(1, m.scope)
+                    s.bindText(2, m.talkId)
+                    s.bindLong(3, m.addedAtMs)
+                    if (m.snapshot == null) s.bindNull(4) else s.bindText(4, m.snapshot.toJson())
+                    s.step()
+                }
+            }
+            t.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").use { s ->
+                s.bindText(1, key)
+                s.bindText(2, value)
+                s.step()
+            }
+            beforeCommit()
+        }
+    }
+
     /**
      * Marks or unmarks [talkId] in [scope]. A mark keeps [snapshot] when one is given; marking a
      * talk that is marked already keeps its date and only refreshes the copy.
