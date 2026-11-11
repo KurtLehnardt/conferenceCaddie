@@ -335,14 +335,13 @@ class CaddieCore(
      * [RETRY_MAX_MS]). [CoreState.semantic] says which, so the screens can search again once the
      * model is ready.
      */
-    fun useEmbedder(load: suspend () -> Embedder?) {
-        scope.launch {
-            embedderMutex.withLock {
-                if (loader != null) return@launch
-                loader = load
-            }
-            command { _state.update { if (it.semantic == SemanticState.Off) it.copy(semantic = SemanticState.Idle) else it } }
+    fun useEmbedder(load: suspend () -> Embedder?) = command {
+        // Through the core's queue, so of two offers the first one made is the one kept.
+        embedderMutex.withLock {
+            if (loader != null) return@command
+            loader = load
         }
+        _state.update { if (it.semantic == SemanticState.Off) it.copy(semantic = SemanticState.Idle) else it }
     }
 
     /**
