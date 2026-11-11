@@ -30,6 +30,12 @@ data class PeopleContext(
      * credential is in the secure store and is not affected.
      */
     val storageInMemory: Boolean = false,
+    /**
+     * Every conference the backend's list names, the selected one included, or empty while the list
+     * is not known. "Delete my profile" reaches the ones still live ([ConferenceWindow]) even when the
+     * device's records were lost, and the Android background check reads the selected one's dates.
+     */
+    val listed: List<ConferenceInfo> = emptyList(),
 ) {
     companion object {
         /**
@@ -45,8 +51,8 @@ data class PeopleContext(
                 else -> Capabilities.None
             }
             val bundle = (state.bundle as? BundleState.Ready)?.bundle?.takeIf { it.conference.slug == state.selectedSlug }
-            val listed = (state.conferences as? ConferencesState.Ready)?.conferences
-                ?.firstOrNull { it.conference.slug == state.selectedSlug }?.conference
+            val all = (state.conferences as? ConferencesState.Ready)?.conferences.orEmpty().map { it.conference }
+            val listed = all.firstOrNull { it.slug == state.selectedSlug }
             val conference = (bundle?.conference ?: listed)?.let {
                 ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate)
             }
@@ -57,6 +63,7 @@ data class PeopleContext(
                 bundle,
                 if (conference != null) state.interested else emptyList(),
                 storageInMemory = state.storageInMemory,
+                listed = all.map { ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate) },
             )
         }
     }
