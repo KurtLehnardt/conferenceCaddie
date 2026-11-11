@@ -1834,8 +1834,16 @@ mark {
 
 /* While the install card is open, the page gets the card's height (plus its offset above the
    nav and a gap) as extra bottom padding, so nothing stays hidden under it at full scroll. */
-:root[data-install-open] .content {
+:root[data-install-open]:not([data-guide-open]) .content {
   padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 76px + var(--install-h, 0px) + 16px);
+}
+
+/* While the welcome guide is up (src/guide/run.ts sets data-guide-open), the install card is
+   hidden and the page drops the room it reserves for it. The guide's dialog sits in the same
+   place above the tab bar, so the card would otherwise peek out behind the dialog and cover the
+   screen the step describes. The card comes back as it was when the guide ends. */
+:root[data-guide-open] .install-region {
+  display: none;
 }
 
 @media (min-width: 768px) {
@@ -1845,7 +1853,7 @@ mark {
     justify-content: flex-start;
   }
 
-  :root[data-install-open] .content {
+  :root[data-install-open]:not([data-guide-open]) .content {
     padding-bottom: calc(88px + var(--safe-bottom) + var(--install-h, 0px) + 16px);
   }
 }

@@ -144,6 +144,9 @@ export async function runGuide(run: GuideRun): Promise<void> {
   window.addEventListener('popstate', onPop);
   document.addEventListener('pointerdown', onPointer, true);
   document.addEventListener('keydown', onKey, true);
+  // Hides the install card, if it is open, until the guide ends (src/styles.css): it floats in the
+  // same place above the tab bar as the guide's dialog.
+  document.documentElement.setAttribute('data-guide-open', '');
   try {
     await showScreen(GUIDE_STEPS[0], run.tabParams(GUIDE_STEPS[0].tab), gone);
     if (!navigatedAway) {
@@ -221,6 +224,8 @@ export async function runGuide(run: GuideRun): Promise<void> {
     document.removeEventListener('pointerdown', onPointer, true);
     document.removeEventListener('keydown', onKey, true);
     if (Swal.isVisible()) Swal.close();
+    // Before focus is put back, which may be on a control of the install card.
+    document.documentElement.removeAttribute('data-guide-open');
     run.onEnd(confirmed ? 'done' : 'skipped');
     if (!navigatedAway) {
       replaceHash(startHash);
