@@ -6,8 +6,8 @@
 //
 // Run with `npm test`. It uses the in-memory stand-in for Elasticsearch in test/lib/fake-es.mjs,
 // which sets PUSH_TRANSPORT=stub, so every push (Web Push, APNs and FCM) is recorded instead of
-// sent; nothing reaches the network. Both native channels are configured with keys generated for
-// this run.
+// sent; nothing reaches the network. APNs is configured with a key generated for this run, and FCM
+// with a project id; the stub answers the metadata server's token request.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,14 +18,9 @@ Object.assign(process.env, {
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
   APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
-  FCM_SERVICE_ACCOUNT_JSON: JSON.stringify({
-    type: 'service_account',
-    project_id: 'caddie-test-project',
-    private_key: crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
-    client_email: 'push@caddie-test-project.iam.gserviceaccount.com',
-  }),
+  FCM_PROJECT_ID: 'caddie-test-project',
 });
-for (const k of ['APNS_BUNDLE_ID', 'FCM_PROJECT_ID']) delete process.env[k];
+delete process.env.APNS_BUNDLE_ID;
 
 const { handlePeopleApi } = await import('../server/people.mjs');
 const { nudgeAfterPresence } = await import('../server/nudge.mjs');

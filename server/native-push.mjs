@@ -1,7 +1,7 @@
 // Native push to the official apps: APNs over node:http2 with a token-based (.p8) key, and FCM
-// HTTP v1 with a service account. server/nudge.mjs sends the nudge through it to the native
-// registrations of server/push.mjs (PUT /api/push/native), beside Web Push, and
-// server/capabilities.mjs advertises push.apns and push.fcm from it.
+// HTTP v1 with the runtime service account's own access token. server/nudge.mjs sends the nudge
+// through it to the native registrations of server/push.mjs (PUT /api/push/native), beside Web
+// Push, and server/capabilities.mjs advertises push.apns and push.fcm from it.
 //
 // Env (read once when the module is imported; each channel is on only when its settings are all
 // present and usable):
@@ -10,22 +10,22 @@
 //   APNS_KEY_P8               the text of the .p8 key file, a PKCS#8 EC P-256 private key (secret;
 //                             Secret Manager caddie-apns-key).
 //   APNS_BUNDLE_ID            the app's bundle id, sent as apns-topic; default app.conferencecaddie.
-//   FCM_SERVICE_ACCOUNT_JSON  the JSON key of a service account of the app's Firebase project
-//                             (secret; Secret Manager caddie-fcm-service-account); its
-//                             client_email, private_key and project_id are read.
-//   FCM_PROJECT_ID            optional; the Firebase project id when it is not the service
-//                             account's own project_id.
+//   FCM_PROJECT_ID            the id of the app's Firebase project (not a secret). FCM is on when
+//                             it is set. There is no FCM key: the access token comes from the
+//                             Cloud Run metadata server for the runtime service account, which
+//                             holds the role Firebase Cloud Messaging API Admin on that project.
 //   PUSH_TRANSPORT=stub       (tests only) replaces the APNs and FCM transports with a recorder at
 //                             PUSH_STUB_URL, as it replaces web-push in nudge.mjs.
 //
 // Rules this module keeps:
-// - Only the official deployment holds these keys (docs/NATIVE_PLAN.md, section 14, decision 3).
-//   A backend without them advertises push.apns and push.fcm false; a third-party operator
-//   leaves every one of them unset.
+// - Only the official deployment pushes natively (docs/NATIVE_PLAN.md, section 14, decision 3): it
+//   holds the APNs key and its service account may send through the app's Firebase project. A
+//   backend without them advertises push.apns and push.fcm false; a third-party operator leaves
+//   every one of these settings unset.
 // - A setting that is present but unusable keeps its channel off, and one log line at start
-//   names the setting and the rule, never its value. The two secrets are removed from
-//   process.env as soon as they are read. No key, JWT, access token or device token is ever
-//   logged.
+//   names the setting and the rule, never its value. APNS_KEY_P8 is deleted from process.env as
+//   soon as it is read (see the end of this file). No key, JWT, access token or device token is
+//   ever logged.
 // - The message is a generic alert, the same bytes for every push: the constant title and body of
 //   NATIVE_ALERT and the constant deep link caddie://people?around=1. APNs and FCM payloads reach
 //   Apple and Google in plain text, unlike Web Push payloads, which are end-to-end encrypted, so a
@@ -43,8 +43,9 @@ import http2 from 'node:http2';
 
 export const DEFAULT_BUNDLE_ID = 'app.conferencecaddie';
 export const APNS_ORIGINS = Object.freeze({ production: 'https://api.push.apple.com', sandbox: 'https://api.sandbox.push.apple.com' });
-export const FCM_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-export const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+// The runtime service account's access token on Cloud Run. Its scope there is cloud-platform, which
+// messages.send accepts beside firebase.messaging.
+export const METADATA_TOKEN_URL = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
 export const fcmSendUrl = (projectId) => `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`;
 
 // apns-priority 5 is APNs' "normal": delivered with the device's power state in mind. It is what
@@ -61,9 +62,11 @@ const REQUEST_TIMEOUT_MS = 10_000;
 // early only when it is at least 20 minutes old.
 const PROVIDER_TOKEN_TTL_MS = 40 * 60_000;
 const PROVIDER_TOKEN_MIN_AGE_MS = 20 * 60_000;
-// An OAuth access token is used until five minutes before it expires.
-const ACCESS_TOKEN_MARGIN_MS = 5 * 60_000;
-const ASSERTION_TTL_S = 3600;
+// An access token is used until a minute before it expires (as server/moderation.mjs does with the
+// same metadata server). After a failed token request no other is made for a minute: a send in
+// that time fails at once and keeps its registration.
+const ACCESS_TOKEN_MARGIN_MS = 60_000;
+const TOKEN_BACKOFF_MS = 60_000;
 // An idle HTTP/2 session to APNs is closed after this long; the next push opens a new one.
 const SESSION_IDLE_MS = 10 * 60_000;
 // The most of a response body that is read: APNs and FCM error bodies are a few hundred bytes.
@@ -91,13 +94,10 @@ export function nativeTokenOf(platform, value) {
 
 const segment = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
 
-/** A compact JWS: ES256 (P-256, the raw r||s signature JOSE requires) or RS256. */
+/** A compact JWS signed with ES256: a P-256 key and the raw r||s signature JOSE requires. */
 export function signJwt(header, claims, key) {
   const input = `${segment(header)}.${segment(claims)}`;
-  const data = Buffer.from(input, 'utf8');
-  const signature = header.alg === 'ES256'
-    ? crypto.sign('sha256', data, { key, dsaEncoding: 'ieee-p1363' })
-    : crypto.sign('sha256', data, key);
+  const signature = crypto.sign('sha256', Buffer.from(input, 'utf8'), { key, dsaEncoding: 'ieee-p1363' });
   return `${input}.${signature.toString('base64url')}`;
 }
 
@@ -107,8 +107,6 @@ export function signJwt(header, claims, key) {
 const KEY_ID_RE = /^[A-Z0-9]{10}$/;
 const BUNDLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,154}$/;
 const PROJECT_ID_RE = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
-const EMAIL_RE = /^[^\s@]{1,64}@[A-Za-z0-9.-]{1,253}$/;
-const PRIVATE_KEY_ID_RE = /^[0-9a-f]{40}$/;
 
 const set = (v) => typeof v === 'string' && v.trim() !== '';
 
@@ -140,29 +138,14 @@ export function apnsConfigFrom(env) {
 }
 
 /**
- * The FCM settings: { config: { clientEmail, keyId, key, projectId } }, { config: null } when
- * FCM_SERVICE_ACCOUNT_JSON is not set, or { problem } naming what is wrong (never a value).
+ * The FCM settings: { config: { projectId } }, { config: null } when FCM_PROJECT_ID is not set, or
+ * { problem } naming what is wrong (never a value).
  */
 export function fcmConfigFrom(env) {
-  const text = env.FCM_SERVICE_ACCOUNT_JSON;
-  if (!set(text)) return { config: null };
-  let account;
-  try {
-    account = JSON.parse(text);
-  } catch {
-    // JSON.parse quotes the text around a syntax error, so its message is never used.
-    return { problem: 'FCM_SERVICE_ACCOUNT_JSON is not JSON' };
-  }
-  if (account === null || typeof account !== 'object' || Array.isArray(account)) return { problem: 'FCM_SERVICE_ACCOUNT_JSON is not a JSON object' };
-  const { client_email: clientEmail, private_key: pem, private_key_id: keyId } = account;
-  if (typeof clientEmail !== 'string' || !EMAIL_RE.test(clientEmail)) return { problem: 'FCM_SERVICE_ACCOUNT_JSON has no usable client_email' };
-  const projectId = set(env.FCM_PROJECT_ID) ? env.FCM_PROJECT_ID : account.project_id;
-  if (typeof projectId !== 'string' || !PROJECT_ID_RE.test(projectId)) {
-    return { problem: set(env.FCM_PROJECT_ID) ? 'FCM_PROJECT_ID is not a project id' : 'FCM_SERVICE_ACCOUNT_JSON has no usable project_id' };
-  }
-  const key = typeof pem === 'string' ? privateKeyOf(pem) : null;
-  if (!key || key.asymmetricKeyType !== 'rsa') return { problem: 'FCM_SERVICE_ACCOUNT_JSON has no usable private_key (an RSA private key)' };
-  return { config: { clientEmail, keyId: typeof keyId === 'string' && PRIVATE_KEY_ID_RE.test(keyId) ? keyId : null, key, projectId } };
+  const projectId = env.FCM_PROJECT_ID;
+  if (!set(projectId)) return { config: null };
+  if (!PROJECT_ID_RE.test(projectId)) return { problem: 'FCM_PROJECT_ID is not a project id' };
+  return { config: { projectId } };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -251,7 +234,7 @@ export function http2Transport({ timeoutMs = REQUEST_TIMEOUT_MS, idleMs = SESSIO
 
 // Test-only transports (PUSH_TRANSPORT=stub): each push is posted as JSON to PUSH_STUB_URL and
 // the stub's status and body are the platform's answer. The Authorization header is left out of
-// the record, and the OAuth token request is answered here with a stand-in token.
+// the record, and the metadata server's token request is answered here with a stand-in token.
 function stubTransports(env) {
   const url = env.PUSH_STUB_URL;
   const record = async (entry) => {
@@ -265,7 +248,7 @@ function stubTransports(env) {
       return record({ platform: 'apns', origin, path, headers: rest, payload: JSON.parse(body) });
     },
     fetch: async (target, init) => {
-      if (target === FCM_TOKEN_URL) return new Response(JSON.stringify({ access_token: 'stub-access-token', expires_in: 3600, token_type: 'Bearer' }), { status: 200 });
+      if (target === METADATA_TOKEN_URL) return new Response(JSON.stringify({ access_token: 'stub-access-token', expires_in: 3600, token_type: 'Bearer' }), { status: 200 });
       const r = await record({ platform: 'fcm', url: target, payload: JSON.parse(init.body) });
       return new Response(r.body || null, { status: r.status });
     },
@@ -401,35 +384,44 @@ async function readJson(res) {
 function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
   let access = null; // { token, expiresAt }
   let pending = null;
+  let failedAt = null; // when the last token request failed
   const sendUrl = fcmSendUrl(config.projectId);
 
+  // The runtime service account's token from the metadata server. No key is held here: Cloud Run
+  // mints it for the service's own identity.
   async function requestAccessToken() {
-    const iat = Math.floor(now() / 1000);
-    const assertion = signJwt(
-      { alg: 'RS256', typ: 'JWT', ...(config.keyId ? { kid: config.keyId } : {}) },
-      { iss: config.clientEmail, scope: FCM_SCOPE, aud: FCM_TOKEN_URL, iat, exp: iat + ASSERTION_TTL_S },
-      config.key,
-    );
-    const res = await fetchImpl(FCM_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }).toString(),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    let res;
+    try {
+      res = await fetchImpl(METADATA_TOKEN_URL, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (err) {
+      throw new PushFailure(`token ${errorClass(err)}`);
+    }
     const json = await readJson(res);
     if (!res.ok) throw new PushFailure(`token ${res.status}`);
     if (typeof json?.access_token !== 'string' || !json.access_token) throw new PushFailure('token invalid response');
-    const seconds = Number.isFinite(json.expires_in) && json.expires_in > 0 ? json.expires_in : 3600;
+    const seconds = Number.isFinite(json.expires_in) && json.expires_in > 0 ? json.expires_in : 300;
     access = { token: json.access_token, expiresAt: now() + seconds * 1000 };
     return access.token;
   }
 
   // The cached access token, or a new one when it is about to expire or when force is set (after
-  // a 401). Concurrent callers share one token request.
+  // a 401). Concurrent callers share one token request. For a minute after a failed request every
+  // caller fails at once with 'token backoff', so a metadata server in trouble is not asked again
+  // for each push.
   function accessToken(force = false) {
     if (!force && access && now() < access.expiresAt - ACCESS_TOKEN_MARGIN_MS) return Promise.resolve(access.token);
     if (!pending) {
-      pending = requestAccessToken().finally(() => {
+      if (failedAt !== null && now() - failedAt < TOKEN_BACKOFF_MS) return Promise.reject(new PushFailure('token backoff'));
+      pending = requestAccessToken().then(
+        (token) => {
+          failedAt = null;
+          return token;
+        },
+        (err) => {
+          failedAt = now();
+          throw err;
+        },
+      ).finally(() => {
         pending = null;
       });
     }
@@ -465,7 +457,8 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
 
 /**
  * The native push channels of one configuration. Options exist for the tests: apnsTransport
- * ((origin, request) => { status, body }), fetch (for the OAuth token and FCM), now and log.
+ * ((origin, request) => { status, body }), fetch (for the metadata server's token and FCM), now
+ * and log.
  * Returns { apns, fcm, send(registration, { ttl }) }, where apns and fcm say whether the channel is
  * on and registration is { platform, token, environment }. send pushes NATIVE_ALERT, and nothing
  * else, and resolves to 'sent', 'gone' or 'failed'.
@@ -502,12 +495,14 @@ export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = D
   });
 }
 
-// This server's channels. The two secrets are taken out of the environment before they are
-// parsed, so nothing that later reads or copies process.env (a child process, a diagnostic dump)
-// can see them.
-const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_SERVICE_ACCOUNT_JSON', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
+// This server's channels. The settings are copied into `settings`, and then the one secret among
+// them, APNS_KEY_P8, is deleted from process.env. That removes it from what this process hands to
+// a child process and from anything in this process that reads process.env later, such as a
+// diagnostic dump. It does not erase the value from memory, from the environment block the process
+// started with (on Linux, /proc/self/environ still shows it), or from the Cloud Run revision,
+// which holds it as a reference to Secret Manager.
+const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 const settings = Object.fromEntries(SETTINGS.map((k) => [k, process.env[k]]));
 delete process.env.APNS_KEY_P8;
-delete process.env.FCM_SERVICE_ACCOUNT_JSON;
 /** The native push channels of this server; push.apns and push.fcm are its apns and fcm. */
 export const NATIVE_PUSH = createNativePush(settings);

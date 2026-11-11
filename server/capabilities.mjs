@@ -10,13 +10,15 @@
 //   BLE_MASTER_KEYRING and BLE_NEAR_RSSI, through server/ble-config.mjs (ble.mode and near_rssi).
 //   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT: push.webpush is true only when all
 //                      three are set, which is when nudge.mjs can send.
-//   APNS_* and FCM_*, through server/native-push.mjs: push.apns is true only when the APNs key,
-//                      its key id and the team id are all set and usable, and push.fcm only when
-//                      the FCM service account is, which is when nudge.mjs can send through them.
+//   APNS_* and FCM_PROJECT_ID, through server/native-push.mjs: push.apns is true only when the
+//                      APNs key, its key id and the team id are all set and well-formed, and
+//                      push.fcm only when FCM_PROJECT_ID is, which is when nudge.mjs can send
+//                      through them.
 //
 // Tier 3 serves every People API v1 route with server-side ranking and polling, the talk search
-// routes and both server imports. Only the official deployment holds the APNs key and the FCM
-// service account, so on every other tier 3 server push.apns and push.fcm are false.
+// routes and both server imports. Only the official deployment holds the APNs key and may send
+// through the app's Firebase project, so on every other tier 3 server push.apns and push.fcm are
+// false.
 
 import { take, clientIp } from './ratelimit.mjs';
 import { SERVICE_UUID, WINDOW_S } from '../contracts/js/ble-token.mjs';

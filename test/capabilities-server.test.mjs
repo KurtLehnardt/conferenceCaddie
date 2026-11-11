@@ -5,7 +5,7 @@
 // unusable master keyring or bundle base.
 //
 // Run with `npm test`. Nothing reaches the network; the Bluetooth keys below are the fake fixed
-// ones of contracts/fixtures/ble, and the APNs and FCM keys are generated for this run.
+// ones of contracts/fixtures/ble, and the APNs key is generated for this run (FCM needs no key).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ import { Readable } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const NATIVE_SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_SERVICE_ACCOUNT_JSON', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
+const NATIVE_SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 for (const k of ['BLE_MASTER_KEYRING', 'BLE_NEAR_RSSI', 'TALKS_BUNDLE_BASE', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', ...NATIVE_SETTINGS]) delete process.env[k];
 
 const { capabilitiesDocument, bundleBaseFrom, webPushConfigured, handleCapabilities, CAPABILITIES, DEFAULT_BUNDLE_BASE } = await import('../server/capabilities.mjs');
@@ -49,7 +49,7 @@ test('with the master keyring and VAPID: the tier3-paid fixture, without native 
   assert.deepEqual(effectiveCapabilities(doc), doc, 'a complete document is its own effective feature set');
 });
 
-test('with the keyring, VAPID, an APNs key and an FCM service account: exactly the tier3-paid fixture', () => {
+test('with the keyring, VAPID, an APNs key and an FCM project: exactly the tier3-paid fixture', () => {
   const doc = capabilitiesDocument(config({ apns: true, fcm: true }));
   assertValid(doc);
   assert.deepEqual(doc, fixture('tier3-paid.json'));
@@ -226,9 +226,8 @@ function pushFlags(env) {
 
 test('push.apns and push.fcm follow the APNs and FCM settings, and a broken one stays off without quoting it', () => {
   const p8 = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
-  const rsaPem = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
   const apns = { APNS_KEY_ID: 'ABCDE12345', APNS_TEAM_ID: 'TEAM123456', APNS_KEY_P8: p8 };
-  const fcm = { FCM_SERVICE_ACCOUNT_JSON: JSON.stringify({ type: 'service_account', project_id: 'caddie-test-project', private_key: rsaPem, client_email: 'push@caddie-test-project.iam.gserviceaccount.com' }) };
+  const fcm = { FCM_PROJECT_ID: 'caddie-test-project' };
   const vapid = { VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 's', VAPID_SUBJECT: 'mailto:x@example.org' };
 
   const none = pushFlags({});
@@ -239,11 +238,12 @@ test('push.apns and push.fcm follow the APNs and FCM settings, and a broken one 
   assert.deepEqual(pushFlags(fcm).push, { apns: false, fcm: true, webpush: false });
   assert.deepEqual(pushFlags({ ...apns, ...fcm, ...vapid }).push, { apns: true, fcm: true, webpush: true });
 
-  const broken = pushFlags({ ...apns, APNS_KEY_P8: p8.slice(0, 100), FCM_SERVICE_ACCOUNT_JSON: fcm.FCM_SERVICE_ACCOUNT_JSON.slice(0, 200) });
+  const broken = pushFlags({ ...apns, APNS_KEY_P8: p8.slice(0, 100), FCM_PROJECT_ID: 'Not A Project' });
   assert.deepEqual(broken.push, { apns: false, fcm: false, webpush: false });
   assert.match(broken.output, /APNs push is off: APNS_KEY_P8 is not the text of a \.p8 key/);
-  assert.match(broken.output, /FCM push is off: FCM_SERVICE_ACCOUNT_JSON is not JSON/);
-  for (const secret of [p8, rsaPem]) {
+  assert.match(broken.output, /FCM push is off: FCM_PROJECT_ID is not a project id/);
+  assert.doesNotMatch(broken.output, /Not A Project/, 'the value is never quoted');
+  for (const secret of [p8]) {
     for (const line of secret.split('\n').filter((l) => l.length > 20 && !l.startsWith('-----'))) {
       assert.ok(!broken.output.includes(line.slice(0, 20)), 'the output never quotes a key');
     }

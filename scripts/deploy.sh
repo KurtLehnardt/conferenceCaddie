@@ -16,10 +16,12 @@
 # vars APNS_KEY_ID and APNS_TEAM_ID; APNS_BUNDLE_ID comes from the shell (default
 # app.conferencecaddie). The key is pinned like the Bluetooth keyring, because the ids are read
 # here: a key version added later reaches the instances only with a deploy that reads its ids too.
-# When the secret caddie-fcm-service-account exists (the JSON key of a service account of the
-# app's Firebase project), it is mounted as FCM_SERVICE_ACCOUNT_JSON; it names its own project, so
-# "latest" is safe. Without them the app deploys with push.apns and push.fcm false. A third-party
-# operator never creates either secret. This script never reads either key's value.
+# FCM has no key and no secret: the server sends with the runtime service account's own token from
+# the metadata server, and FCM_PROJECT_ID (below, or from the shell) names the app's Firebase
+# project, in which caddie-runtime holds the role Firebase Cloud Messaging API Admin (step 7a of
+# docs/OPERATOR_CHECKLIST.md). Without the secret and the project id the app deploys with
+# push.apns and push.fcm false. A third-party operator never creates the secret and leaves
+# FCM_PROJECT_ID empty. This script never reads the APNs key's value.
 #
 # GitHub import: when the secret caddie-github-token exists (a read-only public-scope token, see
 # docs/CONTRACT.md), it is mounted as GITHUB_TOKEN; without it the server calls GitHub
@@ -58,7 +60,9 @@ VAPID_PUBLIC_SECRET="caddie-vapid-public"
 GITHUB_SECRET="caddie-github-token"
 APNS_KEY_SECRET="caddie-apns-key"
 APNS_IDS_SECRET="caddie-apns-ids"
-FCM_SECRET="caddie-fcm-service-account"
+# The Firebase project of the Android app (not a secret). Set it here once step 7a is done, so every
+# deploy keeps FCM on; empty deploys with push.fcm false.
+FCM_PROJECT_ID="${FCM_PROJECT_ID:-}"
 APNS_BUNDLE_ID="${APNS_BUNDLE_ID:-app.conferencecaddie}"
 BLE_MASTER_SECRET="caddie-ble-master"
 BLE_NEAR_RSSI="${BLE_NEAR_RSSI:--75}"
@@ -95,7 +99,9 @@ MOD_TIMEOUT_MS="3000"
 
 cd "$(dirname "$0")/.."
 
-# The runtime identity is always the dedicated caddie-runtime service account. It holds no project-level roles.
+# The runtime identity is always the dedicated caddie-runtime service account. It holds no
+# project-level roles in this project; on the official deployment with FCM it holds Firebase Cloud
+# Messaging API Admin on the Firebase project (step 7a of docs/OPERATOR_CHECKLIST.md), nothing else.
 RUNTIME_SA="caddie-runtime@$PROJECT.iam.gserviceaccount.com"
 
 ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI,PEOPLE_SEMANTIC_MIN_SIMILARITY=$PEOPLE_SEMANTIC_MIN_SIMILARITY,PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY,PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY"
@@ -142,11 +148,15 @@ if gcloud secrets describe "$APNS_KEY_SECRET" --project "$PROJECT" --quiet >/dev
 else
   echo "No $APNS_KEY_SECRET secret: deploying without APNs push (push.apns false)." >&2
 fi
-if gcloud secrets describe "$FCM_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
-  SECRETS="$SECRETS,FCM_SERVICE_ACCOUNT_JSON=$FCM_SECRET:latest"
-  RUNTIME_SECRETS+=("$FCM_SECRET")
+# FCM through the runtime service account: only the project id is passed, never a key.
+if [ -n "$FCM_PROJECT_ID" ]; then
+  if ! [[ "$FCM_PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+    echo "FCM_PROJECT_ID must be a Google Cloud project id; see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
+    exit 1
+  fi
+  ENV_VARS="$ENV_VARS,FCM_PROJECT_ID=$FCM_PROJECT_ID"
 else
-  echo "No $FCM_SECRET secret: deploying without FCM push (push.fcm false)." >&2
+  echo "No FCM_PROJECT_ID: deploying without FCM push (push.fcm false)." >&2
 fi
 
 # The optional GitHub token raises the import's rate limit; the server works without it.

@@ -51,7 +51,7 @@ export const TEST_ENV = {
   ES_RULES_INDEX: 'caddie-people-rules',
   MOD_CLASSIFIER: 'off',
 };
-for (const key of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'REF_SALT', 'ELASTISEARCH_API_KEY', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_SERVICE_ACCOUNT_JSON', 'FCM_PROJECT_ID']) delete process.env[key];
+for (const key of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'REF_SALT', 'ELASTISEARCH_API_KEY', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID']) delete process.env[key];
 Object.assign(process.env, TEST_ENV);
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);

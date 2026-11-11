@@ -44,7 +44,7 @@ Object.assign(process.env, {
   ES_RULES_INDEX: 'caddie-people-rules',
   MOD_CLASSIFIER: 'off',
 });
-for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI', 'BLE_MASTER_KEYRING', 'TALKS_BUNDLE_BASE', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_SERVICE_ACCOUNT_JSON', 'FCM_PROJECT_ID', 'PUSH_STUB_URL']) delete process.env[k];
+for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI', 'BLE_MASTER_KEYRING', 'TALKS_BUNDLE_BASE', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_STUB_URL']) delete process.env[k];
 Object.assign(process.env, {
   PUSH_TRANSPORT: 'stub',
   APNS_KEY_ID: 'TESTKEY001',
@@ -366,7 +366,7 @@ test('GET /api/capabilities answers a closed-valid capabilities document', async
   const result = validator('capabilities.v1')(doc, { closed: true });
   assert.equal(result.valid, true, formatErrors(result.errors));
   // Without a master keyring the server is in transition: the legacy tokens, with the mitigations.
-  // This run has no VAPID keys, so no Web Push either, and an APNs key but no FCM service account.
+  // This run has no VAPID keys, so no Web Push either, and an APNs key but no FCM project.
   const want = JSON.parse(readFileSync(path.join(ROOT, 'contracts/fixtures/capabilities/tier3-transition.json'), 'utf8'));
   want.ble.colocation_required = true;
   want.push.webpush = false;

@@ -1,7 +1,8 @@
-// Native push (server/native-push.mjs) on its own: the APNs provider token and the FCM OAuth
-// assertion (shape, signature, caching and renewal), the requests each channel sends, how each
-// answer of APNs and FCM is handled, the configuration and what it logs, the token formats, and
-// the real HTTP/2 transport against a local plain-text HTTP/2 server.
+// Native push (server/native-push.mjs) on its own: the APNs provider token (shape, signature,
+// caching and renewal) and the FCM access token from the metadata server (caching, renewal and
+// back-off), the requests each channel sends, how each answer of APNs and FCM is handled, the
+// configuration and what it logs, the token formats, and the real HTTP/2 transport against a local
+// plain-text HTTP/2 server.
 //
 // Run with `npm test`. Nothing here reaches Apple or Google: the channels get injected transports,
 // and the one real HTTP/2 test talks to a server on 127.0.0.1 (a port from 8702 to 8709). Every key
@@ -12,23 +13,24 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http2 from 'node:http2';
 
-const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_SERVICE_ACCOUNT_JSON', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
+const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 for (const k of SETTINGS) delete process.env[k];
 
 const ec = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const P8 = ec.privateKey.export({ type: 'pkcs8', format: 'pem' });
 const RSA_PEM = rsa.privateKey.export({ type: 'pkcs8', format: 'pem' });
-const PRIVATE_KEY_ID = crypto.randomBytes(20).toString('hex');
-const ACCOUNT = { type: 'service_account', project_id: 'caddie-test-project', private_key_id: PRIVATE_KEY_ID, private_key: RSA_PEM, client_email: 'push@caddie-test-project.iam.gserviceaccount.com' };
 const APNS_ENV = { APNS_KEY_ID: 'ABCDE12345', APNS_TEAM_ID: 'TEAM123456', APNS_KEY_P8: P8 };
-const FCM_ENV = { FCM_SERVICE_ACCOUNT_JSON: JSON.stringify(ACCOUNT) };
+// FCM needs no key: only the Firebase project id.
+const FCM_ENV = { FCM_PROJECT_ID: 'caddie-test-project' };
+// The access token the stand-in metadata server hands out; it must never reach a log line.
+const ACCESS_TOKEN_PREFIX = 'ya29.stand-in-access-token-';
 
-// The module reads this server's own settings when it is imported, and takes the two secrets out
-// of the environment.
+// The module reads this server's own settings when it is imported, and takes the APNs key out of
+// the environment.
 Object.assign(process.env, APNS_ENV, FCM_ENV);
 const native = await import('../server/native-push.mjs');
-const { createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, FCM_TOKEN_URL, FCM_SCOPE, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
+const { createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, METADATA_TOKEN_URL, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
 for (const k of SETTINGS) delete process.env[k];
 
 const APNS_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -52,7 +54,7 @@ function harness() {
 
 // No log line may carry key material, a token or a JWT.
 function assertClean(lines, extra = []) {
-  const secrets = [P8, RSA_PEM, APNS_TOKEN, FCM_TOKEN, PRIVATE_KEY_ID, ...extra];
+  const secrets = [P8, RSA_PEM, APNS_TOKEN, FCM_TOKEN, ACCESS_TOKEN_PREFIX, ...extra];
   for (const line of lines) {
     for (const s of secrets) {
       for (const piece of String(s).split(/\s+/).filter((p) => p.length >= 12 && !p.startsWith('-----'))) {
@@ -220,26 +222,28 @@ describe('APNs', () => {
   });
 });
 
-// A fetch for FCM: the OAuth token endpoint answers tokens t1, t2, ... valid for expiresIn
-// seconds; the send URL answers from a list (the last answer repeats).
+// A fetch for FCM: the metadata server answers tokens t1, t2, ... valid for expiresIn seconds (or
+// the answers in token, the last one repeating); the send URL answers from a list (the last answer
+// repeats).
 function fcmStub({ sends = [{ status: 200, body: { name: 'projects/caddie-test-project/messages/1' } }], token = [], expiresIn = 3600 } = {}) {
   const calls = [];
   let tokens = 0;
   let sent = 0;
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
-    if (url === FCM_TOKEN_URL) {
+    if (url === METADATA_TOKEN_URL) {
       const a = token[Math.min(tokens, token.length - 1)];
       tokens++;
+      if (a instanceof Error) throw a;
       if (a) return new Response(JSON.stringify(a.body ?? {}), { status: a.status });
-      return new Response(JSON.stringify({ access_token: `t${tokens}`, expires_in: expiresIn, token_type: 'Bearer' }), { status: 200 });
+      return new Response(JSON.stringify({ access_token: `${ACCESS_TOKEN_PREFIX}t${tokens}`, expires_in: expiresIn, token_type: 'Bearer' }), { status: 200 });
     }
     const a = sends[Math.min(sent, sends.length - 1)];
     sent++;
     if (a instanceof Error) throw a;
     return new Response(a.body === undefined ? null : JSON.stringify(a.body), { status: a.status });
   };
-  return { fetchImpl, calls, tokenCalls: () => calls.filter((c) => c.url === FCM_TOKEN_URL), sendCalls: () => calls.filter((c) => c.url !== FCM_TOKEN_URL) };
+  return { fetchImpl, calls, tokenCalls: () => calls.filter((c) => c.url === METADATA_TOKEN_URL), sendCalls: () => calls.filter((c) => c.url !== METADATA_TOKEN_URL) };
 }
 
 function fcmChannel(opts = {}, env = {}) {
@@ -250,24 +254,20 @@ function fcmChannel(opts = {}, env = {}) {
 }
 
 const fcmReg = (over = {}) => ({ platform: 'fcm', token: FCM_TOKEN, environment: 'production', ...over });
+const bearer = (n) => `Bearer ${ACCESS_TOKEN_PREFIX}t${n}`;
 const fcmError = (code, status, errorCode, extra = []) => ({ status: code, body: { error: { code, message: 'x', status, details: [...(errorCode ? [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode }] : []), ...extra] } } });
 const tokenViolation = { '@type': 'type.googleapis.com/google.rpc.BadRequest', fieldViolations: [{ field: 'message.token', description: 'The registration token is not a valid FCM registration token' }] };
 
 describe('FCM', () => {
-  test('the OAuth assertion is an RS256 JWT for the messaging scope, signed by the service account key', async () => {
+  test('the access token is the runtime service account\'s, from the metadata server, with no key', async () => {
     const { push, tokenCalls } = fcmChannel();
     assert.equal(await push.send(fcmReg()), 'sent');
     const [call] = tokenCalls();
-    assert.equal(call.init.method, 'POST');
-    assert.equal(call.init.headers['Content-Type'], 'application/x-www-form-urlencoded');
-    const form = new URLSearchParams(call.init.body);
-    assert.equal(form.get('grant_type'), 'urn:ietf:params:oauth:grant-type:jwt-bearer');
-    const [h, c, s] = form.get('assertion').split('.');
-    assert.deepEqual(decode(h), { alg: 'RS256', typ: 'JWT', kid: PRIVATE_KEY_ID });
-    const iat = Math.floor(T0 / 1000);
-    assert.deepEqual(decode(c), { iss: ACCOUNT.client_email, scope: 'https://www.googleapis.com/auth/firebase.messaging', aud: 'https://oauth2.googleapis.com/token', iat, exp: iat + 3600 });
-    assert.equal(FCM_SCOPE, 'https://www.googleapis.com/auth/firebase.messaging');
-    assert.equal(crypto.verify('sha256', Buffer.from(`${h}.${c}`), rsa.publicKey, Buffer.from(s, 'base64url')), true);
+    assert.equal(call.url, 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token');
+    assert.equal(call.init.method, undefined, 'a GET');
+    assert.equal(call.init.body, undefined);
+    assert.deepEqual(call.init.headers, { 'Metadata-Flavor': 'Google' });
+    assert.ok(call.init.signal instanceof AbortSignal, 'the token request has a timeout');
   });
 
   test('the send: the project URL, the access token, and the generic alert with a 600 s TTL at normal priority', async () => {
@@ -277,7 +277,7 @@ describe('FCM', () => {
     assert.equal(call.url, 'https://fcm.googleapis.com/v1/projects/caddie-test-project/messages:send');
     assert.equal(call.url, fcmSendUrl('caddie-test-project'));
     assert.equal(call.init.method, 'POST');
-    assert.deepEqual(call.init.headers, { Authorization: 'Bearer t1', 'Content-Type': 'application/json' });
+    assert.deepEqual(call.init.headers, { Authorization: bearer(1), 'Content-Type': 'application/json' });
     assert.equal(call.init.body, fcmBytes(FCM_TOKEN), 'the exact bytes: the token, the constant alert and the deep link, nothing else');
     assert.deepEqual(JSON.parse(call.init.body), {
       message: {
@@ -291,29 +291,29 @@ describe('FCM', () => {
     assert.ok(call.init.signal instanceof AbortSignal, 'every request has a timeout');
   });
 
-  test('FCM_PROJECT_ID overrides the service account project', async () => {
+  test('FCM_PROJECT_ID names the project the messages are sent through', async () => {
     const { push, sendCalls } = fcmChannel({}, { FCM_PROJECT_ID: 'caddie-other-project' });
     await push.send(fcmReg());
     assert.equal(sendCalls()[0].url, 'https://fcm.googleapis.com/v1/projects/caddie-other-project/messages:send');
   });
 
-  test('the access token is cached until five minutes before it expires, and concurrent sends share one request', async () => {
+  test('the access token is cached until a minute before it expires, and concurrent sends share one request', async () => {
     const { push, tokenCalls, sendCalls, clock } = fcmChannel();
     await Promise.all([push.send(fcmReg()), push.send(fcmReg()), push.send(fcmReg())]);
     assert.equal(tokenCalls().length, 1, 'one token request for three concurrent sends');
-    clock.t += 54 * MIN;
+    clock.t += 58 * MIN;
     await push.send(fcmReg());
-    assert.equal(tokenCalls().length, 1, 'still cached at 54 minutes of 60');
+    assert.equal(tokenCalls().length, 1, 'still cached at 58 minutes of 60');
     clock.t += 1 * MIN;
     await push.send(fcmReg());
-    assert.equal(tokenCalls().length, 2, 'renewed at 55 minutes');
-    assert.deepEqual(sendCalls().map((c) => c.init.headers.Authorization), ['Bearer t1', 'Bearer t1', 'Bearer t1', 'Bearer t1', 'Bearer t2']);
+    assert.equal(tokenCalls().length, 2, 'renewed at 59 minutes');
+    assert.deepEqual(sendCalls().map((c) => c.init.headers.Authorization), [bearer(1), bearer(1), bearer(1), bearer(1), bearer(2)]);
   });
 
   test('401 renews the access token and retries once', async () => {
     const ok = fcmChannel({ sends: [fcmError(401, 'UNAUTHENTICATED'), { status: 200, body: {} }] });
     assert.equal(await ok.push.send(fcmReg()), 'sent');
-    assert.deepEqual(ok.sendCalls().map((c) => c.init.headers.Authorization), ['Bearer t1', 'Bearer t2']);
+    assert.deepEqual(ok.sendCalls().map((c) => c.init.headers.Authorization), [bearer(1), bearer(2)]);
     assert.deepEqual(ok.lines, []);
     const again = fcmChannel({ sends: [fcmError(401, 'UNAUTHENTICATED')] });
     assert.equal(await again.push.send(fcmReg()), 'failed');
@@ -329,7 +329,7 @@ describe('FCM', () => {
     }
   });
 
-  test('a 404 without UNREGISTERED (a wrong project) and an INVALID_ARGUMENT on another field keep the registration', async () => {
+  test('a 404 without UNREGISTERED (a wrong project) and an INVALID_ARGUMENT that does not name the token keep the registration', async () => {
     const otherField = { '@type': 'type.googleapis.com/google.rpc.BadRequest', fieldViolations: [{ field: 'message.android.ttl', description: 'x' }] };
     for (const [answer, line] of [
       [fcmError(404, 'NOT_FOUND'), 'Native push failed: fcm 404 NOT_FOUND'],
@@ -348,21 +348,48 @@ describe('FCM', () => {
     }
   });
 
-  test('a refused or broken token request fails the push and logs only its status', async () => {
-    const refused = fcmChannel({ token: [{ status: 400, body: { error: 'invalid_grant', error_description: `bad ${PRIVATE_KEY_ID}` } }] });
+  test('a refused or broken token request fails the push and logs only its status or error class', async () => {
+    const refused = fcmChannel({ token: [{ status: 403, body: { error: 'forbidden', error_description: `bad ${ACCESS_TOKEN_PREFIX}x` } }] });
     assert.equal(await refused.push.send(fcmReg()), 'failed');
     assert.equal(refused.sendCalls().length, 0);
-    assert.deepEqual(refused.lines, ['Native push failed: fcm token 400']);
+    assert.deepEqual(refused.lines, ['Native push failed: fcm token 403']);
     const empty = fcmChannel({ token: [{ status: 200, body: { token_type: 'Bearer' } }] });
     assert.equal(await empty.push.send(fcmReg()), 'failed');
     assert.deepEqual(empty.lines, ['Native push failed: fcm token invalid response']);
+    const nowhere = fcmChannel({ token: [Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } })] });
+    assert.equal(await nowhere.push.send(fcmReg()), 'failed', 'no metadata server, as on a laptop');
+    assert.deepEqual(nowhere.lines, ['Native push failed: fcm token ENOTFOUND']);
     const down = fcmChannel({ sends: [Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } })] });
     assert.equal(await down.push.send(fcmReg()), 'failed');
     assert.deepEqual(down.lines, ['Native push failed: fcm ENOTFOUND']);
     const slow = fcmChannel({ sends: [new DOMException('The operation was aborted due to timeout', 'TimeoutError')] });
     assert.equal(await slow.push.send(fcmReg()), 'failed');
     assert.deepEqual(slow.lines, ['Native push failed: fcm timeout']);
-    assertClean([...refused.lines, ...empty.lines, ...down.lines, ...slow.lines]);
+    assertClean([...refused.lines, ...empty.lines, ...nowhere.lines, ...down.lines, ...slow.lines]);
+  });
+
+  test('after a failed token request no other is made for a minute: sends fail at once and keep their registrations', async () => {
+    const { push, lines, clock, tokenCalls, sendCalls } = fcmChannel({ token: [{ status: 500, body: {} }, null] });
+    // Two concurrent sends share the failed request.
+    assert.deepEqual(await Promise.all([push.send(fcmReg()), push.send(fcmReg())]), ['failed', 'failed']);
+    assert.equal(tokenCalls().length, 1);
+    clock.t += 59_000;
+    assert.equal(await push.send(fcmReg()), 'failed', 'failed, not gone: the registration is kept');
+    assert.equal(tokenCalls().length, 1, 'no token request during the back-off');
+    assert.equal(sendCalls().length, 0);
+    clock.t += 1_000;
+    assert.equal(await push.send(fcmReg()), 'sent', 'a minute later the token is asked for again');
+    assert.equal(tokenCalls().length, 2);
+    assert.deepEqual(lines, ['Native push failed: fcm token 500', 'Native push failed: fcm token 500', 'Native push failed: fcm token backoff']);
+    // A later failure starts a new back-off.
+    const again = fcmChannel({ token: [null, { status: 503, body: {} }, null], expiresIn: 120 });
+    assert.equal(await again.push.send(fcmReg()), 'sent');
+    again.clock.t += 61_000;
+    assert.equal(await again.push.send(fcmReg()), 'failed');
+    again.clock.t += 30_000;
+    assert.equal(await again.push.send(fcmReg()), 'failed');
+    assert.equal(again.tokenCalls().length, 2);
+    assert.deepEqual(again.lines, ['Native push failed: fcm token 503', 'Native push failed: fcm token backoff']);
   });
 });
 
@@ -408,7 +435,7 @@ describe('both channels', () => {
 describe('configuration', () => {
   test('nothing set: both channels off, and nothing is logged', () => {
     const h = harness();
-    const push = createNativePush({ APNS_BUNDLE_ID: 'app.conferencecaddie', FCM_PROJECT_ID: 'caddie-test-project' }, { log: h.log });
+    const push = createNativePush({ APNS_BUNDLE_ID: 'app.conferencecaddie' }, { log: h.log });
     assert.deepEqual([push.apns, push.fcm], [false, false]);
     assert.deepEqual(h.lines, []);
   });
@@ -445,33 +472,24 @@ describe('configuration', () => {
     }
   });
 
-  test('unusable FCM settings keep FCM off with one line that names the setting and never the value', () => {
-    const json = (over) => JSON.stringify({ ...ACCOUNT, ...over });
-    const cases = [
-      // JSON.parse would quote the text around the error; the line must not.
-      [{ FCM_SERVICE_ACCOUNT_JSON: `{"private_key": "${RSA_PEM.slice(30, 90)}" oops}` }, 'FCM push is off: FCM_SERVICE_ACCOUNT_JSON is not JSON.'],
-      [{ FCM_SERVICE_ACCOUNT_JSON: JSON.stringify([ACCOUNT]) }, 'FCM push is off: FCM_SERVICE_ACCOUNT_JSON is not a JSON object.'],
-      [{ FCM_SERVICE_ACCOUNT_JSON: json({ client_email: 'not an email' }) }, 'FCM push is off: FCM_SERVICE_ACCOUNT_JSON has no usable client_email.'],
-      [{ FCM_SERVICE_ACCOUNT_JSON: json({ project_id: undefined }) }, 'FCM push is off: FCM_SERVICE_ACCOUNT_JSON has no usable project_id.'],
-      [{ FCM_SERVICE_ACCOUNT_JSON: json({}), FCM_PROJECT_ID: 'Bad_Project' }, 'FCM push is off: FCM_PROJECT_ID is not a project id.'],
-      [{ FCM_SERVICE_ACCOUNT_JSON: json({ private_key: P8 }) }, 'FCM push is off: FCM_SERVICE_ACCOUNT_JSON has no usable private_key (an RSA private key).'],
-      [{ FCM_SERVICE_ACCOUNT_JSON: json({ private_key: RSA_PEM.slice(0, 200) }) }, 'FCM push is off: FCM_SERVICE_ACCOUNT_JSON has no usable private_key (an RSA private key).'],
-    ];
-    for (const [env, line] of cases) {
+  test('an unusable FCM_PROJECT_ID keeps FCM off with one line that names the setting and never the value', () => {
+    for (const value of ['Bad_Project', 'abc', 'caddie test project', '1caddie-project', `${'a'.repeat(31)}`, 'caddie-project-']) {
       const h = harness();
-      const push = createNativePush(env, { log: h.log });
-      assert.equal(push.fcm, false, line);
-      assert.deepEqual(h.lines, [line]);
-      assertClean(h.lines);
-      assert.equal(fcmConfigFrom(env).config, undefined);
+      const push = createNativePush({ FCM_PROJECT_ID: value }, { log: h.log });
+      assert.equal(push.fcm, false, value);
+      assert.deepEqual(h.lines, ['FCM push is off: FCM_PROJECT_ID is not a project id.']);
+      assert.equal(fcmConfigFrom({ FCM_PROJECT_ID: value }).config, undefined);
     }
+    assert.deepEqual(fcmConfigFrom({ FCM_PROJECT_ID: 'caddie-test-project' }), { config: { projectId: 'caddie-test-project' } });
+    assert.deepEqual(fcmConfigFrom({}), { config: null });
+    // A service account key is not a setting any more: it turns nothing on.
+    assert.deepEqual(fcmConfigFrom({ FCM_SERVICE_ACCOUNT_JSON: '{"project_id":"caddie-test-project"}' }), { config: null });
   });
 
-  test('this server read its settings at import and took the two secrets out of the environment', () => {
+  test('this server read its settings at import and took the APNs key out of the environment', () => {
     assert.equal(native.NATIVE_PUSH.apns, true);
     assert.equal(native.NATIVE_PUSH.fcm, true);
     assert.equal(process.env.APNS_KEY_P8, undefined);
-    assert.equal(process.env.FCM_SERVICE_ACCOUNT_JSON, undefined);
   });
 });
 
@@ -490,11 +508,10 @@ test('token formats: APNs hex of 32 to 100 bytes, lowercased; FCM base64url with
   assert.equal(nativeTokenOf('webpush', FCM_TOKEN), null);
 });
 
-test('signJwt: ES256 signatures are 64 bytes and RS256 ones verify with the public key', () => {
+test('signJwt: ES256 signatures are 64 bytes and verify with the public key', () => {
   const es = signJwt({ alg: 'ES256', kid: 'K' }, { a: 1 }, ec.privateKey).split('.');
   assert.equal(Buffer.from(es[2], 'base64url').length, 64);
-  const rs = signJwt({ alg: 'RS256', typ: 'JWT' }, { a: 1 }, rsa.privateKey).split('.');
-  assert.equal(crypto.verify('sha256', Buffer.from(`${rs[0]}.${rs[1]}`), rsa.publicKey, Buffer.from(rs[2], 'base64url')), true);
+  assert.equal(crypto.verify('sha256', Buffer.from(`${es[0]}.${es[1]}`), { key: ec.publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(es[2], 'base64url')), true);
 });
 
 // ---------------------------------------------------------------------------------------------
