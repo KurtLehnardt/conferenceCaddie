@@ -5,6 +5,7 @@ import android.app.job.JobScheduler
 import android.app.job.JobService
 import app.conferencecaddie.shared.people.BackgroundNudges
 import app.conferencecaddie.shared.people.PeopleAvailability
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,7 +30,14 @@ class BackgroundNudgeJobService : JobService() {
 
     override fun onStartJob(params: JobParameters): Boolean {
         run = scope.launch {
-            runCheck()
+            try {
+                runCheck()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // A database or secure store that fails now must not end the process; the next
+                // period tries again. Nothing is logged, because messages can carry people data.
+            }
             // A stopped job is already finished as far as the system is concerned.
             if (isActive) jobFinished(params, false)
         }
@@ -54,7 +62,14 @@ class BackgroundNudgeJobService : JobService() {
         // reports foreground itself when it starts.
         val controller = CaddiePeople.controller(app)
         if (!CaddieApplication.hasStartedActivity) controller.setForeground(false)
-        val ready = withTimeoutOrNull(READY_WAIT_MS) { controller.state.first { it.availability == PeopleAvailability.Ready } } ?: return
+        val ready = withTimeoutOrNull(READY_WAIT_MS) { controller.state.first { it.availability == PeopleAvailability.Ready } }
+        if (ready == null) {
+            // The backend now offers no people features (another backend was chosen): the job is
+            // not wanted any more. Anything else (still loading, no conference yet) may pass, so the
+            // job stays for its next period.
+            if (controller.state.value.availability == PeopleAvailability.Off) getSystemService(JobScheduler::class.java).cancel(BackgroundNudgeScheduler.JOB_ID)
+            return
+        }
         val now = controller.clock.now().toEpochMilliseconds()
         if (!BackgroundNudges.wanted(ready, now, BackgroundNudgeScheduler.notificationsAllowed(app))) {
             getSystemService(JobScheduler::class.java).cancel(BackgroundNudgeScheduler.JOB_ID)
