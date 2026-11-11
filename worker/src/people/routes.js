@@ -98,10 +98,15 @@ function checkTopics(ctx, ids, name, stored = []) {
   return kept.filter((id) => labels.has(id));
 }
 
+// The shared talk ids to store. An id of another conference is rejected. An id of this conference
+// that is not in its schedule is dropped instead of rejected: a talk the device shared for can leave
+// the schedule (a cancelled session or a takedown, removed by the next ingest), and the app sends its
+// stored list with every write, so rejecting it would block every profile write until the person
+// stopped sharing for everything. The answer echoes the list that was stored, which the app keeps.
 function checkSharedTalks(ctx, ids) {
-  if (!ids.length) return;
+  if (!ids.length) return ids;
   if (!ids.every((id) => id.startsWith(`${ctx.slug}:`))) throw bad('shared_talk_ids must be talks of this conference');
-  if (!ids.every((id) => ctx.store.talk(id))) throw bad('shared_talk_ids contains an unknown talk');
+  return ids.filter((id) => ctx.store.talk(id));
 }
 
 // The report flags of a profile that is being created: reports outlive the profile row, so a
@@ -120,7 +125,7 @@ async function putProfile(ctx, req) {
   const body = await readJson(req, PUT_KEYS);
   if (typeof body.open_to_meet !== 'boolean') throw bad('open_to_meet must be a boolean');
   const profile = validateProfile(body.profile);
-  const shared = idList(body.shared_talk_ids, 'shared_talk_ids', 50, TALK_ID_RE);
+  const shared = checkSharedTalks(ctx, idList(body.shared_talk_ids, 'shared_talk_ids', 50, TALK_ID_RE));
   const store = ctx.store;
   const own = await ownRow(ctx, device);
 
@@ -133,7 +138,6 @@ async function putProfile(ctx, req) {
   if (!ctx.conf.visible_until_ms || ctx.conf.visible_until_ms <= ctx.now) throw bad('conference has ended');
   profile.learn_topics = checkTopics(ctx, profile.learn_topics, 'learn_topics', own?.learn_topics ?? []);
   profile.speak_topics = checkTopics(ctx, profile.speak_topics, 'speak_topics', own?.speak_topics ?? []);
-  checkSharedTalks(ctx, shared);
 
   const fields = {
     ...profile,
