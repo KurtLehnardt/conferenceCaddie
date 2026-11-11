@@ -193,7 +193,10 @@ describe('the admin nonce table', { skip }, () => {
     }
   });
 
-  test('an object refuses a nonce whose first use was pruned: the timestamp is past its clock window', async () => {
+  // The object's own clock check alone, with no Worker in front: the next test does the same for the
+  // DirectoryDO. The end-to-end stalled-body tests below go through the Worker, whose re-check after
+  // the body read refuses first, so they guard the two checks together.
+  test('a ConferenceDO refuses a nonce whose first use was pruned: the timestamp is past its clock window', async () => {
     const state = fakeState();
     const obj = new ConferenceDO(state, { EMBED_FAKE: '1' });
     const stats = countHandler('GET', '/admin/stats');
@@ -217,7 +220,33 @@ describe('the admin nonce table', { skip }, () => {
     }
   });
 
-  test('a replay whose body is held back past the nonce retention is refused, and the handler runs once', async () => {
+  test('a DirectoryDO refuses a nonce whose first use was pruned: the timestamp is past its clock window', async () => {
+    const sql = [];
+    const state = fakeState({ onExec: (q) => sql.push(q) });
+    const dir = new DirectoryDO(state, {});
+    const upserts = () => sql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
+    const send = (nonce, ts) => dir.fetch(new Request('https://directory.internal/admin/conferences', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-caddie-admin-nonce': nonce, 'x-caddie-admin-ts': String(ts) },
+      body: JSON.stringify({ conferences: [conf(SLUG)] }),
+    }));
+    const T = 1_900_000_000;
+    const first = 'f'.repeat(22);
+    await withFixedClock(T * 1000, async (setNow) => {
+      assert.equal((await send(first, T)).status, 200);
+      setNow((T + 1000) * 1000);
+      assert.equal((await send('p'.repeat(22), T + 1000)).status, 200); // prunes the first nonce
+      assert.ok(!nonces(state).some((r) => r.nonce === first));
+      const again = await send(first, T);
+      assert.deepEqual([again.status, await again.json()], [401, { error: 'admin_skew' }]);
+    });
+    assert.equal(upserts(), 2);
+  });
+
+  test('a ConferenceDO replay whose body is held back past the nonce retention is refused, and the handler runs once (Worker re-check and object check together)', async () => {
+    // Through the Worker: its clock re-check after the body read refuses this request before it
+    // reaches the object, so this guards both layers together; the object's check alone is the
+    // direct test above.
     const embed = countHandler('POST', '/admin/embed-pending');
     try {
       await withClock(async (setOffset) => {
@@ -251,7 +280,9 @@ describe('the admin nonce table', { skip }, () => {
     }
   });
 
-  test('the same on PUT /admin/conferences: a held-back replay is refused, and the directory upserts only for the request that pruned', async () => {
+  test('the same on PUT /admin/conferences: a held-back replay is refused, and the directory upserts only for the request that pruned (Worker re-check and object check together)', async () => {
+    // Through the Worker, as the ConferenceDO test above; the DirectoryDO's own check alone is the
+    // direct pruned-nonce test.
     await withClock(async (setOffset) => {
       const ctx = realEnv();
       const upserts = () => ctx.directorySql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;

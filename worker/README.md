@@ -264,17 +264,19 @@ The clients that sign are `worker/ingest/push-ingest.mjs`, `topics-local.mjs` an
 `worker/scripts/moderation.mjs` and the smoke (with `SMOKE_ADMIN_AUTH=signed`); the `caddie-admin`
 CLI signs with the same module once it gains its Worker backend. They read the token from
 `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`, and their `--api` base must be the Worker's origin, with no
-path, over https (plain http for localhost only). They never follow a redirect: fetch drops only
-`Authorization` on a cross-origin redirect, so following one would hand the signed header and the
-Access secret to another origin; a 3xx answer is an error at once, not retried. A retry is signed
-afresh with a new nonce and timestamp, so it is a new request to the Worker, and every admin route
-handles a repeated request idempotently, with one exception: `POST /admin/moderation` with
-`"action": "delete"` answers 404 when the target is already gone, so a delete whose first answer was
-lost reports 404 on the retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are
-set, `adminClient` and `moderation.mjs` also send them as `CF-Access-Client-Id` and
-`CF-Access-Client-Secret`, for a Cloudflare Access application in front of `/admin/*`; the Worker
-does not check them, and the signature stays the check that matters. To rotate the token without an
-outage, see docs/FREE_HOSTING.md (Operations runbook).
+path, over https (plain http for localhost only). `adminClient` and `moderation.mjs` never follow a
+redirect: fetch drops only `Authorization` on a cross-origin redirect, so following one would hand
+the signed header and the Access secret to another origin; a 3xx answer is an error as soon as its
+headers arrive, never retried. The smoke (`scripts/smoke.mjs`) still follows redirects until its own
+change lands, so point it only at the Worker's own origin. A retry is signed afresh with a new nonce
+and timestamp, so it is a new request to the Worker, and every admin route handles a repeated
+request idempotently, with one exception: `POST /admin/moderation` with `"action": "delete"` answers
+404 when the target is already gone, so a delete whose first answer was lost reports 404 on the
+retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `adminClient` and
+`moderation.mjs` also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
+Cloudflare Access application in front of `/admin/*`; the Worker does not check them, and the
+signature stays the check that matters. To rotate the token without an outage, see
+docs/FREE_HOSTING.md (Operations runbook).
 
 A failed signature takes one token from a bucket of ten per minute per `CF-Connecting-IP`, and an
 empty bucket makes the Worker answer 404 before it computes anything; valid requests never take

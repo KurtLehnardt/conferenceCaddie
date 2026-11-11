@@ -45,8 +45,35 @@ function recorder(answers = []) {
   });
 }
 after(() => {
-  for (const s of servers) s.close();
+  for (const s of servers) {
+    s.closeAllConnections?.();
+    s.close();
+  }
 });
+
+// A server whose answers send their headers and one byte of a 100-byte body, then, in turn,
+// stall (`stall`), break the connection (`break`), or send a whole JSON body (`ok`), as the next
+// entry of `plan` says ({ status, then }).
+function halfBody(plan) {
+  const hits = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url);
+    req.resume();
+    const { status, then } = plan.shift() ?? { status: 200, then: 'ok' };
+    if (then === 'ok') {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(status < 300 ? { ok: true } : { error: 'not_found' }));
+      return;
+    }
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': '100', ...(status >= 300 && status < 400 ? { Location: 'http://127.0.0.1:9/elsewhere' } : {}) });
+    res.write('{');
+    if (then === 'break') setTimeout(() => res.socket?.destroy(), 20);
+  });
+  servers.push(server);
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({ hits, base: `http://127.0.0.1:${server.address().port}` }));
+  });
+}
 
 // A server on localhost (another origin than the recorder's 127.0.0.1) that answers every request
 // with `status` and a Location on `target`, and counts the requests it gets.
@@ -145,6 +172,24 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
     assert.equal(target.seen.length, 0, 'the redirect target got a request');
   });
 
+  test('a redirect whose body stalls is refused at once, before the body is read, and sent once', async () => {
+    const server = await halfBody([{ status: 302, then: 'stall' }, { status: 302, then: 'stall' }, { status: 302, then: 'stall' }]);
+    const admin = adminClient(server.base, KEY, { retries: 2, timeoutMs: 300, env: {} });
+    const started = Date.now();
+    await assert.rejects(admin('GET', `/admin/stats?event=${SLUG}`), (e) => e instanceof AdminError && e.status === 302 && /a redirect\. Admin calls never follow redirects/.test(e.message));
+    assert.equal(server.hits.length, 1);
+    assert.ok(Date.now() - started < 300, 'did not wait for the stalled body');
+  });
+
+  test('any other answer whose body breaks is still retried as a network failure', async () => {
+    const server = await halfBody([{ status: 200, then: 'break' }, { status: 200, then: 'ok' }, { status: 404, then: 'break' }, { status: 404, then: 'ok' }]);
+    const admin = adminClient(server.base, KEY, { retries: 1, timeoutMs: 2_000, env: {} });
+    assert.deepEqual(await admin('GET', `/admin/stats?event=${SLUG}`), { ok: true });
+    assert.equal(server.hits.length, 2);
+    await assert.rejects(admin('GET', `/admin/stats?event=${SLUG}`), (e) => e instanceof AdminError && e.status === 404);
+    assert.equal(server.hits.length, 4);
+  });
+
   test('a request the signer refuses is a usage error before anything is sent, and the message holds no key', async () => {
     const { seen, base } = await recorder();
     const refused = [
@@ -210,6 +255,16 @@ describe('worker/scripts/moderation.mjs', () => {
     assert.match(r.stderr, /status 307, a redirect\. Admin calls never follow redirects/);
     assert.equal(from.hits.length, 1);
     assert.equal(target.seen.length, 0);
+  });
+
+  test('refuses a redirect whose body stalls without waiting for the body', { timeout: 10_000 }, async () => {
+    const server = await halfBody([{ status: 302, then: 'stall' }]);
+    const started = Date.now();
+    const r = await moderation(server.base, ['--hidden']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /status 302, a redirect\. Admin calls never follow redirects/);
+    assert.equal(server.hits.length, 1);
+    assert.ok(Date.now() - started < 8_000, 'the 30-second fetch timeout was not waited for');
   });
 
   test('plain http is refused for anything but localhost', async () => {

@@ -194,8 +194,8 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
       } catch (e) {
         throw new UsageError(`${where}: ${e.message}`);
       }
+      const networkError = (e) => `${where}: ${e.name === 'TimeoutError' ? 'timeout' : 'network error'}`;
       let res;
-      let text = '';
       try {
         res = await fetch(signed.url, {
           method,
@@ -208,14 +208,25 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
           redirect: 'manual',
           signal: AbortSignal.timeout(timeoutMs),
         });
-        text = await res.text();
       } catch (e) {
-        lastError = `${where}: ${e.name === 'TimeoutError' ? 'timeout' : 'network error'}`;
+        lastError = networkError(e);
         if (attempt < retries) await sleep(1000 * 2 ** attempt);
         continue;
       }
+      // A redirect is refused as soon as its headers arrive, before any body is read, so a body
+      // that stalls or breaks cannot turn it into a retried network failure.
       if (isRedirect(res)) {
+        res.body?.cancel().catch(() => {});
         throw new AdminError(`${where}: status ${res.status}, a redirect. Admin calls never follow redirects; the API base must be the Worker's own origin.`, res.status);
+      }
+      // Any other answer whose body stalls or breaks is retried as a network failure, as before.
+      let text;
+      try {
+        text = await res.text();
+      } catch (e) {
+        lastError = networkError(e);
+        if (attempt < retries) await sleep(1000 * 2 ** attempt);
+        continue;
       }
       if (res.ok) {
         try {
