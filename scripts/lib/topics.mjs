@@ -89,6 +89,31 @@ export function analyse(title, stop) {
  * Returns { topics: [{ topic_id, label, talk_count, rank, aliases }], talkTopics: Map talk_id -> [topic_id], dropped: [term] }.
  * Topic ids match ^[a-z0-9][a-z0-9-]{0,99}$; a candidate whose term gives no such id is dropped and logged.
  */
+/**
+ * The merge targets that are not candidates on their own but are with their aliases: a target that
+ * occurs in at least one title and, counting the talks that hold it or one of its aliases, reaches
+ * MIN_TALKS. Without this a merge loses its target when the target alone drops below MIN_TALKS (for
+ * example when a talk is cancelled), and the topic id changes from the target to the alias. The
+ * result is appended after the regular candidates, so it changes no other topic. Both builders use
+ * it (worker/ingest/topics-local.mjs too). termSets holds one Map or Set of terms per talk.
+ */
+export function mergeTargets(termSets, docCount, merge, already) {
+  const aliasesOf = new Map();
+  for (const [alias, canonical] of Object.entries(merge ?? {})) {
+    const target = canonical.replace(/-/g, ' ');
+    aliasesOf.set(target, [...(aliasesOf.get(target) ?? []), alias.replace(/-/g, ' ')]);
+  }
+  const sets = [...termSets];
+  const out = [];
+  for (const [target, aliases] of [...aliasesOf].sort((a, b) => cmp(a[0], b[0]))) {
+    if (already.has(target) || !(docCount.get(target) > 0)) continue;
+    let count = 0;
+    for (const terms of sets) if (terms.has(target) || aliases.some((a) => terms.has(a))) count++;
+    if (count >= MIN_TALKS) out.push({ term: target, count });
+  }
+  return out;
+}
+
 export function buildTopics({ talks, stoplistText, fixups = {}, log = () => {} }) {
   const fx = { rename: fixups.rename ?? {}, merge: fixups.merge ?? {}, remove: fixups.remove ?? [] };
   const stop = new Set([...ENGLISH_STOP, ...readStoplist(stoplistText)]);
@@ -105,6 +130,7 @@ export function buildTopics({ talks, stoplistText, fixups = {}, log = () => {} }
     .sort((a, b) => b[1] - a[1] || cmp(a[0], b[0]))
     .slice(0, CANDIDATES)
     .map(([term, count]) => ({ term, count }));
+  candidates.push(...mergeTargets(perTalk.values(), docCount, fx.merge, new Set(candidates.map((c) => c.term))));
   if (candidates.length === 0 && Object.keys(fx.merge).length === 0) {
     // A conference too small for any shared term has no topics; its talks have empty topic lists.
     return { topics: [], talkTopics: new Map(talks.map((t) => [t.talk_id, []])), dropped: [] };

@@ -190,3 +190,66 @@ test('ties between accented and kana labels are ordered the same way by both bui
   const order = [tie('Éclair', 'b'), tie('Zebra', 'a'), tie('éclair', 'a'), tie('Éclair', 'a')];
   assert.deepEqual(order.sort(compareTopics).map((t) => `${t.label}/${t.topic_id}`), ['Zebra/a', 'Éclair/a', 'Éclair/b', 'éclair/a']);
 });
+
+test('a merge target that reaches three talks only with its aliases stays the topic, in both builders', () => {
+  // "pipeline" occurs in two titles and "pipelines" in four: the merge keeps the id "pipeline",
+  // counting all six talks, instead of falling back to "pipelines" (KubeCon after a cancellation).
+  const titles = ['Pipeline security for clusters', 'Pipeline caching for clusters', 'Pipelines at scale for clusters', 'Faster pipelines for clusters', 'Pipelines without tears for clusters', 'Pipelines and secrets for clusters'];
+  const talks = titles.map((title, i) => ({ talk_id: `fx:${i + 1}`, title }));
+  const fixups = { rename: {}, merge: { pipelines: 'pipeline' }, remove: [] };
+  const worker = buildTopics(talks, { slug: 'fx', stop, fixups }).topics;
+  const bundle = buildBundleTopics({ talks, stoplistText: STOPLIST_TEXT, fixups }).topics;
+  for (const list of [worker, bundle]) {
+    const ids = list.map((t) => t.topic_id);
+    assert.ok(ids.includes('pipeline'), `pipeline kept: ${ids.join(', ')}`);
+    assert.ok(!ids.includes('pipelines'), 'the alias is not a topic of its own');
+    assert.equal(list.find((t) => t.topic_id === 'pipeline').talk_count, 6);
+  }
+  // A target that occurs in no title is not created by a merge, and the alias stays a topic of its own.
+  const none = talks.slice(2);
+  const workerNone = buildTopics(none, { slug: 'fx', stop, fixups }).topics;
+  const bundleNone = buildBundleTopics({ talks: none, stoplistText: STOPLIST_TEXT, fixups }).topics;
+  for (const list of [workerNone, bundleNone]) {
+    const ids = list.map((t) => t.topic_id);
+    assert.ok(!ids.includes('pipeline'), `no topic from a merge target that no title holds: ${ids.join(', ')}`);
+    assert.equal(list.find((t) => t.topic_id === 'pipelines')?.talk_count, 4, 'pipelines stands alone with its four talks');
+  }
+});
+
+test('a conference with no shared term gets an empty topic list in both builders', () => {
+  const talks = talksWith({ alpha: 2, beta: 2, gamma: 1 });
+  // Without fix-ups, and with a merge whose target no title holds (the bundle builder then takes
+  // its full path rather than the early return).
+  for (const fixups of [{ rename: {}, merge: {}, remove: [] }, { rename: {}, merge: { beta: 'delta' }, remove: [] }]) {
+    const worker = buildTopics(talks, { slug: SLUG, stop, fixups });
+    assert.deepEqual(worker.topics, []);
+    assert.deepEqual([...worker.assignments.values()], talks.map(() => []));
+    assert.ok(worker.warnings.some((w) => /no topics/.test(w)), worker.warnings.join(' | '));
+    const bundle = buildBundleTopics({ talks, stoplistText: STOPLIST_TEXT, fixups });
+    assert.deepEqual(bundle.topics, []);
+    assert.deepEqual([...bundle.talkTopics.values()], talks.map(() => []));
+  }
+});
+
+test('a rebuild that finds no topics never replaces a stored list unless allowEmpty is given', async () => {
+  const worker = fakeWorker();
+  await ingest(worker, talksWith({ alpha: 5, beta: 4 }));
+  assert.deepEqual(worker.served(), ['alpha', 'beta']);
+  const tiny = talksWith({ alpha: 1, beta: 2 });
+  await assert.rejects(resolveTopics(tiny, { slug: SLUG, admin: worker.admin, rebuild: true, stop }), /would replace the 2 stored topics; no talk or topic was sent/);
+  // resolveTopics only reads, so this holds with or without the refusal; the check that nothing was
+  // sent at all is in scripts/test/push-takedowns.test.mjs, at the pushEvent level.
+  assert.deepEqual(worker.served(), ['alpha', 'beta']);
+  // Without --rebuild-topics the stored list stays frozen, with the new counts.
+  const frozen = await resolveTopics(tiny, { slug: SLUG, admin: worker.admin, stop });
+  assert.equal(frozen.mode, 'frozen');
+  assert.deepEqual(frozen.topics.map((t) => [t.topic_id, t.talk_count]), [['beta', 2], ['alpha', 1]]);
+  const allowed = await resolveTopics(tiny, { slug: SLUG, admin: worker.admin, rebuild: true, allowEmpty: true, stop });
+  assert.equal(allowed.mode, 'built');
+  assert.deepEqual(allowed.topics, []);
+  // A conference with nothing stored takes the empty list without the flag.
+  const fresh = fakeWorker();
+  const first = await resolveTopics(tiny, { slug: SLUG, admin: fresh.admin, stop });
+  assert.equal(first.mode, 'built');
+  assert.deepEqual(first.topics, []);
+});
