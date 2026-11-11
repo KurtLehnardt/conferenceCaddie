@@ -1,11 +1,12 @@
 {
-  "about": "Test vectors for the X-Caddie-Admin v1 request signature (scripts/lib/admin-sign.mjs). The Worker verifier (worker/src/lib/admin-auth.js) and the CLI are tested against this one file. Three kinds of case: \"sign\" (signer input and the exact header it must produce), \"verify\" (what the verifier answers for a header, given the keys it holds and its clock) and \"reject\" (input the signer refuses before anything is sent). All times are Unix seconds. Keys are UTF-8 after trimming, never hex-decoded.",
+  "about": "Test vectors for the X-Caddie-Admin v1 request signature (scripts/lib/admin-sign.mjs). The Worker verifier (worker/src/lib/admin-auth.js) and the CLI are tested against this one file. Three kinds of case: \"sign\" (signer input and the exact header it must produce), \"verify\" (what the verifier answers for a header, given the keys it holds and its clock) and \"reject\" (input the signer refuses before anything is sent). All times are Unix seconds; `now` is Math.floor(Date.now() / 1000). Keys are UTF-8 after trimming, never hex-decoded. The signed path is new URL(path, base).pathname + search: the path must match path_re (one leading \"/\", no \"//\", no \"\\\", nothing that would be percent-encoded) and the query must match query_re, so both sides see the same bytes without any escaping rule; free text travels base64url-encoded under a key ending in 64. ts has no leading zero (header_re), so a raw-string verifier and Number() agree.",
   "version": "v1",
   "header_name": "X-Caddie-Admin",
   "header_format": "v1 <ts> <nonce> <bodySha256> <sig>",
-  "header_re": "^v1 (\\d{1,12}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$",
+  "header_re": "^v1 (0|[1-9]\\d{0,11}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$",
   "canonical_format": "caddie-admin-v1\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n",
   "query_re": "^[A-Za-z0-9_.:=&-]*$",
+  "path_re": "^\\/[A-Za-z0-9\\/_.-]*$",
   "empty_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "bodyless_methods": [
     "GET",
@@ -19,6 +20,7 @@
     "key2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
   },
   "verify_reasons": {
+    "_note": "Reasons are checked in this order: malformed, bodyless_body_hash, no_key, signature, skew. When several apply, any listed reason is acceptable; all but skew map to 404, and skew is 401 admin_skew.",
     "malformed": "the header is absent or does not match header_re (Worker: 404)",
     "bodyless_body_hash": "GET, HEAD or DELETE with a bodySha256 other than empty_body_sha256 (Worker: 404)",
     "no_key": "the Worker holds no usable key: ADMIN_TOKEN missing or shorter than 32 after trimming (Worker: 404)",
@@ -26,12 +28,16 @@
     "skew": "|now - ts| > skew_seconds, checked only after the signature matched (Worker: 401 admin_skew)"
   },
   "reject_reasons": {
-    "_note": "Each reject case names the UsageError.code the signer throws.",
+    "_note": "Each reject case names the UsageError.code the signer throws. These are all the codes the signer has.",
+    "path_charset": "the path does not match path_re, starts with \"//\", holds a \"\\\", is not absolute, or resolves to another origin than base",
     "query_charset": "the query string after \"?\" does not match query_re",
     "body_on_bodyless_method": "a body on GET, HEAD or DELETE",
     "key_too_short": "the key is missing or shorter than min_key_length after trimming",
     "body_type": "the body is neither a string nor bytes",
-    "method": "the method is missing"
+    "method": "the method is missing",
+    "nonce": "a nonce given to the signer (tests only) is not 22 base64url characters",
+    "ts": "the signing time is negative or longer than 12 digits",
+    "url": "the base is not a URL"
   },
   "cases": [
     {
@@ -360,6 +366,26 @@
       "canonical": "caddie-admin-v1\nPUT\n/admin/conferences\nb3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69\n1762848000\nI8j9K0l1M2n3O4p5Q6r7St\n",
       "sig": "33134beb5e032064755781b22d7b1e90759f7dc56ce5f9563abb4a6ae6504a11",
       "header": "v1 1762848000 I8j9K0l1M2n3O4p5Q6r7St b3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69 33134beb5e032064755781b22d7b1e90759f7dc56ce5f9563abb4a6ae6504a11"
+    },
+    {
+      "id": "get-trailing-question",
+      "kind": "sign",
+      "title": "A path ending in \"?\" with no query: the canonical path has no \"?\"",
+      "note": "new URL gives an empty search, so path_with_query is \"/admin/stats\", the same as get-no-query.",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/stats?",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/stats?",
+      "path_with_query": "/admin/stats",
+      "ts": 1762848000,
+      "nonce": "T9u0V1w2X3y4Z5a6B7c8De",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/stats\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nT9u0V1w2X3y4Z5a6B7c8De\n",
+      "sig": "78c7a64b9d09af7fb4a8f52b79b8d62f2236971fa59ae50916346c27188a0fa6",
+      "header": "v1 1762848000 T9u0V1w2X3y4Z5a6B7c8De e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 78c7a64b9d09af7fb4a8f52b79b8d62f2236971fa59ae50916346c27188a0fa6"
     },
     {
       "id": "v-ok",
@@ -892,6 +918,54 @@
       }
     },
     {
+      "id": "v-malformed-ts-leading-zero",
+      "kind": "verify",
+      "title": "A timestamp with a leading zero: malformed (a raw-string verifier and Number() must agree)",
+      "header": "v1 01762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-joined-twice",
+      "kind": "verify",
+      "title": "The header value sent twice and joined by the HTTP layer (\"<h>, <h>\"): malformed",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70, v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-bodysha-uppercase",
+      "kind": "verify",
+      "title": "An uppercase hex body hash: malformed (hex is lowercase)",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg BA5A2F12560FC7A9CAC1FF212193E7DE744965A1584359937AA41890795D3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
       "id": "reject-query-percent",
       "kind": "reject",
       "title": "q=a%20b: \"%\" is outside the query charset",
@@ -1050,6 +1124,138 @@
         "path": "/admin/stats"
       },
       "reject": "method"
+    },
+    {
+      "id": "reject-path-non-ascii",
+      "kind": "reject",
+      "title": "Non-ASCII in the path (it would be percent-encoded)",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/Zoë"
+      },
+      "reject": "path_charset"
+    },
+    {
+      "id": "reject-path-space",
+      "kind": "reject",
+      "title": "A space in the path (it would be percent-encoded)",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/a b"
+      },
+      "reject": "path_charset"
+    },
+    {
+      "id": "reject-path-double-slash",
+      "kind": "reject",
+      "title": "A path starting with \"//\" (it would name another host)",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "//admin/stats"
+      },
+      "reject": "path_charset"
+    },
+    {
+      "id": "reject-path-backslash",
+      "kind": "reject",
+      "title": "A backslash in the path (the URL parser would turn it into a slash)",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin\\stats"
+      },
+      "reject": "path_charset"
+    },
+    {
+      "id": "reject-path-relative",
+      "kind": "reject",
+      "title": "A path without a leading \"/\"",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "admin/stats"
+      },
+      "reject": "path_charset"
+    },
+    {
+      "id": "reject-path-absolute-url",
+      "kind": "reject",
+      "title": "A full URL instead of a path",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "https://caddie.example/admin/stats"
+      },
+      "reject": "path_charset"
+    },
+    {
+      "id": "reject-path-percent",
+      "kind": "reject",
+      "title": "A percent-encoded path",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/%2e%2e/stats"
+      },
+      "reject": "path_charset"
+    },
+    {
+      "id": "reject-nonce-bad",
+      "kind": "reject",
+      "title": "A nonce that is not 22 base64url characters (tests only; the signer draws its own)",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats",
+        "nonce": "short"
+      },
+      "reject": "nonce"
+    },
+    {
+      "id": "reject-ts-bad",
+      "kind": "reject",
+      "title": "A signing time out of range (tests only)",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats",
+        "now": -1000
+      },
+      "reject": "ts"
+    },
+    {
+      "id": "reject-url-bad",
+      "kind": "reject",
+      "title": "A base that is not a URL",
+      "input": {
+        "base": "not a url",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats"
+      },
+      "reject": "url"
     }
   ]
 }

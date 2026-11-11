@@ -393,7 +393,7 @@ const GLOBAL_HELP = [
   '  --backend <name>    backend from config.json (default: the config\'s "default")',
   '  --json              print one JSON object on stdout',
   '  --yes               run a destructive command for real (otherwise it previews)',
-  '  --confirm <target>  with --yes, the exact target, when there is no terminal to type it on',
+  '  --confirm <target>  with --yes, the exact target; replaces typing it, and is required off a terminal',
   '  --dry-run           preview only, even with --yes',
   '  -h, --help          this help',
   'Exit codes: 0 ok, 1 backend failure, 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on this tier.',
@@ -470,7 +470,8 @@ export async function main(argv, deps = {}) {
   try {
     return await run(argv, { env, stdout, stderr, d, secrets, redact });
   } catch (raw) {
-    const error = raw instanceof AdminError ? raw : new AdminError(raw?.message ?? String(raw));
+    // A UsageError of the signer or another module carries its own exitCode; anything else is 1.
+    const error = raw instanceof AdminError ? raw : Object.assign(new AdminError(raw?.message ?? String(raw)), Number.isInteger(raw?.exitCode) ? { exitCode: raw.exitCode, code: raw.exitCode === 2 ? 'usage' : 'failed' } : {});
     const message = redact(error.message);
     stderr.write(json
       ? `${JSON.stringify({ ok: false, error: error.code, message })}\n`
@@ -550,7 +551,8 @@ async function run(argv, ctx) {
     }
   };
 
-  let mode = 'dry-run';
+  // The mode the operator asked for, so a refused confirmation is audited as a refused run.
+  let mode = destructive && (values['dry-run'] || !values.yes) ? 'dry-run' : 'run';
   try {
     mode = await resolveMode({
       destructive,

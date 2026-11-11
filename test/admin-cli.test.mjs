@@ -613,3 +613,75 @@ describe('ATT-11, MOD-7, CONF-10 and --note', () => {
     assert.equal(unretire.calls[0].args.slug, SLUG);
   });
 });
+
+describe('round-1 fixes', () => {
+  test('a non-AdminError with an integer exitCode keeps it (the signer\'s UsageError is 2)', async () => {
+    const usage = Object.assign(new Error('The admin query string may hold only letters'), { exitCode: 2, code: 'query_charset' });
+    let r = await invoke(['stats', 'usage', '--json'], { behavior: throwing(usage) });
+    assert.equal(r.code, 2);
+    assert.deepEqual(JSON.parse(r.stderr), { ok: false, error: 'usage', message: 'The admin query string may hold only letters' });
+    r = await invoke(['stats', 'usage'], { behavior: throwing(Object.assign(new Error('x'), { exitCode: 5 })) });
+    assert.equal(r.code, 5);
+    for (const bad of [Object.assign(new Error('x'), { exitCode: 2.5 }), Object.assign(new Error('x'), { exitCode: '2' }), new Error('x')]) {
+      r = await invoke(['stats', 'usage'], { behavior: throwing(bad) });
+      assert.equal(r.code, 1);
+    }
+  });
+
+  test('on Windows a credential file is refused and the environment variable is the only source', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const file = join(home, 'es-admin-key');
+      writeFileSync(file, ES_KEY, { mode: 0o600 });
+      let r = await invoke(['stats', 'usage'], { env: { ELASTISEARCH_API_KEY: '' } });
+      assert.equal(r.code, 1);
+      assert.ok(r.stderr.includes('use the environment variable on Windows'), r.stderr);
+      assert.ok(r.stderr.includes('ELASTISEARCH_API_KEY'));
+      assert.equal(r.calls.length, 0);
+      r = await invoke(['stats', 'usage']);
+      assert.equal(r.code, 0);
+      assert.equal(r.calls[0].credential, ES_KEY);
+    } finally {
+      Object.defineProperty(process, 'platform', original);
+    }
+  });
+
+  test('SEC-13: a tier 2 api url must be https, or http to this machine only', async () => {
+    for (const api of ['http://api.example.test', 'http://10.0.0.5:8787', 'ftp://localhost']) {
+      writeConfig({ default: 't2', backends: { t2: { tier: 2, api } } });
+      const r = await invoke(['stats', 'usage']);
+      assert.equal(r.code, 2, api);
+      assert.ok(r.stderr.includes('https api url (http only for localhost)'), r.stderr);
+      assert.equal(r.calls.length, 0);
+    }
+    for (const api of ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://[::1]:8787', 'https://api.example.test']) {
+      writeConfig({ default: 't2', backends: { t2: { tier: 2, api } } });
+      const r = await invoke(['stats', 'usage']);
+      assert.equal(r.code, 0, api);
+    }
+  });
+
+  test('a refused confirmation is audited as the run the operator asked for', async () => {
+    let r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes', '--confirm', 'wrong']);
+    assert.equal(r.code, 3);
+    assert.deepEqual(JSON.parse(r.audit.trim()), { ts: '2026-11-11T10:00:00.000Z', backend: 't3', tier: 3, command: 'attendees delete', target: REF, mode: 'run', result: 'refused', flags: [] });
+    rmSync(join(home, 'audit.jsonl'));
+    r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes']);
+    assert.equal(r.code, 3);
+    assert.equal(JSON.parse(r.audit.trim()).mode, 'run');
+    rmSync(join(home, 'audit.jsonl'));
+    // Without --yes the preview is what was asked for, and a failure in it is audited as a dry-run.
+    r = await invoke(['attendees', 'delete', '--event', SLUG, REF], { behavior: throwing(new AdminError('boom')) });
+    assert.equal(r.code, 1);
+    assert.equal(JSON.parse(r.audit.trim()).mode, 'dry-run');
+  });
+
+  test('--confirm works on a terminal too, without a prompt', async () => {
+    let prompted = false;
+    const r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes', '--confirm', REF], { isTTY: true, prompt: async () => { prompted = true; return REF; } });
+    assert.equal(r.code, 0);
+    assert.equal(prompted, false);
+    assert.equal(r.calls[0].args.mode, 'run');
+  });
+});

@@ -18,6 +18,9 @@ export function readCredential({ env, envName, fileEnvName, defaultFile }) {
   if (fromEnv) return fromEnv;
 
   const file = env[fileEnvName] || resolve(configDir(env), defaultFile);
+  // Windows has no POSIX mode bits to check, so a credential file cannot be shown to be private
+  // there; the environment variable is the only source.
+  if (process.platform === 'win32') throw new AdminError(`no credential: set ${envName}; a credential file is not read on Windows, use the environment variable on Windows`);
   let st;
   try {
     st = statSync(file);

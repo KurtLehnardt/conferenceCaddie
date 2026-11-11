@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
 import {
-  BODYLESS_METHODS, EMPTY_BODY_SHA256, HEADER_NAME, HEADER_RE, MIN_KEY_LENGTH, NONCE_RE, QUERY_RE, SKEW_SECONDS, UsageError,
+  BODYLESS_METHODS, EMPTY_BODY_SHA256, HEADER_NAME, HEADER_RE, MIN_KEY_LENGTH, NONCE_RE, PATH_RE, QUERY_RE, SKEW_SECONDS, UsageError,
   bodyMatches, canonicalString, canonicalUrl, parseAdminHeader, randomNonce, signAdminRequest, verifyAdminSignature,
 } from '../scripts/lib/admin-sign.mjs';
 
@@ -33,10 +33,12 @@ async function webCryptoHmacHex(key, text) {
 }
 const webCryptoSha256Hex = async (bytes) => hex(await crypto.subtle.digest('SHA-256', bytes));
 
-// A WebCrypto port of verifyAdminSignature(), written the way the Worker's verifier is: regex,
-// bodyless check, HMAC with every held key, constant-time compare, then the clock.
+// A WebCrypto port of verifyAdminSignature(), written the way the Worker's verifier is: the
+// fixture's header_re compiled from its string (not the module's constant), bodyless check, HMAC
+// with every held key, constant-time compare, then the clock.
+const FIXTURE_HEADER_RE = new RegExp(fixture.header_re);
 async function verifyWithWebCrypto({ headerValue, method, pathWithQuery, keys, now }) {
-  const m = HEADER_RE.exec(typeof headerValue === 'string' ? headerValue : '');
+  const m = FIXTURE_HEADER_RE.exec(typeof headerValue === 'string' ? headerValue : '');
   if (!m) return { ok: false, reason: 'malformed' };
   const [, ts, nonce, bodySha256, sig] = m;
   if (['GET', 'HEAD', 'DELETE'].includes(method.toUpperCase()) && bodySha256 !== EMPTY_BODY_SHA256) return { ok: false, reason: 'bodyless_body_hash' };
@@ -59,6 +61,17 @@ describe('the fixture file states the scheme the module implements', () => {
     assert.equal(fixture.header_name, HEADER_NAME);
     assert.equal(fixture.header_re, HEADER_RE.source);
     assert.equal(fixture.query_re, QUERY_RE.source);
+    assert.equal(fixture.path_re, PATH_RE.source);
+    assert.ok(fixture.about.includes('Math.floor(Date.now() / 1000)'));
+    assert.ok(fixture.verify_reasons._note.includes('any listed reason is acceptable'));
+    // The fixture names every code the module throws, and nothing else.
+    const codes = Object.keys(fixture.reject_reasons).filter((k) => !k.startsWith('_')).sort();
+    assert.deepEqual(codes, ['body_on_bodyless_method', 'body_type', 'key_too_short', 'method', 'nonce', 'path_charset', 'query_charset', 'ts', 'url']);
+    const source = readFileSync(new URL('../scripts/lib/admin-sign.mjs', import.meta.url), 'utf8');
+    const thrown = [...new Set([...source.matchAll(/new UsageError\([\s\S]*?, '([a-z_]+)'\);/g)].map((m) => m[1]))].sort();
+    assert.deepEqual(thrown, codes);
+    assert.ok(rejectCases.every((c) => codes.includes(c.reject)));
+    for (const code of codes) assert.ok(rejectCases.some((c) => c.reject === code), `no reject case for ${code}`);
     assert.equal(fixture.empty_body_sha256, EMPTY_BODY_SHA256);
     assert.equal(EMPTY_BODY_SHA256, crypto.createHash('sha256').update('').digest('hex'));
     assert.deepEqual(fixture.bodyless_methods, [...BODYLESS_METHODS]);
@@ -68,7 +81,7 @@ describe('the fixture file states the scheme the module implements', () => {
   });
 
   test('CLI-12: the required cases are present', () => {
-    for (const id of ['get-stats', 'post-moderation', 'get-since-iso', 'get-q64', 'post-non-ascii', 'post-four-bytes', 'delete-empty', 'head-empty', 'post-second-key', 'post-one-byte-diff', 'post-key-trimmed', 'put-body-flag', 'reject-query-percent', 'reject-query-space', 'v-second-key-accepted', 'v-skew-plus-301', 'v-malformed-missing']) {
+    for (const id of ['get-stats', 'post-moderation', 'get-since-iso', 'get-q64', 'post-non-ascii', 'post-four-bytes', 'delete-empty', 'head-empty', 'post-second-key', 'post-one-byte-diff', 'post-key-trimmed', 'put-body-flag', 'get-trailing-question', 'reject-query-percent', 'reject-query-space', 'reject-path-non-ascii', 'reject-path-space', 'reject-path-double-slash', 'reject-path-backslash', 'v-second-key-accepted', 'v-skew-plus-301', 'v-malformed-missing', 'v-malformed-ts-leading-zero', 'v-malformed-joined-twice', 'v-malformed-bodysha-uppercase']) {
       assert.ok(byId[id], `missing case ${id}`);
     }
     assert.ok(signCases.some((c) => c.path.includes('event=')));
@@ -93,6 +106,8 @@ describe('sign cases: every vector recomputed from scratch', () => {
       assert.equal(c.path_with_query, u.pathname + u.search);
       assert.equal(c.url, u.href);
       assert.match(u.search.slice(1), QUERY_RE);
+      assert.match(u.pathname, PATH_RE);
+      assert.match(c.header, FIXTURE_HEADER_RE);
       // The body hash: the empty-body constant for GET, HEAD and DELETE, else SHA-256 of the UTF-8 bytes.
       const bytes = Buffer.from(c.body ?? '', 'utf8');
       if (['GET', 'HEAD', 'DELETE'].includes(c.method)) {
@@ -246,7 +261,7 @@ describe('reject cases: the signer refuses before anything is sent', () => {
   for (const c of rejectCases) {
     test(`${c.id}: ${c.title}`, () => {
       assert.throws(
-        () => signAdminRequest({ method: c.input.method, path: c.input.path, base: c.input.base, body: c.input.body, key: c.input.key }),
+        () => signAdminRequest({ ...c.input }),
         (e) => e instanceof UsageError && e.code === c.reject && e.exitCode === 2,
       );
     });
@@ -257,6 +272,22 @@ describe('reject cases: the signer refuses before anything is sent', () => {
     for (const q of ['q=a%20b', 'q=a b', 'q=a+b', 'q=a/b', 'q=a?b', 'q=%41', 'q=a;b', 'q=a,b', 'q=a@b', 'q=a~b', 'q="a"', "q='a'", 'q=Zoë']) {
       assert.throws(() => canonicalUrl(`/admin/people/search?event=x&${q}`, 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'query_charset', q);
     }
+    // The path charset: one leading slash, nothing that the URL parser would rewrite or encode.
+    for (const path of ['/admin/Zoë', '/admin/a b', '//admin/stats', '/admin\\stats', 'admin/stats', '', 'https://caddie.example/admin/stats', '/admin/%2e%2e', '/admin/st;ats', '/admin/st@ts', '/admin/st:ats', '/admin/st~ats', '/admin/x?a=1/b']) {
+      assert.throws(() => canonicalUrl(path, 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'path_charset' || e.code === 'query_charset', JSON.stringify(path));
+    }
+    // A fragment is dropped before either check, so a bad fragment is neither sent nor refused.
+    assert.equal(canonicalUrl('/admin/stats?x=1#/y z', 'https://caddie.example').pathWithQuery, '/admin/stats?x=1');
+    assert.equal(canonicalUrl('/admin/people/search?event=x', 'https://caddie.example').pathWithQuery, '/admin/people/search?event=x');
+    assert.equal(canonicalUrl('/admin/a_b-c.d/x', 'https://caddie.example').pathWithQuery, '/admin/a_b-c.d/x');
+    // A dot segment is normalised the same way on both sides.
+    assert.equal(canonicalUrl('/admin/./stats', 'https://caddie.example').pathWithQuery, '/admin/stats');
+    assert.equal(canonicalUrl('/admin/stats?', 'https://caddie.example').pathWithQuery, '/admin/stats');
+    // The leading-zero rule, read from the fixture's string and from the module.
+    const c0 = byId['v-malformed-ts-leading-zero'];
+    assert.doesNotMatch(c0.header, FIXTURE_HEADER_RE);
+    assert.doesNotMatch(c0.header, HEADER_RE);
+    assert.equal(parseAdminHeader(c0.header), null);
     // A fragment is not part of what is sent, so it is neither signed nor refused, and the base's
     // own query does not leak into the path.
     assert.equal(canonicalUrl('/admin/stats?event=x#frag', 'https://caddie.example').pathWithQuery, '/admin/stats?event=x');

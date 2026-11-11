@@ -36,7 +36,11 @@ export const VERSION = 'v1';
 export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 export const QUERY_RE = /^[A-Za-z0-9_.:=&-]*$/;
 export const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
-export const HEADER_RE = /^v1 (\d{1,12}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$/;
+// ts is a decimal integer without a leading zero, so a raw-string verifier and Number() agree.
+export const HEADER_RE = /^v1 (0|[1-9]\d{0,11}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$/;
+// The path of an admin request: absolute, one leading "/", and only letters, digits, "/", "_",
+// "." and "-", so nothing in it is ever percent-encoded, which keeps both sides byte-identical.
+export const PATH_RE = /^\/[A-Za-z0-9\/_.-]*$/;
 export const HEADER_NAME = 'X-Caddie-Admin';
 export const SKEW_SECONDS = 300;
 export const MIN_KEY_LENGTH = 32;
@@ -84,11 +88,22 @@ export function randomNonce() {
 
 // The request URL and its canonical path: new URL(path, base), with the query charset enforced.
 export function canonicalUrl(path, base) {
+  // The path is checked as given and again as parsed: "//host/x" would change the host, "\\" is a
+  // slash to the URL parser, and a space or non-ASCII would come back percent-encoded.
+  const rawPath = String(path ?? '').split(/[?#]/, 1)[0];
+  if (!PATH_RE.test(rawPath) || rawPath.startsWith('//')) {
+    throw new UsageError('The admin request path must start with one "/" and hold only letters, digits, "/", "_", "." and "-".', 'path_charset');
+  }
   let u;
+  let origin;
   try {
     u = new URL(path, base);
+    origin = new URL(base).origin;
   } catch {
     throw new UsageError('The admin request path or base is not a valid URL.', 'url');
+  }
+  if (u.origin !== origin || !PATH_RE.test(u.pathname)) {
+    throw new UsageError('The admin request path must start with one "/" and hold only letters, digits, "/", "_", "." and "-".', 'path_charset');
   }
   if (!QUERY_RE.test(u.search.slice(1))) {
     throw new UsageError('The admin query string may hold only letters, digits, "_", ".", ":", "=", "&" and "-"; send other text base64url-encoded under a key ending in 64 (for example q64).', 'query_charset');

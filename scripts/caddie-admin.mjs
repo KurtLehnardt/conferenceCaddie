@@ -6,8 +6,8 @@
 // Usage: node scripts/caddie-admin.mjs <area> <command> [target] [flags]
 //   Areas are attendees, moderation, conferences and stats; add -h after an area or a command for
 //   its usage. Global flags: --backend <name>, --json, --yes, --confirm <target>, --dry-run, -h.
-//   Destructive commands only preview until --yes is given; with --yes the operator types the exact
-//   target on a terminal, or passes --confirm <target> when there is no terminal.
+//   Destructive commands only preview until --yes is given; with --yes the operator passes
+//   --confirm <target> (required when there is no terminal) or types the exact target at a prompt.
 //
 // Exit codes: 0 success, 1 backend or request failure, 2 usage, 3 confirmation missing or refused,
 // 4 not found, 5 not supported on this tier.

@@ -93,7 +93,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import { signAdminRequest } from './lib/admin-sign.mjs';
+import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
@@ -154,8 +154,14 @@ if (ADMIN_TOKEN && ADMIN_AUTH === 'signed' && ADMIN_TOKEN.length < 32) {
 // each time it is built, so a retry never resends one. `key` is the real token unless a probe
 // deliberately signs with a wrong one.
 function adminAuthHeaders(method, path, body, key = ADMIN_TOKEN) {
-  if (ADMIN_AUTH === 'bearer') return { Authorization: `Bearer ${key}` };
-  return { 'X-Caddie-Admin': signAdminRequest({ method, path, base: API_BASE, body, key }).header };
+  return adminAuth(method, path, body, key).headers;
+}
+// The auth headers and the URL of one admin attempt. In signed mode the URL is the one the signer
+// canonicalised and signed, so what is sent is exactly what the signature covers.
+function adminAuth(method, path, body, key = ADMIN_TOKEN) {
+  if (ADMIN_AUTH === 'bearer') return { headers: { Authorization: `Bearer ${key}` }, url: `${API_BASE}${path}` };
+  const signed = signAdminRequest({ method, path, base: API_BASE, body, key });
+  return { headers: { 'X-Caddie-Admin': signed.header }, url: signed.url };
 }
 
 // Which API this is. The Worker needs the CORS checks, the admin fixtures and text-only imports;
@@ -437,9 +443,9 @@ async function admin(method, path, body) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const headers = adminAuthHeaders(method, path, serialised);
+      const { headers, url } = adminAuth(method, path, serialised);
       if (serialised !== undefined) headers['Content-Type'] = 'application/json';
-      const res = await fetch(`${API_BASE}${path}`, {
+      const res = await fetch(url, {
         method,
         headers,
         body: serialised,
@@ -461,6 +467,8 @@ async function admin(method, path, body) {
       noteFixtureAnswer(path, res.status);
       return { status: res.status, json, headers: res.headers };
     } catch (err) {
+      // A request the signer refuses is a bug in this script, not a network failure: no retry.
+      if (err instanceof UsageError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -825,6 +833,8 @@ if (!IS_WORKER) {
       ...(await probe('a wrong token', adminAuthHeaders('GET', probePath, undefined, crypto.randomBytes(32).toString('hex')))),
     ];
     // With the real token, an Origin header must still be refused, because a browser page must never reach admin.
+    // The probe is signed in signed mode on purpose: the Worker refuses the Origin header before it
+    // verifies anything, so a valid signature proves the refusal is the Origin rule and not the signature.
     if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { ...adminAuthHeaders('GET', probePath, undefined), Origin: SMOKE_ORIGIN })));
     report(problems.length === 0, 'adm1: the admin routes answer 404 without a valid token and send no CORS headers', problems.length ? problems.join('; ') : `${ADMIN_TOKEN ? 3 : 2} requests, all 404 without CORS headers`);
   });
