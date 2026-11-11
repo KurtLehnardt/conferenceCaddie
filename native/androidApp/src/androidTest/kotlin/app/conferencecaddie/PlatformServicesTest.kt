@@ -162,6 +162,10 @@ class PlatformServicesTest {
             lm.addTestProvider(name, ProviderProperties.Builder().setAccuracy(ProviderProperties.ACCURACY_FINE).build())
             lm.setTestProviderEnabled(name, true)
         }
+        // Android limits the positions a background app receives to a few an hour, and the app reads
+        // positions only while its screens are shown, so the test does the same: with the activity in
+        // front.
+        val scenario = ActivityScenario.launch(MainActivity::class.java)
         try {
             val first = async(Dispatchers.Default) { provider.fixes().first() }
             val fix = withTimeout(30_000) {
@@ -177,6 +181,7 @@ class PlatformServicesTest {
             assertEquals(12.0, fix.accuracyM, 1e-6)
             assertNotNull(fix.atEpochMillis)
         } finally {
+            scenario.close()
             for (name in names) runCatching { lm.removeTestProvider(name) }
             instrumentation.uiAutomation.executeShellCommand("appops set ${context.packageName} android:mock_location default").close()
         }
