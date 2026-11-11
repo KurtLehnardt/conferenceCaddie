@@ -79,7 +79,18 @@ class FakeNotifier : Notifier {
 
     val shown = ArrayList<Shown>()
 
-    override suspend fun requestPermission(): Boolean = true
+    /** What [requestPermission] answers. */
+    var allowed = true
+    var permissionRequests = 0
+
+    /** Where the order of calls is written, when a test follows it. */
+    var log: MutableList<String>? = null
+
+    override suspend fun requestPermission(): Boolean {
+        permissionRequests++
+        log?.add("notifications")
+        return allowed
+    }
 
     override fun show(id: String, title: String, body: String, deepLink: String?) {
         shown += Shown(id, title, body, deepLink)

@@ -44,6 +44,18 @@ internal interface PresenceHost {
 
     /** True when the backend uses positions with presence (`people.gps_bands`). */
     fun gpsBands(): Boolean
+
+    /**
+     * True while Bluetooth proximity runs at [slug]. The phone is then meant to stay in a pocket,
+     * so backgrounding does not end hour-mode presence there.
+     */
+    fun bluetoothRunning(slug: String): Boolean
+
+    /**
+     * Presence of [slug] changed on the device: turned on, moved, extended or ended. Bluetooth
+     * follows it (a new `until` for the radio, or a stop when presence ended).
+     */
+    suspend fun presenceChanged(slug: String)
 }
 
 /**
@@ -61,6 +73,10 @@ internal interface PresenceHost {
  * (stretched by the API's pace), accuracy rounded to whole metres, stopped in the background and
  * when presence turns off. Every presence write runs one at a time, in the order asked for, so a slow
  * position write can never land after the delete that turned presence off.
+ *
+ * While Bluetooth proximity runs at a conference ([PresenceHost.bluetoothRunning]), backgrounding
+ * does not end its hour-mode presence: the phone is meant to be in a pocket. Presence still ends at
+ * its `until`, and the five-minute rule applies again from the moment Bluetooth stops.
  */
 internal class PresenceRuntime(
     private val store: PeopleStore,
@@ -90,6 +106,11 @@ internal class PresenceRuntime(
     private var lastSentFix: GeoFix? = null
     private var sendJob: Job? = null
     private var sending = false
+
+    // The position the server holds for each conference, as far as this device knows: the last fix
+    // a write carried, until a write without one (a zone change, the position switched off) or the
+    // end of presence. A Bluetooth write repeats it, because a presence write replaces every field.
+    private val serverFixes = HashMap<String, GeoFix>()
 
     /** Presence of [slug] as it stands now: presence whose `until` has passed is off. */
     fun get(slug: String): Presence = live(store.presence(slug), now())
@@ -161,10 +182,13 @@ internal class PresenceRuntime(
                 held = res.held,
             )
         }
+        // The write was zone-only, so the server holds no position until the next fix.
+        serverFixes.remove(slug)
         if (watchedSlug == slug) scheduleExpiry(slug)
         lastSentAt = 0
         stopPositionWatch()
         syncPositionWatch(slug)
+        host.presenceChanged(slug)
         return null
     }
 
@@ -185,9 +209,12 @@ internal class PresenceRuntime(
         if (raw.on) lastZone = raw.zone
         epoch++
         store.setPresence(slug) { it.off() }
+        serverFixes.remove(slug)
         host.changed()
         if (watchedSlug == slug) clearTimers()
         stopPositionWatch()
+        // Bluetooth stops with presence, on the device only: the presence delete ends its session.
+        host.presenceChanged(slug)
         presenceWrite {
             if (api.deletePresence(slug) is ApiResult.Failed) {
                 // The server lets it lapse on its own at presence_until otherwise.
@@ -208,8 +235,10 @@ internal class PresenceRuntime(
             store.setPresence(slug) { it.off() }
             host.changed()
         }
+        serverFixes.remove(slug)
         if (watchedSlug == slug) clearTimers()
         if (watchSlug == slug) stopPositionWatch()
+        host.presenceChanged(slug)
     }
 
     /** Stops every presence timer and the position watch, for "Delete my profile". */
@@ -217,8 +246,41 @@ internal class PresenceRuntime(
         epoch++
         clearTimers()
         stopPositionWatch()
+        serverFixes.clear()
         hiddenAt = null
         lastZone = null
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Bluetooth proximity
+
+    /**
+     * Writes presence again with `ble` set ([ble] true starts or re-keys Bluetooth, false stops it),
+     * repeating the current presence in full: the zone, the spot line, the position the server holds
+     * (only while the position is on) and the duration mode. A presence write replaces every
+     * presence field from its body, so a write that sent only the zone would clear the spot line and
+     * the position (docs/contracts/ble-tokens.md, Re-keying). It runs in the presence write queue and
+     * returns null, sending nothing, when presence is off by the time its turn comes.
+     */
+    suspend fun writeBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>? = presenceWrite {
+        val p = get(slug)
+        val zone = p.zone
+        if (!p.on || zone == null) return@presenceWrite null
+        putPresence(slug, zone, p.spot, if (p.position) serverFixes[slug] else null, p.mode, ble)
+    }
+
+    /**
+     * Bluetooth started or stopped at [slug] while the app is in the background. Started: the
+     * five-minute turn-off is called off. Stopped: hour-mode presence ends five minutes from now,
+     * as if the app had just gone to the background.
+     */
+    fun onBluetoothChanged(slug: String) {
+        if (watchedSlug != slug || host.foreground()) return
+        hiddenJob?.cancel()
+        hiddenJob = null
+        if (host.bluetoothRunning(slug)) return
+        hiddenAt = now()
+        scheduleHidden(slug)
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -287,20 +349,24 @@ internal class PresenceRuntime(
     fun onBackground() {
         val slug = watchedSlug ?: return
         hiddenJob?.cancel()
+        hiddenJob = null
         if (hiddenAt == null) hiddenAt = now()
-        // Five minutes in the background end an hour-mode presence. In the day mode backgrounding is
-        // the normal state (the phone is in a pocket), so presence stays and the next foreground
-        // asks whether the zone still holds.
-        val p = get(slug)
-        if (p.on && p.mode == PresenceMode.Hour) {
-            hiddenJob = scope.launch {
-                delay(HIDDEN_MS)
-                hiddenJob = null
-                scope.launch { turnOff(slug) }
-            }
-        }
+        scheduleHidden(slug)
         // Positions are foreground only.
         stopPositionWatch()
+    }
+
+    // Five minutes in the background end an hour-mode presence. In the day mode backgrounding is the
+    // normal state (the phone is in a pocket), so presence stays and the next foreground asks whether
+    // the zone still holds. The same holds while Bluetooth runs at this conference.
+    private fun scheduleHidden(slug: String) {
+        val p = get(slug)
+        if (!p.on || p.mode != PresenceMode.Hour || host.bluetoothRunning(slug)) return
+        hiddenJob = scope.launch {
+            delay(HIDDEN_MS)
+            hiddenJob = null
+            scope.launch { turnOff(slug) }
+        }
     }
 
     suspend fun onForeground() {
@@ -312,8 +378,10 @@ internal class PresenceRuntime(
         val raw = store.presence(slug)
         val untilMs = raw.until?.let { IsoTime.epochMillis(it) }
         // Back after a long time away: the server has already let it lapse. Or back in hour mode
-        // after five minutes or more: the timer could not run while the app was suspended.
-        if (raw.on && ((untilMs != null && untilMs <= now()) || (raw.mode == PresenceMode.Hour && away >= HIDDEN_MS))) {
+        // after five minutes or more: the timer could not run while the app was suspended. Not
+        // while Bluetooth runs here, which keeps presence in the pocket until its until.
+        val hiddenTooLong = raw.mode == PresenceMode.Hour && away >= HIDDEN_MS && !host.bluetoothRunning(slug)
+        if (raw.on && ((untilMs != null && untilMs <= now()) || hiddenTooLong)) {
             turnOff(slug)
         } else {
             checkZoneAge(slug)
@@ -375,6 +443,7 @@ internal class PresenceRuntime(
         }
         val before = get(slug)
         set(slug) { it.copy(position = false, positionChoice = PositionChoice.No) }
+        serverFixes.remove(slug)
         syncPositionWatch(slug)
         if (before.on && before.zone != null) {
             presenceWrite {
@@ -455,7 +524,10 @@ internal class PresenceRuntime(
                 // Presence may have been turned off while this waited its turn.
                 val p = wanted() ?: return@presenceWrite
                 when (val r = putPresence(slug, p.zone!!, p.spot, fix, p.mode)) {
-                    is ApiResult.Ok -> lastSentFix = fix
+                    is ApiResult.Ok -> {
+                        lastSentFix = fix
+                        serverFixes[slug] = fix
+                    }
                     is ApiResult.Failed -> {
                         // A profile that is gone, or presence the server no longer accepts: stop
                         // sending positions. A 409 or a 429 tries again with the next fix.

@@ -118,6 +118,25 @@ data class PushRecord(
     override fun toString(): String = "PushRecord(on=$on, platform=$platform, noticeSeen=$noticeSeen)"
 }
 
+/**
+ * Bluetooth proximity at one conference (web ble.ts keeps `caddie.ble.v1.{slug}`). The session key
+ * itself is never here: it lives in the platform's [app.conferencecaddie.shared.ble.BleKeyStore],
+ * and [keyId] only names it, so a sightings answer that names another key can be recognised.
+ */
+@Serializable
+internal data class BleRecord(
+    /** The device's switch: true from a successful turn-on until it is turned or stopped off. */
+    val on: Boolean = false,
+    /** True once the first-time explanation was accepted, which a successful turn-on implies. */
+    @SerialName("notice_seen") val noticeSeen: Boolean = false,
+    /** The `ble_key_id` of the key in the key store while [on]; null otherwise. */
+    @SerialName("key_id") val keyId: String? = null,
+    /** The token window of the last successful re-key, so a second one in the same window is refused. */
+    @SerialName("rekey_w") val rekeyW: Long? = null,
+    /** Epoch milliseconds of the nearby notifications shown in the last hour, oldest first. */
+    @SerialName("notified_at") val notifiedAt: List<Long> = emptyList(),
+)
+
 /** One blocked person, cached on the device; [ref] is a key only and never shown. */
 @Serializable
 data class BlockedPerson(
@@ -184,6 +203,8 @@ internal data class ConferenceRecord(
     /** Whether nudges are wanted at this conference; on by default. */
     @SerialName("nudges_on") val nudgesOn: Boolean = true,
     @SerialName("delete_pending") val deletePending: DeleteRetry? = null,
+    /** Bluetooth proximity's switch and bookkeeping at this conference. */
+    val ble: BleRecord = BleRecord(),
 ) {
     internal fun sanitized(): ConferenceRecord = copy(
         visibility = visibility.sanitized(),
@@ -191,6 +212,7 @@ internal data class ConferenceRecord(
         blocks = blocks.take(500),
         met = met.takeLast(500),
         watch = watch.takeLast(200),
+        ble = ble.copy(notifiedAt = ble.notifiedAt.takeLast(10)),
     )
 
     /** True when nothing but defaults is left, so the record can be removed. */
