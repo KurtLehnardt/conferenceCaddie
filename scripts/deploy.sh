@@ -10,19 +10,23 @@
 # secret) and VAPID_SUBJECT is set from the shell's VAPID_SUBJECT (a mailto: address) or the
 # repository URL. Without the secret the app deploys with nudges off.
 #
-# Native push (official deployment only): when the secret caddie-apns-key exists (the .p8 key
-# file Apple issued), its newest enabled version at deploy time is mounted as the file
-# /secrets/apns/AuthKey.p8, which the env var APNS_KEY_FILE names (the key is never an env var),
-# and the key id and team id are read from caddie-apns-ids ("<key id> <team id>", not secret) into
-# the env vars APNS_KEY_ID and APNS_TEAM_ID; APNS_BUNDLE_ID comes from the shell (default
-# app.conferencecaddie). The key is pinned like the Bluetooth keyring, because the ids are read
-# here: a key version added later reaches the instances only with a deploy that reads its ids too.
-# FCM has no key and no secret: the server sends with the runtime service account's own token from
-# the metadata server, and FCM_PROJECT_ID (below, or from the shell) names the app's Firebase
-# project, in which caddie-runtime holds the role Firebase Cloud Messaging API Admin (step 7a of
-# docs/OPERATOR_CHECKLIST.md). Without the secret and the project id the app deploys with
-# push.apns and push.fcm false. A third-party operator never creates the secret and leaves
-# FCM_PROJECT_ID empty. This script never reads the APNs key's value.
+# Native push (official deployment only) is off unless this deploy turns it on, one channel at a
+# time, from the shell: NATIVE_PUSH_APNS=1 for APNs and NATIVE_PUSH_FCM=1 for FCM. Unset or 0
+# deploys that channel off (push.apns or push.fcm false), whatever secrets exist and whatever
+# FCM_PROJECT_ID the shell happens to hold; any other value stops the script. Every deploy prints
+# one line saying which native channels it turns on and which off, without a secret value.
+# APNs (NATIVE_PUSH_APNS=1): the secret caddie-apns-key (the .p8 key file Apple issued) must exist;
+# its newest enabled version at deploy time is mounted as the file /secrets/apns/AuthKey.p8, which
+# the env var APNS_KEY_FILE names (the key is never an env var), and the newest enabled version of
+# caddie-apns-ids ("<key id> <team id>", not secret) is read into the env vars APNS_KEY_ID and
+# APNS_TEAM_ID; APNS_BUNDLE_ID comes from the shell (default app.conferencecaddie). Both secrets are
+# pinned to the versions read now, like the Bluetooth keyring, so the ids always belong to the
+# mounted key: a key version added later reaches the instances only with a deploy that reads its
+# ids too. FCM (NATIVE_PUSH_FCM=1) has no key and no secret: the server sends with the runtime
+# service account's own token from the metadata server, and FCM_PROJECT_ID (below, or from the
+# shell) names the app's Firebase project, in which caddie-runtime holds the role Firebase Cloud
+# Messaging API Admin (step 7a of docs/OPERATOR_CHECKLIST.md). A third-party operator never sets
+# either switch. This script never reads the APNs key's value.
 #
 # GitHub import: when the secret caddie-github-token exists (a read-only public-scope token, see
 # docs/CONTRACT.md), it is mounted as GITHUB_TOKEN; without it the server calls GitHub
@@ -64,8 +68,12 @@ APNS_IDS_SECRET="caddie-apns-ids"
 # Where Cloud Run mounts the APNs key: a file in a directory of its own, so the volume hides nothing
 # of the image.
 APNS_KEY_PATH="/secrets/apns/AuthKey.p8"
-# The Firebase project of the Android app (not a secret). Set it here once step 7a is done, so every
-# deploy keeps FCM on; empty deploys with push.fcm false.
+# The switches of the two native push channels: 1 turns the channel on for this deploy, unset or 0
+# deploys it off.
+NATIVE_PUSH_APNS="${NATIVE_PUSH_APNS:-0}"
+NATIVE_PUSH_FCM="${NATIVE_PUSH_FCM:-0}"
+# The Firebase project of the Android app (not a secret), from the shell or set here once step 7a
+# is done. It is used only with NATIVE_PUSH_FCM=1.
 FCM_PROJECT_ID="${FCM_PROJECT_ID:-}"
 APNS_BUNDLE_ID="${APNS_BUNDLE_ID:-app.conferencecaddie}"
 BLE_MASTER_SECRET="caddie-ble-master"
@@ -103,6 +111,24 @@ MOD_TIMEOUT_MS="3000"
 
 cd "$(dirname "$0")/.."
 
+# A mistyped switch must not deploy a channel the operator meant to change.
+for switch in NATIVE_PUSH_APNS NATIVE_PUSH_FCM; do
+  if ! [[ "${!switch}" =~ ^[01]$ ]]; then
+    echo "$switch must be 1 (on) or 0 (off, the default)." >&2
+    exit 1
+  fi
+done
+
+# The newest enabled version of a secret, as a number, read from the versions' metadata only, never
+# a payload. Fails when the secret has no enabled version.
+newest_enabled_version() {
+  local name
+  name="$(gcloud secrets versions list "$1" --project "$PROJECT" --filter=state:enabled --sort-by=~createTime --limit=1 --format='value(name)')" || return 1
+  name="${name##*/}"
+  [[ "$name" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$name"
+}
+
 # The runtime identity is always the dedicated caddie-runtime service account. It holds no
 # project-level roles in this project; on the official deployment with FCM it holds Firebase Cloud
 # Messaging API Admin on the Firebase project (step 7a of docs/OPERATOR_CHECKLIST.md), nothing else.
@@ -127,16 +153,23 @@ else
   echo "No $VAPID_PRIVATE_SECRET secret: deploying with push nudges off (node scripts/vapid-keys.mjs creates it)." >&2
 fi
 
-# Native push to the official apps. The key is mounted by name and version only, as a file in a
-# secret volume rather than an env var; the ids are not secret and become plain env vars.
-if gcloud secrets describe "$APNS_KEY_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
-  APNS_KEY_VERSION="$(gcloud secrets versions list "$APNS_KEY_SECRET" --project "$PROJECT" --filter=state:enabled --sort-by=~createTime --limit=1 --format='value(name)')"
-  APNS_KEY_VERSION="${APNS_KEY_VERSION##*/}"
-  if ! [[ "$APNS_KEY_VERSION" =~ ^[0-9]+$ ]]; then
+# Native push to the official apps, each channel only when this deploy turns it on. The APNs key is
+# mounted by name and version only, as a file in a secret volume rather than an env var; the ids
+# are not secret and become plain env vars.
+if [ "$NATIVE_PUSH_APNS" = 1 ]; then
+  if ! gcloud secrets describe "$APNS_KEY_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
+    echo "NATIVE_PUSH_APNS=1, but there is no $APNS_KEY_SECRET secret; see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
+    exit 1
+  fi
+  if ! APNS_KEY_VERSION="$(newest_enabled_version "$APNS_KEY_SECRET")"; then
     echo "The secret $APNS_KEY_SECRET has no enabled version; see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
     exit 1
   fi
-  APNS_IDS="$(gcloud secrets versions access latest --secret "$APNS_IDS_SECRET" --project "$PROJECT" || true)"
+  if ! APNS_IDS_VERSION="$(newest_enabled_version "$APNS_IDS_SECRET")"; then
+    echo "The secret $APNS_IDS_SECRET is missing or has no enabled version; see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
+    exit 1
+  fi
+  APNS_IDS="$(gcloud secrets versions access "$APNS_IDS_VERSION" --secret "$APNS_IDS_SECRET" --project "$PROJECT" || true)"
   read -r APNS_KEY_ID APNS_TEAM_ID APNS_EXTRA <<< "$APNS_IDS" || true
   if ! [[ "${APNS_KEY_ID:-}" =~ ^[A-Z0-9]{10}$ && "${APNS_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ && -z "${APNS_EXTRA:-}" ]]; then
     echo "The secret $APNS_IDS_SECRET must hold \"<key id> <team id>\" (10 characters each); see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
@@ -150,19 +183,28 @@ if gcloud secrets describe "$APNS_KEY_SECRET" --project "$PROJECT" --quiet >/dev
   # A key that starts with / is a mount path: gcloud mounts the secret version there as a file.
   SECRETS="$SECRETS,$APNS_KEY_PATH=$APNS_KEY_SECRET:$APNS_KEY_VERSION"
   RUNTIME_SECRETS+=("$APNS_KEY_SECRET")
+  APNS_STATE="on ($APNS_KEY_SECRET version $APNS_KEY_VERSION, $APNS_IDS_SECRET version $APNS_IDS_VERSION, bundle id $APNS_BUNDLE_ID)"
 else
-  echo "No $APNS_KEY_SECRET secret: deploying without APNs push (push.apns false)." >&2
+  APNS_STATE="off (NATIVE_PUSH_APNS is not 1; nothing is mounted)"
 fi
 # FCM through the runtime service account: only the project id is passed, never a key.
-if [ -n "$FCM_PROJECT_ID" ]; then
+if [ "$NATIVE_PUSH_FCM" = 1 ]; then
+  if [ -z "$FCM_PROJECT_ID" ]; then
+    echo "NATIVE_PUSH_FCM=1 needs FCM_PROJECT_ID, the Firebase project id; see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
+    exit 1
+  fi
   if ! [[ "$FCM_PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
     echo "FCM_PROJECT_ID must be a Google Cloud project id; see step 7a of docs/OPERATOR_CHECKLIST.md." >&2
     exit 1
   fi
   ENV_VARS="$ENV_VARS,FCM_PROJECT_ID=$FCM_PROJECT_ID"
+  FCM_STATE="on (Firebase project $FCM_PROJECT_ID)"
+elif [ -n "$FCM_PROJECT_ID" ]; then
+  FCM_STATE="off (NATIVE_PUSH_FCM is not 1; FCM_PROJECT_ID is set and ignored)"
 else
-  echo "No FCM_PROJECT_ID: deploying without FCM push (push.fcm false)." >&2
+  FCM_STATE="off (NATIVE_PUSH_FCM is not 1)"
 fi
+echo "Native push: APNs $APNS_STATE; FCM $FCM_STATE." >&2
 
 # The optional GitHub token raises the import's rate limit; the server works without it.
 if gcloud secrets describe "$GITHUB_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
@@ -180,9 +222,7 @@ fi
 # on (it reads the pinned version back from the service). Only the versions' metadata is read
 # here, never a payload.
 if gcloud secrets describe "$BLE_MASTER_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
-  BLE_MASTER_VERSION="$(gcloud secrets versions list "$BLE_MASTER_SECRET" --project "$PROJECT" --filter=state:enabled --sort-by=~createTime --limit=1 --format='value(name)')"
-  BLE_MASTER_VERSION="${BLE_MASTER_VERSION##*/}"
-  if ! [[ "$BLE_MASTER_VERSION" =~ ^[0-9]+$ ]]; then
+  if ! BLE_MASTER_VERSION="$(newest_enabled_version "$BLE_MASTER_SECRET")"; then
     echo "The secret $BLE_MASTER_SECRET has no enabled version; run node scripts/ble-master.mjs --init first." >&2
     exit 1
   fi
