@@ -404,3 +404,11 @@ Reported by the other session: Sessionize session 1250975 ("CANCELED: ...") was 
 - **Shrink guard (added in review).** That cascade made a short feed more costly: talks come back on the next ingest, but people's sharing does not. Finalize now refuses with 409 when it would delete more than 10 talks and more than 10% of the conference, unless `allow_shrink` is set (`push-ingest.mjs --allow-shrink`, the `allow_shrink` input of `ingest.yml`). A test covers the refusal, that nothing is deleted, and the override.
 - **How this was built.** The build agent's run ended on the account's usage limit before it committed. The orchestrator recovered its edits from the agent's transcript after discarding them by mistake, reviewed them, and added the shrink guard and these notes.
 
+### A merge target kept when its own count drops (branch fix/topic-merge-target)
+
+Reported by the other session after the cancellation of KubeCon session 1250975: with that talk gone, "pipeline" occurs in only two titles, below `MIN_TALKS` (3), so the fix-up merge "pipelines" -> "pipeline" in `data/topics/kubecon-cloudnativecon-north-america-2026.json` lost its target. The bundle builder and tier 3 then served the topic id `pipelines` (4 talks), while the Worker's frozen list kept `pipeline` (6 talks), and profiles that store `pipeline` referred to a topic the rebuilt lists no longer had.
+
+Fix: `mergeTargets` in `scripts/lib/topics.mjs`, used by both the bundle builder and the Worker's first-build path (`worker/ingest/topics-local.mjs`). A merge target that occurs in at least one title and reaches `MIN_TALKS` together with the talks of its aliases stays a candidate. These targets are appended after the regular candidates, so no other topic changes. A target that occurs in no title is still never created by a merge. Checked on every committed conference and on PR #50's KubeCon data with the real stoplist: the lists are identical, except that on PR #50's data `pipelines:4` becomes `pipeline:6`, which matches the Worker. A new test in `worker/test/topics-order.test.mjs` covers both builders.
+
+For the other session: `scripts/topics.mjs` (the tier 3 Elasticsearch builder) needs the same rule (it can import `mergeTargets`), and the KubeCon topics-live fixture would then go back to `pipeline`.
+
