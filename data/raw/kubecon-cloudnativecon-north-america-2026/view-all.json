@@ -3,7 +3,7 @@
     {
       "id": "1304040",
       "title": "Registration + Badge Pick-Up",
-      "description": "Got your badge? Next, make sure to visit any Info Desk for an ID check and a 21+ wristband to redeem your drink tickets at event receptions.\r\n\r\nInfo Desk ID Check Hours:\r\nSunday, November 8 | 8:00 AM - 5:00 PM\r\nMonday, November 9 | 7:00 AM - 7:00 PM*\r\nTuesday, November 10 | 7:30 AM - 6:15 PM*\r\n\r\n *ID check stations will also be available during the reception.",
+      "description": "Got your badge? Next, make sure to visit any Info Desk for an ID check and a 21+ wristband to redeem your drink tickets at event receptions.\r\n\r\nID Check Station Hours:\r\nSunday, November 8 | 8:00 AM - 5:00 PM\r\nMonday, November 9 | 7:00 AM - 7:00 PM*\r\nTuesday, November 10 | 7:30 AM - 6:15 PM*\r\n\r\n *ID check stations will also be available during the reception.",
       "startsAt": "2026-11-08T08:00:00",
       "endsAt": "2026-11-08T17:00:00",
       "isServiceSession": false,
@@ -109,7 +109,7 @@
     {
       "id": "1289947",
       "title": "Registration + Badge Pick-Up",
-      "description": "Got your badge? Next, make sure to visit any Info Desk for an ID check and a 21+ wristband to redeem your drink tickets at event receptions.\r\n\r\nInfo Desk ID Check Hours:\r\nSunday, November 8 | 8:00 AM - 5:00 PM\r\nMonday, November 9 | 7:00 AM - 7:00 PM*\r\nTuesday, November 10 | 7:30 AM - 6:15 PM*\r\n\r\n *ID check stations will also be available during the reception.",
+      "description": "Got your badge? Next, make sure to visit any Info Desk for an ID check and a 21+ wristband to redeem your drink tickets at event receptions.\r\n\r\nID Check Station Hours:\r\nSunday, November 8 | 8:00 AM - 5:00 PM\r\nMonday, November 9 | 7:00 AM - 7:00 PM*\r\nTuesday, November 10 | 7:30 AM - 6:15 PM*\r\n\r\n *ID check stations will also be available during the reception.",
       "startsAt": "2026-11-09T07:00:00",
       "endsAt": "2026-11-09T17:00:00",
       "isServiceSession": false,
@@ -2111,7 +2111,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/ocpaid~3ps6AxRbzuxqUKMyQaxgUd.pptx~kubecon-na-2026-keynote-v1.pptx"
+          "answerValue": "https://sessionize.com/download/ickawdeh~as3XoEgoVC6mbpbFKLaLAV.pptx~kubecon-na-2026-keynote-v2.pptx"
         }
       ],
       "roomId": 82947,
@@ -2628,7 +2628,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/lzacsej~ssiTLYz6ZFMk7YCKsBnXyK.pdf~saturated-by-design.pdf"
+          "answerValue": "https://sessionize.com/download/ccaosmeh~YJrUKLfo2PG87KXNnMWPX8.pdf~saturated-by-design.pdf"
         }
       ],
       "roomId": 82948,
@@ -2830,7 +2830,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/ilzalceq~DjMKKJqakhubjrUrHgei2C.pdf~aicr-kubecon-na-2026-one-recipe-five-clouds-one-query-slides-1-30.pdf"
+          "answerValue": "https://sessionize.com/download/icbaivme~9ZHueTBk6jScrRC1uWhxtA.pdf~aicr-kubecon-na-2026-one-recipe-five-clouds-one-query-final.pdf"
         }
       ],
       "roomId": 82955,
@@ -2856,7 +2856,12 @@
         465814,
         465822
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/iugotha~986CKKA4SVewC33eCco1kR.pdf~kubecon-na-2026_-mythos-vs-maintainers.pptx.pdf"
+        }
+      ],
       "roomId": 82956,
       "liveUrl": null,
       "recordingUrl": null,
@@ -2961,7 +2966,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/gxafqep~hBfKkTmzZqvaYzMk4MsN9e.pdf~sig_network_intro_and_updates_kubecon_na_2026.pptx.pdf"
+          "answerValue": "https://sessionize.com/download/gkapyen~nrhtKsDcSinYPvrGDyVKzU.pdf~sig_network_intro_and_updates_kubecon_na_2026.pptx.pdf"
         }
       ],
       "roomId": 87422,
@@ -3109,7 +3114,7 @@
       "title": "🚩 An Introduction to Capture The Flag ",
       "description": "An Introduction to Capture The Flag\r\n\r\nThe Cloud Native Capture The Flag (CTF) is available to all KubeCon + CloudNativeCon attendees.  In preparation for playing the game, you are invited to attend an introductory session.\r\n\r\nThis session introduces CTF competitions for newcomers: any experience level is welcome. We will share tips and tricks for completing these challenges and work through a practice scenario together. You can play solo or with a friend!\r\n\r\nLearn more about how to participate in Capture The Flag: https://ctf.control-plane.io/events/kubecon-na-26/",
       "startsAt": "2026-11-10T11:30:00",
-      "endsAt": "2026-11-10T13:30:00",
+      "endsAt": "2026-11-10T12:00:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -3418,7 +3423,12 @@
         465817,
         465822
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/idganxeg~BKughMyve3xr4X1QpKByKe.pdf~kubecon-na-2026-lts-eol-cves.pdf"
+        }
+      ],
       "roomId": 82953,
       "liveUrl": null,
       "recordingUrl": null,
@@ -3625,7 +3635,12 @@
         496153,
         497683
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/nzajgel~4uhX4jJNmv8j2AVUWTNhnZ.pdf~one-platform-for-authn-and-authz-keycloak-meets-authzen.pdf"
+        }
+      ],
       "roomId": 87424,
       "liveUrl": null,
       "recordingUrl": null,
@@ -3998,9 +4013,9 @@
       "isConfirmed": false
     },
     {
-      "id": "1370500",
-      "title": "CNCF Project Demos",
-      "description": null,
+      "id": "1372568",
+      "title": "Open Cluster Management (OCM): Live Demo Using k3d/KIND",
+      "description": "When deploying workloads from a central hub cluster to multiple managed clusters, two key questions often arise: How long does it take for a workload to reach each cluster, and how can you confirm it arrived successfully?\r\n\r\nIn this live demo, we'll launch two local Kubernetes clusters using k3d, connect one to the other as a managed cluster through OCM, and deploy a ManifestWork from the hub.\r\n\r\nWe'll then track the deployment using two timestamps: T1, recorded when the hub's admission webhook accepts the write, and T2, recorded when the managed cluster's work agent begins applying that generation. OCM v1.4 supports this capability through the alpha ManifestWorkApplyLogs feature gate.",
       "startsAt": "2026-11-10T13:40:00",
       "endsAt": "2026-11-10T14:05:00",
       "isServiceSession": false,
@@ -4718,7 +4733,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/hwaqger~QMi3oJ5LbUSS1NXxx3K9ni.pdf~ai-found-a-zero-day-in-metal3.pdf"
+          "answerValue": "https://sessionize.com/download/fravtew~NH53eXKgeQRaoYZpKUjZVP.pdf~ai-found-a-zero-day-in-metal3.pdf"
         },
         {
           "questionId": 137004,
@@ -4861,11 +4876,11 @@
       "isConfirmed": false
     },
     {
-      "id": "1370503",
-      "title": "CNCF Project Demos",
-      "description": null,
+      "id": "1372851",
+      "title": "OpenTelemetry - OBI",
+      "description": "OBI is the new automatic instrumentation solution using eBPF. It offers users the ability to add o11y to applications with low overhead and no code changes. In this demo we'll show how to install and use OBI.",
       "startsAt": "2026-11-10T14:50:00",
-      "endsAt": "2026-11-10T16:25:00",
+      "endsAt": "2026-11-10T15:15:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [],
@@ -4907,7 +4922,7 @@
     {
       "id": "1373665",
       "title": "Project Pavilion Kiosks | Tuesday Afternoon",
-      "description": "P-1A\tVitess\r\nP-1B\tTekton Pipelines\r\nP-2A\tCloud Native Buildpacks\r\nP-2B\tFlux\r\nP-3A\tKubevela\r\nP-3B\tBackstage\r\nP-4A\tLinkerd\r\nP-4B\tKEDA\r\nP-5A\tKueue / Workload Aware Scheduling (SIG Subproject)\r\nP-5B\tHeadlamp (SIG)\r\nP-6A\tORAS\r\nP-6B\tIstio\r\nP-7A\tCrossplane\r\nP-7B\tEnvoyproxy\r\nP-8A\tFlatcar Container Linux\r\nP-8B\tk8gb\r\nP-9A\tVolcano\r\nP-9B\tHAMi\r\nP-10A\tKubeVirt\r\nP-10B\tPerses\r\nP-11A\tkubeflow\r\nP-11B\tJaeger\r\nP-12A\tFluent Bit\r\nP-12B\tKyverno\r\nP-13A\tSPIFFE\r\nP-13B\tHarbor\r\nP-14A\tKubescape\r\nP-14B\tCedar\r\nP-15A\tOpenFeature\r\nP-15B\tCadence\r\nP-16A\tTAG Developer Experience\r\nP-16B\tTechnical Community Group\r\nP-17A\tCloud Native Community Groups/KCDs\r\nP-17B\tTAG Operational Resilience\r\nP-18A\tArgo\r\nP-18B\tConfidential Containers",
+      "description": "P-1A\tVitess\r\nP-1B\tTekton Pipelines\r\nP-2A\tCloud Native Buildpacks\r\nP-2B\tFlux\r\nP-3A\tKubevela\r\nP-3B\tBackstage\r\nP-4A\tLinkerd\r\nP-4B\tMicrocks\r\nP-5A\tKueue / Workload Aware Scheduling (SIG Subproject)\r\nP-5B\tHeadlamp (SIG)\r\nP-6A\tORAS\r\nP-6B\tIstio\r\nP-7A\tCrossplane\r\nP-7B\tEnvoyproxy\r\nP-8A\tFlatcar Container Linux\r\nP-8B\tk8gb\r\nP-9A\tVolcano\r\nP-9B\tHAMi\r\nP-10A\tKubeVirt\r\nP-10B\tPerses\r\nP-11A\tkubeflow\r\nP-11B\tJaeger\r\nP-12A\tFluent Bit\r\nP-12B\tKyverno\r\nP-13A\tSPIFFE\r\nP-13B\tHarbor\r\nP-14A\tKubescape\r\nP-14B\tCedar\r\nP-15A\tOpenFeature\r\nP-15B\tCadence\r\nP-16A\tTAG Developer Experience\r\nP-16B\tTechnical Community Group\r\nP-17A\tCloud Native Community Groups/KCDs\r\nP-17B\tTAG Operational Resilience\r\nP-18A\tArgo\r\nP-18B\tConfidential Containers",
       "startsAt": "2026-11-10T15:00:00",
       "endsAt": "2026-11-10T19:30:00",
       "isServiceSession": false,
@@ -4965,6 +4980,26 @@
       ],
       "questionAnswers": [],
       "roomId": 90363,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1372852",
+      "title": "Integrating MLflow for Kubeflow Pipelines: Enhanced Experiment Visibility - Model Training Workloads",
+      "description": "What projects are involved?\r\n\r\nKubeflow (specifically Kubeflow Pipelines) and MLflow (open-source project, non-CNCF affiliated)\r\n\r\nKubeflow Pipelines (KFP) 2.17, released in July, included a plugin for MLflow that allows users to auto-upload KFP pipeline runs as runs in the MLflow console. This feature allows users to avoid choosing between KFP and MLflow for their training orchestrators: simply submit a pipeline through KFP and take advantage of the MLflow console for organizing experiments and visualizing run metrics.\r\n\r\nThis presentation walks through a brief 5-minute demo of a Kubeflow Pipelines training run and its visualization in the MLflow console.\r\nSession lead contact info: Alyssa Goins\r\n",
+      "startsAt": "2026-11-10T15:25:00",
+      "endsAt": "2026-11-10T15:50:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        520089
+      ],
+      "questionAnswers": [],
+      "roomId": 90682,
       "liveUrl": null,
       "recordingUrl": null,
       "status": "Accepted",
@@ -5094,7 +5129,12 @@
         465820,
         496398
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/lgatseq~3dy9kHqURsgPnbES14t5y1.pdf~ai_in_retail_kubecon_na_2026.pdf"
+        }
+      ],
       "roomId": 82950,
       "liveUrl": null,
       "recordingUrl": null,
@@ -5119,7 +5159,12 @@
         465822,
         496398
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/imlavfex~UuKbbCThnGijQ44azpyFc9.pdf~health-check-hell-kubecon-na-2026-1.pdf"
+        }
+      ],
       "roomId": 82951,
       "liveUrl": null,
       "recordingUrl": null,
@@ -5356,7 +5401,12 @@
         496153,
         497654
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/iyzamcel~YhtiUVSiiAz2YxNguxdnMb.pdf~cortex-surviving-high-cardinality-diagrams-kubecon.pdf"
+        }
+      ],
       "roomId": 87423,
       "liveUrl": null,
       "recordingUrl": null,
@@ -5734,7 +5784,12 @@
         465822,
         496398
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/wqazrec~UxmxXCYHXxP3AJo3kU85cm.pdf~firepool-kubecon-slides.pdf"
+        }
+      ],
       "roomId": 82950,
       "liveUrl": null,
       "recordingUrl": null,
@@ -5838,7 +5893,12 @@
         465815,
         465819
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/imlausne~fPEGqm4pHJMxVpA92WxVVH.pdf~not-all-memory-is-equal.pptx-1.pdf"
+        }
+      ],
       "roomId": 82954,
       "liveUrl": null,
       "recordingUrl": null,
@@ -5888,7 +5948,12 @@
         465814,
         465822
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/nqabiu~X7e7YY82TwcEQwZFhXpY4u.pdf~five-stages-of-k8s-security-grief.pdf"
+        }
+      ],
       "roomId": 82956,
       "liveUrl": null,
       "recordingUrl": null,
@@ -5921,7 +5986,7 @@
     },
     {
       "id": "1250975",
-      "title": "Building a Cloud-Native RAG Pipeline from Scratch: Docling Operator, KFP, and OpenSearch",
+      "title": "CANCELED: Building a Cloud-Native RAG Pipeline from Scratch: Docling Operator, KFP, and OpenSearch",
       "description": "Processing thousands of documents reliably requires more than a Python script. You need a persistent service, quality checks before anything hits your index, and a pipeline that skips files that haven't changed.\r\n\r\nIn this tutorial you will build exactly that on a local Kubernetes cluster. We start with the Docling Operator managing Docling Serve as a deployment, wire it to Kubeflow Pipelines, and finish with documents flowing into OpenSearch and queryable by the end of the session.\r\n\r\nAlong the way: writing KFP components that call Docling Serve in-cluster, extracting quality metrics from the DoclingDocument JSON to filter bad conversions before indexing, and using KFP step caching so unchanged documents never reprocess.\r\n\r\nYou leave with a running cluster, working pipeline code, and a repo you can extend.",
       "startsAt": "2026-11-10T16:40:00",
       "endsAt": "2026-11-10T18:00:00",
@@ -5935,7 +6000,12 @@
         465822,
         496274
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137004,
+          "answerValue": "https://github.com/KrishnaRekapalli/doc-ingestion-kfp"
+        }
+      ],
       "roomId": 82958,
       "liveUrl": null,
       "recordingUrl": null,
@@ -5984,7 +6054,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/msazbek~aNiTd939jnGRwaELKKGidZ.pdf~lima-20261104.pdf"
+          "answerValue": "https://sessionize.com/download/xxaivle~L98wuprRnxtWCYnrKWmdz3.pdf~20261110-kubecon-na-lima-as-the-universal-ai-sandbox.pdf"
         }
       ],
       "roomId": 87422,
@@ -6117,7 +6187,12 @@
         496284,
         498156
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/vtasjer~Xfoep4YGqAc1AziPeVSgzN.pdf~kubecon_na_contribfest.pdf"
+        }
+      ],
       "roomId": 87427,
       "liveUrl": null,
       "recordingUrl": null,
@@ -6165,26 +6240,6 @@
       ],
       "questionAnswers": [],
       "roomId": 91537,
-      "liveUrl": null,
-      "recordingUrl": null,
-      "status": "Accepted",
-      "isInformed": true,
-      "isConfirmed": false
-    },
-    {
-      "id": "1370893",
-      "title": "CNCF Project Demos",
-      "description": null,
-      "startsAt": "2026-11-10T17:10:00",
-      "endsAt": "2026-11-10T17:35:00",
-      "isServiceSession": false,
-      "isPlenumSession": false,
-      "speakers": [],
-      "categoryItems": [
-        520089
-      ],
-      "questionAnswers": [],
-      "roomId": 90682,
       "liveUrl": null,
       "recordingUrl": null,
       "status": "Accepted",
@@ -6339,7 +6394,12 @@
         465819,
         496398
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/ikpawmei~3sKbtDacGm9HzDAt81hEZL.pdf~sharing_gpus_at_scale.pdf"
+        }
+      ],
       "roomId": 82951,
       "liveUrl": null,
       "recordingUrl": null,
@@ -6673,7 +6733,7 @@
     },
     {
       "id": "1364853",
-      "title": "CLBO: ClashLoopBackOff: Demo Night",
+      "title": "CANCELLED - CLBO: ClashLoopBackOff: Demo Night",
       "description": "Join CNCF project maintainers and cloud native community members for an informal evening of demos, fresh ideas, and creative projects!\r\n\r\nDiscover what others are building, explore new tools and technologies, and get a behind-the-scenes look at exciting projects and experiments. Whether you’re looking for inspiration or simply curious about what’s new, Demo Night is a chance to connect, ask questions, and celebrate community innovation.",
       "startsAt": "2026-11-10T18:00:00",
       "endsAt": "2026-11-10T19:15:00",
@@ -7016,7 +7076,7 @@
     },
     {
       "id": "1301748",
-      "title": "Context Unlocks Autonomous AI Infrastructure",
+      "title": "Autonomous Orchestration for AI Infrastructure",
       "description": "Enterprise AI never sits still. Thousands of agents, tools, models, and applications spike, idle, scale, and redeploy every minute, each with its own needs, each affecting the others. Managing production AI infrastructure manually has become impossible. The answer is infrastructure that runs autonomously, and that depends on real-time context: knowing how each workload behaves, what it needs, and what it talks to before any action is taken. \r\n\r\nYodar Shafrir shows how context, from a single workload to the whole system, becomes autonomous orchestration that keeps enterprise AI reliable and performant, and puts platform teams in command of the system instead of chasing it.",
       "startsAt": "2026-11-11T10:04:00",
       "endsAt": "2026-11-11T10:09:00",
@@ -7323,14 +7383,13 @@
     {
       "id": "1334848",
       "title": "Two Drivers, One Topology: GPU:NIC Rail Alignment for RDMA VMs with KubeVirt DRA",
-      "description": "A VM can receive the four GPUs and four RDMA NICs it asked for and still get a fraction of the RDMA bandwidth it paid for. What matters is the pairing: each GPU needs a NIC on its own rail, under the same PCIe root. For multi-site GPU clouds on KubeVirt, this alignment is mandatory for every RDMA-accelerated VM running distributed training, disaggregated inference, or GPUDirect Storage. Device plugins allocate GPUs and SR-IOV VFs separately and cannot express that one device must be chosen relative to another.\r\n\r\nWith a demo from our production GPU cloud, this talk shows how KubeVirt's DRA support can request a VM with GPU and NIC aligned on the PCIe root attribute, served by two drivers in a single ResourceClaim. The same path surfaces gaps in Multus DRA networking; we cover them and a proposed fix that keeps the existing CNI chain intact.\r\n \r\nWe close with a roadmap of DRA in KubeVirt: CPU DRA integration, KubeVirt-generated and managed ResourceClaims, and remaining work to reach GA.",
+      "description": "A VM can receive the four GPUs and four RDMA NICs it asked for and still get a fraction of the RDMA bandwidth it paid for. What matters is the pairing: each GPU needs a NIC on its own rail, under the same PCIe root. For multi-site GPU clouds on KubeVirt, this alignment is mandatory for every RDMA-accelerated VM running distributed training, disaggregated inference, or GPUDirect Storage. Device plugins allocate GPUs and SR-IOV VFs separately and cannot express that one device must be chosen relative to another.\r\n\r\nWith a demo from our production GPU cloud, this talk shows how KubeVirt's DRA support can request a VM with GPU and NIC aligned on the PCIe root attribute, served by two drivers in a single ResourceClaim. The same path surfaces gaps in Multus DRA networking; we cover them and a proposed fix that keeps the existing CNI chain intact.",
       "startsAt": "2026-11-11T10:50:00",
-      "endsAt": "2026-11-11T11:10:00",
+      "endsAt": "2026-11-11T11:05:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
         "974e136d-95c7-4b59-a3cc-96d7db4069de",
-        "bf59973b-264c-4f39-bbb1-aab33c349c5d",
         "8f98c252-2eab-4c18-93a8-dae88332e0b2"
       ],
       "categoryItems": [
@@ -7473,7 +7532,12 @@
         465819,
         496398
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/ityaobu~U7JB9SKbApRsH5vDNjiRdz.pdf~time-to-learn-new-tricks-to-improve-performance-on-dra-managed-devices-20261110.pdf"
+        }
+      ],
       "roomId": 82952,
       "liveUrl": null,
       "recordingUrl": null,
@@ -7608,7 +7672,12 @@
         465815,
         465819
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/zzalyei~3DarVmpXZseVsX5ua4HEFx.pdf~kubecon-na-2026-otel-blueprints.pdf"
+        }
+      ],
       "roomId": 92181,
       "liveUrl": null,
       "recordingUrl": null,
@@ -7763,7 +7832,7 @@
       "recordingUrl": null,
       "status": "Accepted",
       "isInformed": true,
-      "isConfirmed": false
+      "isConfirmed": true
     },
     {
       "id": "1294766",
@@ -7893,6 +7962,29 @@
       "isConfirmed": false
     },
     {
+      "id": "1384474",
+      "title": "DRA in KubeVirt Update",
+      "description": "A roadmap of DRA in KubeVirt: CPU DRA integration, KubeVirt-generated and managed ResourceClaims, and remaining work to reach GA.",
+      "startsAt": "2026-11-11T11:05:00",
+      "endsAt": "2026-11-11T11:10:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [
+        "bf59973b-264c-4f39-bbb1-aab33c349c5d"
+      ],
+      "categoryItems": [
+        512413,
+        512410
+      ],
+      "questionAnswers": [],
+      "roomId": 90363,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": false,
+      "isConfirmed": false
+    },
+    {
       "id": "1334849",
       "title": "The Healthy Cluster, The Unhealthy VM:Why Infrastructure Metrics Are Only Half the Story in KubeVirt",
       "description": "Every virtualization administrator has seen it: the cluster looks healthy, yet users report slow, unresponsive, or crashing VMs.\r\n\r\nWhile investigating production Linux and Windows workloads on KubeVirt, we repeatedly found that infrastructure telemetry alone could not explain workload behavior. Windows Event ID 129 appeared with causes ranging from storage contention to FC path instability and storage subsystem defects, while Linux guests exposed filesystem and OS failures that infrastructure signals did not immediately explain.\r\n\r\nThis session shares what these incidents taught us: infra telemetry explains platform health, while guest OS telemetry shows how workloads experience that infrastructure. We’ll show how correlating both perspectives speeds troubleshooting, reveals workload impact, identifies noisy neighbors, improves VM placement and right-sizing, and informs capacity planning. We’ll also share how these lessons shaped our open-source work on KubeVirt guest observability.",
@@ -8003,7 +8095,12 @@
         465822,
         496398
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/gmavdex~NFKkzpPF7CxgNpdRdU1F47.pdf~hardening-kubernetes-for-govcloud-kubecon-na-2026.pdf"
+        }
+      ],
       "roomId": 82948,
       "liveUrl": null,
       "recordingUrl": null,
@@ -8103,7 +8200,15 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/iwxafhen~nQmQrER8SWEjevUzQYe1B1.pdf~preview.pdf"
+          "answerValue": "https://sessionize.com/download/ihrawzek~V32UxLkSoQeYjKzjeJvfJc.pdf~slides.pdf"
+        },
+        {
+          "questionId": 137004,
+          "answerValue": "https://codeberg.org/pojntfx/pushrod"
+        },
+        {
+          "questionId": 137006,
+          "answerValue": "https://felicitas.pojtinger.com/"
         }
       ],
       "roomId": 82952,
@@ -9075,26 +9180,6 @@
       "isConfirmed": false
     },
     {
-      "id": "1370896",
-      "title": "CNCF Project Demos",
-      "description": null,
-      "startsAt": "2026-11-11T13:40:00",
-      "endsAt": "2026-11-11T15:15:00",
-      "isServiceSession": false,
-      "isPlenumSession": false,
-      "speakers": [],
-      "categoryItems": [
-        520089
-      ],
-      "questionAnswers": [],
-      "roomId": 90682,
-      "liveUrl": null,
-      "recordingUrl": null,
-      "status": "Accepted",
-      "isInformed": true,
-      "isConfirmed": false
-    },
-    {
       "id": "1369675",
       "title": "Gold In-Booth Demos: ControlTheory, New Relic, OpenObserve",
       "description": "Sponsor: ControlTheory\r\nTitle: Dstl8 Demo - Telemetry Distillation + Sentiment In Action\r\nBooth: 188\r\n\r\nSponsor: New Relic\r\nTitle: Kubernetes Monitoring with the OpenTelemetry Kube Stack\r\nBooth: 159\r\n\r\nSponsor: OpenObserve\r\nTitle: Alert Noise to Root Cause in 5 Minutes: Kubernetes Observability with OpenObserve\r\nBooth: 167\r\n\r\n_In order to facilitate networking and business relationships at the event, you may choose to visit a third party’s booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities, the third party will receive some of your registration data. This data includes your first name, last name, title, company, address, email, standard demographics questions (i.e. job function, industry), and details about the sponsored content or resources you interacted with. If you choose to interact with a booth or access sponsored content, you are explicitly consenting to receipt and use of such data by the third-party recipients, which will be subject to their own privacy policies._",
@@ -9137,6 +9222,26 @@
       "status": "Accepted",
       "isInformed": true,
       "isConfirmed": false
+    },
+    {
+      "id": "1372858",
+      "title": "Fireside Chat: Future of Kubernetes and Agents with Tim Hokin and Kelsey Hightower",
+      "description": "Kubernetes was built for long-running services. AI agents are different: mostly idle, bursty, running untrusted code, and needing to resume instantly with their state intact. What does that mean for the platform underneath?\r\n\r\nJoin Kubernetes co-founder Tim Hockin and cloud native leader Kelsey Hightower for a live conversation hosted by Savannah Peterson. They’ll explore how Agent Substrate builds on Kubernetes for the agent era, and what the next decade holds for platform teams and the open source community. Expect candid opinions, a little history, and time for audience questions.",
+      "startsAt": "2026-11-11T13:50:00",
+      "endsAt": "2026-11-11T14:20:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        520089
+      ],
+      "questionAnswers": [],
+      "roomId": 90682,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": true
     },
     {
       "id": "1373667",
@@ -9693,7 +9798,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/inbaqtet~PEFHMCoecaBvo1EBVhDao7.pdf~contribfest-deck.pdf"
+          "answerValue": "https://sessionize.com/download/izhajjen~U9c8ehjC9nc8YadyjtECgR.pdf~final-contribfest.pdf"
         }
       ],
       "roomId": 87427,
@@ -9930,6 +10035,26 @@
       ],
       "questionAnswers": [],
       "roomId": 90363,
+      "liveUrl": null,
+      "recordingUrl": null,
+      "status": "Accepted",
+      "isInformed": true,
+      "isConfirmed": false
+    },
+    {
+      "id": "1372868",
+      "title": "Kubernetes: Ask the Experts",
+      "description": "Hear from Kubernetes maintainers and the Steering Committee as they discuss the future of Kubernetes. Come ready with your questions!",
+      "startsAt": "2026-11-11T14:50:00",
+      "endsAt": "2026-11-11T15:15:00",
+      "isServiceSession": false,
+      "isPlenumSession": false,
+      "speakers": [],
+      "categoryItems": [
+        520089
+      ],
+      "questionAnswers": [],
+      "roomId": 90682,
       "liveUrl": null,
       "recordingUrl": null,
       "status": "Accepted",
@@ -10310,7 +10435,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/irxabnek~XYqxqAzB19WtaZt6oZn4bN.pdf~kubecon-na-2026_your-ci-s-mistaken-identity.pdf"
+          "answerValue": "https://sessionize.com/download/ijqakpev~UdkT37BMpgpVkXdFT9DZR8.pdf~kubecon-na-2026_your-ci-s-mistaken-identity.pdf"
         }
       ],
       "roomId": 82956,
@@ -10913,8 +11038,7 @@
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
-        "4ad9c703-af56-4c2d-8675-cd9c57b93163",
-        "34051502-0645-4910-94cd-7d298ee902b3"
+        "4ad9c703-af56-4c2d-8675-cd9c57b93163"
       ],
       "categoryItems": [
         465816,
@@ -10923,7 +11047,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/ixlagqeb~Ln9FuKtSq5meqnZzqY9bJe.pptx~kubecon-vlm-kubernetes-v13.pptx"
+          "answerValue": "https://sessionize.com/download/icpasoh~MFnYacmV5qtpmPbhGzPjyL.pptx~kubecon-vlm-kubernetes-v15.pptx"
         }
       ],
       "roomId": 82952,
@@ -11445,7 +11569,12 @@
         465822,
         496398
       ],
-      "questionAnswers": [],
+      "questionAnswers": [
+        {
+          "questionId": 137003,
+          "answerValue": "https://sessionize.com/download/iwpaqtep~X12j4qP9jui29zi4gVBcRX.pdf~one_workload_to_rule_them_all_workload-aware_scheduling_for-distributed_ai_training_on-kubernetes.pdf"
+        }
+      ],
       "roomId": 82948,
       "liveUrl": null,
       "recordingUrl": null,
@@ -11935,7 +12064,7 @@
       "title": "Kubeflow Graduation: Powering the Next Era of Cloud Native AI With an Open Community",
       "description": "Since 2017, Kubeflow has evolved from a TensorFlow controller into a Cloud Native AI platform comprising eleven full-fledged projects, used by thousands of organizations across the AI lifecycle. Today, we are excited to celebrate Kubeflow’s Graduation from the CNCF – and the open community that made this journey possible.\r\nThis keynote explores real-world stories from our users, showing how an open, vendor-neutral community is pushing the boundaries of Data & AI infrastructure across the whole AI lifecycle. It will highlight large-scale distributed training with Kubeflow Trainer and MPI, and look ahead to the agentic era with innovations such as the Semantic Operator. By bringing governed semantic APIs to Kubernetes, the Semantic Operator enables AI agents, applications, and BI tools to work with trusted business definitions without relying on LLM-generated SQL. Together, these efforts illustrate how the Kubeflow community is building the foundations for the next decade of Cloud Native AI.",
       "startsAt": "2026-11-12T09:12:00",
-      "endsAt": "2026-11-12T09:17:00",
+      "endsAt": "2026-11-12T09:19:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -11960,8 +12089,8 @@
       "id": "1353351",
       "title": "Celebrating the People Who Make Cloud Native Possible",
       "description": "Behind every project, release and community milestone are people doing the work that keeps cloud native moving forward. The CNCF Community Awards recognize individuals whose technical contributions, sustained leadership and often unseen work have made an exceptional impact on the cloud native community. Join us as we celebrate community members across four awards, recognizing the many ways people contribute to building and sustaining cloud native technologies.",
-      "startsAt": "2026-11-12T09:19:00",
-      "endsAt": "2026-11-12T09:30:00",
+      "startsAt": "2026-11-12T09:21:00",
+      "endsAt": "2026-11-12T09:32:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -11982,8 +12111,8 @@
       "id": "1337241",
       "title": "Scaling Multi-Modal Models and Computer-Use Agents on Kubernetes",
       "description": "Hark builds multi-modal models and computer-use agents — models that operate software the way a person does. Scaling them means running every kind of workload on the same infrastructure: multi-modal data processing, training, reinforcement learning, and inference serving.\r\n\r\nAll of it runs on Ray, deployed and autoscaled by KubeRay. But Ray is not only our runtime — it is also our resource management layer, with MultiKueue governing GPU capacity across every cluster we operate. This keynote covers how that fits together.",
-      "startsAt": "2026-11-12T09:32:00",
-      "endsAt": "2026-11-12T09:37:00",
+      "startsAt": "2026-11-12T09:34:00",
+      "endsAt": "2026-11-12T09:39:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -12005,8 +12134,8 @@
       "id": "1293929",
       "title": "Standardized Yet Adaptable: How Nutanix is Evolving Cluster API with CAREN",
       "description": "Cloud native innovation has always been driven by the community. From Mesosphere's role as a CNCF founding member to D2iQ's continued Kubernetes leadership and now Nutanix's active contributions across multiple CNCF projects, the mission has remained the same: build together in the open.In this session, we'll revisit that journey and explore how those experiences led to CAREN (Cluster API Runtime Extensions - Nutanix), an extensible framework that enables dynamic cluster configuration and lifecycle management while preserving the simplicity and consistency of Cluster API's declarative model. As we look to the future of Kubernetes fleet management, standardization via Cluster API (CAPI) and the ClusterClass feature has brought immense consistency to cluster provisioning. However, real-world enterprise deployments often hit a wall: they require dynamic customization that strict standardization struggles to accommodate.CAREN bridges the critical gap between strict declarative blueprints and real-world adaptability. By leveraging CAPI's runtime mutation hooks, CAREN dynamically configures and manages Kubernetes clusters without ever needing to fork or touch the base ClusterClass. It empowers platform engineering teams to deliver standardized, yet infinitely adaptable Kubernetes clusters.",
-      "startsAt": "2026-11-12T09:39:00",
-      "endsAt": "2026-11-12T09:44:00",
+      "startsAt": "2026-11-12T09:41:00",
+      "endsAt": "2026-11-12T09:46:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -12028,8 +12157,8 @@
       "id": "1367923",
       "title": "Salesforce Runs on Heroku: How We Empower Every Builder at Cloud Native Scale",
       "description": "Salesforce is Heroku's largest customer with over 20k apps. Internal teams rely on Heroku to ship fast . As AI and \"vibe coding\" lower the barrier to software creation, it's essential to provide the right guardrails and restricted access while preserving an intuitive developer experience.\r\n\r\nTo satisfy strict security requirements, Salesforce relies on Heroku Private Spaces. Behind the scenes, this isolated environment was re-engineered on a Cloud Native stack while keeping the same developer experience. Cloud Native Buildpacks bring the language & framework of choice, while image rebasing lets the platform patch base OS vulnerabilities across thousands of apps in seconds without rebuilding code.\r\n\r\nIn this keynote, see how these pieces come together to provide a clear shared responsibility between the platform and the builder: builders own delivering customer value, while the platform silently handles scale, isolation, and security.\r\n",
-      "startsAt": "2026-11-12T09:46:00",
-      "endsAt": "2026-11-12T09:49:00",
+      "startsAt": "2026-11-12T09:48:00",
+      "endsAt": "2026-11-12T09:51:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -12051,8 +12180,8 @@
       "id": "1368936",
       "title": "The Storage Bottleneck AI Didn't See Coming: Inside StepFun’s Multimodal Production Stack",
       "description": "Multimodal AI has outgrown the storage systems built for it. Training and inference now mix small-file storms, high-concurrency random reads, terabyte-scale checkpoints, and 100 GB+ model files across heterogeneous GPU clusters, private data centers, and public clouds. The hard part isn't any one workload. It means serving all of them through a single storage access layer that follows compute wherever it runs, whether on-prem or in any cloud. In this keynote, we'll show how StepFun made that move on Kubernetes, TiKV, and JuiceFS. Hardware-aware CSI mounts handle heterogeneous nodes, TiKV-backed metadata scales to more than 10,000 mounting hosts, point-get optimization speeds up relevant read-only operations by roughly 50%, and tuning both the metadata engine and readahead for Safetensors loads cuts read amplification by roughly 71%. We'll share how these improvements were merged upstream to turn production lessons into community gains.",
-      "startsAt": "2026-11-12T09:51:00",
-      "endsAt": "2026-11-12T09:54:00",
+      "startsAt": "2026-11-12T09:53:00",
+      "endsAt": "2026-11-12T09:56:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -12074,8 +12203,8 @@
       "id": "1301727",
       "title": "Kubernetes with Conviction: How Customization is Shaping the OSS AI Ecosystem's Future",
       "description": "Just as the Linux ecosystem thrives by separating a universal, low-level kernel from specialized distributions, Kubernetes is evolving beyond a monolithic, \"one-size-fits-all\" architecture. Forcing a single platform to act as a universal orchestrator for everything from tiny edge devices to hyper-scale AI clusters creates inefficiency and strain.\r\nTo solve this, the industry is implicitly defining a lean Kubernetes Kernel—the core API machinery, reconciliation loops, and resource abstractions—as a standardized foundation. Simultaneously, agentic engineering is drastically reducing the cost of software creation and democratizing the operational expertise needed to build upon this foundation.\r\n\r\nJoin us to learn how building on the Kubernetes Kernel allows power-users to create vertically integrated, purpose-built custom distros that achieve significant performance gains while still crowd-sourcing defect discovery and reliability. ",
-      "startsAt": "2026-11-12T09:56:00",
-      "endsAt": "2026-11-12T10:01:00",
+      "startsAt": "2026-11-12T09:58:00",
+      "endsAt": "2026-11-12T10:03:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -12098,8 +12227,8 @@
       "id": "1293369",
       "title": "Agentic AI, Assembled in the Open",
       "description": "Agentic AI is moving from experiments to production, and Kubernetes is a natural place to think about how these workloads are run. Let's look at how open source can provide a common platform layer for agentic systems, allowing frameworks, orchestrators, compute substrates, and identity infrastructure to come together behind declarative APIs. The goal is a more consistent way to deploy, schedule, secure, and observe AI agents using the cloud native model teams already know.",
-      "startsAt": "2026-11-12T10:03:00",
-      "endsAt": "2026-11-12T10:08:00",
+      "startsAt": "2026-11-12T10:05:00",
+      "endsAt": "2026-11-12T10:10:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -12121,8 +12250,8 @@
       "id": "1294245",
       "title": "Cloud Native Without Limits: What Can AI Agents Do for Us?",
       "description": "In Amsterdam, we explored what cloud native could do with AI agents, MCP, and a drone controlled through natural language. Now it's time for Drone 2.\r\nWhat happens when AI agents become a natural part of the cloud native ecosystem? Imagine agents that can debug production issues, analyze token spending, automate routine operations, and even make us laugh, all while interacting with Kubernetes, cloud native tools, and MCP servers through natural language, with humans firmly in control.\r\n\r\nThis keynote explores what's possible when AI agents become trusted collaborators in cloud native. Through live demonstrations with Drone 2, we'll show how natural language and AI agents can transform the way we build, operate, and experience cloud native systems, pushing the boundaries of what's possible while keeping humans in control.",
-      "startsAt": "2026-11-12T10:10:00",
-      "endsAt": "2026-11-12T10:20:00",
+      "startsAt": "2026-11-12T10:12:00",
+      "endsAt": "2026-11-12T10:24:00",
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
@@ -12143,7 +12272,7 @@
       "id": "1302806",
       "title": "Closing Remarks",
       "description": null,
-      "startsAt": "2026-11-12T10:22:00",
+      "startsAt": "2026-11-12T10:24:00",
       "endsAt": "2026-11-12T10:30:00",
       "isServiceSession": false,
       "isPlenumSession": false,
@@ -12202,7 +12331,7 @@
     {
       "id": "1373668",
       "title": "Project Pavilion Kiosks | Thursday Morning",
-      "description": "P-1A\tHelm\r\nP-1B\tTBD\r\nP-2A\tDrasi\r\nP-2B\tFlux\r\nP-3A\tRook\r\nP-3B\tKarmada\r\nP-4A\tLinkerd\r\nP-4B\tMicrocks\r\nP-5A\tKueue / Workload Aware Scheduling (SIG Subproject)\r\nP-5B\tSIG-etcd\r\nP-6A\tProject Capsule\r\nP-6B\tIstio\r\nP-7A\tCrossplane\r\nP-7B\tEnvoyproxy\r\nP-8A\tCilium\r\nP-8B\tKagent\r\nP-9A\tLima\r\nP-9B\tKServe\r\nP-10A\tLonghorn\r\nP-10B\tHive Commons\r\nP-11A\tFalco\r\nP-11B\tOpen Policy Agent\r\nP-12A\tFluent Bit\r\nP-12B\tKyverno\r\nP-13A\tSPIFFE\r\nP-13B\tMetal3.io\r\nP-14A\tLitmusChaos\r\nP-14B\tCartography\r\nP-15A\tTAG Infrastructure\r\nP-15B\tSpin\r\nP-16A\tOpenTelemetry\r\nP-16B\tTechnical Community Group\r\nP-17A\tCloud Native Community Groups/KCDs\r\nP-17B\tScore\r\nP-18A\tArgo\r\nP-18B\tDapr",
+      "description": "P-1A\tHelm\r\nP-1B\tTBD\r\nP-2A\tDrasi\r\nP-2B\tFlux\r\nP-3A\tRook\r\nP-3B\tKarmada\r\nP-4A\tLinkerd\r\nP-4B\tMicrocks\r\nP-5A\tKueue / Workload Aware Scheduling (SIG Subproject)\r\nP-5B\tSIG-etcd\r\nP-6A\tProject Capsule\r\nP-6B\tIstio\r\nP-7A\tCrossplane\r\nP-7B\tEnvoyproxy\r\nP-8A\tCilium\r\nP-8B\tKagent\r\nP-9A\tLima\r\nP-9B\tKServe\r\nP-10A\tLonghorn\r\nP-10B\tHive Commons\r\nP-11A\tFalco\r\nP-11B\tOpen Policy Agent\r\nP-12A\tFluent Bit\r\nP-12B\tKyverno\r\nP-13A\tSPIFFE\r\nP-13B\tMetal3.io\r\nP-14A\tKubescape\r\nP-14B\tCartography\r\nP-15A\tTAG Infrastructure\r\nP-15B\tSpin\r\nP-16A\tOpenTelemetry\r\nP-16B\tTechnical Community Group\r\nP-17A\tCloud Native Community Groups/KCDs\r\nP-17B\tScore\r\nP-18A\tArgo\r\nP-18B\tDapr",
       "startsAt": "2026-11-12T10:30:00",
       "endsAt": "2026-11-12T11:55:00",
       "isServiceSession": false,
@@ -12557,8 +12686,8 @@
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
-        "5a17eabe-e0d9-450f-86c2-14d4d5289837",
-        "fbc52cf0-2678-4866-925e-40cb7ba3ba53"
+        "fbc52cf0-2678-4866-925e-40cb7ba3ba53",
+        "e6687161-2fca-4304-acb8-439573e376ea"
       ],
       "categoryItems": [
         465809,
@@ -13130,7 +13259,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/tlaptep~BH1m7mj9438Ga8sRk7nNMb.pdf~from-load-balancer-sprawl-to-multicluster-service-discovery.pdf"
+          "answerValue": "https://sessionize.com/download/cvaswel~Bcdax4KXMDL3SyTmqicSnD.pdf~from-load-balancer-sprawl-to-multicluster-service-discovery.pdf"
         }
       ],
       "roomId": 82955,
@@ -14120,7 +14249,7 @@
       "questionAnswers": [
         {
           "questionId": 137003,
-          "answerValue": "https://sessionize.com/download/ibmaywec~VdQgcsbZUhf7M4VKu5x2hv.pdf~kubeconna-from-black-box-to-auditable-ai-grid.pdf"
+          "answerValue": "https://sessionize.com/download/imbazdeh~hEh22hQ9Buv8zi2iKGKSBf.pdf~upload-kubeconna-from-black-box-to-auditable-ai-grid.pdf"
         }
       ],
       "roomId": 82950,
@@ -14866,8 +14995,8 @@
       "isServiceSession": false,
       "isPlenumSession": false,
       "speakers": [
-        "496781a5-5e38-462e-b1a4-63b39652dc78",
-        "8890bf82-0e38-4dfe-bf20-820920efb9b8"
+        "8890bf82-0e38-4dfe-bf20-820920efb9b8",
+        "57a1c1b9-8d99-439e-b1fc-56b5258355f2"
       ],
       "categoryItems": [
         496286,
@@ -14879,7 +15008,7 @@
       "recordingUrl": null,
       "status": "Accepted",
       "isInformed": true,
-      "isConfirmed": false
+      "isConfirmed": true
     }
   ],
   "speakers": [
@@ -15076,7 +15205,7 @@
         },
         {
           "questionId": 128830,
-          "answerValue": "Group Product Manager"
+          "answerValue": "Robotics Product Lead"
         }
       ]
     },
@@ -15577,7 +15706,7 @@
         }
       ],
       "sessions": [
-        1334848
+        1384474
       ],
       "fullName": "Alay Patel",
       "categoryItems": [],
@@ -18072,6 +18201,52 @@
       ]
     },
     {
+      "id": "57a1c1b9-8d99-439e-b1fc-56b5258355f2",
+      "firstName": "Avinash",
+      "lastName": "Sabat",
+      "bio": "Avinash Sabat is a Principal Cloud DevOps and Platform Engineer with 14+ years of experience building cloud-native platforms for large, regulated organizations. His work centers on platform engineering, developer enablement, and operational excellence, creating scalable, secure foundations that allow teams to move faster without sacrificing control. He brings a systems-level perspective that connects cloud engineering, governance, and business outcomes.",
+      "tagLine": "Helping financial institutions move faster and smarter in the cloud — Avinash Sabat, Cloud DevOps and Platform engineer at Synechron",
+      "profilePicture": "https://cdn.sessionize.com/image/4fd7-400o400o1-WshrDDNwBUUM61uEAmZZGN.jpg",
+      "isTopSpeaker": false,
+      "links": [
+        {
+          "title": "LinkedIn",
+          "url": "https://www.linkedin.com/in/avinashsabat/",
+          "linkType": "LinkedIn"
+        },
+        {
+          "title": "Blog",
+          "url": "https://www.infoq.com/articles/platform-golden-path-approach/",
+          "linkType": "Blog"
+        },
+        {
+          "title": "Company Website",
+          "url": "https://www.synechron.com/en-us",
+          "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/avinash-sabat",
+          "linkType": "Sessionize"
+        }
+      ],
+      "sessions": [
+        1375121
+      ],
+      "fullName": "Avinash Sabat",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 128829,
+          "answerValue": "Synechron"
+        },
+        {
+          "questionId": 128830,
+          "answerValue": "Platform Engineer"
+        }
+      ]
+    },
+    {
       "id": "7bf5a378-3621-426a-82b8-ab84d57235b8",
       "firstName": "Ayato",
       "lastName": "Tokubi",
@@ -19584,8 +19759,7 @@
         }
       ],
       "sessions": [
-        1375122,
-        1375121
+        1375122
       ],
       "fullName": "Chris Plank",
       "categoryItems": [],
@@ -20511,37 +20685,6 @@
         {
           "questionId": 128830,
           "answerValue": "Principal Observability Architect"
-        }
-      ]
-    },
-    {
-      "id": "34051502-0645-4910-94cd-7d298ee902b3",
-      "firstName": "Daniel",
-      "lastName": "Bichuetti",
-      "bio": "Daniel Bichuetti is Co-CEO and CTO of Forlex, where he leads the engineering of domain-specific AI systems and the GPU infrastructure used to train and serve them. A computer scientist and serial entrepreneur, he works across distributed training, Kubernetes, high-performance networking, data pipelines, and reliable production AI. His focus is turning large-scale infrastructure lessons into practical, reproducible engineering patterns.",
-      "tagLine": "Co-Ceo & CTO",
-      "profilePicture": "https://cdn.sessionize.com/image/2b55-400o400o1-LYAjTA8wmVQtUsnponrEPr.png",
-      "isTopSpeaker": false,
-      "links": [
-        {
-          "title": "Company Website",
-          "url": "https://www.forlex.ai",
-          "linkType": "Company_Website"
-        }
-      ],
-      "sessions": [
-        1249812
-      ],
-      "fullName": "Daniel Bichuetti",
-      "categoryItems": [],
-      "questionAnswers": [
-        {
-          "questionId": 128829,
-          "answerValue": "Forlex"
-        },
-        {
-          "questionId": 128830,
-          "answerValue": "AI Engineer"
         }
       ]
     },
@@ -28268,13 +28411,13 @@
           "linkType": "Company_Website"
         },
         {
-          "title": "BlueSky",
-          "url": "https://bsky.app/profile/jcosta.dev",
+          "title": "Mastodon",
+          "url": "https://mastodon.social/@julianocosta89",
           "linkType": "Other"
         },
         {
-          "title": "Mastodon",
-          "url": "https://mastodon.social/@julianocosta89",
+          "title": "BlueSky",
+          "url": "https://bsky.app/profile/jcosta.dev",
           "linkType": "Other"
         },
         {
@@ -29857,8 +30000,8 @@
       "id": "0479616d-f8a6-4eb6-ba5e-4ef5ba21781e",
       "firstName": "Laura",
       "lastName": "Lorenz",
-      "bio": "Laura Lorenz is a software engineer at Google. She is an active member of Kubernetes’ upstream focused on SIG-Multicluster, SIG-Node, and releases.",
-      "tagLine": "SWE at Google",
+      "bio": "Laura is a Software Engineer who has been a kubernetes contributor since 2020, with focus on SIG-Multicluster, SIG-Node, and SIG-Release.",
+      "tagLine": "Software Engineer",
       "profilePicture": "https://cdn.sessionize.com/image/f71c-400o400o1-fYg3KHew8iais6ud6yzu73.jpg",
       "isTopSpeaker": false,
       "links": [
@@ -29877,7 +30020,7 @@
       "questionAnswers": [
         {
           "questionId": 128829,
-          "answerValue": "Google"
+          "answerValue": "Independent"
         },
         {
           "questionId": 128830,
@@ -30623,9 +30766,9 @@
       "id": "4da4c54e-dc61-45ce-ad78-8ff6e9255873",
       "firstName": "Lucas",
       "lastName": "Käldström",
-      "bio": "Lucas is a Kubernetes and cloud native contributor since 10 years. He was a CNCF Ambassador for 7 years, awarded Top CNCF Ambassador 2017 with Sarah Novotny. Lucas was a co-lead for SIG Cluster Lifecycle, co-created kubeadm, and ported Kubernetes to ARM. Lucas has been running meetups and KCD Helsinki in Finland, co-created the meetup collective Cloud Native Nordics and has spoken at 10 KubeCons. Lucas is now researching control plane access control as a Staff Software Engineer at Upbound.",
+      "bio": "Lucas is a Kubernetes and CNCF contributor since 10+ years. He has been a CNCF Ambassador for over 7 years. Lucas is a Cedar Policy maintainer, contributes to Kubernetes SIG Auth, and works on integrating Cedar Policy's automated reasoning capabilities with the CNCF ecosystem as a Senior Applied Scientist at AWS. Lucas is running meetups and KCD Helsinki in Finland, and has spoken at 10+ KubeCons. Previously, Lucas co-led SIG Cluster Lifecycle, co-created kubeadm, and ported Kubernetes to ARM.",
       "tagLine": "Kubernetes & Cloud Native Developer and Speaker",
-      "profilePicture": "https://cdn.sessionize.com/image/c6c2-400o400o1-XhVBJaiRt1caAYVdLbs553.jpeg",
+      "profilePicture": "https://cdn.sessionize.com/image/6308-400o400o1-XTeYmrRd2FPr5bzc1Xb67.jpg",
       "isTopSpeaker": false,
       "links": [
         {
@@ -30657,11 +30800,11 @@
       "questionAnswers": [
         {
           "questionId": 128829,
-          "answerValue": "Upbound"
+          "answerValue": "AWS"
         },
         {
           "questionId": 128830,
-          "answerValue": "Staff Software Engineer"
+          "answerValue": "Senior Applied Scientist"
         }
       ]
     },
@@ -33708,7 +33851,7 @@
       "questionAnswers": [
         {
           "questionId": 128829,
-          "answerValue": "Potainer.io"
+          "answerValue": "Portainer.io"
         },
         {
           "questionId": 128830,
@@ -35348,7 +35491,7 @@
       "id": "a37cda3a-e328-4482-8b69-b04e6a14bcc7",
       "firstName": "Prschita",
       "lastName": "Prschita",
-      "bio": "Prschita is an engineering manager at Apple, leading the Observability Intelligence and Analysis team. Prschita loves to think about and build ML-Driven Observability solutions. She has a background in Observability, Machine Learning, Data Science and Data Engineering.",
+      "bio": "Prschita is an engineering manager at Apple, leading the Observability Intelligence team. Prschita loves to think about and build ML-Driven Observability solutions. She has a background in Observability, Machine Learning, Data Science and Data Engineering.",
       "tagLine": "Apple, Engineering Manager",
       "profilePicture": "https://cdn.sessionize.com/image/bb99-400o400o1-UbDKeqNvAaRBhphcNTtKFu.jpg",
       "isTopSpeaker": false,
@@ -36075,6 +36218,11 @@
           "title": "Company Website",
           "url": "https://www.agilityrobotics.com/",
           "linkType": "Company_Website"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/rian-bogle",
+          "linkType": "Sessionize"
         }
       ],
       "sessions": [
@@ -38740,47 +38888,6 @@
       ]
     },
     {
-      "id": "5a17eabe-e0d9-450f-86c2-14d4d5289837",
-      "firstName": "Srikanth",
-      "lastName": "Rajan",
-      "bio": "As a VP of Software Engineering at Salesforce, Srikanth leads the Hyperforce compute platform, overseeing massive Kubernetes deployments. Drawing on over 20 years of industry experience, he specializes in building enterprise-scale infrastructure at tech leaders like Yahoo and Salesforce. He is driven to architect robust, future-proof systems by unlocking the potential of AI.",
-      "tagLine": "VP of Software Engineering, Salesforce",
-      "profilePicture": "https://cdn.sessionize.com/image/e66a-400o400o1-Tz8v65XgsoiC6DcysB5NiB.jpg",
-      "isTopSpeaker": false,
-      "links": [
-        {
-          "title": "LinkedIn",
-          "url": "https://www.linkedin.com/in/rssrik",
-          "linkType": "LinkedIn"
-        },
-        {
-          "title": "Company Website",
-          "url": "https://www.salesforce.com",
-          "linkType": "Company_Website"
-        },
-        {
-          "title": "Sessionize",
-          "url": "https://sessionize.com/rssrik",
-          "linkType": "Sessionize"
-        }
-      ],
-      "sessions": [
-        1248788
-      ],
-      "fullName": "Srikanth Rajan",
-      "categoryItems": [],
-      "questionAnswers": [
-        {
-          "questionId": 128829,
-          "answerValue": "Salesforce"
-        },
-        {
-          "questionId": 128830,
-          "answerValue": "VP of Software Engineering"
-        }
-      ]
-    },
-    {
       "id": "91d09448-13dc-49c7-ad49-da9c9b0262b0",
       "firstName": "Stanislav",
       "lastName": "Láznička",
@@ -39519,7 +39626,7 @@
       "lastName": "Bansal",
       "bio": "I have been building distributed systems at major cloud providers over the last 15 years. I currently work at Oracle as an Architect in the Containers and Kubernetes space. I have spent the last few years diving into the Kubernetes world, working towards making Oracle Kubernetes Engine scalable, resilient and ready to handle large scale GPU Training,  Inference and Agentic workloads. \r\nPrior to Oracle, I spent 11 years at AWS building various cloud services like SageMaker AutoML and FeatureStore.",
       "tagLine": "Oracle, Architect for Oracle Kubernetes Engine",
-      "profilePicture": "https://cdn.sessionize.com/image/b489-400o400o1-UTcEfNC1BX826Bj1ge78iH.jpg",
+      "profilePicture": "https://cdn.sessionize.com/image/52f3-400o400o1-UGjMNreiV4mknS4gwdjc7N.jpg",
       "isTopSpeaker": false,
       "links": [
         {
@@ -39805,6 +39912,11 @@
           "title": "LinkedIn",
           "url": "https://www.linkedin.com/in/tskillian/",
           "linkType": "LinkedIn"
+        },
+        {
+          "title": "Sessionize",
+          "url": "https://sessionize.com/tskillian",
+          "linkType": "Sessionize"
         }
       ],
       "sessions": [
@@ -40355,6 +40467,31 @@
         {
           "questionId": 128830,
           "answerValue": "Senior Staff Software Engineer"
+        }
+      ]
+    },
+    {
+      "id": "e6687161-2fca-4304-acb8-439573e376ea",
+      "firstName": "Uttam",
+      "lastName": "Kumar",
+      "bio": "Uttam Kumar is a director of software engineering at Salesforce, managing compute platform within the Hyperforce Container Platform.  He has deep expertise in Kubernetes platform engineering, availability and incident management, and scale and chaos testing across multi-cloud environments. He is passionate about building self-healing, resilient systems and applying agentic AI to automate operations at scale.",
+      "tagLine": "Salesforce , Director of Software Engineering",
+      "profilePicture": "https://cdn.sessionize.com/image/336d-400o400o1-MrvEXqQVPN5mRxyABofhXj.png",
+      "isTopSpeaker": false,
+      "links": [],
+      "sessions": [
+        1248788
+      ],
+      "fullName": "Uttam Kumar",
+      "categoryItems": [],
+      "questionAnswers": [
+        {
+          "questionId": 128829,
+          "answerValue": "Salesforce"
+        },
+        {
+          "questionId": 128830,
+          "answerValue": "Director of Software Engineering"
         }
       ]
     },
@@ -41945,7 +42082,7 @@
         },
         {
           "questionId": 128830,
-          "answerValue": "CEO"
+          "answerValue": "Founder & CEO"
         },
         {
           "questionId": 140808,
