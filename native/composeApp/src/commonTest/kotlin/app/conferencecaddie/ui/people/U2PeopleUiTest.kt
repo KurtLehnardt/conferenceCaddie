@@ -3,7 +3,6 @@ package app.conferencecaddie.ui.people
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -12,7 +11,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ComposeUiTest
@@ -30,7 +28,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.InMemorySecureStore
@@ -144,19 +141,18 @@ internal fun ComposeUiTest.u2Ready(rig: U2Rig, name: String? = "Me Myself", visi
 }
 
 /**
- * The People tab as PeopleTab draws it online, with the shared sheets, in the light theme. [state]
- * may change what the screen is given (a reveal); [fontScale] scales the text.
+ * The People tab as PeopleTab draws it online, with the shared sheets, in the light theme, on the
+ * test phone. [state] may change what the screen is given (a reveal); [fontScale] scales the text.
  */
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.u2Show(rig: U2Rig, fontScale: Float? = null, state: (PeopleUiState) -> PeopleUiState = { it }) {
+internal fun ComposeUiTest.u2Show(rig: U2Rig, fontScale: Float = 1f, state: (PeopleUiState) -> PeopleUiState = { it }) {
     setContent {
         val scope = rememberCoroutineScope()
         val host = remember {
             PeopleHost(rig.controller, rig.nav, scope, { message, _ -> rig.toasts += message }, {}, { rig.opened += it }).also { rig.host = it }
         }
         val current by rig.controller.state.collectAsState()
-        val density = LocalDensity.current
-        CompositionLocalProvider(LocalDensity provides if (fontScale != null) Density(density.density, fontScale) else density) {
+        TestPhone(fontScale) {
             CaddieTheme {
                 Box(Modifier.fillMaxSize().background(Caddie.colors.bg)) {
                     PeopleTab(state(current), host, rig.talks, online = true)

@@ -4,11 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -19,7 +17,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.unit.Density
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.InMemorySecureStore
 import app.conferencecaddie.shared.LocationAccess
@@ -220,15 +217,15 @@ internal fun ComposeUiTest.u3WaitForToast(rig: U3Rig, message: String) {
     waitUntil(timeoutMillis = 20_000) { message in rig.toasts.value }
 }
 
-/** Draws [content] in the app's theme and, when set, at a font scale. The rig's clock and "open settings" reach the screens through its host. */
+/**
+ * Draws [content] in the app's theme on the test phone, at [fontScale]. The rig's clock and "open
+ * settings" reach the screens through its host.
+ */
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.u3Show(rig: U3Rig, fontScale: Float? = null, content: @Composable (PeopleUiState) -> Unit) {
+internal fun ComposeUiTest.u3Show(rig: U3Rig, fontScale: Float = 1f, content: @Composable (PeopleUiState) -> Unit) {
     setContent {
-        CaddieTheme {
-            val density = LocalDensity.current
-            CompositionLocalProvider(
-                LocalDensity provides if (fontScale != null) Density(density.density, fontScale) else density,
-            ) {
+        TestPhone(fontScale) {
+            CaddieTheme {
                 val state by rig.controller.state.collectAsState()
                 Box(Modifier.fillMaxSize().background(Caddie.colors.bg)) { content(state) }
                 PeopleSheets(state, rig.host)

@@ -7,7 +7,7 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.core.BundleState
 import app.conferencecaddie.shared.core.CaddieCore
@@ -38,6 +38,10 @@ import kotlinx.io.files.SystemTemporaryDirectory
 // a tab first, and then their tab stays. CaddieApp over a real CaddieCore on TestBackend (people features on), whose capabilities
 // document is held back, and a PeopleController on the fake People server. Runs on the iOS simulator
 // and on Android.
+//
+// The tests use the v2 test API, which runs the composition's coroutines on the main thread. The
+// People tab first appears when the controller, on a background thread, says people features are
+// on; the v1 API would compose it on that thread, where an Android lazy list cannot start.
 @OptIn(ExperimentalTestApi::class)
 class StartTabUiTest {
     private val backend = TestBackend(people = true)
@@ -84,7 +88,7 @@ class StartTabUiTest {
 
     @Test
     fun aFirstStartOpensPeopleWhenTheCapabilitiesArriveLate() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) }
+        setContent { TestPhone { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) } }
         waitForIdle()
 
         // Nothing is known yet: there is no People tab, and no tab is picked for the person, so the
@@ -108,7 +112,7 @@ class StartTabUiTest {
 
     @Test
     fun aTabPickedBeforeTheCapabilitiesArriveStaysPicked() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) }
+        setContent { TestPhone { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) } }
         waitForIdle()
         onNodeWithTag("tab-${Strings.Tabs.PEOPLE}").assertDoesNotExist()
 

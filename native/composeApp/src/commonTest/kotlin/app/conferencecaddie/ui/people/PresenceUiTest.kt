@@ -15,7 +15,6 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.GeoFix
 import app.conferencecaddie.shared.LocationAccess
@@ -72,7 +71,7 @@ class PresenceUiTest {
         // The zone sheet (titled "Zone") closes, and the picker shows the choice.
         waitUntil(timeoutMillis = 20_000) { onAllNodesWithTextCount(ConnectStrings.ZONE) == 0 }
         onNodeWithContentDescription(ConnectStrings.ZONE).assertTextEquals("Hallway")
-        onNodeWithTag("presence-spot").performTextInput("by the coffee cart")
+        onNodeWithTag("presence-spot").typeText("by the coffee cart")
         onNodeWithText(ConnectStrings.I_AM_AROUND).performClick()
 
         waitUntil(timeoutMillis = 20_000) { rig.state.presence.on }

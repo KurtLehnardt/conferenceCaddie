@@ -3,6 +3,7 @@ package app.conferencecaddie.ui.people
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -11,7 +12,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.GeoFix
 import app.conferencecaddie.shared.people.ApiResult
@@ -86,7 +86,7 @@ class MeetUiTest {
         runOnIdle { rig.host.closeReport() }
 
         // My spot-me line.
-        onNodeWithTag("meet-spot-me").performScrollTo().performTextInput("green hoodie")
+        onNodeWithTag("meet-spot-me").performScrollTo().typeText("green hoodie")
         onNodeWithText(ConnectStrings.spotMeCount(12)).assertIsDisplayed()
         onNodeWithTag("meet-spot-me-save").performClick()
         u3WaitForText(ConnectStrings.SAVED)
@@ -125,8 +125,8 @@ class MeetUiTest {
         onNodeWithText(ConnectStrings.meetAt("Hallway")).performScrollTo().assertIsDisplayed()
         onNodeWithText(ConnectStrings.addALine("Ada Seed")).performScrollTo().assertIsDisplayed()
         onNodeWithTag("meet-distance").assertDoesNotExist()
-        val them = onNodeWithTag("meet-them").fetchSemanticsNode().boundsInRoot.top
-        val rendezvous = onNodeWithTag("meet-rendezvous").fetchSemanticsNode().boundsInRoot.top
+        val them = onNodeWithTag("meet-them").getUnclippedBoundsInRoot().top
+        val rendezvous = onNodeWithTag("meet-rendezvous").getUnclippedBoundsInRoot().top
         assertTrue(them < rendezvous)
     }
 

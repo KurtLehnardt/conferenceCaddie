@@ -67,7 +67,7 @@ class U1TalkPeopleUiTest {
         // Avery is around in Hall A and shares for talk 1; I am not around.
         f.server.seedPerson(f.slug, "Sample · Avery", about = "Placeholder profile 1.", sharedTalkIds = listOf(talk1), around = "Hall A")
         prepare(talk1)
-        setContent { CaddieApp(f.core, isDebugBuild = false, appVersion = "test", talkLaunch = TalkLaunch(talk = talk1), people = f.controller) }
+        setContent { TestPhone { CaddieApp(f.core, isDebugBuild = false, appVersion = "test", talkLaunch = TalkLaunch(talk = talk1), people = f.controller) } }
         u1WaitForTag("talk-sheet")
         val controls = hasAnyAncestor(hasTestTag("talk-people-$talk1"))
         u1WaitForNode(hasText(u1CountLabel(1)) and controls)
@@ -106,7 +106,7 @@ class U1TalkPeopleUiTest {
     @Test
     fun shareAllOnInterestedSharesEveryMarkedTalk() = runComposeUiTest {
         prepare(talk1, talk3)
-        setContent { CaddieApp(f.core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Interested), people = f.controller) }
+        setContent { TestPhone { CaddieApp(f.core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Interested), people = f.controller) } }
         u1WaitForTag("share-all")
         onNodeWithText(ProfileStrings.SHARE_ALL_TITLE).assertIsDisplayed()
         u1WaitForText(ProfileStrings.shareSummary(0, 2))
@@ -145,10 +145,12 @@ class U1TalkPeopleUiTest {
         val end1 = bundle.talksById.getValue(talk1).endEpochMs
         var now by mutableLongStateOf(end1 - 60_000)
         setContent {
-            CaddieTheme {
-                val state by f.controller.state.collectAsState()
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    EndedTalkBanner(PeopleTalks(bundle, listOf(talk1, talk3), now), state, f.host)
+            TestPhone {
+                CaddieTheme {
+                    val state by f.controller.state.collectAsState()
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        EndedTalkBanner(PeopleTalks(bundle, listOf(talk1, talk3), now), state, f.host)
+                    }
                 }
             }
         }

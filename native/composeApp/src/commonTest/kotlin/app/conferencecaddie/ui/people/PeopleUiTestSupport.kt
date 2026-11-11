@@ -1,5 +1,12 @@
 package app.conferencecaddie.ui.people
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.InMemorySecureStore
@@ -13,10 +20,31 @@ import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleFeatures
 import app.conferencecaddie.shared.people.PeopleKeyValue
 import app.conferencecaddie.shared.people.PeopleUiState
+import app.conferencecaddie.ui.TestDevice
 import kotlinx.coroutines.CoroutineScope
 
-// Small stand-ins for the people UI tests: a controller built with its constructor over a map and
-// an API that answers the few routes the shell touches with empty results.
+// Small stand-ins for the people UI tests: the phone they draw on, typing without the keyboard, a
+// controller built with its constructor over a map and an API that answers the few routes the shell
+// touches with empty results.
+
+/** The phone the people UI tests draw on: 390 by 844 dp, the screen of an iPhone 14. */
+val TEST_PHONE = DpSize(390.dp, 844.dp)
+
+/**
+ * Draws [content] as [TEST_PHONE] at [fontScale] (see [TestDevice]), so a people UI test sees the
+ * same screen on every emulator and simulator, CI's small emulator included, whatever their own
+ * screen size, system bars and font size.
+ */
+@Composable
+fun TestPhone(fontScale: Float = 1f, content: @Composable () -> Unit) = TestDevice(TEST_PHONE, fontScale, content)
+
+/**
+ * Puts [text] in this field as typing would, without focusing it: a focused field brings up the
+ * software keyboard on an emulator, which covers much of a small screen while it animates and makes
+ * the test depend on the keyboard. The keyboard itself is checked on devices.
+ */
+fun SemanticsNodeInteraction.typeText(text: String): SemanticsNodeInteraction =
+    performSemanticsAction(SemanticsActions.SetText) { it(AnnotatedString(text)) }
 
 /** People records in memory. */
 class MemoryKeyValue : PeopleKeyValue {

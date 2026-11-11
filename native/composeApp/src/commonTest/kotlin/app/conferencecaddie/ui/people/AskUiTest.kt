@@ -6,9 +6,6 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextClearance
-import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.people.ApiResult
 import app.conferencecaddie.shared.people.PeopleText
@@ -79,13 +76,13 @@ class AskUiTest {
         u3Show(rig) { }
         runOnIdle { rig.host.ask(person) }
         u3WaitForTag("ask-note")
-        onNodeWithTag("ask-note").performTextClearance()
+        onNodeWithTag("ask-note").typeText("")
         onNodeWithText(ConnectStrings.noteCount(0)).assertIsDisplayed()
         onNodeWithTag("ask-send").performClick()
         u3WaitForText(ConnectStrings.NOTE_EMPTY)
         assertTrue(rig.calls("POST", "/api/meet").isEmpty())
         // Typing clears the error.
-        onNodeWithTag("ask-note").performTextInput("Tracing")
+        onNodeWithTag("ask-note").typeText("Tracing")
         onNodeWithText(ConnectStrings.NOTE_EMPTY).assertDoesNotExist()
         onNodeWithText(ConnectStrings.noteCount(7)).assertIsDisplayed()
     }
@@ -99,12 +96,12 @@ class AskUiTest {
         u3WaitForTag("ask-note")
 
         // The line filter: the server's own words.
-        onNodeWithTag("ask-note").performTextReplacement("This is a badword note")
+        onNodeWithTag("ask-note").typeText("This is a badword note")
         onNodeWithTag("ask-send").performClick()
         u3WaitForText("That was held back by the filter. Edit it and try again.")
 
         // Asks are now-only: they must be around, and so must I.
-        onNodeWithTag("ask-note").performTextReplacement("Tracing at scale")
+        onNodeWithTag("ask-note").typeText("Tracing at scale")
         u3Await(rig) { rig.locked { ada.leave() } }
         onNodeWithTag("ask-send").performClick()
         u3WaitForText("They're not around right now.")

@@ -10,7 +10,7 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.ui.App
@@ -35,6 +35,11 @@ import kotlinx.coroutines.launch
 // The People layer in the shell: notification taps, the offline gate and the evidence text. The
 // controller is a real one over an in-memory API; the screens are their owners' (stubs for now), so
 // these tests look only at what the layer itself decides. Run on the iOS simulator and on Android.
+//
+// The tests use the v2 test API, which runs the composition's coroutines on the main thread. The
+// People tab first appears when the controller, on a background thread, says people features are
+// on, and taps arrive from the test's thread; the v1 API would compose on those threads, where an
+// Android lazy list cannot start.
 @OptIn(ExperimentalTestApi::class)
 class PeopleShellUiTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -75,7 +80,7 @@ class PeopleShellUiTest {
         setContent {
             nav = rememberShellNavigation()
             val ui = rememberPeopleUi(controller, nav, talks, true, true, null, { _, _, _ -> }, {}, {})!!
-            App(ui.shellState(shellState()), content = content(ui), navigation = nav)
+            TestPhone { App(ui.shellState(shellState()), content = content(ui), navigation = nav) }
         }
         // The People tab waits for the controller: no tab until its people features are on.
         onNodeWithTag("tab-People").assertDoesNotExist()
@@ -115,7 +120,7 @@ class PeopleShellUiTest {
         setContent {
             val nav = rememberShellNavigation()
             val ui = rememberPeopleUi(controller, nav, talks, true, true, null, { _, _, _ -> }, {}, {})!!
-            App(ui.shellState(shellState()), content = content(ui), navigation = nav)
+            TestPhone { App(ui.shellState(shellState()), content = content(ui), navigation = nav) }
         }
         waitForIdle()
         onNodeWithTag("page-inbox").assertDoesNotExist()
@@ -131,7 +136,7 @@ class PeopleShellUiTest {
         var online by mutableStateOf(false)
         setContent {
             val ui = PeopleUi(readyState(), host, talks, online = online, searchable = true)
-            App(ui.shellState(shellState(online = online)), content = content(ui), navigation = nav)
+            TestPhone { App(ui.shellState(shellState(online = online)), content = content(ui), navigation = nav) }
         }
 
         // The People tab: the web's NeedsConnection, word for word, and the Offline badge.
@@ -164,8 +169,10 @@ class PeopleShellUiTest {
     @Test
     fun evidenceShowsMarkupAsText() = runComposeUiTest {
         setContent {
-            CaddieTheme {
-                EvidenceText("Ran <mark>Postgres</mark> &amp; <b>bold</b> &lt;mark&gt;x&lt;/mark&gt; <script>alert(1)</script>")
+            TestPhone {
+                CaddieTheme {
+                    EvidenceText("Ran <mark>Postgres</mark> &amp; <b>bold</b> &lt;mark&gt;x&lt;/mark&gt; <script>alert(1)</script>")
+                }
             }
         }
         onNodeWithText("Ran Postgres & <b>bold</b> <mark>x</mark> <script>alert(1)</script>").assertIsDisplayed()

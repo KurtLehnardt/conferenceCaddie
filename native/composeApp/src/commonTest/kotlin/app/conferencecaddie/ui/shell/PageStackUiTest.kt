@@ -19,6 +19,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.ui.App
 import app.conferencecaddie.ui.people.RequestsButton
+import app.conferencecaddie.ui.people.TestPhone
 import app.conferencecaddie.ui.strings.Strings
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -59,7 +60,7 @@ class PageStackUiTest {
         lateinit var nav: ShellNavigation
         setContent {
             nav = rememberShellNavigation()
-            App(state(), content = content({ nav }), navigation = nav)
+            TestPhone { App(state(), content = content({ nav }), navigation = nav) }
         }
 
         onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
@@ -104,7 +105,7 @@ class PageStackUiTest {
         lateinit var nav: ShellNavigation
         setContent {
             nav = rememberShellNavigation()
-            App(state(), content = content({ nav }), navigation = nav)
+            TestPhone { App(state(), content = content({ nav }), navigation = nav) }
         }
 
         onNodeWithTag("requests-button").performClick()
@@ -142,7 +143,7 @@ class PageStackUiTest {
         var current by mutableStateOf(state())
         setContent {
             nav = rememberShellNavigation()
-            App(current, content = content({ nav }), navigation = nav)
+            TestPhone { App(current, content = content({ nav }), navigation = nav) }
         }
         runOnIdle {
             nav.openSettings()
@@ -160,7 +161,7 @@ class PageStackUiTest {
 
     @Test
     fun settingsHasNoYouGroupWithoutPeoplePages() = runComposeUiTest {
-        setContent { App(state(), content = content({ error("unused") }, withPeople = false)) }
+        setContent { TestPhone { App(state(), content = content({ error("unused") }, withPeople = false)) } }
         onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
         onNodeWithTag("settings-screen").assertExists()
         onNodeWithTag("settings-you").assertDoesNotExist()
@@ -172,7 +173,7 @@ class PageStackUiTest {
         var badge by mutableStateOf(3)
         setContent {
             val nav = rememberShellNavigation()
-            App(state(badge = badge), content = content({ nav }, badge = badge), navigation = nav)
+            TestPhone { App(state(badge = badge), content = content({ nav }, badge = badge), navigation = nav) }
         }
         onNodeWithTag("requests-button").assertContentDescriptionEquals("Requests, 3 new")
         onNodeWithTag("tab-People").assertContentDescriptionEquals("People, 3 new requests")
@@ -192,7 +193,7 @@ class PageStackUiTest {
     fun aProfileWithoutANameSaysSetUp() = runComposeUiTest {
         setContent {
             val nav = rememberShellNavigation()
-            App(state(profileName = ""), content = content({ nav }), navigation = nav)
+            TestPhone { App(state(profileName = ""), content = content({ nav }), navigation = nav) }
         }
         onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
         onNodeWithText(Strings.Settings.SET_UP_PROFILE).assertExists()

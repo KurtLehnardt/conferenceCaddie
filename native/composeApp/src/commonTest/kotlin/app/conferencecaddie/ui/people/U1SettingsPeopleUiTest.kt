@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
@@ -52,9 +53,11 @@ class U1SettingsPeopleUiTest {
         }
         val me = f.server.me(f.slug)!!
         setContent {
-            CaddieTheme {
-                val state by f.controller.state.collectAsState()
-                Column(Modifier.verticalScroll(rememberScrollState())) { SettingsPeople(state, f.host) }
+            TestPhone {
+                CaddieTheme {
+                    val state by f.controller.state.collectAsState()
+                    Column(Modifier.verticalScroll(rememberScrollState())) { SettingsPeople(state, f.host) }
+                }
             }
         }
         u1WaitForTag("set-blocked")
@@ -106,12 +109,12 @@ class U1SettingsPeopleUiTest {
             push = PushView(available = true),
         )
         setContent {
-            CaddieTheme { Column(Modifier.verticalScroll(rememberScrollState())) { SettingsPeople(state, host) } }
+            TestPhone { CaddieTheme { Column(Modifier.verticalScroll(rememberScrollState())) { SettingsPeople(state, host) } } }
         }
         onNodeWithText(ProfileStrings.SOMEONE_YOU_BLOCKED).assertIsDisplayed()
         onNodeWithText(ProfileStrings.SOMEONE).assertExists()
         onNodeWithText(ProfileStrings.PUSH.uppercase()).assertExists()
-        val tops = listOf("set-blocked", "set-met", "set-watch", "set-nudges", "set-push").map { onNodeWithTag(it).fetchSemanticsNode().boundsInRoot.top }
+        val tops = listOf("set-blocked", "set-met", "set-watch", "set-nudges", "set-push").map { onNodeWithTag(it).getUnclippedBoundsInRoot().top }
         assertEquals(tops.sorted(), tops)
         assertEquals(tops.size, tops.toSet().size)
     }

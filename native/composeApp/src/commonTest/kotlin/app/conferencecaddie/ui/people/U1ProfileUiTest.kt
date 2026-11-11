@@ -1,9 +1,7 @@
 package app.conferencecaddie.ui.people
 
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
@@ -18,10 +16,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.unit.Density
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.bundle.TalkBundle
@@ -146,8 +142,7 @@ class U1ProfileUiTest {
     private fun ComposeUiTest.showProfile(fontScale: Float = 1f) {
         u1WaitReady(f)
         setContent {
-            val density = LocalDensity.current
-            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+            TestPhone(fontScale) {
                 CaddieTheme {
                     val state by f.controller.state.collectAsState()
                     val core by f.core.state.collectAsState()
@@ -160,7 +155,7 @@ class U1ProfileUiTest {
     }
 
     private fun ComposeUiTest.type(tag: String, text: String) {
-        onNodeWithTag(tag).performScrollTo().performTextReplacement(text)
+        onNodeWithTag(tag).performScrollTo().typeText(text)
     }
 
     private fun ComposeUiTest.chip(picker: String, group: String, name: String): SemanticsNodeInteraction =
@@ -268,11 +263,11 @@ class U1ProfileUiTest {
         u1WaitGone(hasTestTag("picker-learn-chosen"))
 
         // The search filters the bundle's topics on the device.
-        onNodeWithTag("picker-learn-search").performScrollTo().performTextReplacement("kub")
+        onNodeWithTag("picker-learn-search").performScrollTo().typeText("kub")
         u1WaitForNode(hasContentDescription("Kubernetes, 0 talks") and hasAnyAncestor(hasTestTag("picker-learn-matching")))
         // Subheads are drawn in capitals, as the web's text-transform does.
         onNode(hasText(ProfileStrings.COMMON_AT_CONFERENCE.uppercase()) and hasAnyAncestor(hasTestTag("picker-learn"))).assertDoesNotExist()
-        onNodeWithTag("picker-learn-search").performTextReplacement("zzzz")
+        onNodeWithTag("picker-learn-search").typeText("zzzz")
         u1WaitForText(ProfileStrings.NO_TOPIC_MATCH)
         onNode(hasContentDescription(ProfileStrings.CLEAR) and hasAnyAncestor(hasTestTag("picker-learn"))).performClick()
         u1WaitForNode(hasText(ProfileStrings.COMMON_AT_CONFERENCE.uppercase()) and hasAnyAncestor(hasTestTag("picker-learn")))

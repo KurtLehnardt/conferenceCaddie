@@ -19,7 +19,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.GeoFix
@@ -127,7 +126,7 @@ class PeopleFlowUiTest {
                     seedPerson(slug, "Kim Seed", about = "SRE.", expertise = "Ran Kubernetes upgrades for 40 clusters.", speakTopics = listOf("kubernetes"), around = "Hall B", located = true)
                 }
             }
-            setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) }
+            setContent { TestPhone { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) } }
 
             // Settings, then Profile: a name, about, expertise, and visible at the conference.
             waitFor(hasContentDescription(Strings.AppBar.SETTINGS) and hasClickAction())
@@ -135,9 +134,9 @@ class PeopleFlowUiTest {
             waitFor(hasText(Strings.Settings.PROFILE) and hasClickAction())
             onNode(hasText(Strings.Settings.PROFILE) and hasClickAction()).performClick()
             waitFor(hasTestTag("profile-screen"))
-            onNodeWithTag("profile-name").performTextInput("Jordan Rivera")
-            onNodeWithTag("profile-about-me").performScrollTo().performTextInput("Platform engineer.")
-            onNodeWithTag("profile-expertise").performScrollTo().performTextInput("Built eBPF tracing for a fleet.")
+            onNodeWithTag("profile-name").performScrollTo().typeText("Jordan Rivera")
+            onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer.")
+            onNodeWithTag("profile-expertise").performScrollTo().typeText("Built eBPF tracing for a fleet.")
             onNodeWithText(ProfileStrings.visibleAt("Alpha Conference")).performScrollTo().performClick()
             waitUntil(timeoutMillis = 20_000) { controller.state.value.visibility.openToMeet && controller.state.value.sync.state != SyncStatus.State.Saving }
             assertTrue(await { locked { me(slug) != null } }, "the profile is on the server")
@@ -156,7 +155,7 @@ class PeopleFlowUiTest {
             waitFor(hasTestTag("tab-People"))
             onNodeWithTag("tab-People").performClick()
             waitFor(hasTestTag("people-search-field"))
-            onNodeWithTag("people-search-field").performTextInput("kubernetes upgrades")
+            onNodeWithTag("people-search-field").typeText("kubernetes upgrades")
             // Kim is listed before the search too (People to meet); the search's card marks the words.
             waitFor(hasText(PeopleStrings.PEOPLE_WHO_MATCH))
             waitFor(highlights("Kubernetes") and hasAnyAncestor(hasTestTag("person-${kim.ref}")))

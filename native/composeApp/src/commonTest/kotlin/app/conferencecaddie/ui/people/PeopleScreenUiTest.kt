@@ -15,8 +15,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.core.CaddieCore
@@ -107,7 +105,7 @@ class PeopleScreenUiTest {
         }
         u2Show(rig)
         u2WaitForTag("people-search-field")
-        onNodeWithTag("people-search-field").performTextInput("kubernetes")
+        onNodeWithTag("people-search-field").typeText("kubernetes")
         u2WaitForText(PeopleStrings.PEOPLE_WHO_MATCH)
         u2WaitForTag("person-${people.first().ref}")
 
@@ -134,7 +132,7 @@ class PeopleScreenUiTest {
 
         // A search nobody matches.
         onNodeWithTag("people-screen").performScrollToNode(hasTestTag("people-search-field"))
-        onNodeWithTag("people-search-field").performTextReplacement("zzqqxx")
+        onNodeWithTag("people-search-field").typeText("zzqqxx")
         u2WaitForText(PeopleStrings.SEARCH_EMPTY)
     }
 
@@ -232,7 +230,7 @@ class PeopleScreenUiTest {
                 assertNull(rig.controller.setOpenToMeet(true))
             }
             val kim = rig.server.seedPerson(rig.slug, "Kim Seed", expertise = "Ran Kubernetes upgrades for 40 clusters.")
-            setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(people = "search:kubernetes"), people = rig.controller) }
+            setContent { TestPhone { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(people = "search:kubernetes"), people = rig.controller) } }
             u2WaitForTag("person-${kim.ref}")
             onNodeWithText(PeopleStrings.PEOPLE_WHO_MATCH).assertIsDisplayed()
             onNodeWithTag("people-search-field").assertTextEquals("kubernetes")
