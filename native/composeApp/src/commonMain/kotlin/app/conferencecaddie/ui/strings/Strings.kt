@@ -196,12 +196,9 @@ object Strings {
 
     /** web/src/components/schedule.tsx: the day chips, My schedule's Day timeline and the full schedule. */
     object Schedule {
-        const val DAY_LABEL = "Day"
         const val TODAY = "Today"
-        fun timelineLabel(day: String) = "Your talks on $day"
         const val NOW = "Now"
         const val EVENT = "Event or showcase"
-        const val INTERESTED = "I'm interested"
         fun interested(title: String) = "I'm interested: $title"
         const val LOADING = "Loading the schedule…"
         const val JUMP_TO_NOW = "Jump to now"

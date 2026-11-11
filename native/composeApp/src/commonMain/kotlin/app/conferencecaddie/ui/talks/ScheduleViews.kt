@@ -251,7 +251,8 @@ internal fun DayTimeline(
             .padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 12.dp, bottom = 20.dp)
             .height(PER_MINUTE * (t.to - t.from) + 16.dp)
             .testTag("day-timeline")
-            .semantics { contentDescription = Strings.Schedule.timelineLabel(Format.day(day)) },
+            // The day's cards are read in order as one group; the chosen day chip names the day.
+            .semantics { isTraversalGroup = true },
     ) {
         // The hour lines and labels, which screen readers skip as the web marks them aria-hidden.
         for (m in t.from..t.to step 60) {
