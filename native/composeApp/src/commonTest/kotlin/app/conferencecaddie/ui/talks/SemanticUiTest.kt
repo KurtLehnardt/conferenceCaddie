@@ -35,7 +35,9 @@ import kotlin.test.assertEquals
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
+import kotlinx.coroutines.test.runTest
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.files.SystemTemporaryDirectory
@@ -74,12 +76,14 @@ class SemanticUiTest {
     }
 
     @AfterTest
-    fun cleanUp() {
-        scope.cancel()
+    fun cleanUp() = runTest {
+        // Every job must have stopped before the database closes, the screens' searches included:
+        // closeWhenIdle waits for any statement a search still has queued.
+        scope.coroutineContext.job.cancelAndJoin()
         files.clear()
         SystemFileSystem.delete(Path(root, "bundles"), mustExist = false)
         SystemFileSystem.delete(root, mustExist = false)
-        database.close()
+        database.closeWhenIdle()
     }
 
     private fun ComposeUiTest.app(tab: Tab, talkLaunch: TalkLaunch = TalkLaunch(), model: Embedder? = embedder, failing: Boolean = false) {

@@ -22,4 +22,11 @@ object TalkStrings {
 
     /** A toast at start when the stored data could not be opened (CoreState.storageReset). */
     const val STORAGE_RESET = "The data saved on this phone could not be opened, so the app started without it."
+
+    /** The same toast when this launch keeps everything in memory (CoreState.storageInMemory). */
+    const val STORAGE_IN_MEMORY =
+        "The data saved on this phone could not be opened, so talks you mark now won't be kept after the app closes."
+
+    /** The conference list's state when the server needs a newer app and nothing is saved. */
+    const val SERVER_UPDATE_APP = "This server needs a newer version of the app. Update Conference Caddie to see its conferences."
 }

@@ -7,9 +7,8 @@ import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
+import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
-import kotlinx.io.Buffer
-import kotlinx.io.readByteArray
 
 /**
  * [Http] over Ktor. Redirects are followed only within https (Ktor's default refuses an https to
@@ -18,7 +17,8 @@ import kotlinx.io.readByteArray
  *
  * The body is streamed, never buffered by Ktor first: a declared `Content-Length` above the limit
  * is refused before anything is read, and an undeclared or false one stops the read as soon as the
- * bytes passed the limit. So a host that sends an endless body costs at most the limit in memory.
+ * bytes passed the limit. The bytes go straight into the array the caller gets, so a host that sends
+ * an endless body costs at most the limit in memory, once.
  */
 class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { configure() }) : Http {
     override suspend fun get(url: String, ifNoneMatch: String?, maxBytes: Long): HttpResponse =
@@ -28,24 +28,9 @@ class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { c
         }.execute { response ->
             val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
             if (declared != null && declared > maxBytes) throw ResponseTooLarge(maxBytes)
-            val channel = response.bodyAsChannel()
-            val body = Buffer()
-            val chunk = ByteArray(CHUNK_BYTES)
-            var total = 0L
-            while (true) {
-                val n = channel.readAvailable(chunk, 0, chunk.size)
-                if (n < 0) break
-                if (n == 0) {
-                    if (channel.isClosedForRead) break
-                    continue
-                }
-                total += n
-                if (total > maxBytes) throw ResponseTooLarge(maxBytes)
-                body.write(chunk, 0, n)
-            }
             HttpResponse(
                 status = response.status.value,
-                body = body.readByteArray(),
+                body = readBounded(response.bodyAsChannel(), maxBytes, declared),
                 etag = response.headers[HttpHeaders.ETag],
                 cacheControl = response.headers[HttpHeaders.CacheControl],
             )
@@ -68,8 +53,6 @@ class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { c
          */
         const val MIN_BYTES_PER_SECOND = 8L * 1024
 
-        private const val CHUNK_BYTES = 64 * 1024
-
         /**
          * The whole-request timeout of a GET that may read [maxBytes]: [REQUEST_TIMEOUT_MS] for a
          * small document, and long enough for [maxBytes] at [MIN_BYTES_PER_SECOND] for a large file,
@@ -79,6 +62,42 @@ class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { c
             val forSize = maxBytes.coerceAtLeast(0) / MIN_BYTES_PER_SECOND * 1000
             return maxOf(REQUEST_TIMEOUT_MS, forSize)
         }
+
+        /**
+         * Reads [channel] to its end into one array, throwing [ResponseTooLarge] as soon as it holds
+         * more than [maxBytes]. The array starts at the [declared] length (the size a bundle file's
+         * index entry gives, in practice), so a body of the expected size is read without a second
+         * copy; it grows only when the body runs longer (a compressed body's length is its
+         * compressed size), and never past [maxBytes].
+         */
+        internal suspend fun readBounded(channel: ByteReadChannel, maxBytes: Long, declared: Long?): ByteArray {
+            val limit = maxBytes.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+            var buffer = ByteArray((declared ?: FIRST_CHUNK_BYTES.toLong()).coerceIn(0, limit.toLong()).toInt())
+            var size = 0
+            val probe = ByteArray(1)
+            while (true) {
+                if (size == buffer.size) {
+                    if (size >= limit) {
+                        // Full to the limit: one more byte means the body is too large.
+                        val n = channel.readAvailable(probe, 0, 1)
+                        if (n > 0) throw ResponseTooLarge(maxBytes)
+                        if (n < 0 || channel.isClosedForRead) break
+                        continue
+                    }
+                    buffer = buffer.copyOf(minOf(limit.toLong(), maxOf(size * 2L, size + FIRST_CHUNK_BYTES.toLong())).toInt())
+                }
+                val n = channel.readAvailable(buffer, size, buffer.size - size)
+                if (n < 0) break
+                if (n == 0) {
+                    if (channel.isClosedForRead) break
+                    continue
+                }
+                size += n
+            }
+            return if (size == buffer.size) buffer else buffer.copyOf(size)
+        }
+
+        private const val FIRST_CHUNK_BYTES = 64 * 1024
 
         internal fun io.ktor.client.HttpClientConfig<*>.configure() {
             expectSuccess = false

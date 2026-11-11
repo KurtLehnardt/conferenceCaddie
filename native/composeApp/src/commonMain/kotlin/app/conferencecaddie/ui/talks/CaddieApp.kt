@@ -164,7 +164,8 @@ fun CaddieApp(
     // The person is told once when the stored data could not be opened.
     LaunchedEffect(state.storageReset) {
         if (state.storageReset) {
-            toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = TalkStrings.STORAGE_RESET)
+            val message = if (state.storageInMemory) TalkStrings.STORAGE_IN_MEMORY else TalkStrings.STORAGE_RESET
+            toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = message)
             core.dismissStorageReset()
         }
     }
@@ -197,7 +198,9 @@ fun CaddieApp(
                 if (base == Defaults.BACKEND) {
                     core.setBackend(null)
                 } else {
-                    (BackendUrl.normalise(base, allowLocalHttp = isDebugBuild && !fromLink) as? BackendUrl.Valid)?.let { core.setBackend(it) }
+                    (BackendUrl.normalise(base, allowLocalHttp = isDebugBuild && !fromLink) as? BackendUrl.Valid)?.let {
+                        core.setBackend(it, typed = !fromLink)
+                    }
                 }
             },
             onDeclineConnect = onConnectHandled,
@@ -405,7 +408,8 @@ private fun shellState(
         conferences = conferences,
         conferencesError = when (val c = s.conferences) {
             is ConferencesState.Failed -> when (c.reason) {
-                "update_app" -> TalkStrings.UPDATE_APP_TITLE
+                // The server itself, or only its conference list, needs a newer app.
+                "update_app" -> if (s.capabilities == CapabilitiesState.UpdateApp) TalkStrings.SERVER_UPDATE_APP else TalkStrings.UPDATE_APP_TITLE
                 "offline" -> TalkStrings.LIST_OFFLINE
                 else -> TalkStrings.LIST_FAILED
             }

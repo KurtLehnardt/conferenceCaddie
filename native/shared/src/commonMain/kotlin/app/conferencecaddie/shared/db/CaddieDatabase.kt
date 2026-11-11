@@ -10,6 +10,7 @@ import app.conferencecaddie.shared.bundle.Topic
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlin.time.Clock
 import kotlinx.coroutines.withContext
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -37,17 +38,20 @@ import kotlinx.io.files.SystemFileSystem
  * statement runs on one dispatcher that never runs two blocks at once.
  *
  * [openLazily] opens the files on that dispatcher at the first statement, never on the caller's
- * thread, and never fails: a main database that cannot be opened or migrated (a corrupt file, or
- * one from a newer version of the app after a downgrade or a restored backup) is moved aside to
- * `{path}.unreadable` and replaced by an empty one, and [wasReset] says so once; a broken cache
- * database is deleted and created again.
+ * thread, and never fails. A corrupt main database is moved aside to `{path}.unreadable-{time}`
+ * (the newest three are kept) and replaced by an empty one. A main database from a newer version of
+ * the app (after a downgrade, or a restored backup) is left where it is, so that version opens it
+ * again after an upgrade, and this launch runs in memory, as it does after any other failure (no
+ * space, no permission). [wasReset] says once that the stored data could not be used, and
+ * [runsInMemory] whether marks made now will be lost. A broken cache database is deleted and
+ * created again.
  */
 class CaddieDatabase private constructor(private val opener: () -> Opened) {
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
     private var opened: Opened? = null
     private var resetReported = false
 
-    private class Opened(val connection: SQLiteConnection, val reset: Boolean)
+    private class Opened(val connection: SQLiteConnection, val reset: Boolean, val inMemory: Boolean = false)
 
     private fun connection(): SQLiteConnection = (opened ?: opener().also { opened = it }).connection
 
@@ -68,10 +72,19 @@ class CaddieDatabase private constructor(private val opener: () -> Opened) {
         reset
     }
 
+    /** True when the main database runs in memory because the stored one could not be opened. */
+    suspend fun runsInMemory(): Boolean = withContext(dispatcher) {
+        connection()
+        opened?.inMemory == true
+    }
+
     /** Closes the connection. Call it only once nothing runs on the database any more. */
     fun close() {
         opened?.connection?.close()
     }
+
+    /** Closes the connection after every statement already queued has run. */
+    suspend fun closeWhenIdle() = withContext(dispatcher) { close() }
 
     // ---------------------------------------------------------------------------------------------
     // Settings
@@ -123,6 +136,14 @@ class CaddieDatabase private constructor(private val opener: () -> Opened) {
             s.step()
         }
         Unit
+    }
+
+    /** When the cached response for [url] was fetched or confirmed, without reading its body. */
+    suspend fun cachedFetchedAt(url: String): Long? = run { c ->
+        c.prepare("SELECT fetched_at FROM http_cache WHERE url = ?").use { s ->
+            s.bindText(1, url)
+            if (s.step()) s.getLong(0) else null
+        }
     }
 
     suspend fun touchResponse(url: String, fetchedAtMs: Long) = run { c ->
@@ -370,24 +391,30 @@ class CaddieDatabase private constructor(private val opener: () -> Opened) {
          * dispatcher, and recovers instead of failing (see the class comment). If even an empty
          * database cannot be created there, it runs in memory for this launch.
          */
-        fun openLazily(path: String, cachePath: String = defaultCachePath(path)): CaddieDatabase = CaddieDatabase {
+        fun openLazily(
+            path: String,
+            cachePath: String = defaultCachePath(path),
+            nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+        ): CaddieDatabase = CaddieDatabase {
             var reset = false
+            var inMemory = false
             val connection = try {
                 openMain(path)
             } catch (e: Throwable) {
                 reset = true
-                // Only a file that is itself unusable is moved aside. Any other failure (no space, no
-                // permission) leaves it alone, and this launch runs in memory.
-                if (isUnusableFile(e)) {
-                    moveAside(path)
+                // A database from a newer app is kept where it is, for that app to open again; a
+                // corrupt file is moved aside; any other failure leaves the file alone. In every case
+                // but a successful move, this launch runs in memory.
+                val replaced = if (!isNewerSchema(e) && isCorruptFile(e) && moveAside(path, nowMs())) {
                     try {
                         openMain(path)
                     } catch (_: Throwable) {
-                        openMain(MEMORY)
+                        null
                     }
                 } else {
-                    openMain(MEMORY)
+                    null
                 }
+                replaced ?: openMain(MEMORY).also { inMemory = true }
             }
             try {
                 attachCache(connection, cachePath)
@@ -404,7 +431,7 @@ class CaddieDatabase private constructor(private val opener: () -> Opened) {
                     attachCache(connection, MEMORY)
                 }
             }
-            Opened(connection, reset)
+            Opened(connection, reset, inMemory)
         }
 
         fun defaultCachePath(path: String): String = if (path == MEMORY) MEMORY else path.removeSuffix(".db") + "-cache.db"
@@ -450,33 +477,62 @@ class CaddieDatabase private constructor(private val opener: () -> Opened) {
             }
         }
 
-        /**
-         * True for the failures that mean the file cannot be used as it is: a schema from a newer
-         * version of the app, or SQLite's SQLITE_CORRUPT (11) and SQLITE_NOTADB (26).
-         */
-        internal fun isUnusableFile(e: Throwable): Boolean {
-            if (e is IllegalArgumentException && e.message?.contains("newer version of the app") == true) return true
+        /** True for a database whose schema is from a newer version of the app. */
+        internal fun isNewerSchema(e: Throwable): Boolean =
+            e is IllegalArgumentException && e.message?.contains("newer version of the app") == true
+
+        /** True for SQLite's SQLITE_CORRUPT (11) and SQLITE_NOTADB (26): the file itself is unusable. */
+        internal fun isCorruptFile(e: Throwable): Boolean {
             val m = e.message ?: return false
             return Regex("""\b(?:code|Error code):? ?(?:11|26)\b""", RegexOption.IGNORE_CASE).containsMatchIn(m) ||
                 m.contains("not a database", ignoreCase = true) || m.contains("malformed", ignoreCase = true)
         }
 
-        // Keeps the unreadable file, so nothing is destroyed, and frees the path for a new database.
-        private fun moveAside(path: String) {
-            if (path == MEMORY) return
+        /** How many sets of moved-aside files are kept next to the database. */
+        const val KEEP_UNREADABLE = 3
+
+        private const val UNREADABLE = ".unreadable-"
+
+        /**
+         * Moves the database files at [path] to `{path}.unreadable-{nowMs}`, keeping them for a later
+         * look, and deletes all but the newest [KEEP_UNREADABLE] such sets. True when the path is
+         * free for a new database; the main file is never deleted.
+         */
+        internal fun moveAside(path: String, nowMs: Long): Boolean {
+            if (path == MEMORY) return false
+            val stamp = "$path$UNREADABLE$nowMs"
             for (suffix in listOf("", "-wal", "-shm")) {
                 val from = Path(path + suffix)
-                val to = Path("$path.unreadable$suffix")
                 try {
-                    SystemFileSystem.delete(to, mustExist = false)
-                    if (SystemFileSystem.exists(from)) SystemFileSystem.atomicMove(from, to)
+                    if (SystemFileSystem.exists(from)) SystemFileSystem.atomicMove(from, Path(stamp + suffix))
                 } catch (_: Exception) {
+                    // The main file must move. A journal that cannot move must not stay either, or a
+                    // new database at the path would read it; if it cannot be deleted, the path is
+                    // not free and the launch runs in memory.
+                    if (suffix.isEmpty()) return false
                     try {
                         SystemFileSystem.delete(from, mustExist = false)
                     } catch (_: Exception) {
-                        // Opening again will fail, and the database runs in memory.
+                        return false
                     }
                 }
+            }
+            pruneUnreadable(path)
+            return true
+        }
+
+        private fun pruneUnreadable(path: String) {
+            try {
+                val file = Path(path)
+                val dir = file.parent ?: return
+                val prefix = file.name + UNREADABLE
+                val sets = SystemFileSystem.list(dir).map { it.name }.filter { it.startsWith(prefix) }
+                    .groupBy { it.removePrefix(prefix).substringBefore('-').toLongOrNull() ?: 0L }
+                for (old in sets.keys.sortedDescending().drop(KEEP_UNREADABLE)) {
+                    sets.getValue(old).forEach { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
+                }
+            } catch (_: Exception) {
+                // Old copies stay; they are only kept for a later look.
             }
         }
 

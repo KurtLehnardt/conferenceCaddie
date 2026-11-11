@@ -49,7 +49,7 @@ class EmbedderStateTest {
     @AfterTest
     fun cleanUp() = runTest {
         scope.coroutineContext.job.cancelAndJoin()
-        database.close()
+        database.closeWhenIdle()
         files.clear()
         for (child in SystemFileSystem.list(root)) SystemFileSystem.delete(child, mustExist = false)
         SystemFileSystem.delete(root, mustExist = false)

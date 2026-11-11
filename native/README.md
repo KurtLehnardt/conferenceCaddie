@@ -412,9 +412,10 @@ check that gating.
   migration at the end, never change a shipped one). Android keeps both in the app's database
   directory, excluded from backups like everything else; iOS keeps them in Application Support,
   with the cache database and the bundle directory excluded from backups. The apps open the
-  database lazily off the main thread with `CaddieDatabase.openLazily()`, which sets aside a main
-  database it cannot open (`caddie.db.unreadable`) and starts with an empty one rather than
-  crashing.
+  database lazily off the main thread with `CaddieDatabase.openLazily()`, which never crashes: it
+  sets a corrupt main database aside (`caddie.db.unreadable-{time}`, the newest three kept) and
+  starts with an empty one, and runs in memory, leaving the file alone, when the database is from a
+  newer version of the app.
 
 ### Trying the talk features against local bundles
 

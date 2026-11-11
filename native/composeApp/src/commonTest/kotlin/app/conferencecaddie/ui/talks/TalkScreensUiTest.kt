@@ -53,12 +53,13 @@ class TalkScreensUiTest {
 
     @AfterTest
     fun cleanUp() = runTest {
-        // Every job must have stopped before the database closes.
+        // Every job must have stopped before the database closes, the screens' searches included:
+        // closeWhenIdle waits for any statement a search still has queued.
         scope.coroutineContext.job.cancelAndJoin()
         files.clear()
         SystemFileSystem.delete(Path(root, "bundles"), mustExist = false)
         SystemFileSystem.delete(root, mustExist = false)
-        database.close()
+        database.closeWhenIdle()
     }
 
     private fun ComposeUiTest.waitFor(tag: String? = null, text: String? = null): SemanticsNodeInteraction {
