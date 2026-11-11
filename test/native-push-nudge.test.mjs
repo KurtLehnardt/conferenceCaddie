@@ -177,6 +177,50 @@ describe('push nudge with native push', () => {
     assert.deepEqual(records().find((r) => r.profile_ids.includes(w.profileId)).receivers, [w.profileId]);
   });
 
+  test('one search reads the targets of every receiver, however many matches, as Web Push did before native push', async () => {
+    const { t, v, me } = await pair({ web: true }, { web: true });
+    const w = newDevice();
+    assert.equal((await put(w, 'Wanda Third', { expertise: 'Kafka', interests: 'ebpf probes', learn: ['ebpf'] })).status, 200);
+    around(w, { web: true });
+    fake.calls.length = 0;
+    const targetSearches = () => fake.calls.filter((c) => c.index === 'caddie-people-push' && c.op === '_search');
+    await nudgeAfterPresence(me, CONF);
+    assert.equal(targetSearches().length, 1, 'one search for the writer and both matches');
+    assert.deepEqual(targetSearches()[0].body.aggs.receivers.terms, { field: 'profile_id', size: 3 });
+    // The writer hears about both matches, and each match about the writer: the pushes main sent.
+    const sent = fake.pushes.map(addressOf).sort();
+    assert.deepEqual(sent, [t, t, v, w].map((d) => `web:https://push.example.test/${d.profileId}`).sort());
+    assert.equal(records().length, 2);
+
+    // The same day again: both records exist, so the creates answer 409 and nothing is sent; the
+    // one search is made first, as before.
+    fake.pushes.length = 0;
+    fake.calls.length = 0;
+    await nudgeAfterPresence(me, CONF);
+    assert.equal(fake.pushes.length, 0);
+    assert.equal(targetSearches().length, 1);
+  });
+
+  test('a receiver with more than ten subscriptions and registrations gets the nudge on the newest ten, and the other receiver still gets theirs', async () => {
+    const tApns = apnsToken();
+    const { v, me } = await pair({ apns: tApns }, {});
+    for (let i = 0; i < 12; i++) {
+      fake.put('caddie-people-push', `flood-${i}`, { event_id: EVENT, profile_id: v.profileId, endpoint: `https://push.example.test/flood/${i}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString(), expires_at: FUTURE });
+    }
+    const lines = [];
+    const error = console.error;
+    console.error = (...args) => lines.push(args.join(' '));
+    try {
+      await nudgeAfterPresence(me, CONF);
+    } finally {
+      console.error = error;
+    }
+    const toV = fake.pushes.filter((p) => !p.platform).map((p) => p.endpoint).sort();
+    assert.deepEqual(toV, Array.from({ length: 10 }, (_, i) => `https://push.example.test/flood/${i + 2}`).sort(), 'the newest ten');
+    assert.deepEqual(fake.pushes.filter((p) => p.platform).map(addressOf), [`apns:${tApns}`]);
+    assert.deepEqual(lines, ['Push targets capped: one receiver has 12, the newest 10 are used']);
+  });
+
   test('a registration APNs or FCM reports gone is deleted; a refusal for another reason keeps it', async () => {
     const [goneApns, goneFcm, badApns, keptFcm, topicApns, busyFcm] = [apnsToken(), fcmToken(), apnsToken(), fcmToken(), apnsToken(), fcmToken()];
     const { t, v, me } = await pair({ apns: goneApns, fcm: goneFcm }, { apns: badApns, fcm: keptFcm });

@@ -5,7 +5,7 @@
 // the people-write bucket, the delete's token check, and that a profile delete, visibility off,
 // the hourly purge and the finishing of a pending delete remove native registrations exactly as
 // they remove Web Push subscriptions. Also what nudge.mjs reads back (pushTargetsFor, one search
-// per receiver), and the capabilities this configuration advertises.
+// for every receiver), and the capabilities this configuration advertises.
 //
 // Run with `npm test`. Nothing reaches the network: fetch is replaced before the server modules
 // are imported, APNs is configured with a key generated for this run and FCM with a project id, and
@@ -288,9 +288,9 @@ test('pushTargetsFor reads subscriptions and registrations back for nudge.mjs, a
   assert.equal(byId.sandbox.native.environment, 'sandbox');
 });
 
-test('pushTargetsFor asks once per receiver, so one receiver with many subscriptions cannot crowd another out', async () => {
+test('pushTargetsFor reads every receiver in one search, so one receiver with many subscriptions cannot crowd another out', async () => {
   const { cluster, device, other, othersId } = await withRegistrations();
-  // 150 subscriptions of one person, older than nothing in particular, would fill any shared page.
+  // 150 subscriptions of one person would fill any shared page of hits.
   for (let i = 0; i < 150; i++) {
     const endpoint = `https://push.example.test/flood/${i}`;
     cluster.put(INDEX.push, subscriptionId(endpoint), { event_id: EVENT, profile_id: device.profileId, endpoint, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString(), expires_at: FUTURE });
@@ -300,7 +300,7 @@ test('pushTargetsFor asks once per receiver, so one receiver with many subscript
   console.error = (...args) => lines.push(args.join(' '));
   let targets;
   try {
-    targets = await pushTargetsFor(EVENT, [device.profileId, other.profileId]);
+    targets = await pushTargetsFor(EVENT, [device.profileId, other.profileId, device.profileId, 'nobody']);
   } finally {
     console.error = error;
   }
@@ -310,7 +310,15 @@ test('pushTargetsFor asks once per receiver, so one receiver with many subscript
   assert.deepEqual(mine.map((t) => t.subscription?.endpoint), Array.from({ length: 10 }, (_, i) => `https://push.example.test/flood/${149 - i}`));
   assert.deepEqual(lines, [`Push targets capped: one receiver has 153, the newest ${TARGETS_PER_PROFILE} are used`]);
   const searches = cluster.log.filter((e) => e.path.startsWith(`/${INDEX.push}/_search`));
-  assert.equal(searches.length, 2, 'one search per receiver');
+  assert.equal(searches.length, 1, 'one search for every receiver');
+  const { body } = searches[0];
+  assert.equal(body.size, 0, 'the hits come from the aggregation only');
+  assert.deepEqual(body.query.bool.filter[1], { terms: { profile_id: [device.profileId, other.profileId, 'nobody'] } });
+  assert.deepEqual(body.aggs.receivers.terms, { field: 'profile_id', size: 3 }, 'one bucket for each distinct receiver');
+  assert.equal(body.aggs.receivers.aggs.newest.top_hits.size, TARGETS_PER_PROFILE);
+  assert.deepEqual(body.aggs.receivers.aggs.newest.top_hits.sort, [{ created_at: { order: 'desc', unmapped_type: 'date' } }]);
+  assert.deepEqual(await pushTargetsFor(EVENT, []), [], 'no receiver, no search');
+  assert.equal(cluster.log.filter((e) => e.path.startsWith(`/${INDEX.push}/_search`)).length, 1);
 });
 
 test('this configuration advertises push.apns and push.fcm, and the document stays valid in closed mode', () => {

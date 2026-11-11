@@ -6,7 +6,8 @@
 //
 // It understands the subset of the query DSL the server sends (bool, term, terms, ids, exists,
 // range, match_all, knn, multi_match, distance_feature, standard and rrf retrievers, a terms
-// aggregation) well enough to exercise the routes; it ranks nothing. `fake.inject` lets a test
+// aggregation with top_hits under its buckets) well enough to exercise the routes; it ranks
+// nothing. `fake.inject` lets a test
 // answer one call itself, to inject a failure.
 //
 // A knn query matches every document whose source field has text, at a cosine of 1, unless a
@@ -89,6 +90,52 @@ export function matches(q, id, src) {
 
 const pick = (src, spec) => (spec === false ? undefined : Array.isArray(spec) ? Object.fromEntries(spec.filter((f) => src[f] !== undefined).map((f) => [f, src[f]])) : src);
 
+// Sorts [id, doc] entries by a search's sort ([{ field: { order } }] or [{ field: order }]): a
+// document without the field comes last, whichever the order, as in Elasticsearch.
+function sorted(entries, sort) {
+  const specs = asArray(sort).map((x) => {
+    const [[field, o]] = Object.entries(typeof x === 'string' ? { [x]: 'asc' } : x);
+    return [field, (typeof o === 'string' ? o : o?.order) === 'desc' ? -1 : 1];
+  });
+  if (!specs.length) return entries;
+  return [...entries].sort(([, a], [, b]) => {
+    for (const [field, dir] of specs) {
+      const x = get(a.source, field);
+      const y = get(b.source, field);
+      if (x === y) continue;
+      if (x === undefined || x === null) return 1;
+      if (y === undefined || y === null) return -1;
+      return (x < y ? -1 : 1) * dir;
+    }
+    return 0;
+  });
+}
+
+// The aggregations of a search over its matching [id, doc] entries: terms buckets (as before, by
+// first appearance, include honoured), each with its own sub-aggregations, and top_hits (size 3 by
+// default, sort, _source, and _seq_no and _primary_term only with seq_no_primary_term).
+function aggregate(name, entries, aggs) {
+  const out = {};
+  for (const [k, a] of Object.entries(aggs)) {
+    if (a.top_hits) {
+      const { size = 3, sort, _source: source, seq_no_primary_term: withSeq } = a.top_hits;
+      const hits = sorted(entries, sort).slice(0, size).map(([id, d]) => ({ _index: name, _id: id, _source: pick(d.source, source), ...(withSeq === true ? { _seq_no: d.seq, _primary_term: 1 } : {}) }));
+      out[k] = { hits: { total: { value: entries.length, relation: 'eq' }, hits } };
+      continue;
+    }
+    const groups = new Map();
+    for (const e of entries) {
+      for (const v of asArray(e[1].source[a.terms.field])) {
+        if (a.terms.include && !a.terms.include.includes(v)) continue;
+        if (!groups.has(v)) groups.set(v, []);
+        groups.get(v).push(e);
+      }
+    }
+    out[k] = { buckets: [...groups].map(([key, docs]) => ({ key, doc_count: docs.length, ...(a.aggs ? aggregate(name, docs, a.aggs) : {}) })) };
+  }
+  return out;
+}
+
 export const fake = {
   indices: new Map(), // name -> Map id -> { source, seq }
   calls: [], // { method, index, op, id, body }
@@ -160,14 +207,7 @@ function search(name, body) {
     return hit;
   });
   const res = { hits: { total: { value: hits.length }, hits: page } };
-  if (body.aggs) {
-    res.aggregations = {};
-    for (const [k, a] of Object.entries(body.aggs)) {
-      const counts = new Map();
-      for (const [, d] of hits) for (const v of asArray(d.source[a.terms.field])) if (!a.terms.include || a.terms.include.includes(v)) counts.set(v, (counts.get(v) ?? 0) + 1);
-      res.aggregations[k] = { buckets: [...counts].map(([key, doc_count]) => ({ key, doc_count })) };
-    }
-  }
+  if (body.aggs) res.aggregations = aggregate(name, hits, body.aggs);
   return res;
 }
 

@@ -213,24 +213,37 @@ export const TARGETS_PER_PROFILE = 10;
 // Every live Web Push subscription and native registration of these people at one conference,
 // as [{ id, profile_id, subscription: { endpoint, keys: { p256dh, auth } } }] for a subscription
 // and [{ id, profile_id, native: { platform, token, environment } }] for a registration. Used by
-// nudge.mjs. One search per person (at most 21: the writer and the 20 candidates), in parallel,
-// each capped at TARGETS_PER_PROFILE, newest first: one person's many subscriptions can never
-// crowd another person's out of a shared page, and the pushes one nudge sends stay bounded. A
-// person over the cap is one log line, without an id.
+// nudge.mjs. One search per nudge, as before native push: a terms aggregation on profile_id gives
+// one bucket per person (at most 21: the writer and the 20 candidates), and its top_hits the
+// newest TARGETS_PER_PROFILE documents of each (created_at descending). So one person's many
+// subscriptions can never crowd another person's out, and the pushes one nudge sends stay
+// bounded. A person over the cap is one log line, without an id.
 export async function pushTargetsFor(eventId, profileIds) {
   const ids = [...new Set(profileIds)].filter(Boolean);
-  const pages = await Promise.all(ids.map(async (profileId) => {
-    const { json } = await people('POST', `${idx(PUSH_INDEX)}/_search?ignore_unavailable=true`, {
-      size: TARGETS_PER_PROFILE,
-      sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }],
-      _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth', 'platform', 'token', 'environment'],
-      query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }, { range: { expires_at: { gt: 'now' } } }] } },
-    });
-    const total = json.hits?.total?.value ?? 0;
-    if (total > TARGETS_PER_PROFILE) console.error(`Push targets capped: one receiver has ${total}, the newest ${TARGETS_PER_PROFILE} are used`);
-    return json.hits?.hits ?? [];
-  }));
-  return pages.flat().flatMap((h) => {
+  if (!ids.length) return [];
+  const { json } = await people('POST', `${idx(PUSH_INDEX)}/_search?ignore_unavailable=true`, {
+    size: 0,
+    query: { bool: { filter: [{ term: { event_id: eventId } }, { terms: { profile_id: ids } }, { range: { expires_at: { gt: 'now' } } }] } },
+    aggs: {
+      receivers: {
+        terms: { field: 'profile_id', size: ids.length },
+        aggs: {
+          newest: {
+            top_hits: {
+              size: TARGETS_PER_PROFILE,
+              sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }],
+              _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth', 'platform', 'token', 'environment'],
+            },
+          },
+        },
+      },
+    },
+  });
+  const buckets = json.aggregations?.receivers?.buckets ?? [];
+  for (const b of buckets) {
+    if (b.doc_count > TARGETS_PER_PROFILE) console.error(`Push targets capped: one receiver has ${b.doc_count}, the newest ${TARGETS_PER_PROFILE} are used`);
+  }
+  return buckets.flatMap((b) => b.newest?.hits?.hits ?? []).flatMap((h) => {
     const source = h._source ?? {};
     if (!source.profile_id) return [];
     if (source.endpoint && source.keys_p256dh && source.keys_auth) {
