@@ -61,7 +61,7 @@ function around(d, { web = false, apns = null, fcm = null } = {}) {
   const id = `${EVENT}:${d.profileId}`;
   const until = new Date(Date.now() + 30 * 60_000).toISOString();
   fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_since: new Date().toISOString(), presence_until: until });
-  if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+  if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
   for (const [platform, token] of [['apns', apns], ['fcm', fcm]]) {
     if (token) fake.put('caddie-people-push', registrationId(EVENT, d.profileId, platform), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
   }

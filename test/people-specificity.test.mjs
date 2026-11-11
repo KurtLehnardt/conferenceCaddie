@@ -330,10 +330,10 @@ describe('evidence comes only from a semantic leg that found the person', () => 
     // Only the two people under test, since a person receives at most three pushes an hour.
     for (const d of s.others.splice(0, 4)) fake.store(PEOPLE).delete(`${EVENT}:${d.profileId}`);
     for (const d of [s.me, ...s.others]) {
-      fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+      fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
     }
     await nudgedNames(s);
-    const bodies = fake.pushes.filter((p) => p.endpoint === `https://push.example.test/${s.me.profileId}`).map((p) => p.payload.body);
+    const bodies = fake.pushes.filter((p) => p.endpoint === `https://fcm.googleapis.com/fcm/send/${s.me.profileId}`).map((p) => p.payload.body);
     assert.ok(bodies.includes("Someone who's worked on Runs Kubernetes operators at scale. Bakes sourdough on weekends is in Hall A right now"), JSON.stringify(bodies));
     assert.ok(bodies.includes("Someone who's worked on Built kernel tracing tools with eBPF is in Hall A right now"), JSON.stringify(bodies));
     assert.ok(!bodies.some((b) => b.includes('Someone who\'s worked on Bakes sourdough')), 'the unrelated chunk is never quoted');

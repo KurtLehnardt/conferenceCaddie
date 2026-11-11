@@ -470,7 +470,7 @@ test('reports, blocks and push subscriptions', async () => {
   conforms('DELETE', '/api/people/block', await call('DELETE', '/api/people/block', { device: other, body: { event: EVENT, ref: leavingRef } }));
 
   assert.deepEqual(conforms('GET', '/api/push/vapid', await call('GET', '/api/push/vapid')), { publicKey: null });
-  const subscription = { endpoint: 'https://push.example.org/send/contracts', keys: { p256dh: crypto.randomBytes(65).toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') }, expirationTime: null };
+  const subscription = { endpoint: 'https://fcm.googleapis.com/fcm/send/contracts', keys: { p256dh: crypto.randomBytes(65).toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') }, expirationTime: null };
   conforms('PUT', '/api/push/subscription', await call('PUT', '/api/push/subscription', { device: me, body: { event: EVENT, subscription } }));
   assert.equal(store('caddie-people-push').size, 1);
   conforms('DELETE', '/api/push/subscription', await call('DELETE', '/api/push/subscription', { device: me, body: { event: EVENT, endpoint: subscription.endpoint } }));

@@ -56,6 +56,10 @@ const PUSHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
 const TTL_SECONDS = 600;
 const TITLE = 'Conference Caddie';
+// How long one Web Push request may stay idle before it is abandoned, as the Worker's
+// PUSH_TIMEOUT_MS. web-push sends with https.request, which never follows a redirect, so the
+// signed request cannot be forwarded to a host that is not on the push service list either.
+export const PUSH_TIMEOUT_MS = 10_000;
 // The longest pause between the pushes to the two people of a pair.
 export const PAIR_JITTER_MAX_MS = 3000;
 
@@ -87,8 +91,11 @@ async function loadTransport() {
   const mod = await import('web-push');
   const webpush = mod.default ?? mod;
   const vapidDetails = { subject, publicKey, privateKey };
-  return (subscription, payload, options) => webpush.sendNotification(subscription, payload, { ...options, vapidDetails });
+  return (subscription, payload, options) => webpush.sendNotification(subscription, payload, webPushOptions(options, vapidDetails));
 }
+
+// The options of one web-push send: the caller's (TTL, urgency), the VAPID details and the timeout.
+export const webPushOptions = (options, vapidDetails) => ({ ...options, vapidDetails, timeout: PUSH_TIMEOUT_MS });
 
 function transport() {
   if (!transportPromise) {

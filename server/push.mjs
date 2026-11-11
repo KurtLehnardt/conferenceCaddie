@@ -29,11 +29,19 @@
 // - A native registration for a platform this server does not push to (push.apns or push.fcm
 //   false, also after native-push.mjs turned the channel off at runtime) is refused with 404
 //   push_unavailable and nothing is stored. Removing one always works.
-// - Nothing from a request body or header is logged.
+// - A new subscription's endpoint must be https, on a known browser push service host
+//   (PUSH_SERVICE_HOSTS in push-hosts.mjs, the same list as the Worker's), on the default port,
+//   with no user name or password; any other is refused with 400 "endpoint must be a push service
+//   URL", so a profile can never make this server send signed requests to a host of its choosing.
+//   Removing a subscription needs only a well-formed https endpoint, so a row stored before this
+//   rule can still be removed by its owner, and pushTargetsFor skips such a row, never sends to it.
+// - Nothing from a request body or header is logged, except the host of a refused push endpoint
+//   (never the endpoint), so a push service missing from the list shows up in the logs.
 
 import crypto from 'node:crypto';
 import { clientIp } from './ratelimit.mjs';
 import { NATIVE_PUSH, nativeTokenOf } from './native-push.mjs';
+import { isPushServiceEndpoint } from './push-hosts.mjs';
 import {
   people, idx, PUSH_INDEX, LIMITS,
   HttpError, UpstreamError, bad, sendJson, limit, jsonBody, requireDevice, isPlainObject,
@@ -69,7 +77,10 @@ function writer(req) {
   return device;
 }
 
-function endpointOf(value) {
+// A push endpoint: a https URL of at most ENDPOINT_MAX characters. forWrite (a new subscription)
+// also requires a known browser push service host (isPushServiceEndpoint); a delete does not, so
+// a row stored before that rule can still be removed.
+function endpointOf(value, { forWrite = false } = {}) {
   if (typeof value !== 'string' || !value || value.length > ENDPOINT_MAX) throw bad('endpoint must be a push service URL');
   let u;
   try {
@@ -78,6 +89,11 @@ function endpointOf(value) {
     throw bad('endpoint must be a push service URL');
   }
   if (u.protocol !== 'https:') throw bad('endpoint must be a https URL');
+  if (forWrite && !isPushServiceEndpoint(value)) {
+    // Only the host is logged, never the endpoint, so a push service missing from the list shows up.
+    console.warn(`Push subscription refused: host ${u.hostname.toLowerCase().slice(0, 64)}`);
+    throw bad('endpoint must be a push service URL');
+  }
   return value;
 }
 
@@ -86,7 +102,7 @@ function endpointOf(value) {
 function subscriptionOf(value) {
   if (!isPlainObject(value)) throw bad('subscription must be an object');
   for (const k of Object.keys(value)) if (!SUBSCRIPTION_FIELDS.has(k)) throw bad(`Unknown key: subscription.${k.slice(0, 40)}`);
-  const endpoint = endpointOf(value.endpoint);
+  const endpoint = endpointOf(value.endpoint, { forWrite: true });
   if (!isPlainObject(value.keys)) throw bad('subscription.keys must be an object');
   for (const k of Object.keys(value.keys)) if (!KEYS_FIELDS.has(k)) throw bad(`Unknown key: subscription.keys.${k.slice(0, 40)}`);
   const { p256dh, auth } = value.keys;
@@ -220,6 +236,8 @@ export const TARGETS_PER_PROFILE = 10;
 // pushes one nudge sends stay bounded. A person over the cap is one log line, without an id. A
 // registration's guard is the _seq_no and _primary_term it was read with, so that one APNs or FCM
 // reports gone is deleted only while it is still that document (deleteRegistrationIfUnchanged).
+// A subscription whose endpoint is not on a known push service host (one stored before that rule)
+// is skipped, never sent to, and counted in one log line without its endpoint or host.
 export async function pushTargetsFor(eventId, profileIds) {
   const ids = [...new Set(profileIds)].filter(Boolean);
   if (!ids.length) return [];
@@ -246,10 +264,15 @@ export async function pushTargetsFor(eventId, profileIds) {
   for (const b of buckets) {
     if (b.doc_count > TARGETS_PER_PROFILE) console.error(`Push targets capped: one receiver has ${b.doc_count}, the newest ${TARGETS_PER_PROFILE} are used`);
   }
-  return buckets.flatMap((b) => b.newest?.hits?.hits ?? []).flatMap((h) => {
+  let offList = 0;
+  const targets = buckets.flatMap((b) => b.newest?.hits?.hits ?? []).flatMap((h) => {
     const source = h._source ?? {};
     if (!source.profile_id) return [];
     if (source.endpoint && source.keys_p256dh && source.keys_auth) {
+      if (!isPushServiceEndpoint(source.endpoint)) {
+        offList += 1;
+        return [];
+      }
       return [{ id: h._id, profile_id: source.profile_id, subscription: { endpoint: source.endpoint, keys: { p256dh: source.keys_p256dh, auth: source.keys_auth } } }];
     }
     const token = nativeTokenOf(source.platform, source.token);
@@ -258,6 +281,8 @@ export async function pushTargetsFor(eventId, profileIds) {
     const guard = Number.isInteger(h._seq_no) && Number.isInteger(h._primary_term) ? { seqNo: h._seq_no, primaryTerm: h._primary_term } : null;
     return [{ id: h._id, profile_id: source.profile_id, native: { platform: source.platform, token, environment }, guard }];
   });
+  if (offList) console.error(`Push targets skipped: ${offList} stored subscription(s) not on a known push service host`);
+  return targets;
 }
 
 // Removes a subscription the push service said is gone (404 or 410). Its id is the hash of its

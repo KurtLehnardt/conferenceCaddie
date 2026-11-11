@@ -225,7 +225,7 @@ async function withRegistrations() {
   const other = newDevice();
   addPerson(cluster, other);
   const tokens = { apns: apnsToken(), fcm: fcmToken(), others: apnsToken() };
-  cluster.put(INDEX.push, subscriptionId('https://push.example.test/sub'), { event_id: EVENT, profile_id: device.profileId, endpoint: 'https://push.example.test/sub', keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+  cluster.put(INDEX.push, subscriptionId('https://fcm.googleapis.com/fcm/send/sub'), { event_id: EVENT, profile_id: device.profileId, endpoint: 'https://fcm.googleapis.com/fcm/send/sub', keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
   assert.equal((await put(device, { event: EVENT, platform: 'apns', token: tokens.apns })).status, 200);
   assert.equal((await put(device, { event: EVENT, platform: 'fcm', token: tokens.fcm })).status, 200);
   assert.equal((await put(other, { event: EVENT, platform: 'apns', token: tokens.others })).status, 200);
@@ -282,14 +282,14 @@ test('pushTargetsFor reads subscriptions and registrations back for nudge.mjs, a
   const byId = Object.fromEntries(targets.map((t) => [t.id, t]));
   const apnsId = registrationId(EVENT, device.profileId, 'apns');
   const fcmId = registrationId(EVENT, device.profileId, 'fcm');
-  assert.deepEqual(Object.keys(byId).sort(), [subscriptionId('https://push.example.test/sub'), apnsId, fcmId, othersId, 'sandbox'].sort());
-  assert.deepEqual(byId[subscriptionId('https://push.example.test/sub')].subscription, { endpoint: 'https://push.example.test/sub', keys: { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) } });
+  assert.deepEqual(Object.keys(byId).sort(), [subscriptionId('https://fcm.googleapis.com/fcm/send/sub'), apnsId, fcmId, othersId, 'sandbox'].sort());
+  assert.deepEqual(byId[subscriptionId('https://fcm.googleapis.com/fcm/send/sub')].subscription, { endpoint: 'https://fcm.googleapis.com/fcm/send/sub', keys: { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) } });
   const guardOf = (id) => ({ seqNo: cluster.docs(INDEX.push).get(id).seq, primaryTerm: 1 });
   assert.deepEqual(byId[apnsId], { id: apnsId, profile_id: device.profileId, native: { platform: 'apns', token: tokens.apns, environment: 'production' }, guard: guardOf(apnsId) });
   assert.deepEqual(byId[fcmId].native, { platform: 'fcm', token: tokens.fcm, environment: 'production' });
   assert.deepEqual(byId[fcmId].guard, guardOf(fcmId), 'a registration carries the version it was read at');
   assert.equal(byId.sandbox.native.environment, 'sandbox');
-  assert.equal(byId[subscriptionId('https://push.example.test/sub')].guard, undefined, 'a subscription is deleted by id alone');
+  assert.equal(byId[subscriptionId('https://fcm.googleapis.com/fcm/send/sub')].guard, undefined, 'a subscription is deleted by id alone');
 });
 
 test('a registration reported gone is deleted only while it is the document that was read', async () => {
@@ -330,7 +330,7 @@ test('pushTargetsFor reads every receiver in one search, so one receiver with ma
   const { cluster, device, other, othersId } = await withRegistrations();
   // 150 subscriptions of one person would fill any shared page of hits.
   for (let i = 0; i < 150; i++) {
-    const endpoint = `https://push.example.test/flood/${i}`;
+    const endpoint = `https://fcm.googleapis.com/fcm/send/flood/${i}`;
     cluster.put(INDEX.push, subscriptionId(endpoint), { event_id: EVENT, profile_id: device.profileId, endpoint, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString(), expires_at: FUTURE });
   }
   const lines = [];
@@ -345,7 +345,7 @@ test('pushTargetsFor reads every receiver in one search, so one receiver with ma
   assert.ok(targets.some((t) => t.id === othersId), "the other receiver's registration is there");
   const mine = targets.filter((t) => t.profile_id === device.profileId);
   assert.equal(mine.length, TARGETS_PER_PROFILE, 'capped at the newest ten');
-  assert.deepEqual(mine.map((t) => t.subscription?.endpoint), Array.from({ length: 10 }, (_, i) => `https://push.example.test/flood/${149 - i}`));
+  assert.deepEqual(mine.map((t) => t.subscription?.endpoint), Array.from({ length: 10 }, (_, i) => `https://fcm.googleapis.com/fcm/send/flood/${149 - i}`));
   assert.deepEqual(lines, [`Push targets capped: one receiver has 153, the newest ${TARGETS_PER_PROFILE} are used`]);
   const searches = cluster.log.filter((e) => e.path.startsWith(`/${INDEX.push}/_search`));
   assert.equal(searches.length, 1, 'one search for every receiver');
