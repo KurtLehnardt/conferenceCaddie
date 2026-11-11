@@ -81,6 +81,11 @@ class MainActivity : ComponentActivity(), PlatformActions {
             CapacitorMigration.maybeRun(this, core)
         }
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
+        // The people features: the process's one controller and platform services (the Keystore-backed
+        // secure store, location, notifications and the permission prompts of this activity), which
+        // the background nudge job shares. They are made on the first call only, not on every
+        // re-creation of the activity.
+        val people = CaddiePeople.controller(this)
         setContent {
             CaddieApp(
                 core = core,
@@ -90,6 +95,7 @@ class MainActivity : ComponentActivity(), PlatformActions {
                 initialQuery = query,
                 talkLaunch = talkLaunch,
                 embedder = { EmbeddingModel.load() },
+                people = people,
                 platform = this,
             )
         }
@@ -101,6 +107,13 @@ class MainActivity : ComponentActivity(), PlatformActions {
         setIntent(intent)
         deliverNotificationTap(intent)
         handOff(intent)
+    }
+
+    // The system's notification switch for the app may have changed while it was away, which no
+    // people state shows: the background nudge job is checked again.
+    override fun onResume() {
+        super.onResume()
+        CaddiePeople.recheckBackgroundNudges()
     }
 
     override fun onDestroy() {

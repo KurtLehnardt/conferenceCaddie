@@ -23,6 +23,10 @@ import app.conferencecaddie.ui.theme.Caddie
  * bundle: each speaker with their one-line tagline (names and taglines only, as public bundles
  * carry nothing else), the whole abstract, and the related talks the bundle lists, which open in
  * the same sheet and work offline.
+ *
+ * [peopleControls] draws the talk's people controls (the web's TalkPeopleControls: who wants to
+ * talk about it, and sharing the profile with them) at the foot of the card, above the related
+ * talks as on the web; null leaves them out.
  */
 @Composable
 fun TalkSheet(
@@ -35,6 +39,7 @@ fun TalkSheet(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     onClose: () -> Unit,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val c = Caddie.colors
     CaddieSheet(title = Strings.Talk.SHEET_TITLE, onClose = onClose, modifier = Modifier.testTag("talk-sheet")) {
@@ -52,8 +57,11 @@ fun TalkSheet(
             onOpenLink = onOpenUrl,
             flat = true,
             modifier = Modifier.testTag("talk-sheet-card"),
-            extra = if (talk.kind == "talk") {
-                { RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, startOpen = true, onOpenUrl = onOpenUrl) }
+            extra = if (talk.kind == "talk" || peopleControls != null) {
+                {
+                    peopleControls?.invoke(talk)
+                    if (talk.kind == "talk") RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, startOpen = true, onOpenUrl = onOpenUrl)
+                }
             } else {
                 null
             },

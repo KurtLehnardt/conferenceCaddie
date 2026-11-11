@@ -832,6 +832,12 @@ class PeopleController(
      * Actions still start one at a time in the order they were called. Called from the
      * controller's own work, it runs in place. A failure the action does not expect returns [failed].
      */
+    /**
+     * "Try again" for records that could not be opened: opens the current backend's session now.
+     * True when the session is open now.
+     */
+    suspend fun retrySession(): Boolean = write(false) { session != null }
+
     private suspend fun <T> write(failed: T, block: suspend () -> T): T {
         if (currentCoroutineContext()[Owner]?.controller === this) return guarded(failed, block)
         return scope.async { guarded(failed, block) }.await()
@@ -864,6 +870,7 @@ class PeopleController(
     // After a failure the screens see the state as it now is, and a session that could not be
     // opened is tried again later.
     private fun afterFailure() {
+        openFailed = sessionMissing()
         publish()
         retrySessionLater()
     }
@@ -881,6 +888,9 @@ class PeopleController(
             scope.async { contextLock.withLock { context?.takeIf { sessionMissing() }?.let { applyContext(it) } } }.await()
         }
     }
+
+    /** True after an attempt to open the current backend's session failed, until a session is registered. */
+    private var openFailed = false
 
     private fun sessionMissing(): Boolean = context?.let { session == null && backendAllowed(it.backend) } == true
 
@@ -1061,6 +1071,7 @@ class PeopleController(
                 s.hasDevice = s.credentials.get() != null
                 s.sync.livePresence = { slug -> s.presenceRuntime.get(slug).on }
                 sessions[next.backend.base] = s
+                openFailed = false
                 session = s
                 s.sync.reconcileCredential()?.let { setNotice(it) }
                 s.sync.startDeleteRetries()
@@ -1131,10 +1142,14 @@ class PeopleController(
         publish()
     }
 
-    // The web offers "Open profile" when the message speaks of the profile (followShare in
-    // web/src/app.tsx). A profile problem is fixed there too, even when its words do not say so
-    // (the malformed LinkedIn link).
-    private fun opensProfile(message: String): Boolean =
+    /**
+     * True when the fix for [message], as an action returned it or a notice carries it, is on the
+     * profile screen, so the screen offers "Open profile" next to it. The web offers it when the
+     * message speaks of the profile (followShare in web/src/app.tsx); a profile problem is fixed
+     * there too, even when its words do not say so (the malformed LinkedIn link). The controller
+     * decides this in one place, so no screen reads the wording.
+     */
+    fun opensProfile(message: String): Boolean =
         message.contains("profile", ignoreCase = true) || message == ProfileSync.profileProblem(session?.store?.profile)
 
     private suspend fun applyForeground(fg: Boolean) {
@@ -1309,7 +1324,7 @@ class PeopleController(
         }
         if (s == null) {
             // The records could not be read yet; they are tried again.
-            _state.value = PeopleUiState(availability = PeopleAvailability.Loading, backend = ctx.backend.base, features = features)
+            _state.value = PeopleUiState(availability = PeopleAvailability.Loading, backend = ctx.backend.base, features = features, sessionFailed = openFailed)
             return
         }
         val store = s.store

@@ -55,6 +55,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.components.AppBar
+import app.conferencecaddie.ui.components.AppBarBack
+import app.conferencecaddie.ui.components.AppBarLabeledBack
 import app.conferencecaddie.ui.components.AppBarTitle
 import app.conferencecaddie.ui.components.CaddieIconButton
 import app.conferencecaddie.ui.components.NavBar
@@ -68,14 +70,17 @@ import app.conferencecaddie.ui.components.Toast
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.ConnectConfirmation
 import app.conferencecaddie.ui.shell.LocalShellNavigator
+import app.conferencecaddie.ui.shell.PeoplePage
 import app.conferencecaddie.ui.shell.SettingsScreen
 import app.conferencecaddie.ui.shell.ShellActions
-import app.conferencecaddie.ui.shell.ShellNavigator
+import app.conferencecaddie.ui.shell.ShellNavigation
+import app.conferencecaddie.ui.shell.ShellPage
 import app.conferencecaddie.ui.shell.ShellState
 import app.conferencecaddie.ui.shell.SwitcherSheet
 import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.shell.TabContent
 import app.conferencecaddie.ui.shell.isWebLink
+import app.conferencecaddie.ui.shell.rememberShellNavigation
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.CaddieTheme
@@ -86,18 +91,21 @@ fun visibleTabs(peopleEnabled: Boolean): List<Tab> = Tab.entries.filter { it != 
 /**
  * The root of the UI on both platforms: the web app's shell. An app bar with the conference
  * switcher, the Offline badge and the Settings gear; the tab bar (People when the backend serves
- * people features, For you, Search, Interested); Settings as a screen of its own with Back, as on
- * the web; the switcher sheet; the toast; and the confirmation before switching servers.
+ * people features, For you, Search, Interested); the pages over the tabs (Settings, and the people
+ * screens Profile, Requests and Meet up), each with Back, as on the web; the switcher sheet; the
+ * toast; and the confirmation before switching servers.
  *
  * In a window at least 768 dp wide (a tablet, or a phone in landscape) the shell takes the web's
  * wide layout: the tabs move to a rail on the left and the app bar and content stay in a column at
  * most 720 dp wide, centred. Every part stays clear of the system bars, the display cutout and the
  * keyboard.
  *
- * The caller owns the data ([state]) and answers [actions]; [content] supplies each tab's screen.
- * [initialTab] opens another tab than the first one, if the backend offers it. [request] moves the
- * shell from outside, once per request: to a tab or Settings (a `caddie://` link), or to the
- * conference switcher (Import my schedule's "Switch conference").
+ * The caller owns the data ([state]) and answers [actions]; [content] supplies each tab's screen and
+ * the people pages. [initialTab] opens another tab than the first one, if the backend offers it.
+ * [navigation] holds where the shell is; pass one from [rememberShellNavigation] to move around the
+ * shell from outside it. [request] moves the shell from outside too, once per request: to a tab or
+ * Settings (a `caddie://` link), or to the conference switcher (Import my schedule's "Switch
+ * conference").
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -106,68 +114,72 @@ fun App(
     actions: ShellActions = ShellActions(),
     content: TabContent = TabContent(),
     initialTab: Tab? = null,
+    navigation: ShellNavigation = rememberShellNavigation(initialTab),
     request: ShellRequest? = null,
 ) {
-    val tabs = visibleTabs(state.capabilities.people.enabled)
-    // The tab asked for (a tap, a link or a launch option), or null for the backend's first tab:
-    // People where people features are served, else For you, as on the web. The choice is not made
-    // before the capabilities arrive: on a first start the tabs appear only then, and an untouched
-    // shell follows them to People, while a tab the person picked stays picked. A tab the backend
-    // does not offer shows the first tab until it is offered again.
-    var chosen by rememberSaveable { mutableStateOf(initialTab) }
-    val selected = chosen?.takeIf { it in tabs } ?: tabs.first()
-    var settingsOpen by rememberSaveable { mutableStateOf(false) }
-    var switcherOpen by rememberSaveable { mutableStateOf(false) }
+    val peopleEnabled = state.capabilities.people.enabled
+    val tabs = visibleTabs(peopleEnabled)
+    // Tier 1 has no People tab and opens on For you. A tab that is not offered (People, when the
+    // backend turns people features off) falls back to the first one. Nothing is picked for the
+    // person before the tabs are known: on a first start the tab bar shows no selection until the
+    // capabilities say whether People is there, and then the first tab.
+    val picked = navigation.tab?.takeIf { it in tabs }
+    val selected = picked ?: tabs.first()
+    val tabSelected = picked ?: tabs.first().takeIf { state.tabsKnown }
+    val page = navigation.top
     // A server typed in Settings waits here for the same confirmation a link gets.
     var typedServer by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // A link's tab leaves Settings and shows the tab, as a tap on it would.
+    // The people pages close when the backend is known to serve no people features. Requests and
+    // Meet up belong to one conference, so they close when another conference is selected, as on
+    // the web. After a restore the capabilities are still loading (features read as off) and the
+    // conference is not selected yet; neither closes a page. Only a settled "off", and a real switch
+    // from one conference to another, do.
+    LaunchedEffect(peopleEnabled, state.tabsKnown) {
+        if (state.tabsKnown && !peopleEnabled) navigation.closePages { it is PeoplePage }
+    }
+    var shownConference by rememberSaveable { mutableStateOf(state.selectedConferenceId) }
+    LaunchedEffect(state.selectedConferenceId) {
+        val selected = state.selectedConferenceId ?: return@LaunchedEffect
+        val shown = shownConference
+        if (shown != null && shown != selected) {
+            navigation.closePages { it == PeoplePage.Inbox || it is PeoplePage.Meet }
+        }
+        shownConference = selected
+    }
+    // A link's tab leaves every page and shows the tab, as a tap on it would; a link to Settings opens
+    // it as the gear does. The switcher shows only when the request asks for it. A people route is
+    // the People layer's to show (see ShellRequest).
     LaunchedEffect(request) {
         val r = request ?: return@LaunchedEffect
-        if (r.tab != null) {
-            settingsOpen = false
-            chosen = r.tab
-        }
-        if (r.settings) settingsOpen = true
-        switcherOpen = r.switcher
+        if (r.people == null) r.tab?.let(navigation::selectTab)
+        if (r.settings) navigation.openSettings()
+        navigation.switcherOpen = r.switcher
     }
 
     val uriHandler = LocalUriHandler.current
     val openUrl: (String) -> Unit = { url ->
         if (isWebLink(url)) actions.onOpenUrl?.invoke(url) ?: runCatching { uriHandler.openUri(url) }
     }
-    val navigator = remember {
-        object : ShellNavigator {
-            override fun selectTab(tab: Tab) {
-                settingsOpen = false
-                chosen = tab
-            }
 
-            override fun openSettings() {
-                settingsOpen = true
-            }
-
-            override fun openSwitcher() {
-                switcherOpen = true
-            }
-        }
-    }
-
-    // The system Back (Android) and the edge swipe (iOS) leave Settings. BackHandler is deprecated in
-    // favour of the navigationevent API, which Compose Multiplatform 1.12 still marks experimental.
+    // The system Back (Android) and the edge swipe (iOS) leave the top page. BackHandler is
+    // deprecated in favour of the navigationevent API, which Compose Multiplatform 1.12 still marks
+    // experimental.
     @Suppress("DEPRECATION")
-    BackHandler(enabled = settingsOpen) { settingsOpen = false }
+    BackHandler(enabled = page != null) { navigation.back() }
 
     CaddieTheme(state.theme) {
-        CompositionLocalProvider(LocalShellNavigator provides navigator) {
+        CompositionLocalProvider(LocalShellNavigator provides navigation) {
             BoxWithConstraints(Modifier.fillMaxSize().background(Caddie.colors.bg)) {
                 val wide = maxWidth >= Caddie.dimens.wideLayoutMinWidth
                 val navItems = tabs.map { tab -> navItem(tab, state) }
-                val navSelected = if (settingsOpen) null else selected
-                val onNavSelect: (Tab) -> Unit = {
-                    settingsOpen = false
-                    chosen = it
+                // Requests and Meet up belong to People, as on the web; Settings and Profile to no tab.
+                val navSelected = when (page) {
+                    null -> tabSelected
+                    PeoplePage.Inbox, is PeoplePage.Meet -> Tab.People.takeIf { it in tabs }
+                    else -> null
                 }
+                val onNavSelect: (Tab) -> Unit = navigation::selectTab
                 // The tab bar's height, so the keyboard inset below the content does not count it twice.
                 var navBarHeight by remember { mutableStateOf(0.dp) }
                 val density = LocalDensity.current
@@ -184,7 +196,7 @@ fun App(
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             val column = if (wide) Modifier.widthIn(max = Caddie.dimens.contentMaxWidth) else Modifier
-                            ShellAppBar(state, settingsOpen, selected, content, column, onBack = { settingsOpen = false }, onOpenSettings = { settingsOpen = true }, onOpenSwitcher = { switcherOpen = true })
+                            ShellAppBar(state, page, selected, content, column, navigation)
                             Box(
                                 Modifier
                                     .weight(1f)
@@ -200,17 +212,25 @@ fun App(
                                     ),
                             ) {
                                 val conference = state.selectedConference
-                                if (settingsOpen) {
-                                    SettingsScreen(
+                                val searchable = conference != null && conference.searchable
+                                when {
+                                    page == ShellPage.Settings -> SettingsScreen(
                                         state = state,
                                         actions = actions,
                                         onOpenUrl = openUrl,
                                         onServerTyped = { typedServer = it },
+                                        onOpenProfile = if (content.peoplePage != null && peopleEnabled) {
+                                            { navigation.openPage(PeoplePage.Profile) }
+                                        } else {
+                                            null
+                                        },
+                                        people = content.settingsPeople.takeIf { searchable && peopleEnabled },
                                     )
-                                } else if (conference == null || !conference.searchable) {
-                                    Blocker(state, actions, onChoose = { switcherOpen = true }, onOpenUrl = openUrl)
-                                } else {
-                                    TabBody(selected, state, content)
+                                    !searchable -> Blocker(state, actions, onChoose = { navigation.switcherOpen = true }, onOpenUrl = openUrl)
+                                    page is PeoplePage -> Box(Modifier.fillMaxSize().testTag("page-${pageTag(page)}")) {
+                                        content.peoplePage?.invoke(page)
+                                    }
+                                    else -> TabBody(selected, state, content)
                                 }
                                 val toast = state.toast
                                 if (toast != null) {
@@ -232,17 +252,17 @@ fun App(
                 }
             }
 
-            if (switcherOpen) {
+            if (navigation.switcherOpen) {
                 SwitcherSheet(
                     conferences = state.conferences,
                     current = state.selectedConferenceId,
                     error = state.conferencesError,
                     onPick = {
-                        switcherOpen = false
+                        navigation.switcherOpen = false
                         if (it != state.selectedConferenceId) actions.onSelectConference(it)
                     },
                     onOpenUrl = openUrl,
-                    onClose = { switcherOpen = false },
+                    onClose = { navigation.switcherOpen = false },
                 )
             }
 
@@ -280,8 +300,10 @@ fun App(
  * A move of the shell asked from outside it: show [tab] (leaving Settings), open [settings], or open
  * the conference [switcher]. [id] tells two equal requests apart, so a second link to the tab the
  * person has since left shows it again. [people] is the People screen a link names (Requests, a
- * meet, the profile, a zone, or the home with "Around now"), which comes with [tab] People; the
- * shell shows the tab, and the People screens open the route.
+ * meet, the profile, a zone, or the home with "Around now"), which comes with [tab] People. The
+ * People layer (rememberPeopleUi) shows it, tab and page together, once people features are on;
+ * the shell leaves the tab alone for such a request, so the tab and the page change at once and a
+ * route that waits for the people features does not move the shell meanwhile.
  */
 data class ShellRequest(
     val id: Long,
@@ -294,43 +316,67 @@ data class ShellRequest(
 /** A server waiting for confirmation, and whether it came from a link (else from Settings). */
 private data class PendingServer(val base: String, val fromLink: Boolean)
 
-/** The app bar: the switcher (or "Settings" with Back), the tab's actions, the badge and the gear. */
+/**
+ * The app bar: the switcher on a tab screen, or the page's title with its Back; the Offline badge,
+ * the tab's own buttons and the gear.
+ */
 @Composable
 private fun ShellAppBar(
     state: ShellState,
-    settingsOpen: Boolean,
+    page: ShellPage?,
     selected: Tab,
     content: TabContent,
     modifier: Modifier,
-    onBack: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenSwitcher: () -> Unit,
+    navigation: ShellNavigation,
 ) {
     AppBar(
         modifier = modifier,
         title = {
-            if (settingsOpen) {
-                AppBarTitle(Strings.Settings.TITLE)
+            if (page != null) {
+                AppBarTitle(pageTitle(page))
             } else {
                 SwitcherButton(
                     name = state.selectedConference?.name
                         ?: if (state.conferences != null) Strings.AppBar.CHOOSE_CONFERENCE else Strings.APP_NAME,
-                    onClick = onOpenSwitcher,
+                    onClick = { navigation.switcherOpen = true },
                 )
             }
         },
-        leading = if (settingsOpen) {
-            { CaddieIconButton(LucideIcon.ArrowLeft, Strings.AppBar.BACK, onBack, iconSize = 22.dp) }
-        } else {
-            null
+        leading = when (page) {
+            null -> null
+            PeoplePage.Profile -> {
+                {
+                    AppBarLabeledBack(Strings.AppBar.BACK_SETTINGS_LABEL, Strings.AppBar.BACK_TO_SETTINGS, navigation::appBarBack)
+                }
+            }
+            else -> {
+                { AppBarBack(navigation::appBarBack) }
+            }
         },
         actions = {
-            // The web's order: the Offline badge, the tab's own actions, then the gear.
+            // The web's order: the Offline badge, the tab's own buttons, the gear.
             if (!state.online) OfflineBadge()
-            if (!settingsOpen) content.appBarActions?.invoke(selected)
-            if (!settingsOpen) CaddieIconButton(LucideIcon.Settings, Strings.AppBar.SETTINGS, onOpenSettings)
+            if (page == null) {
+                content.appBarActions?.invoke(selected)
+                CaddieIconButton(LucideIcon.Settings, Strings.AppBar.SETTINGS, navigation::openSettings)
+            }
         },
     )
+}
+
+/** The app bar title of a page (app.tsx). */
+private fun pageTitle(page: ShellPage): String = when (page) {
+    ShellPage.Settings -> Strings.Settings.TITLE
+    PeoplePage.Profile -> Strings.AppBar.PROFILE
+    PeoplePage.Inbox -> Strings.AppBar.REQUESTS
+    is PeoplePage.Meet -> Strings.AppBar.MEET_UP
+}
+
+/** The test tag of a people page's body: page-profile, page-inbox or page-meet. */
+private fun pageTag(page: PeoplePage): String = when (page) {
+    PeoplePage.Profile -> "profile"
+    PeoplePage.Inbox -> "inbox"
+    is PeoplePage.Meet -> "meet"
 }
 
 private fun navItem(tab: Tab, state: ShellState): NavItem<Tab> = when (tab) {

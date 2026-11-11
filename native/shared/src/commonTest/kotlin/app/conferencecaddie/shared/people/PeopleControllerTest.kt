@@ -100,6 +100,25 @@ class PeopleControllerTest {
     }
 
     @Test
+    fun aSessionThatCouldNotBeOpenedIsReportedAndRetrySessionOpensIt() = runTest {
+        val h = PeopleHarness(this)
+        val kv = FlakyKeyValue().apply { failReads = true }
+        val c = controllerOver(kv, h)
+        c.updateContext(h.context())
+        runCurrent()
+        assertEquals(PeopleAvailability.Loading, c.state.value.availability)
+        assertTrue(c.state.value.sessionFailed, "the records could not be opened")
+        assertFalse(c.retrySession(), "still failing")
+        assertTrue(c.state.value.sessionFailed)
+        kv.failReads = false
+        assertTrue(c.retrySession())
+        runCurrent()
+        assertEquals(PeopleAvailability.Ready, c.state.value.availability)
+        assertFalse(c.state.value.sessionFailed)
+        c.close()
+    }
+
+    @Test
     fun aSessionIsOpenedOnceWhileItsRecordsAreStillBeingRead() = runTest {
         val h = PeopleHarness(this)
         val gate = CompletableDeferred<Unit>()

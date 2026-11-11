@@ -64,6 +64,15 @@ screen_has() {
   grep -qF "$1" <<<"$xml"
 }
 
+# Whether Settings shows: one of its group headings is on screen, "YOU" (Import my schedule, and
+# Profile when the server offers people features) or "APPEARANCE", and nothing else shows either. On
+# a small screen the people groups push Appearance below the fold.
+settings_shown() {
+  local xml
+  xml=$(ui_dump)
+  grep -qF 'text="YOU"' <<<"$xml" || grep -qF 'text="APPEARANCE"' <<<"$xml"
+}
+
 app_running() {
   local pid
   pid=$("$ADB" shell pidof "$PKG" | tr -d '\r') || true
@@ -123,11 +132,10 @@ gear=$(centre_of content-desc Settings) || true
 # shellcheck disable=SC2086
 "$ADB" shell input tap $gear
 sleep 2
-# "APPEARANCE" is the first group heading of Settings, and nothing else shows it.
-screen_has 'text="APPEARANCE"' || fail "The Settings gear did not open Settings in the release build."
+settings_shown || fail "The Settings gear did not open Settings in the release build."
 "$ADB" shell input keyevent KEYCODE_BACK
 sleep 2
-if screen_has 'text="APPEARANCE"'; then
+if settings_shown; then
   fail "Back did not leave Settings in the release build."
 fi
 screen_has 'text="Search"' || fail "The release build does not show the tab bar after Back."

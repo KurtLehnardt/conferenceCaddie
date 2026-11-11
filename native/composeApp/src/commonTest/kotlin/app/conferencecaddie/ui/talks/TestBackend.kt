@@ -30,7 +30,18 @@ import kotlinx.serialization.json.putJsonObject
  * changed, and [publish] lists conferences again, with a newer bundle_version or without a bundle.
  */
 @OptIn(ExperimentalAtomicApi::class)
-class TestBackend : Http {
+class TestBackend(
+    /** True serves a capabilities document with the people features on (tier 3 minus Bluetooth), as [app.conferencecaddie.ui.people.FakePeopleServer] answers them. */
+    private val people: Boolean = false,
+    /**
+     * The topics every conference's bundle lists, as topic_id to label, in rank order; people
+     * profiles pick from them. Null lists the topics the conference's talks carry instead, ranked as
+     * the builder ranks them (see topicsJson).
+     */
+    private val topics: List<Pair<String, String>>? = null,
+    /** True offers native push nudges (apns and fcm) in the capabilities, with the people features. */
+    private val push: Boolean = false,
+) : Http {
     class TestTalk(
         val id: String,
         val kind: String,
@@ -43,12 +54,13 @@ class TestBackend : Http {
         val track: String?,
         val room: String?,
         val hasSlides: Boolean = false,
+        /** The topic_ids of the talk; a topic's talk_count is the number of talks that list it. */
         val topics: List<String> = emptyList(),
         val vector: Int? = null,
     )
 
-    class TestConference(val slug: String, val name: String, val day: String, val talks: List<TestTalk>) {
-        fun without(id: String) = TestConference(slug, name, day, talks.filter { it.id != id })
+    class TestConference(val slug: String, val name: String, val day: String, val talks: List<TestTalk>, val endDay: String = day) {
+        fun without(id: String) = TestConference(slug, name, day, talks.filter { it.id != id }, endDay)
     }
 
     val base = "https://caddie.test"
@@ -131,11 +143,22 @@ class TestBackend : Http {
                 put("bundle_base", bundleBase)
                 put("server_search", false)
             }
-            putJsonObject("people") { put("enabled", false) }
+            putJsonObject("people") {
+                put("enabled", people)
+                if (people) {
+                    put("semantic", "off")
+                    put("presence", true)
+                    put("gps_bands", true)
+                    put("meets", true)
+                    put("circles", true)
+                    put("reports", true)
+                    put("live", "poll")
+                }
+            }
             putJsonObject("ble") { put("mode", "none") }
             putJsonObject("push") {
-                put("apns", false)
-                put("fcm", false)
+                put("apns", people && push)
+                put("fcm", people && push)
                 put("webpush", false)
             }
             putJsonObject("imports") {
@@ -195,7 +218,7 @@ class TestBackend : Http {
         put("slug", c.slug)
         put("name", c.name)
         put("start_date", c.day)
-        put("end_date", c.day)
+        put("end_date", c.endDay)
         put("time_zone", "UTC")
         putJsonObject("location") {
             put("city", "Test City")
@@ -212,16 +235,20 @@ class TestBackend : Http {
         put("talk_count", c.talks.count { it.kind == "talk" })
     }
 
-    // The topics of a conference by how many talks carry them, then id, as the builder ranks them.
+    // The topics of a conference: [topics] in the order given when the test names them, otherwise
+    // those its talks carry, by how many talks carry them, then id, as the builder ranks them. A
+    // topic's talk_count is the number of talks that carry it, 0 for a named topic no talk carries.
     private fun topicsJson(c: TestConference): JsonArray {
         val counts = c.talks.filter { it.kind == "talk" }.flatMap { it.topics }.groupingBy { it }.eachCount()
-        val ordered = counts.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+        val listed = topics ?: counts.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .map { (id, _) -> id to (TOPIC_LABELS[id] ?: id) }
         return JsonArray(
-            ordered.mapIndexed { i, (id, n) ->
+            listed.mapIndexed { i, (id, label) ->
                 buildJsonObject {
                     put("topic_id", id)
-                    put("label", TOPIC_LABELS[id] ?: id)
-                    put("talk_count", n)
+                    put("label", label)
+                    put("talk_count", counts[id] ?: 0)
                     put("rank", i + 1)
                     put("aliases", JsonArray(if (id == "kubernetes") listOf(JsonPrimitive("k8s")) else emptyList()))
                 }
