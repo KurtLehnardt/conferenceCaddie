@@ -12,13 +12,16 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 
-// ImportModel's state across imports that overlap: a file chosen while an earlier one is still being
-// read, and Cancel. On the iOS simulator and an Android emulator.
+// ImportModel's state across imports that overlap (a file chosen while an earlier one is still being
+// read), Cancel, and an import whose scope ends (a rotation). On the iOS simulator and an Android emulator.
 class ImportModelTest {
     private val empty = ImportResult(emptyList(), unmatchedCount = 3, extractedChars = 10)
 
@@ -68,6 +71,35 @@ class ImportModelTest {
         advanceUntilIdle()
         assertNull(m.result)
         assertFalse(m.busy)
+    }
+
+    @Test
+    fun anImportCutShortByItsScopeRunsAgainInTheNextOne() = runTest(StandardTestDispatcher()) {
+        // A rotation on Android ends the composition's scope while the model lives on.
+        val pending = Pending()
+        val first = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+        val m = ImportModel(first) { pending.run(it) }
+        m.pasteText = "text"
+        m.runText(setOf("a:1"))
+        advanceUntilIdle()
+        first.cancel()
+        advanceUntilIdle()
+        assertTrue(m.busy, "the import was dropped with its scope")
+        val second = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+        m.attach(second)
+        advanceUntilIdle()
+        assertEquals(2, pending.answers.size, "the import did not run again")
+        pending.answers[1].complete(ImportOutcome.Done(empty, onServer = false))
+        advanceUntilIdle()
+        assertFalse(m.busy)
+        assertEquals(empty, m.result)
+        // Nothing is left to run again.
+        val third = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+        m.attach(third)
+        advanceUntilIdle()
+        assertEquals(2, pending.answers.size)
+        second.cancel()
+        third.cancel()
     }
 
     @Test

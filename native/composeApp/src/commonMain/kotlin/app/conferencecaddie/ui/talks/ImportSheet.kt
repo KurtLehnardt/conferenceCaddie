@@ -113,11 +113,19 @@ class ImportModel(
 
     private var job: Job? = null
 
+    // The import that is running, kept until it ends, so one that the old scope cut short (a
+    // rotation on Android ends the composition's scope) runs again in the new one.
+    private var unfinished: Pair<ImportInput, Set<String>>? = null
+
+    /** Runs imports in [newScope] from now on, repeating one the previous scope cut short. */
     fun attach(newScope: CoroutineScope) {
+        if (newScope === scope) return
         scope = newScope
+        unfinished?.let { (input, interested) -> start(input, interested) }
     }
 
     fun reset() {
+        unfinished = null
         job?.cancel()
         busy = false
         error = null
@@ -130,6 +138,7 @@ class ImportModel(
 
     /** Stops reading; the sheet stays open on its first page. */
     fun cancel() {
+        unfinished = null
         job?.cancel()
         busy = false
     }
@@ -176,6 +185,7 @@ class ImportModel(
 
     private fun start(input: ImportInput, interested: Set<String>) {
         job?.cancel()
+        unfinished = input to interested
         busy = true
         error = null
         // Started lazily, so [job] names this import before any of it runs: a cancelled earlier
@@ -192,12 +202,15 @@ class ImportModel(
                     }
                     is ImportOutcome.Refused -> error = message(outcome)
                 }
+                unfinished = null
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 error = Strings.Import.UNAVAILABLE
+                unfinished = null
             } finally {
-                if (job === coroutineContext.job) busy = false
+                // An import cut short with its scope stays busy until attach runs it again.
+                if (job === coroutineContext.job && unfinished == null) busy = false
             }
         }
         job = launched
