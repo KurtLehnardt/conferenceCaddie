@@ -141,6 +141,7 @@ class BleRekeyNotifyTest {
     fun aReKeyThatKeepsFailingBacksOffInsteadOfRetryingAtOnce() = runTest {
         val b = BleRig(this)
         b.on()
+        val put = b.h.server.presencePut
         // Offline for the re-key writes, with nothing else heard: the retries wait 10, 20, 40 and
         // 80 seconds (doubling from the interval), not one write after another.
         b.h.server.presencePut = { FakeApiHttp.json(503, """{"error":"People are temporarily unavailable"}""") }
@@ -159,6 +160,24 @@ class BleRekeyNotifyTest {
         // Retries at 10, 30, 70 and 150 seconds after the first failure.
         assertEquals(5, b.presencePuts().size)
         assertTrue(b.view.on, "a failed re-key keeps running")
+
+        // Back online: the next re-key goes through and clears the wait, so a report that then
+        // fails once is tried again after the interval, not after the doubled wait.
+        b.h.server.presencePut = put
+        b.h.server.sightings = { FakeApiHttp.json(503, """{"error":"People are temporarily unavailable"}""") }
+        advanceTimeBy(160_000)
+        runCurrent()
+        assertEquals(6, b.presencePuts().size)
+        val reports = b.sightings().size
+        b.radio.hear(otherPayload(2), -60, b.now())
+        runCurrent()
+        assertEquals(reports + 1, b.sightings().size, "the report goes at once, and fails")
+        advanceTimeBy(9_999)
+        runCurrent()
+        assertEquals(reports + 1, b.sightings().size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(reports + 2, b.sightings().size, "tried again after the interval, not after the re-key's doubled wait")
     }
 
     // ---------------------------------------------------------------------------------------------

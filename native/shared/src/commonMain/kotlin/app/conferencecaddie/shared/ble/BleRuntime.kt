@@ -643,6 +643,9 @@ internal class BleRuntime(
             is ApiResult.Ok -> a.value
         }
         if (run !== r) return
+        // The write went through: the next failure starts its wait from the interval again.
+        r.backoffMs = 0
+        r.backoffUntil = 0
         val keyId = res.bleKeyId
         val key = BleProtocol.decodeKey(res.bleKey)
         if (key == null || keyId == null || !BleProtocol.isKeyId(keyId)) {
