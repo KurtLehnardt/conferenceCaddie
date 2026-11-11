@@ -18,7 +18,9 @@ import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.TestDevice
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.shell.Tab
+import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.talks.CaddieApp
+import app.conferencecaddie.ui.talks.TestBackend
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,13 +35,16 @@ import kotlinx.serialization.json.jsonPrimitive
 // simulator and on Android.
 @OptIn(ExperimentalTestApi::class)
 class TalkCardPeopleUiTest {
-    private val f = U1Fixture()
+    private var fixture: U1Fixture? = null
+    private val f: U1Fixture get() = fixture ?: U1Fixture().also { fixture = it }
     private val talk1 = "alpha-conf-2099:1"
     private val talk3 = "alpha-conf-2099:3"
     private val talk4 = "alpha-conf-2099:4"
 
     @AfterTest
-    fun cleanUp() = f.close()
+    fun cleanUp() {
+        fixture?.close()
+    }
 
     /** People ready, a named profile on this device (visible to nobody yet), [learn] for For you and [interested] marked. */
     private fun ComposeUiTest.prepare(interested: List<String> = emptyList(), learn: List<String> = emptyList()) {
@@ -140,4 +145,70 @@ class TalkCardPeopleUiTest {
         assertEquals(1, asked.size, "one /api/circles/counts request for the page of results, not one per card: $asked")
         assertEquals(setOf(talk1, talk3, talk4), asked.single())
     }
+
+    /**
+     * Search, For you and Interested are lazy lists, so a fling composes cards a few at a time. The
+     * screens ask for the counts of the whole result set once, so the cards find them in the
+     * controller's cache and a long scroll costs no request per window.
+     */
+    @Test
+    fun scrollingThroughAllSearchResultsAsksForCountsInAtMostTwoRequests() = runComposeUiTest {
+        // Alpha's talks 1, 3 and 4 (2 is a break, which a search does not list), then the extra ones.
+        val ids = (listOf(1, 3, 4) + (5 until 5 + TALKS_IN_LONG_LIST)).map { "alpha-conf-2099:$it" }
+        fixture = U1Fixture(crowdedAlpha(TALKS_IN_LONG_LIST, ambient = false), crowdedFakeAlpha(TALKS_IN_LONG_LIST, ambient = false))
+        f.server.seedPerson(f.slug, "Sample · Avery", about = "Placeholder profile 1.", sharedTalkIds = listOf(ids.first(), ids[20], ids.last()))
+        prepare()
+        setContent {
+            TestDevice(DpSize(390.dp, 844.dp)) {
+                CaddieApp(f.core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), people = f.controller)
+            }
+        }
+        u1WaitForTag("search-results")
+        for (id in ids) {
+            onNodeWithTag("search-results", useUnmergedTree = true).performScrollToNode(hasTestTag("talk-$id"))
+        }
+        // The last card has its count, so the controls read what the one request brought.
+        waitInCard(hasText(u1CountLabel(1)) and hasAnyAncestor(hasTestTag("talk-people-${ids.last()}")))
+        waitForIdle()
+        val asked = countRequests()
+        assertTrue(asked.isNotEmpty() && asked.size <= 2, "at most two /api/circles/counts requests for ${ids.size} results, not one per window: ${asked.map { it.size }}")
+    }
+
+    /** The web (talk.tsx) and the talk sheet show the people controls on every kind of talk; Search's events are kind "ambient". */
+    @Test
+    fun searchResultsOfEveryKindCarryThePeopleControls() = runComposeUiTest {
+        val event = "alpha-conf-2099:5"
+        fixture = U1Fixture(crowdedAlpha(0, ambient = true), crowdedFakeAlpha(0, ambient = true))
+        f.server.seedPerson(f.slug, "Sample · Avery", about = "Placeholder profile 1.", sharedTalkIds = listOf(event))
+        prepare()
+        setContent { TestPhone { CaddieApp(f.core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), people = f.controller) } }
+        u1WaitForTag("search-results")
+        onNodeWithText(Strings.Chips.EVENTS).performScrollTo().performClick()
+        // The three talks and the event.
+        u1WaitForText(Strings.Search.count(4, true, true))
+        onNodeWithTag("search-results", useUnmergedTree = true).performScrollToNode(hasTestTag("talk-$event"))
+        waitInCard(hasText(u1CountLabel(1)) and hasAnyAncestor(hasTestTag("talk-people-$event")))
+    }
+
+    private companion object {
+        const val TALKS_IN_LONG_LIST = 40
+    }
+}
+
+/** The Alpha conference with [extra] more talks (ids 5 on, later in the day, as the bundle lists talks by start) and, with [ambient], one event after them. */
+internal fun crowdedAlpha(extra: Int, ambient: Boolean): TestBackend.TestConference {
+    val alpha = TestBackend().alpha
+    val more = (0 until extra).map { n ->
+        TestBackend.TestTalk("${5 + n}", "talk", "Platform session ${5 + n}", "Placeholder abstract.", listOf("Speaker ${5 + n}" to null), "2099-03-03", 940 + n * 10, 950 + n * 10, "Platform", "Hall A")
+    }
+    val event = if (ambient) listOf(TestBackend.TestTalk("${5 + extra}", "ambient", "Sponsor mixer", "Meet the sponsors.", emptyList(), "2099-03-03", 1400, 1430, "Expo", "Hall A")) else emptyList()
+    return TestBackend.TestConference(alpha.slug, alpha.name, alpha.day, alpha.talks + more + event)
+}
+
+/** The fake People server's side of [crowdedAlpha]. */
+internal fun crowdedFakeAlpha(extra: Int, ambient: Boolean): FakeConference {
+    val alpha = FakeConference.alpha()
+    val more = (0 until extra).map { n -> FakeTalk("alpha-conf-2099:${5 + n}", "Platform session ${5 + n}") }
+    val event = if (ambient) listOf(FakeTalk("alpha-conf-2099:${5 + extra}", "Sponsor mixer", kind = "ambient")) else emptyList()
+    return FakeConference(alpha.slug, listOf("Hall A", "Hall B"), alpha.topics, alpha.talks + more + event)
 }

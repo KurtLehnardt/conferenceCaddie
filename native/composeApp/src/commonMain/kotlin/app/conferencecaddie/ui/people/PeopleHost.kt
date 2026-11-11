@@ -67,6 +67,14 @@ class PeopleHost(
     /** Profile (#/profile), from "Create my profile" or "Open my profile". */
     fun openProfile() = navigator.openPage(PeoplePage.Profile)
 
+    /** True when the controller says the fix for an action's [message] is on the profile screen, so the screen offers "Open my profile" with it. */
+    fun opensProfile(message: String): Boolean = controller.opensProfile(message)
+
+    /** "Try again" on the People tab when the records could not be opened: asks the controller to open them now. */
+    fun retrySession() {
+        scope.launch { controller.retrySession() }
+    }
+
     /** Requests (#/inbox). */
     fun openInbox() = navigator.openPage(PeoplePage.Inbox)
 

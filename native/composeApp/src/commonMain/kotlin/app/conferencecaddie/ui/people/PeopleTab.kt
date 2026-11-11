@@ -16,7 +16,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -33,6 +32,7 @@ import app.conferencecaddie.shared.people.PeopleAvailability
 import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.ui.ShellRequest
+import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieIconButton
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.NeedsConnection
@@ -44,6 +44,7 @@ import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 // The People layer: how the people screens sit in the shell. The screens themselves are
 // PeopleScreen (the People tab), ProfileScreen, InboxScreen and MeetScreen (the pages over the
@@ -63,6 +64,7 @@ fun PeopleTab(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, online
     Box(modifier.fillMaxSize()) {
         when {
             !online -> PeopleOffline()
+            state.sessionFailed -> PeopleSessionFailed(host)
             state.features.enabled && state.availability == PeopleAvailability.Ready -> Box(Modifier.fillMaxSize().testTag("people-home")) {
                 PeopleScreen(state, host, talks, host.request)
             }
@@ -109,6 +111,19 @@ fun PeopleSheets(state: PeopleUiState, host: PeopleHost) {
 @Composable
 fun RequestsButton(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     CaddieIconButton(LucideIcon.Inbox, Strings.AppBar.requests(count), onClick, modifier.testTag("requests-button"), badge = count)
+}
+
+/** The People tab while the people records could not be opened: a message and "Try again", which asks the controller to open them now. */
+@Composable
+private fun PeopleSessionFailed(host: PeopleHost) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).testTag("people-session-failed"),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(PeopleCommonStrings.SESSION_FAILED, style = Caddie.type.body, color = Caddie.colors.text2)
+        CaddieButton(PeopleCommonStrings.TRY_AGAIN, host::retrySession, modifier = Modifier.testTag("people-session-retry"))
+    }
 }
 
 /** The web's offline state of the People tab, Requests and Meet up. */
@@ -161,7 +176,9 @@ class PeopleUi internal constructor(
         capabilities = base.capabilities.copy(people = base.capabilities.people.copy(enabled = base.capabilities.people.enabled && enabled)),
         // The tab bar is known once the controller has answered too, so a start that has the
         // capabilities already does not select For you for the moment the controller takes.
-        tabsKnown = base.tabsKnown && !(base.capabilities.people.enabled && state.availability == PeopleAvailability.Loading),
+        // A backend whose records could not be opened still has its tabs (people features are on),
+        // so the People tab can show its "Try again".
+        tabsKnown = base.tabsKnown && (state.sessionFailed || !(base.capabilities.people.enabled && state.availability == PeopleAvailability.Loading)),
         peopleBadge = badge,
         profileName = state.profile.displayName,
     )
@@ -186,6 +203,13 @@ class PeopleUi internal constructor(
      */
     val talkControls: (@Composable (Talk) -> Unit)? get() = if (ready) slots.talkControls else null
 
+    /**
+     * The `prefetchCounts` of the Search, For you and Interested screens: asks the controller for a
+     * result set's circle counts in one request, so the cards' controls read its cache. Null without
+     * people features. Stable like [talkControls].
+     */
+    val prefetchCounts: ((List<String>) -> Unit)? get() = if (ready) slots.prefetchCounts else null
+
     /** InterestedScreen's `shareAll`: U1's [ShareAllControls], online with people features on, else null. Stable like [talkControls]. */
     val shareAll: (@Composable (List<String>) -> Unit)? get() = if (online && ready) slots.shareAll else null
 
@@ -198,7 +222,7 @@ class PeopleUi internal constructor(
 }
 
 /** What the People layer's slots read: one value, so a slot changes by reading it and not by being made again. */
-internal class PeopleInputs(
+internal data class PeopleInputs(
     val state: PeopleUiState,
     val talks: PeopleTalks,
     val online: Boolean,
@@ -211,13 +235,13 @@ internal class PeopleInputs(
  * the same instance and does not make the lists that hold it recompose.
  */
 internal class PeopleSlots(private val host: PeopleHost) {
-    private val latest = mutableStateOf<PeopleInputs?>(null, referentialEqualityPolicy())
+    private val latest = mutableStateOf<PeopleInputs?>(null)
 
     fun update(inputs: PeopleInputs) {
         latest.value = inputs
     }
 
-    private fun inputs(): PeopleInputs = checkNotNull(latest.value)
+    internal fun inputs(): PeopleInputs = checkNotNull(latest.value)
 
     val tab: @Composable () -> Unit = {
         val i = inputs()
@@ -245,6 +269,10 @@ internal class PeopleSlots(private val host: PeopleHost) {
         val i = inputs()
         val interested = talk.talkId in i.talks.interested
         PeopleType { if (i.online) TalkPeopleControls(talk.talkId, interested, i.state, host) else if (interested) CirclesOfflineNote() }
+    }
+
+    val prefetchCounts: (List<String>) -> Unit = { ids ->
+        host.scope.launch { host.controller.circleCounts(ids.take(PeopleController.COUNT_CHUNK)) }
     }
 
     val shareAll: @Composable (List<String>) -> Unit = { ids ->
@@ -294,6 +322,7 @@ fun rememberPeopleUi(
         )
     }
     val enabled by rememberUpdatedState(state.features.enabled)
+    val availability by rememberUpdatedState(state.availability)
 
     // A people route waits until people features are on, so the notification tap or link that
     // opened the app is not lost while the capabilities load; it is then shown once. The hand-off
@@ -318,16 +347,24 @@ fun rememberPeopleUi(
     }
     LaunchedEffect(host, waiting) {
         val encoded = waiting ?: return@LaunchedEffect
-        snapshotFlow { enabled }.first { it }
+        // A route waits only while the answer is still coming: once the tabs are known and people
+        // features are off, it is given up with the same toast as a talk link to such a backend.
+        snapshotFlow { enabled to availability }.first { (on, now) -> on || now != PeopleAvailability.Loading }
         waiting = null
+        if (!enabled) {
+            toast(Strings.Blockers.NOT_AVAILABLE_HERE, null, null)
+            return@LaunchedEffect
+        }
         decodePeopleRoute(encoded)?.let { route(it, host, navigation) }
     }
 
     var launched by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(host, launch) {
         if (launch == null || launched) return@LaunchedEffect
-        snapshotFlow { enabled }.first { it }
+        // Dropped without a toast when people features are off: a debug launch is not a user's tap.
+        snapshotFlow { enabled to availability }.first { (on, now) -> on || now != PeopleAvailability.Loading }
         launched = true
+        if (!enabled) return@LaunchedEffect
         when (launch) {
             is PeopleLaunch.Route -> route(launch.route, host, navigation)
             is PeopleLaunch.Search -> host.openPeople(PeopleRequest(query = launch.text))

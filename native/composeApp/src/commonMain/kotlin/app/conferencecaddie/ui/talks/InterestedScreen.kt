@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -60,12 +61,16 @@ fun InterestedScreen(
     snapshots: Map<String, InterestedTalk> = emptyMap(),
     shareAll: (@Composable (talkIds: List<String>) -> Unit)? = null,
     peopleControls: (@Composable (Talk) -> Unit)? = null,
+    prefetchCounts: ((List<String>) -> Unit)? = null,
     view: MyScheduleView = MyScheduleView.List,
     onView: (MyScheduleView) -> Unit = {},
     day: String? = null,
     onDay: (String) -> Unit = {},
 ) {
     val talks = interestedTalks(bundle, interested, snapshots)
+    // One counts request for the whole schedule, so the cards below read the controller's cache.
+    val talkIds = talks.map { it.talkId }
+    LaunchedEffect(prefetchCounts, talkIds) { if (talkIds.isNotEmpty()) prefetchCounts?.invoke(talkIds) }
     if (talks.isEmpty()) {
         InterestedPlaceholder()
         return

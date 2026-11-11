@@ -205,7 +205,7 @@ fun PushControls(state: PeopleUiState, host: PeopleHost, variant: PushVariant, m
                     }
                 }
                 is PushPanel.Hint -> Column(panelPadding.semantics { liveRegion = LiveRegionMode.Polite }) {
-                    if (p.text.contains("profile")) {
+                    if (host.opensProfile(p.text)) {
                         MessageWithLink(p.text, PeopleCommonStrings.OPEN_MY_PROFILE, host::openProfile, error = false)
                     } else {
                         PushHint(p.text, settings)

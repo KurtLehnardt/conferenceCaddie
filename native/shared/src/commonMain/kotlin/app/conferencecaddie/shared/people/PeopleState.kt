@@ -197,6 +197,11 @@ data class PeopleUiState(
     val backend: String? = null,
     val conference: ConferenceInfo? = null,
     val features: PeopleFeatures = PeopleFeatures.OFF,
+    /**
+     * True while the backend offers people features but its records could not be opened on the last
+     * try; the controller tries again on a timer, on the next action and on `retrySession`.
+     */
+    val sessionFailed: Boolean = false,
     /** True once this device has a credential for the backend (after the first visible write). */
     val hasDevice: Boolean = false,
     /** The profile on this device, or [Profile.EMPTY]. */

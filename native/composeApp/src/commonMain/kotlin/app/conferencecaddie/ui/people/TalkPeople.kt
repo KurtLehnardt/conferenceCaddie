@@ -176,7 +176,7 @@ private fun TalkPeopleBody(
         }
         if (notice) ShareNotice(busy, onShare = { apply(true) }, onNotNow = { notice = false })
         message?.let { m ->
-            if (m.contains("profile")) MessageWithLink(m, PeopleCommonStrings.OPEN_MY_PROFILE, host::openProfile) else ErrorText(m)
+            if (host.opensProfile(m)) MessageWithLink(m, PeopleCommonStrings.OPEN_MY_PROFILE, host::openProfile) else ErrorText(m)
         }
         if (shared) {
             // "See who's here": the chevron after the label, up while the circle is open; screen
@@ -390,7 +390,7 @@ fun ShareAllControls(talkIds: List<String>, state: PeopleUiState, host: PeopleHo
             // The 50-talk cut and retired topics report something done for the user: a hint, not an error.
             val hint = PeopleController.isHintMessage(m)
             when {
-                m.contains("profile") -> MessageWithLink(m, PeopleCommonStrings.OPEN_MY_PROFILE, host::openProfile, error = !hint)
+                host.opensProfile(m) -> MessageWithLink(m, PeopleCommonStrings.OPEN_MY_PROFILE, host::openProfile, error = !hint)
                 hint -> HintText(m, Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                 else -> ErrorText(m)
             }

@@ -373,7 +373,7 @@ private fun PresenceSetup(
                 }
                 if (mode == PresenceMode.Day) HintText(ConnectStrings.DAY_HINT)
             }
-            val profileError = error?.contains("profile") == true
+            val profileError = error?.let(host::opensProfile) == true
             PeopleTextField(
                 spot,
                 onSpot,
@@ -499,7 +499,7 @@ private fun StillChip(label: String, active: Boolean, enabled: Boolean, onClick:
     val c = Caddie.colors
     // The tappable box is the 48 dp one; the chip drawn in it keeps its 36 dp look.
     Box(
-        Modifier.defaultMinSize(minHeight = PlatformTouchTarget).caddieClickable(Pill, enabled = enabled, onClick = onClick),
+        Modifier.defaultMinSize(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget).caddieClickable(Pill, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Box(

@@ -30,7 +30,7 @@ private val BLAKE = "Sample · Blake"
 private val CASEY = "Sample · Casey"
 
 /** The extra windows of the screens the brief names: twice the font size, landscape, and the wide layout. */
-private fun extras(tall: Int) = mapOf(
+internal fun extras(tall: Int) = mapOf(
     "font2x" to ParityWindow(390, tall, fontScale = 2f),
     "landscape" to ParityWindow(844, 390),
     "wide" to ParityWindow(1024, 1366),
