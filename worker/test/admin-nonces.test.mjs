@@ -251,6 +251,44 @@ describe('the admin nonce table', { skip }, () => {
     }
   });
 
+  test('the same on PUT /admin/conferences: a held-back replay is refused, and the directory upserts only for the request that pruned', async () => {
+    await withClock(async (setOffset) => {
+      const ctx = realEnv();
+      const upserts = () => ctx.directorySql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
+      const body = JSON.stringify({ conferences: [conf(SLUG)] });
+      const req = signed('PUT', '/admin/conferences', { body });
+      assert.equal((await call(ctx.env, req.build())).status, 200);
+      assert.equal(upserts(), 1);
+      setOffset(10_000);
+      const stream = new ReadableStream({
+        async pull(c) {
+          setOffset(1_000_000);
+          assert.equal((await call(ctx.env, signed('PUT', '/admin/conferences', { body }).build())).status, 200); // prunes the first nonce
+          assert.ok(!nonces(ctx.states.get('directory:global')).some((r) => r.nonce === req.nonce), 'the first use was pruned');
+          c.enqueue(new TextEncoder().encode(body));
+          c.close();
+        },
+      }, { highWaterMark: 0 });
+      const stalled = new Request(req.url, {
+        method: 'PUT', duplex: 'half', body: stream,
+        headers: { 'X-Caddie-Admin': req.header, 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.9' },
+      });
+      assert.deepEqual(Object.values(await call(ctx.env, stalled)), [401, { error: 'admin_skew' }]);
+      assert.equal(upserts(), 2, 'only the request that pruned upserted');
+    });
+  });
+
+  test('an object that reached version 3 without the nonce index gets it at its next start', () => {
+    const state = fakeState();
+    new ConferenceDO(state, { EMBED_FAKE: '1' });
+    const indexes = () => state.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'admin_nonces' AND name = 'admin_nonces_ts'").all().length;
+    assert.equal(indexes(), 1);
+    state.db.exec('DROP INDEX admin_nonces_ts');
+    assert.equal(state.db.prepare("SELECT v FROM meta WHERE k = 'schema_version'").get().v, '3');
+    new ConferenceDO(state, { EMBED_FAKE: '1' });
+    assert.equal(indexes(), 1);
+  });
+
   test('an /admin/* request without the forwarded nonce and timestamp is 404 in both objects, and no handler runs', async () => {
     const obj = new ConferenceDO(fakeState(), { EMBED_FAKE: '1' });
     const stats = countHandler('GET', '/admin/stats');

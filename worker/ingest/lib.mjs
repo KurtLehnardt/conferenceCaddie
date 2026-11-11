@@ -147,6 +147,10 @@ function describe(status, text) {
   return code ? `status ${status} (${code})` : `status ${status}`;
 }
 
+// A redirect answer of a fetch made with redirect: 'manual': the 3xx itself (Node), or an
+// opaque-redirect response with status 0 (browsers).
+export const isRedirect = (res) => res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400);
+
 export class AdminError extends Error {
   constructor(message, status = 0) {
     super(message);
@@ -172,8 +176,11 @@ export function accessHeaders(env = process.env) {
 // /admin/moderation with action "delete" answers 404 when the target is already gone, so a delete
 // whose first answer was lost reports 404 on the retry. It stops at once on a 503
 // daily_limit, because retrying cannot help before the quota resets. Any other status throws an
-// AdminError that carries the status. `api` must be an origin (the admin routes live at its root);
-// a path or query outside the signer's charset is a UsageError before anything is sent.
+// AdminError that carries the status. A redirect is never followed and is an AdminError at once,
+// not retried: fetch drops only Authorization on a cross-origin redirect, so following one would
+// hand the signed header and the Access secret to another origin. `api` must be an origin (the
+// admin routes live at its root); a path or query outside the signer's charset is a UsageError
+// before anything is sent.
 export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env = process.env } = {}) {
   const access = accessHeaders(env);
   return async function admin(method, path, body) {
@@ -198,6 +205,7 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
             ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
           },
           body: payload,
+          redirect: 'manual',
           signal: AbortSignal.timeout(timeoutMs),
         });
         text = await res.text();
@@ -205,6 +213,9 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
         lastError = `${where}: ${e.name === 'TimeoutError' ? 'timeout' : 'network error'}`;
         if (attempt < retries) await sleep(1000 * 2 ** attempt);
         continue;
+      }
+      if (isRedirect(res)) {
+        throw new AdminError(`${where}: status ${res.status}, a redirect. Admin calls never follow redirects; the API base must be the Worker's own origin.`, res.status);
       }
       if (res.ok) {
         try {

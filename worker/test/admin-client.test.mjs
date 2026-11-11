@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { EMPTY_BODY_SHA256, bodyMatches, parseAdminHeader, verifyAdminSignature } from '../../scripts/lib/admin-sign.mjs';
-import { UsageError, adminClient, drainPending } from '../ingest/lib.mjs';
+import { AdminError, UsageError, adminClient, drainPending } from '../ingest/lib.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
 const KEY = fixture.keys.key1;
@@ -47,6 +47,23 @@ function recorder(answers = []) {
 after(() => {
   for (const s of servers) s.close();
 });
+
+// A server on localhost (another origin than the recorder's 127.0.0.1) that answers every request
+// with `status` and a Location on `target`, and counts the requests it gets.
+function redirector(status, target) {
+  const hits = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url);
+    req.resume();
+    res.writeHead(status, { Location: `${target}/elsewhere` });
+    res.end();
+  });
+  servers.push(server);
+  return new Promise((resolve) => {
+    server.listen(0, 'localhost', () => resolve({ hits, base: `http://localhost:${server.address().port}` }));
+  });
+}
+const ACCESS = { CF_ACCESS_CLIENT_ID: 'fake-id.access', CF_ACCESS_CLIENT_SECRET: 'fake-access-secret' };
 
 // One recorded request: signed for exactly what was sent, with the key and no other credential.
 function assertSigned(r) {
@@ -113,6 +130,21 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
     for (const r of seen) assertSigned(r);
   });
 
+  test('a redirect is never followed: the call fails at once, and neither the signature nor the Access secret reaches the other origin', async () => {
+    const target = await recorder();
+    for (const status of [301, 302, 303, 307, 308]) {
+      const from = await redirector(status, target.base);
+      const admin = adminClient(from.base, KEY, { retries: 3, env: ACCESS });
+      await assert.rejects(
+        admin('POST', `/admin/talks?event=${SLUG}`, { generation: 1, talks: [] }),
+        (e) => e instanceof AdminError && e.status === status && /never follow redirects/.test(e.message),
+        String(status),
+      );
+      assert.equal(from.hits.length, 1, `${status} was retried`);
+    }
+    assert.equal(target.seen.length, 0, 'the redirect target got a request');
+  });
+
   test('a request the signer refuses is a usage error before anything is sent, and the message holds no key', async () => {
     const { seen, base } = await recorder();
     const refused = [
@@ -168,6 +200,16 @@ describe('worker/scripts/moderation.mjs', () => {
     assert.ok(!r.stdout.includes('fake-access-secret') && !r.stderr.includes('fake-access-secret'));
     assert.deepEqual([seen[0].headers['cf-access-client-id'], seen[0].headers['cf-access-client-secret']], ['fake-id.access', 'fake-access-secret']);
     assertSigned(seen[0]);
+  });
+
+  test('never follows a redirect, so the signature and the Access secret stay with the Worker\'s origin', async () => {
+    const target = await recorder();
+    const from = await redirector(307, target.base);
+    const r = await moderation(from.base, ['--hidden'], ACCESS);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /status 307, a redirect\. Admin calls never follow redirects/);
+    assert.equal(from.hits.length, 1);
+    assert.equal(target.seen.length, 0);
   });
 
   test('plain http is refused for anything but localhost', async () => {

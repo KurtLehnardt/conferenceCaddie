@@ -71,9 +71,10 @@ jobs:
       ALLOW_SHRINK: ${{ inputs.allow_shrink }}
       ALLOW_EMPTY: ${{ inputs.allow_empty }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
-    # The admin token and the optional Access token are given only to the two steps that need
-    # them (the configuration check and the push), never to the job, so the discovery step, which
-    # fetches third-party feeds, cannot read them.
+    # The admin token and the optional Access token are set only in the environment of the two
+    # steps that need them (the configuration check and the push), not the job's, so the discovery
+    # step, which fetches third-party feeds, does not receive them in its environment. The steps
+    # still share the runner and its workspace, so this narrows the exposure; it is not isolation.
     steps:
       - name: Check the configuration
         id: config

@@ -215,12 +215,16 @@ export function migrate(sql) {
   sql.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
   const row = sql.exec("SELECT v FROM meta WHERE k = 'schema_version'").toArray()[0];
   const current = row ? Number(row.v) : 0;
-  if (current >= SCHEMA_VERSION) return;
-  if (current < 1) sql.exec(V1);
-  for (const [table, column, type] of V2_COLUMNS) addColumn(sql, table, column, type);
-  sql.exec(V2);
+  if (current < SCHEMA_VERSION) {
+    if (current < 1) sql.exec(V1);
+    for (const [table, column, type] of V2_COLUMNS) addColumn(sql, table, column, type);
+    sql.exec(V2);
+    sql.exec("INSERT INTO meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(SCHEMA_VERSION));
+  }
+  // Version 3's admin_nonces and its index, on every start and outside the version gate, as the
+  // DirectoryDO does: an object that reached version 3 without the index (or the table) gets it
+  // now. Both statements are idempotent.
   sql.exec(ADMIN_NONCES);
-  sql.exec("INSERT INTO meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(SCHEMA_VERSION));
 }
 
 // The DirectoryDO schema: the conference list, a small key-value table for the cron's

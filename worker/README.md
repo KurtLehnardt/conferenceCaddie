@@ -264,15 +264,17 @@ The clients that sign are `worker/ingest/push-ingest.mjs`, `topics-local.mjs` an
 `worker/scripts/moderation.mjs` and the smoke (with `SMOKE_ADMIN_AUTH=signed`); the `caddie-admin`
 CLI signs with the same module once it gains its Worker backend. They read the token from
 `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`, and their `--api` base must be the Worker's origin, with no
-path, over https (plain http for localhost only). A retry is signed afresh with a new nonce and
-timestamp, so it is a new request to the Worker, and every admin route handles a repeated request
-idempotently, with one exception: `POST /admin/moderation` with `"action": "delete"` answers 404
-when the target is already gone, so a delete whose first answer was lost reports 404 on the
-retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `adminClient` and
-`moderation.mjs` also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
-Cloudflare Access application in front of `/admin/*`; the Worker does not check them, and the
-signature stays the check that matters. To rotate the token without an outage, see
-docs/FREE_HOSTING.md (Operations runbook).
+path, over https (plain http for localhost only). They never follow a redirect: fetch drops only
+`Authorization` on a cross-origin redirect, so following one would hand the signed header and the
+Access secret to another origin; a 3xx answer is an error at once, not retried. A retry is signed
+afresh with a new nonce and timestamp, so it is a new request to the Worker, and every admin route
+handles a repeated request idempotently, with one exception: `POST /admin/moderation` with
+`"action": "delete"` answers 404 when the target is already gone, so a delete whose first answer was
+lost reports 404 on the retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are
+set, `adminClient` and `moderation.mjs` also send them as `CF-Access-Client-Id` and
+`CF-Access-Client-Secret`, for a Cloudflare Access application in front of `/admin/*`; the Worker
+does not check them, and the signature stays the check that matters. To rotate the token without an
+outage, see docs/FREE_HOSTING.md (Operations runbook).
 
 A failed signature takes one token from a bucket of ten per minute per `CF-Connecting-IP`, and an
 empty bucket makes the Worker answer 404 before it computes anything; valid requests never take
@@ -284,13 +286,16 @@ until the bucket refills (one failure's worth every six seconds, all ten within 
 instead, because the timestamp is checked only after a valid signature. Either way the fix is the
 secret or the clock, not the Worker.
 
-A Worker from before signed admin requests reads only the bearer, and the clients from that
-change on send only the signature, so rolling the Worker back means rolling the clients back too:
-run `push-ingest.mjs`, `migrate-from-backup.mjs`, `topics-local.mjs` and
-`moderation.mjs` from the commit before the merge (and revert the merge on `main`, so the weekly
-ingest sends the bearer again), and run the smoke with `SMOKE_ADMIN_AUTH=bearer`. Otherwise every
-ingest and moderation call gets a 404 that looks like a wrong token. The `admin_nonces` table and
-its index stay in the objects and are harmless to the older code, which never reads them.
+A Worker from before signed admin requests reads only the bearer, and the clients from that change
+on send only the signature, so rolling the Worker back means rolling the clients back too: run
+`push-ingest.mjs`, `migrate-from-backup.mjs`, `topics-local.mjs` and `moderation.mjs` from the
+commit before the merge (and revert the merge on `main`, so the weekly ingest sends the bearer
+again), and run the smoke with `SMOKE_ADMIN_AUTH=bearer`. Otherwise every ingest and moderation call
+gets a 404 that looks like a wrong token. The `admin_nonces` table and its index stay in the objects
+and are harmless to the older code, which never reads them. After a rollback the conference objects
+stay at `schema_version` 3, so the next schema change must use version 4: a later change that bumps
+to 3 again would be skipped silently, because `migrate()` in `src/schema.js` does nothing when the
+stored version is at least `SCHEMA_VERSION`.
 
 ## Moderation
 

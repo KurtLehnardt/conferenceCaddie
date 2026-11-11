@@ -85,10 +85,11 @@ export async function signatureMatches({ method, pathWithQuery, header, keys, ti
   return matched;
 }
 
-// The clock window: |now - ts| <= 300 seconds, with now in whole seconds as the fixture defines it
-// (Math.floor(Date.now() / 1000)).
-export function withinSkew(ts, nowMs) {
-  return Math.abs(Math.floor(nowMs / 1000) - Number(ts)) <= SKEW_SECONDS;
+// The clock window: |now - ts| <= limit seconds, with now in whole seconds as the fixture defines
+// it (Math.floor(Date.now() / 1000)). The Worker uses SKEW_SECONDS, a Durable Object
+// DO_SKEW_SECONDS; both go through this one function.
+export function withinSkew(ts, nowMs, limit = SKEW_SECONDS) {
+  return Math.abs(Math.floor(nowMs / 1000) - Number(ts)) <= limit;
 }
 
 // Verifies the header against the request's method and url.pathname + url.search, in the
@@ -138,7 +139,7 @@ export function consumeAdminNonce(exec, headers, nowMs) {
   const nonce = headers.get(NONCE_HEADER);
   const ts = headers.get(TS_HEADER);
   if (!NONCE_RE.test(nonce ?? '') || !TS_RE.test(ts ?? '')) return 'missing';
-  if (Math.abs(Math.floor(nowMs / 1000) - Number(ts)) > DO_SKEW_SECONDS) return 'skew';
+  if (!withinSkew(ts, nowMs, DO_SKEW_SECONDS)) return 'skew';
   const fresh = exec('INSERT INTO admin_nonces (nonce, ts_ms) VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING 1', nonce, Number(ts) * 1000).toArray().length > 0;
   exec('DELETE FROM admin_nonces WHERE ts_ms < ?', nowMs - NONCE_TTL_MS);
   return fresh ? 'ok' : 'replay';

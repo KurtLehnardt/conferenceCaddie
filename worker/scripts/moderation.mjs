@@ -31,7 +31,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
-import { accessHeaders, normalizeApiBase } from '../ingest/lib.mjs';
+import { accessHeaders, isRedirect, normalizeApiBase } from '../ingest/lib.mjs';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const REF_RE = /^[0-9a-f]{16}$/;
@@ -140,11 +140,18 @@ async function admin(method, query, body) {
         ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       body: payload,
+      // Never followed: fetch drops only Authorization on a cross-origin redirect, so the signed
+      // header and the Access secret would go to the other origin.
+      redirect: 'manual',
       signal: AbortSignal.timeout(30_000),
     });
   } catch (err) {
     const why = err?.name === 'TimeoutError' ? 'timed out' : redact(err?.cause?.code ?? err?.cause?.message ?? err?.name ?? 'error');
     console.error(`Could not reach the Worker at ${base} (${why}). Check --api or CADDIE_API_BASE.`);
+    process.exit(1);
+  }
+  if (isRedirect(res)) {
+    console.error(`The Worker answered ${method} /admin/moderation with status ${res.status}, a redirect. Admin calls never follow redirects; --api (or CADDIE_API_BASE) must be the Worker's own origin.`);
     process.exit(1);
   }
   const json = await res.json().catch(() => ({}));
@@ -153,7 +160,7 @@ async function admin(method, query, body) {
     process.exit(1);
   }
   if (res.status === 401 && json?.error === 'admin_skew') {
-    console.error("The Worker refused the request's timestamp: this machine's clock differs from the Worker's by more than five minutes.");
+    console.error("The Worker refused the request's timestamp (admin_skew): it was more than five minutes from the Worker's clock or the conference object's when the request reached them. Either this machine's clock is off, the request body took that long to arrive, or the Worker's and the object's clocks disagree; check this machine's clock and try again.");
     process.exit(1);
   }
   if (!res.ok) {
