@@ -54,7 +54,11 @@ function endpointOf(value, { forWrite = false } = {}) {
   if (u.username || u.password || !u.hostname) throw bad('endpoint must be a push service URL');
   // A new subscription must point at a known browser push service. Removing one only needs a
   // well-formed https URL, so a row stored before this rule can still be deleted by its owner.
-  if (forWrite && !isPushServiceEndpoint(value)) throw bad('endpoint must be a push service URL');
+  if (forWrite && !isPushServiceEndpoint(value)) {
+    // Only the host is logged, never the endpoint, so a push service missing from the list shows up.
+    console.warn(`push subscription refused: host ${u.hostname.toLowerCase().slice(0, 64)}`);
+    throw bad('endpoint must be a push service URL');
+  }
   return value;
 }
 

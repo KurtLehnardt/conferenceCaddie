@@ -251,6 +251,9 @@ export async function buildPushRequest(env, sub, payload, nowMs = Date.now()) {
     url: sub.endpoint,
     init: {
       method: 'POST',
+      // A redirect is never followed, so the VAPID-signed request cannot be forwarded to a host
+      // that is not on the push service list. Known push services do not redirect.
+      redirect: 'manual',
       headers: {
         TTL: String(TTL_SECONDS),
         Urgency: 'normal',

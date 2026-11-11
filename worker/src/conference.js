@@ -16,8 +16,9 @@ import { visibleUntilMs, utcDay } from './lib/time.js';
 // The meter is written to meta.usage after FLUSH_EVERY requests or FLUSH_INTERVAL_MS, whichever
 // comes first, and after the first request of a new instance. The object can be evicted from
 // memory at any time, and whatever it counted since its last write is lost then, so the
-// interval bounds that loss to a few seconds of traffic. One write per interval costs about
-// 5,760 written rows a day for an object that is busy all day.
+// interval bounds that loss to a few seconds of traffic. One write per interval costs up to
+// 5,760 written rows a day for each object that is busy all day, so the total grows with the
+// number of searchable conferences (about 23,000 a day for four).
 const FLUSH_EVERY = 100;
 const FLUSH_INTERVAL_MS = 15_000;
 const WINDOW_MIN = 10;
@@ -87,10 +88,12 @@ class Meter {
   }
 
   // Writes the day's totals to meta.usage (one written row).
+  // The counters that schedule the next write are reset only after this write succeeds, so a
+  // failed write is retried on the next request.
   flush(now = Date.now()) {
+    this.owner.exec("INSERT INTO meta (k, v) VALUES ('usage', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(this.usage));
     this.sinceFlush = 0;
     this.flushedAt = now;
-    this.owner.exec("INSERT INTO meta (k, v) VALUES ('usage', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(this.usage));
   }
 
   setOthers(day, others) {
@@ -330,7 +333,8 @@ export class ConferenceDO extends DurableObject {
       this.meter.maybeFlush(now);
       this.#drain();
     } catch (err) {
-      // A failed meter write never fails the response; the next request tries again.
+      // A failed meter write never fails the response. The counts stay in memory and the next
+      // request tries the write again.
       console.error(`meter flush failed: ${err?.name ?? 'Error'}`);
     }
     const out = new Response(request.method === 'HEAD' ? null : res.body, res);

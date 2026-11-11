@@ -649,17 +649,18 @@ if (!IS_WORKER) {
   });
 }
 
-// The daily meter behind X-Caddie-Pace and the soft caps: within one UTC day, its counts only
-// grow. A conference object that loses counts when it is replaced would fail this.
+// A sanity check of the daily meter behind X-Caddie-Pace and the soft caps: five requests must
+// raise the day's counts by at least five. One run does not replace the conference object, so
+// this does not prove that a replaced object keeps its counts.
 if (IS_WORKER && ADMIN_TOKEN) {
-  await check('meter1: the daily usage meter never goes down within a day', async () => {
+  await check('meter1: the daily usage meter counts requests (sanity check)', async () => {
     const usage = async () => (await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`)).json.usage ?? null;
     const before = await usage();
     for (let i = 0; i < 5; i++) await api('GET', `/api/topics?event=${encodeURIComponent(PRIMARY)}`, undefined, { label: 'meter' });
     const after = await usage();
     const sameDay = before && after && before.day === after.day;
     const ok = Boolean(before && after) && (!sameDay || (after.requests >= before.requests + 5 && after.rows_read >= before.rows_read && after.rows_written >= before.rows_written));
-    report(ok, 'meter1: the daily usage meter never goes down within a day', before && after ? `requests ${before.requests} then ${after.requests}, rows read ${before.rows_read} then ${after.rows_read}` : 'no usage in /admin/stats');
+    report(ok, 'meter1: the daily usage meter counts requests (sanity check)', before && after ? `requests ${before.requests} then ${after.requests}, rows read ${before.rows_read} then ${after.rows_read}` : 'no usage in /admin/stats');
   });
 }
 
