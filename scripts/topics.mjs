@@ -1,7 +1,8 @@
 // Builds the topic list of one conference from its talk titles and tags every talk with the
 // topics found in its title.
 //
-// Usage: node scripts/topics.mjs --event <slug> [--dry-run] [--talks-index name] [--topics-index name] [--work-index name]
+// Usage: node scripts/topics.mjs --event <slug> [--dry-run] [--allow-empty] [--allow-shrink]
+//        [--talks-index name] [--topics-index name] [--work-index name]
 // Env:   ES_URL (default: the Elastic Cloud deployment), and an admin-capable key in ES_ADMIN_API_KEY,
 //        ELASTISEARCH_API_KEY or ES_API_KEY (the topics step writes, so the read-only key is not enough).
 //
@@ -13,19 +14,21 @@
 //    shingle filter fills the gap with a filler token and every token that contains the filler is dropped.
 // 2. A terms aggregation on that field counts talks per term (at least 3 talks, at most 150 topics).
 // 3. Term vector offsets give each term its most common original casing, and give each talk its terms.
-// 4. data/topics/{slug}.json can rename, merge (as aliases) or remove topics. It never adds one.
+// 4. data/topics/{slug}.json can rename, merge (as aliases) or remove topics. A merge never creates a target that occurs in no title (a target below three talks
+//    becomes a topic when its aliases bring it to three), and a fix-up never adds any other topic.
 //    Then a single word that nearly always appears inside a kept two-word topic is collapsed into
 //    it, so "cloud" and "native" do not sit beside "cloud native" (see COLLAPSE_COVERAGE).
 // 5. The conference's topic documents are replaced (only when they differ), and talks.topics is set
 //    with a Bulk API partial update that omits title and abstract, only where the value changed.
 // With --dry-run nothing is written to the topics or talks index: the topic list is printed as JSON
-// and the script stops. An empty result never replaces stored topics unless --allow-empty is passed. Only the temporary work index is created and deleted.
+// and the script stops. An empty result never replaces stored topics unless --allow-empty is passed, and a list that
+// drops more than 10 topics and 10% of the stored ones needs --allow-shrink (--allow-empty implies it). Only the temporary work index is created and deleted.
 // The work index is deleted at the end. Re-running with the same data changes nothing.
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { candidatesWithTargets, checkNotWiping, checkWorkIndexCount } from './lib/topics-candidates.mjs';
+import { candidatesWithTargets, checkNotShrinking, checkWorkIndexCount } from './lib/topics-candidates.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
@@ -51,6 +54,7 @@ const flag = (name) => {
 };
 const dryRun = flag('--dry-run');
 const allowEmpty = flag('--allow-empty');
+const allowShrink = flag('--allow-shrink');
 const slug = opt('--event');
 const talksIndex = opt('--talks-index') || 'caddie-talks';
 const topicsFlag = opt('--topics-index');
@@ -58,7 +62,12 @@ const topicsIndex = topicsFlag || 'caddie-topics';
 // Unique per run, so a dry run or a second run never deletes the work index of a run in progress.
 const workIndex = opt('--work-index') || `caddie-topicwork-${slug}-${process.pid}-${Date.now().toString(36)}`;
 if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug)) {
-  console.error('Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name] [--dry-run] [--allow-empty]');
+  console.error('Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name] [--dry-run] [--allow-empty] [--allow-shrink]');
+  process.exit(1);
+}
+// createWorkIndex deletes this index first, so only a work index name is accepted.
+if (!/^caddie-topicwork-[a-z0-9._-]+$/.test(workIndex)) {
+  console.error('--work-index must start with caddie-topicwork- (the script deletes that index).');
   process.exit(1);
 }
 
@@ -364,8 +373,9 @@ async function main() {
       query: { term: { conference: slug } },
       sort: [{ rank: 'asc' }],
     });
-    if (stored.status !== 200) fail(`Reading ${topicsIndex}`, stored);
-    checkNotWiping(topics.length, stored.json.hits.hits.length, allowEmpty);
+    // A dry run may run before the topics index exists: nothing is stored then.
+    const storedHits = stored.status === 404 && dryRun ? [] : stored.status === 200 ? stored.json.hits.hits : fail(`Reading ${topicsIndex}`, stored);
+    checkNotShrinking(topics.length, storedHits.length, { allowEmpty, allowShrink });
     if (dryRun) {
       console.log(JSON.stringify(topics.map((t) => ({ topic_id: t.topic_id, label: t.label, talk_count: t.talk_count, rank: t.rank, aliases: t.aliases.map((a) => a.replace(/-/g, ' ')) }))));
       return;
@@ -381,7 +391,7 @@ async function main() {
       talk_count: t.talk_count,
       rank: t.rank,
     }));
-    const same = JSON.stringify(stored.json.hits.hits.map((h) => h._source)) === JSON.stringify(desired.map((d) => d));
+    const same = JSON.stringify(storedHits.map((h) => h._source)) === JSON.stringify(desired.map((d) => d));
     let topicsWritten = 0;
     if (!same) {
       const del = await es('POST', `/${topicsIndex}/_delete_by_query?refresh=true&conflicts=proceed`, { query: { term: { conference: slug } } });
@@ -408,7 +418,7 @@ async function main() {
     console.log('Top 20 topics:');
     for (const t of topics.slice(0, 20)) console.log(`  ${String(t.talk_count).padStart(3)}  ${t.label}  (${t.topic_id})`);
   } finally {
-    await es('DELETE', `/${workIndex}`);
+    try { await es('DELETE', `/${workIndex}`); } catch { /* never replace the original error */ }
   }
 }
 

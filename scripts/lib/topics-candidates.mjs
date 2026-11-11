@@ -27,9 +27,17 @@ export function checkWorkIndexCount(expected, actual) {
   }
 }
 
-/** An empty topic list never replaces a stored non-empty one unless the caller passes --allow-empty. */
-export function checkNotWiping(computed, stored, allowEmpty) {
+/**
+ * An empty topic list never replaces a stored non-empty one unless the caller passes --allow-empty.
+ * A list that drops more than 10 topics and more than 10% of the stored ones (the Worker's finalize
+ * rule) needs --allow-shrink, which --allow-empty implies.
+ */
+export function checkNotShrinking(computed, stored, { allowEmpty = false, allowShrink = false } = {}) {
   if (computed === 0 && stored > 0 && !allowEmpty) {
     throw new Error(`No topics were computed, but ${stored} are stored for this conference. Refusing to delete them and every talk's topics; pass --allow-empty if that is intended.`);
+  }
+  const removed = stored - computed;
+  if (computed > 0 && removed > 10 && removed > stored * 0.1 && !allowShrink && !allowEmpty) {
+    throw new Error(`The computed list has ${computed} topics against ${stored} stored (${removed} fewer). Refusing to shrink it by more than 10 topics and 10%; pass --allow-shrink if that is intended.`);
   }
 }

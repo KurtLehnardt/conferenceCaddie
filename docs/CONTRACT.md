@@ -138,7 +138,7 @@ Every index is versioned behind an alias. The server reads alias names from env:
 
 `_id` is `{conference}:{topic_id}`. Mapping (`dynamic: false`): `conference`, `topic_id`, `label_exact` keyword; `label`, `aliases` `search_as_you_type`; `talk_count`, `rank` integer.
 
-- Built by `node scripts/topics.mjs --event <slug> [--dry-run] [--talks-index name]` from that conference's `kind: talk` titles. Analysis in Elasticsearch: standard tokenizer, lowercase, stop (`_english_` plus `config/topic-stoplist.txt`), no stemming, unigrams and bigrams that never span a removed word, and no numbers or single characters.
+- Built by `node scripts/topics.mjs --event <slug> [--dry-run] [--allow-empty] [--allow-shrink] [--talks-index name]` from that conference's `kind: talk` titles. Analysis in Elasticsearch: standard tokenizer, lowercase, stop (`_english_` plus `config/topic-stoplist.txt`), no stemming, unigrams and bigrams that never span a removed word, and no numbers or single characters.
 - A terms aggregation counts talks per term. Terms in at least 3 talks are kept, at most 150, ranked by `talk_count` descending, then label. `topic_id` is the term with spaces replaced by `-`. The label is the most common original casing.
 - `data/topics/{slug}.json` is `{ "rename": { id: label }, "merge": { alias_id: canonical_id }, "remove": [id] }`. A merge never creates a target that occurs in no title; a target below three talks becomes a topic when its aliases bring it to three.
 - The command replaces the conference's topic documents only when they differ, and updates `topics` on talks only where the value changed. The ingestion CLI runs it after every successful event.

@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { mergeTargets } from '../lib/topics.mjs';
-import { candidatesWithTargets, checkNotWiping, checkWorkIndexCount } from '../lib/topics-candidates.mjs';
+import { mergeTargets, TOPIC_ID } from '../lib/topics.mjs';
+import { candidatesWithTargets, checkNotShrinking, checkWorkIndexCount } from '../lib/topics-candidates.mjs';
 
 const merge = { pipelines: 'pipeline' };
 const sets = (...rows) => rows.map((r) => new Set(r));
@@ -74,11 +74,27 @@ test('the work index count must equal the talks and be above zero', () => {
 });
 
 test('an empty result refuses to replace stored topics unless --allow-empty', () => {
-  assert.throws(() => checkNotWiping(0, 96, false), /Refusing to delete .*--allow-empty/);
-  checkNotWiping(0, 96, true);
-  checkNotWiping(0, 0, false);
-  checkNotWiping(5, 96, false);
+  assert.throws(() => checkNotShrinking(0, 96, {}), /Refusing to delete .*--allow-empty/);
+  checkNotShrinking(0, 96, { allowEmpty: true });
+  checkNotShrinking(0, 0, {});
+  checkNotShrinking(5, 96 - 91 + 5, {});
 });
+
+test('the shrink guard needs more than 10 topics and more than 10% fewer', () => {
+  assert.throws(() => checkNotShrinking(80, 96, {}), /pass --allow-shrink/);
+  checkNotShrinking(80, 96, { allowShrink: true });
+  checkNotShrinking(80, 96, { allowEmpty: true });
+  checkNotShrinking(86, 96, {}); // 10 fewer is not more than 10
+  checkNotShrinking(90, 96, {}); // fewer than 10% and 10
+  checkNotShrinking(200, 96, {}); // growth
+  checkNotShrinking(15, 20, {}); // 5 fewer
+  checkNotShrinking(0, 8, { allowEmpty: true });
+  assert.throws(() => checkNotShrinking(1, 100, {}), /Refusing to shrink/);
+});
+
+// A committed no-op: "don't-have" can never be a topic id (an apostrophe), so the script ignores it
+// with a warning. Reported to the owner of the data instead of changed here.
+const KNOWN_INVALID = new Set(["kubecon-cloudnativecon-north-america-2026.json:don't-have"]);
 
 test('every data/topics fixup file is well formed', () => {
   const dir = new URL('../../data/topics/', import.meta.url);
@@ -89,6 +105,9 @@ test('every data/topics fixup file is well formed', () => {
     const fx = JSON.parse(readFileSync(new URL(f, dir), 'utf8'));
     const mg = fx.merge ?? {};
     const canonicals = new Set(Object.values(mg));
+    const ids = [...Object.keys(mg), ...Object.values(mg), ...(fx.remove ?? []), ...Object.keys(fx.rename ?? {})];
+    for (const id of ids) assert.ok(TOPIC_ID.test(id) || KNOWN_INVALID.has(`${f}:${id}`), `${f}: ${JSON.stringify(id)} is not a valid topic id`);
+    for (const id of fx.remove ?? []) assert.ok(!Object.keys(mg).includes(id) && !canonicals.has(id), `${f}: ${id} is both removed and merged`);
     for (const [alias, canonical] of Object.entries(mg)) {
       assert.ok(text(alias) && text(canonical), `${f}: ${JSON.stringify([alias, canonical])} must be non-empty strings`);
       assert.notEqual(alias, canonical, `${f}: ${alias} merges into itself`);
