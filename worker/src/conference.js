@@ -13,7 +13,13 @@ import { HttpError, json, readJson, isDailyLimitError, dailyLimitResponse, secon
 import { newEmbedState } from './lib/embed.js';
 import { visibleUntilMs, utcDay } from './lib/time.js';
 
-const FLUSH_EVERY = 1000;
+// The meter is written to meta.usage after FLUSH_EVERY requests or FLUSH_INTERVAL_MS, whichever
+// comes first, and after the first request of a new instance. The object can be evicted from
+// memory at any time, and whatever it counted since its last write is lost then, so the
+// interval bounds that loss to a few seconds of traffic. One write per interval costs about
+// 5,760 written rows a day for an object that is busy all day.
+const FLUSH_EVERY = 100;
+const FLUSH_INTERVAL_MS = 15_000;
 const WINDOW_MIN = 10;
 const BUCKET_SWEEP_EVERY = 1000;
 const num = (v, d) => (Number.isFinite(Number(v)) && v !== undefined && v !== '' ? Number(v) : d);
@@ -45,6 +51,9 @@ class Meter {
     this.othersGrowth = 0; // growth of others.requests between the last two cron calls
     this.minutes = new Map(); // minute index -> requests
     this.sinceFlush = 0;
+    // 0, so a fresh instance writes after its first request: instances can live well under
+    // FLUSH_INTERVAL_MS, and their counts would otherwise never reach meta.usage.
+    this.flushedAt = 0;
   }
 
   #roll(now) {
@@ -63,7 +72,12 @@ class Meter {
     this.minutes.set(m, (this.minutes.get(m) ?? 0) + 1);
     for (const k of this.minutes.keys()) if (k <= m - WINDOW_MIN) this.minutes.delete(k);
     this.sinceFlush += 1;
-    if (this.sinceFlush >= FLUSH_EVERY) this.flush();
+  }
+
+  // Writes the totals when enough requests or enough time have gone by since the last write.
+  // Called after each response is built, once its rows are counted.
+  maybeFlush(now = Date.now()) {
+    if (this.sinceFlush >= FLUSH_EVERY || (this.sinceFlush > 0 && now - this.flushedAt >= FLUSH_INTERVAL_MS)) this.flush(now);
   }
 
   addRows(read, written) {
@@ -73,8 +87,9 @@ class Meter {
   }
 
   // Writes the day's totals to meta.usage (one written row).
-  flush() {
+  flush(now = Date.now()) {
     this.sinceFlush = 0;
+    this.flushedAt = now;
     this.owner.exec("INSERT INTO meta (k, v) VALUES ('usage', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(this.usage));
   }
 
@@ -310,6 +325,13 @@ export class ConferenceDO extends DurableObject {
       }
     } finally {
       this.#drain();
+    }
+    try {
+      this.meter.maybeFlush(now);
+      this.#drain();
+    } catch (err) {
+      // A failed meter write never fails the response; the next request tries again.
+      console.error(`meter flush failed: ${err?.name ?? 'Error'}`);
     }
     const out = new Response(request.method === 'HEAD' ? null : res.body, res);
     out.headers.set('X-Caddie-Pace', String(this.meter.pace()));

@@ -12,14 +12,16 @@
 //   one row and a subscription can be removed by its endpoint alone. It expires with the
 //   profile's visible_until_ms; the cron purge deletes it then, and deletePersonEverywhere
 //   deletes it with the profile. A profile keeps at most 10 subscriptions (the newest).
-// - The endpoint must be https and at most 1,000 characters; p256dh must be the base64url of a
-//   valid 65-byte P-256 point and auth the base64url of 16 bytes.
+// - The endpoint must be https and at most 1,000 characters, and a new subscription's endpoint
+//   must be on a known browser push service host (PUSH_SERVICE_HOSTS in webpush.js), on the
+//   default port; p256dh must be the base64url of a valid 65-byte P-256 point and auth the
+//   base64url of 16 bytes.
 // - The endpoint and the keys are never returned to anyone and never logged. They leave the
 //   object only inside the encrypted push request to the browser's own push service.
 
 import { HttpError, bad, json, readJson, isPlainObject } from '../lib/http.js';
 import { requireDevice, sha256Hex } from '../lib/device.js';
-import { b64urlDecode, isValidP256Point } from './webpush.js';
+import { b64urlDecode, isPushServiceEndpoint, isValidP256Point } from './webpush.js';
 
 const ENDPOINT_MAX = 1000;
 const SUBS_PER_PROFILE = 10;
@@ -40,7 +42,7 @@ function writer(ctx, req) {
   return device;
 }
 
-function endpointOf(value) {
+function endpointOf(value, { forWrite = false } = {}) {
   if (typeof value !== 'string' || !value || value.length > ENDPOINT_MAX) throw bad('endpoint must be a push service URL');
   let u;
   try {
@@ -50,6 +52,9 @@ function endpointOf(value) {
   }
   if (u.protocol !== 'https:') throw bad('endpoint must be a https URL');
   if (u.username || u.password || !u.hostname) throw bad('endpoint must be a push service URL');
+  // A new subscription must point at a known browser push service. Removing one only needs a
+  // well-formed https URL, so a row stored before this rule can still be deleted by its owner.
+  if (forWrite && !isPushServiceEndpoint(value)) throw bad('endpoint must be a push service URL');
   return value;
 }
 
@@ -58,7 +63,7 @@ function endpointOf(value) {
 async function subscriptionOf(value) {
   if (!isPlainObject(value)) throw bad('subscription must be an object');
   for (const k of Object.keys(value)) if (!SUBSCRIPTION_FIELDS.has(k)) throw bad(`Unknown key: subscription.${k.slice(0, 40)}`);
-  const endpoint = endpointOf(value.endpoint);
+  const endpoint = endpointOf(value.endpoint, { forWrite: true });
   if (!isPlainObject(value.keys)) throw bad('subscription.keys must be an object');
   for (const k of Object.keys(value.keys)) if (!KEYS_FIELDS.has(k)) throw bad(`Unknown key: subscription.keys.${k.slice(0, 40)}`);
   const { p256dh, auth } = value.keys;
