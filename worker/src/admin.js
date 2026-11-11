@@ -407,6 +407,15 @@ function deleteTestProfile(ctx, req) {
   return json(200, { ok: true });
 }
 
+// The smoke's meter check (meter1): starts a new usage meter from the stored totals, as a new
+// instance of the object would after an eviction, and drops the old meter's unwritten counts
+// (at most 100 requests or 15 seconds of them). Nothing else in the object is touched.
+async function restartMeter(ctx, req) {
+  await readJson(req, new Set());
+  ctx.restartMeter();
+  return json(200, { ok: true });
+}
+
 const FAIL = 'Admin request failed';
 export default [
   { method: 'POST', path: '/admin/talks', fail: FAIL, handler: postTalks },
@@ -423,6 +432,7 @@ export default [
   { method: 'POST', path: '/admin/test/profile', fail: FAIL, handler: testProfile },
   { method: 'DELETE', path: '/admin/test/profile', fail: FAIL, handler: deleteTestProfile },
   { method: 'POST', path: '/admin/test/age-presence', fail: FAIL, handler: agePresence },
+  { method: 'POST', path: '/admin/test/meter-restart', fail: FAIL, handler: restartMeter },
 ];
 
 // The admin paths the Worker may forward to a ConferenceDO (PUT /admin/conferences goes to the
@@ -430,4 +440,5 @@ export default [
 export const CONFERENCE_ADMIN_PATHS = new Set([
   '/admin/talks', '/admin/talks/finalize', '/admin/topics', '/admin/facets', '/admin/people', '/admin/reports',
   '/admin/moderation', '/admin/embed-pending', '/admin/stats', '/admin/test/profile', '/admin/test/age-presence',
+  '/admin/test/meter-restart',
 ]);
