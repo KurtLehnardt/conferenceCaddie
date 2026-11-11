@@ -16,23 +16,28 @@ const T0 = Date.UTC(2026, 10, 11, 12, 0, 0);
 // One object's storage. sql has the shape of storage.sql.exec: it returns a cursor with toArray,
 // one, rowsRead and rowsWritten. node:sqlite reports no row counts, so a test that needs them
 // passes its own.
-function storage({ cost = null, failUpserts = 0 } = {}) {
+// failUpserts makes that many meter writes fail; failWhen, if given, is asked before each
+// meter write and makes it fail when it returns true. writes counts the statements that change
+// usage_days.
+function storage({ cost = null, failUpserts = 0, failWhen = null } = {}) {
   const db = new DatabaseSync(':memory:');
   db.exec('CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
   let fails = failUpserts;
-  const sql = (q, ...b) => {
+  const out = { db, writes: 0 };
+  out.sql = (q, ...b) => {
     const upsert = q.startsWith('INSERT INTO usage_days') && q.includes('RETURNING');
-    if (upsert && fails > 0) {
-      fails -= 1;
+    if (upsert && (fails > 0 || (failWhen && failWhen()))) {
+      fails = Math.max(0, fails - 1);
       throw new Error('SQLITE_BUSY');
     }
+    if (/^\s*(INSERT|UPDATE|DELETE)/.test(q) && q.includes('usage_days')) out.writes += 1;
     const rows = db.prepare(q).all(...b);
     const c = { toArray: () => rows, one: () => rows[0] };
     if (upsert && cost) Object.assign(c, { rowsRead: cost.read, rowsWritten: cost.written });
     return c;
   };
-  const row = (day) => db.prepare('SELECT requests, rows_read, rows_written FROM usage_days WHERE day = ?').get(day);
-  return { db, sql, row };
+  out.row = (day) => db.prepare('SELECT requests, rows_read, rows_written FROM usage_days WHERE day = ?').get(day);
+  return out;
 }
 
 const start = (s, now = T0, env = {}) => new Meter({ sql: s.sql, exec: s.sql, env, now });
@@ -83,7 +88,9 @@ test('two overlapping instances add their counts instead of overwriting each oth
 test('random interleavings of instances, restarts and writes never make a reading go down', () => {
   for (let seed = 1; seed <= 25; seed++) {
     const rand = rng(seed);
-    const s = storage();
+    // Odd seeds also fail one meter write in five, as when the daily written-rows limit is hit.
+    let failing = seed % 2 === 1;
+    const s = storage({ failWhen: () => failing && rand() < 0.2 });
     let now = T0;
     let live = [start(s, now)];
     let last = { requests: 0, rows_read: 0, rows_written: 0 };
@@ -97,7 +104,11 @@ test('random interleavings of instances, restarts and writes never make a readin
         m.countRequest(now);
         m.addRows(Math.floor(rand() * 50), Math.floor(rand() * 3), now);
         counted += 1;
-        m.maybeFlush(now);
+        try {
+          m.maybeFlush(now);
+        } catch {
+          // As in conference.js: a failed write never fails the request, and the deltas stay.
+        }
       } else if (r < 0.7) {
         // An eviction: the instance's unwritten requests are gone.
         lost += [...m.pending.values()].reduce((n, d) => n + d.requests, 0);
@@ -107,12 +118,14 @@ test('random interleavings of instances, restarts and writes never make a readin
         live.push(start(s, now)); // an overlapping instance, as during a deploy
       } else {
         const reading = m.report(now);
+        assert.equal(reading.stale, undefined, 'a failed write still reads the row back');
         for (const f of ['requests', 'rows_read', 'rows_written']) {
           assert.ok(reading[f] >= last[f], `seed ${seed} step ${step}: ${f} ${last[f]} then ${reading[f]}`);
         }
         last = reading;
       }
     }
+    failing = false;
     for (const m of live) m.flush(now);
     // Every request is stored exactly once, except those of evicted instances.
     assert.equal(s.row('2026-11-11').requests, counted - lost, `seed ${seed}`);
@@ -143,14 +156,15 @@ test('the write cadence is unchanged: first request, then every 100 requests or 
   m.countRequest((now += 10));
   m.maybeFlush(now);
   assert.equal(writes, 2);
-  assert.ok(m.needsFlush());
-  assert.equal(m.dueIn(now), FLUSH_INTERVAL_MS - 10);
-  now += FLUSH_INTERVAL_MS;
-  assert.equal(m.dueIn(now), 0);
+  // Idle: nothing writes until the next request (the meter has no timer).
+  m.countRequest((now += FLUSH_INTERVAL_MS - 20));
+  m.maybeFlush(now);
+  assert.equal(writes, 2, 'no write before 15 seconds have passed');
+  now += 3_600_000;
+  assert.equal(writes, 2, 'an idle meter does not write on its own');
   m.countRequest(now);
   m.maybeFlush(now);
-  assert.equal(writes, 3, 'a write once 15 seconds have passed');
-  assert.equal(m.needsFlush(), false);
+  assert.equal(writes, 3, 'a write on the first request once 15 seconds have passed');
 });
 
 test('a write adds its own cost, and a costlier write than expected is carried to the next', () => {
@@ -162,7 +176,6 @@ test('a write adds its own cost, and a costlier write than expected is carried t
   // The write assumed one written row, measured two, and carries the difference.
   assert.deepEqual({ ...s.row('2026-11-11') }, { requests: 1, rows_read: 11, rows_written: 1 });
   assert.equal(m.current(T0).rows_written, 2);
-  assert.equal(m.needsFlush(), false, 'a carried correction alone does not wake the idle timer');
   m.flush(T0 + 1);
   // Second write: the carried row plus its own measured cost of two.
   assert.deepEqual({ ...s.row('2026-11-11') }, { requests: 1, rows_read: 12, rows_written: 4 });
@@ -196,23 +209,38 @@ test('a failed write keeps the deltas, and the next write stores them', () => {
   for (let i = 0; i < 4; i++) m.countRequest(T0 + i);
   assert.throws(() => m.flush(T0 + 10));
   assert.equal(m.current(T0 + 10).requests, 4);
-  assert.equal(m.needsFlush(), true);
   assert.equal(m.report(T0 + 20).requests, 4);
   assert.equal(s.row('2026-11-11').requests, 4);
 });
 
-test('a reading falls back to stored totals plus deltas when the write fails', () => {
+test('a reading never includes unwritten deltas, even when the write fails', () => {
   const s = storage();
-  const m = start(s);
-  m.countRequest(T0);
-  m.report(T0);
-  m.countRequest(T0 + 1);
-  m.countRequest(T0 + 2);
-  m.sql = () => {
+  const a = start(s);
+  a.countRequest(T0);
+  assert.equal(a.report(T0).requests, 1);
+  const b = start(s); // an overlapping instance that stores more than a has seen
+  for (let i = 0; i < 4; i++) b.countRequest(T0 + i);
+  b.flush(T0 + 5);
+  a.countRequest(T0 + 6);
+  a.countRequest(T0 + 7);
+  // The write fails (for example at the daily written-rows limit) but reads still work: the
+  // reading is the stored row read back, without a's two unwritten requests.
+  const sql = a.sql;
+  a.sql = (q, ...args) => {
+    if (q.startsWith('INSERT')) throw new Error('SQLITE_FULL');
+    return sql(q, ...args);
+  };
+  const reading = a.report(T0 + 8);
+  assert.deepEqual({ requests: reading.requests, stale: reading.stale }, { requests: 5, stale: undefined });
+  assert.equal(a.current(T0 + 8).requests, 7, 'the pace and the soft caps still see the deltas');
+  // An eviction now loses a's deltas, and the next reading is not lower.
+  assert.ok(start(s, T0 + 9).report(T0 + 9).requests >= reading.requests);
+  // Reads fail too: the last stored total a saw, marked stale.
+  a.sql = () => {
     throw new Error('SQLITE_FULL');
   };
-  const reading = m.report(T0 + 3);
-  assert.equal(reading.requests, 3);
+  assert.deepEqual({ ...a.report(T0 + 10) }, { ...a.stored, stale: true });
+  assert.equal(a.report(T0 + 10).requests, 5);
 });
 
 test('the pace and the soft caps read the stored totals plus the unwritten deltas', () => {
@@ -232,22 +260,34 @@ test('the pace and the soft caps read the stored totals plus the unwritten delta
   assert.equal(b.pace(T0), 10, 'a budget almost spent, in memory only, still slows clients');
 });
 
-test('the totals an earlier version kept in meta.usage move into usage_days once', () => {
+test('the totals an earlier version kept in meta.usage are folded into usage_days, never added twice', () => {
   const s = storage();
-  s.sql("INSERT INTO meta (k, v) VALUES ('usage', ?)", JSON.stringify({ day: '2026-11-11', requests: 1192, rows_read: 5000, rows_written: 70 }));
+  const legacy = (v) => s.sql("INSERT INTO meta (k, v) VALUES ('usage', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", v);
+  const legacyRow = () => s.db.prepare("SELECT v FROM meta WHERE k = 'usage'").get()?.v;
+  legacy(JSON.stringify({ day: '2026-11-11', requests: 1192, rows_read: 5000, rows_written: 70 }));
   const m = start(s);
   assert.equal(m.current(T0).requests, 1192);
-  assert.equal(s.sql("SELECT v FROM meta WHERE k = 'usage'").toArray().length, 0);
+  // meta.usage stays, so a rollback to the earlier version starts the day from it, not from zero.
+  assert.ok(legacyRow());
   m.countRequest(T0);
   m.flush(T0);
+  // Folding again (every new instance does) changes nothing and writes nothing.
+  const writes = s.writes;
+  start(s, T0 + 1);
+  ensureUsageTable(s.sql, T0 + 2);
+  assert.equal(s.writes, writes, 'no write when the stored row already holds the old totals');
+  assert.deepEqual({ ...s.row('2026-11-11') }, { requests: 1193, rows_read: 5001, rows_written: 71 });
   // A late totals write by an instance of the earlier version, folded in with MAX, not added.
-  s.sql("INSERT INTO meta (k, v) VALUES ('usage', ?)", JSON.stringify({ day: '2026-11-11', requests: 1195, rows_read: 10, rows_written: 1 }));
-  ensureUsageTable(s.sql);
+  legacy(JSON.stringify({ day: '2026-11-11', requests: 1195, rows_read: 10, rows_written: 1 }));
+  ensureUsageTable(s.sql, T0);
   assert.deepEqual({ ...s.row('2026-11-11') }, { requests: 1195, rows_read: 5001, rows_written: 71 });
-  // A malformed old value is dropped.
-  s.sql("INSERT INTO meta (k, v) VALUES ('usage', 'not json')");
-  ensureUsageTable(s.sql);
-  assert.equal(s.sql("SELECT v FROM meta WHERE k = 'usage'").toArray().length, 0);
+  // Totals older than yesterday are ignored, so the cron's sweep does not see their row come back.
+  legacy(JSON.stringify({ day: '2026-11-09', requests: 7 }));
+  ensureUsageTable(s.sql, T0);
+  assert.equal(s.row('2026-11-09'), undefined);
+  // A malformed old value is ignored.
+  legacy('not json');
+  ensureUsageTable(s.sql, T0);
   assert.equal(s.row('2026-11-11').requests, 1195);
 });
 

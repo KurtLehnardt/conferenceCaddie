@@ -78,7 +78,8 @@ Worker allows through `ALLOWED_ORIGINS`).
   Worker's Bluetooth code against `contracts/fixtures/ble/` with no Worker running.
 - `npm test` in `worker/` runs the Worker's unit tests (`test/*.test.mjs`, node:test with
   node:sqlite and no Worker running), such as the usage meter's test with several instances
-  sharing one database. CI runs them in `test.yml`.
+  sharing one database. They need Node 22.13 or later (node:sqlite without a flag). CI runs them
+  in `test.yml`.
 - Parallel local runs use port 8787 plus a task number, so they do not collide.
 - To exercise the Cron Trigger, start with `npx wrangler dev --local --port 8787 --test-scheduled`
   and request `http://localhost:8787/__scheduled?cron=*/10+*+*+*+*`.

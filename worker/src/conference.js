@@ -12,13 +12,17 @@ import adminRoutes from './admin.js';
 import { HttpError, json, readJson, isDailyLimitError, dailyLimitResponse } from './lib/http.js';
 import { newEmbedState } from './lib/embed.js';
 import { visibleUntilMs } from './lib/time.js';
-import { Meter, FLUSH_INTERVAL_MS } from './lib/meter.js';
+import { Meter } from './lib/meter.js';
 
 // The daily usage meter (src/lib/meter.js) adds its deltas to the day's stored totals after the
-// first request of a new instance, then after 100 requests or 15 seconds, whichever comes first,
-// and on an idle timer once 15 seconds have passed with counts unwritten. One write per interval
-// costs up to 5,760 written rows a day for each object that is busy all day, so the total grows
-// with the number of searchable conferences (about 23,000 a day for four).
+// first request of a new instance, then after 100 requests or on the first request 15 seconds or
+// more after the last write, whichever comes first, and on every GET /admin/stats and cron call.
+// It never writes from a timer: a pending timer keeps the object from hibernating, and an object
+// that cannot hibernate is billed for duration (GB-s, a daily Free-plan limit for the whole
+// account) while it waits. An object evicted while idle therefore loses the counts since its last
+// write (fewer than 100 requests within 15 seconds of it). One write per interval costs up to
+// 5,760 written rows a day for each object that is busy all day, so the total grows with the
+// number of searchable conferences (about 23,000 a day for four).
 const BUCKET_SWEEP_EVERY = 1000;
 // The routes an object serves while its conference is not searchable: an owner's deletes and the
 // list of their own blocks, so nobody is locked out of deleting their data (the Worker forwards
@@ -69,7 +73,6 @@ export class ConferenceDO extends DurableObject {
     this.conf = null;
     this.slug = null;
     this.store = new Store(this);
-    this.idleTimer = null;
     state.blockConcurrencyWhile(async () => {
       migrate(state.storage.sql);
       this.#loadConf();
@@ -99,30 +102,6 @@ export class ConferenceDO extends DurableObject {
     }
     this.cursors = [];
     if (read || written) this.meter.addRows(read, written);
-  }
-
-  // Writes the meter's deltas once they are due by time and no request has come along to write
-  // them, so an idle instance does not hold its counts until it is evicted. It is a timer rather
-  // than an alarm because each alarm is billed as a Durable Object request and each setAlarm as a
-  // written row. It writes on the same cadence as the requests do (at most once per 15 seconds),
-  // so it adds no writes, and an eviction before it fires loses the deltas, as before.
-  #armIdleFlush(delay = this.meter.dueIn()) {
-    if (this.idleTimer || !this.meter.needsFlush()) return;
-    this.idleTimer = setTimeout(() => {
-      this.idleTimer = null;
-      let retry;
-      if (this.meter.needsFlush() && this.meter.dueIn() === 0) {
-        try {
-          this.meter.flush();
-        } catch (err) {
-          // Tried again a full interval later, not in a tight loop.
-          console.error(`meter flush failed: ${err?.name ?? 'Error'}`);
-          retry = FLUSH_INTERVAL_MS;
-        }
-        this.#drain();
-      }
-      this.#armIdleFlush(retry);
-    }, Math.max(1000, delay));
   }
 
   #loadConf() {
@@ -200,10 +179,7 @@ export class ConferenceDO extends DurableObject {
       waitUntil: (promise) => {
         const p = Promise.resolve(promise)
           .catch((err) => console.error(`background work failed: ${err?.name ?? 'Error'}`))
-          .finally(() => {
-            this.#drain();
-            this.#armIdleFlush();
-          });
+          .finally(() => this.#drain());
         if (typeof this.state.waitUntil === 'function') this.state.waitUntil(p);
       },
       meter: { lexicalAllowed: () => meter.lexicalAllowed(), writesAllowed: () => meter.writesAllowed(), pace: meter.pace(now) },
@@ -271,7 +247,6 @@ export class ConferenceDO extends DurableObject {
       // request tries the write again.
       console.error(`meter flush failed: ${err?.name ?? 'Error'}`);
     }
-    this.#armIdleFlush();
     const out = new Response(request.method === 'HEAD' ? null : res.body, res);
     out.headers.set('X-Caddie-Pace', String(this.meter.pace()));
     return out;

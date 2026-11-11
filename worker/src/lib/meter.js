@@ -9,19 +9,26 @@
 // that starts after an eviction or a deploy never overwrites what an earlier instance stored.
 //
 // What the meter can still lose: the deltas of an instance that is evicted between two writes
-// (at most FLUSH_EVERY requests or FLUSH_INTERVAL_MS of counts). Those counts were never stored,
-// so they never appear in a reading either: every reading that leaves the object (GET
-// /admin/stats and the cron's totals) writes the deltas first and reports the stored total, so a
-// later reading of the same day, from this instance or a later one, is never smaller. The pace
-// and the soft caps read the stored total plus the deltas, the best estimate this instance has.
+// (fewer than FLUSH_EVERY requests, counted within FLUSH_INTERVAL_MS of the last write, plus the
+// rows of background work that finished after it). Writes happen only on requests and readings,
+// never on a timer, so an object that goes idle keeps those counts in memory until its next
+// request, reading or cron call, or loses them if it is evicted first. A timer would keep the
+// object from hibernating, and an object that cannot hibernate is billed for duration (GB-s, a
+// daily Free-plan limit shared by the whole account) for as long as the timer waits.
+//
+// Those lost counts were never stored, so they never appear in a reading either: every reading
+// that leaves the object (GET /admin/stats and the cron's totals) writes the deltas first and
+// reports the stored total, so a later reading of the same day, from this instance or a later
+// one, is never smaller. If that write fails, the reading is the stored row read back without
+// the deltas, or, if that read fails too, the last stored total this instance saw, marked
+// stale. The pace and the soft caps read the stored total plus the deltas, the best estimate
+// this instance has.
 
 import { utcDay } from './time.js';
 import { secondsUntilUtcMidnight } from './http.js';
 
-// A write after FLUSH_EVERY requests or FLUSH_INTERVAL_MS, whichever comes first, and after the
-// first request of a new instance. The object also writes on its own (a timer in conference.js)
-// once FLUSH_INTERVAL_MS has passed with counts still unwritten, so an idle instance does not sit
-// on its deltas until it is evicted.
+// A write after FLUSH_EVERY requests or on the first request FLUSH_INTERVAL_MS or more after the
+// last write, whichever comes first, and after the first request of a new instance.
 export const FLUSH_EVERY = 100;
 export const FLUSH_INTERVAL_MS = 15_000;
 // The days of rows kept in usage_days: today and the day before. The cron deletes older rows.
@@ -32,6 +39,8 @@ const FIELDS = ['requests', 'rows_read', 'rows_written'];
 const num = (v, d) => (Number.isFinite(Number(v)) && v !== undefined && v !== null && v !== '' ? Number(v) : d);
 const zero = (day) => ({ day, requests: 0, rows_read: 0, rows_written: 0 });
 const isEmpty = (d) => FIELDS.every((f) => !d[f]);
+// The first day whose usage_days row is kept: yesterday.
+const keepFrom = (now) => utcDay(now - (KEEP_DAYS - 1) * 86_400_000);
 
 // WITHOUT ROWID keeps each row in one b-tree, so the UPSERT writes one row.
 const USAGE_TABLE = `CREATE TABLE IF NOT EXISTS usage_days (
@@ -48,11 +57,17 @@ ON CONFLICT(day) DO UPDATE SET
   rows_written = rows_written + excluded.rows_written
 RETURNING requests, rows_read, rows_written`;
 
-// Creates usage_days and moves the totals an earlier version kept in meta.usage (a JSON object
+// Creates usage_days and folds the totals an earlier version kept in meta.usage (a JSON object
 // that each write replaced) into it. MAX keeps the larger of the two, so a late write by an
 // instance of the earlier version during a deploy is folded in by the next new instance and is
 // never added twice. Runs unmetered, before the first request of each instance.
-export function ensureUsageTable(sql) {
+//
+// meta.usage is left in place, so a rollback to the earlier version starts the day from the
+// totals it last wrote there instead of from zero (its readings then drop by what this version
+// counted since, for the rest of that day). Because the fold can run on every instance start, it
+// writes only when meta.usage holds today's or yesterday's totals and at least one of them is
+// larger than the stored row; otherwise it costs two rows read and no write.
+export function ensureUsageTable(sql, now = Date.now()) {
   sql(USAGE_TABLE);
   const legacy = sql("SELECT v FROM meta WHERE k = 'usage'").toArray()[0];
   if (!legacy) return;
@@ -62,15 +77,16 @@ export function ensureUsageTable(sql) {
   } catch {
     old = null;
   }
-  if (old && typeof old.day === 'string') {
-    sql(
-      `INSERT INTO usage_days (day, requests, rows_read, rows_written) VALUES (?, ?, ?, ?)
-       ON CONFLICT(day) DO UPDATE SET requests = MAX(requests, excluded.requests),
-         rows_read = MAX(rows_read, excluded.rows_read), rows_written = MAX(rows_written, excluded.rows_written)`,
-      old.day, num(old.requests, 0), num(old.rows_read, 0), num(old.rows_written, 0),
-    ).toArray();
-  }
-  sql("DELETE FROM meta WHERE k = 'usage'").toArray();
+  if (!old || typeof old.day !== 'string' || old.day < keepFrom(now)) return;
+  const vals = FIELDS.map((f) => num(old[f], 0));
+  const row = sql('SELECT requests, rows_read, rows_written FROM usage_days WHERE day = ?', old.day).toArray()[0];
+  if (row && FIELDS.every((f, i) => num(row[f], 0) >= vals[i])) return;
+  sql(
+    `INSERT INTO usage_days (day, requests, rows_read, rows_written) VALUES (?, ?, ?, ?)
+     ON CONFLICT(day) DO UPDATE SET requests = MAX(requests, excluded.requests),
+       rows_read = MAX(rows_read, excluded.rows_read), rows_written = MAX(rows_written, excluded.rows_written)`,
+    old.day, ...vals,
+  ).toArray();
 }
 
 export class Meter {
@@ -85,7 +101,7 @@ export class Meter {
     const day = utcDay(now);
     this.stored = zero(day); // the day's stored totals, as last read or written by this instance
     try {
-      ensureUsageTable(sql);
+      ensureUsageTable(sql, now);
       const row = sql('SELECT requests, rows_read, rows_written FROM usage_days WHERE day = ?', day).toArray()[0];
       if (row) for (const f of FIELDS) this.stored[f] = num(row[f], 0);
     } catch (err) {
@@ -93,10 +109,6 @@ export class Meter {
       console.error(`meter start failed: ${err?.name ?? 'Error'}`);
     }
     this.pending = new Map(); // UTC day -> deltas not yet written
-    // Requests or rows were counted since the last write: what the idle timer waits for. The
-    // correction a write leaves when it cost more than expected does not set it, so the timer
-    // never chases the meter's own writes.
-    this.dirty = false;
     // The rows one UPSERT reads and writes, as the last write measured them (cursor.rowsRead and
     // cursor.rowsWritten). Each write adds this to the deltas it stores.
     this.cost = { read: 1, written: 1 };
@@ -135,7 +147,6 @@ export class Meter {
   countRequest(now = Date.now()) {
     const day = this.#roll(now);
     this.#delta(day).requests += 1;
-    this.dirty = true;
     const m = Math.floor(now / 60_000);
     this.minutes.set(m, (this.minutes.get(m) ?? 0) + 1);
     for (const k of this.minutes.keys()) if (k <= m - WINDOW_MIN) this.minutes.delete(k);
@@ -147,17 +158,6 @@ export class Meter {
     const d = this.#delta(this.#roll(now));
     d.rows_read += read;
     d.rows_written += written;
-    this.dirty = true;
-  }
-
-  // Whether the idle timer should write: something was counted since the last write.
-  needsFlush() {
-    return this.dirty;
-  }
-
-  // Milliseconds until a write is due by time.
-  dueIn(now = Date.now()) {
-    return Math.max(0, FLUSH_INTERVAL_MS - (now - this.flushedAt));
   }
 
   // Writes when enough requests or enough time have gone by since the last write. Called after
@@ -204,7 +204,6 @@ export class Meter {
     }
     this.sinceFlush = 0;
     this.flushedAt = now;
-    this.dirty = false;
   }
 
   // The day's stored totals plus this instance's deltas: what the pace and the soft caps read.
@@ -218,22 +217,31 @@ export class Meter {
 
   // The reading GET /admin/stats and the cron report. The deltas are written first and the
   // reading is the stored total that write returns, so a later reading of the same day, from
-  // this instance or a later one, never shows less. If the write fails, the reading falls back
-  // to the stored totals plus the deltas, which an eviction could still lose.
+  // this instance or a later one, never shows less. If the write fails (for example once the
+  // account's daily written-rows limit is reached), the deltas stay in memory and are left out
+  // of the reading, because an eviction could still lose them: the reading is the day's row
+  // read back, or, if that read fails too, the last stored total this instance saw, with
+  // stale: true (another instance may have stored more since).
   report(now = Date.now()) {
     try {
       this.flush(now, { force: true });
       return { ...this.stored };
     } catch (err) {
       console.error(`meter flush failed: ${err?.name ?? 'Error'}`);
-      return this.current(now);
+    }
+    try {
+      const row = this.sql('SELECT requests, rows_read, rows_written FROM usage_days WHERE day = ?', this.stored.day).toArray()[0];
+      if (row) for (const f of FIELDS) this.stored[f] = Math.max(this.stored[f], num(row[f], 0));
+      return { ...this.stored };
+    } catch (err) {
+      console.error(`meter read failed: ${err?.name ?? 'Error'}`);
+      return { ...this.stored, stale: true };
     }
   }
 
   // Deletes the rows of days before yesterday. Called by the cron; usually deletes nothing.
   sweep(now = Date.now()) {
-    const keep = utcDay(now - (KEEP_DAYS - 1) * 86_400_000);
-    this.exec('DELETE FROM usage_days WHERE day < ?', keep).toArray();
+    this.exec('DELETE FROM usage_days WHERE day < ?', keepFrom(now)).toArray();
   }
 
   setOthers(day, others, now = Date.now()) {
