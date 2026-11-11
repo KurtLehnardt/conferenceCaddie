@@ -8,7 +8,7 @@
 // for every receiver), and the capabilities this configuration advertises.
 //
 // Run with `npm test`. Nothing reaches the network: fetch is replaced before the server modules
-// are imported, APNs is configured with a key generated for this run and FCM with a project id, and
+// are imported, APNs is configured with a key file generated for this run and FCM with a project id, and
 // PUSH_TRANSPORT=stub without PUSH_STUB_URL makes any push fail locally.
 
 import { test, describe, before } from 'node:test';
@@ -18,13 +18,14 @@ import {
   FakeES, useCluster, bootPurgeDone, INDEX, EVENT, FUTURE, newDevice, personId, addPerson,
   addConnections, request, quietly, HIDDEN_FOR_DELETE,
 } from './helpers/fake-es.mjs';
+import { writeKeyFile } from './helpers/apns-key.mjs';
 
 for (const k of ['APNS_BUNDLE_ID', 'PUSH_STUB_URL']) delete process.env[k];
 Object.assign(process.env, {
   PUSH_TRANSPORT: 'stub',
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
-  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  APNS_KEY_FILE: writeKeyFile(),
   FCM_PROJECT_ID: 'caddie-test-project',
 });
 

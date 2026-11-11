@@ -26,6 +26,7 @@ import { Readable } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rrfExplanation } from './lib/rrf-explanation.mjs';
+import { writeKeyFile } from './helpers/apns-key.mjs';
 
 const ES_HOST = 'es.contracts.test';
 Object.assign(process.env, {
@@ -44,12 +45,12 @@ Object.assign(process.env, {
   ES_RULES_INDEX: 'caddie-people-rules',
   MOD_CLASSIFIER: 'off',
 });
-for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI', 'BLE_MASTER_KEYRING', 'TALKS_BUNDLE_BASE', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_STUB_URL']) delete process.env[k];
+for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'BLE_NEAR_RSSI', 'BLE_MASTER_KEYRING', 'TALKS_BUNDLE_BASE', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_FILE', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_STUB_URL']) delete process.env[k];
 Object.assign(process.env, {
   PUSH_TRANSPORT: 'stub',
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
-  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  APNS_KEY_FILE: writeKeyFile(),
 });
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

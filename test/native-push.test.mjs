@@ -6,29 +6,34 @@
 //
 // Run with `npm test`. Nothing here reaches Apple or Google: the channels get injected transports,
 // and the one real HTTP/2 test talks to a server on 127.0.0.1 (a port from 8702 to 8709). Every key
-// is generated for this run and never written anywhere.
+// is generated for this run; the .p8 files the APNs channel reads are written only to a temporary
+// directory that is removed when the run ends (test/helpers/apns-key.mjs).
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http2 from 'node:http2';
 import net from 'node:net';
+import fs from 'node:fs';
+import path from 'node:path';
+import { writeKeyFile, missingKeyFile } from './helpers/apns-key.mjs';
 
-const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
+const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_FILE', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 for (const k of SETTINGS) delete process.env[k];
 
 const ec = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const P8 = ec.privateKey.export({ type: 'pkcs8', format: 'pem' });
 const RSA_PEM = rsa.privateKey.export({ type: 'pkcs8', format: 'pem' });
-const APNS_ENV = { APNS_KEY_ID: 'ABCDE12345', APNS_TEAM_ID: 'TEAM123456', APNS_KEY_P8: P8 };
+// The .p8 key is read from the file APNS_KEY_FILE names, as Cloud Run mounts the secret.
+const KEY_FILE = writeKeyFile(P8);
+const APNS_ENV = { APNS_KEY_ID: 'ABCDE12345', APNS_TEAM_ID: 'TEAM123456', APNS_KEY_FILE: KEY_FILE };
 // FCM needs no key: only the Firebase project id.
 const FCM_ENV = { FCM_PROJECT_ID: 'caddie-test-project' };
 // The access token the stand-in metadata server hands out; it must never reach a log line.
 const ACCESS_TOKEN_PREFIX = 'ya29.stand-in-access-token-';
 
-// The module reads this server's own settings when it is imported, and takes the APNs key out of
-// the environment.
+// The module reads this server's own settings, and the APNs key from its file, when it is imported.
 Object.assign(process.env, APNS_ENV, FCM_ENV);
 const native = await import('../server/native-push.mjs');
 const { AUTH_FAILURES_MAX, createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, FCM_TOKEN_URL, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
@@ -561,16 +566,19 @@ describe('configuration', () => {
 
   test('unusable APNs settings keep APNs off with one line that names the setting and never the value', () => {
     const otherCurve = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+    const notAKey = 'APNs push is off: the file APNS_KEY_FILE names is not a .p8 key (a PKCS#8 P-256 private key).';
     const cases = [
-      [{ APNS_KEY_ID: 'ABCDE12345' }, 'APNs push is off: APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY_P8 are not all set.'],
-      [{ APNS_KEY_P8: P8 }, 'APNs push is off: APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY_P8 are not all set.'],
+      [{ APNS_KEY_ID: 'ABCDE12345' }, 'APNs push is off: APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY_FILE are not all set.'],
+      [{ APNS_KEY_FILE: KEY_FILE }, 'APNs push is off: APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY_FILE are not all set.'],
       [{ ...APNS_ENV, APNS_KEY_ID: 'abc' }, 'APNs push is off: APNS_KEY_ID is not a 10-character key id.'],
       [{ ...APNS_ENV, APNS_TEAM_ID: 'team 12345' }, 'APNs push is off: APNS_TEAM_ID is not a 10-character team id.'],
       [{ ...APNS_ENV, APNS_BUNDLE_ID: 'app/../x' }, 'APNs push is off: APNS_BUNDLE_ID is not a bundle id.'],
-      [{ ...APNS_ENV, APNS_KEY_P8: P8.replace(/\n/g, '\\n') }, 'APNs push is off: APNS_KEY_P8 is not the text of a .p8 key (a PKCS#8 P-256 private key).'],
-      [{ ...APNS_ENV, APNS_KEY_P8: RSA_PEM }, 'APNs push is off: APNS_KEY_P8 is not the text of a .p8 key (a PKCS#8 P-256 private key).'],
-      [{ ...APNS_ENV, APNS_KEY_P8: otherCurve }, 'APNs push is off: APNS_KEY_P8 is not the text of a .p8 key (a PKCS#8 P-256 private key).'],
-      [{ ...APNS_ENV, APNS_KEY_P8: P8.slice(0, 120) }, 'APNs push is off: APNS_KEY_P8 is not the text of a .p8 key (a PKCS#8 P-256 private key).'],
+      [{ ...APNS_ENV, APNS_KEY_FILE: writeKeyFile(P8.replace(/\n/g, '\\n')) }, notAKey],
+      [{ ...APNS_ENV, APNS_KEY_FILE: writeKeyFile(RSA_PEM) }, notAKey],
+      [{ ...APNS_ENV, APNS_KEY_FILE: writeKeyFile(otherCurve) }, notAKey],
+      [{ ...APNS_ENV, APNS_KEY_FILE: writeKeyFile(P8.slice(0, 120)) }, notAKey],
+      [{ ...APNS_ENV, APNS_KEY_FILE: writeKeyFile('') }, notAKey],
+      [{ ...APNS_ENV, APNS_KEY_FILE: writeKeyFile(P8 + ' '.repeat(16 * 1024)) }, notAKey],
     ];
     for (const [env, line] of cases) {
       const h = harness();
@@ -580,6 +588,28 @@ describe('configuration', () => {
       assertClean(h.lines, [otherCurve]);
       assert.equal(apnsConfigFrom(env).config, undefined);
     }
+  });
+
+  test('an APNS_KEY_FILE with no readable file behind it (nothing mounted) keeps APNs off with one line, and nothing else fails', () => {
+    for (const file of [missingKeyFile(), path.dirname(KEY_FILE)]) {
+      const h = harness();
+      const push = createNativePush({ ...APNS_ENV, ...FCM_ENV, APNS_KEY_FILE: file }, { log: h.log });
+      assert.deepEqual([push.apns, push.fcm], [false, true], 'FCM is unaffected');
+      assert.deepEqual(h.lines, ['APNs push is off: APNS_KEY_FILE names no readable file.']);
+      assert.ok(!h.lines[0].includes(file), 'the path is not logged either');
+    }
+  });
+
+  test('the key file is read only once the other APNs settings are usable', () => {
+    const reads = [];
+    const readFile = (file) => {
+      reads.push(file);
+      return P8;
+    };
+    assert.match(apnsConfigFrom({ ...APNS_ENV, APNS_KEY_ID: 'abc' }, { readFile }).problem, /APNS_KEY_ID/);
+    assert.deepEqual(reads, []);
+    assert.equal(apnsConfigFrom(APNS_ENV, { readFile }).config.keyId, 'ABCDE12345');
+    assert.deepEqual(reads, [KEY_FILE]);
   });
 
   test('an unusable FCM_PROJECT_ID keeps FCM off with one line that names the setting and never the value', () => {
@@ -596,10 +626,12 @@ describe('configuration', () => {
     assert.deepEqual(fcmConfigFrom({ FCM_SERVICE_ACCOUNT_JSON: '{"project_id":"caddie-test-project"}' }), { config: null });
   });
 
-  test('this server read its settings at import and took the APNs key out of the environment', () => {
+  test('this server read its settings and its APNs key file at import, and the key was never in the environment', () => {
     assert.equal(native.NATIVE_PUSH.apns, true);
     assert.equal(native.NATIVE_PUSH.fcm, true);
-    assert.equal(process.env.APNS_KEY_P8, undefined);
+    const keyLine = P8.split('\n').find((l) => l.length > 40);
+    assert.ok(!Object.values(process.env).some((v) => String(v).includes(keyLine)), 'no environment variable holds the key');
+    assert.equal(fs.readFileSync(KEY_FILE, 'utf8'), P8, 'the key file is left as it was');
   });
 });
 

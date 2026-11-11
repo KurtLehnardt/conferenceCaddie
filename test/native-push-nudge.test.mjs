@@ -13,11 +13,12 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { fake, EVENT, FUTURE, PUSH_HOST, newDevice, request, profileBody } from './lib/fake-es.mjs';
+import { writeKeyFile } from './helpers/apns-key.mjs';
 
 Object.assign(process.env, {
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
-  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  APNS_KEY_FILE: writeKeyFile(),
   FCM_PROJECT_ID: 'caddie-test-project',
 });
 delete process.env.APNS_BUNDLE_ID;

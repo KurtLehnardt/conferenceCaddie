@@ -15,11 +15,12 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { fake, EVENT, FUTURE, PUSH_HOST, newDevice, request, profileBody } from './lib/fake-es.mjs';
+import { writeKeyFile } from './helpers/apns-key.mjs';
 
 Object.assign(process.env, {
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
-  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  APNS_KEY_FILE: writeKeyFile(),
 });
 for (const k of ['APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT']) delete process.env[k];
 

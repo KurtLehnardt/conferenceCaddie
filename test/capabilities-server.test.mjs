@@ -15,8 +15,9 @@ import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeKeyFile, missingKeyFile } from './helpers/apns-key.mjs';
 
-const NATIVE_SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
+const NATIVE_SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_FILE', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 for (const k of ['BLE_MASTER_KEYRING', 'BLE_NEAR_RSSI', 'TALKS_BUNDLE_BASE', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', ...NATIVE_SETTINGS]) delete process.env[k];
 
 const { capabilitiesDocument, bundleBaseFrom, webPushConfigured, handleCapabilities, currentCapabilities, DEFAULT_BUNDLE_BASE } = await import('../server/capabilities.mjs');
@@ -227,7 +228,7 @@ function pushFlags(env) {
 
 test('push.apns and push.fcm follow the APNs and FCM settings, and a broken one stays off without quoting it', () => {
   const p8 = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
-  const apns = { APNS_KEY_ID: 'ABCDE12345', APNS_TEAM_ID: 'TEAM123456', APNS_KEY_P8: p8 };
+  const apns = { APNS_KEY_ID: 'ABCDE12345', APNS_TEAM_ID: 'TEAM123456', APNS_KEY_FILE: writeKeyFile(p8) };
   const fcm = { FCM_PROJECT_ID: 'caddie-test-project' };
   const vapid = { VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 's', VAPID_SUBJECT: 'mailto:x@example.org' };
 
@@ -239,9 +240,9 @@ test('push.apns and push.fcm follow the APNs and FCM settings, and a broken one 
   assert.deepEqual(pushFlags(fcm).push, { apns: false, fcm: true, webpush: false });
   assert.deepEqual(pushFlags({ ...apns, ...fcm, ...vapid }).push, { apns: true, fcm: true, webpush: true });
 
-  const broken = pushFlags({ ...apns, APNS_KEY_P8: p8.slice(0, 100), FCM_PROJECT_ID: 'Not A Project' });
+  const broken = pushFlags({ ...apns, APNS_KEY_FILE: writeKeyFile(p8.slice(0, 100)), FCM_PROJECT_ID: 'Not A Project' });
   assert.deepEqual(broken.push, { apns: false, fcm: false, webpush: false });
-  assert.match(broken.output, /APNs push is off: APNS_KEY_P8 is not the text of a \.p8 key/);
+  assert.match(broken.output, /APNs push is off: the file APNS_KEY_FILE names is not a \.p8 key/);
   assert.match(broken.output, /FCM push is off: FCM_PROJECT_ID is not a project id/);
   assert.doesNotMatch(broken.output, /Not A Project/, 'the value is never quoted');
   for (const secret of [p8]) {
@@ -249,6 +250,11 @@ test('push.apns and push.fcm follow the APNs and FCM settings, and a broken one 
       assert.ok(!broken.output.includes(line.slice(0, 20)), 'the output never quotes a key');
     }
   }
+
+  // Nothing mounted where APNS_KEY_FILE points: APNs off with one line, and the rest as configured.
+  const unmounted = pushFlags({ ...apns, ...fcm, APNS_KEY_FILE: missingKeyFile() });
+  assert.deepEqual(unmounted.push, { apns: false, fcm: true, webpush: false });
+  assert.deepEqual(unmounted.output.split('\n').filter((l) => /push is off/.test(l)), ['APNs push is off: APNS_KEY_FILE names no readable file.']);
 });
 
 test('the server refuses to start when the current key id is not in the keyring, or the keyring is unusable', () => {

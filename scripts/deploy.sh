@@ -11,9 +11,10 @@
 # repository URL. Without the secret the app deploys with nudges off.
 #
 # Native push (official deployment only): when the secret caddie-apns-key exists (the .p8 key
-# file Apple issued), its newest enabled version at deploy time is mounted as APNS_KEY_P8, and the
-# key id and team id are read from caddie-apns-ids ("<key id> <team id>", not secret) into the env
-# vars APNS_KEY_ID and APNS_TEAM_ID; APNS_BUNDLE_ID comes from the shell (default
+# file Apple issued), its newest enabled version at deploy time is mounted as the file
+# /secrets/apns/AuthKey.p8, which the env var APNS_KEY_FILE names (the key is never an env var),
+# and the key id and team id are read from caddie-apns-ids ("<key id> <team id>", not secret) into
+# the env vars APNS_KEY_ID and APNS_TEAM_ID; APNS_BUNDLE_ID comes from the shell (default
 # app.conferencecaddie). The key is pinned like the Bluetooth keyring, because the ids are read
 # here: a key version added later reaches the instances only with a deploy that reads its ids too.
 # FCM has no key and no secret: the server sends with the runtime service account's own token from
@@ -60,6 +61,9 @@ VAPID_PUBLIC_SECRET="caddie-vapid-public"
 GITHUB_SECRET="caddie-github-token"
 APNS_KEY_SECRET="caddie-apns-key"
 APNS_IDS_SECRET="caddie-apns-ids"
+# Where Cloud Run mounts the APNs key: a file in a directory of its own, so the volume hides nothing
+# of the image.
+APNS_KEY_PATH="/secrets/apns/AuthKey.p8"
 # The Firebase project of the Android app (not a secret). Set it here once step 7a is done, so every
 # deploy keeps FCM on; empty deploys with push.fcm false.
 FCM_PROJECT_ID="${FCM_PROJECT_ID:-}"
@@ -123,8 +127,8 @@ else
   echo "No $VAPID_PRIVATE_SECRET secret: deploying with push nudges off (node scripts/vapid-keys.mjs creates it)." >&2
 fi
 
-# Native push to the official apps. The key is mounted by name and version only; the ids are not
-# secret and become plain env vars.
+# Native push to the official apps. The key is mounted by name and version only, as a file in a
+# secret volume rather than an env var; the ids are not secret and become plain env vars.
 if gcloud secrets describe "$APNS_KEY_SECRET" --project "$PROJECT" --quiet >/dev/null 2>&1; then
   APNS_KEY_VERSION="$(gcloud secrets versions list "$APNS_KEY_SECRET" --project "$PROJECT" --filter=state:enabled --sort-by=~createTime --limit=1 --format='value(name)')"
   APNS_KEY_VERSION="${APNS_KEY_VERSION##*/}"
@@ -142,8 +146,9 @@ if gcloud secrets describe "$APNS_KEY_SECRET" --project "$PROJECT" --quiet >/dev
     echo "APNS_BUNDLE_ID must be a bundle id." >&2
     exit 1
   fi
-  ENV_VARS="$ENV_VARS,APNS_KEY_ID=$APNS_KEY_ID,APNS_TEAM_ID=$APNS_TEAM_ID,APNS_BUNDLE_ID=$APNS_BUNDLE_ID"
-  SECRETS="$SECRETS,APNS_KEY_P8=$APNS_KEY_SECRET:$APNS_KEY_VERSION"
+  ENV_VARS="$ENV_VARS,APNS_KEY_ID=$APNS_KEY_ID,APNS_TEAM_ID=$APNS_TEAM_ID,APNS_BUNDLE_ID=$APNS_BUNDLE_ID,APNS_KEY_FILE=$APNS_KEY_PATH"
+  # A key that starts with / is a mount path: gcloud mounts the secret version there as a file.
+  SECRETS="$SECRETS,$APNS_KEY_PATH=$APNS_KEY_SECRET:$APNS_KEY_VERSION"
   RUNTIME_SECRETS+=("$APNS_KEY_SECRET")
 else
   echo "No $APNS_KEY_SECRET secret: deploying without APNs push (push.apns false)." >&2
