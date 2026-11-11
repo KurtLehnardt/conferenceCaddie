@@ -8,7 +8,11 @@
     <!-- The people features: the device's position for presence ("Use my position too"), only
          while the app is in use, so there is no background location and no foreground service.
          Android 12 and newer need both location permissions in the same request; the person then
-         picks precise or approximate. POST_NOTIFICATIONS shows nudges on Android 13 and newer. -->
+         picks precise or approximate. POST_NOTIFICATIONS shows nudges on Android 13 and newer.
+         The background nudge check is a periodic JobScheduler job, which needs no permission of its
+         own. It is deliberately not persisted across a reboot: that would need
+         RECEIVE_BOOT_COMPLETED, and the app keeps its permissions minimal. The job is scheduled again
+         the next time the app starts. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -83,6 +87,10 @@
                 <data android:mimeType="text/tab-separated-values" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".BackgroundNudgeJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 
 </manifest>
