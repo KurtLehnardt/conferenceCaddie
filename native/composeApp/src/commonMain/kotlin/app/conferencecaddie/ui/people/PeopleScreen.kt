@@ -389,6 +389,13 @@ fun PeopleScreen(
                 )
             }
         }
+        // The web's ForYouRow, last on the home and left out while a search shows.
+        val forYouRow = talks.forYouRow
+        if (!searching && forYouRow != null) {
+            item(key = "for-you", contentType = "for-you") {
+                Box(Modifier.fillMaxWidth().padding(top = PeopleScreenGap)) { forYouRow() }
+            }
+        }
     }
 }
 

@@ -265,6 +265,12 @@ data class PeopleTalks(
     /** Talk ids marked Interested at the selected conference, oldest first. */
     val interested: List<String>,
     val nowMs: Long,
+    /**
+     * The People home's For you row (web ForYouRow), drawn by the talk screens
+     * (app.conferencecaddie.ui.talks.ForYouRow) because For you is worked out on the device; null
+     * leaves the row out (no bundle yet, or a host without the talk screens).
+     */
+    val forYouRow: (@Composable () -> Unit)? = null,
 )
 
 /**

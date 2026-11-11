@@ -117,6 +117,8 @@ fun CaddieApp(
     }
     SideEffect { search.attach(scope) }
     val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
+    // The People home's For you row asks for its own few suggestions, as the web's row does.
+    val forYouRow = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.ROW_SIZE) } }
     var pickerOpen by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val openUrl: (String) -> Unit = { url -> if (isWebLink(url)) runCatching { uriHandler.openUri(url) } }
@@ -203,11 +205,25 @@ fun CaddieApp(
 
     val navigation = rememberShellNavigation(launch.tab ?: if (initialQuery != null) Tab.Search else null)
     val shell = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast)
+    // The People home's For you row: like the For you tab, it asks again only while it is on screen.
+    val peopleForYouRow: (@Composable () -> Unit)? = if (ready != null) {
+        {
+            LaunchedEffect(forYouInputs) { forYouRow.refresh(state.selectedSlug, forYouInputs) }
+            ForYouRow(
+                model = forYouRow,
+                onOpenTalk = { openTalk = it.talkId },
+                onSeeAll = { navigation.selectTab(Tab.ForYou) },
+                onPickTopics = { pickerOpen = true },
+            )
+        }
+    } else {
+        null
+    }
     // The people screens (ui/people/PeopleTab.kt); null without a controller.
     val peopleUi = rememberPeopleUi(
         controller = people,
         navigation = navigation,
-        talks = PeopleTalks(ready?.bundle, state.interested, nowMs),
+        talks = PeopleTalks(ready?.bundle, state.interested, nowMs, forYouRow = peopleForYouRow),
         online = shell.online,
         searchable = shell.selectedConference?.searchable == true,
         launch = PeopleLaunch.parse(launch.people),
@@ -266,12 +282,17 @@ fun CaddieApp(
                         onOpenTalk = { openTalk = it.talkId },
                         onOpenUrl = openUrl,
                         onPickTopics = { pickerOpen = true },
+                        peopleControls = peopleUi?.talkControls,
                     )
                 }
             },
             search = {
                 BundleGate(state, core) { r ->
-                    SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl, openRank = talkLaunch.rank)
+                    SearchScreen(
+                        search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl,
+                        openRank = talkLaunch.rank,
+                        peopleControls = peopleUi?.talkControls,
+                    )
                 }
             },
             interested = {

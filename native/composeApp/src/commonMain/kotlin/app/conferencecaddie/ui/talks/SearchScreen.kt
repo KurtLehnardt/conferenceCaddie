@@ -47,7 +47,9 @@ import app.conferencecaddie.ui.theme.Caddie
 /**
  * The Search tab's Search view (web/src/components/search.tsx): the search field, the "Did you
  * mean" suggestions, the chip row of filters and time phrases, the results count and the talk
- * cards. Everything runs on the device over the conference's bundle.
+ * cards. Everything runs on the device over the conference's bundle. [peopleControls] draws a
+ * talk's people controls in its card, as every web talk card carries TalkPeopleControls; null
+ * leaves them out.
  */
 @Composable
 fun SearchScreen(
@@ -59,6 +61,7 @@ fun SearchScreen(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     openRank: String? = null,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val result = model.result
     val conference = bundle.conference
@@ -167,6 +170,7 @@ fun SearchScreen(
                             TalkResult(
                                 talk, bundle, terms, talk.talkId in interested, nowMs, onToggleInterested, onOpenTalk, onOpenUrl,
                                 searchText = result.searchText,
+                                peopleControls = peopleControls,
                                 rank = if (browse) {
                                     null
                                 } else {
