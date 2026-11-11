@@ -13,7 +13,7 @@ It runs as a web app (PWA) on any phone, and as an Android app (.apk) that adds 
 
 ## Install
 
-**On your phone (web app).** Open `https://conference-caddie.<subdomain>.workers.dev/`, the free app served by the Cloudflare Worker, or scan the QR code for KubeCon + CloudNativeCon North America 2026. The address is a placeholder until the Worker is live: `worker/scripts/deploy.sh` prints the real one, and the QR code is regenerated for it after the deploy (see [docs/FREE_HOSTING.md](docs/FREE_HOSTING.md)). To get nudges with the app closed, add it to your Home Screen (iPhone: Share, then Add to Home Screen; Android: the install prompt) and turn on "Nudge me even when the app is closed". No account is needed.
+**On your phone (web app).** Open https://conference-caddie.krlehnardt.workers.dev/, the free app served by the Cloudflare Worker (the API is on the same origin), or scan the QR code for KubeCon + CloudNativeCon North America 2026 (`docs/demo/qr-kubecon.png`), which opens https://conference-caddie.krlehnardt.workers.dev/e/kubecon-cloudnativecon-north-america-2026. See [docs/FREE_HOSTING.md](docs/FREE_HOSTING.md) for how it is hosted. To get nudges with the app closed, add it to your Home Screen (iPhone: Share, then Add to Home Screen; Android: the install prompt) and turn on "Nudge me even when the app is closed". No account is needed.
 
 <img src="docs/demo/qr-kubecon.png" alt="QR code that opens Conference Caddie for KubeCon + CloudNativeCon North America 2026" width="160">
 

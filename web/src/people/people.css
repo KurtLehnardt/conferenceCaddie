@@ -284,13 +284,15 @@
   border-top: 1px solid var(--border);
 }
 
+/* Plain status text, not a control: it uses the secondary text colour and normal weight so it
+   is not mistaken for a link next to the accent-coloured links and toggles. */
 .pp-count {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--accent-ink);
+  color: var(--text-2);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .pp-count svg {
@@ -718,8 +720,10 @@
 
 /* ---------- Share for all (Interested screen) ---------- */
 
+/* The card sits directly in .interested, which has no side padding, so it takes the same gutter
+   as the talk cards in .results. */
 .pp-share-all {
-  margin-bottom: 16px;
+  margin: 0 var(--gutter) 16px;
 }
 
 .pp-share-all .pp-count {
