@@ -30,7 +30,7 @@ const ACCESS_TOKEN_PREFIX = 'ya29.stand-in-access-token-';
 // the environment.
 Object.assign(process.env, APNS_ENV, FCM_ENV);
 const native = await import('../server/native-push.mjs');
-const { createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, METADATA_TOKEN_URL, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
+const { AUTH_FAILURES_MAX, createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, METADATA_TOKEN_URL, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
 for (const k of SETTINGS) delete process.env[k];
 
 const APNS_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -44,6 +44,13 @@ const T0 = Date.UTC(2099, 5, 1, 9, 0, 0);
 const MIN = 60_000;
 
 const decode = (part) => JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));
+const until = async (cond, ms = 2000) => {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
 
 // A clock the test moves, and a log that collects lines.
 function harness() {
@@ -146,8 +153,8 @@ describe('APNs', () => {
     assert.equal(decode(tokens[2].split('.')[1]).iat, Math.floor((T0 + 40 * MIN) / 1000));
   });
 
-  test('410 and 400 BadDeviceToken or DeviceTokenNotForTopic mean the token is gone', async () => {
-    for (const answer of [{ status: 410, reason: 'Unregistered' }, { status: 410, reason: 'ExpiredToken' }, { status: 400, reason: 'BadDeviceToken' }, { status: 400, reason: 'DeviceTokenNotForTopic' }]) {
+  test('410 and 400 BadDeviceToken mean the token is gone', async () => {
+    for (const answer of [{ status: 410, reason: 'Unregistered' }, { status: 410, reason: 'ExpiredToken' }, { status: 400, reason: 'BadDeviceToken' }]) {
       const { push, lines } = apnsChannel([answer]);
       assert.equal(await push.send(reg()), 'gone', JSON.stringify(answer));
       assert.deepEqual(lines, []);
@@ -155,7 +162,9 @@ describe('APNs', () => {
   });
 
   test('other refusals, rate limits and server errors fail without deleting, with one clean log line', async () => {
-    for (const answer of [{ status: 400, reason: 'BadExpirationDate' }, { status: 400, reason: 'BadTopic' }, { status: 429, reason: 'TooManyRequests' }, { status: 500, reason: 'InternalServerError' }, { status: 503, reason: 'ServiceUnavailable' }, { status: 413, reason: 'PayloadTooLarge' }]) {
+    // DeviceTokenNotForTopic is what every token gives when APNS_BUNDLE_ID is wrong: deleting on it
+    // would wipe every registration, so it only fails.
+    for (const answer of [{ status: 400, reason: 'DeviceTokenNotForTopic' }, { status: 400, reason: 'BadExpirationDate' }, { status: 400, reason: 'BadTopic' }, { status: 429, reason: 'TooManyRequests' }, { status: 500, reason: 'InternalServerError' }, { status: 503, reason: 'ServiceUnavailable' }, { status: 413, reason: 'PayloadTooLarge' }]) {
       const { push, lines, calls } = apnsChannel([answer]);
       assert.equal(await push.send(reg()), 'failed', JSON.stringify(answer));
       assert.equal(calls.length, 1, 'no retry');
@@ -211,6 +220,32 @@ describe('APNs', () => {
     const first = apnsChannel([{ status: 403, reason: 'ExpiredProviderToken' }, { status: 200 }]);
     assert.equal(await first.push.send(reg()), 'failed', 'a token minted for this very push is not renewed either');
     assert.equal(first.calls.length, 1);
+  });
+
+  test('a 403 ExpiredProviderToken retries with the current token when another push has renewed it meanwhile', async () => {
+    const h = harness();
+    const auths = [];
+    let releaseFirst;
+    const transport = async (origin, req) => {
+      auths.push(req.headers.authorization);
+      const n = auths.length;
+      if (n === 2) await new Promise((resolve) => (releaseFirst = resolve));
+      if (n === 2 || n === 3) return { status: 403, body: JSON.stringify({ reason: 'ExpiredProviderToken' }) };
+      return { status: 200, body: '' };
+    };
+    const push = createNativePush(APNS_ENV, { apnsTransport: transport, now: h.now, log: h.log });
+    assert.equal(await push.send(reg()), 'sent', 'the first token, T1');
+    h.clock.t += 25 * MIN;
+    // A is refused with T1 but only answered after B has been refused with T1 too and has renewed
+    // the token to T2 (T1 is 25 minutes old, so B may renew it).
+    const a = push.send(reg());
+    await until(() => auths.length === 2);
+    assert.equal(await push.send(reg()), 'sent', 'B: renewed and retried');
+    releaseFirst();
+    assert.equal(await a, 'sent', 'A: retried with the token B renewed, though it is younger than 20 minutes');
+    const [t1] = auths;
+    assert.deepEqual(auths.map((x) => (x === t1 ? 'T1' : 'T2')), ['T1', 'T1', 'T1', 'T2', 'T2']);
+    assert.deepEqual(h.lines, []);
   });
 
   test('403 for another reason is not retried', async () => {
@@ -393,6 +428,79 @@ describe('FCM', () => {
   });
 });
 
+describe('a channel the platform keeps refusing turns itself off', () => {
+  test('APNs: five 403s in a row from the production host turn push.apns off, once, until restart', async () => {
+    assert.equal(AUTH_FAILURES_MAX, 5);
+    const { push, calls, lines } = apnsChannel([{ status: 403, reason: 'InvalidProviderToken' }]);
+    for (let i = 1; i < AUTH_FAILURES_MAX; i++) assert.equal(await push.send(reg()), 'failed');
+    assert.equal(push.apns, true, 'four in a row are not enough');
+    assert.equal(await push.send(reg()), 'failed');
+    assert.equal(push.apns, false, 'the fifth turns it off');
+    assert.equal(await push.send(reg()), 'failed');
+    assert.equal(calls.length, AUTH_FAILURES_MAX, 'no request once it is off');
+    assert.deepEqual(lines.filter((l) => !l.startsWith('Native push failed')), ['APNs push is off: 5 authentication failures in a row.']);
+    assert.equal(lines.filter((l) => l === 'Native push failed: apns 403 InvalidProviderToken').length, AUTH_FAILURES_MAX);
+  });
+
+  test('APNs: any answer past authentication resets the count, and 403s from the sandbox host never count', async () => {
+    const reset = apnsChannel([
+      ...Array(4).fill({ status: 403, reason: 'InvalidProviderToken' }),
+      { status: 410, reason: 'Unregistered' },
+      ...Array(4).fill({ status: 403, reason: 'Forbidden' }),
+      { status: 400, reason: 'BadDeviceToken' },
+      ...Array(4).fill({ status: 403, reason: 'InvalidProviderToken' }),
+      { status: 200 },
+    ]);
+    for (let i = 0; i < 15; i++) await reset.push.send(reg());
+    assert.equal(reset.push.apns, true);
+    // Rate limits and server errors say nothing about the key either way.
+    const busy = apnsChannel([...Array(4).fill({ status: 403, reason: 'InvalidProviderToken' }), { status: 429, reason: 'TooManyRequests' }, { status: 503, reason: 'ServiceUnavailable' }, { status: 403, reason: 'InvalidProviderToken' }]);
+    for (let i = 0; i < 7; i++) await busy.push.send(reg());
+    assert.equal(busy.push.apns, false, '4 + 1 refusals in a row, with only a 429 and a 503 between them');
+    const sandbox = apnsChannel([{ status: 403, reason: 'BadEnvironmentKeyInToken' }]);
+    for (let i = 0; i < 2 * AUTH_FAILURES_MAX; i++) assert.equal(await sandbox.push.send(reg({ environment: 'sandbox' })), 'failed');
+    assert.equal(sandbox.push.apns, true, 'a client chooses sandbox, so it cannot turn APNs off for everyone');
+  });
+
+  test('FCM: five refusals of this server\'s access in a row turn push.fcm off; a token\'s own refusals and token request failures do not', async () => {
+    const denied = fcmChannel({ sends: [fcmError(403, 'PERMISSION_DENIED')] });
+    for (let i = 0; i < AUTH_FAILURES_MAX; i++) assert.equal(await denied.push.send(fcmReg()), 'failed');
+    assert.equal(denied.push.fcm, false);
+    assert.equal(await denied.push.send(fcmReg()), 'failed');
+    assert.equal(denied.sendCalls().length, AUTH_FAILURES_MAX, 'no request once it is off');
+    assert.deepEqual(denied.lines.filter((l) => !l.startsWith('Native push failed')), ['FCM push is off: 5 authentication failures in a row.']);
+
+    const unauthenticated = fcmChannel({ sends: [fcmError(401, 'UNAUTHENTICATED')] });
+    for (let i = 0; i < AUTH_FAILURES_MAX; i++) await unauthenticated.push.send(fcmReg());
+    assert.equal(unauthenticated.push.fcm, false, 'a 401 that a fresh token did not cure');
+
+    for (const code of ['SENDER_ID_MISMATCH', 'THIRD_PARTY_AUTH_ERROR']) {
+      const status = code === 'SENDER_ID_MISMATCH' ? 403 : 401;
+      const one = fcmChannel({ sends: [fcmError(status, status === 403 ? 'PERMISSION_DENIED' : 'UNAUTHENTICATED', code)] });
+      for (let i = 0; i < 2 * AUTH_FAILURES_MAX; i++) assert.equal(await one.push.send(fcmReg()), 'failed');
+      assert.equal(one.push.fcm, true, `${code} is about one registration token, so a client cannot turn FCM off with it`);
+    }
+    const metadata = fcmChannel({ token: [{ status: 500, body: {} }] });
+    for (let i = 0; i < 2 * AUTH_FAILURES_MAX; i++) {
+      assert.equal(await metadata.push.send(fcmReg()), 'failed');
+      metadata.clock.t += 61_000;
+    }
+    assert.equal(metadata.push.fcm, true, 'a failing metadata server backs off instead');
+    const reset = fcmChannel({ sends: [...Array(4).fill(fcmError(403, 'PERMISSION_DENIED')), fcmError(404, 'NOT_FOUND', 'UNREGISTERED'), ...Array(4).fill(fcmError(403, 'PERMISSION_DENIED'))] });
+    for (let i = 0; i < 9; i++) await reset.push.send(fcmReg());
+    assert.equal(reset.push.fcm, true, 'an UNREGISTERED in between resets the count');
+  });
+
+  test('each channel turns off on its own', async () => {
+    const h = harness();
+    const stub = apnsStub({ status: 403, reason: 'InvalidProviderToken' });
+    const both = createNativePush({ ...APNS_ENV, ...FCM_ENV }, { apnsTransport: stub.transport, fetch: fcmStub().fetchImpl, now: h.now, log: h.log });
+    for (let i = 0; i < AUTH_FAILURES_MAX; i++) await both.send(reg());
+    assert.deepEqual([both.apns, both.fcm], [false, true]);
+    assert.equal(await both.send(fcmReg()), 'sent');
+  });
+});
+
 describe('both channels', () => {
   test('every native push is the same generic alert: no zone, passage, name, ref, profile id, conference or spot line', async () => {
     const apns = apnsChannel([{ status: 200 }]);
@@ -564,14 +672,6 @@ describe('the HTTP/2 transport', () => {
     for (const s of serverSessions) s.destroy();
     await new Promise((resolve) => server.close(resolve));
   });
-
-  const until = async (cond) => {
-    const deadline = Date.now() + 2000;
-    while (!cond()) {
-      if (Date.now() > deadline) throw new Error('timed out waiting');
-      await new Promise((r) => setTimeout(r, 10));
-    }
-  };
 
   test('reuses one session, opens a new one after GOAWAY, and drops a session whose request timed out', async () => {
     port = await listen(server);

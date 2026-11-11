@@ -1,6 +1,7 @@
-// GET /api/capabilities: what this backend can do (docs/contracts/capabilities.md), computed once
-// from the server's configuration when it starts, so the document always matches what the server
-// serves. Public, cacheable for five minutes, and readable from any origin, because it carries
+// GET /api/capabilities: what this backend can do (docs/contracts/capabilities.md), computed from
+// the server's configuration when it starts, so the document always matches what the server
+// serves. push.apns and push.fcm are read at every request, because native-push.mjs turns a
+// channel off at runtime when its platform keeps refusing it. Public, cacheable for five minutes, and readable from any origin, because it carries
 // nothing private and a tier 1 page may read it from another origin.
 //
 // Env:
@@ -13,7 +14,8 @@
 //   APNS_* and FCM_PROJECT_ID, through server/native-push.mjs: push.apns is true only when the
 //                      APNs key, its key id and the team id are all set and well-formed, and
 //                      push.fcm only when FCM_PROJECT_ID is, which is when nudge.mjs can send
-//                      through them.
+//                      through them; either turns false after five authentication failures in a
+//                      row, until the server restarts.
 //
 // Tier 3 serves every People API v1 route with server-side ranking and polling, the talk search
 // routes and both server imports. Only the official deployment holds the APNs key and may send
@@ -77,16 +79,24 @@ export function capabilitiesDocument({ bleMode, nearRssi, webpush, apns = false,
   };
 }
 
-/** This server's document. */
-export const CAPABILITIES = Object.freeze(capabilitiesDocument({
+// What the start fixed. An unusable TALKS_BUNDLE_BASE throws here, so the server never starts.
+const FIXED = Object.freeze({
   bleMode: BLE_MODE,
   nearRssi: NEAR_RSSI,
   webpush: webPushConfigured(process.env),
-  apns: NATIVE_PUSH.apns,
-  fcm: NATIVE_PUSH.fcm,
   bundleBase: bundleBaseFrom(process.env.TALKS_BUNDLE_BASE),
-}));
-const BODY = JSON.stringify(CAPABILITIES);
+});
+
+/** This server's document now. */
+export const currentCapabilities = () => capabilitiesDocument({ ...FIXED, apns: NATIVE_PUSH.apns, fcm: NATIVE_PUSH.fcm });
+
+// The body for each pair of native push flags, built once.
+const bodies = new Map();
+function body() {
+  const key = `${NATIVE_PUSH.apns}:${NATIVE_PUSH.fcm}`;
+  if (!bodies.has(key)) bodies.set(key, JSON.stringify(currentCapabilities()));
+  return bodies.get(key);
+}
 
 function send(res, status, body, headers) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), ...headers });
@@ -104,5 +114,5 @@ export function handleCapabilities(req, res) {
     send(res, 429, JSON.stringify({ error: 'Too many requests' }), { 'Retry-After': String(rate.retryAfterSec), 'Cache-Control': 'no-store' });
     return;
   }
-  send(res, 200, BODY, { 'Cache-Control': `public, max-age=${MAX_AGE_S}`, 'Access-Control-Allow-Origin': '*' });
+  send(res, 200, body(), { 'Cache-Control': `public, max-age=${MAX_AGE_S}`, 'Access-Control-Allow-Origin': '*' });
 }

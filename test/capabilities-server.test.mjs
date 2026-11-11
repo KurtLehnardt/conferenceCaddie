@@ -19,12 +19,13 @@ import { fileURLToPath } from 'node:url';
 const NATIVE_SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 for (const k of ['BLE_MASTER_KEYRING', 'BLE_NEAR_RSSI', 'TALKS_BUNDLE_BASE', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', ...NATIVE_SETTINGS]) delete process.env[k];
 
-const { capabilitiesDocument, bundleBaseFrom, webPushConfigured, handleCapabilities, CAPABILITIES, DEFAULT_BUNDLE_BASE } = await import('../server/capabilities.mjs');
+const { capabilitiesDocument, bundleBaseFrom, webPushConfigured, handleCapabilities, currentCapabilities, DEFAULT_BUNDLE_BASE } = await import('../server/capabilities.mjs');
 const { nearRssiFrom, keyringFrom } = await import('../server/ble-config.mjs');
 const { parseKeyring, serializeKeyring } = await import('../server/ble-keyring.mjs');
 const { validator } = await import('../contracts/js/schemas.mjs');
 const { formatErrors } = await import('../contracts/js/validate.mjs');
 const { effectiveCapabilities, SERVICE_UUID } = await import('../contracts/js/capabilities.mjs');
+const CAPABILITIES = currentCapabilities();
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = (f) => JSON.parse(readFileSync(path.join(ROOT, 'contracts/fixtures/capabilities', f), 'utf8'));
@@ -214,7 +215,7 @@ function start(env) {
 // The push flags the server computes at start for an environment, read in a child process so each
 // configuration is a fresh import. Returns { push, output }.
 function pushFlags(env) {
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(path.join(ROOT, 'server/capabilities.mjs'))}); console.log(JSON.stringify(m.CAPABILITIES.push));`], {
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(path.join(ROOT, 'server/capabilities.mjs'))}); console.log(JSON.stringify(m.currentCapabilities().push));`], {
     env: { PATH: process.env.PATH, ...env },
     encoding: 'utf8',
     timeout: 30_000,

@@ -33,10 +33,13 @@
 //   no conference and no spot line. The app opens Around now, which shows the match through the
 //   authenticated API.
 // - Every push has one outcome: 'sent'; 'gone', when the platform says the token will never work
-//   again (APNs 410, or 400 BadDeviceToken or DeviceTokenNotForTopic; FCM 404 UNREGISTERED, or
-//   400 INVALID_ARGUMENT naming message.token), and the caller then deletes the registration; or
-//   'failed', with one log line that names the platform, the status and the platform's reason
-//   code. send() never rejects.
+//   again (APNs 410 or 400 BadDeviceToken; FCM 404 UNREGISTERED, or 400 INVALID_ARGUMENT naming
+//   message.token), and the caller then deletes the registration; or 'failed', with one log line
+//   that names the platform, the status and the platform's reason code. send() never rejects.
+// - push.apns and push.fcm say that a channel is configured and its settings are well-formed, not
+//   that Apple or Google accept them. A channel whose sends are refused for authentication
+//   AUTH_FAILURES_MAX times in a row turns itself off until the server restarts: the flag turns
+//   false (so GET /api/capabilities says so), sends stop, and one line says why.
 
 import crypto from 'node:crypto';
 import http2 from 'node:http2';
@@ -71,6 +74,9 @@ const TOKEN_BACKOFF_MS = 60_000;
 const SESSION_IDLE_MS = 10 * 60_000;
 // The most of a response body that is read: APNs and FCM error bodies are a few hundred bytes.
 const BODY_MAX = 16 * 1024;
+// How many authentication failures in a row turn a channel off. One is a hiccup, five in a row with
+// a fresh token in between is a key, a role or a team that the platform no longer accepts.
+export const AUTH_FAILURES_MAX = 5;
 
 // Device tokens. An APNs token is the bytes Apple gives the app, as hex (32 bytes today; Apple
 // says it may grow), and is stored lowercase. An FCM registration token is base64url text with a
@@ -325,8 +331,15 @@ function apnsChannel(config, { transport, now, log }) {
     return age >= 0 && age < PROVIDER_TOKEN_MIN_AGE_MS ? null : mint();
   };
 
+  // Resolves to { outcome, auth }: auth is 'failed' when APNs refused the provider token (403, which
+  // Apple's documentation reserves for "an error with the certificate or with the provider
+  // authentication token"), 'ok' when APNs judged the request past authentication, and null when
+  // the answer says nothing about it. Only the production host counts: a client chooses sandbox
+  // for a development build, and a key may be limited to one environment, so a client must not be
+  // able to turn the channel off for everyone.
   return async function send(registration, { ttl }) {
-    const origin = registration.environment === 'sandbox' ? APNS_ORIGINS.sandbox : APNS_ORIGINS.production;
+    const sandbox = registration.environment === 'sandbox';
+    const origin = sandbox ? APNS_ORIGINS.sandbox : APNS_ORIGINS.production;
     const attempt = (token) => transport(origin, {
       path: `/3/device/${registration.token}`,
       headers: {
@@ -340,22 +353,32 @@ function apnsChannel(config, { transport, now, log }) {
       },
       body: APNS_BODY,
     });
-    let res = await attempt(providerToken());
+    const used = providerToken();
+    let res = await attempt(used);
     let reason = reasonOf(parse(res.body)?.reason, /^[A-Za-z]{1,64}$/);
     if (res.status === 403 && (reason === 'ExpiredProviderToken' || reason === 'InvalidProviderToken')) {
-      const renewed = renewedToken();
-      if (renewed) {
-        res = await attempt(renewed);
+      // When another push renewed the token while this one was in flight, the current token is
+      // already new: retry with it. Otherwise renew it, unless it is too young to be renewed.
+      const current = providerToken();
+      const retry = current !== used ? current : renewedToken();
+      if (retry) {
+        res = await attempt(retry);
         reason = reasonOf(parse(res.body)?.reason, /^[A-Za-z]{1,64}$/);
       }
     }
+    const auth = sandbox ? null : res.status === 403 ? 'failed' : res.status >= 200 && res.status < 500 && res.status !== 429 ? 'ok' : null;
     // APNs answers 200; any 2xx (a stand-in's 201) counts as sent.
-    if (res.status >= 200 && res.status <= 299) return 'sent';
-    if (res.status === 410 || (res.status === 400 && (reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic'))) return 'gone';
+    if (res.status >= 200 && res.status <= 299) return { outcome: 'sent', auth };
+    // DeviceTokenNotForTopic is not here: it is what every token gives when APNS_BUNDLE_ID is wrong,
+    // and deleting on it would wipe every registration.
+    if (res.status === 410 || (res.status === 400 && reason === 'BadDeviceToken')) return { outcome: 'gone', auth };
     log(`Native push failed: apns ${res.status}${reason ? ` ${reason}` : ''}`);
-    return 'failed';
+    return { outcome: 'failed', auth };
   };
 }
+
+// FCM codes of a 401 or 403 that one registration token causes, rather than this server's access.
+const TOKEN_AUTH_CODES = new Set(['SENDER_ID_MISMATCH', 'THIRD_PARTY_AUTH_ERROR']);
 
 // The FCM error code of an error body: the errorCode of its FcmError detail, else its status.
 function fcmCodeOf(error) {
@@ -366,7 +389,8 @@ function fcmCodeOf(error) {
 
 // True when a 400 says that the token is what is invalid (a BadRequest field violation on
 // message.token). Any other INVALID_ARGUMENT would be this server's message, and deleting the
-// registration for it would lose a working token.
+// registration for it would lose a working token. The shape follows Google's error model; it is to
+// be checked against a real answer once the official deployment sends (DECISIONS.md).
 function tokenRefused(error) {
   const details = Array.isArray(error?.details) ? error.details : [];
   return details.some((d) => Array.isArray(d?.fieldViolations) && d.fieldViolations.some((v) => v?.field === 'message.token'));
@@ -428,6 +452,11 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
     return pending;
   }
 
+  // Resolves to { outcome, auth }, as the APNs channel: auth is 'failed' on a 401 that a fresh token
+  // did not cure and on a 403, except the two codes that a single registration token causes
+  // (SENDER_ID_MISMATCH, a token of another Firebase project, and THIRD_PARTY_AUTH_ERROR, a token
+  // of an app whose own APNs or Web Push credentials are missing), so no client can turn the
+  // channel off for everyone.
   return async function send(registration, { ttl }) {
     const body = JSON.stringify(fcmMessageOf(registration.token, ttl));
     const post = (token) => fetchImpl(sendUrl, {
@@ -444,14 +473,15 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
     }
     if (res.ok) {
       await res.body?.cancel();
-      return 'sent';
+      return { outcome: 'sent', auth: 'ok' };
     }
     const error = (await readJson(res))?.error;
     const code = fcmCodeOf(error);
-    if (res.status === 404 && code === 'UNREGISTERED') return 'gone';
-    if (res.status === 400 && code === 'INVALID_ARGUMENT' && tokenRefused(error)) return 'gone';
+    const auth = (res.status === 401 || res.status === 403) && !TOKEN_AUTH_CODES.has(code) ? 'failed' : res.status < 500 && res.status !== 429 ? 'ok' : null;
+    if (res.status === 404 && code === 'UNREGISTERED') return { outcome: 'gone', auth };
+    if (res.status === 400 && code === 'INVALID_ARGUMENT' && tokenRefused(error)) return { outcome: 'gone', auth };
     log(`Native push failed: fcm ${res.status}${code ? ` ${code}` : ''}`);
-    return 'failed';
+    return { outcome: 'failed', auth };
   };
 }
 
@@ -460,8 +490,9 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
  * ((origin, request) => { status, body }), fetch (for the metadata server's token and FCM), now
  * and log.
  * Returns { apns, fcm, send(registration, { ttl }) }, where apns and fcm say whether the channel is
- * on and registration is { platform, token, environment }. send pushes NATIVE_ALERT, and nothing
- * else, and resolves to 'sent', 'gone' or 'failed'.
+ * on now (configured and well-formed, and not turned off after AUTH_FAILURES_MAX authentication
+ * failures in a row) and registration is { platform, token, environment }. send pushes
+ * NATIVE_ALERT, and nothing else, and resolves to 'sent', 'gone' or 'failed'.
  */
 export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = Date.now, log = (line) => console.error(line), timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const stub = env.PUSH_TRANSPORT === 'stub' ? stubTransports(env) : null;
@@ -478,15 +509,35 @@ export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = D
       ? fcmChannel(fcmSettings.config, { fetch: fetchImpl ?? stub?.fetch ?? ((url, init) => fetch(url, init)), now, log, timeoutMs })
       : null,
   };
+  // Whether each channel is on, and its authentication failures in a row.
+  const state = {
+    apns: { name: 'APNs', on: Boolean(channels.apns), authFailures: 0 },
+    fcm: { name: 'FCM', on: Boolean(channels.fcm), authFailures: 0 },
+  };
+  const account = (st, auth) => {
+    if (auth === 'ok') st.authFailures = 0;
+    if (auth !== 'failed') return;
+    st.authFailures++;
+    if (st.on && st.authFailures >= AUTH_FAILURES_MAX) {
+      st.on = false;
+      log(`${st.name} push is off: ${AUTH_FAILURES_MAX} authentication failures in a row.`);
+    }
+  };
   return Object.freeze({
-    apns: Boolean(channels.apns),
-    fcm: Boolean(channels.fcm),
+    get apns() {
+      return state.apns.on;
+    },
+    get fcm() {
+      return state.fcm.on;
+    },
     async send(registration, { ttl = DEFAULT_TTL_SECONDS } = {}) {
       const platform = registration?.platform;
       const channel = platform === 'apns' || platform === 'fcm' ? channels[platform] : null;
-      if (!channel) return 'failed';
+      if (!channel || !state[platform].on) return 'failed';
       try {
-        return await channel(registration, { ttl });
+        const { outcome, auth } = await channel(registration, { ttl });
+        account(state[platform], auth);
+        return outcome;
       } catch (err) {
         log(`Native push failed: ${platform} ${errorClass(err)}`);
         return 'failed';

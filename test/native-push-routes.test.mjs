@@ -29,7 +29,8 @@ Object.assign(process.env, {
 
 const people = await import('../server/people.mjs');
 const { handlePushApi, registrationId, subscriptionId, pushTargetsFor } = await import('../server/push.mjs');
-const { CAPABILITIES } = await import('../server/capabilities.mjs');
+const { currentCapabilities } = await import('../server/capabilities.mjs');
+const CAPABILITIES = currentCapabilities();
 const { validator } = await import('../contracts/js/schemas.mjs');
 
 before(() => bootPurgeDone());

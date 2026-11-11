@@ -38,7 +38,8 @@ at(T_FIXTURE);
 const { handlePeopleApi } = await import('../server/people.mjs');
 const { handleConnectApi } = await import('../server/connect.mjs');
 const { handleBleApi } = await import('../server/ble.mjs');
-const { CAPABILITIES } = await import('../server/capabilities.mjs');
+const { currentCapabilities } = await import('../server/capabilities.mjs');
+const CAPABILITIES = currentCapabilities();
 const { refFor } = await import('../server/device.mjs');
 
 fake.reset();
