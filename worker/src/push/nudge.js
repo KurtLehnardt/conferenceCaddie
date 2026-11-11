@@ -26,7 +26,7 @@ import { rankPeople } from '../people/rank.js';
 import { cutText, unescapeHtml } from '../lib/text.js';
 import { dayKey, dayBounds } from '../lib/time.js';
 import { sendPush, MAX_SENDS } from './send.js';
-import { vapidConfigured } from './webpush.js';
+import { isPushServiceEndpoint, vapidConfigured } from './webpush.js';
 
 const CANDIDATES = 20;
 const EVIDENCE_MAX = 80;
@@ -83,12 +83,15 @@ export async function afterPresence(ctx, me) {
     // What the other person hears about me: my own words, as evidenceFor falls back to them.
     const myPassage = passageOf({ plain: self.expertise || self.about || null }, self, labels);
 
-    // Who has a live subscription at all, in one query.
+    // Who has a live subscription that can be delivered to, in one query. A row whose endpoint is not
+    // on the push service allowlist is kept but is never sent to (sendPush skips it), so it does not
+    // make its person a receiver: nothing would be delivered and their hourly cap would be used up.
     const ids = [self.profile_id, ...strong.map((h) => h.person.profile_id)];
     const subscribed = new Set(
       ctx.sql
-        .exec('SELECT DISTINCT profile_id FROM push_subs WHERE profile_id IN (SELECT value FROM json_each(?)) AND expires_at_ms > ?', JSON.stringify(ids), now)
+        .exec('SELECT profile_id, endpoint FROM push_subs WHERE profile_id IN (SELECT value FROM json_each(?)) AND expires_at_ms > ?', JSON.stringify(ids), now)
         .toArray()
+        .filter((r) => isPushServiceEndpoint(r.endpoint))
         .map((r) => r.profile_id),
     );
     const counts = new Map();

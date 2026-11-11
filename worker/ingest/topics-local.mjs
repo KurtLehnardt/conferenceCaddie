@@ -25,7 +25,8 @@
 //    it, so "cloud" and "native" do not sit beside "cloud native" (see COLLAPSE_COVERAGE).
 //
 // The topic list of a conference that already has topics on the Worker is frozen, because people
-// store topic ids in their profiles. Only the topics of each talk are recomputed against it.
+// store topic ids in their profiles. Only the topics of each talk, the talk counts and the ranks
+// are recomputed against it; the ranks follow the same order rule as a fresh build.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -91,6 +92,10 @@ export function titleTerms(title, stop) {
   }
   return terms;
 }
+
+// The order of the topic list: most talks first, then label, then topic id. Both the builder and a
+// frozen list (assignFrozen) rank by this rule, and rank 1 is the first topic in this order.
+export const compareTopics = (a, b) => b.talk_count - a.talk_count || a.label.localeCompare(b.label) || a.topic_id.localeCompare(b.topic_id);
 
 const idOf = (term) => term.replace(/ /g, '-');
 const termOf = (topicId) => topicId.replace(/-/g, ' ');
@@ -191,7 +196,7 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     for (const set of talkTerms.values()) if (holds(set, t)) count++;
     topics.push({ topic_id: id, label: t.label, aliases: [...t.aliases].sort(), talk_count: count, members: t.members });
   }
-  topics.sort((a, b) => b.talk_count - a.talk_count || a.label.localeCompare(b.label) || a.topic_id.localeCompare(b.topic_id));
+  topics.sort(compareTopics);
   topics.splice(MAX_TOPICS);
   topics.forEach((t, i) => { t.rank = i + 1; });
 
@@ -213,35 +218,53 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
 }
 
 // Recomputes the topics of each talk against a frozen list (documents shaped like the ones
-// GET /admin/topics returns). The ids, labels, aliases and ranks stay as they are; talk_count is
-// refreshed. Returns { topics, assignments }.
+// GET /admin/topics returns). The ids, labels and aliases stay as they are, which keeps the topic
+// ids people store in their profiles valid. talk_count is refreshed and the ranks are recomputed
+// from the new counts with the builder's rule (compareTopics), so the list a later GET /api/topics
+// serves is in the order buildTopics would give for the same talks. A topic whose count has
+// fallen below MIN_TALKS or to zero is kept, at the end of the list. Each talk's topic ids are
+// listed in the new rank order. Returns { topics, assignments }, with topics in rank order.
 export function assignFrozen(talks, frozen, { slug, stop = loadStoplist() }) {
-  const ordered = [...frozen].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
-  const members = ordered.map((t) => new Set([termOf(t.topic_id), ...(t.aliases || []).map(termOf)]));
-  const counts = new Array(ordered.length).fill(0);
-  const assignments = new Map();
+  const members = frozen.map((t) => new Set([termOf(t.topic_id), ...(t.aliases || []).map(termOf)]));
+  const counts = new Array(frozen.length).fill(0);
+  const matches = new Map(); // talk id -> indexes into `frozen`
   for (const talk of talks) {
     const terms = titleTerms(talk.title || '', stop);
-    const ids = [];
-    ordered.forEach((t, i) => {
+    const hit = [];
+    frozen.forEach((t, i) => {
       for (const m of members[i]) {
         if (terms.has(m)) {
-          ids.push(t.topic_id);
+          hit.push(i);
           counts[i]++;
           break;
         }
       }
     });
-    assignments.set(talk.talk_id, ids);
+    matches.set(talk.talk_id, hit);
   }
-  const topics = ordered.map((t, i) => ({
-    conference: slug,
+  const ordered = frozen.map((t, i) => ({
+    index: i,
     topic_id: t.topic_id,
     label: t.label,
     label_exact: t.label_exact ?? t.label,
     aliases: t.aliases || [],
     talk_count: counts[i],
-    rank: t.rank,
+  }));
+  ordered.sort(compareTopics);
+  const rankOf = new Array(frozen.length);
+  ordered.forEach((t, r) => { rankOf[t.index] = r + 1; });
+  const assignments = new Map();
+  for (const [id, hit] of matches) {
+    assignments.set(id, hit.sort((a, b) => rankOf[a] - rankOf[b]).map((i) => frozen[i].topic_id));
+  }
+  const topics = ordered.map((t) => ({
+    conference: slug,
+    topic_id: t.topic_id,
+    label: t.label,
+    label_exact: t.label_exact,
+    aliases: t.aliases,
+    talk_count: t.talk_count,
+    rank: rankOf[t.index],
   }));
   return { topics, assignments };
 }

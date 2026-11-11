@@ -10,6 +10,10 @@
 //   --dry-run                   fetch, build and write files; index nothing
 //   --no-fetch                  build from the committed data/raw files; no network call at all
 //   --skip-topics               do not run scripts/topics.mjs after an event is indexed
+//   --report <file>             write { "processed": [slugs] } when the run ends: the conferences whose
+//                               data/{slug}/conference.json this run wrote. Ended events drop off the
+//                               upcoming list, so data/ also holds conferences this run did not touch;
+//                               ingest.yml pushes and publishes only the ones listed here.
 // Env: ES_URL, ES_API_KEY or ELASTISEARCH_API_KEY (needed only to index, or to show dry-run counts).
 //
 // Exit codes: 0 when every event ended searchable or unavailable for a non-error reason; 1 on a fatal
@@ -44,6 +48,7 @@ const opts = {
   dryRun: false,
   noFetch: false,
   skipTopics: false,
+  report: null,
 };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -59,6 +64,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--dry-run') opts.dryRun = true;
   else if (a === '--no-fetch') opts.noFetch = true;
   else if (a === '--skip-topics') opts.skipTopics = true;
+  else if (a === '--report') opts.report = value();
   else usage(`Unknown argument: ${a}`);
 }
 const mode = [...new Set(opts.modes)];
@@ -67,7 +73,7 @@ if (mode.length !== 1) usage('Choose exactly one of --list, --event <slug> or --
 function usage(message) {
   console.error(message);
   console.error('Usage: node scripts/ingest.mjs --list | --event <slug> [--event <slug> ...] | --all-upcoming');
-  console.error('       [--index name] [--conferences-index name] [--dry-run] [--no-fetch] [--skip-topics]');
+  console.error('       [--index name] [--conferences-index name] [--dry-run] [--no-fetch] [--skip-topics] [--report file]');
   process.exit(1);
 }
 
@@ -371,6 +377,8 @@ async function main() {
   for (const c of unavailable) console.log(`  ${c.slug}: ${c.status_reason}`);
   if (stopped) console.log(`Stopped at the embedding limit. Missing events: ${missing.join(', ')}`);
   console.log(`Network calls this run: ${networkCalls()}`);
+
+  if (opts.report) writeJson(opts.report, { processed: results.map((c) => c.slug) });
 
   const errorReasons = new Set(['embedding_limit', 'partial_index', 'fetch_failed']);
   return stopped || unavailable.some((c) => errorReasons.has(c.status_reason)) ? 2 : 0;
