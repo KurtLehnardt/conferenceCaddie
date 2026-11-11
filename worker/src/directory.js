@@ -5,7 +5,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { migrateDirectory } from './schema.js';
-import { HttpError, bad, json, readJson, isPlainObject, SLUG_RE } from './lib/http.js';
+import { HttpError, bad, json, readJson, isPlainObject, SLUG_RE, isDailyLimitError, dailyLimitResponse } from './lib/http.js';
 import { consumeAdminNonce } from './lib/admin-auth.js';
 import { utcDay } from './lib/time.js';
 
@@ -109,6 +109,7 @@ export class DirectoryDO extends DurableObject {
       if (path.startsWith('/admin/')) {
         const nonce = consumeAdminNonce((q, ...b) => this.sql.exec(q, ...b), request.headers, Date.now());
         if (nonce === 'missing') return json(404, { error: 'Not found' });
+        if (nonce === 'skew') return json(401, { error: 'admin_skew' });
         if (nonce === 'replay') return json(401, { error: 'admin_replay' });
       }
       if (path === '/admin/conferences' && request.method === 'PUT') return await this.#upsert(request);
@@ -129,6 +130,9 @@ export class DirectoryDO extends DurableObject {
       return json(404, { error: 'Not found' });
     } catch (err) {
       if (err instanceof HttpError) return json(err.status, err.body, err.headers);
+      // The account's daily limit (for example written rows, which the nonce insert needs): 503
+      // daily_limit with Retry-After, which the clients do not retry, rather than a 502 they would.
+      if (isDailyLimitError(err)) return dailyLimitResponse();
       console.error(`directory request failed: ${err?.name ?? 'Error'}`);
       return json(502, { error: 'Conferences are temporarily unavailable' });
     }

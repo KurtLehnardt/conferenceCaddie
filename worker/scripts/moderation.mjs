@@ -21,14 +21,17 @@
 //
 // The admin token never leaves this machine and is never printed: each request carries an
 // X-Caddie-Admin signature made with it (scripts/lib/admin-sign.mjs), and no Authorization header.
-// The API base must be the Worker's origin, with no path. The Worker never returns profile ids or
-// reporter ids from these routes, and this script prints neither.
+// The API base must be the Worker's origin, with no path, over https (plain http for localhost
+// only). With CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET both set, the Cloudflare Access
+// service token headers are sent too, as worker/ingest/lib.mjs sends them. The Worker never
+// returns profile ids or reporter ids from these routes, and this script prints neither.
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
+import { accessHeaders, normalizeApiBase } from '../ingest/lib.mjs';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const REF_RE = /^[0-9a-f]{16}$/;
@@ -83,11 +86,9 @@ const showContent = opts['show-content'];
 const rawBase = opts.api ?? process.env.CADDIE_API_BASE ?? '';
 let base;
 try {
-  const u = new URL(rawBase);
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('protocol');
-  base = u.origin + u.pathname.replace(/\/+$/, '');
-} catch {
-  usage('--api <base> (or CADDIE_API_BASE) must be the Worker URL, for example https://conference-caddie.<subdomain>.workers.dev.');
+  base = normalizeApiBase(rawBase);
+} catch (err) {
+  usage(`${err.message} --api <base> (or CADDIE_API_BASE) is the Worker URL, for example https://conference-caddie.<subdomain>.workers.dev.`);
 }
 
 function readToken() {
@@ -135,6 +136,7 @@ async function admin(method, query, body) {
       method,
       headers: {
         [HEADER_NAME]: signed.header,
+        ...accessHeaders(process.env),
         ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       body: payload,

@@ -156,8 +156,8 @@ export class AdminError extends Error {
 
 // The optional Cloudflare Access service token: both CF_ACCESS_CLIENT_ID and
 // CF_ACCESS_CLIENT_SECRET set, or nothing. It is an extra layer in front of the Worker; the
-// signature is the check the Worker itself makes.
-function accessHeaders(env) {
+// signature is the check the Worker itself makes. worker/scripts/moderation.mjs sends it too.
+export function accessHeaders(env = process.env) {
   const id = (env.CF_ACCESS_CLIENT_ID || '').trim();
   const secret = (env.CF_ACCESS_CLIENT_SECRET || '').trim();
   return id && secret ? { 'CF-Access-Client-Id': id, 'CF-Access-Client-Secret': secret } : {};
@@ -168,7 +168,9 @@ function accessHeaders(env) {
 // leaves this process; no Authorization header is sent. It retries network failures, 429 and 5xx
 // up to `retries` times (honouring Retry-After), signing each attempt afresh: a nonce is
 // single-use on the Worker and the timestamp must be within five minutes of its clock, so a retry
-// is a new request, which every admin route handles idempotently. It stops at once on a 503
+// is a new request, which every admin route handles idempotently, with one exception: POST
+// /admin/moderation with action "delete" answers 404 when the target is already gone, so a delete
+// whose first answer was lost reports 404 on the retry. It stops at once on a 503
 // daily_limit, because retrying cannot help before the quota resets. Any other status throws an
 // AdminError that carries the status. `api` must be an origin (the admin routes live at its root);
 // a path or query outside the signer's charset is a UsageError before anything is sent.

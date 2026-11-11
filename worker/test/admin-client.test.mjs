@@ -129,10 +129,10 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
 });
 
 // Runs moderation.mjs against the recorder; resolves with the exit code and both outputs.
-function moderation(base, args) {
+function moderation(base, args, env = {}) {
   return new Promise((resolve) => {
     execFile(process.execPath, [MODERATION, '--event', SLUG, '--api', base, ...args], {
-      env: { ...process.env, ADMIN_TOKEN: KEY, ADMIN_TOKEN_FILE: '/nonexistent/admin-token', CADDIE_API_BASE: '' },
+      env: { ...process.env, ADMIN_TOKEN: KEY, ADMIN_TOKEN_FILE: '/nonexistent/admin-token', CADDIE_API_BASE: '', CF_ACCESS_CLIENT_ID: '', CF_ACCESS_CLIENT_SECRET: '', ...env },
     }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr }));
   });
 }
@@ -154,8 +154,28 @@ describe('worker/scripts/moderation.mjs', () => {
       `GET /admin/moderation?event=${SLUG}&since=2026-11-10T08:00:00.000Z`,
       `POST /admin/moderation?event=${SLUG}`,
     ]);
-    for (const r of seen) assertSigned(r);
+    for (const r of seen) {
+      assertSigned(r);
+      assert.equal(r.headers['cf-access-client-id'], undefined);
+    }
     assert.deepEqual(JSON.parse(seen[2].body), { action: 'unhide', kind: 'profile', id: '0123456789abcdef' });
+  });
+
+  test('sends the Cloudflare Access headers when both values are set, as adminClient does', async () => {
+    const { seen, base } = await recorder([{ body: { hidden: [] } }]);
+    const r = await moderation(base, ['--hidden'], { CF_ACCESS_CLIENT_ID: 'fake-id.access', CF_ACCESS_CLIENT_SECRET: 'fake-access-secret' });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(!r.stdout.includes('fake-access-secret') && !r.stderr.includes('fake-access-secret'));
+    assert.deepEqual([seen[0].headers['cf-access-client-id'], seen[0].headers['cf-access-client-secret']], ['fake-id.access', 'fake-access-secret']);
+    assertSigned(seen[0]);
+  });
+
+  test('plain http is refused for anything but localhost', async () => {
+    for (const api of ['http://example.com', 'http://192.0.2.1:8787']) {
+      const r = await moderation(api, ['--hidden']);
+      assert.equal(r.code, 2, api);
+      assert.match(r.stderr, /plain http is allowed for localhost only/);
+    }
   });
 
   test('a base with a path is refused before a request is made', async () => {

@@ -194,9 +194,13 @@ CREATE INDEX IF NOT EXISTS ble_caps_profile ON ble_caps(profile_id, at_ms);
 // Version 3 (signed admin requests, 2026-11-11): admin_nonces, the nonce of every /admin/*
 // request this object has served, with its signed timestamp (ts_ms = ts * 1000, not the object's
 // clock). A nonce seen before is a replay and answers 401 admin_replay before any handler runs;
-// rows older than 15 minutes are dropped on every insert (lib/admin-auth.js consumeAdminNonce).
-// The DirectoryDO keeps its own table (DIRECTORY_V1); nonces are per object, never shared.
-const ADMIN_NONCES = 'CREATE TABLE IF NOT EXISTS admin_nonces (nonce TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL);';
+// rows older than 15 minutes are dropped on every insert (lib/admin-auth.js consumeAdminNonce),
+// through the index on ts_ms, so the prune reads only the expired rows. The DirectoryDO keeps its
+// own table (DIRECTORY_V1); nonces are per object, never shared.
+const ADMIN_NONCES = `
+CREATE TABLE IF NOT EXISTS admin_nonces (nonce TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS admin_nonces_ts ON admin_nonces (ts_ms);
+`;
 
 // Adds a column unless the table already has it, so a run interrupted after the ALTER is repaired
 // by the next one (ALTER TABLE ADD COLUMN itself is not idempotent).

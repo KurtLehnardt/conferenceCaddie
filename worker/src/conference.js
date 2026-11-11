@@ -221,10 +221,15 @@ export class ConferenceDO extends DurableObject {
       // An admin request's nonce is recorded before anything else runs (W2). The Worker forwards
       // it only after verifying the signature, and no internal caller uses an /admin/* path (the
       // cron and the directory fan-out use /internal/*), so a request without it is not one the
-      // Worker sent: 404. A nonce seen before is a replay: 401, and no handler runs.
+      // Worker sent: 404. A timestamp more than 305 seconds from this object's clock is refused
+      // (401), and a nonce seen before is a replay (401); no handler runs for either. The insert
+      // is a written row, so once the account's daily written-rows limit is reached every admin
+      // request, a read included, answers 503 daily_limit (it fails closed).
       const nonce = admin ? consumeAdminNonce((q, ...b) => this.exec(q, ...b), request.headers, now) : 'ok';
       if (nonce === 'missing') {
         res = json(404, { error: 'Not found' });
+      } else if (nonce === 'skew') {
+        res = json(401, { error: 'admin_skew' });
       } else if (nonce === 'replay') {
         res = json(401, { error: 'admin_replay' });
       } else if (!route) {

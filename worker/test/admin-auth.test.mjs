@@ -67,8 +67,9 @@ describe('the verifier against test/fixtures/admin-sign.v1.json', () => {
     assert.deepEqual([...BODYLESS_METHODS], fixture.bodyless_methods);
     assert.equal(SKEW_SECONDS, fixture.skew_seconds);
     assert.equal(MIN_KEY_LENGTH, fixture.min_key_length);
-    assert.equal(signCases.length, 19);
-    assert.equal(verifyCases.length, 36);
+    // The fixture belongs to the signer's side and may grow; every case runs below.
+    assert.ok(signCases.length >= 19, `${signCases.length} sign cases`);
+    assert.ok(verifyCases.length >= 36, `${verifyCases.length} verify cases`);
   });
 
   for (const c of signCases) {
@@ -376,6 +377,36 @@ describe('the Worker\'s admin check, step by step', { skip }, () => {
       assert.equal(r.hmac, 1);
     }
     assert.equal(received.length, 0);
+  });
+
+  test('step 8: a body that arrives after the clock window answers 401 admin_skew and is not forwarded', async () => {
+    await withClock(async (setOffset) => {
+      const { env, received } = stubEnv();
+      const path = `/admin/talks?event=${SLUG}`;
+      const { signed } = signedRequest('POST', path, { body: BODY });
+      // The header passes at once; the body is held back for 301 seconds.
+      const stalled = (delay) => new Request(signed.url, {
+        method: 'POST',
+        duplex: 'half',
+        headers: { 'X-Caddie-Admin': signed.header, 'Content-Type': 'application/json', 'CF-Connecting-IP': freshIp() },
+        body: new ReadableStream({
+          pull(c) {
+            setOffset(delay);
+            c.enqueue(new TextEncoder().encode(BODY));
+            c.close();
+          },
+        }, { highWaterMark: 0 }),
+      });
+      const late = await call(env, stalled(301_000));
+      assert.deepEqual([late.status, late.json], [401, { error: 'admin_skew' }]);
+      assert.ok(late.reads.includes('body'), 'refused after the body was read, not at step 7');
+      assert.equal(received.length, 0);
+      // Held back less than that, it goes through (the signature's own nonce, not yet used: the
+      // stand-in object keeps no table).
+      setOffset(0);
+      assert.equal((await call(env, stalled(200_000))).status, 200);
+      assert.equal(received.length, 1);
+    });
   });
 
   test('step 8: a body over 4 MB answers 413, and only after a valid signature', async () => {

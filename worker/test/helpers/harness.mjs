@@ -92,6 +92,21 @@ export function namespace(make) {
   };
 }
 
+// Runs fn with Date.now() fixed at atMs until fn's argument sets another time, and restores it
+// after, so a test at an exact second boundary cannot cross one.
+export async function withFixedClock(atMs, fn) {
+  const real = Date.now;
+  let now = atMs;
+  Date.now = () => now;
+  try {
+    return await fn((ms) => {
+      now = ms;
+    });
+  } finally {
+    Date.now = real;
+  }
+}
+
 // Runs fn with Date.now() moved by the offset that fn's argument sets, and restores it after.
 export async function withClock(fn) {
   const real = Date.now;

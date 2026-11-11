@@ -28,6 +28,9 @@ export const TS_RE = /^(0|[1-9]\d{0,11})$/;
 export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 export const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE']);
 export const SKEW_SECONDS = 300;
+// The Durable Object's own clock check of the forwarded timestamp: the Worker's window plus 5
+// seconds for the time between the Worker's check and the object's.
+export const DO_SKEW_SECONDS = SKEW_SECONDS + 5;
 export const MIN_KEY_LENGTH = 32;
 // How long a Durable Object remembers a nonce, counted from its signed timestamp. The Worker
 // accepts a timestamp for 5 minutes after it, so a nonce is known for as long as its request could
@@ -92,8 +95,9 @@ export function withinSkew(ts, nowMs) {
 // Worker's order (worker/src/index.js, adminAuth): no usable key, a malformed header, a body hash
 // on a bodyless method, the caller's failed-auth pre-check (mayTry), the signature with every key,
 // then the clock. The first reason that applies is returned; all of them are a 404 on the Worker
-// except skew, which only a key holder can reach (401 admin_skew). The body is not read here: on
-// success the caller reads it and checks it with bodyMatches().
+// except skew (401 admin_skew), which needs a valid signature: a key holder's, or a captured
+// header's. The body is not read here: on success the caller reads it, checks the clock again
+// (the body may take any time to arrive) and checks the body with bodyMatches().
 //
 // Reasons: no_key, malformed, bodyless_body_hash, limited, signature, skew.
 export async function verifyAdminHeader({ headerValue, method, pathWithQuery, keys, nowMs, timingSafeEqual, mayTry = () => true }) {
@@ -119,15 +123,22 @@ export async function bodyMatches(bodySha256, bytes, timingSafeEqual) {
 // The nonce table (admin_nonces in worker/src/schema.js), one per Durable Object.
 
 // Records the nonce the Worker forwarded with an /admin/* request, before any handler runs.
-// `exec` has the signature of storage.sql.exec. Returns 'ok' for a new nonce, 'replay' when the
-// object has seen it before (401 admin_replay), and 'missing' when either header is absent or not
-// of the shape the Worker's verifier forwards, so the request did not come through it (404). The
-// stored time is the signed timestamp, not the object's clock; every call also drops the nonces
-// signed more than 15 minutes ago.
+// `exec` has the signature of storage.sql.exec. Returns:
+//   'missing'  either header is absent or not of the shape the Worker's verifier forwards, so the
+//              request did not come through it (404);
+//   'skew'     the signed timestamp is more than 305 seconds from the object's own clock
+//              (401 admin_skew). Without this check a request whose body took longer than the
+//              nonce retention to reach the Worker could arrive after its first use was pruned;
+//              with it, every nonce the object accepts is still inside the retention;
+//   'replay'   the object has seen the nonce before (401 admin_replay);
+//   'ok'       a new nonce, now recorded.
+// The stored time is the signed timestamp, not the object's clock; every insert also drops the
+// nonces signed more than 15 minutes ago (an index on ts_ms keeps that from scanning the table).
 export function consumeAdminNonce(exec, headers, nowMs) {
   const nonce = headers.get(NONCE_HEADER);
   const ts = headers.get(TS_HEADER);
   if (!NONCE_RE.test(nonce ?? '') || !TS_RE.test(ts ?? '')) return 'missing';
+  if (Math.abs(Math.floor(nowMs / 1000) - Number(ts)) > DO_SKEW_SECONDS) return 'skew';
   const fresh = exec('INSERT INTO admin_nonces (nonce, ts_ms) VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING 1', nonce, Number(ts) * 1000).toArray().length > 0;
   exec('DELETE FROM admin_nonces WHERE ts_ms < ?', nowMs - NONCE_TTL_MS);
   return fresh ? 'ok' : 'replay';

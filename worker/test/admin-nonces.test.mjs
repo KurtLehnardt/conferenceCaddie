@@ -9,7 +9,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { skip, ConferenceDO, DirectoryDO, worker, adminRoutes, fakeState, namespace, withClock } from './helpers/harness.mjs';
+import { skip, ConferenceDO, DirectoryDO, worker, adminRoutes, fakeState, namespace, withClock, withFixedClock } from './helpers/harness.mjs';
 import { signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
@@ -136,22 +136,119 @@ describe('the admin nonce table', { skip }, () => {
     assert.equal((await call(ctx.env, moved)).status, 404);
   });
 
-  test('a nonce whose signed time is older than 15 minutes is gone after a later insert', async () => {
+  test('a nonce whose signed time is older than 15 minutes is gone after a later insert, through the index', async () => {
     const state = fakeState();
     const obj = new ConferenceDO(state, { EMBED_FAKE: '1' });
     const send = (nonce, ts) => obj.fetch(new Request(`https://do.internal/admin/stats?event=${SLUG}`, {
       headers: { 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': nonce, 'x-caddie-admin-ts': String(ts) },
     }));
-    await withClock(async (setOffset) => {
-      const nowS = Math.floor(Date.now() / 1000);
+    const T = 1_900_000_000;
+    await withFixedClock(T * 1000, async (setNow) => {
       const [a, b, c] = ['a', 'b', 'c'].map((x) => x.repeat(22));
-      assert.equal((await send(a, nowS - 890)).status, 200); // 14 min 50 s old: kept by its own insert
-      assert.equal((await send(b, nowS - 850)).status, 200);
-      assert.deepEqual(nonces(state).map((r) => r.nonce), [a, b]);
-      setOffset(20_000); // a is now 15 min 10 s old, b 14 min 30 s
-      assert.equal((await send(c, nowS + 20)).status, 200);
-      assert.deepEqual(nonces(state), [{ nonce: b, ts_ms: (nowS - 850) * 1000 }, { nonce: c, ts_ms: (nowS + 20) * 1000 }]);
+      assert.equal((await send(a, T)).status, 200);
+      setNow((T + 500) * 1000);
+      assert.equal((await send(b, T + 500)).status, 200);
+      setNow((T + 900) * 1000); // a is exactly 15 minutes old: kept
+      assert.equal((await send('d'.repeat(22), T + 900)).status, 200);
+      assert.deepEqual(nonces(state).map((r) => r.nonce), [a, b, 'd'.repeat(22)]);
+      setNow((T + 901) * 1000); // a is 15 min 1 s old
+      assert.equal((await send(c, T + 901)).status, 200);
+      assert.deepEqual(nonces(state).map((r) => r.ts_ms), [(T + 500) * 1000, (T + 900) * 1000, (T + 901) * 1000]);
     });
+    const plan = state.db.prepare('EXPLAIN QUERY PLAN DELETE FROM admin_nonces WHERE ts_ms < ?').all(0).map((r) => r.detail).join(' ');
+    assert.match(plan, /admin_nonces_ts/);
+  });
+
+  test('each object checks the forwarded timestamp against its own clock: 305 seconds pass, 306 are 401 admin_skew', async () => {
+    const T = 1_900_000_000;
+    const conference = new ConferenceDO(fakeState(), { EMBED_FAKE: '1' });
+    const dirSql = [];
+    const directory = new DirectoryDO(fakeState({ onExec: (q) => dirSql.push(q) }), {});
+    const stats = countHandler('GET', '/admin/stats');
+    let n = 0;
+    const nonce = () => `n${String(++n).padStart(21, '0')}`;
+    const toConference = (ts) => conference.fetch(new Request(`https://do.internal/admin/stats?event=${SLUG}`, {
+      headers: { 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': nonce(), 'x-caddie-admin-ts': String(ts) },
+    }));
+    const toDirectory = (ts) => directory.fetch(new Request('https://directory.internal/admin/conferences', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-caddie-admin-nonce': nonce(), 'x-caddie-admin-ts': String(ts) },
+      body: JSON.stringify({ conferences: [conf(SLUG)] }),
+    }));
+    const upserts = () => dirSql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
+    try {
+      await withFixedClock(T * 1000 + 999, async () => {
+        for (const send of [toConference, toDirectory]) {
+          for (const off of [-305, 305, 0]) assert.equal((await send(T + off)).status, 200, `${send.name} ${off}`);
+          for (const off of [-306, 306, -100_000]) {
+            const res = await send(T + off);
+            assert.deepEqual([res.status, await res.json()], [401, { error: 'admin_skew' }], `${send.name} ${off}`);
+          }
+        }
+      });
+      assert.equal(stats.n, 3);
+      assert.equal(upserts(), 3);
+    } finally {
+      stats.restore();
+    }
+  });
+
+  test('an object refuses a nonce whose first use was pruned: the timestamp is past its clock window', async () => {
+    const state = fakeState();
+    const obj = new ConferenceDO(state, { EMBED_FAKE: '1' });
+    const stats = countHandler('GET', '/admin/stats');
+    const send = (nonce, ts) => obj.fetch(new Request(`https://do.internal/admin/stats?event=${SLUG}`, {
+      headers: { 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': nonce, 'x-caddie-admin-ts': String(ts) },
+    }));
+    const T = 1_900_000_000;
+    const first = 'f'.repeat(22);
+    try {
+      await withFixedClock(T * 1000, async (setNow) => {
+        assert.equal((await send(first, T)).status, 200);
+        setNow((T + 1000) * 1000);
+        assert.equal((await send('p'.repeat(22), T + 1000)).status, 200); // prunes the first nonce
+        assert.ok(!nonces(state).some((r) => r.nonce === first));
+        const again = await send(first, T);
+        assert.deepEqual([again.status, await again.json()], [401, { error: 'admin_skew' }]);
+      });
+      assert.equal(stats.n, 2);
+    } finally {
+      stats.restore();
+    }
+  });
+
+  test('a replay whose body is held back past the nonce retention is refused, and the handler runs once', async () => {
+    const embed = countHandler('POST', '/admin/embed-pending');
+    try {
+      await withClock(async (setOffset) => {
+        const ctx = realEnv();
+        await withConferences(ctx);
+        const body = '{}';
+        const req = signed('POST', `/admin/embed-pending?event=${SLUG}`, { body });
+        assert.equal((await call(ctx.env, req.build())).status, 200);
+        assert.deepEqual(Object.values(await call(ctx.env, req.build())), [401, { error: 'admin_replay' }]);
+        // The replay starts 10 seconds later (inside the window) and its body arrives after
+        // 1000 seconds, once another admin request to the same object has pruned the nonce.
+        setOffset(10_000);
+        const stream = new ReadableStream({
+          async pull(c) {
+            setOffset(1_000_000);
+            assert.equal((await call(ctx.env, signed('GET', `/admin/stats?event=${SLUG}`).build())).status, 200);
+            assert.ok(!nonces(ctx.states.get(`conference:${SLUG}`)).some((r) => r.nonce === req.nonce), 'the first use was pruned');
+            c.enqueue(new TextEncoder().encode(body));
+            c.close();
+          },
+        }, { highWaterMark: 0 });
+        const stalled = new Request(req.url, {
+          method: 'POST', duplex: 'half', body: stream,
+          headers: { 'X-Caddie-Admin': req.header, 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.66' },
+        });
+        assert.deepEqual(Object.values(await call(ctx.env, stalled)), [401, { error: 'admin_skew' }]);
+      });
+      assert.equal(embed.n, 1);
+    } finally {
+      embed.restore();
+    }
   });
 
   test('an /admin/* request without the forwarded nonce and timestamp is 404 in both objects, and no handler runs', async () => {
@@ -185,6 +282,34 @@ describe('the admin nonce table', { skip }, () => {
     assert.equal(res.status, 404);
     assert.equal(sql.length, before, 'the directory ran no statement for it');
     assert.equal((await dir.fetch(new Request('https://directory.internal/internal/routes'))).status, 200);
+  });
+
+  test('at the daily written-rows limit an admin request answers 503 daily_limit in both objects, reads included', async () => {
+    // The nonce insert is the first write; the stand-in throws as the runtime does once the
+    // account's limit is reached.
+    const limit = (q) => {
+      if (q.startsWith('INSERT INTO admin_nonces')) throw new Error('Exceeded the daily limit of rows written');
+    };
+    const headers = () => ({ 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': randomBytes(16).toString('base64url'), 'x-caddie-admin-ts': String(Math.floor(Date.now() / 1000)) });
+    const stats = countHandler('GET', '/admin/stats');
+    const error = console.error;
+    console.error = () => {};
+    try {
+      const obj = new ConferenceDO(fakeState({ onExec: limit }), { EMBED_FAKE: '1' });
+      const res = await obj.fetch(new Request(`https://do.internal/admin/stats?event=${SLUG}`, { headers: headers() }));
+      assert.deepEqual([res.status, await res.json()], [503, { error: 'daily_limit' }]);
+      assert.ok(Number(res.headers.get('retry-after')) > 0);
+      assert.equal(stats.n, 0);
+      const dir = new DirectoryDO(fakeState({ onExec: limit }), {});
+      const put = await dir.fetch(new Request('https://directory.internal/admin/conferences', {
+        method: 'PUT', headers: { ...headers(), 'content-type': 'application/json' }, body: JSON.stringify({ conferences: [conf(SLUG)] }),
+      }));
+      assert.deepEqual([put.status, await put.json()], [503, { error: 'daily_limit' }]);
+      assert.ok(Number(put.headers.get('retry-after')) > 0);
+    } finally {
+      console.error = error;
+      stats.restore();
+    }
   });
 
   test('no internal caller uses an /admin/* path: the cron and the fan-out reach the objects on /internal/* only', async () => {

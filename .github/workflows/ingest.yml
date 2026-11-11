@@ -70,13 +70,15 @@ jobs:
       REBUILD_TOPICS: ${{ inputs.rebuild_topics }}
       ALLOW_SHRINK: ${{ inputs.allow_shrink }}
       ALLOW_EMPTY: ${{ inputs.allow_empty }}
-      ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
-      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    # The admin token and the optional Access token are given only to the two steps that need
+    # them (the configuration check and the push), never to the job, so the discovery step, which
+    # fetches third-party feeds, cannot read them.
     steps:
       - name: Check the configuration
         id: config
+        env:
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
         run: |
           missing=""
           if [ -z "$ADMIN_TOKEN" ]; then missing="the CADDIE_ADMIN_TOKEN secret"; fi
@@ -115,6 +117,10 @@ jobs:
       - name: Push to the Worker
         id: push
         if: steps.config.outputs.ready == 'true'
+        env:
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -u
           args=(--events-from "$RUNNER_TEMP/ingest-report.json")

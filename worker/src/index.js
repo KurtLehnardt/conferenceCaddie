@@ -14,7 +14,7 @@ import { ConferenceDO } from './conference.js';
 import { DirectoryDO } from './directory.js';
 import { CONFERENCE_ADMIN_PATHS } from './admin.js';
 import { capabilitiesDocument, CAPABILITIES_MAX_AGE_S } from './capabilities.js';
-import { HEADER_NAME, NONCE_HEADER, TS_HEADER, adminKeys, bodyMatches, verifyAdminHeader } from './lib/admin-auth.js';
+import { HEADER_NAME, NONCE_HEADER, TS_HEADER, adminKeys, bodyMatches, verifyAdminHeader, withinSkew } from './lib/admin-auth.js';
 import { json, isPlainObject, SLUG_RE, dailyLimitResponse, isDailyLimitError } from './lib/http.js';
 import { utcDay } from './lib/time.js';
 
@@ -366,7 +366,8 @@ async function handleApi(request, env, url, originAllowed) {
 // an HMAC-SHA256 made with ADMIN_TOKEN (or ADMIN_TOKEN_NEXT during a rotation) over the method, the
 // path and query, the body hash, the timestamp and the nonce (lib/admin-auth.js). The checks run in
 // this order, and every failure before the clock check answers 404, so the routes are never
-// advertised and only a key holder can ever see a 401:
+// advertised and a 401 needs a valid signature (a key holder's, or a captured header's while its
+// timestamp is fresh):
 //   1. an Origin header (a browser is never an admin client): 404;
 //   2. no ADMIN_TOKEN of at least 32 characters after trimming: 404;
 //   3. the header absent or malformed: 404;
@@ -374,10 +375,12 @@ async function handleApi(request, env, url, originAllowed) {
 //   5. ten failed signatures from this address within the last minute (peek, nothing computed): 404;
 //   6. no key reproduces the signature: one token taken from that bucket, 404;
 //   7. the timestamp more than 300 seconds from the Worker's clock: 401 admin_skew;
-//   8. only now the body is read (4 MB cap) and hashed; another hash than the signed one: 401
-//      admin_body;
-//   9. the buffered bytes are forwarded with the verified nonce and timestamp, and the Durable
-//      Object refuses a nonce it has seen (401 admin_replay, schema.js admin_nonces).
+//   8. only now the body is read (4 MB cap); the clock is checked again, because the body may
+//      take any time to arrive (401 admin_skew); then the body is hashed, and another hash than
+//      the signed one is 401 admin_body;
+//   9. the buffered bytes are forwarded with the verified nonce and timestamp; the Durable Object
+//      checks the timestamp against its own clock (305 seconds, 401 admin_skew) and refuses a
+//      nonce it has seen (401 admin_replay, schema.js admin_nonces).
 // The Authorization header is not read here.
 
 const timingSafeEqual = (a, b) => crypto.subtle.timingSafeEqual(a, b);
@@ -408,6 +411,8 @@ async function handleAdmin(request, env, url, header) {
   let raw = null;
   if (method !== 'GET' && method !== 'HEAD') {
     raw = await readCappedBytes(request, CAP_ADMIN);
+    // A body held back past the window would otherwise reach the object with a stale timestamp.
+    if (!withinSkew(header.ts, Date.now())) throw reply(401, { error: 'admin_skew' });
     if (!(await bodyMatches(header.bodySha256, raw, timingSafeEqual))) throw reply(401, { error: 'admin_body' });
   }
   // The bytes that were hashed, never request.body (already consumed).
