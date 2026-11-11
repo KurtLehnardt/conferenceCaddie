@@ -127,13 +127,16 @@ function stubWorker() {
     if (path === '/admin/conference') {
       if (method !== 'DELETE') return [405, { error: 'Method not allowed' }, { Allow: 'DELETE' }];
       if (!/^[a-z0-9][a-z0-9-]{0,119}$/.test(event ?? '')) return [400, { error: 'event must be a conference slug' }];
+      // Tombstone first (its nonce check refuses a replay before any write), then the wipe, then
+      // the directory row; a second removal reports already_retired_at.
       const known = state.conferences.some((c) => c.slug === event);
+      const already = state.retired.has(event) ? { already_retired_at: 1762819200000 } : {};
+      state.retired.add(event);
       const deleted = state.wiped.includes(event) ? Object.fromEntries(Object.keys(state.tables).map((k) => [k, 0])) : { talks_fts: 3, ...state.tables, usage_days: 1, meta: 2 };
       delete deleted.vectors;
       state.wiped.push(event);
       state.conferences = state.conferences.filter((c) => c.slug !== event);
-      state.retired.add(event);
-      return [200, { ok: true, deleted, directory: known ? 1 : 0, retired: true }];
+      return [200, { ok: true, deleted, directory: known ? 1 : 0, retired: true, ...already }];
     }
     if (path === '/admin/stats' && event === null) {
       if (method !== 'GET') return [405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' }];
@@ -191,7 +194,7 @@ function stubWorker() {
       if (!p.reporters.some((r) => r.id === 'operator')) return [404, { error: 'no_operator_block' }];
       p.reporters = p.reporters.filter((r) => r.id !== 'operator');
       p.hidden = hiddenByReports(p);
-      return [200, { ok: true, hidden: p.hidden }];
+      return [200, { ok: true, hidden: p.hidden, found: true, removed: true }];
     }
     if (path === '/admin/moderation' && method === 'GET') {
       const hidden = [];
@@ -547,7 +550,10 @@ describe('ATT-1, ATT-2 attendees search', () => {
     assert.match(two.stdout, /3 attendees matched at testconf-2099, 2 shown \(--limit\)/);
     const long = await invoke(['attendees', 'search', '--event', EVENT, '--name', 'x'.repeat(201)]);
     assert.equal(long.code, 2);
-    assert.equal(stub.requests.length - admins(r.requests).length - admins(two.requests).length, 0, 'no request for the long name');
+    const nul = await invoke(['attendees', 'search', '--event', EVENT, '--name', 'a\u0000b']);
+    assert.equal(nul.code, 2);
+    assert.match(nul.stderr, /NUL/);
+    assert.equal(stub.requests.length - admins(r.requests).length - admins(two.requests).length, 0, 'no request for the long name or the NUL');
   });
 
   test('--ref finds exactly that person, hidden or not, or exits 4', async () => {
@@ -567,7 +573,7 @@ describe('ATT-1, ATT-2 attendees search', () => {
 describe('ATT-3, ATT-4 attendees view', () => {
   function seedViewed() {
     return person('Viewed Person', {
-      spot_hidden: true, presence: 'on', shared_talks: 2, meets: { requested: 1, accepted: 1, declined: 0, ended: 0, other: 0 }, blocks_made: 1, blocks_received: 2, push: 1,
+      spot_hidden: true, presence: 'on', shared_talks: 2, meets: { requested: 1, accepted: 1, declined: 0, ended: 0, other: 0, found: 3 }, blocks_made: 1, blocks_received: 2, push: 1,
       about: 'SENTINEL-ABOUT', interests: 'SENTINEL-INTERESTS', expertise: 'SENTINEL-EXPERTISE', contact_note: 'SENTINEL-CONTACT-NOTE', spot: 'SENTINEL-SPOT', pending: { spot: 'SENTINEL-PENDING' },
       linkedin_url: 'https://www.linkedin.com/in/SENTINEL-LINKEDIN', reporters: [{ id: 'r1', reason: 'spam' }, { id: 'r2', reason: 'harassment' }],
     });
@@ -586,7 +592,8 @@ describe('ATT-3, ATT-4 attendees view', () => {
       assert.match(base.stdout, /presence=on|"presence":"on"/);
       assert.match(base.stdout, /shared_talks=2|"shared_talks":2/);
       assert.match(base.stdout, /"requested":1/);
-      assert.match(base.stdout, /meets=2|"meets":2/);
+      assert.match(base.stdout, /"found":3/, 'a bucket the Worker adds is rendered as it comes');
+      assert.match(base.stdout, /meets=5|"meets":5/);
       assert.match(base.stdout, /blocks_made=1|"blocks_made":1/);
       assert.match(base.stdout, /blocks_received=2|"blocks_received":2/);
       assert.match(base.stdout, /"web":1/);
@@ -611,7 +618,7 @@ describe('ATT-3, ATT-4 attendees view', () => {
       const entries = auditLines();
       assert.deepEqual(entries.map((e) => e.flags), [[], ['text'], ['contact'], ['text', 'contact']]);
       assert.equal(entries.at(-1).target, ref);
-      assert.deepEqual(entries.at(-1).counts, { meets: 2, blocks_made: 1, blocks_received: 2, push: 1, reports: 2 });
+      assert.deepEqual(entries.at(-1).counts, { meets: 5, blocks_made: 1, blocks_received: 2, push: 1, reports: 2 });
       for (const s of [...NEVER, ...TEXT, ...CONTACT, 'Viewed Person']) assert.ok(!JSON.stringify(entries).includes(s), `${s} in the audit`);
     });
   }
@@ -729,19 +736,28 @@ describe('ATT-8, ATT-9 block and unblock', () => {
     assert.match(none.stderr, /has no operator block at testconf-2099/);
     const dryNone = await invoke(['attendees', 'unblock', '--event', EVENT, p.ref]);
     assert.match(dryNone.stdout, /has no operator block/);
+    // The four answers: no_operator_block after a lost attempt is "already unblocked" (exit 0);
+    // not_found stays exit 4 even on a retry; found:true is an unblock; found:false removed a
+    // stale report of a deleted profile.
     p.reporters.push({ id: 'operator', reason: 'operator' });
     p.hidden = true;
     stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
     const lost = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, p.ref], p.ref));
     assert.equal(lost.code, 0, lost.stderr);
     assert.equal(admins(lost.requests).length, 2);
-    assert.match(lost.stdout, /the operator block of .*: already done or never existed/);
+    assert.match(lost.stdout, /the operator block of .*: already unblocked \(a retried request answered 404/);
+    assert.equal(lost.audit.at(-1).result, 'ok');
     assert.equal(p.reporters.length, 0);
+    stub.forced.push({ status: 503, body: { error: 'lost' } });
+    const noPerson = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, '0123456789abcdef'], '0123456789abcdef'));
+    assert.equal(noPerson.code, 4, 'not_found on a retry is still exit 4');
+    assert.equal(admins(noPerson.requests).length, 2);
     stub.state.staleOperatorReports.add('fedcba9876543210');
     const stale = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, 'fedcba9876543210'], 'fedcba9876543210'));
     assert.equal(stale.code, 0, stale.stderr);
     assert.match(stale.stdout, /is gone; removed its stale operator report/);
     assert.deepEqual(stale.audit.at(-1).counts, { reports: 1 });
+    assert.equal((await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, 'fedcba9876543210'], 'fedcba9876543210'))).code, 4, 'no person and no stale report');
   });
 });
 
@@ -1044,10 +1060,30 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     assert.equal(local.status_reason, 'operator_removed');
     assert.ok(existsSync(join(root, 'data', EVENT, 'talks.ndjson')));
     assert.deepEqual(Object.keys(operatorFile().removed), [EVENT]);
-    // A second wipe is idempotent on the Worker: zero counts, still exit 0.
+    // A second wipe is idempotent on the Worker: zero counts, already_retired_at, still exit 0.
     const again = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
     assert.equal(again.code, 0, again.stderr);
-    assert.match(again.stdout, /nothing was left to delete/);
+    assert.match(again.stdout, /nothing was left to delete.*it was retired already, at 2025-11-11T00:00:00\.000Z/);
+    assert.equal(again.audit.at(-1).result, 'ok');
+    // After the wipe the object refuses admin requests until an unretire; the message says so.
+    const search = await invoke(['attendees', 'search', '--event', EVENT, '--name', 'x']);
+    assert.equal(search.code, 1);
+    assert.match(search.stderr, /the Worker does not route testconf-2099 \(no conference, or it was removed; after a removal run conferences unretire --event testconf-2099 and then conferences refresh\)/);
+  });
+
+  test('a removal that stopped between its steps exits 1 naming the step, is not retried blind, and leaves the local files alone', async () => {
+    seedConferenceFiles(EVENT);
+    stub.forced.push({ status: 502, body: { error: 'removal_incomplete', step: 'wipe', retired: true, wiped: false } });
+    const r = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(r.code, 1);
+    assert.equal(admins(r.requests).length, 1, 'not retried by the client');
+    assert.match(r.stderr, /DELETE \/admin\/conference: removal incomplete at step wipe \(status 502; retired true, wiped false\); run the removal again/);
+    assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'searchable');
+    assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
+    assert.equal(r.audit.at(-1).result, 'failed');
+    const again = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status_reason, 'operator_removed');
   });
 
   test('--purge-local deletes only the raw directory and the talk file; a slug the directory does not route is still wiped', async () => {

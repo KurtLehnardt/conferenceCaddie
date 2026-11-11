@@ -14,9 +14,11 @@
 //   is cancelled, and nothing is retried (fetch would carry the signed header and the optional
 //   Access secret to another origin).
 // - A 404 from the Worker means "not found" or "the signature was refused", and the Worker does not
-//   say which; every not-found message says so. After a retry of a delete, an unhide or an unblock
-//   (an attempt whose answer was lost may have done the work), a 404 reads as "already done" and
-//   the command succeeds with a note.
+//   say which; every not-found message says so. After a retry of a delete or an unhide (an attempt
+//   whose answer was lost may have done the work), a 404 reads as "already done", and after a
+//   retried unblock a 404 no_operator_block reads as "already unblocked"; the command succeeds
+//   with a note. A removal run again is a success too (already_retired_at), and a removal that
+//   stopped between its steps (removal_incomplete) says which step and asks for another run.
 // - Query values stay inside the signer's charset: slugs, refs, integers, ISO instants in Z form
 //   and comma lists; free text travels base64url-encoded under q64. Flags that change what a
 //   handler does (unretire) travel in the JSON body, never in the query.
@@ -103,6 +105,7 @@ export function workerOrigin(backend) {
 export function q64Of(text) {
   const bytes = Buffer.from(String(text), 'utf8');
   if (bytes.length === 0) throw new UsageError('--name must not be empty');
+  if (bytes.includes(0)) throw new UsageError('--name must not hold a NUL character');
   if (bytes.length > Q64_MAX_BYTES) throw new UsageError(`--name must be at most ${Q64_MAX_BYTES} bytes of UTF-8`);
   return bytes.toString('base64url');
 }
@@ -173,6 +176,18 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       }
       if (res.ok || okStatuses.includes(res.status)) return { status: res.status, json: json && typeof json === 'object' ? json : {}, retried };
       lastError = `${where}: ${describe(res.status, json)}`;
+      // A removal that stopped between its steps (tombstone, wipe, directory row): the next run
+      // finishes it, so the operator is told to run it again rather than the client retrying blind.
+      if (json?.error === 'removal_incomplete') {
+        const step = typeof json.step === 'string' && /^[a-z_]{1,20}$/.test(json.step) ? json.step : 'unknown';
+        throw new AdminError(`${where}: removal incomplete at step ${step} (status ${res.status}; retired ${json.retired === true}, wiped ${json.wiped === true}); run the removal again`);
+      }
+      // A conference the Worker does not route: never added, or removed (its object refuses admin
+      // requests after a wipe until an unretire puts the directory row back).
+      if (res.status === 400 && json?.error === 'conference is not available') {
+        const slug = /[?&]event=([a-z0-9-]+)/.exec(path)?.[1];
+        throw new AdminError(`${where}: the Worker does not route ${slug ?? 'this conference'} (no conference, or it was removed; after a removal run conferences unretire --event ${slug ?? '<slug>'} and then conferences refresh)`);
+      }
       if (res.status === 404) throw new WorkerNotFoundError(where, { code: typeof json?.error === 'string' ? json.error : null, retried });
       if (res.status === 401) {
         const code = json?.error;
@@ -232,9 +247,12 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     return p;
   }
 
+  // The meet buckets as the Worker sends them (the five of the spec, plus whatever it adds), so a
+  // renamed bucket still shows and the total still adds up.
   const meetCounts = (p) => {
-    const m = p.counts?.meets ?? {};
+    const m = p.counts?.meets && typeof p.counts.meets === 'object' ? p.counts.meets : {};
     const by = Object.fromEntries(MEET_STATES.map((s) => [s, int(m[s])]));
+    for (const [state, n] of Object.entries(m)) if (/^[a-z_]{1,20}$/.test(state)) by[state] = int(n);
     return { by, total: Object.values(by).reduce((a, b) => a + b, 0) };
   };
   const reportCounts = (p) => {
@@ -388,16 +406,17 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       try {
         ({ json } = await admin('POST', `/admin/people/block?${q({ event })}`, { ref, action }));
       } catch (err) {
-        if (options.unblock) {
-          const done = alreadyDone(err, `the operator block of ${ref}`);
-          if (done) return { counts: { reports: 0 }, note: 'already_unblocked', summary: done };
-          if (isNotFound(err) && err.workerCode === 'no_operator_block') throw new NotFoundError(`${ref} has no operator block at ${event}`);
+        // The four unblock answers: no_operator_block is exit 4, or "already unblocked" when a
+        // retried attempt may have removed it; not_found (no person, no stale report) is exit 4.
+        if (options.unblock && isNotFound(err) && err.workerCode === 'no_operator_block') {
+          if (err.retried) return { counts: { reports: 0 }, note: 'already_unblocked', summary: `the operator block of ${ref}: already unblocked (a retried request answered 404; the first attempt may have succeeded)` };
+          throw new NotFoundError(`${ref} has no operator block at ${event}`);
         }
         throw isNotFound(err) ? notFound(`profile ${ref} at ${event}`, err) : err;
       }
       if (!options.unblock) return { counts: { reports: 1 }, summary: `profile ${ref} is hidden by an operator report (hidden=${json.hidden === true})` };
-      if (json.found === false) return { counts: { reports: int(json.removed) }, summary: `the profile ${ref} is gone; removed its stale operator report` };
-      return { counts: { reports: 1 }, summary: `removed the operator block of ${ref}; it ${json.hidden === true ? 'stays hidden (other reports remain)' : 'is visible again'}` };
+      if (json.found === false) return { counts: { reports: json.removed === true ? 1 : int(json.removed) }, found: false, summary: `the profile ${ref} is gone; removed its stale operator report` };
+      return { counts: { reports: 1 }, found: true, summary: `removed the operator block of ${ref}; it ${json.hidden === true ? 'stays hidden (other reports remain)' : 'is visible again'}` };
     },
 
     async moderationQueue({ event, options }) {
@@ -557,7 +576,9 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       for (const [table, n] of Object.entries(json.deleted && typeof json.deleted === 'object' ? json.deleted : {})) if (/^[A-Za-z0-9_]{1,40}$/.test(table)) counts[table] = int(n);
       counts.directory = int(json.directory);
       const what = Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}`).join(', ');
-      return { counts, summary: `wiped ${slug} from the Worker${what ? `: ${what}` : ' (nothing was left to delete)'}; tombstone ${json.retired === true ? 'left' : 'not confirmed'}, so the weekly ingest skips it until conferences unretire` };
+      // A removal run again (for example after a lost answer) finds the tombstone already there.
+      const already = Number.isFinite(json.already_retired_at) ? ` (it was retired already, at ${new Date(json.already_retired_at).toISOString()})` : '';
+      return { counts, ...(already ? { note: 'already_retired' } : {}), summary: `wiped ${slug} from the Worker${what ? `: ${what}` : ' (nothing was left to delete)'}; tombstone ${json.retired === true ? 'left' : 'not confirmed'}${already}, so the weekly ingest skips it until conferences unretire` };
     },
 
     async unretireConference({ slug, doc, mode }) {
