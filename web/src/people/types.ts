@@ -102,6 +102,8 @@ export interface PushState {
   /** The subscription's endpoint, so it can be removed by name; null while off. */
   endpoint: string | null;
   notice_seen: boolean;
+  /** When the server last accepted this endpoint for this conference (ms since the epoch), or null. */
+  synced_at: number | null;
 }
 
 /** One blocked person, cached on the device (caddie.blocks.v1.{slug}). */
