@@ -276,6 +276,13 @@ class BleServiceLifecycleTest {
         assertEquals(1, fake.scanStarts)
         assertEquals(1, fake.gattOpens)
 
+        // A second refresh with the same payload (the runtime and the service's own timer both
+        // refresh at a window start) leaves the running sets alone.
+        val restarts = fake.advertised.size
+        radio.refresh()
+        Thread.sleep(500)
+        assertEquals(restarts, fake.advertised.size)
+
         // No key for a moment: nothing is advertised rather than a stale payload, and the scan goes on.
         source.payload = null
         radio.refresh()
@@ -388,7 +395,8 @@ class BleServiceLifecycleTest {
     @Test
     fun finishingTheActivityLeavesTheServiceRunning() {
         val events = Events()
-        startRunning(Source(payload(1)), events)
+        val source = Source(payload(1))
+        startRunning(source, events)
         scenario?.close()
         scenario = null
         Thread.sleep(2_000)
@@ -398,7 +406,8 @@ class BleServiceLifecycleTest {
         assertNotNull(fake.scanListener)
         assertNotNull(ongoing())
         assertTrue(events.stopped.isEmpty())
-        // From the background, a refresh still reaches it.
+        // From the background, a refresh with a new payload still reaches it.
+        source.payload = payload(2)
         radio.refresh()
         assertTrue(waitFor { fake.advertised.size >= 2 })
     }

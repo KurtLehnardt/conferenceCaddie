@@ -14,7 +14,7 @@ these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
 | Path | What it is |
 |---|---|
-| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), the platform interfaces (`Embedder`, `BleRadio`, `Notifier`, `SecureStore`, and the people features' `PlatformServices.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
+| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), Bluetooth proximity (`ble/`: the derived-token protocol, the runtime that drives the radio, and the platform's `BleRadio` and `BleKeyStore`; see Bluetooth proximity below), the platform interfaces (`Embedder`, `Notifier`, `SecureStore`, the people features' `PlatformServices.kt` and `ble/BlePlatform.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
 | `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, For you, the topic picker, Search with Why this rank, the Filters sheet, the talk sheet and My schedule). The query model and its vocabulary are its Compose resources. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
 | `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`, shows the permission prompts the platform services ask for and hands notification taps to the screens. Its instrumented tests (the smoke test, the secure store and the platform services) are in `src/androidTest`. |
 | `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController`, its app delegate hands the APNs token and notification taps to Kotlin, and a build phase runs Gradle to build and embed the framework. |
@@ -613,6 +613,55 @@ once at start-up to build the people controller.
   Each prints one line, `caddie.selftest securestore: passed` or what failed, never a value or a
   position.
 
+## Bluetooth proximity
+
+Phase 4 brings "Find people near me by Bluetooth" to both apps on backends whose capabilities say
+`ble.mode: derived-v1` ([`docs/contracts/ble-tokens.md`](../docs/contracts/ble-tokens.md)). It is
+off by default, runs only while the person is around at the conference, and shows under the
+presence card's push switch and as the Bluetooth group in Settings.
+
+- **Tokens on the phone.** Turning it on writes presence again with `ble: true`; the answer's
+  `ble_key` goes straight into the platform key store under an alias per backend and conference,
+  and its text is dropped. The phone then derives each ten-minute token itself
+  (`ble/BleProtocol.kt`), so rotation needs no network call and keeps working while the app sleeps,
+  which is what stopped discovery on Android on 2026-11-09 (`docs/NATIVE_PLAN.md`, section 4.5).
+- **Common runtime.** `ble/BleRuntime.kt` (owned by `PeopleController`) does the turn-on steps
+  (presence, permission, Bluetooth state, notifications, the presence write, the key), hands the
+  radio the payload of the current window whenever it asks, reports sightings in batches
+  (`ble.sightings_min_interval_s`, at most 50, never older than five minutes, never the phone's own
+  token or one already reported in the window, backing off on errors), re-keys at most once per
+  window, and turns strong matches into at most one local notification per person per day and three
+  an hour, shared with the in-app nudges. It resumes after the system restarted the process.
+- **Android.** `AndroidBleRadio` runs `BleRadioService`, a foreground service of type
+  `connectedDevice` with its own ongoing notification ("Conference Caddie is finding people near
+  you", with Stop). It advertises an extended set with the payload as service data and a legacy
+  connectable set with the service UUID, serves the payload from a GATT server, restarts both sets
+  at every window so the address changes with the token, scans for the service UUID and for Apple
+  manufacturer data, and connects to read the token from phones that do not send it in their
+  advertisement (`ble/BleInterrogation.kt`: at most six reads a minute, one at a time, each address
+  once per window). It is `START_STICKY` and keeps running when the app is swiped from Recents.
+  Keys are non-exportable HMAC keys in the Android Keystore (`AndroidBleKeyStore`).
+- **iOS.** `IosBleRadio` uses Core Bluetooth from Kotlin, with state restoration and the
+  `bluetooth-central` and `bluetooth-peripheral` background modes. It advertises the service UUID
+  only (iOS cannot advertise service data, and moves the UUID to the overflow area in the
+  background), always serves the token characteristic, and reads it from phones that do not send
+  service data. When iOS relaunches the app for Bluetooth, `iOSApp.swift` calls
+  `IosBle.restoreAfterLaunch`, which creates the people controller without any UI so the session
+  resumes. Keys are Keychain items, after first unlock, this device only (`IosBleKeyStore`).
+- **Tests.** The common tests check the protocol against the contract's golden vectors and drive
+  the runtime with a fake radio on virtual time (turn-on paths, batching, back-off, re-keying,
+  notifications, presence, restoring). `androidApp/src/androidTest` checks the Keystore key against
+  the golden vectors and the service's lifecycle with a fake Bluetooth stack (foreground type,
+  notification, refresh, GATT reads, Stop, the deadline, Bluetooth off, the system restart, the
+  activity finishing). `shared/src/iosTest` checks the Keychain store's logic and the radio on the
+  simulator, which has no Bluetooth; `-caddie.selftest blekeys` and `-caddie.selftest bleradio` run
+  the Keychain and radio checks inside the app (see People platform services for how to launch
+  one). `BleUiTest` covers the controls on both platforms.
+- **Not checked without phones.** Emulators and simulators have no real radio: discovery between
+  phones, two backgrounded iPhones, the overflow area seen from Android, the address change per
+  window, Doze timing and battery are measured on real phones (`docs/NATIVE_PLAN.md`, Phase 4 exit
+  criteria).
+
 ## Privacy
 
 - ONNX Runtime's telemetry is switched off on both platforms (Talk features, No telemetry).
@@ -625,8 +674,14 @@ once at start-up to build the people controller.
 - Android permissions: `INTERNET`, and for the people features `ACCESS_COARSE_LOCATION` and
   `ACCESS_FINE_LOCATION` (asked together, only while the app is in use; no background location)
   and `POST_NOTIFICATIONS` (Android 13 and newer). `android.hardware.location` is not required.
-- iOS: `Info.plist` has `NSLocationWhenInUseUsageDescription` and no background modes;
-  notifications need no usage text. `iosApp/iosApp.entitlements` requests Push Notifications.
+  Bluetooth proximity adds `BLUETOOTH_SCAN` (declared `neverForLocation`: no position is derived
+  from what the scan hears), `BLUETOOTH_ADVERTISE` and `BLUETOOTH_CONNECT` on Android 12 and newer,
+  `BLUETOOTH` and `BLUETOOTH_ADMIN` up to Android 11 (where a scan also needs the location
+  permission, asked only when the person turns Bluetooth on), and `FOREGROUND_SERVICE` with
+  `FOREGROUND_SERVICE_CONNECTED_DEVICE`. `android.hardware.bluetooth_le` is not required.
+- iOS: `Info.plist` has `NSLocationWhenInUseUsageDescription`, `NSBluetoothAlwaysUsageDescription`
+  and the `bluetooth-central` and `bluetooth-peripheral` background modes (Bluetooth proximity
+  only; there is still no background location); notifications need no usage text. `iosApp/iosApp.entitlements` requests Push Notifications.
 - iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking and no tracking domains. Its
   collected data is what the people features send to the official backend, all linked to the
   profile, none for tracking, all for the app's function: name, other user contact info, other

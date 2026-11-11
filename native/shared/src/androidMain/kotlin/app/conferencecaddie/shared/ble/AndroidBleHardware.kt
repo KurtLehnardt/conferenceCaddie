@@ -164,12 +164,23 @@ class AndroidBleHardware(context: Context) : BleHardware {
         val emptyResponse = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false).build()
         // A callback object of its own for every start: the stack refuses one that is still tied to
         // a set, and a late callback of a stopped set then cannot be mistaken for the new one's.
+        // A set whose start was still pending when it was stopped is not stopped by the stack: it
+        // starts later anyway, with a token that is no longer current, and nothing would ever stop
+        // it. So a set that starts after its callback was replaced stops itself at once.
         val extended = object : AdvertisingSetCallback() {
             override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
-                if (extendedCallback === this && (status != ADVERTISE_SUCCESS || advertisingSet == null)) onFailed()
+                if (extendedCallback !== this) {
+                    if (advertisingSet != null) stopStale(adv, this)
+                    return
+                }
+                if (status != ADVERTISE_SUCCESS || advertisingSet == null) onFailed()
             }
         }
-        val legacy = object : AdvertisingSetCallback() {}
+        val legacy = object : AdvertisingSetCallback() {
+            override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
+                if (legacyCallback !== this && advertisingSet != null) stopStale(adv, this)
+            }
+        }
         return try {
             adv.startAdvertisingSet(extendedParameters, extendedData, null, null, null, extended)
             advertiser = adv
@@ -190,6 +201,19 @@ class AndroidBleHardware(context: Context) : BleHardware {
         } catch (e: IllegalStateException) {
             stopAdvertising()
             BleHardwareStatus.Off
+        }
+    }
+
+    /** Stops a set that started after it had been replaced or stopped (see [startAdvertising]). */
+    private fun stopStale(adv: BluetoothLeAdvertiser, callback: AdvertisingSetCallback) {
+        try {
+            adv.stopAdvertisingSet(callback)
+        } catch (e: SecurityException) {
+            // Without permission the stack stops advertising for the app anyway.
+        } catch (e: IllegalStateException) {
+            // Bluetooth is off; the set is gone with it.
+        } catch (e: IllegalArgumentException) {
+            // Already stopped.
         }
     }
 

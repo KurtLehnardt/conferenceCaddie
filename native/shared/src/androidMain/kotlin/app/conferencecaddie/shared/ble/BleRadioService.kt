@@ -65,6 +65,9 @@ class BleRadioService : Service() {
     private var interrogation: BleInterrogation? = null
     private var advertisedWindow = Long.MIN_VALUE
 
+    /** The payload the advertising sets carry now, or null while nothing is advertised. */
+    private var advertisedPayload: ByteArray? = null
+
     /** The session's end on SystemClock.elapsedRealtime(). */
     private var deadlineElapsed = Long.MAX_VALUE
     private var leaving = false
@@ -276,7 +279,17 @@ class BleRadioService : Service() {
     /** The window changed, or the key did: advertise the payload of now. */
     internal fun refresh() {
         val s = active ?: return
+        val r = radio ?: return
         if (leaving || pastDeadline(s)) return
+        // The runtime and this service's own timer both refresh at a window start. When the sets
+        // already carry the payload of now, restarting them again a moment later gains nothing and
+        // races the stack's pending starts, so only a new payload (a new window or a new key)
+        // restarts them.
+        val payload = payloadNow(s)
+        if (payload != null && payload.contentEquals(advertisedPayload) && advertisedWindow == BleProtocol.windowAtMillis(r.clock())) {
+            arm()
+            return
+        }
         if (advertise(s)) arm()
     }
 
@@ -301,8 +314,10 @@ class BleRadioService : Service() {
             // No key (it is being replaced, or it is gone): advertise nothing rather than a stale
             // payload, and keep listening. The runtime refreshes or stops the radio.
             hw.stopAdvertising()
+            advertisedPayload = null
             return true
         }
+        advertisedPayload = payload
         val status = hw.startAdvertising(UUID.fromString(s.config.serviceUuid), payload) {
             active?.takeIf { it === s }?.let { finish(it, BleStopReason.AdvertiseFailed) }
         }
@@ -446,6 +461,7 @@ class BleRadioService : Service() {
         }
         hardware = null
         advertisedWindow = Long.MIN_VALUE
+        advertisedPayload = null
         deadlineElapsed = Long.MAX_VALUE
     }
 
