@@ -586,15 +586,16 @@ is deleted and checked to be gone at the end. Without `-Pcaddie.liveBase` the te
 
 The people features reach the phone through the interfaces in
 `shared/src/commonMain/.../PlatformServices.kt` and `Platform.kt`, passed in once as
-`PeopleServices`. Each platform has a factory; nothing calls them yet, because the people screens
-arrive later in phase 3.
+`PeopleServices`. Each platform has a factory. On Android the process's one controller, with its
+services, comes from `CaddiePeople.controller(context)` in `androidApp`, which the background
+nudge job uses too; the people screens arrive later in phase 3.
 
 | | Android (`shared/src/androidMain`) | iOS (`shared/src/iosMain`) |
 |---|---|---|
 | Factory | `AndroidPeopleServices.create(context, R.drawable.ic_stat_caddie)` | `IosPeopleServices.create()`, on the main thread |
 | `SecureStore` | `AndroidSecureStore`: an AES-256-GCM key in the Android Keystore, values in the private file `caddie_secure_store` | `IosSecureStore`: Keychain items of the service `app.conferencecaddie.secure-store`, after first unlock, this device only, never in iCloud Keychain |
 | `LocationProvider` | `AndroidLocationProvider`: the platform's LocationManager (no Play services), while in use only | `IosLocationProvider`: Core Location, "when in use" only |
-| `Notifier` | `AndroidNotifier`: the "Nudges" channel | `IosNotifier`: UserNotifications |
+| `Notifier` | `AndroidNotifier`: the "Nudges" channel; while a visible profile has presence on at a live conference, a periodic `JobScheduler` job (`BackgroundNudgeJobService`, every 15 minutes, not persisted across a reboot) runs the nudge check in the background | `IosNotifier`: UserNotifications |
 | `PushRegistrar` | `NoPush` (no Firebase in the APK, see `DECISIONS.md`) | `IosPushRegistrar`: APNs, channel `apns` |
 | `SystemSettings` | the app's page in Settings | the app's page in the Settings app |
 
