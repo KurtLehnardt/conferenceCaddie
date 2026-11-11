@@ -323,6 +323,33 @@ class PeopleController(
         }
     }
 
+    /**
+     * Takes over, once, what an earlier app on this phone kept for [backend] ([LegacyPeople]): its
+     * device [credential] (`{profile_id}.{secret}`), so the profile it made on the server stays this
+     * phone's to change and delete, and its [profile], so nothing is typed again. A credential this
+     * app already holds is kept ([DeviceCredentials.adopt]), and so is a profile it already holds or
+     * an unfinished "Delete my profile". Returns true when the hand-over is settled (stored, kept, or
+     * refused as malformed) and false when the secure store or the records could not be used now, so
+     * the caller tries again at a later start. The backend's session, when it is open, sees the
+     * credential at once, so a visible write made after this never generates a second one.
+     */
+    suspend fun adoptLegacy(backend: BackendUrl.Valid, credential: String?, profile: Profile?): Boolean = write(false) {
+        contextLock.withLock {
+            val s = sessions[backend.base]
+            if (credential != null) (s?.credentials ?: DeviceCredentials(services.secureStore, backend)).adopt(credential)
+            if (profile != null) {
+                val store = s?.store ?: PeopleStore(keyValue, backend.base)
+                store.load()
+                if (store.profile == null && store.deleteAll == null) store.setProfile(profile.sanitized())
+            }
+            if (s != null && session === s) {
+                refreshDevice(s)
+                publish()
+            }
+            true
+        }
+    }
+
     /** "Try again" on an unfinished delete. True when nothing is left unfinished. */
     suspend fun finishPendingDeletes(): Boolean = write(false) {
         val s = session ?: return@write false
@@ -467,7 +494,9 @@ class PeopleController(
      * talks. Answers are kept for [COUNT_TTL_MS] (stretched by the API's pace), and so are failures,
      * so a talk whose count failed is not asked for again by every card; a talk that had a count
      * keeps showing it. After a 429, or a 503 that says when to come back, nothing is asked for
-     * until that time has passed. A caller that stops waiting does not stop the request that others
+     * until that time has passed. While one request is under way, the next batch keeps forming and
+     * goes out only when that one has answered, so a fling through a long list costs one request
+     * per round trip at most. A caller that stops waiting does not stop the request that others
      * are waiting for.
      */
     suspend fun circleCounts(talkIds: List<String>): Map<String, Int> = read(emptyMap()) {
@@ -842,7 +871,15 @@ class PeopleController(
     /** Opens the current backend's session when an earlier attempt could not read its records. */
     private suspend fun openSession() {
         if (!sessionMissing()) return
-        contextLock.withLock { context?.takeIf { sessionMissing() }?.let { applyContext(it) } }
+        // On the controller's own scope, like [write]: openSession can be called from a read that
+        // its caller cancels, and a cancel between `session = s` and the timers, watch and poll
+        // being installed would leave a session with none of them. The caller's cancellation only
+        // stops the waiting.
+        if (currentCoroutineContext()[Owner]?.controller === this) {
+            contextLock.withLock { context?.takeIf { sessionMissing() }?.let { applyContext(it) } }
+        } else {
+            scope.async { contextLock.withLock { context?.takeIf { sessionMissing() }?.let { applyContext(it) } } }.await()
+        }
     }
 
     private fun sessionMissing(): Boolean = context?.let { session == null && backendAllowed(it.backend) } == true
@@ -906,7 +943,7 @@ class PeopleController(
 
         override fun selectedSlug(): String? = context?.takeIf { it.backend == backend }?.conference?.slug
 
-        override fun listedConferences(): List<ConferenceInfo>? = context?.takeIf { it.backend == backend }?.listed?.takeIf { it.isNotEmpty() }
+        override fun listedConferences(): List<ConferenceInfo>? = context?.takeIf { it.backend == backend }?.takeIf { it.listKnown }?.listed
 
         override suspend fun presenceEndedOnServer(slug: String) = presenceRuntime.presenceEndedOnServer(slug)
 
@@ -1199,6 +1236,13 @@ class PeopleController(
         scope.launch {
             try {
                 delay(COUNT_BATCH_MS)
+                // One request at a time per backend: while another batch is under way, this one
+                // keeps forming and goes out when that one has answered, so a list that scrolls
+                // through many cards sends at most one request per round trip, not one per window.
+                while (true) {
+                    val underWay = countBatches.firstOrNull { it !== b && it.s === b.s && it.sent } ?: break
+                    underWay.done.await()
+                }
                 b.sent = true
                 fetchCounts(b)
             } finally {
@@ -1223,8 +1267,9 @@ class PeopleController(
                     b.s.countsNotBefore = max(b.s.countsNotBefore, now + wait)
                 }
             }
-            // Counts read from another backend's session are not this one's.
-            if (session !== b.s) continue
+            // Counts read from another backend's session are not this one's, and neither are the rest of
+            // the batch's chunks: the session changed, so the batch ends here.
+            if (session !== b.s) return
             for (id in chunk) {
                 val key = countKey(b.slug, id)
                 countCache[key] = when (res) {

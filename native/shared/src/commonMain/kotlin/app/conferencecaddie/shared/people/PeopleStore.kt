@@ -151,14 +151,15 @@ internal class PeopleStore(private val kv: PeopleKeyValue, val backend: String) 
      * Removes the profile and every visibility, presence, push, block, watch, nudge and
      * unfinished-delete record, the "Delete my profile" one included. "People I met" is the user's
      * own notes and stays, like the Interested list. Only for after the server confirmed every
-     * delete.
+     * delete. The "Delete my profile" mark goes last: a wipe that fails half way leaves the mark,
+     * so the delete is tried again instead of the profile coming back without it.
      */
     suspend fun clearAllPeopleData() {
-        setProfile(null)
-        setDeleteAll(null)
         for (slug in records.keys.toList()) {
             update(slug) { ConferenceRecord(met = it.met) }
         }
+        setProfile(null)
+        setDeleteAll(null)
     }
 
     // ---------------------------------------------------------------------------------------------

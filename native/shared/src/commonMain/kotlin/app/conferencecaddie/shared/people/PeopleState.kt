@@ -38,6 +38,12 @@ data class PeopleContext(
      * device's records were lost, and the Android background check reads the selected one's dates.
      */
     val listed: List<ConferenceInfo> = emptyList(),
+    /**
+     * True when [listed] is the backend's list as read, even when that list is empty, and false
+     * while it is not known (not loaded yet, or it failed). A backend that lists no conference is a
+     * known answer: "Delete my profile" then has no other conference to reach.
+     */
+    val listKnown: Boolean = false,
 ) {
     companion object {
         /**
@@ -66,6 +72,7 @@ data class PeopleContext(
                 if (conference != null) state.interested else emptyList(),
                 storageInMemory = state.storageInMemory,
                 listed = all.map { ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate) },
+                listKnown = state.conferences is ConferencesState.Ready,
             )
         }
     }

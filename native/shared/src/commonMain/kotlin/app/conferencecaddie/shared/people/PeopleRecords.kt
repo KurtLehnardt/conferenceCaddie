@@ -147,6 +147,7 @@ data class Watch(
 enum class DeleteFailure {
     @SerialName("partial") Partial,
     @SerialName("offline") Offline,
+    @SerialName("store") Store,
     @SerialName("rate") Rate,
     @SerialName("forbidden") Forbidden,
     @SerialName("bad") Bad,

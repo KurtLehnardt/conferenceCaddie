@@ -14,6 +14,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -312,7 +313,7 @@ class PeopleControllerTest {
     // ---------------------------------------------------------------------------------------------
     // Circle counts
 
-    private fun countsServer(h: PeopleHarness, answer: (SentRequest) -> app.conferencecaddie.shared.net.HttpResponse = { r -> counted(r) }) {
+    private fun countsServer(h: PeopleHarness, answer: suspend (SentRequest) -> app.conferencecaddie.shared.net.HttpResponse = { r -> counted(r) }) {
         h.server.other = { r -> if (r.path == "/api/circles/counts") answer(r) else FakeApiHttp.json(404, """{"error":"Not found"}""") }
     }
 
@@ -341,6 +342,32 @@ class PeopleControllerTest {
         val counts = h.controller.circleCounts(many)
         assertEquals(listOf(100, 50), countRequests(h).drop(1).map { idsOf(it).size })
         assertEquals(many.associateWith { countOf(it) }, counts)
+    }
+
+    @Test
+    fun whileOneCountsRequestIsUnderWayTheNextBatchWaitsForIt() = runTest {
+        val h = PeopleHarness(this)
+        // The server takes 400 ms to answer: longer than many batch windows.
+        countsServer(h) { r ->
+            delay(400)
+            counted(r)
+        }
+        h.start()
+        // A list that is flung: a card asks every 60 ms for its own talk, over about a second.
+        val ids = (3001..3016).map { talk(it) }
+        val results = ids.map { id ->
+            val d = async { h.controller.circleCounts(listOf(id)) }
+            advanceTimeBy(PeopleController.COUNT_BATCH_MS)
+            d
+        }.awaitAll()
+        results.forEachIndexed { i, m -> assertEquals(mapOf(ids[i] to countOf(ids[i])), m, "each card gets its own talk") }
+        // The first card's batch goes out at 60 ms and answers at 460; every card asked for while it
+        // was under way shares the next one, which goes out at 460 and answers at 860, and so on:
+        // four requests for sixteen cards over 900 ms, one per round trip, never one per window.
+        val sent = countRequests(h)
+        assertEquals(4, sent.size, "one request per round trip")
+        assertEquals(ids, sent.flatMap { idsOf(it) })
+        assertEquals(listOf(1, 7, 7, 1), sent.map { idsOf(it).size })
     }
 
     @Test

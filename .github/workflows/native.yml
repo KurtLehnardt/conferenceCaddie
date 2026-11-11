@@ -110,7 +110,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-android-test-reports
-          path: native/shared/build/reports/tests/
+          path: |
+            native/shared/build/reports/tests/
+            native/shared/build/test-results/**/*.xml
           retention-days: 7
 
       - name: Name the debug APK after the commit
@@ -426,6 +428,18 @@ jobs:
       # The Compose UI tests of composeApp/src/commonTest, on the iOS simulator.
       - name: UI tests on the iOS simulator
         run: ./gradlew :composeApp:iosSimulatorArm64Test
+
+      - name: Keep the test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-ios-test-reports
+          path: |
+            native/shared/build/test-results/
+            native/shared/build/reports/tests/
+            native/composeApp/build/test-results/
+            native/composeApp/build/reports/tests/
+          retention-days: 7
 
       # The licences shown in Settings must list every library both apps ship. The check needs the
       # iOS dependency graph, so it runs here on macOS; it fails on a new dependency until its
