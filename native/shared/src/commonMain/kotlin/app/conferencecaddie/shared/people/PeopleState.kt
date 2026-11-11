@@ -25,9 +25,11 @@ data class PeopleContext(
     /** The talks marked Interested at the selected conference, oldest first. */
     val interested: List<String> = emptyList(),
     /**
-     * True when this launch keeps the app's data, the people records included, in memory only,
-     * because the stored database could not be opened ([CoreState.storageInMemory]). The device
-     * credential is in the secure store and is not affected.
+     * True when this launch keeps the app's data in memory only, because the stored database could
+     * not be opened ([CoreState.storageInMemory]). The people records have a file of their own
+     * ([PeopleDatabase]), but a launch whose main database failed is treated as one whose records
+     * may not last either, so the controller creates nothing on the server that this phone could
+     * lose track of. The device credential is in the secure store and is not affected.
      */
     val storageInMemory: Boolean = false,
     /**

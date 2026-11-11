@@ -554,7 +554,7 @@ reference for them.
 | `PeopleError.kt` | The contract's client rule for errors: a `Kind` per stable code, the status class otherwise, and the web's wording for each (`friendly()`, `explainBadRequest()`). |
 | `PeopleModels.kt` | A kotlinx.serialization type per `$defs` entry of `contracts/schema/people-api.v1.schema.json`. A request sends exactly the keys it is given (`Opt`: absent, `null` or a value); answers are read leniently. |
 | `DeviceCredential.kt` | `profile_id` (16 random bytes) and `secret` (32), base64url, generated once per backend base and kept in the `SecureStore` under `SecureStore.scopedKey(backend, "people.device.v1")`. Never printed. |
-| `PeopleRecords.kt`, `PeopleStore.kt` | The device-side records of `web/src/people/storage.ts` (profile, visibility, presence, push, blocks, people met, the watch list, nudge records, unfinished deletes) as JSON in the main database's `settings` table (never the cache database, which "Clear saved schedules" empties and a broken file replaces), under `people:v1:{backend base}#...`. No table or migration of their own. |
+| `PeopleRecords.kt`, `PeopleStore.kt` | The device-side records of `web/src/people/storage.ts` (profile, visibility, presence, push, blocks, people met, the watch list, nudge records, unfinished deletes) as JSON in `PeopleDatabase`, a key-value file of their own that no backup carries (iOS `caddie/people/people.db`, excluded from backup; Android `no_backup/people/people.db`), under `people:v1:{backend base}#...`, so they last exactly as long as the device credential. A corrupt file is replaced; any other failure to open it keeps the launch's records in memory (`PeopleKeyValue.inMemory`). |
 | `ProfileSync.kt` | `sync.ts`: profile writes one at a time under one write lock, the delete that is marked before it is sent and retried from 30 seconds doubling to 30 minutes, no write while a delete covers the conference, "Delete my profile", the degraded re-send after 70 s, retired topics. |
 | `PresenceRuntime.kt` | `presence.ts`: zones, hour and day modes, expiry, five minutes in the background, "Still in {zone}?", and the position (precise access and `gps_bands` only, at most every 30 s stretched by the pace, accuracy in whole metres). |
 | `ConnectRuntime.kt` | `connect.ts`, `nudges.ts` and `watch.ts`: the inbox poll (45 s, stretched by the pace, held back by Retry-After), asks, the blocks cache, nudges once per person per day with a local notification when the app is not in the foreground, and the watch list. |
@@ -617,10 +617,13 @@ arrive later in phase 3.
 - **Tests.** `androidApp/src/androidTest` checks the Keystore store (round trip, overwrite, remove,
   two backends kept apart, nothing readable in the file, a tampered or moved value, a lost key),
   the notification channel and the tap routing through `MainActivity`, and positions from a test
-  location provider. The Keychain tests in `shared/src/iosTest` cannot run under Gradle, whose
-  standalone simulator process has no Keychain (`errSecNotAvailable`, -25291); they print SKIPPED
-  there. Debug builds run the same checks in the app instead, with a simulator build that carries
-  the app's entitlements (an unsigned build gets `errSecMissingEntitlement`, -34018):
+  location provider. The Keychain tests in `shared/src/iosTest` run under Gradle: the simulator
+  test executable carries the entitlements of `src/iosTest/simulator-tests.entitlements` in its
+  `__TEXT,__entitlements` section, as an Xcode simulator build does, and the simulator test tasks
+  boot their simulator first (`simctl bootstatus -b`) and run in it, because a standalone
+  simulator process has no Keychain (`errSecNotAvailable`, -25291). A missing Keychain fails them.
+  Debug builds also run the same checks in the app, with a simulator build that carries the app's
+  entitlements (an unsigned build gets `errSecMissingEntitlement`, -34018):
 
   ```sh
   xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -sdk iphonesimulator \
