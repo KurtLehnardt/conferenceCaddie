@@ -184,7 +184,13 @@ class PeopleApi(
     ): ApiResult<T> {
         val headers = LinkedHashMap<String, String>()
         if (auth) {
-            val credential = device()
+            // A secure store that cannot be read now is not a missing credential: the call fails like
+            // one that got no answer, so no caller takes it for "this device has no profile".
+            val credential = try {
+                device()
+            } catch (e: SecureStoreUnavailable) {
+                return ApiResult.Failed(PeopleError.secureStoreUnavailable())
+            }
             if (credential == null || credential.backendBase != backend.base) return ApiResult.Failed(PeopleError.noDevice())
             headers[DEVICE_HEADER] = credential.header()
         }
