@@ -77,7 +77,11 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
   const rel = (path) => relative(root, path);
   const files = (slug) => [rel(confPath(root, slug)), OPERATOR_FILE];
 
-  const removedError = (slug) => new UsageError(`${slug} is removed (data/conference-operator.json); run conferences unretire --event ${slug} first`);
+  // The refusal of a removed slug, exit 2; under --dry-run it is the preview of that refusal.
+  const removedError = (slug, mode) => new UsageError(`${mode === 'dry-run' ? 'would refuse: ' : ''}${slug} is removed (data/conference-operator.json); run conferences unretire --event ${slug} first`);
+  // A status the operator set is not a status to restore: after remove, unretire, hide and unhide
+  // the conference must come back by the talk-file rule, not as operator_removed.
+  const operatorSet = (statusReason) => typeof statusReason === 'string' && statusReason.startsWith('operator_');
 
   return {
     ...adapter,
@@ -85,12 +89,12 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
     // A removed conference stays removed until an explicit unretire: ingest.mjs would skip it and
     // the backend would hold it again, so add and refresh refuse it.
     async addConference(args) {
-      if (readOperatorFile(root).removed[args.slug]) throw removedError(args.slug);
+      if (readOperatorFile(root).removed[args.slug]) throw removedError(args.slug, args.mode);
       return adapter.addConference(args);
     },
 
     async refreshConference(args) {
-      if (readOperatorFile(root).removed[args.slug]) throw removedError(args.slug);
+      if (readOperatorFile(root).removed[args.slug]) throw removedError(args.slug, args.mode);
       return adapter.refreshConference(args);
     },
 
@@ -98,15 +102,17 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
       const local = readConference(root, slug);
       if (!local) throw new NotFoundError(`no ${rel(confPath(root, slug))}; run conferences refresh --event ${slug} first`);
       const operator = readOperatorFile(root);
-      if (operator.removed[slug]) throw removedError(slug);
+      if (operator.removed[slug]) throw removedError(slug, mode);
       const since = now().toISOString();
       const doc = { ...local, status: 'unavailable', status_reason: HIDDEN, raw_fetched_at: since };
       const backend = await adapter.hideConference({ event, slug, reason, mode, doc });
       const items = [...(backend.items ?? []), { file: rel(confPath(root, slug)), status: 'unavailable', status_reason: HIDDEN }, { file: OPERATOR_FILE, hidden: slug }];
       if (mode === 'dry-run') return { ...backend, items, summary: `${backend.summary}; would rewrite ${files(slug).join(' and ')}` };
       writeJson(confPath(root, slug), doc);
-      // The status before the hide, restored by unhide; a second hide keeps the first record.
-      const previous = operator.hidden[slug]?.previous ?? { status: local.status ?? null, status_reason: local.status_reason ?? null };
+      // The status before the hide, restored by unhide; a second hide keeps the first record. A
+      // status the operator set (operator_removed left by a remove, operator_hidden) is not one.
+      const previous = operator.hidden[slug]?.previous
+        ?? (operatorSet(local.status_reason) ? null : { status: local.status ?? null, status_reason: local.status_reason ?? null });
       operator.hidden[slug] = { reason: reason ?? 'other', since, previous };
       writeJson(join(root, OPERATOR_FILE), operator);
       return { ...backend, items, files: files(slug), summary: `${backend.summary}; ${COMMIT_NOTE(files(slug))}; the next pages.yml build drops ${slug} from the bundle index` };
@@ -122,7 +128,7 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
       // The status from before the hide when the operator file recorded one (a conference that
       // was partial_index stays partial_index); searchable needs the talk file to be present.
       const previous = operator.hidden[slug]?.previous;
-      const restored = previous && typeof previous.status === 'string' && (previous.status !== 'searchable' || hasTalks)
+      const restored = previous && typeof previous.status === 'string' && !operatorSet(previous.status_reason) && (previous.status !== 'searchable' || hasTalks)
         ? { status: previous.status, status_reason: previous.status_reason ?? null }
         : hasTalks ? { status: 'searchable', status_reason: null } : null;
       const doc = restored ? { ...base, ...restored, raw_fetched_at: since } : { ...base, raw_fetched_at: since };

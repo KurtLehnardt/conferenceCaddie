@@ -1,8 +1,9 @@
 // Command tree, argument parsing, help, exit codes and the run loop of the caddie-admin CLI.
 // main() returns the exit code and never calls process.exit, so tests can call it in-process.
 //
-// Exit codes: 0 success, 1 backend or request failure, 2 usage, 3 confirmation missing or refused,
-// 4 not found, 5 not supported on this tier.
+// Exit codes: 0 success, 1 backend or request failure, or finished with warnings (see stderr; audit
+// counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on
+// this tier.
 
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -398,7 +399,7 @@ const GLOBAL_HELP = [
   '  --confirm <target>  with --yes, the exact target; replaces typing it, and is required off a terminal',
   '  --dry-run           preview only, even with --yes',
   '  -h, --help          this help',
-  'Exit codes: 0 ok, 1 backend failure, 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on this tier.',
+  'Exit codes: 0 ok, 1 backend failure, or finished with warnings (see stderr; audit counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on this tier.',
 ];
 
 function rootHelp() {
@@ -582,7 +583,7 @@ async function run(argv, ctx) {
     const adapter = d.createAdapter(backend, { credential, env, spawn: d.spawn, fetch: d.fetch, now: d.now });
     const result = (await adapter[command.method]({ ...args, mode })) ?? {};
     const warnings = Array.isArray(result.warnings) ? result.warnings : [];
-    writeAudit({ mode, result: 'ok', counts: warnings.length ? { ...(result.counts ?? {}), warnings: warnings.length } : result.counts });
+    writeAudit({ mode, result: warnings.length ? 'warned' : 'ok', counts: warnings.length ? { ...(result.counts ?? {}), warnings: warnings.length } : result.counts });
     const text = values.json
       ? renderJson({ command: commandName, backend: backend.name, tier: backend.tier, mode, result })
       : renderHuman({ command: commandName, mode, result });

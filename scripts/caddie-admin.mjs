@@ -9,8 +9,9 @@
 //   Destructive commands only preview until --yes is given; with --yes the operator passes
 //   --confirm <target> (required when there is no terminal) or types the exact target at a prompt.
 //
-// Exit codes: 0 success, 1 backend or request failure, 2 usage, 3 confirmation missing or refused,
-// 4 not found, 5 not supported on this tier.
+// Exit codes: 0 success, 1 backend or request failure, or finished with warnings (see stderr; audit
+// counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on
+// this tier.
 //
 // Config: <dir>/config.json names the backends and their tier; it holds no secrets. <dir> is
 // CADDIE_ADMIN_HOME, else $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie.

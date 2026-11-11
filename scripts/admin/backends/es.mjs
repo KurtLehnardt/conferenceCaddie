@@ -182,12 +182,17 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
   // ELASTISEARCH_API_KEY and no other *API_KEY variable reaches the child, because the scripts
   // prefer ES_API_KEY (scripts/lib/es.mjs) or ES_PEOPLE_API_KEY (purge-expired-people.mjs,
   // moderation-rules.mjs) when they are set and would otherwise use a different key than the one
-  // the operator chose. Index names, NODE_* settings and the basics pass through; CADDIE_DATA_DIR
-  // points ingest.mjs at this root's data directory.
-  const CHILD_ENV_RE = /^(PATH|HOME|TMPDIR|TMP|TEMP|LANG|LC_[A-Z_]+|TZ|SHELL|USER|NODE_[A-Z_]+|ES_INDEX|ES_[A-Z_]+_INDEX|MODERATION_WORDS_FILE|CADDIE_DATA_DIR)$/;
+  // the operator chose. Index names, the listed NODE_* settings, the proxy and certificate
+  // settings and the basics (Windows ones included) pass through; nothing whose name looks like a
+  // token, secret, password or key does; CADDIE_DATA_DIR points ingest.mjs at this root's data
+  // directory.
+  const CHILD_ENV_RE = /^(PATH|HOME|TMPDIR|TMP|TEMP|LANG|LC_[A-Z_]+|TZ|SHELL|USER|SYSTEMROOT|PATHEXT|APPDATA|USERPROFILE|COMSPEC|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_ENV|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|NODE_DEBUG|NODE_PATH|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy|SSL_CERT_FILE|SSL_CERT_DIR|ES_INDEX|ES_[A-Z_]+_INDEX|MODERATION_WORDS_FILE|CADDIE_DATA_DIR)$/;
+  const CHILD_ENV_DENY_RE = /(TOKEN|SECRET|PASSWORD|API_KEY)/i;
   function childEnv() {
     const out = {};
-    for (const [key, value] of Object.entries(env)) if (CHILD_ENV_RE.test(key) && typeof value === 'string') out[key] = value;
+    for (const [key, value] of Object.entries(env)) {
+      if (CHILD_ENV_RE.test(key) && !CHILD_ENV_DENY_RE.test(key) && typeof value === 'string') out[key] = value;
+    }
     if (!out.CADDIE_DATA_DIR && root !== REPO_ROOT) out.CADDIE_DATA_DIR = join(root, 'data');
     return { ...out, ES_URL: esUrl, ELASTISEARCH_API_KEY: credential };
   }
@@ -402,6 +407,7 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
     async rules({ action, line, options, mode }) {
       const indexArgs = options.index ? ['--index', options.index] : [];
       if (action === 'test') {
+        if (mode === 'dry-run') return { summary: `would run scripts/moderation-rules.mjs --test "<line>"${options.index ? ` --index ${options.index}` : ''} with ES_URL and ELASTISEARCH_API_KEY in its environment` };
         const { status, stdout } = runScript('moderation-rules.mjs', ['--test', line, ...indexArgs], { okStatuses: [0, 3] });
         return { items: stdout.map((l) => ({ line: l })), counts: { matched: status === 3 ? Math.max(stdout.length - 1, 0) : 0 }, summary: status === 3 ? 'the line matched the word list' : 'no rule matched' };
       }

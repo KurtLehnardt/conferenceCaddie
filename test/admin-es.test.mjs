@@ -360,7 +360,7 @@ describe('ATT-5, ATT-10, MOD-3 attendees delete', () => {
     assert.equal(cluster.source(INDEX.people, personId(device.profileId)), null, 'the profile is gone');
     for (const meet of ids.meets) assert.equal(cluster.source(INDEX.meets, meet), null);
     const entry = r.audit.at(-1);
-    assert.equal(entry.result, 'ok');
+    assert.equal(entry.result, 'warned');
     assert.equal(entry.counts.warnings, 1);
     const json = await invoke(confirmed(['attendees', 'delete', '--event', EVENT, ref], ref));
     assert.equal(json.code, 4, 'gone now');
@@ -590,7 +590,12 @@ describe('MOD-5, MOD-6 child processes', () => {
   });
 
   test('the child environment carries the checked key only: no other *API_KEY or token variable reaches it', async () => {
-    const env = { ES_API_KEY: 'other-read-key', ES_PEOPLE_API_KEY: 'other-people-key', ADMIN_TOKEN: 'a-token', ES_PEOPLE_INDEX: 'caddie-people-x', NODE_OPTIONS: '--max-old-space-size=512', PATH: '/usr/bin', HOME: '/home/op', SECRET_THING: 'nope' };
+    const env = {
+      ES_API_KEY: 'other-read-key', ES_PEOPLE_API_KEY: 'other-people-key', ADMIN_TOKEN: 'a-token', NODE_AUTH_TOKEN: 'npm-token', ES_PEOPLE_INDEX: 'caddie-people-x',
+      NODE_OPTIONS: '--max-old-space-size=512', NODE_EXTRA_CA_CERTS: '/etc/ca.pem', PATH: '/usr/bin', HOME: '/home/op', SECRET_THING: 'nope',
+      HTTPS_PROXY: 'http://proxy.example:3128', HTTP_PROXY: 'http://proxy.example:3128', NO_PROXY: 'localhost', SSL_CERT_FILE: '/etc/ssl/corp.pem', SSL_CERT_DIR: '/etc/ssl/certs',
+      SYSTEMROOT: 'C:\\Windows', PATHEXT: '.EXE', APPDATA: 'C:\\Users\\op\\AppData', USERPROFILE: 'C:\\Users\\op', COMSPEC: 'cmd.exe',
+    };
     const r = await invoke(confirmed(['moderation', 'purge-expired'], 'purge-expired'), { env });
     assert.equal(r.code, 0, r.stderr);
     const child = r.spawned[0].options.env;
@@ -599,8 +604,12 @@ describe('MOD-5, MOD-6 child processes', () => {
     assert.ok(!JSON.stringify(child).includes('other-read-key') && !JSON.stringify(child).includes('other-people-key') && !JSON.stringify(child).includes('a-token'));
     assert.equal(child.ES_PEOPLE_INDEX, 'caddie-people-x');
     assert.equal(child.NODE_OPTIONS, '--max-old-space-size=512');
+    assert.equal(child.NODE_EXTRA_CA_CERTS, '/etc/ca.pem');
+    assert.equal(child.NODE_AUTH_TOKEN, undefined, 'NODE_AUTH_TOKEN is dropped');
     assert.equal(child.PATH, '/usr/bin');
     assert.equal(child.HOME, '/home/op');
+    for (const key of ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'SYSTEMROOT', 'PATHEXT', 'APPDATA', 'USERPROFILE', 'COMSPEC']) assert.equal(child[key], env[key], key);
+    assert.equal(child.SECRET_THING, undefined);
     assert.equal(child.CADDIE_DATA_DIR, join(root, 'data'));
     assert.equal(child.CADDIE_ADMIN_HOME, undefined);
     assert.equal(child.CADDIE_ADMIN_ROOT, undefined);
@@ -617,6 +626,15 @@ describe('MOD-5, MOD-6 child processes', () => {
     const none = await invoke(['moderation', 'rules', 'test', LINE, '--index', 'caddie-people-rules-v2'], { spawnResult: { status: 0, stdout: 'No rule matched.\n' } });
     assert.deepEqual(none.spawned[0].args.slice(-3), [LINE, '--index', 'caddie-people-rules-v2']);
     assert.match(none.stdout, /no rule matched/);
+  });
+
+  test('rules test with --dry-run prints the command and starts nothing', async () => {
+    const r = await invoke(['moderation', 'rules', 'test', LINE, '--index', 'caddie-people-rules-v2', '--dry-run']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.spawned.length, 0);
+    assert.match(r.stdout, /would run scripts\/moderation-rules\.mjs --test "<line>" --index caddie-people-rules-v2/);
+    assert.ok(!r.stdout.includes(LINE) && !JSON.stringify(r.audit).includes(LINE));
+    assert.equal(r.audit.at(-1).mode, 'dry-run');
   });
 
   test('rules reload previews, then runs --reload-rules with the key in the environment', async () => {
@@ -687,6 +705,12 @@ describe('CONF-1, CONF-2 conferences list and add', () => {
       assert.equal(r.requests.length, 0);
     }
     assert.equal(readJson(join(root, 'data', OTHER, 'conference.json')).status, 'searchable');
+    // Under --dry-run the refusal is previewed, still exits 2, and is audited as a dry run.
+    const dry = await invoke(['conferences', 'refresh', '--event', OTHER, '--dry-run']);
+    assert.equal(dry.code, 2);
+    assert.match(dry.stderr, /would refuse: otherconf-2099 is removed .*run conferences unretire --event otherconf-2099 first/);
+    assert.equal(dry.audit.at(-1).mode, 'dry-run');
+    assert.equal(dry.spawned.length + dry.requests.length, 0);
   });
 });
 
@@ -755,6 +779,29 @@ describe('CONF-4, CONF-11 conferences hide and unhide', () => {
     assert.equal(cluster.source(INDEX.conferences, EVENT).status_reason, 'partial_index');
     assert.match(unhide.stdout, /restored unavailable \(partial_index\)/);
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
+  });
+
+  test('remove, unretire, hide, unhide brings a conference back searchable, never operator_removed', async () => {
+    seedConferenceFiles(EVENT);
+    assert.equal((await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT))).code, 0);
+    assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status_reason, 'operator_removed');
+    assert.equal((await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT))).code, 0);
+    // The backend holds the conference again (as conferences refresh would put it back).
+    cluster.put(INDEX.conferences, EVENT, { slug: EVENT, status: 'searchable', end_date: '2099-12-31' });
+    const hide = await invoke(confirmed(['conferences', 'hide', '--event', EVENT], EVENT));
+    assert.equal(hide.code, 0, hide.stderr);
+    assert.equal(operatorFile().hidden[EVENT].previous, null, 'an operator-set status is not recorded as the status to restore');
+    const unhide = await invoke(confirmed(['conferences', 'unhide', '--event', EVENT], EVENT));
+    assert.equal(unhide.code, 0, unhide.stderr);
+    const local = readJson(join(root, 'data', EVENT, 'conference.json'));
+    assert.equal(local.status, 'searchable');
+    assert.equal(local.status_reason, null);
+    assert.equal(cluster.source(INDEX.conferences, EVENT).status, 'searchable');
+    // An older hidden entry whose recorded previous is operator_hidden: unhide uses the talk-file rule too.
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: { [EVENT]: { reason: 'spam', since: '2026-11-01T00:00:00.000Z', previous: { status: 'unavailable', status_reason: 'operator_hidden' } } }, removed: {} }));
+    const legacy = await invoke(confirmed(['conferences', 'unhide', '--event', EVENT], EVENT));
+    assert.equal(legacy.code, 0, legacy.stderr);
+    assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'searchable');
   });
 
   test('unhide without the talk file keeps the status until a refresh; hide without a local file exits 4', async () => {

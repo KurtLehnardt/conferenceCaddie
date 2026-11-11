@@ -537,6 +537,18 @@ describe('SEC-12 audit log', () => {
     }
   });
 
+  test('a result with warnings is audited as warned with the count, printed on stderr, and exits 1', async () => {
+    const r = await invoke(['stats', 'usage'], { behavior: () => ({ summary: 'done', counts: { rows: 2 }, warnings: ['second pass failed: status 503'] }) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /^caddie-admin: warning: second pass failed: status 503$/m);
+    assert.match(r.stdout, /^done$/m);
+    const entry = JSON.parse(auditLines().at(-1));
+    assert.equal(entry.result, 'warned');
+    assert.deepEqual(entry.counts, { rows: 2, warnings: 1 });
+    const help = await invoke(['-h']);
+    assert.match(help.stdout, /1 backend failure, or finished with warnings \(see stderr; audit counts\.warnings\)/);
+  });
+
   test('appendAudit drops unknown keys and free text', async () => {
     const { appendAudit } = await import('../scripts/admin/audit.mjs');
     appendAudit(home, {
