@@ -5,6 +5,7 @@ import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.KtorHttp
 import app.conferencecaddie.shared.people.PeopleController
+import app.conferencecaddie.shared.people.PeopleDatabase
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +25,7 @@ object IosCore {
     private var instance: CaddieCore? = null
     private var peopleInstance: PeopleController? = null
     private lateinit var database: CaddieDatabase
+    private lateinit var peoplePath: String
     private lateinit var http: KtorHttp
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -36,9 +38,15 @@ object IosCore {
      * - `cache/cache.db`, the cache database (the conference lists, the installed bundles and the
      *   search index), and `bundles/`, the bundle files. Both can be downloaded again, so their
      *   directories are excluded from backups; after a restore the app downloads them again.
+     * - `people/people.db`, the people records ([PeopleDatabase], opened by [people]). Its directory
+     *   is excluded from backups because the records belong with the device credential, a Keychain
+     *   item that never leaves this phone: restored without it, they would make the next "make me
+     *   visible" create a second profile. They also name other attendees. After a restore the
+     *   people features start empty, as on a new phone.
      *
      * The databases open on their own I/O thread at the first statement, and one that cannot be
-     * opened is replaced rather than crashing every start ([CaddieDatabase.openLazily]).
+     * opened is replaced rather than crashing every start ([CaddieDatabase.openLazily],
+     * [PeopleDatabase.openLazily]).
      */
     @OptIn(ExperimentalForeignApi::class)
     fun get(allowLocalHttp: Boolean): CaddieCore = instance ?: run {
@@ -48,13 +56,15 @@ object IosCore {
         val dir = support.URLByAppendingPathComponent("caddie", isDirectory = true)!!
         val bundles = dir.URLByAppendingPathComponent("bundles", isDirectory = true)!!
         val cache = dir.URLByAppendingPathComponent("cache", isDirectory = true)!!
-        for (excluded in listOf(bundles, cache)) {
+        val people = dir.URLByAppendingPathComponent("people", isDirectory = true)!!
+        for (excluded in listOf(bundles, cache, people)) {
             fm.createDirectoryAtURL(excluded, withIntermediateDirectories = true, attributes = null, error = null)
             excluded.setResourceValue(NSNumber(bool = true), forKey = NSURLIsExcludedFromBackupKey, error = null)
         }
         val dbPath = dir.URLByAppendingPathComponent("caddie.db")!!.path!!
         val cachePath = cache.URLByAppendingPathComponent("cache.db")!!.path!!
         database = CaddieDatabase.openLazily(dbPath, cachePath)
+        peoplePath = people.URLByAppendingPathComponent("people.db")!!.path!!
         http = KtorHttp()
         CaddieCore(
             database = database,
@@ -77,12 +87,12 @@ object IosCore {
 
     /**
      * The app's people features, created on first use on the main thread, next to the core (the same
-     * database and HTTP client) and bound to its state. [services] are the platform's; they are used
-     * by the first call only, which every later call returns.
+     * HTTP client; the records in `people/people.db`, see [get]) and bound to its state. [services]
+     * are the platform's; they are used by the first call only, which every later call returns.
      */
     fun people(services: PeopleServices, allowLocalHttp: Boolean): PeopleController = peopleInstance ?: run {
         val core = get(allowLocalHttp)
-        PeopleController.create(database, http, services, scope, allowLocalHttp).also {
+        PeopleController.create(PeopleDatabase.openLazily(peoplePath), http, services, scope, allowLocalHttp).also {
             it.bind(core.state)
             peopleInstance = it
         }

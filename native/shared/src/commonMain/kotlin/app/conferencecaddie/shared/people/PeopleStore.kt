@@ -1,13 +1,13 @@
 package app.conferencecaddie.shared.people
 
-import app.conferencecaddie.shared.db.CaddieDatabase
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 
 /**
- * Where the people records live: a small key-value store. [CaddieDatabase]'s settings table is the
- * one the app uses ([forDatabase]); tests use a map.
+ * Where the people records live: a small key-value store. The app's is [PeopleDatabase], a file of
+ * its own that no backup carries (never [app.conferencecaddie.shared.db.CaddieDatabase], whose main
+ * file is in iOS backups); tests use a map.
  */
 interface PeopleKeyValue {
     suspend fun get(key: String): String?
@@ -15,14 +15,11 @@ interface PeopleKeyValue {
     /** Stores [value] under [key], or removes the key when [value] is null. */
     suspend fun set(key: String, value: String?)
 
-    companion object {
-        /** The settings table of [database]; no table or migration of its own. */
-        fun forDatabase(database: CaddieDatabase): PeopleKeyValue = object : PeopleKeyValue {
-            override suspend fun get(key: String): String? = database.setting(key)
-
-            override suspend fun set(key: String, value: String?) = database.setSetting(key, value)
-        }
-    }
+    /**
+     * True when this launch keeps the records in memory only, because the stored ones could not be
+     * opened. Known once the first [get] or [set] has returned, which loading the records does.
+     */
+    val inMemory: Boolean get() = false
 }
 
 /**

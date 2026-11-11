@@ -8,6 +8,8 @@ import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.SecureStore
 import java.io.File
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
+import javax.crypto.SecretKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -16,6 +18,8 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,6 +45,22 @@ class AndroidSecureStoreTest {
     private fun store() = AndroidSecureStore(context, fileName = file, keyAlias = alias)
 
     private fun prefsFile() = File(context.dataDir, "shared_prefs/$file.xml")
+
+    private fun entries(): Map<String, *> = context.getSharedPreferences(file, Context.MODE_PRIVATE).all.toMap()
+
+    /** The Keystore's key, but [existing] fails as a transient Keystore error does while [fail] is set. */
+    private class FailingKeys(private val real: AndroidSecureStore.Keys) : AndroidSecureStore.Keys {
+        @Volatile var fail = true
+        @Volatile var created = 0
+
+        override fun existing(): SecretKey? =
+            if (fail) throw UnrecoverableKeyException("Failed to obtain information about key") else real.existing()
+
+        override fun create(): SecretKey {
+            created++
+            return real.create()
+        }
+    }
 
     private fun clean() {
         context.deleteSharedPreferences(file)
@@ -131,12 +151,71 @@ class AndroidSecureStoreTest {
     }
 
     @Test
-    fun aLostKeystoreKeyReadsAsMissingAndANewValueWorks() = runBlocking {
+    fun aMalformedValueIsRemovedWithoutAskingTheKeystore() = runBlocking {
         store().put(secretKey, secret)
+        val prefs = context.getSharedPreferences(file, Context.MODE_PRIVATE)
+        val name = prefs.all.keys.single()
+        prefs.edit().putString(name, "not base64 at all!").commit()
+        // The bytes are unreadable under any key, so a failing Keystore does not matter here.
+        val broken = AndroidSecureStore(context, fileName = file, keys = FailingKeys(AndroidSecureStore.KeystoreKeys(alias)))
+        assertNull(broken.get(secretKey))
+        assertFalse(entries().containsKey(name))
+    }
+
+    @Test
+    fun aKeystoreKeyThatIsReallyGoneReadsAsMissingAndANewValueWorks() = runBlocking {
+        store().put(secretKey, secret)
+        val name = entries().keys.single()
+        // getKey returns null: the Keystore says there is no key, so the value is lost. Its entry
+        // stays until the next write replaces it.
         KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(alias)
         assertNull(store().get(secretKey))
+        assertTrue("the entry is kept", entries().containsKey(name))
         store().put(secretKey, "again")
         assertEquals("again", store().get(secretKey))
+    }
+
+    @Test
+    fun aKeystoreErrorOnReadIsThrownAndKeepsTheEntry() = runBlocking {
+        store().put(secretKey, secret)
+        val before = entries()
+        // A transient Keystore failure (SYSTEM_ERROR, a binder failure, a daemon restart) reaches
+        // getKey as UnrecoverableKeyException, like a broken key: it must not read as missing.
+        val failing = FailingKeys(AndroidSecureStore.KeystoreKeys(alias))
+        val broken = AndroidSecureStore(context, fileName = file, keys = failing)
+        assertThrows(UnrecoverableKeyException::class.java) { runBlocking { broken.get(secretKey) } }
+        assertEquals("the entry is kept", before, entries())
+        assertEquals(0, failing.created)
+        // Once the Keystore answers again, the same value reads back.
+        failing.fail = false
+        assertEquals(secret, broken.get(secretKey))
+        assertEquals(secret, store().get(secretKey))
+    }
+
+    @Test
+    fun aKeystoreErrorOnWriteIsThrownAndKeepsTheKey() = runBlocking {
+        store().put(secretKey, secret)
+        val before = entries()
+        val failing = FailingKeys(AndroidSecureStore.KeystoreKeys(alias))
+        val broken = AndroidSecureStore(context, fileName = file, keys = failing)
+        assertThrows(UnrecoverableKeyException::class.java) { runBlocking { broken.put(otherKey, "other") } }
+        assertThrows(UnrecoverableKeyException::class.java) { runBlocking { broken.put(secretKey, "replaced") } }
+        assertEquals("no new key replaced the old one", 0, failing.created)
+        assertEquals("nothing was written", before, entries())
+        assertEquals(secret, store().get(secretKey))
+    }
+
+    @Test
+    fun aValueWrittenUnderAnEarlierKeyIsRemoved() = runBlocking {
+        store().put(secretKey, secret)
+        val name = entries().keys.single()
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(alias)
+        // Another value's write creates a new key; the old entry's tag fails under it, and since the
+        // key was loaded, that can only mean the entry is unreadable for good.
+        store().put(otherKey, "other")
+        assertNull(store().get(secretKey))
+        assertFalse("the entry is removed", entries().containsKey(name))
+        assertEquals("other", store().get(otherKey))
     }
 
     @Test
