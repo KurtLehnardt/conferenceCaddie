@@ -120,7 +120,9 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     .map(([term, count]) => ({ term, count }));
   // A merge target that reaches MIN_TALKS only with its aliases stays a candidate (mergeTargets).
   candidates.push(...mergeTargets(perTalk.map((p) => p.terms), counts, fixups.merge, new Set(candidates.map((c) => c.term))));
-  if (candidates.length === 0) throw new Error('No term occurs in at least three talk titles.');
+  // With no candidate the steps below give an empty list and talks without topics, as the bundle
+  // builder and tier 3 do for a conference too small for any shared term.
+  if (candidates.length === 0) warnings.push('No term occurs in at least three talk titles; the conference has no topics.');
 
   // Alias terms are counted even when they occur in fewer than three talks.
   const wanted = new Set(candidates.map((c) => c.term));
@@ -276,24 +278,37 @@ export function assignFrozen(talks, frozen, { slug, stop = loadStoplist() }) {
   return { topics, assignments };
 }
 
+// The topic list stored on the Worker for a conference, or [] when the Worker does not know it.
+async function storedTopics(admin, slug) {
+  let stored;
+  try {
+    stored = (await admin('GET', `/admin/topics?event=${encodeURIComponent(slug)}`)).topics;
+  } catch (e) {
+    // A conference the Worker does not know yet has no topics to freeze.
+    if (e.status !== 404) throw e;
+    stored = [];
+  }
+  if (!Array.isArray(stored)) throw new Error('GET /admin/topics did not return a topics array.');
+  return stored;
+}
+
 // Chooses between the stored list and a fresh one. `admin` is an adminClient or null.
 // Returns { mode, topics, assignments, warnings, collapsed } where mode is 'frozen', 'built'
 // (the Worker holds no topics yet, or --rebuild-topics), or 'built-offline' (no Worker to ask).
-export async function resolveTopics(talks, { slug, admin = null, rebuild = false, stop = loadStoplist() }) {
+// A rebuild that finds no topics while the Worker holds some throws before anything is sent,
+// unless allowEmpty (--allow-empty) is given; PUT /admin/topics refuses that change too.
+export async function resolveTopics(talks, { slug, admin = null, rebuild = false, allowEmpty = false, stop = loadStoplist() }) {
   const topicTalks = talks.filter((t) => t.kind === 'talk');
+  let stored = null;
   if (admin && !rebuild) {
-    let stored;
-    try {
-      stored = (await admin('GET', `/admin/topics?event=${encodeURIComponent(slug)}`)).topics;
-    } catch (e) {
-      // A conference the Worker does not know yet has no topics to freeze.
-      if (e.status !== 404) throw e;
-      stored = [];
-    }
-    if (!Array.isArray(stored)) throw new Error('GET /admin/topics did not return a topics array.');
+    stored = await storedTopics(admin, slug);
     if (stored.length > 0) return { mode: 'frozen', warnings: [], collapsed: [], ...assignFrozen(topicTalks, stored, { slug, stop }) };
   }
   const built = buildTopics(topicTalks, { slug, stop });
+  if (admin && built.topics.length === 0 && !allowEmpty) {
+    const n = (stored ?? await storedTopics(admin, slug)).length;
+    if (n > 0) throw new Error(`${slug}: the rebuilt topic list is empty and would replace the ${n} stored topics; nothing was sent. Re-run with --allow-empty if the conference really has no topics.`);
+  }
   return { mode: admin ? 'built' : 'built-offline', ...built };
 }
 
@@ -317,7 +332,8 @@ async function main() {
     if (!token) throw new UsageError('--api needs ADMIN_TOKEN (or ADMIN_TOKEN_FILE).');
     admin = adminClient(normalizeApiBase(args.api), token);
   }
-  const result = await resolveTopics(talks, { slug: args.event, admin, rebuild: args['rebuild-topics'] });
+  // This command only reads, so an empty rebuilt list is reported rather than refused.
+  const result = await resolveTopics(talks, { slug: args.event, admin, rebuild: args['rebuild-topics'], allowEmpty: true });
   for (const w of result.warnings) console.warn(w);
   const tagged = [...result.assignments.values()].filter((ids) => ids.length).length;
   console.log(`Event ${args.event}: ${talks.filter((t) => t.kind === 'talk').length} talks, ${result.topics.length} topics (${result.mode}), ${tagged} talks tagged.`);

@@ -196,9 +196,16 @@ function getTopics(ctx) {
 }
 
 async function putTopics(ctx, req) {
-  const body = await readJson(req, new Set(['topics']));
+  const body = await readJson(req, new Set(['topics', 'allow_empty']));
   if (!Array.isArray(body.topics) || body.topics.length > 5000) throw bad('topics must be an array');
+  if (body.allow_empty !== undefined && typeof body.allow_empty !== 'boolean') throw bad('allow_empty must be a boolean');
   const rows = body.topics.filter((t) => isPlainObject(t) && typeof t.topic_id === 'string' && t.topic_id && (t.conference === undefined || t.conference === ctx.slug));
+  // Topic ids live in people's profiles and every talk is tagged with them, so an empty list never
+  // replaces a stored one by accident (a rebuild from a broken feed); allow_empty says it is meant.
+  if (rows.length === 0 && !body.allow_empty) {
+    const stored = Number(ctx.sql.exec('SELECT COUNT(*) AS n FROM topics').one().n);
+    if (stored > 0) throw new HttpError(409, { error: `this would replace the ${stored} stored topics with none; nothing was changed. Re-send with allow_empty if the conference really has no topics.` });
+  }
   ctx.store.tx(() => {
     ctx.sql.exec('DELETE FROM topics');
     for (const t of rows) {

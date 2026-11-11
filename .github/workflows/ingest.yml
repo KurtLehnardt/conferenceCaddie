@@ -42,6 +42,11 @@ on:
         type: boolean
         required: false
         default: false
+      allow_empty:
+        description: 'With rebuild_topics, let an empty topic list replace a stored one (the Worker refuses otherwise, since people store topic ids).'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -60,6 +65,7 @@ jobs:
       EVENTS: ${{ inputs.events }}
       REBUILD_TOPICS: ${{ inputs.rebuild_topics }}
       ALLOW_SHRINK: ${{ inputs.allow_shrink }}
+      ALLOW_EMPTY: ${{ inputs.allow_empty }}
       ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
     steps:
@@ -108,6 +114,7 @@ jobs:
           args=(--events-from "$RUNNER_TEMP/ingest-report.json")
           if [ "$REBUILD_TOPICS" = "true" ]; then args+=(--rebuild-topics); fi
           if [ "$ALLOW_SHRINK" = "true" ]; then args+=(--allow-shrink); fi
+          if [ "$ALLOW_EMPTY" = "true" ]; then args+=(--allow-empty); fi
           status=0
           node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --report "$RUNNER_TEMP/push-report.json" "${args[@]}" || status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
