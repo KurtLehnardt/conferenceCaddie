@@ -157,7 +157,7 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
     if (mode === 'dry-run') {
       return { counts: { reports: before }, summary: `would ${already ? 'keep' : 'set'} ${kind} ${ref} hidden with an operator report (${plural(before, 'report')} on file)` };
     }
-    await es('PUT', `${idx(INDEX.reports)}/_create/${encodeURIComponent(operatorReportId(kind, ref))}?refresh=wait_for`, {
+    const { status: created } = await es('PUT', `${idx(INDEX.reports)}/_create/${encodeURIComponent(operatorReportId(kind, ref))}?refresh=wait_for`, {
       event_id: event,
       target_kind: kind,
       target_id: ref,
@@ -167,7 +167,8 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
       created_at: now().toISOString(),
     }, { okStatuses: [409] });
     await patchPerson(person.id, flag);
-    return { counts: { reports: before + 1 }, summary: `${kind} ${ref} is hidden by an operator report${already ? ' (it was hidden already)' : ''}` };
+    // A 409 means the operator's report was on file already, so nothing was added.
+    return { counts: { reports: created === 409 ? before : before + 1 }, summary: `${kind} ${ref} is hidden by an operator report${already ? ' (it was hidden already)' : ''}` };
   }
 
   // ---- child processes ----

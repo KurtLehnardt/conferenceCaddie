@@ -13,10 +13,11 @@
 //   as operator_hidden again, a removed slug is skipped until `conferences unretire`.
 // - data/conference-overrides.json (time zones, scripts/lib/zones.mjs) is never read or written here.
 //
-// withConferenceFiles(adapter, { root, now }) wraps a tier adapter: the backend call is the
-// adapter's, the files are written here, only in mode 'run', and only after the backend call
-// succeeded, so a failed backend write leaves the repository untouched. CADDIE_ADMIN_ROOT points
-// the tests at a temporary repository root.
+// withConferenceFiles(adapter, { root, now }) wraps a tier adapter: the local files are read and
+// validated first (a malformed file stops the command before anything is touched), then the
+// backend call is the adapter's, then the files are written, only in mode 'run', and only after
+// the backend call succeeded, so a failed backend write leaves the repository untouched.
+// CADDIE_ADMIN_ROOT points the tests at a temporary repository root.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -81,13 +82,13 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
     async hideConference({ event, slug, reason, mode }) {
       const local = readConference(root, slug);
       if (!local) throw new NotFoundError(`no ${rel(confPath(root, slug))}; run conferences refresh --event ${slug} first`);
+      const operator = readOperatorFile(root);
       const since = now().toISOString();
       const doc = { ...local, status: 'unavailable', status_reason: HIDDEN, raw_fetched_at: since };
       const backend = await adapter.hideConference({ event, slug, reason, mode, doc });
       const items = [...(backend.items ?? []), { file: rel(confPath(root, slug)), status: 'unavailable', status_reason: HIDDEN }, { file: OPERATOR_FILE, hidden: slug }];
       if (mode === 'dry-run') return { ...backend, items, summary: `${backend.summary}; would rewrite ${files(slug).join(' and ')}` };
       writeJson(confPath(root, slug), doc);
-      const operator = readOperatorFile(root);
       operator.hidden[slug] = { reason: reason ?? 'other', since };
       writeJson(join(root, OPERATOR_FILE), operator);
       return { ...backend, items, files: files(slug), summary: `${backend.summary}; ${COMMIT_NOTE(files(slug))}; the next pages.yml build drops ${slug} from the bundle index` };
@@ -114,8 +115,9 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
     },
 
     async removeConference({ event, slug, reason, mode, options }) {
-      const backend = await adapter.removeConference({ event, slug, reason, mode, options });
       const local = readConference(root, slug);
+      const operator = readOperatorFile(root);
+      const backend = await adapter.removeConference({ event, slug, reason, mode, options });
       const since = now().toISOString();
       const items = [...(backend.items ?? [])];
       const touched = [OPERATOR_FILE];
@@ -135,7 +137,6 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
       const followUps = `${COMMIT_NOTE(touched)}; the next pages.yml build drops ${slug} from the bundle index and carries its bundle forward for one day; ${slug} stays removed across the weekly ingest until conferences unretire --event ${slug}`;
       if (mode === 'dry-run') return { ...backend, items, summary: `${backend.summary}; would retire ${rel(confPath(root, slug))}${purge.length ? ` and delete ${purge.join(', ')}` : ''}` };
       if (local) writeJson(confPath(root, slug), { ...local, status: 'unavailable', status_reason: REMOVED, raw_fetched_at: since });
-      const operator = readOperatorFile(root);
       delete operator.hidden[slug];
       operator.removed[slug] = { since };
       writeJson(join(root, OPERATOR_FILE), operator);

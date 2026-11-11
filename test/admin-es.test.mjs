@@ -379,8 +379,12 @@ describe('ATT-8, ATT-9 block and unblock', () => {
     assert.equal(r.audit.at(-1).reason, 'harassment');
     const create = r.requests.find((e) => e.path.includes('/_create/'));
     assert.ok(create, 'written with op_type create');
-    // Blocking again is harmless (409 on the create) and keeps it hidden.
-    assert.equal((await invoke(confirmed(['attendees', 'block', '--event', EVENT, p.ref, '--reason', 'spam'], p.ref))).code, 0);
+    assert.deepEqual(r.audit.at(-1).counts, { reports: 1 });
+    // Blocking again is harmless (409 on the create), keeps it hidden, and counts no second report.
+    const again = await invoke(confirmed(['attendees', 'block', '--event', EVENT, p.ref, '--reason', 'spam'], p.ref));
+    assert.equal(again.code, 0);
+    assert.deepEqual(again.audit.at(-1).counts, { reports: 1 });
+    assert.equal(cluster.ids(INDEX.reports).length, 1);
 
     // The owner rewrites the profile fully through the server against the same data: still hidden.
     useCluster(cluster);
@@ -754,6 +758,28 @@ describe('CONF-6, CONF-8, CONF-11, CONF-12 conferences remove and unretire', () 
     assert.ok(existsSync(join(root, 'data', 'conference-overrides.json')));
     assert.match(r.stdout, /deleted data\/raw\/testconf-2099, data\/testconf-2099\/talks\.ndjson/);
     assert.deepEqual(r.audit.at(-1).flags, ['purge-local']);
+  });
+
+  test('a malformed operator file or conference.json stops hide and remove before any backend call', async () => {
+    seedTwoConferences();
+    seedConferenceFiles(EVENT);
+    writeFileSync(join(root, 'data', 'conference-operator.json'), '{ not json');
+    for (const argv of [confirmed(['conferences', 'remove', '--event', EVENT], EVENT), confirmed(['conferences', 'hide', '--event', EVENT], EVENT)]) {
+      const r = await invoke(argv);
+      assert.equal(r.code, 1, argv.join(' '));
+      assert.match(r.stderr, /conference-operator\.json is not valid JSON/);
+      assert.equal(r.requests.length, 0, 'no backend call');
+    }
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: [], removed: {} }));
+    const shape = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(shape.code, 1);
+    assert.match(shape.stderr, /must be \{ "hidden": \{\}, "removed": \{\} \}/);
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: {} }));
+    writeFileSync(join(root, 'data', EVENT, 'conference.json'), '{ not json');
+    const conf = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(conf.code, 1);
+    assert.equal(conf.requests.length, 0);
+    assert.deepEqual(remaining(EVENT).talks, 3, 'nothing was deleted');
   });
 
   test('remove without a local file records the removal and says the file is missing', async () => {

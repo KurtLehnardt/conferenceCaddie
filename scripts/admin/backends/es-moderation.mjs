@@ -129,8 +129,9 @@ export function createModeration({ es, slug, indices, now = () => Date.now() }) 
     for (const h of meetHits.json.hits?.hits ?? []) {
       const s = h._source ?? {};
       const sm = summary.get(`meet:${s.meet_id}`);
-      row('meet', s.meet_id, await meetText(s), sm);
-      lines.push(`meet     ${await meetText(s)}  ${countText(sm)}${sm ? `: ${reasonsText(sm)}` : ''}`);
+      const text = await meetText(s);
+      row('meet', s.meet_id, text, sm);
+      lines.push(`meet     ${text}  ${countText(sm)}${sm ? `: ${reasonsText(sm)}` : ''}`);
     }
     const n = rows.length;
     lines.push(n ? `${n} hidden target${n === 1 ? '' : 's'} at ${slug}.` : `Nothing is hidden at ${slug}.`);
