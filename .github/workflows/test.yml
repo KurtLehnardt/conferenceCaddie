@@ -49,3 +49,6 @@ jobs:
         run: |
           npm --prefix web ci
           npm --prefix web test --if-present
+
+      - name: Worker tests
+        run: npm --prefix worker test

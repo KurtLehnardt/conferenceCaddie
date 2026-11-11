@@ -6,8 +6,9 @@
 // - At most 40 push requests per call by default, below the Free plan's 50 subrequests per
 //   request. A caller that sends several payloads in one request (the nudge rule) passes one
 //   shared budget object so the total stays at 40.
-// - A subscription the push service reports gone (404 or 410) is deleted at once, and so is one
-//   whose endpoint is not on a known push service host. Each push request times out after
+// - A subscription the push service reports gone (404 or 410) is deleted at once. A row whose
+//   endpoint is not on a known push service host is skipped, logged by host only, and kept, so a
+//   gap in the host list never destroys subscriptions. Each push request times out after
 //   PUSH_TIMEOUT_MS.
 // - A failure is one log line with a status or an error class, never an endpoint, a key, a
 //   payload or a person.
@@ -52,11 +53,22 @@ export async function sendPush(ctx, profileIds, payload, { budget = { left: MAX_
   }
 }
 
+// The host of an endpoint for a log line, or a fixed word when it does not parse. Never the path or query.
+function hostOf(endpoint) {
+  try {
+    return new URL(endpoint).hostname.slice(0, 100);
+  } catch {
+    return 'unparseable';
+  }
+}
+
 async function deliver(ctx, sub, data) {
   try {
-    // A row stored before the push service allowlist existed is dropped, never sent to.
+    // A row whose endpoint is not on the push service allowlist is never sent to, and it is kept:
+    // only the push service's own 404 or 410 deletes a row, so a gap in the list can never destroy
+    // subscriptions. The log line names the host only, never the path (the path is the secret).
     if (!isPushServiceEndpoint(sub.endpoint)) {
-      ctx.sql.exec('DELETE FROM push_subs WHERE id = ?', sub.id);
+      console.error(`push skipped: endpoint host not allowed: ${hostOf(sub.endpoint)}`);
       return false;
     }
     const { url, init } = await buildPushRequest(ctx.env, sub, data);

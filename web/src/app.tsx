@@ -50,6 +50,7 @@ import {
   ProfileScreen,
   onInterestedChanged,
   registerPeopleUi,
+  resyncPush,
   startDeleteRetries,
   useInboxCount,
   useInboxWatch,
@@ -180,6 +181,12 @@ export function App() {
   // A profile delete that did not finish last time is tried again now, and again whenever the app
   // comes back to the foreground or back online.
   useEffect(() => startDeleteRetries(), []);
+
+  // A browser whose nudge switch is On tells the server about its push subscription once per load,
+  // so a row the server lost is restored without the person doing anything.
+  useEffect(() => {
+    void resyncPush();
+  }, []);
 
   const loadList = useCallback(async () => {
     try {

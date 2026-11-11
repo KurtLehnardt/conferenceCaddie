@@ -207,13 +207,19 @@ export async function vapidJwt(env, audience, nowMs = Date.now()) {
   return token;
 }
 
-// The hosts of the browser push services this Worker delivers to: Chrome, Edge and other
-// Chromium browsers (FCM), Firefox (Mozilla autopush), legacy Edge (WNS) and Safari (Apple).
-// An entry that starts with a dot matches any subdomain of it. Anything else is refused, so a
-// subscription can never make the Worker send signed requests to a host the person chose.
+// The hosts of the browser push services this Worker delivers to. Chrome Stable, Opera, Samsung
+// Internet and other Chromium browsers deliver through FCM (fcm.googleapis.com; android.googleapis.com
+// is the older FCM and GCM host). Chromium's non-Stable channels (Chrome Beta, Dev and Canary) and
+// unbranded Chromium use jmt17.google.com instead (GetGcmEndpointForChannel in Chromium's
+// components/push_messaging/push_messaging_utils.cc). Chromium-based Edge delivers through WNS
+// (*.notify.windows.com), not FCM. Firefox uses Mozilla autopush and Safari uses Apple.
+// An entry that starts with a dot matches any subdomain of it; every other entry matches that exact
+// host only. Anything else is refused, so a subscription can never make the Worker send signed
+// requests to a host the person chose.
 export const PUSH_SERVICE_HOSTS = Object.freeze([
   'fcm.googleapis.com',
   'android.googleapis.com',
+  'jmt17.google.com',
   '.push.services.mozilla.com',
   '.notify.windows.com',
   'web.push.apple.com',

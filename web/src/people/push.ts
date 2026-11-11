@@ -162,6 +162,41 @@ export async function subscribePush(slug: string): Promise<SubscribeResult> {
   }
 }
 
+let resyncStarted = false;
+
+/**
+ * Quietly tells the server about this browser's push subscription again, once per page load, for
+ * every conference whose nudge switch is On. The PUT is idempotent (one row per endpoint), so this
+ * restores a row the server lost, for example one deleted before a push service host was
+ * allowed. It sends nothing unless notification permission is granted, the switch is On and the
+ * browser really holds a subscription; it never asks for permission, never subscribes and never
+ * shows anything. A failure is ignored: the next load tries again. The cost is one small request
+ * per conference with nudges on.
+ */
+export async function resyncPush(): Promise<void> {
+  if (resyncStarted || MOCK || !supportsPush()) return;
+  resyncStarted = true;
+  try {
+    if (Notification.permission !== 'granted') return;
+    const slugs = slugsWithPush();
+    if (!slugs.length) return;
+    const reg = await navigator.serviceWorker.getRegistration(appPath(''));
+    const json = (await reg?.pushManager.getSubscription())?.toJSON();
+    if (!json?.endpoint || !json.keys?.p256dh || !json.keys.auth) return;
+    const body = { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } };
+    for (const slug of slugs) {
+      try {
+        await putPushSubscription(slug, body);
+        if (getPush(slug).endpoint !== json.endpoint) setPush(slug, { endpoint: json.endpoint });
+      } catch {
+        // Offline, no visible profile here, or a delete is unfinished: leave the switch as it is.
+      }
+    }
+  } catch {
+    // The browser would not say; nothing to restore.
+  }
+}
+
 /** Removes the server's copy for this conference and, when no conference uses it, the browser's subscription. */
 export async function unsubscribePush(slug: string): Promise<void> {
   const state = getPush(slug);
