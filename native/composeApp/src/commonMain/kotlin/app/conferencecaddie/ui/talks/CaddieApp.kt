@@ -101,7 +101,9 @@ import kotlinx.coroutines.delay
  * [platform] is the system's file picker and share sheet. Links and files the platform hands over
  * ([IncomingHandoff]) are routed here: a `caddie://connect` link (or the QR code that holds one)
  * asks the shell's confirmation that names the server, a `caddie://e/...` link opens a conference's
- * tab, view and day as the web's routes do, and a schedule file opens Import my schedule.
+ * tab, view and day as the web's routes do, a people route (`#/inbox`, `#/meet/<id>`, a tapped
+ * notification's `caddie://inbox` and the like) opens the People tab with the route in the shell's
+ * request, and a schedule file opens Import my schedule.
  */
 @Composable
 fun CaddieApp(
@@ -338,17 +340,7 @@ fun CaddieApp(
             }
             else -> Unit
         }
-        shellRequest = ShellRequest(
-            id = ++requestIds.last,
-            tab = when (link.tab) {
-                AppLink.Tab.People -> Tab.People
-                AppLink.Tab.ForYou -> Tab.ForYou
-                AppLink.Tab.Search -> Tab.Search
-                AppLink.Tab.Interested -> Tab.Interested
-                AppLink.Tab.Settings, null -> null
-            },
-            settings = link.tab == AppLink.Tab.Settings,
-        )
+        shellRequest = shellRequestFor(link, ++requestIds.last)
     }
 
     val navigation = rememberShellNavigation(launch.tab ?: if (initialQuery != null) Tab.Search else null)
@@ -613,6 +605,23 @@ private const val THEME = "theme"
 private class RequestIds {
     var last = 0L
 }
+
+/**
+ * The shell's move for a conference [link] once its conference is selected: its tab, or Settings,
+ * and with the People tab the people screen it names, which the People screens open.
+ */
+internal fun shellRequestFor(link: AppLink.Open, id: Long): ShellRequest = ShellRequest(
+    id = id,
+    tab = when (link.tab) {
+        AppLink.Tab.People -> Tab.People
+        AppLink.Tab.ForYou -> Tab.ForYou
+        AppLink.Tab.Search -> Tab.Search
+        AppLink.Tab.Interested -> Tab.Interested
+        AppLink.Tab.Settings, null -> null
+    },
+    settings = link.tab == AppLink.Tab.Settings,
+    people = link.people.takeIf { link.tab == AppLink.Tab.People },
+)
 
 /** The List or Day choice of My schedule (the web's caddie.myschedule.view.v1). */
 private const val MY_SCHEDULE_VIEW = "myschedule.view.v1"

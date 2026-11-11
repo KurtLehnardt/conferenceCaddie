@@ -12,7 +12,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import app.conferencecaddie.shared.AndroidNotifier
 import app.conferencecaddie.shared.AndroidPermissions
 import app.conferencecaddie.shared.BackendUrl
-import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.ui.platform.IncomingHandoff
 import app.conferencecaddie.ui.platform.PickedFile
@@ -116,15 +115,17 @@ class MainActivity : ComponentActivity(), PlatformActions {
     }
 
     /**
-     * Hands a tapped notification's caddie:// link to the screens (see AndroidNotifier). This
-     * activity is exported, so only a link that comes with the app's own tap key counts; the link
-     * and the key are then removed from the intent the activity keeps.
+     * Hands a tapped notification's caddie:// link to the screens (see AndroidNotifier), the way
+     * every caddie:// link goes ([IncomingHandoff], then the app's link router). This activity is
+     * exported, so only a link that comes with the app's own tap key counts; the link and the key
+     * are then removed from the intent the activity keeps. It is apart from [handOff]: a tap is
+     * an extra, never a VIEW intent's data.
      */
     private fun deliverNotificationTap(intent: Intent?) {
         val link = AndroidNotifier.tappedDeepLink(this, intent) ?: return
         intent?.removeExtra(AndroidNotifier.EXTRA_DEEP_LINK)
         intent?.removeExtra(AndroidNotifier.EXTRA_TAP_KEY)
-        NotificationTaps.deliver(link)
+        IncomingHandoff.offerLink(link)
     }
 
     /** Hands a `caddie://` link, or a schedule file opened in or shared to the app, to the screens ([IncomingIntents]). */

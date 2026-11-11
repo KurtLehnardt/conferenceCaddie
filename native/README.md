@@ -450,7 +450,14 @@ Both apps register the `caddie` scheme (Android: an intent filter on `MainActivi
   that day of the full schedule, and `#/interested?view=day` My schedule's Day view. The slug must
   be a bundle slug the backend lists (otherwise the app says the conference is not available here
   and changes nothing); an unknown tab, a view that does not fit its tab and a day that is not a
-  date are dropped. The people routes (`here`, `inbox`, `meet`, `profile`) open the People tab.
+  date are dropped. The people routes open the People tab with an `AppLink.PeopleRoute`:
+  `#/people` the People home (`?around=1` with "Around now" on), `#/inbox` Requests,
+  `#/meet/<meet_id>` Meet up, `#/profile` the profile and `#/here/<zone>` a zone, percent-decoded
+  and at most 120 characters, that the screen matches against the conference's zones. A meet id
+  or zone that does not fit is dropped and the People tab opens without it.
+- `caddie://people?around=1`, `caddie://inbox` and `caddie://meet/<meet_id>`, the links of the
+  app's own notifications (see People platform services), open the same screens on the selected
+  conference. Only those exact shapes are taken on these hosts.
 - Anything else, and any link longer than 2,048 characters, is ignored.
 
 There are no https App Links or Universal Links (`DECISIONS.md`, phase 2c): they need files at the
@@ -664,10 +671,13 @@ build the people controller.
   the services ask the system directly. The screens show the web's explanation before asking.
 - **Notification taps.** A notification carries a `caddie://` link (`caddie://people?around=1`,
   `caddie://inbox`, `caddie://meet/{meet_id}`). On Android it is the intent extra
-  `AndroidNotifier.EXTRA_DEEP_LINK`, which `MainActivity` reads in `onCreate` and `onNewIntent`; on
-  iOS it is `deepLink` in the notification's `userInfo`, which the app delegate in `iOSApp.swift`
-  passes to `IosNotificationTaps`. Both hand only `caddie://` links to `NotificationTaps.deliver()`,
-  and the screens read `NotificationTaps.taps`. A remote (APNs) notification must put its link at
+  `AndroidNotifier.EXTRA_DEEP_LINK`, which `MainActivity` reads in `onCreate` and `onNewIntent`
+  and takes only with this install's tap key; on iOS it is `deepLink` in the notification's
+  `userInfo`, which the app delegate in `iOSApp.swift` passes to `openNotificationTap`
+  (`IosIncoming.kt`, reading it with `IosNotificationTaps`). Both take only those exact links
+  (`isNotificationDeepLink`) and hand them to `IncomingHandoff`, the same way every `caddie://`
+  link goes: `AppLink.parse` reads them as the People tab with a `PeopleRoute`, which `CaddieApp`
+  passes on in the shell's `ShellRequest`. A remote (APNs) notification must put its link at
   the top level of the payload under `deepLink`. iOS shows notifications as banners while the app
   is open too.
 - **APNs.** `IosPushRegistrar.register()` asks for notification permission, registers with iOS and
