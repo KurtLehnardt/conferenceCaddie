@@ -46,7 +46,7 @@ abstract class GenerateContractFixtures : DefaultTask() {
     @TaskAction
     fun generate() {
         val root = fixturesDir.get().asFile
-        val contract = listOf("capabilities", "bundle", "embedding", "people-api")
+        val contract = listOf("capabilities", "bundle", "embedding", "people-api", "ble")
             .flatMap { sub -> root.resolve(sub).walkTopDown().filter { it.isFile }.toList() }
             .map { it.relativeTo(root).invariantSeparatorsPath to it }
         val nativeRoot = nativeFixturesDir.get().asFile

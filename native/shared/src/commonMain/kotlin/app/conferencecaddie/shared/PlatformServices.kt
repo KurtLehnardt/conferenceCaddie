@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared
 
+import app.conferencecaddie.shared.ble.BlePlatform
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -121,6 +122,8 @@ class PeopleServices(
     val notifier: Notifier = NoNotifier,
     val push: PushRegistrar = NoPush,
     val systemSettings: SystemSettings? = null,
+    /** Bluetooth proximity's radio and key store, or null on a platform or build without them. */
+    val ble: BlePlatform? = null,
 )
 
 /** Cryptographically secure random bytes from the platform (SecureRandom, SecRandomCopyBytes). */

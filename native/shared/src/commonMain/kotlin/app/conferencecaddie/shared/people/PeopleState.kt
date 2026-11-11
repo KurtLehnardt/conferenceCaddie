@@ -3,6 +3,7 @@ package app.conferencecaddie.shared.people
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.LocationAccess
+import app.conferencecaddie.shared.ble.BlePermissionKind
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.core.BundleState
 import app.conferencecaddie.shared.core.CapabilitiesState
@@ -91,7 +92,7 @@ data class PeopleFeatures(
      * are in-app and local notifications only.
      */
     val pushChannel: String? = null,
-    /** The Bluetooth mode this app would use; phase 4 brings it ([Capabilities.BleMode.None] until then). */
+    /** The Bluetooth mode this app uses: [Capabilities.BleMode.DerivedV1] or [Capabilities.BleMode.None]. */
     val bleMode: Capabilities.BleMode = Capabilities.BleMode.None,
 ) {
     companion object {
@@ -155,6 +156,63 @@ data class PushView(
     val noticeSeen: Boolean = false,
 )
 
+/** Why Bluetooth proximity is off, or could not start, shown under its switch. */
+enum class BleProblem {
+    /** Presence is off at this conference: "Turn on being around first." */
+    NeedsPresence,
+
+    /** The Bluetooth permission was refused; asking again still shows the prompt. */
+    PermissionDenied,
+
+    /** The Bluetooth permission was refused for good: only the system settings can allow it. */
+    PermissionBlocked,
+
+    /** Bluetooth is switched off on the device. */
+    BluetoothOff,
+
+    /** This phone's Bluetooth cannot send the code. */
+    Unsupported,
+
+    /** It stopped because the same profile turned it on on another device (a second re-key in one window). */
+    OtherDevice,
+
+    /** The presence write or the radio failed; [BleView.message] has the words. */
+    Failed,
+}
+
+/**
+ * Bluetooth proximity ("Find people near me by Bluetooth") at the selected conference
+ * (web/src/people/BleControls.tsx and ble.ts).
+ */
+data class BleView(
+    /**
+     * True when the row shows: the backend resolves derived-v1 tokens, presence is a feature there,
+     * and this device has a radio that can take part.
+     */
+    val available: Boolean = false,
+    /** True while it runs at this conference (the device's switch). */
+    val on: Boolean = false,
+    /** True while a turn-on is under way (permission prompts, the presence write, the radio start). */
+    val starting: Boolean = false,
+    /** True once the first-time explanation has been accepted at this conference. */
+    val noticeSeen: Boolean = false,
+    /** The permission this platform asks for, so the explanation names the right one. */
+    val permission: BlePermissionKind = BlePermissionKind.NearbyDevices,
+    /** Why it is off or could not start, or null. Cleared by the next turn-on. */
+    val problem: BleProblem? = null,
+    /** The words for [problem] when the screens have none of their own ([BleProblem.Failed]). */
+    val message: String? = null,
+    /** False when notifications are not allowed, so a nearby match cannot be announced. */
+    val notificationsAllowed: Boolean = true,
+)
+
+/** What [PeopleController.turnOnBluetooth] ended with. */
+sealed interface BleOutcome {
+    data object On : BleOutcome
+
+    data class Problem(val problem: BleProblem, val message: String? = null) : BleOutcome
+}
+
 /** The first page of "Who's around", refreshed while the Around view is showing. */
 data class AroundView(
     val visible: Boolean = false,
@@ -209,6 +267,8 @@ data class PeopleUiState(
     val blocks: List<BlockedPerson> = emptyList(),
     val met: List<MetPerson> = emptyList(),
     val push: PushView = PushView(),
+    /** Bluetooth proximity at the selected conference. */
+    val ble: BleView = BleView(),
     val around: AroundView = AroundView(),
     /** A message from work the controller did on its own (an automatic share), for a toast; clear with [PeopleController.clearNotice]. */
     val notice: String? = null,

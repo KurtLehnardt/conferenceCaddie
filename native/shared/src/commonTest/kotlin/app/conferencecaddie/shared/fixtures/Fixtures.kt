@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
-/** The contract fixtures (contracts/fixtures/capabilities, bundle and people-api), embedded at build time. */
+/** The contract fixtures (contracts/fixtures/capabilities, bundle, embedding, people-api and ble), embedded at build time. */
 @OptIn(ExperimentalEncodingApi::class)
 object Fixtures {
     const val SLUG = "caddie-fixture-2099"

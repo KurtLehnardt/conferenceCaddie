@@ -325,6 +325,26 @@ class PeopleController(
         publish()
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Bluetooth proximity (phase 4)
+
+    /**
+     * "Find people near me by Bluetooth" on at the selected conference (web ble.ts startBle): needs
+     * presence on, a derived-v1 backend and a radio ([PeopleUiState.ble] `available`). Asks for the
+     * Bluetooth permission and for notifications, writes presence again with `ble: true` (repeating
+     * the zone, spot, position and duration), keeps the key in the platform key store and starts the
+     * radio. [PeopleUiState.ble] follows every step.
+     */
+    suspend fun turnOnBluetooth(): BleOutcome = withContext(serial) {
+        // TODO(phase 4 core): BleRuntime.
+        BleOutcome.Problem(BleProblem.Unsupported)
+    }
+
+    /** Turns Bluetooth proximity off at the selected conference and tells the server (`ble: false`); presence stays. */
+    suspend fun turnOffBluetooth(): Unit = withContext(serial) {
+        // TODO(phase 4 core): BleRuntime.
+    }
+
     /** "Still in {zone}?" answered with [zone] (the same one, or a new one). */
     suspend fun confirmZone(zone: String): String? = withContext(serial) {
         val r = ready()?.takeIf { it.features.presence } ?: return@withContext PeopleError.NOT_OFFERED_MESSAGE
