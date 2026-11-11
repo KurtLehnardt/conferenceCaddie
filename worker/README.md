@@ -2,7 +2,7 @@
 
 This directory holds the free hosting of Conference Caddie: one Cloudflare Worker,
 `conference-caddie`, that serves the web app as static assets and the API on the same origin
-(`https://conference-caddie.<subdomain>.workers.dev`), with SQLite-backed Durable Objects for all
+(`https://conference-caddie.krlehnardt.workers.dev`), with SQLite-backed Durable Objects for all
 storage (FTS5 for keyword search, float32 vectors with brute-force cosine in code), Workers AI for
 embeddings, a Cron Trigger for purges and expiry, and VAPID Web Push sent from the Worker. GitHub
 Pages publishes only the public talk bundles and a landing page that links to the app; the app is
@@ -144,7 +144,7 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 3. **Migrate the data** from the Elasticsearch backup (one time).
 
    ```sh
-   export CADDIE_APP_URL=https://conference-caddie.<subdomain>.workers.dev   # the URL deploy.sh printed
+   export CADDIE_APP_URL=https://conference-caddie.krlehnardt.workers.dev   # the URL deploy.sh printed
    export CADDIE_API_BASE="$CADDIE_APP_URL"
    export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
    node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE" --dry-run
@@ -214,7 +214,7 @@ undoes or confirms hides with `worker/scripts/moderation.mjs`, which calls
 (default `~/.config/conference-caddie/admin-token`):
 
 ```sh
-export CADDIE_API_BASE=https://conference-caddie.<subdomain>.workers.dev
+export CADDIE_API_BASE=https://conference-caddie.krlehnardt.workers.dev
 node worker/scripts/moderation.mjs --event <slug> --hidden
 node worker/scripts/moderation.mjs --event <slug> --since 2026-11-10T08:00:00Z
 node worker/scripts/moderation.mjs --event <slug> --hidden --show-content

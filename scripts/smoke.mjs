@@ -26,6 +26,7 @@
 //                        fixtures: POST /admin/test/profile (the expired profile),
 //                        POST /admin/test/age-presence (the aged presence) and GET /admin/stats (the
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
+//                        The reports the run makes are removed at the end with POST /admin/moderation.
 //                        The token is only ever sent as an Authorization header to API_BASE.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
@@ -458,6 +459,9 @@ function profileBody(event, who, { learn = [], speak = [], about = '', interests
 
 // Test profiles created in this run, so they can be removed at the end.
 const created = []; // { device, event }
+// The refs the report check (q10) reported. Reports are never purged automatically, so with an
+// admin token the run removes them again through POST /admin/moderation (action unhide).
+const reportedRefs = [];
 async function putProfile(device, event, who, opts, { open = false, shared = [] } = {}) {
   const r = await api('PUT', '/api/people/profile', { event, profile: profileBody(event, who, opts), open_to_meet: open, shared_talk_ids: shared }, { device, label: `${who}-put` });
   if (r.status === 200 && !created.some((c) => c.device === device && c.event === event)) created.push({ device, event });
@@ -1771,6 +1775,7 @@ try {
     const beforeB = await seenBy(B, 'B');
     if (!beforeA.ref) throw new Error('R is not in A\'s matches before any report');
     const refR = beforeA.ref;
+    reportedRefs.push(refR);
     const reportR = (device, who, reason = 'spam') => api('POST', '/api/people/report', { event: PRIMARY, ref: refR, context: { kind: 'profile', id: refR }, reason }, { device, label: `${who}-report` });
     const first = await reportR(A, 'A');
     const again = await reportR(A, 'A', 'other');
@@ -2139,6 +2144,15 @@ try {
 } catch (err) {
   report(false, 'people checks', err.message);
 } finally {
+  // Remove the reports the run made, while their target still exists, so none is left behind.
+  if (WRITE_MODE === 'admin') {
+    for (const ref of reportedRefs) {
+      // A failed cleanup is a FAIL, so a run never claims to leave no reports when it did.
+      const r = await admin('POST', `/admin/moderation?event=${encodeURIComponent(PRIMARY)}`, { action: 'unhide', kind: 'profile', id: ref })
+        .catch((err) => ({ status: 0, json: { error: err.message } }));
+      if (r.status !== 200) report(false, 'cleanup: reports', `unhide of a reported test profile gave ${r.status}; remove its reports by hand`);
+    }
+  }
   // Remove every test profile, whatever happened above.
   for (const { device, event } of created) {
     await api('DELETE', `/api/people/profile?event=${encodeURIComponent(event)}`, undefined, { device, label: 'cleanup' }).catch(() => {});
