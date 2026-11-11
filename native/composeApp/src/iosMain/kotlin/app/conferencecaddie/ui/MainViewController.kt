@@ -5,6 +5,7 @@ import androidx.compose.ui.window.ComposeUIViewController
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.core.IosCore
 import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
+import app.conferencecaddie.ui.platform.IosPlatformActions
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
 import app.conferencecaddie.ui.talks.EmbeddingModel
@@ -53,6 +54,7 @@ fun MainViewController(): UIViewController {
             initialQuery = query,
             talkLaunch = talkLaunch,
             embedder = { EmbeddingModel.load() },
+            platform = IosPlatformActions,
         )
     }.also { HostController.current = it }
 }

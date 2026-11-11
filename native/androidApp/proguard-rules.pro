@@ -8,3 +8,9 @@
 # name (ai.onnxruntime.OnnxTensor, OrtSession$Result and others), and its AAR keeps only its
 # telemetry classes, so the whole Java API is kept. It is about 140 KB of classes.
 -keep class ai.onnxruntime.** { *; }
+
+# CapacitorMigration's WebView calls its JavaScript interface by method name, so methods marked
+# @JavascriptInterface keep their names (the default rules say the same; this does not rely on them).
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
