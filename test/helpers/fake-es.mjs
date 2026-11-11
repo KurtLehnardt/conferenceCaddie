@@ -6,9 +6,9 @@
 //
 // The stand-in keeps documents per index with a sequence number each, evaluates the queries the
 // server sends (bool, term, terms, ids, exists, range with "now" date math, match_all), and
-// answers _doc, _create, _update, _search (with terms aggregations), _mget, _count, _bulk,
-// _delete_by_query, _update_by_query (no script, or the setup's expires_at backfill script),
-// _mapping and index creation. Writes honour if_seq_no/if_primary_term the way Elasticsearch does:
+// answers _doc, _create, _update, _search (with terms aggregations, and top_hits under a terms
+// bucket or on their own), _mget, _count, _bulk, _delete_by_query, _update_by_query (no script,
+// or the setup's expires_at backfill script), _mapping and index creation. Writes honour if_seq_no/if_primary_term the way Elasticsearch does:
 // a guarded delete or index of a missing document is a 409, and a Bulk action that combines
 // if_seq_no with retry_on_conflict fails the whole request with 400. A people search by retriever
 // (matches, nudges) finds nobody. Every call is logged with a tag (see tagOf),
@@ -51,7 +51,7 @@ export const TEST_ENV = {
   ES_RULES_INDEX: 'caddie-people-rules',
   MOD_CLASSIFIER: 'off',
 };
-for (const key of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'REF_SALT', 'ELASTISEARCH_API_KEY', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID']) delete process.env[key];
+for (const key of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT', 'REF_SALT', 'ELASTISEARCH_API_KEY', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_FILE', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID']) delete process.env[key];
 Object.assign(process.env, TEST_ENV);
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -134,6 +134,33 @@ function sortSpecs(sort) {
     const [[field, order]] = Object.entries(s);
     return [field, typeof order === 'string' ? order : order?.order ?? 'asc'];
   });
+}
+
+// The sort values of a document, and a comparison of two lists of them in the order the sort specs
+// ask for.
+const sortValuesOf = (specs, doc) => specs.map(([f]) => doc.source[f] ?? null);
+function comparer(specs) {
+  return (xs, ys) => {
+    for (let i = 0; i < specs.length; i++) {
+      const x = xs[i] ?? '';
+      const y = ys[i] ?? '';
+      if (x === y) continue;
+      return (x < y ? -1 : 1) * (specs[i][1] === 'desc' ? -1 : 1);
+    }
+    return 0;
+  };
+}
+
+// One search hit as Elasticsearch returns it: _seq_no and _primary_term only when asked for, and
+// the sort values when sorted.
+function hitOf(index, [id, doc], { source, withSeq, specs }) {
+  return {
+    _index: index,
+    _id: id,
+    ...(source === false ? {} : { _source: pick(doc.source, source) }),
+    ...(withSeq ? { _seq_no: doc.seq, _primary_term: doc.term } : {}),
+    ...(specs.length ? { sort: sortValuesOf(specs, doc) } : {}),
+  };
 }
 
 export class FakeES {
@@ -345,19 +372,30 @@ export class FakeES {
     return [...this.docs(index)].filter(([id, doc]) => matches(doc.source, id, query, now));
   }
 
-  // Terms aggregations ({ terms: { field, size, include } }) over every matching document; any
-  // other aggregation answers no buckets.
-  aggregate(found, aggs) {
+  // Terms aggregations ({ terms: { field, size, include } }) over every matching document, each
+  // bucket with its own sub-aggregations (aggs); and top_hits ({ top_hits: { size, sort, _source,
+  // seq_no_primary_term } }, size 3 by default as in Elasticsearch) over the documents of its
+  // bucket, or of the whole search. Any other aggregation answers no buckets.
+  aggregate(index, found, aggs) {
     return Object.fromEntries(Object.entries(aggs).map(([name, spec]) => {
+      if (spec.top_hits) {
+        const { size = 3, sort, _source: source, seq_no_primary_term: withSeq = false } = spec.top_hits;
+        const specs = sortSpecs(sort);
+        const compare = comparer(specs);
+        const sorted = specs.length ? [...found].sort(([, a], [, b]) => compare(sortValuesOf(specs, a), sortValuesOf(specs, b))) : found;
+        const hits = sorted.slice(0, size).map((entry) => hitOf(index, entry, { source, withSeq: withSeq === true, specs }));
+        return [name, { hits: { total: { value: found.length, relation: 'eq' }, hits } }];
+      }
       if (!spec.terms) return [name, { buckets: [] }];
-      const counts = new Map();
-      for (const [, doc] of found) {
-        for (const v of valuesOf(doc.source, spec.terms.field)) {
+      const groups = new Map();
+      for (const entry of found) {
+        for (const v of valuesOf(entry[1].source, spec.terms.field)) {
           if (spec.terms.include && !spec.terms.include.includes(v)) continue;
-          counts.set(v, (counts.get(v) ?? 0) + 1);
+          if (!groups.has(v)) groups.set(v, []);
+          groups.get(v).push(entry);
         }
       }
-      const buckets = [...counts].map(([key, doc_count]) => ({ key, doc_count })).sort((a, b) => b.doc_count - a.doc_count);
+      const buckets = [...groups].map(([key, docs]) => ({ key, doc_count: docs.length, ...this.aggregate(index, docs, spec.aggs ?? {}) })).sort((a, b) => b.doc_count - a.doc_count);
       return [name, { buckets: buckets.slice(0, spec.terms.size ?? 10) }];
     }));
   }
@@ -388,33 +426,17 @@ export class FakeES {
     // Ranked people searches (matches, nudges, members) go through a retriever: nobody is found.
     if (body.retriever) return json(empty);
     let found = this.find(index, body.query);
-    const aggregations = this.aggregate(found, body.aggs ?? {});
+    const aggregations = this.aggregate(index, found, body.aggs ?? {});
     const specs = sortSpecs(body.sort);
-    // Compares two lists of sort values in the order the sort asks for.
-    const compare = (xs, ys) => {
-      for (let i = 0; i < specs.length; i++) {
-        const x = xs[i] ?? '';
-        const y = ys[i] ?? '';
-        if (x === y) continue;
-        return (x < y ? -1 : 1) * (specs[i][1] === 'desc' ? -1 : 1);
-      }
-      return 0;
-    };
-    const sortValues = (doc) => specs.map(([f]) => doc.source[f] ?? null);
-    if (specs.length) found.sort(([, a], [, b]) => compare(sortValues(a), sortValues(b)));
+    const compare = comparer(specs);
+    if (specs.length) found.sort(([, a], [, b]) => compare(sortValuesOf(specs, a), sortValuesOf(specs, b)));
     // As in Elasticsearch, a page starts after the given sort values, whether or not the document
     // that had them still exists.
-    if (body.search_after) found = found.filter(([, d]) => compare(sortValues(d), body.search_after) > 0);
+    if (body.search_after) found = found.filter(([, d]) => compare(sortValuesOf(specs, d), body.search_after) > 0);
     const from = body.from ?? 0;
     const size = body.size ?? 10;
     const withSeq = params.get('seq_no_primary_term') === 'true';
-    const hits = found.slice(from, from + size).map(([id, doc]) => ({
-      _index: index,
-      _id: id,
-      ...(body._source === false ? {} : { _source: pick(doc.source, body._source) }),
-      ...(withSeq ? { _seq_no: doc.seq, _primary_term: doc.term } : {}),
-      ...(specs.length ? { sort: specs.map(([f]) => doc.source[f] ?? null) } : {}),
-    }));
+    const hits = found.slice(from, from + size).map((entry) => hitOf(index, entry, { source: body._source, withSeq, specs }));
     return json({ aggregations, hits: { total: { value: found.length }, hits } });
   }
 

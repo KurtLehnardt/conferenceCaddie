@@ -7,8 +7,9 @@
 // present and usable):
 //   APNS_KEY_ID               the 10-character id of the APNs key (not a secret).
 //   APNS_TEAM_ID              the 10-character id of the Apple developer team (not a secret).
-//   APNS_KEY_P8               the text of the .p8 key file, a PKCS#8 EC P-256 private key (secret;
-//                             Secret Manager caddie-apns-key).
+//   APNS_KEY_FILE             the path of the .p8 key file, a PKCS#8 EC P-256 private key (secret;
+//                             Secret Manager caddie-apns-key, which Cloud Run mounts as a file).
+//                             The key itself is never an environment variable.
 //   APNS_BUNDLE_ID            the app's bundle id, sent as apns-topic; default app.conferencecaddie.
 //   FCM_PROJECT_ID            the id of the app's Firebase project (not a secret). FCM is on when
 //                             it is set. There is no FCM key: the access token comes from the
@@ -23,9 +24,10 @@
 //   backend without them advertises push.apns and push.fcm false; a third-party operator leaves
 //   every one of these settings unset.
 // - A setting that is present but unusable keeps its channel off, and one log line at start
-//   names the setting and the rule, never its value. APNS_KEY_P8 is deleted from process.env as
-//   soon as it is read (see the end of this file). No key, JWT, access token or device token is
-//   ever logged.
+//   names the setting and the rule, never its value; so does an APNS_KEY_FILE with no readable
+//   key file behind it (nothing mounted), which never stops the server. The key is read from its
+//   file once, when this module is imported (see the end of this file). No key, JWT, access token
+//   or device token is ever logged.
 // - The message is a generic alert, the same bytes for every push: the constant title and body of
 //   NATIVE_ALERT and the constant deep link caddie://people?around=1. APNs and FCM payloads reach
 //   Apple and Google in plain text, unlike Web Push payloads, which are end-to-end encrypted, so a
@@ -42,13 +44,18 @@
 //   false (so GET /api/capabilities says so), sends stop, and one line says why.
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http2 from 'node:http2';
 
 export const DEFAULT_BUNDLE_ID = 'app.conferencecaddie';
 export const APNS_ORIGINS = Object.freeze({ production: 'https://api.push.apple.com', sandbox: 'https://api.sandbox.push.apple.com' });
-// The runtime service account's access token on Cloud Run. Its scope there is cloud-platform, which
-// messages.send accepts beside firebase.messaging.
-export const METADATA_TOKEN_URL = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
+// The runtime service account's access token on Cloud Run, asked for with the one OAuth scope that
+// FCM's messages.send needs, firebase.messaging, rather than the default cloud-platform, which
+// would let a leaked token reach every Google Cloud API the account may use. The FCM channel caches
+// it on its own: server/moderation.mjs asks the metadata server for its own token, with the default
+// scope, and keeps that apart.
+export const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+export const FCM_TOKEN_URL = `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token?scopes=${FCM_SCOPE}`;
 export const fcmSendUrl = (projectId) => `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`;
 
 // apns-priority 5 is APNs' "normal": delivered with the device's power state in mind. It is what
@@ -115,6 +122,21 @@ const BUNDLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,154}$/;
 const PROJECT_ID_RE = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 
 const set = (v) => typeof v === 'string' && v.trim() !== '';
+// A .p8 key file is about 250 bytes; anything much larger is not one and is not read.
+const KEY_FILE_MAX = 16 * 1024;
+
+// The text of the file at path, or null when there is no readable regular file there. A file
+// over KEY_FILE_MAX is not read and answers '', which no key parses from.
+export function keyFileText(path) {
+  try {
+    const stat = fs.statSync(path);
+    if (!stat.isFile()) return null;
+    if (stat.size > KEY_FILE_MAX) return '';
+    return fs.readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 function privateKeyOf(pem) {
   try {
@@ -126,19 +148,23 @@ function privateKeyOf(pem) {
 
 /**
  * The APNs settings: { config: { keyId, teamId, bundleId, key } }, { config: null } when none of
- * the three required settings is set, or { problem } naming what is wrong (never a value).
+ * the three required settings is set, or { problem } naming what is wrong (never a value). The key
+ * is read from the file APNS_KEY_FILE names, with readFile (keyFileText unless a test passes
+ * another), only once the other settings are usable.
  */
-export function apnsConfigFrom(env) {
-  const { APNS_KEY_ID: keyId, APNS_TEAM_ID: teamId, APNS_KEY_P8: p8 } = env;
-  if (!set(keyId) && !set(teamId) && !set(p8)) return { config: null };
-  if (!set(keyId) || !set(teamId) || !set(p8)) return { problem: 'APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY_P8 are not all set' };
+export function apnsConfigFrom(env, { readFile = keyFileText } = {}) {
+  const { APNS_KEY_ID: keyId, APNS_TEAM_ID: teamId, APNS_KEY_FILE: file } = env;
+  if (!set(keyId) && !set(teamId) && !set(file)) return { config: null };
+  if (!set(keyId) || !set(teamId) || !set(file)) return { problem: 'APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY_FILE are not all set' };
   if (!KEY_ID_RE.test(keyId)) return { problem: 'APNS_KEY_ID is not a 10-character key id' };
   if (!KEY_ID_RE.test(teamId)) return { problem: 'APNS_TEAM_ID is not a 10-character team id' };
   const bundleId = set(env.APNS_BUNDLE_ID) ? env.APNS_BUNDLE_ID : DEFAULT_BUNDLE_ID;
   if (!BUNDLE_ID_RE.test(bundleId)) return { problem: 'APNS_BUNDLE_ID is not a bundle id' };
+  const p8 = readFile(file);
+  if (typeof p8 !== 'string') return { problem: 'APNS_KEY_FILE names no readable file' };
   const key = privateKeyOf(p8);
   if (!key || key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
-    return { problem: 'APNS_KEY_P8 is not the text of a .p8 key (a PKCS#8 P-256 private key)' };
+    return { problem: 'the file APNS_KEY_FILE names is not a .p8 key (a PKCS#8 P-256 private key)' };
   }
   return { config: { keyId, teamId, bundleId, key } };
 }
@@ -298,7 +324,7 @@ function stubTransports(env) {
       return record({ platform: 'apns', origin, path, headers: rest, payload: JSON.parse(body) });
     },
     fetch: async (target, init) => {
-      if (target === METADATA_TOKEN_URL) return new Response(JSON.stringify({ access_token: 'stub-access-token', expires_in: 3600, token_type: 'Bearer' }), { status: 200 });
+      if (target === FCM_TOKEN_URL) return new Response(JSON.stringify({ access_token: 'stub-access-token', expires_in: 3600, token_type: 'Bearer' }), { status: 200 });
       const r = await record({ platform: 'fcm', url: target, payload: JSON.parse(init.body) });
       return new Response(r.body || null, { status: r.status });
     },
@@ -455,12 +481,12 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
   let failedAt = null; // when the last token request failed
   const sendUrl = fcmSendUrl(config.projectId);
 
-  // The runtime service account's token from the metadata server. No key is held here: Cloud Run
-  // mints it for the service's own identity.
+  // The runtime service account's token from the metadata server, with the firebase.messaging
+  // scope only. No key is held here: Cloud Run mints it for the service's own identity.
   async function requestAccessToken() {
     let res;
     try {
-      res = await fetchImpl(METADATA_TOKEN_URL, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(timeoutMs) });
+      res = await fetchImpl(FCM_TOKEN_URL, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(timeoutMs) });
     } catch (err) {
       throw new PushFailure(`token ${errorClass(err)}`);
     }
@@ -590,14 +616,13 @@ export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = D
   });
 }
 
-// This server's channels. The settings are copied into `settings`, and then the one secret among
-// them, APNS_KEY_P8, is deleted from process.env. That removes it from what this process hands to
-// a child process and from anything in this process that reads process.env later, such as a
-// diagnostic dump. It does not erase the value from memory, from the environment block the process
-// started with (on Linux, /proc/self/environ still shows it), or from the Cloud Run revision,
-// which holds it as a reference to Secret Manager.
-const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
+// This server's channels, from its settings when this module is imported. The APNs key is never in
+// the environment: Cloud Run mounts the secret as a read-only file and APNS_KEY_FILE names it, so
+// the key is not in what this process hands to a child process, not in anything that reads
+// process.env, and not in the environment block the process started with (on Linux,
+// /proc/self/environ). It is read from the file once, here, and the APNs channel keeps it as a
+// KeyObject; the file itself stays mounted, readable only by opening that path.
+const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_FILE', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 const settings = Object.fromEntries(SETTINGS.map((k) => [k, process.env[k]]));
-delete process.env.APNS_KEY_P8;
 /** The native push channels of this server; push.apns and push.fcm are its apns and fcm. */
 export const NATIVE_PUSH = createNativePush(settings);
