@@ -81,6 +81,17 @@ class DeviceCredentials(private val store: SecureStore, private val backend: Bac
     }
 
     /**
+     * The credential for a request: null when the device has none, and [SecureStoreUnavailable]
+     * when the secure store cannot be read now, so [PeopleApi] never reports a store failure as
+     * "no credential".
+     */
+    suspend fun forRequest(): DeviceCredential? = when (val l = lookup()) {
+        is Lookup.Found -> l.credential
+        Lookup.None -> null
+        Lookup.Unavailable -> throw SecureStoreUnavailable(IllegalStateException("The secure store could not be read."))
+    }
+
+    /**
      * Whether the device holds a credential for the backend. [Lookup.Unavailable] means the secure
      * store failed (an iPhone before its first unlock, a build without the Keychain entitlement, a
      * Keystore error); nothing is cached then, so the next lookup asks the store again.

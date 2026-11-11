@@ -6,6 +6,7 @@ import app.conferencecaddie.shared.SecureStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runCurrent
@@ -73,5 +74,26 @@ class SecureStoreFailureTest {
         runCurrent()
         assertEquals(1, h.sent("DELETE", "/api/people/profile").size)
         assertFalse(again.state.value.deletes.unfinished, "finished: ${again.state.value.deletes}")
+    }
+
+    @Test
+    fun aSearchWhileTheStoreFailsLeavesVisibilityAlone() = runTest {
+        val store = FlakySecureStore()
+        val h = PeopleHarness(this, secure = store)
+        h.start()
+        h.visible()
+        h.controller.close()
+
+        store.failing = true
+        val again = PeopleController(h.kv, h.http, PeopleServices(store), backgroundScope, allowLocalHttp = false, clock = h.clock, timeZone = TimeZone.UTC)
+        again.updateContext(h.context())
+        runCurrent()
+        val res = again.searchPeople("kubernetes", around = false)
+        runCurrent()
+        val error = assertIs<ApiResult.Failed>(res).error
+        assertEquals("secure_store", error.code)
+        assertTrue(error.noAnswer, "a store failure reads like no answer, not like no device")
+        assertTrue(h.sent("POST", "/api/people/matches").isEmpty())
+        assertTrue(again.state.value.visibility.openToMeet, "the profile stays visible on the device")
     }
 }

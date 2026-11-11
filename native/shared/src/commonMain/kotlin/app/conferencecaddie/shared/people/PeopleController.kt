@@ -726,7 +726,7 @@ class PeopleController(
         val store = PeopleStore(keyValue, backend.base)
         val credentials = DeviceCredentials(services.secureStore, backend)
         override val pace = Pace(this@PeopleController.clock)
-        val api = PeopleApi(http, backend, { credentials.get() }, pace, this@PeopleController.clock)
+        val api = PeopleApi(http, backend, { credentials.forRequest() }, pace, this@PeopleController.clock)
         val sync = ProfileSync(store, api, credentials, scope, this)
         val presenceRuntime = PresenceRuntime(store, api, scope, this)
         val connect = ConnectRuntime(store, api, scope, this)
