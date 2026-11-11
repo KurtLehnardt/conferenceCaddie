@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui.talks
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -28,6 +29,10 @@ import app.conferencecaddie.ui.theme.Caddie
  * conference, grouped by the conference's local day in start order, kept on this device only.
  * A marked talk that a newer bundle no longer holds is shown from the copy kept when it was marked
  * ([snapshots]), as the web keeps its copies in local storage.
+ *
+ * [shareAll] draws the web's ShareAllControls under the title, given the ids of the talks listed;
+ * null leaves it out. It is not drawn for an empty list. [peopleControls] draws a talk's people
+ * controls (who wants to talk about it, sharing for it) in its card, as the web's cards do.
  */
 @Composable
 fun InterestedScreen(
@@ -38,6 +43,8 @@ fun InterestedScreen(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     snapshots: Map<String, InterestedTalk> = emptyMap(),
+    shareAll: (@Composable (talkIds: List<String>) -> Unit)? = null,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val talks = interested.mapNotNull { bundle.talksById[it] ?: snapshots[it]?.toTalk() }.sortedWith(compareBy<Talk> { it.startEpochMs }.thenBy { it.talkId })
     if (talks.isEmpty()) {
@@ -59,6 +66,11 @@ fun InterestedScreen(
                 modifier = Modifier.padding(horizontal = Caddie.dimens.gutter, vertical = 8.dp).semantics { heading() },
             )
         }
+        if (shareAll != null) {
+            item("share-all") {
+                Box(Modifier.padding(horizontal = Caddie.dimens.gutter)) { shareAll(talks.map { it.talkId }) }
+            }
+        }
         days.forEach { (day, list) ->
             item("day-$day") {
                 // .day-header: the web writes the day in capitals.
@@ -69,7 +81,7 @@ fun InterestedScreen(
             }
             items(list, key = { it.talkId }) { talk ->
                 // As on the web, My schedule's cards carry no matched passage.
-                TalkResult(talk, bundle, emptyList(), true, nowMs, onToggleInterested, onOpenTalk, onOpenUrl, showEvidence = false)
+                TalkResult(talk, bundle, emptyList(), true, nowMs, onToggleInterested, onOpenTalk, onOpenUrl, showEvidence = false, peopleControls = peopleControls)
             }
         }
         item("footnote") {

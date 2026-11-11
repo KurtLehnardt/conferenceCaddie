@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
@@ -129,10 +130,25 @@ fun ConfirmDialog(
     testTag: String = "confirm-dialog",
     content: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(dismissOnClickOutside = dismissOnScrim)) {
-        ConfirmDialogCard(title, body, confirmLabel, onConfirm, onDismiss, destructive, Modifier.testTag(testTag), content)
+    val scrim = Caddie.colors.scrim
+    Dialog(onDismissRequest = onDismiss, properties = confirmDialogProperties(dismissOnScrim, scrim)) {
+        DialogScrim(scrim)
+        // .scrim-center: 24 dp around the card, which is at most 400 dp wide.
+        Box(Modifier.fillMaxWidth().padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
+            ConfirmDialogCard(title, body, confirmLabel, onConfirm, onDismiss, destructive, Modifier.testTag(testTag), content)
+        }
     }
 }
+
+/**
+ * The dialog's window: as wide as the screen (the card keeps its own margins) and dimmed with the
+ * web's scrim colour, [scrim], where the platform lets the properties say so.
+ */
+internal expect fun confirmDialogProperties(dismissOnScrim: Boolean, scrim: Color): DialogProperties
+
+/** Dims the screen behind the dialog with [scrim] where the platform dims it through the window. */
+@Composable
+internal expect fun DialogScrim(scrim: Color)
 
 /**
  * The card of [ConfirmDialog]. The title, body and [content] scroll when they do not fit (a long

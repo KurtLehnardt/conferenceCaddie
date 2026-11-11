@@ -15,7 +15,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
@@ -29,7 +28,14 @@ import kotlinx.serialization.json.putJsonObject
  * changed, and [publish] lists conferences again, with a newer bundle_version or without a bundle.
  */
 @OptIn(ExperimentalAtomicApi::class)
-class TestBackend : Http {
+class TestBackend(
+    /** True serves a capabilities document with the people features on (tier 3 minus Bluetooth), as [app.conferencecaddie.ui.people.FakePeopleServer] answers them. */
+    private val people: Boolean = false,
+    /** The topics every conference's bundle lists, as topic_id to label; people profiles pick from them. */
+    private val topics: List<Pair<String, String>> = listOf("ebpf" to "eBPF", "kubernetes" to "Kubernetes", "security" to "Security"),
+    /** True offers native push nudges (apns and fcm) in the capabilities, with the people features. */
+    private val push: Boolean = false,
+) : Http {
     class TestTalk(
         val id: String,
         val kind: String,
@@ -42,10 +48,12 @@ class TestBackend : Http {
         val track: String?,
         val room: String?,
         val hasSlides: Boolean = false,
+        /** The topic_ids of the talk; a topic's talk_count is the number of talks that list it. */
+        val topics: List<String> = emptyList(),
     )
 
-    class TestConference(val slug: String, val name: String, val day: String, val talks: List<TestTalk>) {
-        fun without(id: String) = TestConference(slug, name, day, talks.filter { it.id != id })
+    class TestConference(val slug: String, val name: String, val day: String, val talks: List<TestTalk>, val endDay: String = day) {
+        fun without(id: String) = TestConference(slug, name, day, talks.filter { it.id != id }, endDay)
     }
 
     val base = "https://caddie.test"
@@ -106,11 +114,22 @@ class TestBackend : Http {
                 put("bundle_base", bundleBase)
                 put("server_search", false)
             }
-            putJsonObject("people") { put("enabled", false) }
+            putJsonObject("people") {
+                put("enabled", people)
+                if (people) {
+                    put("semantic", "off")
+                    put("presence", true)
+                    put("gps_bands", true)
+                    put("meets", true)
+                    put("circles", true)
+                    put("reports", true)
+                    put("live", "poll")
+                }
+            }
             putJsonObject("ble") { put("mode", "none") }
             putJsonObject("push") {
-                put("apns", false)
-                put("fcm", false)
+                put("apns", people && push)
+                put("fcm", people && push)
                 put("webpush", false)
             }
             putJsonObject("imports") {
@@ -170,7 +189,7 @@ class TestBackend : Http {
         put("slug", c.slug)
         put("name", c.name)
         put("start_date", c.day)
-        put("end_date", c.day)
+        put("end_date", c.endDay)
         put("time_zone", "UTC")
         putJsonObject("location") {
             put("city", "Test City")
@@ -212,7 +231,7 @@ class TestBackend : Http {
                 put("day", t.day)
                 put("start_minutes", t.start)
                 put("end_minutes", t.end)
-                put("topics", JsonArray(emptyList()))
+                put("topics", JsonArray(t.topics.map { JsonPrimitive(it) }))
                 put("text_hash", BundleVerifier.textHash(t.title, t.abstract))
             }
         }
@@ -254,7 +273,15 @@ class TestBackend : Http {
                 put("rows", JsonArray(rows.map { JsonPrimitive(it) }))
             }
             put("talks", JsonArray(talks))
-            putJsonArray("topics") {}
+            put("topics", JsonArray(topics.mapIndexed { i, (id, label) ->
+                buildJsonObject {
+                    put("topic_id", id)
+                    put("label", label)
+                    put("talk_count", c.talks.count { t -> t.kind == "talk" && id in t.topics })
+                    put("rank", i + 1)
+                    put("aliases", JsonArray(emptyList()))
+                }
+            }))
             put("facets", JsonArray(facets))
             putJsonObject("related") {
                 for (id in talkIds) put(id, JsonArray(talkIds.filter { it != id }.take(5).map { JsonPrimitive(it) }))

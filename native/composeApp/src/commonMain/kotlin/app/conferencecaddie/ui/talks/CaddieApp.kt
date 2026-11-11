@@ -41,6 +41,7 @@ import app.conferencecaddie.shared.core.CapabilitiesState
 import app.conferencecaddie.shared.core.ConferencesState
 import app.conferencecaddie.shared.core.CoreState
 import app.conferencecaddie.shared.core.Defaults
+import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.ui.App
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.SkeletonCard
@@ -48,6 +49,9 @@ import app.conferencecaddie.ui.components.StateAction
 import app.conferencecaddie.ui.components.StateView
 import app.conferencecaddie.ui.components.ToastData
 import app.conferencecaddie.ui.icons.LucideIcon
+import app.conferencecaddie.ui.people.PeopleLaunch
+import app.conferencecaddie.ui.people.PeopleTalks
+import app.conferencecaddie.ui.people.rememberPeopleUi
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.shell.ServerStatus
 import app.conferencecaddie.ui.shell.ShellActions
@@ -56,6 +60,7 @@ import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.shell.TabContent
 import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.shell.pendingAfterSwitch
+import app.conferencecaddie.ui.shell.rememberShellNavigation
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.CaddieTheme
@@ -66,8 +71,10 @@ import kotlinx.coroutines.delay
 /**
  * The app on both platforms: the shell (header, switcher, tab bar, Settings) drawn from the shared
  * core's state, with the talk screens in its Search and Interested tabs. For you stays the shell's
- * placeholder until on-device recommendations arrive (phase 2b), and People appears only when the
- * backend serves people features (phase 3).
+ * placeholder until on-device recommendations arrive (phase 2b). [people] brings the people screens
+ * (ui/people, phase 3): the People tab, Profile, Requests and Meet up, the people groups of Settings
+ * and the people controls of the talk screens, shown only when the backend serves people features;
+ * null leaves them out.
  *
  * [launch] holds the debug builds' launch options (the release hosts pass the defaults);
  * [initialQuery] types a search, which opens the Search tab, and [talkLaunch] opens a sheet or
@@ -84,6 +91,7 @@ fun CaddieApp(
     launch: DebugLaunch = DebugLaunch(),
     initialQuery: String? = null,
     talkLaunch: TalkLaunch = TalkLaunch(),
+    people: PeopleController? = null,
 ) {
     val state by core.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -103,7 +111,12 @@ fun CaddieApp(
     val onConnectHandled = { pendingConnect = null }
     var openTalk by rememberSaveable { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<ToastData?>(null) }
-    var undo by remember { mutableStateOf<Pair<Talk, Boolean>?>(null) }
+    // What the toast's button does (Undo), for the toast showing.
+    var toastAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val showToast: (String, String?, (() -> Unit)?) -> Unit = { message, label, action ->
+        toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = message, actionLabel = label)
+        toastAction = action
+    }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
     val nowMs by produceState(Clock.System.now().toEpochMilliseconds()) {
         while (true) {
@@ -112,9 +125,10 @@ fun CaddieApp(
         }
     }
 
-    LifecycleResumeEffect(core) {
+    LifecycleResumeEffect(core, people) {
         core.refresh()
-        onPauseOrDispose { }
+        people?.setForeground(true)
+        onPauseOrDispose { people?.setForeground(false) }
     }
     // The theme choice is kept on this device, as the web keeps it in local storage; a debug
     // launch option wins for that run.
@@ -142,7 +156,7 @@ fun CaddieApp(
     LaunchedEffect(state.storageReset) {
         if (state.storageReset) {
             val message = if (state.storageInMemory) TalkStrings.STORAGE_IN_MEMORY else TalkStrings.STORAGE_RESET
-            toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = message)
+            showToast(message, null, null)
             core.dismissStorageReset()
         }
     }
@@ -152,16 +166,26 @@ fun CaddieApp(
     val toggle: (Talk) -> Unit = { talk ->
         val on = talk.talkId !in interestedIds
         core.setInterested(talk, on)
-        undo = talk to !on
-        toast = ToastData(
-            id = Clock.System.now().toEpochMilliseconds(),
-            message = if (on) Strings.Toasts.ADDED else Strings.Toasts.REMOVED,
-            actionLabel = Strings.Toasts.UNDO,
-        )
+        showToast(if (on) Strings.Toasts.ADDED else Strings.Toasts.REMOVED, Strings.Toasts.UNDO) { core.setInterested(talk, !on) }
     }
 
+    val navigation = rememberShellNavigation(launch.tab ?: if (initialQuery != null) Tab.Search else null)
+    val shell = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast)
+    // The people screens (ui/people/PeopleTab.kt); null without a controller.
+    val peopleUi = rememberPeopleUi(
+        controller = people,
+        navigation = navigation,
+        talks = PeopleTalks(ready?.bundle, state.interested, nowMs),
+        online = shell.online,
+        searchable = shell.selectedConference?.searchable == true,
+        launch = PeopleLaunch.parse(launch.people),
+        showToast = showToast,
+        openTalk = { openTalk = it },
+        openUrl = openUrl,
+    )
+
     App(
-        state = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast),
+        state = peopleUi?.shellState(shell) ?: shell,
         actions = ShellActions(
             onSelectConference = core::selectConference,
             onRetryConferences = { core.refresh(force = true) },
@@ -191,8 +215,8 @@ fun CaddieApp(
             },
             onDismissToast = { toast = null },
             onToastAction = {
-                undo?.let { (talk, on) -> core.setInterested(talk, on) }
-                undo = null
+                toastAction?.invoke()
+                toastAction = null
                 toast = null
             },
             onOpenUrl = openUrl,
@@ -205,11 +229,19 @@ fun CaddieApp(
             },
             interested = {
                 BundleGate(state, core) { r ->
-                    InterestedScreen(r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl, state.interestedSnapshots)
+                    InterestedScreen(
+                        r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl, state.interestedSnapshots,
+                        shareAll = peopleUi?.shareAll,
+                        peopleControls = peopleUi?.talkControls,
+                    )
                 }
             },
+            people = peopleUi?.tab,
+            appBarActions = peopleUi?.appBarActions,
+            peoplePage = peopleUi?.page,
+            settingsPeople = peopleUi?.settings,
         ),
-        initialTab = launch.tab ?: if (initialQuery != null) Tab.Search else null,
+        navigation = navigation,
     )
 
     // A marked talk the bundle no longer holds opens from its saved copy.
@@ -227,9 +259,12 @@ fun CaddieApp(
                 onOpenTalk = { openTalk = it.talkId },
                 onOpenUrl = openUrl,
                 onClose = { openTalk = null },
+                peopleControls = peopleUi?.talkControls,
             )
         }
     }
+    // The people sheets (Ask to talk shop, Report, the block confirmation) sit outside App() too.
+    if (peopleUi?.hasSheet == true) CaddieTheme(theme) { peopleUi.Sheets() }
 }
 
 private const val THEME = "theme"
@@ -339,6 +374,8 @@ private fun shellState(
         (s.bundle as? BundleState.Ready)?.offline == true || s.capabilities == CapabilitiesState.Unreachable
     return ShellState(
         capabilities = caps?.forThisApp ?: Capabilities.None,
+        // Only a first start waits for them: a later one shows the stored capabilities at once.
+        tabsKnown = s.capabilities != CapabilitiesState.Loading,
         conferences = conferences,
         conferencesError = when (val c = s.conferences) {
             is ConferencesState.Failed -> when (c.reason) {

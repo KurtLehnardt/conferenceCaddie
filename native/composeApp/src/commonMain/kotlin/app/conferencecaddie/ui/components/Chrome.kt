@@ -85,6 +85,35 @@ fun AppBar(
     }
 }
 
+/** .appbar-back: the arrow Back of Settings, Requests and Meet up, named "Back". */
+@Composable
+fun AppBarBack(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    CaddieIconButton(LucideIcon.ArrowLeft, Strings.AppBar.BACK, onClick, modifier.testTag("appbar-back"), iconSize = 22.dp)
+}
+
+/**
+ * .appbar-back-labeled: Profile's Back, a chevron and [label] ("Settings") in the accent ink at
+ * 17 sp, named [contentDescription] ("Back to Settings") for screen readers.
+ */
+@Composable
+fun AppBarLabeledBack(label: String, contentDescription: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Caddie.colors
+    Row(
+        modifier
+            .heightIn(min = Caddie.dimens.minTouch)
+            .caddieClickable(Pill, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
+            .testTag("appbar-back")
+            .padding(start = 10.dp, end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        LucideImage(LucideIcon.ChevronLeft, null, size = 24.dp, tint = c.accentInk)
+        // The button's name is the content description; the visible word is not read twice.
+        Text(label, style = Caddie.type.backLabel, color = c.accentInk, maxLines = 1, modifier = Modifier.clearAndSetSemantics { })
+    }
+}
+
 /** A screen title in the app bar (.appbar-title), such as "Settings", marked as a heading. */
 @Composable
 fun AppBarTitle(text: String) {
@@ -238,7 +267,7 @@ private fun <T> NavDestination(item: NavItem<T>, on: Boolean, onClick: () -> Uni
             contentAlignment = Alignment.Center,
         ) {
             LucideImage(item.icon, null, size = 24.dp, tint = if (on) c.accentInk else c.text2, strokeWidth = if (on) 2.25f else 1.75f)
-            if (item.badge > 0) Badge(item.badge, Modifier.align(Alignment.TopStart).offset(x = 32.dp, y = (-2).dp))
+            if (item.badge > 0) Badge(item.badge, Modifier.align(Alignment.TopStart).offset(x = 32.dp, y = (-2).dp), ring = c.surface)
         }
         NavLabel(item.label, on)
     }

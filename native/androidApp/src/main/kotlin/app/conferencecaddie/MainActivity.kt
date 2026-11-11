@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import app.conferencecaddie.shared.AndroidNotifier
 import app.conferencecaddie.shared.AndroidPermissions
 import app.conferencecaddie.shared.BackendUrl
+import app.conferencecaddie.shared.AndroidPeopleServices
 import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.ui.shell.DebugLaunch
@@ -50,6 +51,10 @@ class MainActivity : ComponentActivity() {
             query = get("caddie.query")
         }
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
+        // The people features, next to the core, with the platform services: the Keystore-backed
+        // secure store, location, notifications and the permission prompts of this activity.
+        val peopleServices = AndroidPeopleServices.create(applicationContext, R.drawable.ic_stat_caddie)
+        val people = AndroidCore.people(this, peopleServices, allowLocalHttp = isDebugBuild)
         setContent {
             CaddieApp(
                 core = core,
@@ -58,6 +63,7 @@ class MainActivity : ComponentActivity() {
                 launch = launch,
                 initialQuery = query,
                 talkLaunch = talkLaunch,
+                people = people,
             )
         }
     }

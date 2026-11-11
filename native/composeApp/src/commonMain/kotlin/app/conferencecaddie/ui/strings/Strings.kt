@@ -26,6 +26,16 @@ object Strings {
     object AppBar {
         const val SETTINGS = "Settings"
         const val BACK = "Back"
+        /** Profile's labelled Back: the visible word and the button's name. */
+        const val BACK_SETTINGS_LABEL = "Settings"
+        const val BACK_TO_SETTINGS = "Back to Settings"
+        /** The titles of the people screens over the tabs (#/profile, #/inbox, #/meet/{id}). */
+        const val PROFILE = "Profile"
+        const val REQUESTS = "Requests"
+        const val MEET_UP = "Meet up"
+
+        /** The Requests button's name on the People tab, with the number of new asks. */
+        fun requests(n: Int) = if (n > 0) "Requests, $n new" else "Requests"
         const val CHOOSE_CONFERENCE = "Choose a conference"
         const val CHANGE_CONFERENCE = ", change conference"
         const val OFFLINE = "Offline"

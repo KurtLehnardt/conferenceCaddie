@@ -169,6 +169,7 @@ internal fun TalkResult(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     showEvidence: Boolean = true,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
     TalkCard(
@@ -187,7 +188,11 @@ internal fun TalkResult(
         onOpenLink = onOpenUrl,
         onClick = { onOpenTalk(talk) },
         extra = if (talk.kind == "talk") {
-            { RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk) }
+            {
+                // The web's TalkPeopleControls sit between "I was there" and Related talks.
+                peopleControls?.invoke(talk)
+                RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk)
+            }
         } else {
             null
         },
