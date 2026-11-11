@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -98,10 +99,10 @@ fun PeopleScreen(
 
     // The search bar: the text as typed, the query it settles into, the chip, and whether the
     // search is open over the Around home.
-    var input by remember(slug) { mutableStateOf("") }
-    var query by remember(slug) { mutableStateOf("") }
-    var aroundChip by remember(slug) { mutableStateOf(false) }
-    var findOpen by remember(slug) { mutableStateOf(false) }
+    var input by rememberSaveable(slug) { mutableStateOf("") }
+    var query by rememberSaveable(slug) { mutableStateOf("") }
+    var aroundChip by rememberSaveable(slug) { mutableStateOf(false) }
+    var findOpen by rememberSaveable(slug) { mutableStateOf(false) }
     var pendingHere by remember { mutableStateOf<String?>(null) }
     var focusSearch by remember { mutableStateOf(false) }
     val debounce = remember { DebounceJob() }

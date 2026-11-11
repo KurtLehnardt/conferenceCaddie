@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -50,6 +51,7 @@ import app.conferencecaddie.ui.components.SectionHeading
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.PlatformTouchTarget
 import kotlinx.coroutines.launch
 
 /** The longest spot line ("Where in the zone"), as the web's SPOT_MAX. */
@@ -74,7 +76,8 @@ private const val SPOT_MAX = 60
  * location, the card says so and offers the system settings ([PeopleHost.openAppSettings]); no position is
  * sent then.
  *
- * [hereZone] is a zone from a `caddie://here/{zone}` link (`controller.matchZone(raw)`; an unknown
+ * [hereZone] is a zone from a `caddie://here/{zone}` link (`controller.matchZone(raw)`; it opens the
+ * setup panel with that zone chosen and presence stays off until the person taps "I'm around"; an unknown
  * one says "That zone isn't on this conference's list. Pick one below."); call [onHereZoneHandled]
  * once it is taken. Owner U3.
  */
@@ -115,31 +118,21 @@ fun PresenceControls(
         panel = true
     }
 
-    // caddie://here/{zone}: a known zone turns presence on at once (after the notice, the first
-    // time); anything else opens the picker.
+    // caddie://here/{zone}: the link only opens the setup panel with the zone chosen (when the
+    // conference has that zone) so the person confirms with "I'm around". It never turns presence on
+    // by itself, whatever the link says, because any app can open the link.
     var lastHere by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(hereZone) {
         val raw = hereZone ?: return@LaunchedEffect
-        // The same link again while the card is up is taken without a second write, as on the web.
+        // The same link again while the card is up is taken without opening the panel twice.
         if (lastHere == raw) {
             handled()
             return@LaunchedEffect
         }
         lastHere = raw
         val match = controller.matchZone(raw)
-        val p = currentState.presence
-        if (match != null && p.noticeSeen) {
-            busy = true
-            val err = controller.turnOnPresence(match, p.spot)
-            busy = false
-            if (err != null) {
-                openPanel(match)
-                error = err
-            }
-        } else {
-            unknownZone = match == null
-            openPanel(match)
-        }
+        unknownZone = match == null
+        openPanel(match)
         handled()
     }
 
@@ -476,7 +469,7 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
             )
         }
         if (!picking) {
-            // .pp-still-chips: a row that wraps, 8 dp apart; each chip keeps a 44 dp touch target.
+            // .pp-still-chips: a row that wraps, 8 dp apart; each chip keeps the platform touch target (48 dp on Android).
             FlowRow(Modifier.fillMaxWidth().testTag("still-chips"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StillChip(ConnectStrings.YES, active = true, enabled = !busy) { answer(zone) }
                 likely.forEach { z -> StillChip(z, active = false, enabled = !busy) { answer(z) } }
@@ -497,20 +490,23 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
 
 /**
  * A chip of "Still in {zone}?" (.chip with .chip-main, no check mark): at least 36 dp tall inside a
- * 44 dp touch target, padding 0/14, 14/500; the active "Yes" fills with the accent tint and drops
+ * 48 dp touch target, padding 0/14, 14/500; the active "Yes" fills with the accent tint and drops
  * the border. Unlike the shell's CaddieChip it grows with its text, so a large font size wraps the
  * label instead of clipping it.
  */
 @Composable
 private fun StillChip(label: String, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val c = Caddie.colors
-    Box(Modifier.heightIn(min = Caddie.dimens.minTouch).padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+    // The tappable box is the 48 dp one; the chip drawn in it keeps its 36 dp look.
+    Box(
+        Modifier.defaultMinSize(minHeight = PlatformTouchTarget).caddieClickable(Pill, enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
         Box(
             Modifier
                 .heightIn(min = Caddie.dimens.chipHeight)
                 .background(if (active) c.accentTint else c.surface, Pill)
                 .then(if (active) Modifier else Modifier.border(1.dp, c.borderStrong, Pill))
-                .caddieClickable(Pill, enabled = enabled, onClick = onClick)
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             contentAlignment = Alignment.Center,
         ) {

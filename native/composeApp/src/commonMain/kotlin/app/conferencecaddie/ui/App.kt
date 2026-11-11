@@ -126,17 +126,22 @@ fun App(
     // A server typed in Settings waits here for the same confirmation a link gets.
     var typedServer by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // The people pages close when the backend stops serving people features. Requests and Meet up
-    // belong to one conference, so they close when another conference is selected, as on the web.
-    LaunchedEffect(peopleEnabled) {
-        if (!peopleEnabled) navigation.closePages { it is PeoplePage }
+    // The people pages close when the backend is known to serve no people features. Requests and
+    // Meet up belong to one conference, so they close when another conference is selected, as on
+    // the web. After a restore the capabilities are still loading (features read as off) and the
+    // conference is not selected yet; neither closes a page. Only a settled "off", and a real switch
+    // from one conference to another, do.
+    LaunchedEffect(peopleEnabled, state.tabsKnown) {
+        if (state.tabsKnown && !peopleEnabled) navigation.closePages { it is PeoplePage }
     }
     var shownConference by rememberSaveable { mutableStateOf(state.selectedConferenceId) }
     LaunchedEffect(state.selectedConferenceId) {
-        if (state.selectedConferenceId != shownConference) {
+        val selected = state.selectedConferenceId ?: return@LaunchedEffect
+        val shown = shownConference
+        if (shown != null && shown != selected) {
             navigation.closePages { it == PeoplePage.Inbox || it is PeoplePage.Meet }
-            shownConference = state.selectedConferenceId
         }
+        shownConference = selected
     }
 
     val uriHandler = LocalUriHandler.current

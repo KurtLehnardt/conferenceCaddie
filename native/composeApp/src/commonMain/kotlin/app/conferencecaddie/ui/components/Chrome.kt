@@ -3,6 +3,7 @@ package app.conferencecaddie.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +57,7 @@ import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.BrandBlue
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.MOTION_MS
+import app.conferencecaddie.ui.theme.PlatformTouchTarget
 
 /**
  * .appbar: [leading] (a Back button), the title, and [actions] on the right, on the page colour,
@@ -100,7 +102,7 @@ fun AppBarLabeledBack(label: String, contentDescription: String, onClick: () -> 
     val c = Caddie.colors
     Row(
         modifier
-            .heightIn(min = Caddie.dimens.minTouch)
+            .defaultMinSize(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget)
             .caddieClickable(Pill, onClick = onClick)
             .semantics { this.contentDescription = contentDescription }
             .testTag("appbar-back")
