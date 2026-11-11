@@ -32,6 +32,17 @@
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
 //   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when the web app (SMOKE_DIST) has not been built.
+//   SMOKE_TALKS          bundle or data: where the checks that need a conference's own talks (d, e1,
+//                        e2, n1, n2, m2, x, o, sch1 and the import picks) take them from. bundle (the
+//                        default against a deployed Worker) reads the published talk bundles, the ones native
+//                        clients use: the ingest run publishes them from the same fetch it pushes to
+//                        the Worker, so a schedule change upstream moves both and passes, while a
+//                        Worker that serves other talks than the bundles fails. data (the default
+//                        against Cloud Run, whose index is loaded by hand, and against an API on
+//                        localhost or 127.0.0.1, which is loaded from the seed) reads the committed
+//                        data/ snapshot. Check bun1 compares every searchable conference with its bundle.
+//   SMOKE_BUNDLE_BASE    the talk bundle base for SMOKE_TALKS=bundle, an https URL ending in "/" (or
+//                        http://localhost or http://127.0.0.1 for a local test). Default https://kurtlehnardt.github.io/conferenceCaddie/bundles/.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
@@ -72,6 +83,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { validator } from '../contracts/js/schemas.mjs';
 import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
+import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
 
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -129,6 +141,22 @@ const SEND_ORIGIN = IS_WORKER;
 // The Worker serving the web app itself, on BASE_URL's origin (the free stack as deployed).
 const WORKER_SERVES_APP = IS_WORKER && !CROSS_ORIGIN_API;
 const DIST_DIR = process.env.SMOKE_DIST || (WORKER_SERVES_APP ? 'web/dist-worker' : 'web/dist');
+// A local API (wrangler dev or a local server) on this machine.
+// Where the expected talks of a conference come from (SMOKE_TALKS above). A Worker on this machine
+// is loaded from the committed data/, not from the schedules the ingest published, so it is compared
+// with data/ by default.
+const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER && !LOCAL_API ? 'bundle' : 'data')).toLowerCase();
+if (!['bundle', 'data'].includes(TALKS_FROM)) {
+  console.log('FAIL config: SMOKE_TALKS must be bundle or data');
+  process.exit(1);
+}
+const BUNDLE_BASE = process.env.SMOKE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+// https, or plain http to this machine for a local test.
+if (TALKS_FROM === 'bundle' && !/^https:\/\/[^\s?#]+\/$/.test(BUNDLE_BASE) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?\/$/.test(BUNDLE_BASE)) {
+  console.log('FAIL config: SMOKE_BUNDLE_BASE must be an https URL that ends in "/"');
+  process.exit(1);
+}
 
 // Where the three helpers that reach behind the API get their way in: the Worker's admin fixtures,
 // Elasticsearch (Cloud Run only), or nowhere, in which case the checks that need them are skipped.
@@ -186,9 +214,8 @@ const LEARN = ['ebpf', 'gpu', 'llm'];
 // empty while they are around: a nudge is looked for without a search text, so it reads topics,
 // interests and expertise and never about, and a semantic neighbour cannot pick them either.
 const runTag = crypto.randomBytes(4).toString('hex');
-// A local API (wrangler dev or a local server): checks that need test profiles with a specific match
-// to be around, or a conference to be flipped, run only here unless asked for.
-const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+// A local API (LOCAL_API, wrangler dev or a local server): checks that need test profiles with a
+// specific match to be around, or a conference to be flipped, run only there unless asked for.
 // What A wants to learn (A's interests) and B, C, R and the expired profile have worked on (their
 // expertise; B also wants it, so B finds R).
 const SMOKE_SUBJECT = `zqvsmoke${runTag} vexmorlith quabbit flarnishing`;
@@ -418,10 +445,58 @@ async function search(body) {
   return r;
 }
 
+// A conference's own items (every kind), from the published bundle or the committed data/
+// (SMOKE_TALKS). Bundle talks carry the fields the checks read (talk_id, kind, title, speakers, room,
+// track, tags, start, end, day, end_minutes).
+const bundleTalks = new Map(); // slug -> { docs } or { error }, filled by loadBundleTalks
 const readNdjson = (slug) => {
+  if (TALKS_FROM === 'bundle') {
+    const ref = bundleTalks.get(slug);
+    if (!ref) throw new Error(`the published bundle of ${slug} was not loaded`);
+    if (ref.error) throw new Error(`the published bundle of ${slug}: ${ref.error}`);
+    return ref.docs;
+  }
   const file = join(ROOT, 'data', slug, 'talks.ndjson');
   return readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
 };
+
+// Reads the published index and the bundle.json of each slug, checked against the index's size and
+// SHA-256. Returns the index (readConferenceIndex) or null when it cannot be read; failures per slug
+// are kept in bundleTalks and fail the checks that need them.
+async function loadBundleTalks(slugs) {
+  const get = async (url) => {
+    const res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`${new URL(url).pathname} gave ${res.status}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  };
+  let index;
+  try {
+    index = readConferenceIndex(JSON.parse((await get(`${BUNDLE_BASE}conferences.json`)).toString('utf8')));
+    if (!index.ok) throw new Error(`the published conferences.json is not a usable index (${index.reason})`);
+  } catch (err) {
+    for (const slug of slugs) bundleTalks.set(slug, { error: err.message });
+    return null;
+  }
+  for (const slug of slugs) {
+    const entry = index.conferences.find((c) => c.conference.slug === slug)?.bundle;
+    if (!entry) {
+      bundleTalks.set(slug, { error: 'the published index has no bundle for it' });
+      continue;
+    }
+    try {
+      const bytes = await get(`${BUNDLE_BASE}${entry.path}${BUNDLE_FILE}`);
+      const meta = entry.files[BUNDLE_FILE];
+      if (bytes.length !== meta.bytes || sha256hex(bytes) !== meta.sha256) throw new Error(`${entry.path}${BUNDLE_FILE} does not match the index`);
+      bundleTalks.set(slug, { docs: JSON.parse(bytes.toString('utf8')).talks ?? [], path: entry.path });
+    } catch (err) {
+      bundleTalks.set(slug, { error: err.message });
+    }
+  }
+  return index;
+}
 
 // The UTC offset of a zone at an instant, as "+03:00", through Intl.
 function offsetAt(iso, timeZone) {
@@ -486,6 +561,30 @@ await check('conf: GET /api/conferences lists the conferences', async () => {
     missing.length ? `not searchable: ${missing.join(', ')}` : leakedKeys.length ? `internal keys: ${[...new Set(leakedKeys)].join(', ')}` : `${searchable.length} searchable, ${conferences.length - searchable.length} unavailable`);
 });
 const confBySlug = new Map(conferences.map((c) => [c.slug, c]));
+
+// The expected talks (SMOKE_TALKS), and, with the bundles, check bun1: the Worker and the published
+// bundles list the same searchable conferences with the same talk counts. The ingest run publishes
+// both from one fetch, so a difference means one of them missed a publish (or a Pages deploy of the
+// same run is still in progress: the index is cached for up to ten minutes).
+if (TALKS_FROM === 'data') {
+  console.log('NOTE talks: the expected talks come from the committed data/ (SMOKE_TALKS=data)');
+} else {
+  const published = await loadBundleTalks([PRIMARY, ...EXTRA]);
+  const loaded = [...bundleTalks].filter(([, r]) => r.docs).map(([slug, r]) => `${slug} ${r.path}`);
+  console.log(`NOTE talks: the expected talks come from the published bundles at ${new URL(BUNDLE_BASE).origin}${loaded.length ? `: ${loaded.join(', ')}` : ''} (SMOKE_TALKS=data uses the committed data/)`);
+  await check('bun1: the published talk bundles list the Worker\'s searchable conferences with the same talk counts', async () => {
+    if (!published) throw new Error(bundleTalks.get(PRIMARY)?.error ?? 'the published index could not be read');
+    const bundled = new Map(published.conferences.filter((c) => c.bundle).map((c) => [c.conference.slug, c.bundle.talk_count]));
+    const problems = [];
+    for (const c of conferences.filter((x) => x.status === 'searchable')) {
+      if (!bundled.has(c.slug)) problems.push(`${c.slug} has no published bundle`);
+      else if (bundled.get(c.slug) !== c.talk_count) problems.push(`${c.slug}: the Worker has ${c.talk_count} talks, the bundle ${bundled.get(c.slug)}`);
+    }
+    for (const slug of bundled.keys()) if (confBySlug.get(slug)?.status !== 'searchable') problems.push(`${slug} has a bundle but is not searchable on the Worker`);
+    report(problems.length === 0, 'bun1: the published talk bundles list the Worker\'s searchable conferences with the same talk counts',
+      problems.length ? `${problems.slice(0, 3).join('; ')}; the Worker and the bundles hold different schedules until an ingest run publishes both` : `${bundled.size} conferences`);
+  });
+}
 
 // The Worker's capabilities document (docs/contracts/capabilities.md), validated as a producer's,
 // in closed mode. Later checks read ble.mode from it.
@@ -723,13 +822,13 @@ await check('d: no break, housekeeping or ambient item appears', async () => {
 });
 
 // e. The events and showcases toggle: off by default, and when on it adds only kind "ambient" items,
-// never a break or a housekeeping item. The expectation comes from the committed data.
+// never a break or a housekeeping item. The expectation comes from the expected talks (SMOKE_TALKS).
 await check('e1: include_events adds co-located events and showcases, and nothing else', async () => {
   const docs = readNdjson(PRIMARY);
   const ambient = new Map(docs.filter((d) => d.kind === 'ambient').map((d) => [d.talk_id, d]));
   const other = new Map(docs.filter((d) => d.kind === 'break' || d.kind === 'housekeeping').map((d) => [d.talk_id, d]));
   const track = [...ambient.values()].find((d) => d.track === 'Solutions Showcase')?.track ?? [...ambient.values()][0]?.track;
-  if (!track) throw new Error('no ambient item in the committed data');
+  if (!track) throw new Error('no ambient item in the expected talks');
   const off = await search({ query: '', size: 50, filters: { track: [track] } });
   const on = await search({ query: '', size: 50, filters: { track: [track], include_events: true } });
   if (off.status !== 200 || on.status !== 200) throw new Error(`status ${off.status} and ${on.status}`);
@@ -803,7 +902,7 @@ await check('k2: debug must be a boolean, and browse mode has no ranking details
 });
 
 // Time phrases: "tuesday afternoon" leaves the text and becomes two filters. The expectation is
-// computed from the committed data, not from the response: every talk starts on that day at or
+// computed from the expected talks (SMOKE_TALKS), not from the response: every talk starts on that day at or
 // after 12:00, and the day's lunch from the break items bounds "after lunch".
 const minutesOf = (iso) => Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
 await check('m1: "tuesday afternoon" leaves the text, filters the results and can be removed', async () => {
@@ -823,7 +922,7 @@ await check('m1: "tuesday afternoon" leaves the text, filters the results and ca
 
 // Happening now: the chip's window is judged by Elasticsearch against its own clock, and the chip is
 // available only on days the conference is running in its own time zone. Both expectations are
-// computed here from the committed data and the local clock, with two minutes of slack for skew.
+// computed here from the expected talks (SMOKE_TALKS) and the local clock, with two minutes of slack for skew.
 const localDayIn = (ms, timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
 await check('n1: Happening now is available exactly when the conference has talks today in its own zone', async () => {
   const problems = [];

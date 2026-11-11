@@ -3,8 +3,9 @@ name: Deploy the talk bundles to GitHub Pages
 # Builds https://kurtlehnardt.github.io/conferenceCaddie/ and publishes it with the official Pages
 # actions. The site holds only public talk data, never the web app:
 # - the talk bundles of tier 1 (docs/BUNDLES.md, docs/contracts/talk-bundle.md): bundles/<slug>/<hash16>/
-#   {bundle.json, vectors.i8}, bundles/conferences.json (with a copy at conferences.json) and the
-#   tier 1 capabilities.json, built by scripts/build-bundles.mjs from the committed data/;
+#   {bundle.json, vectors.i8}, bundles/conferences.json (with a copy at conferences.json), the
+#   builder's bundles/build-info.json and bundles/sources.json, and the tier 1 capabilities.json,
+#   built by scripts/build-bundles.mjs;
 # - a small landing page (index.html, and the same page as 404.html, from scripts/pages-landing.mjs)
 #   with no script and no storage access, which links to the app.
 #
@@ -12,16 +13,37 @@ name: Deploy the talk bundles to GitHub Pages
 # github.io origin is shared with the account's other Pages sites, which could read the app's device
 # secrets from localStorage there, so the app is never published here (DECISIONS.md, 2026-11-10).
 #
-# Nothing here needs the Worker: the site is built from the committed data/ and published as is, so
-# the talk bundles are available to the native apps whether or not the Worker has been deployed.
+# Two kinds of run publish the site, and both go through this workflow:
+# - Ingest runs. ingest.yml calls this workflow (workflow_call) after it has pushed fresh schedules to
+#   the Worker, with the name of an artifact that holds the conference files it pushed
+#   (scripts/stage-ingest-data.mjs). A called run checks out the current main, not the ingest's
+#   commit (which can be up to 90 minutes old), so a takedown merged in the meantime is applied and
+#   an older commit never deploys after a newer one. The staged files are laid over data/ before the
+#   build, and those conferences are always rebuilt from them (--fresh), so the bundles carry the
+#   schedule the Worker serves. The ingest run is the publisher of fresh schedules; nothing is
+#   committed to the repository.
+# - Runs of its own (a push to main, the weekly schedule, a manual run), built from the committed
+#   data/, which is only a seed.
+# Every build passes --live with the live bundle base: a conference whose live bundle came from a
+# schedule fetched later than data/ holds (bundles/sources.json) is kept as it is instead of being
+# rebuilt from older data, so a run from the committed data never replaces what an ingest published
+# (scripts/lib/bundle-sources.mjs). A run that cannot read the live site fails rather than guess.
+# The concurrency group below is the workflow's own, also when ingest.yml calls it, so two deploys
+# never overlap. The Pages CDN keeps the previous deploy's files for up to ten minutes, so the build
+# first looks up when the latest successful Pages deployment was created (Deployments API) and waits
+# until the live files carry a Last-Modified at least that new (build-bundles.mjs --live-since).
+# Nothing here needs the Worker: the talk bundles are available to the native apps whether or not
+# the Worker has been deployed.
 # Repository variable (Settings, Secrets and variables, Actions, Variables), a public address and
 # not a secret:
 #   CADDIE_APP_URL   the app's address, the Worker's https address. The landing page links to it, or
 #                    says the app is not live yet while it is empty.
 #
 # Triggers: a push to main that changes the conference data or the bundle builder; a weekly
-# scheduled full rebuild that recomputes every vector (--reuse-from none), so nothing that was ever
-# published persists unnoticed (docs/BUNDLES.md); and a manual run.
+# scheduled full rebuild that recomputes every vector it builds (--reuse-from none), so nothing that
+# was ever published persists unnoticed (docs/BUNDLES.md); a manual run; and the call from
+# ingest.yml. In a called run github.event_name is the caller's, so the scheduled weekly ingest also
+# re-embeds the conferences it refreshed from scratch.
 #
 # Pages must be enabled once with the source set to "GitHub Actions" (Settings, Pages).
 
@@ -40,9 +62,17 @@ on:
       - '.github/workflows/pages.yml'
   schedule:
     # Mondays, after the weekly ingest (ingest.yml, 09:17 UTC) has had time to push new data to the Worker.
-    # The ingest commits nothing, so this run rebuilds the bundles from the data already committed.
+    # The ingest publishes the bundles it refreshed itself, so this run keeps those (--live) and
+    # re-embeds the others from the committed data.
     - cron: '47 11 * * 1'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ingest_artifact:
+        description: 'The artifact of conference files an ingest run pushed to the Worker (scripts/stage-ingest-data.mjs).'
+        type: string
+        required: false
+        default: ''
 
 # The build job installs the third-party packages of tools/bundles (about seventy) with no install
 # script, and nothing from the root package, which the bundle builder, the carry-forward script and the
@@ -65,16 +95,40 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
+      deployments: read
       pages: read
     env:
       CADDIE_APP_URL: ${{ vars.CADDIE_APP_URL }}
     steps:
+      # A called run (from ingest.yml) builds from the current main; any other run from its own commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ingest_artifact && 'main' || '' }}
           persist-credentials: false
+
+      # When the latest successful Pages deployment was created. Pages sets Last-Modified to the time it
+      # deployed a file, and the build waits until the live index is at least that new (--live-since).
+      # This runs before any third-party package is installed.
+      - name: Find the latest Pages deployment
+        id: deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          since=""
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=github-pages&per_page=20" --jq '.[].id')
+          for id in $ids; do
+            state=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
+            if [ "$state" = "success" ]; then
+              since=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id" --jq '.created_at')
+              break
+            fi
+          done
+          if [ -z "$since" ]; then echo "::notice::No successful Pages deployment found; the live site is read without waiting for the CDN."; fi
+          echo "since=$since" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -87,6 +141,41 @@ jobs:
         run: |
           rm -rf dist-pages
           mkdir -p dist-pages
+
+      # Called from ingest.yml: the conference files that run pushed to the Worker replace the
+      # committed ones. The artifact may hold only <slug>/conference.json and <slug>/talks.ndjson,
+      # as plain files.
+      - name: Download the ingest data
+        if: inputs.ingest_artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.ingest_artifact }}
+          path: ${{ runner.temp }}/ingest-data
+
+      - name: Lay the ingest data over data/
+        id: lay
+        if: inputs.ingest_artifact
+        run: |
+          src="$RUNNER_TEMP/ingest-data"
+          unexpected=$(find "$src" -mindepth 1 ! -type d ! -type f -print)
+          if [ -n "$unexpected" ]; then echo "::error::The ingest data holds entries that are not plain files."; exit 1; fi
+          unexpected=$(find "$src" -mindepth 1 -type f -print | sed "s|^$src/||" \
+            | grep -vE '^[a-z0-9][a-z0-9-]{0,119}/(conference\.json|talks\.ndjson)$' || true)
+          if [ -n "$unexpected" ]; then echo "::error::Unexpected files in the ingest data: $unexpected"; exit 1; fi
+          count=0
+          fresh=""
+          for dir in "$src"/*/; do
+            [ -d "$dir" ] || continue
+            slug=$(basename "$dir")
+            mkdir -p "data/$slug"
+            for f in conference.json talks.ndjson; do
+              if [ -f "$dir$f" ]; then cp "$dir$f" "data/$slug/$f"; fi
+            done
+            count=$((count + 1))
+            fresh="${fresh:+$fresh,}$slug"
+          done
+          echo "Laid $count conference(s) from the ingest run over data/."
+          echo "fresh=$fresh" >> "$GITHUB_OUTPUT"
 
       # The embedding library, with no install script: onnxruntime-node's postinstall would
       # download an unverified CUDA provider, and the CPU binaries ship in the package.
@@ -114,9 +203,16 @@ jobs:
         env:
           MODEL_FLAG: ${{ steps.model-cache.outputs.cache-hit == 'true' && '--no-model-download' || '' }}
           REUSE_FLAG: ${{ github.event_name == 'schedule' && '--reuse-from none' || '' }}
+          LIVE_SINCE: ${{ steps.deployed.outputs.since }}
+          FRESH: ${{ steps.lay.outputs.fresh }}
         run: |
           # Never --offline here: it would also forbid reusing the published vectors.
-          node scripts/build-bundles.mjs --out dist-pages --base-url "$BUNDLE_BASE" $MODEL_FLAG $REUSE_FLAG \
+          # --live keeps a live bundle whose schedule is newer than the data here (see above), except
+          # the conferences this ingest run staged (--fresh), which always follow the staged files.
+          live_args=(--live "$BUNDLE_BASE")
+          if [ -n "$LIVE_SINCE" ]; then live_args+=(--live-since "$LIVE_SINCE"); fi
+          if [ -n "$FRESH" ]; then live_args+=(--fresh "$FRESH"); fi
+          node scripts/build-bundles.mjs --out dist-pages --base-url "$BUNDLE_BASE" "${live_args[@]}" $MODEL_FLAG $REUSE_FLAG \
             --takedown "$TAKEDOWN" --publisher-name "$PUBLISHER"
 
       # A deploy replaces the whole site, but clients may still be fetching the bundle directories
@@ -150,7 +246,7 @@ jobs:
           unexpected=$(find dist-pages/bundles -mindepth 1 ! -type d ! -type f -print)
           if [ -n "$unexpected" ]; then echo "::error::Entries under bundles that are not plain files: $unexpected"; exit 1; fi
           unexpected=$(find dist-pages/bundles -mindepth 1 ! -type d -print | sed 's|^dist-pages/||' \
-            | grep -vE '^bundles/(conferences\.json|build-info\.json|[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
+            | grep -vE '^bundles/(conferences\.json|build-info\.json|sources\.json|[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected files in dist-pages/bundles: $unexpected"; exit 1; fi
           unexpected=$(find dist-pages/bundles -mindepth 1 -type d -print | sed 's|^dist-pages/||' \
             | grep -vE '^bundles/[^/]+(/[0-9a-f]{16})?$' || true)
@@ -190,7 +286,7 @@ jobs:
           if grep -qvE '^[-d]$' types.txt; then echo "::error::The artifact holds an entry that is not a plain file or directory (a link or a device)."; tar -tvf artifact/artifact.tar | grep -vE '^[-d]'; exit 1; fi
           entries=$(tar -tf artifact/artifact.tar | sed 's|^\./||; s|/$|/|' | grep -vxE '\.?/?|\.' || true)
           unexpected=$(printf '%s\n' "$entries" | grep -vE '/$' \
-            | grep -vE '^(index\.html|404\.html|conferences\.json|capabilities\.json|bundles/conferences\.json|bundles/build-info\.json|bundles/[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
+            | grep -vE '^(index\.html|404\.html|conferences\.json|capabilities\.json|bundles/conferences\.json|bundles/build-info\.json|bundles/sources\.json|bundles/[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected files in the artifact: $unexpected"; exit 1; fi
           unexpected=$(printf '%s\n' "$entries" | grep -E '/$' | grep -vE '^bundles/([^/]+/([0-9a-f]{16}/)?)?$' || true)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected directories in the artifact: $unexpected"; exit 1; fi
