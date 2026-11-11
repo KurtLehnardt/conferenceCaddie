@@ -38,8 +38,11 @@
 //                        Default signed. No admin request follows a redirect: a 3xx is a FAIL.
 //                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
 //                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
-//                        Worker) and the checks that need them (meter1, the expired profile, the aged
-//                        presence, unav1) print SKIP instead of FAIL.
+//                        Worker); against localhost, 127.0.0.1 or [::1] that FAILs with a hint to set
+//                        ADMIN_TEST_ROUTES=1 in worker/.dev.vars. SMOKE_TREAT_AS_REMOTE=1 (test-only)
+//                        makes a loopback API count as deployed. Against a deployed Worker the checks
+//                        that need the fixtures (meter1, the expired profile, the aged presence,
+//                        unav1) print SKIP instead of FAIL.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -494,6 +497,15 @@ async function admin(method, path, body) {
 // GET /admin/stats answers 200 with the same credentials, the fixtures are gated; otherwise the
 // 404 is an auth or routing failure and the check fails as before.
 let fixturesGated = null;
+// Against a local Worker (localhost, 127.0.0.1, [::1]) a gated fixture is a configuration mistake of the
+// developer's .dev.vars, so it FAILs with a hint instead of a SKIP that hides it. A deployed Worker keeps
+// the SKIP. SMOKE_TREAT_AS_REMOTE=1 is test-only: it makes a loopback API count as deployed, so the
+// loopback stub of test/smoke-admin-sign.test.mjs can exercise the SKIP path.
+const API_IS_LOOPBACK = process.env.SMOKE_TREAT_AS_REMOTE !== '1' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(new URL(API_BASE).hostname);
+const FIXTURES_GATED_LOCAL_HINT = 'the Worker answers 404 to /admin/test/*: set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (npm --prefix worker run dev-vars)';
+function gatedFixtures() {
+  throw API_IS_LOOPBACK ? new Error(FIXTURES_GATED_LOCAL_HINT) : new SkipCheck(FIXTURES_GATED_WHY);
+}
 const FIXTURES_GATED_WHY = 'the Worker answers 404 to /admin/test/*: its fixtures are gated off; deploy it with ADMIN_TEST_ROUTES=1 to run this check';
 function noteFixtureAnswer(path, status) {
   if (!path.startsWith('/admin/test/') || fixturesGated !== null) return;
@@ -505,7 +517,7 @@ async function fixture(method, path, body) {
     const stats = await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`);
     fixturesGated = stats.status === 200;
   }
-  if (r.status === 404 && fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+  if (r.status === 404 && fixturesGated) gatedFixtures();
   return r;
 }
 
@@ -1631,7 +1643,8 @@ try {
 
   await check('p7: expired profiles never appear', async () => {
     if (!expiredWritten) {
-      skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
+      if (fixturesGated && API_IS_LOOPBACK) report(false, 'p7: expired profiles never appear', FIXTURES_GATED_LOCAL_HINT);
+      else skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
       return;
     }
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
@@ -2429,7 +2442,7 @@ try {
       return;
     }
     // A Worker with its fixtures gated off is a deployed one, whose conferences must not be flipped.
-    if (fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+    if (fixturesGated) gatedFixtures();
     const doc = JSON.parse(readFileSync(join(ROOT, 'data', slug, 'conference.json'), 'utf8'));
     const U = newDevice();
     await putProfile(U, slug, 'U', {}, { open: true });

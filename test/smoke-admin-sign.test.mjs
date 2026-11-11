@@ -93,6 +93,9 @@ function runSmoke(port, extraEnv) {
       SMOKE_TALKS: 'data',
       SMOKE_BUNDLE_BASE: `http://127.0.0.1:${port}/bundles/`,
       SMOKE_UNAVAILABLE: PRIMARY,
+      // The loopback stub stands for a deployed Worker unless a test says otherwise (SMOKE_TREAT_AS_REMOTE is
+      // test-only): a gated fixture is a SKIP there and a FAIL with a hint against a local one.
+      SMOKE_TREAT_AS_REMOTE: '1',
       ...extraEnv,
     };
     const child = spawn(process.execPath, [SMOKE], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -233,6 +236,26 @@ test('the default is signed: no SMOKE_ADMIN_AUTH sends X-Caddie-Admin and no Aut
     const calls = adminCalls(requests, signedOk);
     assert.ok(calls.length >= 3);
     assert.ok(requests.every((r) => r.authorization === null));
+  } finally {
+    server.close();
+  }
+});
+
+test('gated fixtures FAIL with the .dev.vars hint against a loopback API, and SKIP against a deployed one', async () => {
+  const { server, port } = await stubWorker({ authOk: signedOk });
+  try {
+    const local = await runSmoke(port, { SMOKE_TREAT_AS_REMOTE: '' });
+    const hint = 'set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (npm --prefix worker run dev-vars)';
+    for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
+      const fail = local.lines.find((l) => l.startsWith(`FAIL ${check}:`));
+      assert.ok(fail?.includes(hint), `${check} must FAIL with the hint:\n${local.lines.filter((l) => l.includes(`${check}:`)).join('\n')}`);
+      assert.ok(!skipLine(local.lines, check), `${check} must not SKIP against a loopback API`);
+    }
+    const remote = await runSmoke(port, {});
+    for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
+      assert.ok(skipLine(remote.lines, check)?.includes('ADMIN_TEST_ROUTES'), `${check} must SKIP against a deployed Worker`);
+      assert.ok(!remote.lines.some((l) => l.startsWith(`FAIL ${check}:`)));
+    }
   } finally {
     server.close();
   }
