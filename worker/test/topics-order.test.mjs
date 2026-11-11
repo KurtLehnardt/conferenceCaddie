@@ -4,7 +4,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { assignFrozen, buildTopics, compareTopics, loadStoplist, resolveTopics } from '../ingest/topics-local.mjs';
+import { buildTopics as buildBundleTopics, compareTopics as bundleCompare, readFixups } from '../../scripts/lib/topics.mjs';
+
+const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const STOPLIST_TEXT = readFileSync(`${ROOT}config/topic-stoplist.txt`, 'utf8');
 
 const SLUG = 'order-test-2026';
 const stop = loadStoplist();
@@ -102,8 +108,85 @@ test('each talk lists its topic ids in the new rank order', () => {
   assert.deepEqual(assignments.get('b'), ['gamma']);
 });
 
-test('compareTopics is the order buildTopics sorts by', () => {
-  const talks = talksWith({ alpha: 5, beta: 5, gamma: 3 });
-  const { topics } = buildTopics(talks, { slug: SLUG, stop });
-  assert.deepEqual([...topics].reverse().sort(compareTopics).map((t) => t.topic_id), topics.map((t) => t.topic_id));
+// The builder behind the bundles and the contract fixtures (scripts/lib/topics.mjs), run on the
+// same talks. Its topics are documents shaped like the ones the Worker stores.
+function bundleTopics(talks, fixups = {}) {
+  return buildBundleTopics({ talks, stoplistText: STOPLIST_TEXT, fixups }).topics
+    .map((t) => ({ conference: SLUG, ...t, label_exact: t.label }));
+}
+
+test('the Worker ingest ranks by the comparator of the bundle builder', () => {
+  assert.equal(compareTopics, bundleCompare);
+});
+
+test('a frozen list of KubeCon topics is ranked in the order the bundle builder gives', () => {
+  const slug = 'kubecon-cloudnativecon-north-america-2026';
+  const talks = readFileSync(`${ROOT}data/${slug}/talks.ndjson`, 'utf8').trim().split('\n')
+    .map((line) => JSON.parse(line)).filter((t) => t.kind === 'talk');
+  assert.ok(talks.length > 400);
+  const built = buildBundleTopics({ talks, stoplistText: STOPLIST_TEXT, fixups: readFixups(`${ROOT}data/topics/${slug}.json`) }).topics;
+  assert.ok(built.length > 50);
+  const docs = built.map((t) => ({ conference: slug, ...t, label_exact: t.label }));
+
+  // The whole list, then a list frozen with every third topic gone (topics that were removed since).
+  // Counts do not depend on the other topics, so the order is the builder's order of the same ids.
+  for (const frozen of [docs, docs.filter((_, i) => i % 3 !== 0)]) {
+    const ids = new Set(frozen.map((t) => t.topic_id));
+    const expected = built.filter((t) => ids.has(t.topic_id));
+    const { topics } = assignFrozen(talks, frozen, { slug, stop });
+    assert.deepEqual(topics.map((t) => [t.topic_id, t.talk_count]), expected.map((t) => [t.topic_id, t.talk_count]));
+    assert.deepEqual(topics.map((t) => t.rank), expected.map((_, i) => i + 1));
+  }
+});
+
+test('a frozen topic with a merge alias counts the talks that have only the alias', async () => {
+  const worker = fakeWorker();
+  const fixups = { merge: { omega: 'alpha' } };
+  const first = talksWith({ alpha: 3, omega: 3, beta: 4 });
+  const frozen = bundleTopics(first, fixups);
+  const alpha = frozen.find((t) => t.topic_id === 'alpha');
+  assert.deepEqual(alpha.aliases, ['omega']);
+  assert.equal(alpha.talk_count, 6);
+  assert.equal(frozen.some((t) => t.topic_id === 'omega'), false);
+  await worker.admin('PUT', `/admin/topics?event=${SLUG}`, { topics: frozen });
+
+  // Two more talks hold only the alias word. The re-ingest keeps the list and counts them.
+  const changed = talksWith({ alpha: 3, omega: 5, beta: 4 });
+  const result = await ingest(worker, changed);
+  assert.equal(result.mode, 'frozen');
+  const stored = (await worker.admin('GET', `/admin/topics?event=${SLUG}`)).topics;
+  assert.deepEqual(stored.map((t) => [t.topic_id, t.talk_count, t.rank]), [['alpha', 8, 1], ['beta', 4, 2]]);
+  assert.deepEqual(stored.find((t) => t.topic_id === 'alpha').aliases, ['omega']);
+  assert.deepEqual(stored.map((t) => [t.topic_id, t.talk_count]), bundleTopics(changed, fixups).map((t) => [t.topic_id, t.talk_count]));
+  for (const t of changed.filter((x) => x.talk_id.startsWith('t-omega-'))) assert.deepEqual(result.assignments.get(t.talk_id), ['alpha']);
+  for (const t of changed.filter((x) => x.talk_id.startsWith('t-alpha-'))) assert.deepEqual(result.assignments.get(t.talk_id), ['alpha']);
+});
+
+test('ties between accented and kana labels are ordered the same way by both builders', () => {
+  // The terms are ASCII (a topic id is), and the labels come from the fix-ups. The counts tie, so
+  // only the label decides. By UTF-16 code unit, case-insensitively: "zebra" (U+007A), "éclair"
+  // (U+00E9), the hiragana label (U+3072), the katakana label (U+30AB). localeCompare would put
+  // "Éclair" before "Zebra" and the katakana label before the hiragana one.
+  const rename = { alpha: 'カタカナ', beta: 'ひらがな', gamma: 'Éclair', delta: 'Zebra' };
+  const talks = talksWith({ alpha: 3, beta: 3, gamma: 3, delta: 3 });
+  const expected = ['delta', 'gamma', 'beta', 'alpha'];
+
+  const bundle = bundleTopics(talks, { rename });
+  assert.deepEqual(bundle.map((t) => t.topic_id), expected);
+  assert.deepEqual(bundle.map((t) => t.label), ['Zebra', 'Éclair', 'ひらがな', 'カタカナ']);
+
+  const local = buildTopics(talks, { slug: SLUG, stop, fixups: { rename, merge: {}, remove: [] } });
+  assert.deepEqual(local.topics.map((t) => t.topic_id), expected);
+
+  // A list frozen in some other order is ranked the same way.
+  const frozen = [...bundle].reverse().map((t) => ({ ...t, rank: 0 }));
+  const { topics, assignments } = assignFrozen(talks, frozen, { slug: SLUG, stop });
+  assert.deepEqual(topics.map((t) => t.topic_id), expected);
+  assert.deepEqual(topics.map((t) => t.rank), [1, 2, 3, 4]);
+  assert.deepEqual(assignments.get('t-alpha-0'), ['alpha']);
+
+  // The same tie through the comparator, with the topic id as the last resort.
+  const tie = (label, topic_id) => ({ label, topic_id, talk_count: 5 });
+  const order = [tie('Éclair', 'b'), tie('Zebra', 'a'), tie('éclair', 'a'), tie('Éclair', 'a')];
+  assert.deepEqual(order.sort(compareTopics).map((t) => `${t.label}/${t.topic_id}`), ['Zebra/a', 'Éclair/a', 'Éclair/b', 'éclair/a']);
 });
