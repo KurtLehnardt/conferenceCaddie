@@ -473,10 +473,19 @@ xcrun simctl openurl booted "caddie://connect?url=https%3A%2F%2Fkurtlehnardt.git
   Worker does; on one that says `server` (tier 3) the app sends the file's text to
   `POST /api/import/schedule` with the file name and type as hints, and imports on the device when
   that backend cannot be reached. The review, the labels and the marking follow the web; the talks
-  are marked on this device only. Android reads only `content:` addresses that another app hands
-  over, never a `file:` address, and iOS deletes the copy the system makes for the app once it is
-  read. `ScheduleImport`'s tests include every case of `test/import-bounds.test.mjs` and 28 files
+  are marked on this device only. A file another app opens in or shares to the app waits on the
+  sheet's first page until the person taps Find talks. Android reads only `content:` addresses that
+  another app hands over, never a `file:` address, and at most 5 MB of them; iOS deletes the copy
+  the system makes for the app once it is read. JSON is read with a bound on memory
+  (`importer/BoundedJson`): at most 200,000 values are built, and nothing nested deeper than 512
+  levels is read as JSON. `ScheduleImport`'s tests include every case of `test/import-bounds.test.mjs` and 28 files
   whose candidates and matches equal the Worker's (`shared/scripts/generate-import-fixtures.mjs`).
+- **Updating from the Capacitor app.** The native Android app installs over the Capacitor app
+  v0.3.0 (same application id and key). Once, at its first start after that update, it reads the
+  old app's Interested lists from the old WebView's local storage (`CapacitorMigration`, through a
+  hidden WebView at the old origin, `https://localhost`; nothing is fetched) and keeps them for the
+  official server. The old app's people profile and device secret are not moved yet (phase 3), so
+  delete a profile in the old app before updating if you made one.
 - **Storage.** SQLite through the bundled androidx.sqlite driver, in two files on one connection:
   the main database (settings and the marked talks) and a cache database attached as `cache` (the
   cached lists, the installed bundles and the search index, all of which can be downloaded again).
