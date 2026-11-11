@@ -12,7 +12,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import app.conferencecaddie.shared.AndroidNotifier
 import app.conferencecaddie.shared.AndroidPermissions
 import app.conferencecaddie.shared.BackendUrl
-import app.conferencecaddie.shared.AndroidPeopleServices
 import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.ui.platform.IncomingHandoff
@@ -83,10 +82,11 @@ class MainActivity : ComponentActivity(), PlatformActions {
             CapacitorMigration.maybeRun(this, core)
         }
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
-        // The people features, next to the core, with the platform services: the Keystore-backed
-        // secure store, location, notifications and the permission prompts of this activity.
-        val peopleServices = AndroidPeopleServices.create(applicationContext, R.drawable.ic_stat_caddie)
-        val people = AndroidCore.people(this, peopleServices, allowLocalHttp = isDebugBuild)
+        // The people features: the process's one controller and platform services (the Keystore-backed
+        // secure store, location, notifications and the permission prompts of this activity), which
+        // the background nudge job shares. They are made on the first call only, not on every
+        // re-creation of the activity.
+        val people = CaddiePeople.controller(this)
         setContent {
             CaddieApp(
                 core = core,

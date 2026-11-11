@@ -7,6 +7,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -15,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.conferencecaddie.shared.people.MetPerson
 import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
@@ -86,12 +88,15 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
 /**
  * People I met (`state.met`, only when not empty): each name (600) and about over a Remove text
  * button that is stretched across the row with its label centred, 12 dp out to the left, as the
- * web's computed style draws it (`controller.removeMet(i)`); then "Saved on this phone only."
+ * web's computed style draws it (`controller.removeMet(person)`); then "Saved on this phone only."
+ * Remove goes by the entry, not its position, and is off while that entry's removal runs: a second
+ * tap, even one that lands before the screen redraws, removes nobody else.
  */
 @Composable
 fun PeopleIMet(state: PeopleUiState, host: PeopleHost) {
     if (state.met.isEmpty()) return
     val scope = rememberCoroutineScope()
+    val removing = remember { mutableStateListOf<MetPerson>() }
     SettingsGroup(ProfileStrings.PEOPLE_I_MET, Modifier.testTag("set-met")) {
         state.met.forEachIndexed { i, m ->
             SettingsRow(first = i == 0) {
@@ -102,10 +107,22 @@ fun PeopleIMet(state: PeopleUiState, host: PeopleHost) {
                     }
                     CaddieButton(
                         ProfileStrings.REMOVE,
-                        { scope.launch { host.controller.removeMet(m) } },
+                        {
+                            if (m !in removing) {
+                                removing += m
+                                scope.launch {
+                                    try {
+                                        host.controller.removeMet(m)
+                                    } finally {
+                                        removing -= m
+                                    }
+                                }
+                            }
+                        },
                         Modifier.stretchedLeft(12).testTag("met-remove-$i"),
                         variant = ButtonVariant.Text,
                         small = true,
+                        enabled = m !in removing,
                     )
                 }
             }

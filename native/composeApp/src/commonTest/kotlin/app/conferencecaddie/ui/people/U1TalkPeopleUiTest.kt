@@ -21,8 +21,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
+import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleText
 import app.conferencecaddie.ui.shell.DebugLaunch
+import app.conferencecaddie.ui.shell.ShellNavigation
 import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.talks.CaddieApp
@@ -31,6 +33,8 @@ import app.conferencecaddie.ui.theme.CaddieTheme
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -45,6 +49,7 @@ class U1TalkPeopleUiTest {
     private val f = U1Fixture()
     private val talk1 = "alpha-conf-2099:1"
     private val talk3 = "alpha-conf-2099:3"
+    private val talk4 = "alpha-conf-2099:4"
 
     @AfterTest
     fun cleanUp() = f.close()
@@ -181,5 +186,47 @@ class U1TalkPeopleUiTest {
         // Close: the banner goes and, being seen, does not come back.
         onNode(hasContentDescription(Strings.Common.CLOSE) and hasAnyAncestor(hasTestTag("ended-talk-banner"))).performClick()
         u1WaitGone(hasTestTag("ended-talk-banner"))
+    }
+
+    @Test
+    fun theControllersNoticeOffersOpenProfileOnlyWhenItSaysSo() = runComposeUiTest {
+        prepare(talk1)
+        f.act { assertNull(f.controller.followInterested()) }
+        val toasts = ArrayList<Pair<String, String?>>()
+        setContent {
+            rememberPeopleUi(
+                f.controller,
+                ShellNavigation(),
+                PeopleTalks(null, emptyList(), 0),
+                online = true,
+                searchable = true,
+                launch = null,
+                showToast = { message, label, _ -> toasts += message to label },
+                openTalk = {},
+                openUrl = {},
+            )
+        }
+
+        // A LinkedIn link the server would refuse: the automatic share of the next marked talk fails
+        // with a message that does not say "profile", yet the fix is on Profile, so the toast offers it.
+        f.act { f.controller.updateProfile { it.copy(linkedinUrl = "https://example.com/in/jordan") } }
+        val problem = PeopleController.profileProblem(f.controller.state.value.profile)!!
+        assertFalse(problem.contains("profile", ignoreCase = true))
+        f.core.setInterested(talk3, true)
+        u1WaitOrDump("the LinkedIn notice") { toasts.isNotEmpty() }
+        runOnIdle { assertEquals(listOf<Pair<String, String?>>(problem to PeopleCommonStrings.OPEN_PROFILE), toasts.toList()) }
+        u1WaitOrDump("the notice to be cleared") { f.controller.state.value.notice == null }
+
+        // A server that is down: the toast names the failure and offers nothing.
+        f.act { f.controller.updateProfile { it.copy(linkedinUrl = "") } }
+        f.server.failure = FakeFailure.ServerError()
+        f.core.setInterested(talk4, true)
+        u1WaitOrDump("the server notice") { toasts.size == 2 }
+        runOnIdle {
+            val (message, label) = toasts[1]
+            assertFalse(message.contains("profile", ignoreCase = true))
+            assertNull(label)
+        }
+        f.server.failure = FakeFailure.None
     }
 }
