@@ -180,6 +180,72 @@ class BleRekeyNotifyTest {
         assertEquals(reports + 2, b.sightings().size, "tried again after the interval, not after the re-key's doubled wait")
     }
 
+    @Test
+    fun aReKeyWhileOfflineBacksOffAndResumesWhenBackOnline() = runTest {
+        val b = BleRig(this)
+        b.on()
+        val put = b.h.server.presencePut
+        val t0 = b.now()
+        val at = ArrayList<Long>()
+        // The presence write throws, as it does with no network, not an answer such as a 503.
+        var offline = true
+        b.h.server.presencePut = { r ->
+            at += b.now() - t0
+            if (offline) throw IllegalStateException("offline")
+            put(r)
+        }
+        b.h.server.sightings = { b.answer(keyId = "AAAAAAAAAAA") }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        assertEquals(listOf(0L), at)
+        assertTrue(b.view.on, "a write that throws keeps running")
+        b.radio.hear(otherPayload(2), -50, b.now())
+        // Retries at 10, 30 and 70 seconds (10, 20, 40 apart, then 80), none back to back.
+        advanceTimeBy(9_999)
+        runCurrent()
+        assertEquals(listOf(0L), at, "no retry before the interval")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000), at)
+        advanceTimeBy(19_999)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000), at, "the wait doubled")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000, 30_000), at)
+        advanceTimeBy(40_000)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000, 30_000, 70_000), at)
+        assertTrue(b.view.on)
+        assertEquals(1, b.sightings().size, "the batch is not reported while the key is out of date")
+
+        // Back online: the retry 80 seconds after the last gets the server's key and clears the wait.
+        offline = false
+        b.h.server.sightings = { b.answer() }
+        advanceTimeBy(79_999)
+        runCurrent()
+        assertEquals(4, at.size, "the wait was 80 seconds")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000, 30_000, 70_000, 150_000), at)
+        assertEquals(b.h.server.bleKeyId(), BleProtocol.keyIdOf(b.keys.hmac(b.alias, BleProtocol.keyIdMessage())!!))
+        assertTrue(b.view.on)
+        assertEquals(listOf(tokenText(2) to -50), b.reported(b.sightings().last()), "the sighting heard offline is kept and sent")
+
+        // A report that then fails once is tried again after the interval, not after the doubled wait.
+        b.h.server.sightings = { FakeApiHttp.json(503, """{"error":"People are temporarily unavailable"}""") }
+        b.radio.hear(otherPayload(3), -60, b.now())
+        advanceTimeBy(10_000)
+        runCurrent()
+        val reports = b.sightings().size
+        advanceTimeBy(9_999)
+        runCurrent()
+        assertEquals(reports, b.sightings().size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(reports + 1, b.sightings().size, "tried again after the interval, not after the doubled wait")
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Notifications
 
