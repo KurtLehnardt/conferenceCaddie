@@ -53,7 +53,7 @@ fun TalkSheet(
             flat = true,
             modifier = Modifier.testTag("talk-sheet-card"),
             extra = if (talk.kind == "talk") {
-                { RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, startOpen = true) }
+                { RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, startOpen = true, onOpenUrl = onOpenUrl) }
             } else {
                 null
             },

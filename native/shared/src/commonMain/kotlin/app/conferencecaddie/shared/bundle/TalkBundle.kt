@@ -72,6 +72,9 @@ data class Attribution(
  * A verified bundle, decoded for use. [decode] reads the schema's shapes strictly and returns null
  * for anything that does not fit, so a bundle that passed the hash checks but is malformed in a way
  * [BundleVerifier] does not look at is still refused rather than half-used.
+ *
+ * [vectors] holds the talk vectors of `vectors.i8` when they were given to [decode] (meaning search
+ * and For you need them); without them, search is keyword search alone.
  */
 data class TalkBundle(
     val contentHash: String,
@@ -81,6 +84,7 @@ data class TalkBundle(
     val topics: List<Topic>,
     val facets: List<Facet>,
     val related: Map<String, List<String>>,
+    val vectors: TalkVectors? = null,
 ) {
     val talksById: Map<String, Talk> by lazy { talks.associateBy { it.talkId } }
     val topicsById: Map<String, Topic> by lazy { topics.associateBy { it.topicId } }
@@ -91,13 +95,18 @@ data class TalkBundle(
         private val FACET_KINDS = setOf("track", "room", "speaker", "tag")
         private val HTTP_URL = Regex("^[Hh][Tt][Tt][Pp][Ss]?://")
 
-        fun decode(contentHash: String, bundleJson: ByteArray): TalkBundle? = try {
-            decode(contentHash, json.parseToJsonElement(bundleJson.decodeToString()))
+        /**
+         * Decodes `bundle.json`, and with [vectors] the bytes of `vectors.i8`, which must hold one
+         * row of `vectors.dims` bytes for every entry of `vectors.rows` (the verifier checks the
+         * same before a bundle is installed).
+         */
+        fun decode(contentHash: String, bundleJson: ByteArray, vectors: ByteArray? = null): TalkBundle? = try {
+            decode(contentHash, json.parseToJsonElement(bundleJson.decodeToString()), vectors)
         } catch (_: Exception) {
             null
         }
 
-        fun decode(contentHash: String, element: JsonElement): TalkBundle? {
+        fun decode(contentHash: String, element: JsonElement, vectorBytes: ByteArray? = null): TalkBundle? {
             val o = element.asObject() ?: return null
             val conference = Conference.read(o["conference"]) ?: return null
             val a = o["attribution"].asObject() ?: return null
@@ -133,7 +142,14 @@ data class TalkBundle(
                 )
             } ?: return null
             val related = o["related"].asObject()?.mapValues { (_, v) -> v.asStringList() ?: return null } ?: return null
-            return TalkBundle(contentHash, conference, attribution, talks, topics, facets, related)
+            val vectors = vectorBytes?.let { bytes ->
+                val v = o["vectors"].asObject() ?: return null
+                val rows = v["rows"].asStringList() ?: return null
+                val dims = v["dims"].asInteger()?.toInt() ?: return null
+                if (dims != TalkVectors.DIMS || bytes.size != rows.size * dims) return null
+                TalkVectors(rows, bytes, dims)
+            }
+            return TalkBundle(contentHash, conference, attribution, talks, topics, facets, related, vectors)
         }
 
         // A required field that holds a string or null. Missing or of another type reads as Kotlin

@@ -1,0 +1,183 @@
+# ONNX Runtime's C API for the iOS targets (docs: https://onnxruntime.ai/docs/api/c/).
+#
+# The C API is a table of function pointers, which is awkward to call from Kotlin, so the few calls
+# the embedder needs are wrapped below in plain C functions: open a session from the model bytes,
+# run it on one tokenised text and copy out the hidden state of the first token, and close it.
+# shared/build.gradle.kts passes the static library (libonnxruntime.a, unpacked from the pinned pod
+# archive) and the header directory.
+package = app.conferencecaddie.shared.embed.ort
+headers = onnxruntime_c_api.h
+headerFilter = onnxruntime_c_api.h
+# The frameworks the onnxruntime-c podspec links. CoreML is weak, because ONNX Runtime calls APIs
+# newer than iOS 16 only after checking that they exist.
+linkerOpts = -lc++ -framework CoreFoundation -framework Foundation -framework Network -framework Security \
+    -framework SystemConfiguration -framework UIKit -weak_framework CoreML
+
+---
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct CaddieOrt {
+    const OrtApi* api;
+    OrtEnv* env;
+    OrtSession* session;
+    OrtMemoryInfo* memory;
+    // Which of input_ids (0), attention_mask (1) and token_type_ids (2) each model input is.
+    int input_kinds[3];
+    const char* input_names[3];
+    size_t input_count;
+    char* output_name;
+} CaddieOrt;
+
+static void caddie_ort_message(char* err, size_t err_len, const char* message) {
+    if (err == NULL || err_len == 0) return;
+    strncpy(err, message != NULL ? message : "unknown error", err_len - 1);
+    err[err_len - 1] = '\0';
+}
+
+// Copies a failed status's message into err and releases the status. Returns 1 when it failed.
+static int caddie_ort_failed(const OrtApi* api, OrtStatus* status, char* err, size_t err_len) {
+    if (status == NULL) return 0;
+    caddie_ort_message(err, err_len, api->GetErrorMessage(status));
+    api->ReleaseStatus(status);
+    return 1;
+}
+
+static void caddie_ort_close(CaddieOrt* o) {
+    if (o == NULL) return;
+    for (size_t i = 0; i < o->input_count; i++) free((void*)o->input_names[i]);
+    free(o->output_name);
+    if (o->memory != NULL) o->api->ReleaseMemoryInfo(o->memory);
+    if (o->session != NULL) o->api->ReleaseSession(o->session);
+    if (o->env != NULL) o->api->ReleaseEnv(o->env);
+    free(o);
+}
+
+// Opens a session on the ONNX model in model[0, size) that runs each operator on intra_threads
+// threads. Returns NULL, with a message in err, when anything fails.
+static CaddieOrt* caddie_ort_open(const void* model, size_t size, int intra_threads, char* err, size_t err_len) {
+    const OrtApiBase* base = OrtGetApiBase();
+    const OrtApi* api = base != NULL ? base->GetApi(ORT_API_VERSION) : NULL;
+    OrtSessionOptions* options = NULL;
+    OrtAllocator* allocator = NULL;
+    size_t count = 0;
+    char* name = NULL;
+    CaddieOrt* o = NULL;
+    if (api == NULL) {
+        caddie_ort_message(err, err_len, "this ONNX Runtime lacks the C API version the app was built with");
+        return NULL;
+    }
+    o = (CaddieOrt*)calloc(1, sizeof(CaddieOrt));
+    if (o == NULL) {
+        caddie_ort_message(err, err_len, "out of memory");
+        return NULL;
+    }
+    o->api = api;
+    // No telemetry: the app sets ORT_DISABLE_TELEMETRY at start (OnnxRuntimeTelemetry), which stops
+    // it for the process, and the environment's telemetry events are turned off too.
+    if (caddie_ort_failed(api, api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "caddie", &o->env), err, err_len)
+        || caddie_ort_failed(api, api->DisableTelemetryEvents(o->env), err, err_len)
+        || caddie_ort_failed(api, api->CreateSessionOptions(&options), err, err_len)
+        || caddie_ort_failed(api, api->SetIntraOpNumThreads(options, intra_threads), err, err_len)
+        || caddie_ort_failed(api, api->SetInterOpNumThreads(options, 1), err, err_len)
+        || caddie_ort_failed(api, api->SetSessionGraphOptimizationLevel(options, ORT_ENABLE_ALL), err, err_len)
+        // Idle intra-op threads sleep instead of spinning on the CPU.
+        || caddie_ort_failed(api, api->AddSessionConfigEntry(options, "session.intra_op.allow_spinning", "0"), err, err_len)
+        || caddie_ort_failed(api, api->CreateSessionFromArray(o->env, model, size, options, &o->session), err, err_len)
+        || caddie_ort_failed(api, api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &o->memory), err, err_len)
+        || caddie_ort_failed(api, api->GetAllocatorWithDefaultOptions(&allocator), err, err_len)
+        || caddie_ort_failed(api, api->SessionGetInputCount(o->session, &count), err, err_len)) {
+        goto fail;
+    }
+    if (count < 1 || count > 3) {
+        caddie_ort_message(err, err_len, "the model does not take one to three inputs");
+        goto fail;
+    }
+    for (size_t i = 0; i < count; i++) {
+        int kind;
+        if (caddie_ort_failed(api, api->SessionGetInputName(o->session, i, allocator, &name), err, err_len)) goto fail;
+        kind = strcmp(name, "input_ids") == 0 ? 0 : strcmp(name, "attention_mask") == 0 ? 1 : strcmp(name, "token_type_ids") == 0 ? 2 : -1;
+        o->input_names[o->input_count] = strdup(name);
+        allocator->Free(allocator, name);
+        name = NULL;
+        if (o->input_names[o->input_count] == NULL) {
+            caddie_ort_message(err, err_len, "out of memory");
+            goto fail;
+        }
+        o->input_kinds[o->input_count] = kind;
+        o->input_count++;
+        if (kind < 0) {
+            caddie_ort_message(err, err_len, "the model takes an input other than input_ids, attention_mask and token_type_ids");
+            goto fail;
+        }
+    }
+    if (caddie_ort_failed(api, api->SessionGetOutputName(o->session, 0, allocator, &name), err, err_len)) goto fail;
+    o->output_name = strdup(name);
+    allocator->Free(allocator, name);
+    if (o->output_name == NULL) {
+        caddie_ort_message(err, err_len, "out of memory");
+        goto fail;
+    }
+    api->ReleaseSessionOptions(options);
+    return o;
+fail:
+    if (options != NULL) api->ReleaseSessionOptions(options);
+    caddie_ort_close(o);
+    return NULL;
+}
+
+// Runs the model on one text of len tokens and copies the last hidden state of the first token
+// ([CLS]), dims values, to out. Returns 0, or -1 with a message in err.
+static int caddie_ort_cls(CaddieOrt* o, const int64_t* ids, const int64_t* mask, const int64_t* types, int64_t len,
+                          float* out, int64_t dims, char* err, size_t err_len) {
+    const OrtApi* api = o->api;
+    const int64_t* data[3] = { ids, mask, types };
+    int64_t shape[2] = { 1, len };
+    OrtValue* inputs[3] = { NULL, NULL, NULL };
+    OrtValue* output = NULL;
+    OrtTensorTypeAndShapeInfo* info = NULL;
+    const char* output_names[1] = { o->output_name };
+    size_t rank = 0;
+    int64_t shape_out[3] = { 0, 0, 0 };
+    ONNXTensorElementDataType element = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+    float* hidden = NULL;
+    int result = -1;
+    for (size_t i = 0; i < o->input_count; i++) {
+        if (caddie_ort_failed(api, api->CreateTensorWithDataAsOrtValue(o->memory, (void*)data[o->input_kinds[i]],
+                (size_t)len * sizeof(int64_t), shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64, &inputs[i]), err, err_len)) {
+            goto done;
+        }
+    }
+    if (caddie_ort_failed(api, api->Run(o->session, NULL, o->input_names, (const OrtValue* const*)inputs, o->input_count,
+            output_names, 1, &output), err, err_len)
+        || caddie_ort_failed(api, api->GetTensorTypeAndShape(output, &info), err, err_len)
+        || caddie_ort_failed(api, api->GetDimensionsCount(info, &rank), err, err_len)) {
+        goto done;
+    }
+    if (rank != 3) {
+        caddie_ort_message(err, err_len, "the model's output is not [batch, tokens, dims]");
+        goto done;
+    }
+    if (caddie_ort_failed(api, api->GetTensorElementType(info, &element), err, err_len)) goto done;
+    if (element != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        caddie_ort_message(err, err_len, "the model's output is not float");
+        goto done;
+    }
+    if (caddie_ort_failed(api, api->GetDimensions(info, shape_out, 3), err, err_len)) goto done;
+    if (shape_out[0] != 1 || shape_out[1] != len || shape_out[2] != dims) {
+        caddie_ort_message(err, err_len, "the model's output has an unexpected shape");
+        goto done;
+    }
+    if (caddie_ort_failed(api, api->GetTensorMutableData(output, (void**)&hidden), err, err_len)) goto done;
+    memcpy(out, hidden, (size_t)dims * sizeof(float));
+    result = 0;
+done:
+    if (info != NULL) api->ReleaseTensorTypeAndShapeInfo(info);
+    if (output != NULL) api->ReleaseValue(output);
+    for (size_t i = 0; i < 3; i++) {
+        if (inputs[i] != NULL) api->ReleaseValue(inputs[i]);
+    }
+    return result;
+}

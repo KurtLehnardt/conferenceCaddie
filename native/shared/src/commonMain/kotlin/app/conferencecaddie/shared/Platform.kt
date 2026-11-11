@@ -16,6 +16,9 @@ interface Embedder {
 
     /** Returns one vector per input text, in the same order. */
     suspend fun embed(texts: List<String>): List<FloatArray>
+
+    /** Releases what the embedder holds (an ONNX Runtime session, for example); later calls may fail. */
+    suspend fun close() {}
 }
 
 /** One Bluetooth sighting: a token heard from a nearby phone and its strongest signal. */

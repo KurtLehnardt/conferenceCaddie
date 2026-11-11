@@ -1,9 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Bluetooth, notification and foreground-service permissions arrive with the BleRadio
          implementation; the skeleton only talks to the network. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- ONNX Runtime's AAR adds a telemetry uploader to Microsoft (a content provider that starts
+         with the app) and the network-state permission it uses. The app sends nothing but to its
+         backend, so both are removed here (the checkOnnxRuntimeManifest task fails the build if either
+         comes back), and CaddieApplication sets ORT_DISABLE_TELEMETRY before ONNX Runtime starts
+         (DECISIONS.md, phase 2b). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 
     <!-- No backups and no device-to-device transfer: the app will hold per-backend device secrets
          that must not leave the phone. allowBackup="false" covers Android 11 and older;
@@ -11,6 +19,7 @@
          device-to-device transfer. Cleartext traffic is off; debug builds add an exception for a
          server on the developer's machine (src/debug). -->
     <application
+        android:name=".CaddieApplication"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -20,6 +29,10 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Caddie">
+        <provider
+            android:name="ai.onnxruntime.TelemetryInitializer"
+            android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
+            tools:node="remove" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
