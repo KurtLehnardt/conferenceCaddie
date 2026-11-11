@@ -36,6 +36,7 @@ import app.conferencecaddie.ui.components.SegmentOption
 import app.conferencecaddie.ui.components.Segmented
 import app.conferencecaddie.ui.components.SettingsGroup
 import app.conferencecaddie.ui.components.SettingsLinkRow
+import app.conferencecaddie.ui.components.SettingsNavRow
 import app.conferencecaddie.ui.components.SettingsRow
 import app.conferencecaddie.ui.components.SettingsTextRow
 import app.conferencecaddie.ui.components.SettingsValueRow
@@ -50,6 +51,10 @@ import app.conferencecaddie.ui.theme.ThemePreference
  * apps' Server group (the backend URL, its status and what it offers) and Storage group (saved
  * schedules). A server typed here is checked by BackendUrl and then handed to [onServerTyped], which
  * shows the same confirmation a link gets.
+ *
+ * You holds the web's "Import my schedule" row when [ShellActions.onImport] is set; it is disabled,
+ * with [ShellState.importNote] as its hint, while no conference is open. Phase 3's Profile row joins
+ * the same group.
  */
 @Composable
 fun SettingsScreen(
@@ -72,6 +77,20 @@ fun SettingsScreen(
             .testTag("settings-screen"),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
+        actions.onImport?.let { onImport ->
+            SettingsGroup(Strings.Settings.YOU, Modifier.testTag("settings-you")) {
+                SettingsNavRow(
+                    icon = LucideIcon.FileUp,
+                    label = Strings.Settings.IMPORT,
+                    hint = state.importNote ?: Strings.Settings.IMPORT_HINT,
+                    onClick = onImport,
+                    first = true,
+                    enabled = state.importNote == null,
+                    modifier = Modifier.testTag("settings-import"),
+                )
+            }
+        }
+
         SettingsGroup(Strings.Settings.APPEARANCE) {
             SettingsRow(first = true) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {

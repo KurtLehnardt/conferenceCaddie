@@ -1,0 +1,122 @@
+{
+  "route": "push.native.put",
+  "examples": [
+    {
+      "name": "register the iOS app (APNs, production)",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "platform": "apns",
+          "token": "00fa4e5c0ffee0000000000000000000000000000000000000000000000000ff"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "register a development build of the iOS app (APNs sandbox)",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "platform": "apns",
+          "token": "00fa4e5c0ffee0000000000000000000000000000000000000000000000000ee",
+          "environment": "sandbox"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "register the Android app (FCM)",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "platform": "fcm",
+          "token": "fakeInstanceId0:APA91bFakeRegistrationTokenForContractFixturesOnly_000000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "a backend that does not push to the platform",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "platform": "fcm",
+          "token": "fakeInstanceId0:APA91bFakeRegistrationTokenForContractFixturesOnly_000000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "push_unavailable"
+        }
+      }
+    },
+    {
+      "name": "no live profile at the conference",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "platform": "apns",
+          "token": "00fa4e5c0ffee0000000000000000000000000000000000000000000000000ff"
+        }
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "error": "profile_required"
+        }
+      }
+    },
+    {
+      "name": "an environment with fcm",
+      "invalid_request": true,
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "platform": "fcm",
+          "token": "fakeInstanceId0:APA91bFakeRegistrationTokenForContractFixturesOnly_000000000000000000000000000000000000000000000000000000000000000000",
+          "environment": "sandbox"
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "environment is only for apns"
+        }
+      }
+    }
+  ]
+}

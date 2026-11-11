@@ -38,6 +38,11 @@
 //                        Cloud Run. They put test profiles with a specific match around, so they run by
 //                        default only against a local API (localhost or 127.0.0.1), never next to real
 //                        attendees. ble1 and cap3 are safe anywhere and always run.
+//   SMOKE_NATIVE_PUSH    the native push platforms this backend is expected to push to: "none", or a
+//                        comma-separated list of apns and fcm. Check np2 then compares push.apns and
+//                        push.fcm with it. Unset, np2 passes when both are false and is skipped when
+//                        one is true, because the script cannot tell whether the backend should
+//                        hold that platform's key.
 //   SMOKE_UNAVAILABLE=<slug>  with an admin token and a local API: flip that conference to unavailable
 //                        for check unav1 (an owner can still delete) and restore it. Never against a
 //                        deployed Worker, because the conference would vanish from the app meanwhile.
@@ -525,6 +530,72 @@ if (!IS_WORKER) {
     if (!/public/.test(res.headers.get('cache-control') ?? '') || !/max-age=300/.test(res.headers.get('cache-control') ?? '')) problems.push(`Cache-Control ${res.headers.get('cache-control')}`);
     if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
     report(problems.length === 0, 'cap1: GET /api/capabilities serves a valid tier 2 document', problems.length ? problems.join('; ') : `closed-mode valid, ble.mode ${capsDoc.ble?.mode}, people.semantic ${capsDoc.people?.semantic}`);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Native push (docs/contracts/capabilities.md, push.apns and push.fcm; docs/contracts/people-api.md,
+// Native push registration). Every backend answers the two flags as booleans; one without the
+// platform's key answers false, and then refuses PUT /api/push/native for that platform with 404
+// push_unavailable (or, on a backend without the route, 404 Not found). A made-up token is never
+// registered on a backend that pushes to the platform: those checks are skipped there.
+
+const NATIVE_PLATFORMS = ['apns', 'fcm'];
+const NATIVE_EXPECTED_ENV = (process.env.SMOKE_NATIVE_PUSH ?? '').trim().toLowerCase();
+let nativeFlags = null; // { apns, fcm } once np1 has read them
+await check('np1: GET /api/capabilities answers push.apns and push.fcm as booleans', async () => {
+  const res = await fetch(`${API_BASE}/api/capabilities`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const text = await res.text();
+  otherResponses.push({ label: 'capabilities-native', path: '/api/capabilities', text, headersText: headerText(res.headers) });
+  if (res.status !== 200) throw new Error(`status ${res.status}`);
+  const push = JSON.parse(text).push ?? {};
+  const wrong = NATIVE_PLATFORMS.filter((p) => typeof push[p] !== 'boolean');
+  if (!wrong.length) nativeFlags = { apns: push.apns, fcm: push.fcm };
+  report(wrong.length === 0, 'np1: GET /api/capabilities answers push.apns and push.fcm as booleans', wrong.length ? `not a boolean: ${wrong.map((p) => `push.${p}`).join(', ')}` : `push.apns ${push.apns}, push.fcm ${push.fcm}`);
+});
+
+const NP2 = 'np2: push.apns and push.fcm are false unless the backend holds that platform\'s key';
+if (!nativeFlags) {
+  skip(NP2, 'np1 did not read the flags');
+} else if (NATIVE_EXPECTED_ENV) {
+  const expected = new Set(NATIVE_EXPECTED_ENV === 'none' ? [] : NATIVE_EXPECTED_ENV.split(',').map((p) => p.trim()).filter(Boolean));
+  const unknown = [...expected].filter((p) => !NATIVE_PLATFORMS.includes(p));
+  const off = NATIVE_PLATFORMS.filter((p) => nativeFlags[p] !== expected.has(p));
+  report(unknown.length === 0 && off.length === 0, NP2, unknown.length ? `SMOKE_NATIVE_PUSH names ${unknown.join(', ')}` : off.length ? off.map((p) => `push.${p} ${nativeFlags[p]}, expected ${expected.has(p)}`).join('; ') : `as SMOKE_NATIVE_PUSH=${NATIVE_EXPECTED_ENV} says`);
+} else if (NATIVE_PLATFORMS.some((p) => nativeFlags[p])) {
+  skip(NP2, `${NATIVE_PLATFORMS.filter((p) => nativeFlags[p]).map((p) => `push.${p}`).join(' and ')} true: this backend holds that key; set SMOKE_NATIVE_PUSH to check which platforms to expect`);
+} else {
+  report(true, NP2, 'both false: no native push keys');
+}
+
+const NP3 = 'np3: PUT /api/push/native answers 404 push_unavailable for a platform whose flag is false';
+const offPlatforms = nativeFlags ? NATIVE_PLATFORMS.filter((p) => !nativeFlags[p]) : [];
+if (!nativeFlags) {
+  skip(NP3, 'np1 did not read the flags');
+} else if (!offPlatforms.length) {
+  skip(NP3, 'both flags are true; a made-up token is never registered on a backend that pushes');
+} else {
+  await check(NP3, async () => {
+    // A test profile of its own, visible and without words, removed again at once (and at the end).
+    const NP = newDevice();
+    const made = await putProfile(NP, PRIMARY, 'NP', {}, { open: true });
+    if (made.status !== 200) throw new Error(`the test profile could not be created (status ${made.status})`);
+    const problems = [];
+    const seen = [];
+    try {
+      const tokens = { apns: crypto.randomBytes(32).toString('hex'), fcm: `${crypto.randomBytes(8).toString('base64url')}:smoke${runTag}${crypto.randomBytes(48).toString('base64url')}` };
+      for (const platform of offPlatforms) {
+        const r = await api('PUT', '/api/push/native', { event: PRIMARY, platform, token: tokens[platform] }, { device: NP, label: `np3-${platform}` });
+        const error = r.json?.error;
+        // Tier 3 serves the route; a backend without it (the Worker today) answers Not found.
+        const ok = r.status === 404 && (error === 'push_unavailable' || (IS_WORKER && error === 'Not found'));
+        if (!ok) problems.push(`${platform}: ${r.status} ${JSON.stringify(r.json).slice(0, 80)}`);
+        else seen.push(`${platform} 404 ${error}`);
+      }
+    } finally {
+      await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: NP, label: 'np3-cleanup' }).catch(() => {});
+    }
+    report(problems.length === 0, NP3, problems.length ? problems.join('; ') : seen.join(', '));
   });
 }
 

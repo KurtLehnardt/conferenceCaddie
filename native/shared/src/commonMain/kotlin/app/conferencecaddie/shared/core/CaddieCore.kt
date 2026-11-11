@@ -15,7 +15,16 @@ import app.conferencecaddie.shared.bundle.Publisher
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.db.CaddieDatabase
+import app.conferencecaddie.shared.importer.ImportInput
+import app.conferencecaddie.shared.importer.ImportOutcome
+import app.conferencecaddie.shared.importer.ImportRefusal
+import app.conferencecaddie.shared.importer.LegacyInterested
+import app.conferencecaddie.shared.importer.MAX_IMPORT_TEXT
+import app.conferencecaddie.shared.importer.ScheduleImport
+import app.conferencecaddie.shared.importer.ServerScheduleImport
 import app.conferencecaddie.shared.net.Http
+import app.conferencecaddie.shared.net.KtorPostJson
+import app.conferencecaddie.shared.net.PostJson
 import app.conferencecaddie.shared.search.ForYou
 import app.conferencecaddie.shared.search.SearchRequest
 import app.conferencecaddie.shared.search.SearchResult
@@ -218,6 +227,10 @@ sealed interface BundleState {
  *
  * [allowLocalHttp] is true in debug builds only. It lets the backend and its bundle base be plain
  * http on the developer's machine (see [BackendUrl]).
+ *
+ * [postJson] sends the schedule import to a backend that offers it ([importSchedule]); without one,
+ * a Ktor client is made the first time it is needed, so a core that never imports through its
+ * backend makes no client for it.
  */
 class CaddieCore(
     private val database: CaddieDatabase,
@@ -228,6 +241,7 @@ class CaddieCore(
     private val clock: Clock = Clock.System,
     /** Times the pause before a failed model load is tried again; monotonic, unlike [clock]. */
     private val timeSource: TimeSource = TimeSource.Monotonic,
+    private val postJson: PostJson? = null,
 ) {
     private val sync = BundleSync(http, database, files) { nowMs() }
     private val mutex = Mutex()
@@ -458,6 +472,121 @@ class CaddieCore(
 
     /** As [setInterested], keeping a copy of [talk] with the mark. */
     fun setInterested(talk: Talk, interested: Boolean) = mark(talk.talkId, talk, interested)
+
+    /**
+     * Marks or unmarks every talk of [talks] in one call, in their order, keeping a copy of each
+     * marked talk as [setInterested] does, and publishes the selected conference's list once at the end, so the
+     * screens never show half of an import (or of a cleared list) in between. Each talk lands in its
+     * own conference, from its id.
+     */
+    fun setInterested(talks: List<Talk>, interested: Boolean) = command {
+        if (talks.isEmpty()) return@command
+        val s = _state.value
+        val bySlug = talks.withIndex().groupBy { it.value.talkId.substringBefore(':', "") }.filterKeys { it.isNotEmpty() }
+        val now = nowMs()
+        for ((slug, list) in bySlug) {
+            val key = BundleSync.scope(s.backend.base, slug)
+            // One millisecond apart, in the order given, so the list keeps that order (the marks are
+            // read back by when they were made): an import in the file's order, an Undo of Clear
+            // list in the order the talks had been marked.
+            for ((index, talk) in list) {
+                database.setInterested(key, talk.talkId, interested, now + index, if (interested) InterestedTalk.from(talk) else null)
+            }
+        }
+        val selected = s.selectedSlug
+        if (selected != null && selected in bySlug) {
+            val key = BundleSync.scope(s.backend.base, selected)
+            _state.value = _state.value.copy(interested = database.interested(key), interestedSnapshots = database.interestedSnapshots(key))
+        }
+    }
+
+    /**
+     * Keeps the Interested lists the Capacitor app left in its WebView's local storage ([lists]:
+     * each storage key with its value, as the host read them), then sets the UI setting [doneKey], so
+     * the host does not read them again. The marks and the setting are written in one transaction
+     * after everything was read, so the setting is never there without the marks: a failure (a full
+     * disk, a process ended midway) leaves neither, and the next start tries again.
+     *
+     * That app always talked to the official server, so the marks go to the build's default backend,
+     * each conference's in the order they were made and before the first mark made in this app; a
+     * talk already marked here keeps its own mark. Keys and values are untrusted; [LegacyInterested]
+     * checks and bounds them.
+     */
+    fun importLegacyInterested(lists: Map<String, String>, doneKey: String) = command {
+        val base = defaultBackend.base
+        val now = nowMs()
+        val rows = ArrayList<CaddieDatabase.NewMark>()
+        for ((key, value) in lists.entries.take(100)) {
+            val slug = LegacyInterested.slugOf(key) ?: continue
+            val scope = BundleSync.scope(base, slug)
+            val have = database.interested(scope).toSet()
+            val marks = LegacyInterested.read(slug, value).filter { it.talkId !in have }
+            // Strictly before the first mark made in this app, one millisecond apart, in their order.
+            val first = database.firstInterestedAt(scope) ?: now
+            var at = first - marks.size
+            for (mark in marks) rows += CaddieDatabase.NewMark(scope, mark.talkId, at++, mark.copy)
+        }
+        database.addMarksThenSet(rows, KEY_UI + doneKey, "1")
+        val s = _state.value
+        val selected = s.selectedSlug
+        if (s.backend.base == base && selected != null) {
+            val scope = BundleSync.scope(base, selected)
+            _state.value = s.copy(interested = database.interested(scope), interestedSnapshots = database.interestedSnapshots(scope))
+        }
+    }
+
+    // The client for the backend's schedule import, made on first use.
+    private val importPoster: PostJson by lazy { postJson ?: KtorPostJson() }
+
+    /**
+     * Imports a schedule for the selected conference: finds its talks in [input] and returns them for
+     * the person to review, without marking or storing anything (DECISIONS.md, "Import my schedule").
+     *
+     * The input is checked first, as the backends check it ([ScheduleImport.check]). Then, when the
+     * backend's capabilities say `imports.schedule: server`, the backend's `POST /api/import/schedule`
+     * reads it; otherwise, and whenever the backend gives no usable answer (no network, a timeout, a
+     * server error or limit, an unexpected body), the device reads it over the installed bundle with
+     * the same rules, so the import works offline and on every tier. A refusal the backend words
+     * itself (a file too large or unreadable for it) is passed on. A file whose text is longer than
+     * the 200,000 characters the backend takes as text is read on the device, and so is everything
+     * while the app is using its stored capabilities because the backend did not answer.
+     *
+     * Parsing and matching run off the main thread. [ImportRefusal.Unavailable] when no bundle of the
+     * selected conference is ready.
+     */
+    suspend fun importSchedule(input: ImportInput): ImportOutcome = try {
+        importOrRefuse(input)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        // A file or answer the bounds did not foresee (an allocation that fails included) refuses the
+        // import instead of ending the app.
+        ImportOutcome.Refused(ImportRefusal.Unavailable)
+    }
+
+    private suspend fun importOrRefuse(input: ImportInput): ImportOutcome {
+        val s = _state.value
+        val ready = s.bundle as? BundleState.Ready ?: return ImportOutcome.Refused(ImportRefusal.Unavailable)
+        val slug = s.selectedSlug
+        if (slug == null || ready.bundle.conference.slug != slug) return ImportOutcome.Refused(ImportRefusal.Unavailable)
+        val prepared = when (val checked = withContext(Dispatchers.Default) { ScheduleImport.check(input) }) {
+            is ScheduleImport.Checked.Refused -> return ImportOutcome.Refused(checked.reason)
+            is ScheduleImport.Checked.Ok -> checked.prepared
+        }
+        val caps = s.capabilities as? CapabilitiesState.Ready
+        val onServer = caps != null && !caps.updateApp && caps.capabilities.imports.schedule == Capabilities.ImportSite.Server &&
+            !caps.usingFallback && !(caps.cached && !caps.checking) && prepared.text.length <= MAX_IMPORT_TEXT
+        if (onServer) {
+            val hints = caps.source != CapabilitiesDiscovery.Source.Legacy
+            when (val answer = ServerScheduleImport(importPoster).run(s.backend.base, slug, prepared, hints, ready.bundle)) {
+                is ServerScheduleImport.Answer.Done -> return ImportOutcome.Done(answer.result, onServer = true)
+                is ServerScheduleImport.Answer.Refused -> return answer.outcome
+                ServerScheduleImport.Answer.Fallback -> Unit
+            }
+        }
+        val result = withContext(Dispatchers.Default) { ScheduleImport.onDevice(prepared, ready.bundle) }
+        return ImportOutcome.Done(result, onServer = false)
+    }
 
     /** Clears [CoreState.storageReset] once the person has been told, in order with every other call. */
     fun dismissStorageReset() = command {

@@ -240,6 +240,26 @@
       "query": [], "request": "PushSubscriptionDeleteRequest", "response": "Ok", "limits": ["people-write"], "capability": "push.webpush",
       "summary": "Remove a subscription; only the profile it belongs to can. Answers { ok: true } either way.",
       "errors": [{ "status": 403, "error": "profile_required" }]
+    },
+    {
+      "id": "push.native.put", "method": "PUT", "path": "/api/push/native", "status": "frozen", "auth": "device",
+      "query": [], "request": "PushNativePutRequest", "response": "Ok", "limits": ["people-write"], "capability": "push.apns (platform apns) or push.fcm (platform fcm)",
+      "summary": "Optional. Store this app's APNs device token or FCM registration token for the requester's profile at one conference, so the nudge reaches the app while it is closed. A device has one registration per platform and conference; a new token replaces the old one.",
+      "notes": "Call it only when the capabilities flag of the platform is true. A backend that does not push to the platform answers 404 push_unavailable and stores nothing; a backend without the route answers 404 Not found. Either way the app falls back to in-app nudges.",
+      "errors": [
+        { "status": 400, "error": "*", "when": "an unknown platform, a malformed token, an environment with fcm, or the conference has ended" },
+        { "status": 403, "error": "profile_required" },
+        { "status": 404, "error": "push_unavailable", "when": "this backend does not push to that platform (its push.apns or push.fcm is false)" }
+      ]
+    },
+    {
+      "id": "push.native.delete", "method": "DELETE", "path": "/api/push/native", "status": "frozen", "auth": "device",
+      "query": [], "request": "PushNativeDeleteRequest", "response": "Ok", "limits": ["people-write"], "capability": "push.apns (platform apns) or push.fcm (platform fcm)",
+      "summary": "Optional. Remove the requester's registration for that platform at that conference while it still holds the given token; only the profile it belongs to can. Answers { ok: true } either way, also when the backend no longer pushes to the platform.",
+      "errors": [
+        { "status": 400, "error": "*", "when": "an unknown platform or a malformed token" },
+        { "status": 403, "error": "profile_required" }
+      ]
     }
   ]
 }
