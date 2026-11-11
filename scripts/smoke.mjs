@@ -426,9 +426,12 @@ async function readBackShared(device, event, requested, before, label) {
 // The Worker's admin routes. The token goes only into the auth header (adminAuthHeaders), and no
 // Origin header is sent, because the Worker answers 404 to an admin request that carries one. Like
 // api(), a 5xx or a network failure is retried once with a NOTE line, and the retry builds its
-// headers afresh, so a signed attempt is never resent with the same nonce. Flags for a route go in
-// the JSON body, never in the query string, so the body hash covers them. Nothing here prints the
-// token, a request body or a response body.
+// headers afresh, so a signed attempt is never resent with the same nonce. A retry can repeat a
+// write whose answer was lost; every admin write the run makes is idempotent (the fixture profile
+// and the aged presence are upserts, a meter restart reads the stored totals, PUT /admin/conferences
+// upserts, the fixture delete and the unhide are no-ops the second time), so that is safe. Flags
+// for a route go in the JSON body, never in the query string, so the body hash covers them.
+// Nothing here prints the token, a request body or a response body.
 async function admin(method, path, body) {
   const serialised = body === undefined ? undefined : JSON.stringify(body);
   let lastError;
