@@ -2,11 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Bluetooth and foreground-service permissions arrive with the BleRadio implementation. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- The people features: the device's position for presence ("Use my position too"), only
-         while the app is in use, so there is no background location and no foreground service.
+         while the app is in use, so there is no background location and no foreground service for it.
          Android 12 and newer need both location permissions in the same request; the person then
          picks precise or approximate. POST_NOTIFICATIONS shows nudges on Android 13 and newer. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -15,6 +14,31 @@
 
     <!-- The app works without location hardware; the position switch is then hidden. -->
     <uses-feature android:name="android.hardware.location" android:required="false" />
+
+    <!-- Bluetooth proximity (docs/contracts/ble-tokens.md): the phone advertises a token derived
+         from its session key, serves it to phones that connect, and scans for the tokens of others.
+         Android 12 and newer (API 31) ask for these three together as "Nearby devices". The scan is
+         declared as never used for location, which is true: no position is derived from a scan
+         result, and only tokens and their signal strength are passed on. Before Android 12 the
+         install-time BLUETOOTH and BLUETOOTH_ADMIN permissions cover all three, and a scan needs
+         ACCESS_FINE_LOCATION (declared above for presence) although no position is read. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+
+    <!-- While Bluetooth proximity is on, a foreground service of type connectedDevice keeps it
+         running with the app in the background or the screen off, with an ongoing notification
+         that has a Stop action. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- The app works without Bluetooth LE; Bluetooth proximity is then hidden. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <!-- ONNX Runtime's AAR adds a telemetry uploader to Microsoft (a content provider that starts
          with the app) and the network-state permission it uses. The app sends nothing but to its
@@ -52,6 +76,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Bluetooth proximity's radio (shared/.../ble/BleRadioService.kt). Swiping the app from
+             Recents does not stop it; the system may restart it after ending the process, and
+             CaddieApplication then recreates the people features that restore its session. -->
+        <service
+            android:name="app.conferencecaddie.shared.ble.BleRadioService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
 
 </manifest>
