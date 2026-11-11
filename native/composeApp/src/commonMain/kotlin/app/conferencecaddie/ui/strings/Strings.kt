@@ -307,6 +307,11 @@ object Strings {
         const val INTERESTED_ON = "Interested"
         const val DEGRADED = "Meaning-based matching is paused right now; these are keyword matches."
 
+        /** ForYouRow on the People home: its title, the link to the For you tab and a card's reason. */
+        const val ROW_TITLE = "For you"
+        const val SEE_ALL = "See all"
+        fun rowWhy(learn: List<String>) = "Learn: ${learn.joinToString(", ")}"
+
         /** Native only: For you also suggests talks like the ones marked, so the lede says so. */
         const val LEDE_NATIVE = "Talks picked from what you want to learn and the talks you marked. Ended talks and talks you marked are left out."
 

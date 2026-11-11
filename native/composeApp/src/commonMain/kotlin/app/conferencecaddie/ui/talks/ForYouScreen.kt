@@ -110,15 +110,19 @@ class ForYouModel(
     companion object {
         const val DELAY_MS = 400L
         const val SIZE = 20
+
+        /** How many suggestions the People home's [ForYouRow] asks for and shows (the web's size 5). */
+        const val ROW_SIZE = 5
     }
 }
 
 /**
  * The For you tab (web ForYouScreen in web/src/people/ForYou.tsx): the lede, then a card per
- * suggested talk with why it was picked, the "I'm interested" button and the official link. With
- * nothing to go on, the web's "Pick what you want to learn" prompt. Everything runs on the device,
- * so it also works offline. A card opens the talk in the talk sheet; [onPickTopics] opens the topic
- * picker.
+ * suggested talk with why it was picked, the "I'm interested" button, the talk's people controls
+ * ([peopleControls], as the web's cards carry TalkPeopleControls; null leaves them out) and the
+ * official link. With nothing to go on, the web's "Pick what you want to learn" prompt. Everything
+ * runs on the device, so it also works offline. A card opens the talk in the talk sheet;
+ * [onPickTopics] opens the topic picker.
  */
 @Composable
 fun ForYouScreen(
@@ -130,6 +134,7 @@ fun ForYouScreen(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     onPickTopics: () -> Unit,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val d = Caddie.dimens
     when (val r = model.result) {
@@ -171,6 +176,7 @@ fun ForYouScreen(
                             onToggleInterested = { onToggleInterested(item.talk) },
                             onOpen = { onOpenTalk(item.talk) },
                             onOpenUrl = onOpenUrl,
+                            peopleControls = peopleControls,
                         )
                     }
                 }
@@ -233,7 +239,7 @@ private fun WhyLine(label: String, value: String, modifier: Modifier = Modifier)
     Text(text, style = Caddie.type.meta, color = Caddie.colors.text, modifier = modifier)
 }
 
-/** .pp-talk-card: one suggestion. */
+/** .pp-talk-card: one suggestion; [peopleControls] go between the actions and the official link, as on the web. */
 @Composable
 private fun ForYouCard(
     item: ForYou.Item,
@@ -242,6 +248,7 @@ private fun ForYouCard(
     onToggleInterested: () -> Unit,
     onOpen: () -> Unit,
     onOpenUrl: (String) -> Unit,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val c = Caddie.colors
     val t = item.talk
@@ -282,6 +289,7 @@ private fun ForYouCard(
                 modifier = Modifier.testTag("for-you-interested-${t.talkId}"),
             )
         }
+        peopleControls?.invoke(t)
         t.url?.takeIf { isWebLink(it) }?.let { url ->
             LinkButton(Strings.Talk.ADD_ON_OFFICIAL, LucideIcon.ExternalLink) { onOpenUrl(url) }
         }
