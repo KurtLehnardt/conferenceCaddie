@@ -66,10 +66,13 @@ export function createModeration({ es, slug, indices, now = () => Date.now() }) 
   async function reportSummary() {
     const { json } = await es('POST', `${idx(REPORTS_INDEX)}/_search?ignore_unavailable=true`, {
       size: PAGE,
+      track_total_hits: true,
       _source: ['target_kind', 'target_id', 'reason'],
       query: eventFilter,
     });
     const map = new Map();
+    // The counts cover the first PAGE reports of the event; `truncated` says more exist.
+    map.truncated = (json.hits?.total?.value ?? 0) > (json.hits?.hits ?? []).length;
     for (const h of json.hits?.hits ?? []) {
       const s = h._source ?? {};
       const key = `${s.target_kind}:${s.target_id}`;
@@ -134,8 +137,9 @@ export function createModeration({ es, slug, indices, now = () => Date.now() }) 
       lines.push(`meet     ${text}  ${countText(sm)}${sm ? `: ${reasonsText(sm)}` : ''}`);
     }
     const n = rows.length;
-    lines.push(n ? `${n} hidden target${n === 1 ? '' : 's'} at ${slug}.` : `Nothing is hidden at ${slug}.`);
-    return { rows, lines };
+    const more = summary.truncated ? ` (report counts cover the first ${PAGE} reports; more exist)` : '';
+    lines.push(n ? `${n} hidden target${n === 1 ? '' : 's'} at ${slug}.${more}` : `Nothing is hidden at ${slug}.${more}`);
+    return { rows, lines, truncated: summary.truncated === true };
   }
 
   async function listSince(iso) {

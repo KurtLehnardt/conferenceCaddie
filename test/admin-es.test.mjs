@@ -137,9 +137,9 @@ function report(kind, targetRef, targetProfileId, reporter, reason = 'spam', eve
   });
 }
 
-function seedConferenceFiles(slug, { talks = true, raw = true, status = 'searchable' } = {}) {
+function seedConferenceFiles(slug, { talks = true, raw = true, status = 'searchable', statusReason = status === 'searchable' ? null : 'fetch_failed' } = {}) {
   mkdirSync(join(root, 'data', slug), { recursive: true });
-  writeFileSync(join(root, 'data', slug, 'conference.json'), `${JSON.stringify({ slug, name: `Conference ${slug}`, status, status_reason: status === 'searchable' ? null : 'fetch_failed', start_date: '2099-12-01', end_date: '2099-12-03', raw_fetched_at: '2026-11-01T00:00:00.000Z', counts: { talk: 2 } }, null, 2)}\n`);
+  writeFileSync(join(root, 'data', slug, 'conference.json'), `${JSON.stringify({ slug, name: `Conference ${slug}`, status, status_reason: statusReason, start_date: '2099-12-01', end_date: '2099-12-03', raw_fetched_at: '2026-11-01T00:00:00.000Z', counts: { talk: 2 } }, null, 2)}\n`);
   if (talks) writeFileSync(join(root, 'data', slug, 'talks.ndjson'), '{"talk_id":"a"}\n{"talk_id":"b"}\n');
   if (raw) {
     mkdirSync(join(root, 'data', 'raw', slug), { recursive: true });
@@ -345,6 +345,25 @@ describe('ATT-5, ATT-10, MOD-3 attendees delete', () => {
     assert.equal(cluster.ids(INDEX.meets).length, 3);
     assert.ok(!r.requests.some((e) => e.method === 'DELETE' || e.tag.startsWith('bulk') || e.tag === 'hide'));
     assert.equal(r.audit.at(-1).mode, 'dry-run');
+  });
+
+  test('a failed second pass still deletes, but warns on stderr, counts the warning and exits 1', async () => {
+    const device = newDevice();
+    addPerson(cluster, device);
+    const ids = addConnections(cluster, device.profileId);
+    cluster.fail({ tag: 'search:meets', nth: 2, how: 503 });
+    const ref = refOf(device.profileId);
+    const r = await invoke(confirmed(['attendees', 'delete', '--event', EVENT, ref], ref));
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /^caddie-admin: warning: Deleting a deleted profile's connections again failed: POST .* failed with status 503; the hourly purge/m);
+    assert.match(r.stdout, /\(with warnings\)/);
+    assert.equal(cluster.source(INDEX.people, personId(device.profileId)), null, 'the profile is gone');
+    for (const meet of ids.meets) assert.equal(cluster.source(INDEX.meets, meet), null);
+    const entry = r.audit.at(-1);
+    assert.equal(entry.result, 'ok');
+    assert.equal(entry.counts.warnings, 1);
+    const json = await invoke(confirmed(['attendees', 'delete', '--event', EVENT, ref], ref));
+    assert.equal(json.code, 4, 'gone now');
   });
 
   test('moderation delete profile:<ref> runs the full delete, not the document-only one', async () => {
@@ -570,6 +589,23 @@ describe('MOD-5, MOD-6 child processes', () => {
     assert.match(run.stdout, /Deleted 3 expired profiles/);
   });
 
+  test('the child environment carries the checked key only: no other *API_KEY or token variable reaches it', async () => {
+    const env = { ES_API_KEY: 'other-read-key', ES_PEOPLE_API_KEY: 'other-people-key', ADMIN_TOKEN: 'a-token', ES_PEOPLE_INDEX: 'caddie-people-x', NODE_OPTIONS: '--max-old-space-size=512', PATH: '/usr/bin', HOME: '/home/op', SECRET_THING: 'nope' };
+    const r = await invoke(confirmed(['moderation', 'purge-expired'], 'purge-expired'), { env });
+    assert.equal(r.code, 0, r.stderr);
+    const child = r.spawned[0].options.env;
+    assert.deepEqual(Object.keys(child).filter((k) => /API_KEY|TOKEN|SECRET/i.test(k)), ['ELASTISEARCH_API_KEY']);
+    assert.equal(child.ELASTISEARCH_API_KEY, KEY);
+    assert.ok(!JSON.stringify(child).includes('other-read-key') && !JSON.stringify(child).includes('other-people-key') && !JSON.stringify(child).includes('a-token'));
+    assert.equal(child.ES_PEOPLE_INDEX, 'caddie-people-x');
+    assert.equal(child.NODE_OPTIONS, '--max-old-space-size=512');
+    assert.equal(child.PATH, '/usr/bin');
+    assert.equal(child.HOME, '/home/op');
+    assert.equal(child.CADDIE_DATA_DIR, join(root, 'data'));
+    assert.equal(child.CADDIE_ADMIN_HOME, undefined);
+    assert.equal(child.CADDIE_ADMIN_ROOT, undefined);
+  });
+
   test('rules test passes the line as an argument, never logs it, and reads exit 3 as matched', async () => {
     const r = await invoke(['moderation', 'rules', 'test', LINE], { spawnResult: { status: 3, stdout: '1 rule matched:\n  w-abc (phrase)\n' } });
     assert.equal(r.code, 0, r.stderr);
@@ -627,6 +663,31 @@ describe('CONF-1, CONF-2 conferences list and add', () => {
     assert.equal(failed.code, 1);
     assert.match(failed.stderr, /scripts\/ingest\.mjs exited with 2: Fatal: nope/);
   });
+
+  test('add and refresh with --dry-run start nothing and print the commands they would run', async () => {
+    for (const argv of [['conferences', 'add', '--event', OTHER], ['conferences', 'refresh', '--event', OTHER, '--allow-shrink']]) {
+      const r = await invoke([...argv, '--dry-run']);
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(r.spawned.length, 0, 'no child process');
+      assert.equal(r.requests.length, 0, 'no request');
+      assert.match(r.stdout, /step=ingest command=node scripts\/ingest\.mjs --event otherconf-2099\nstep=facets command=node scripts\/build-facets\.mjs otherconf-2099\nwould run the two commands above/);
+      assert.match(r.stdout, /dry-run, nothing changed/);
+      assert.equal(r.audit.at(-1).mode, 'dry-run');
+    }
+  });
+
+  test('add, refresh and hide refuse a removed slug and point at conferences unretire', async () => {
+    seedConferenceFiles(OTHER);
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [OTHER]: { since: '2026-11-01T00:00:00.000Z' } } }));
+    for (const argv of [['conferences', 'add', '--event', OTHER], ['conferences', 'refresh', '--event', OTHER], confirmed(['conferences', 'hide', '--event', OTHER], OTHER)]) {
+      const r = await invoke(argv);
+      assert.equal(r.code, 2, argv.join(' '));
+      assert.match(r.stderr, /otherconf-2099 is removed .*run conferences unretire --event otherconf-2099 first/);
+      assert.equal(r.spawned.length, 0);
+      assert.equal(r.requests.length, 0);
+    }
+    assert.equal(readJson(join(root, 'data', OTHER, 'conference.json')).status, 'searchable');
+  });
 });
 
 describe('CONF-4, CONF-11 conferences hide and unhide', () => {
@@ -650,14 +711,26 @@ describe('CONF-4, CONF-11 conferences hide and unhide', () => {
     const backend = cluster.source(INDEX.conferences, EVENT);
     assert.equal(backend.status, 'unavailable');
     assert.equal(backend.status_reason, 'operator_hidden');
-    assert.deepEqual(operatorFile(), { hidden: { [EVENT]: { reason: 'other', since: '2026-11-11T10:00:00.000Z' } }, removed: {} });
+    assert.deepEqual(operatorFile(), { hidden: { [EVENT]: { reason: 'other', since: '2026-11-11T10:00:00.000Z', previous: { status: 'searchable', status_reason: null } } }, removed: {} });
     assert.match(r.stdout, /commit data\/testconf-2099\/conference\.json and data\/conference-operator\.json/);
     assert.match(r.stdout, /pages\.yml/);
     assert.ok(!r.stdout.includes(NOTE) && !JSON.stringify(r.audit).includes(NOTE));
     assert.equal(overridesMtime(), mtime, 'data/conference-overrides.json is untouched');
     assert.deepEqual(readJson(join(root, 'data', 'conference-overrides.json')), { 'pytorch-day-japan-2026': { time_zone: 'Asia/Tokyo' } });
 
-    const unhide = await invoke(['conferences', 'unhide', '--event', EVENT]);
+    assert.deepEqual(operatorFile().hidden[EVENT].previous, { status: 'searchable', status_reason: null });
+    assert.equal(backend.name, undefined, 'only the status fields were sent to the backend');
+
+    // unhide previews without --yes and writes nothing.
+    const preview = await invoke(['conferences', 'unhide', '--event', EVENT]);
+    assert.equal(preview.code, 0, preview.stderr);
+    assert.match(preview.stdout, /would set testconf-2099 to searchable on the backend \(now unavailable \(operator_hidden\)\); would rewrite/);
+    assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'unavailable');
+    assert.equal(cluster.source(INDEX.conferences, EVENT).status, 'unavailable');
+    assert.ok(operatorFile().hidden[EVENT]);
+    assert.ok(!preview.requests.some((e) => e.method !== 'GET'), 'no write in the preview');
+
+    const unhide = await invoke(confirmed(['conferences', 'unhide', '--event', EVENT], EVENT));
     assert.equal(unhide.code, 0, unhide.stderr);
     assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'searchable');
     assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status_reason, null);
@@ -667,16 +740,33 @@ describe('CONF-4, CONF-11 conferences hide and unhide', () => {
     assert.equal(overridesMtime(), mtime);
   });
 
+  test('unhide restores the status the conference had before the hide (partial_index stays partial_index)', async () => {
+    seedConferenceFiles(EVENT, { status: 'unavailable', statusReason: 'partial_index' });
+    cluster.patch(INDEX.conferences, EVENT, { status: 'unavailable', status_reason: 'partial_index' });
+    const hide = await invoke(confirmed(['conferences', 'hide', '--event', EVENT], EVENT));
+    assert.equal(hide.code, 0, hide.stderr);
+    assert.deepEqual(operatorFile().hidden[EVENT].previous, { status: 'unavailable', status_reason: 'partial_index' });
+    assert.equal(cluster.source(INDEX.conferences, EVENT).status_reason, 'operator_hidden');
+    const unhide = await invoke(confirmed(['conferences', 'unhide', '--event', EVENT], EVENT));
+    assert.equal(unhide.code, 0, unhide.stderr);
+    const local = readJson(join(root, 'data', EVENT, 'conference.json'));
+    assert.equal(local.status, 'unavailable');
+    assert.equal(local.status_reason, 'partial_index');
+    assert.equal(cluster.source(INDEX.conferences, EVENT).status_reason, 'partial_index');
+    assert.match(unhide.stdout, /restored unavailable \(partial_index\)/);
+    assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
+  });
+
   test('unhide without the talk file keeps the status until a refresh; hide without a local file exits 4', async () => {
     seedConferenceFiles(EVENT, { talks: false, status: 'unavailable' });
     const operator = { hidden: { [EVENT]: { reason: 'spam', since: '2026-11-01T00:00:00.000Z' } }, removed: {} };
     writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify(operator));
-    const r = await invoke(['conferences', 'unhide', '--event', EVENT]);
+    const r = await invoke(confirmed(['conferences', 'unhide', '--event', EVENT], EVENT));
     assert.equal(r.code, 0, r.stderr);
     assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'unavailable');
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
     assert.match(r.stdout, /talk file is missing/);
-    assert.equal((await invoke(['conferences', 'unhide', '--event', OTHER])).code, 4);
+    assert.equal((await invoke(confirmed(['conferences', 'unhide', '--event', OTHER], OTHER))).code, 4);
     assert.equal((await invoke(['conferences', 'hide', '--event', OTHER])).code, 4);
     // A backend without the conference is exit 4 too, and the local file stays.
     seedConferenceFiles(OTHER);
@@ -809,6 +899,28 @@ describe('CONF-6, CONF-8, CONF-11, CONF-12 conferences remove and unretire', () 
   });
 });
 
+describe('SEC-13 redirects', () => {
+  test('an Elasticsearch redirect is never followed, so the key never travels on', async () => {
+    const hops = [];
+    const redirecting = http.createServer((req, res) => {
+      hops.push(req.url);
+      res.writeHead(302, { location: `${served.url}${req.url}` });
+      res.end();
+    });
+    await new Promise((resolve) => redirecting.listen(0, '127.0.0.1', resolve));
+    try {
+      writeConfig({ default: 't3', backends: { t3: { tier: 3, es_url: `http://127.0.0.1:${redirecting.address().port}` } } });
+      const r = await invoke(['stats', 'counts']);
+      assert.equal(r.code, 1);
+      assert.match(r.stderr, /Could not reach Elasticsearch/);
+      assert.equal(hops.length, 1);
+      assert.equal(cluster.log.length, 0, 'the redirect target was never called');
+    } finally {
+      await new Promise((resolve) => redirecting.close(resolve));
+    }
+  });
+});
+
 describe('STAT-1 to STAT-3 stats', () => {
   test('counts per index, with and without --event', async () => {
     for (const slug of [EVENT, OTHER]) {
@@ -856,7 +968,7 @@ describe('STAT-1 to STAT-3 stats', () => {
       const r = await invoke(['stats', 'health']);
       assert.equal(r.code, 0, r.stderr);
       assert.match(r.stdout, /^health=200 ok=true\ncapabilities=200 tier=3 ble_mode=derived push_apns=false push_fcm=true\n/);
-      assert.ok(r.stdout.includes(`smoke=BASE_URL=${apiUrl} ES_URL=${served.url} ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" node scripts/smoke.mjs`), r.stdout);
+      assert.ok(r.stdout.includes(`smoke=BASE_URL="${apiUrl}" ES_URL="${served.url}" ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" node scripts/smoke.mjs`), r.stdout);
       assert.ok(r.stdout.includes(`logs=gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="fixture-service" AND severity>=ERROR' --limit 50 --project fixture-project --format=json`), r.stdout);
       assert.equal(r.requests.length, 0, 'no Elasticsearch call');
       writeConfig({ default: 't3', backends: { t3: { tier: 3, es_url: served.url } } });

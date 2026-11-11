@@ -313,9 +313,10 @@ export const COMMAND_TREE = {
         },
       },
       unhide: {
-        usage: 'conferences unhide --event <slug>',
-        summary: 'undo conferences hide',
+        usage: 'conferences unhide --event <slug> [--yes --confirm <slug>]',
+        summary: 'undo conferences hide: the conference becomes visible again and the committed files are rewritten',
         options: { ...EVENT_OPTION },
+        destructive: true,
         method: 'unhideConference',
         prepare(v, p) {
           expectPositionals(p, 0);
@@ -567,7 +568,7 @@ async function run(argv, ctx) {
   };
 
   // The mode the operator asked for, so a refused confirmation is audited as a refused run.
-  let mode = destructive && (values['dry-run'] || !values.yes) ? 'dry-run' : 'run';
+  let mode = values['dry-run'] || (destructive && !values.yes) ? 'dry-run' : 'run';
   try {
     mode = await resolveMode({
       destructive,
@@ -580,12 +581,16 @@ async function run(argv, ctx) {
     });
     const adapter = d.createAdapter(backend, { credential, env, spawn: d.spawn, fetch: d.fetch, now: d.now });
     const result = (await adapter[command.method]({ ...args, mode })) ?? {};
-    writeAudit({ mode, result: 'ok', counts: result.counts });
+    const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+    writeAudit({ mode, result: 'ok', counts: warnings.length ? { ...(result.counts ?? {}), warnings: warnings.length } : result.counts });
     const text = values.json
       ? renderJson({ command: commandName, backend: backend.name, tier: backend.tier, mode, result })
       : renderHuman({ command: commandName, mode, result });
     stdout.write(redact(text));
-    return 0;
+    // A command that did its work but reports warnings (for example a delete whose best-effort
+    // second pass failed) says so on stderr and exits 1, so a script notices.
+    for (const warning of warnings) stderr.write(redact(`caddie-admin: warning: ${warning}\n`));
+    return warnings.length ? 1 : 0;
   } catch (error) {
     writeAudit({ mode, result: auditResult(error) });
     throw error;

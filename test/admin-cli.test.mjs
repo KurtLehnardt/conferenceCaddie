@@ -421,6 +421,7 @@ describe('SEC-11 confirmation', () => {
     { name: 'conferences hide', argv: ['conferences', 'hide', '--event', SLUG], target: SLUG, method: 'hideConference' },
     { name: 'conferences remove', argv: ['conferences', 'remove', '--event', SLUG], target: SLUG, method: 'removeConference' },
     { name: 'conferences unretire', argv: ['conferences', 'unretire', '--event', SLUG], target: SLUG, method: 'unretireConference' },
+    { name: 'conferences unhide', argv: ['conferences', 'unhide', '--event', SLUG], target: SLUG, method: 'unhideConference' },
   ];
   for (const c of cases) {
     describe(c.name, () => {
@@ -468,10 +469,16 @@ describe('SEC-11 confirmation', () => {
     });
   }
 
-  test('non-destructive commands run without --yes', async () => {
+  test('non-destructive commands run without --yes, and --dry-run previews them too', async () => {
     const r = await invoke(['conferences', 'refresh', '--event', SLUG, '--allow-shrink']);
     assert.equal(r.calls[0].args.mode, 'run');
     assert.deepEqual(r.calls[0].args.options, { allowShrink: true });
+    for (const argv of [['conferences', 'refresh', '--event', SLUG], ['conferences', 'add', '--event', SLUG], ['attendees', 'view', '--event', SLUG, REF], ['stats', 'counts']]) {
+      const dry = await invoke([...argv, '--dry-run']);
+      assert.equal(dry.code, 0, argv.join(' '));
+      assert.equal(dry.calls[0].args.mode, 'dry-run', argv.join(' '));
+      assert.equal(JSON.parse(dry.audit.trim().split('\n').at(-1)).mode, 'dry-run');
+    }
   });
 
   test('only moderation rules reload is destructive', async () => {

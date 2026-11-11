@@ -8,8 +8,9 @@
 //   next pages.yml build drops the conference from the bundle index; unhide restores 'searchable'
 //   when the talk file is present. Each write carries raw_fetched_at now, which is later than the
 //   live record, as the bundle rule requires.
-// - data/conference-operator.json records the state: { "hidden": { "<slug>": { "reason", "since" } },
-//   "removed": { "<slug>": { "since" } } }. scripts/ingest.mjs reads it: a hidden slug is written
+// - data/conference-operator.json records the state: { "hidden": { "<slug>": { "reason", "since",
+//   "previous": { "status", "status_reason" } } }, "removed": { "<slug>": { "since" } } }; unhide
+//   restores the status the conference had before the hide. scripts/ingest.mjs reads it: a hidden slug is written
 //   as operator_hidden again, a removed slug is skipped until `conferences unretire`.
 // - data/conference-overrides.json (time zones, scripts/lib/zones.mjs) is never read or written here.
 //
@@ -22,7 +23,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AdminError, NotFoundError } from '../errors.mjs';
+import { AdminError, NotFoundError, UsageError } from '../errors.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 export const OPERATOR_FILE = 'data/conference-operator.json';
@@ -76,20 +77,37 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
   const rel = (path) => relative(root, path);
   const files = (slug) => [rel(confPath(root, slug)), OPERATOR_FILE];
 
+  const removedError = (slug) => new UsageError(`${slug} is removed (data/conference-operator.json); run conferences unretire --event ${slug} first`);
+
   return {
     ...adapter,
+
+    // A removed conference stays removed until an explicit unretire: ingest.mjs would skip it and
+    // the backend would hold it again, so add and refresh refuse it.
+    async addConference(args) {
+      if (readOperatorFile(root).removed[args.slug]) throw removedError(args.slug);
+      return adapter.addConference(args);
+    },
+
+    async refreshConference(args) {
+      if (readOperatorFile(root).removed[args.slug]) throw removedError(args.slug);
+      return adapter.refreshConference(args);
+    },
 
     async hideConference({ event, slug, reason, mode }) {
       const local = readConference(root, slug);
       if (!local) throw new NotFoundError(`no ${rel(confPath(root, slug))}; run conferences refresh --event ${slug} first`);
       const operator = readOperatorFile(root);
+      if (operator.removed[slug]) throw removedError(slug);
       const since = now().toISOString();
       const doc = { ...local, status: 'unavailable', status_reason: HIDDEN, raw_fetched_at: since };
       const backend = await adapter.hideConference({ event, slug, reason, mode, doc });
       const items = [...(backend.items ?? []), { file: rel(confPath(root, slug)), status: 'unavailable', status_reason: HIDDEN }, { file: OPERATOR_FILE, hidden: slug }];
       if (mode === 'dry-run') return { ...backend, items, summary: `${backend.summary}; would rewrite ${files(slug).join(' and ')}` };
       writeJson(confPath(root, slug), doc);
-      operator.hidden[slug] = { reason: reason ?? 'other', since };
+      // The status before the hide, restored by unhide; a second hide keeps the first record.
+      const previous = operator.hidden[slug]?.previous ?? { status: local.status ?? null, status_reason: local.status_reason ?? null };
+      operator.hidden[slug] = { reason: reason ?? 'other', since, previous };
       writeJson(join(root, OPERATOR_FILE), operator);
       return { ...backend, items, files: files(slug), summary: `${backend.summary}; ${COMMIT_NOTE(files(slug))}; the next pages.yml build drops ${slug} from the bundle index` };
     },
@@ -101,16 +119,20 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
       const since = now().toISOString();
       const hasTalks = existsSync(talksPath(root, slug));
       const base = local ?? { slug };
-      const doc = hasTalks
-        ? { ...base, status: 'searchable', status_reason: null, raw_fetched_at: since }
-        : { ...base, raw_fetched_at: since };
+      // The status from before the hide when the operator file recorded one (a conference that
+      // was partial_index stays partial_index); searchable needs the talk file to be present.
+      const previous = operator.hidden[slug]?.previous;
+      const restored = previous && typeof previous.status === 'string' && (previous.status !== 'searchable' || hasTalks)
+        ? { status: previous.status, status_reason: previous.status_reason ?? null }
+        : hasTalks ? { status: 'searchable', status_reason: null } : null;
+      const doc = restored ? { ...base, ...restored, raw_fetched_at: since } : { ...base, raw_fetched_at: since };
       const backend = local ? await adapter.unhideConference({ event, slug, mode, doc }) : { summary: `no ${rel(confPath(root, slug))} to restore` };
       const items = [...(backend.items ?? []), { file: rel(confPath(root, slug)), status: doc.status ?? null, status_reason: doc.status_reason ?? null }, { file: OPERATOR_FILE, hidden: null }];
       if (mode === 'dry-run') return { ...backend, items, summary: `${backend.summary}; would rewrite ${files(slug).join(' and ')}` };
       if (local) writeJson(confPath(root, slug), doc);
       delete operator.hidden[slug];
       writeJson(join(root, OPERATOR_FILE), operator);
-      const next = hasTalks ? `run conferences refresh --event ${slug} to re-check the schedule` : `the talk file is missing, so the status stays ${doc.status ?? 'unavailable'} until conferences refresh --event ${slug}`;
+      const next = restored ? `restored ${restored.status}${restored.status_reason ? ` (${restored.status_reason})` : ''}; run conferences refresh --event ${slug} to re-check the schedule` : `the talk file is missing, so the status stays ${doc.status ?? 'unavailable'} until conferences refresh --event ${slug}`;
       return { ...backend, items, files: files(slug), summary: `${backend.summary}; ${COMMIT_NOTE(files(slug))}; ${next}` };
     },
 

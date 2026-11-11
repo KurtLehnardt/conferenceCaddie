@@ -84,6 +84,8 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
         method,
         headers: { Authorization: `ApiKey ${credential}`, 'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json' },
         body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),
+        // A redirect would carry the key to another host (SEC-13).
+        redirect: 'error',
         signal: AbortSignal.timeout(ES_TIMEOUT_MS),
       });
     } catch (err) {
@@ -91,7 +93,8 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
     }
     const json = await res.json().catch(() => ({}));
     if (!res.ok && !okStatuses.includes(res.status)) {
-      throw new AdminError(`${method} ${path.split('?')[0]} failed with status ${res.status}: ${json?.error?.type ?? ''}`.trim());
+      const type = json?.error?.type;
+      throw new AdminError(`${method} ${path.split('?')[0]} failed with status ${res.status}${type ? `: ${type}` : ''}`);
     }
     return { status: res.status, json };
   }
@@ -104,10 +107,12 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
     peoplePreference,
     indices: { people: INDEX.people, meets: INDEX.meets, push: INDEX.push, nudges: INDEX.nudges, blocks: INDEX.blocks },
     UpstreamError: AdminError,
-    log: () => {},
+    // The best-effort second pass logs its failure; deletePerson collects it as a warning.
+    log: (message) => deleteWarnings.push(message),
   });
+  const deleteWarnings = [];
 
-  const moderationFor = (slug) => createModeration({ es, slug, indices: INDEX });
+  const moderationFor = (slug) => createModeration({ es, slug, indices: INDEX, now: () => now().getTime() });
 
   // ---- people lookups ----
 
@@ -173,11 +178,25 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
 
   // ---- child processes ----
 
+  // The environment of a child process is built from scratch: the key the CLI checked travels as
+  // ELASTISEARCH_API_KEY and no other *API_KEY variable reaches the child, because the scripts
+  // prefer ES_API_KEY (scripts/lib/es.mjs) or ES_PEOPLE_API_KEY (purge-expired-people.mjs,
+  // moderation-rules.mjs) when they are set and would otherwise use a different key than the one
+  // the operator chose. Index names, NODE_* settings and the basics pass through; CADDIE_DATA_DIR
+  // points ingest.mjs at this root's data directory.
+  const CHILD_ENV_RE = /^(PATH|HOME|TMPDIR|TMP|TEMP|LANG|LC_[A-Z_]+|TZ|SHELL|USER|NODE_[A-Z_]+|ES_INDEX|ES_[A-Z_]+_INDEX|MODERATION_WORDS_FILE|CADDIE_DATA_DIR)$/;
+  function childEnv() {
+    const out = {};
+    for (const [key, value] of Object.entries(env)) if (CHILD_ENV_RE.test(key) && typeof value === 'string') out[key] = value;
+    if (!out.CADDIE_DATA_DIR && root !== REPO_ROOT) out.CADDIE_DATA_DIR = join(root, 'data');
+    return { ...out, ES_URL: esUrl, ELASTISEARCH_API_KEY: credential };
+  }
+
   function runScript(script, args, { okStatuses = [0] } = {}) {
     const result = spawn(process.execPath, [join(root, 'scripts', script), ...args], {
       cwd: root,
       encoding: 'utf8',
-      env: { ...env, ES_URL: esUrl, ELASTISEARCH_API_KEY: credential },
+      env: childEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 16 * 1024 * 1024,
     });
@@ -189,15 +208,19 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
     return { status: result.status, stdout: lines(result.stdout), stderr: lines(result.stderr) };
   }
 
-  // Writes the rewritten local conference document over the backend's (a partial update), or
-  // NotFoundError when the backend does not hold the conference. Shared by hide and unhide.
+  // Writes the status fields of the rewritten local conference document over the backend's (a
+  // partial update of status, status_reason and raw_fetched_at only, so a stale local copy never
+  // overwrites the rest), or NotFoundError when the backend does not hold the conference. Shared
+  // by hide and unhide.
   async function writeConferenceDoc(slug, doc, mode) {
     const { status, json } = await es('GET', `${idx(INDEX.conferences)}/_doc/${encodeURIComponent(slug)}?_source_includes=status,status_reason`, undefined, { okStatuses: [404] });
     if (status === 404 || !json.found) throw new NotFoundError(`no conference ${slug} on this backend`);
     const current = `${json._source?.status ?? '?'}${json._source?.status_reason ? ` (${json._source.status_reason})` : ''}`;
     const wanted = `${doc.status}${doc.status_reason ? ` (${doc.status_reason})` : ''}`;
     if (mode === 'dry-run') return { summary: `would set ${slug} to ${wanted} on the backend (now ${current})` };
-    await es('POST', `${idx(INDEX.conferences)}/_update/${encodeURIComponent(slug)}?refresh=wait_for`, { doc });
+    await es('POST', `${idx(INDEX.conferences)}/_update/${encodeURIComponent(slug)}?refresh=wait_for`, {
+      doc: { status: doc.status, status_reason: doc.status_reason ?? null, raw_fetched_at: doc.raw_fetched_at },
+    });
     return { summary: `set ${slug} to ${wanted} on the backend (was ${current})` };
   }
 
@@ -298,8 +321,10 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
       const counts = await connectionCounts(event, source.profile_id);
       const what = Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ');
       if (mode === 'dry-run') return { counts, summary: `would delete profile ${ref} at ${event} and what goes with it: ${what}` };
+      deleteWarnings.length = 0;
       await profileDelete.deleteProfileAndConnections(event, source.profile_id);
-      return { counts, summary: `deleted profile ${ref} at ${event} and what went with it: ${what}` };
+      const warnings = deleteWarnings.splice(0).map((m) => `${m}; the hourly purge and the conference-end purge remove what landed after the delete`);
+      return { counts, warnings, summary: `deleted profile ${ref} at ${event} and what went with it: ${what}${warnings.length ? ' (with warnings)' : ''}` };
     },
 
     async setOperatorBlock({ event, ref, options, mode }) {
@@ -401,11 +426,17 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
       };
     },
 
-    async addConference({ slug }) {
-      return this.refreshConference({ slug, options: {} });
+    async addConference({ slug, mode }) {
+      return this.refreshConference({ slug, options: {}, mode });
     },
 
-    async refreshConference({ slug, options }) {
+    async refreshConference({ slug, options, mode }) {
+      if (mode === 'dry-run') {
+        return {
+          items: [{ step: 'ingest', command: `node scripts/ingest.mjs --event ${slug}` }, { step: 'facets', command: `node scripts/build-facets.mjs ${slug}` }],
+          summary: `would run the two commands above with ES_URL and ELASTISEARCH_API_KEY in their environment${options.allowShrink ? ' (--allow-shrink has no effect on tier 3)' : ''}`,
+        };
+      }
       const ingest = runScript('ingest.mjs', ['--event', slug]);
       const facets = runScript('build-facets.mjs', [slug]);
       return {
@@ -464,7 +495,7 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
           ...rows,
         ],
         counts: Object.fromEntries(rows.map((r) => [r.index.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 40), r.docs])),
-        summary: `cluster ${health.status ?? '?'}, ${plural(rows.length, 'caddie index')} (needs the monitor privilege; the admin key holds it)`.replace('indexs', 'indices'),
+        summary: `cluster ${health.status ?? '?'}, ${rows.length} caddie ${rows.length === 1 ? 'index' : 'indices'} (needs the monitor privilege; the admin key holds it)`,
       };
     },
 
@@ -474,7 +505,7 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
       const get = async (path) => {
         let res;
         try {
-          res = await fetch(api + path, { signal: AbortSignal.timeout(ES_TIMEOUT_MS) });
+          res = await fetch(api + path, { redirect: 'error', signal: AbortSignal.timeout(ES_TIMEOUT_MS) });
         } catch (err) {
           throw new AdminError(`GET ${path} failed: ${err?.cause?.code ?? err?.name ?? 'error'}`);
         }
@@ -485,7 +516,7 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
       const c = caps.json ?? {};
       const service = backend.service ?? 'conference-caddie';
       const project = backend.project ?? '<GC_PROJECT>';
-      const smoke = `BASE_URL=${api} ES_URL=${esUrl} ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" node scripts/smoke.mjs`;
+      const smoke = `BASE_URL="${api}" ES_URL="${esUrl}" ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" node scripts/smoke.mjs`;
       const logs = `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="${service}" AND severity>=ERROR' --limit 50 --project ${project} --format=json`;
       return {
         items: [

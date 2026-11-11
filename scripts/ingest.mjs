@@ -396,7 +396,9 @@ async function main() {
   for (const ev of selected) {
     if (stopped) { missing.push(ev.slug); continue; }
     const r = await processEvent(ev);
-    if (Object.hasOwn(operator.hidden, ev.slug)) {
+    // A hidden conference is written as unavailable only over a searchable result; a fetch or
+    // index failure keeps its own reason, which also decides the exit code.
+    if (Object.hasOwn(operator.hidden, ev.slug) && r.conf.status === 'searchable') {
       r.conf.status = 'unavailable';
       r.conf.status_reason = 'operator_hidden';
       r.lines.push('  hidden by the operator (data/conference-operator.json)');

@@ -15,7 +15,7 @@ const SLUG = 'kubecon-cloudnativecon-north-america-2026';
 const text = (p) => readFileSync(p, 'utf8');
 const TRACKED = [`data/${SLUG}/conference.json`, 'data/conference-overrides.json'];
 
-function runCase(operator) {
+function runCase(operator, { breakSchedulePage = false } = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'caddie-operator-'));
   const before = TRACKED.map((f) => text(path.join(ROOT, f)));
   try {
@@ -25,6 +25,8 @@ function runCase(operator) {
     mkdirSync(path.join(tmp, SLUG), { recursive: true });
     cpSync(path.join(ROOT, 'data', SLUG, 'conference.json'), path.join(tmp, SLUG, 'conference.json'));
     writeFileSync(path.join(tmp, 'conference-operator.json'), JSON.stringify(operator));
+    // A schedule page without its data-sched-config makes the event unavailable (no_sched_config).
+    if (breakSchedulePage) writeFileSync(path.join(tmp, 'raw', SLUG, 'schedule-page.html'), '<html><body>no config here</body></html>\n');
     const confPath = path.join(tmp, SLUG, 'conference.json');
     const confBefore = text(confPath);
     const run = spawnSync(process.execPath, ['scripts/ingest.mjs', '--event', SLUG, '--no-fetch', '--dry-run', '--skip-topics'], {
@@ -61,6 +63,14 @@ test('a removed slug is skipped and its conference file is unchanged', () => {
   assert.match(r.run.stdout, /skipped: removed by the operator/);
   assert.match(r.run.stdout, /conferences unretire/);
   assert.equal(r.confChanged, false);
+});
+
+test('a hidden slug whose fetch or parse failed keeps its own reason, not operator_hidden', () => {
+  const r = runCase({ hidden: { [SLUG]: { reason: 'other', since: '2026-11-11T00:00:00Z' } }, removed: {} }, { breakSchedulePage: true });
+  assert.equal(r.run.status, 0, r.run.stderr + r.run.stdout);
+  assert.equal(r.conf.status, 'unavailable');
+  assert.equal(r.conf.status_reason, 'no_sched_config');
+  assert.ok(!r.run.stdout.includes('hidden by the operator'));
 });
 
 test('an empty operator file is the normal run', () => {
