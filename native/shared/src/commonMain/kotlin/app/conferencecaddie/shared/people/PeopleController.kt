@@ -138,6 +138,7 @@ class PeopleController(
     val systemSettings: SystemSettings? get() = services.systemSettings
 
     private var context: PeopleContext? = null
+    @kotlin.concurrent.Volatile
     private var session: Session? = null
 
     // One session per backend base for the life of the controller. Coming back to a backend takes
@@ -608,6 +609,13 @@ class PeopleController(
 
     /** The open-meet poll interval now: 15 seconds, stretched by the API's pace up to three times. */
     suspend fun meetPollIntervalMs(): Long = read(MEET_POLL_MS) { session?.pace?.pacedMeetMs(MEET_POLL_MS) ?: MEET_POLL_MS }
+
+    /**
+     * The person with [ref] as this device last saw them at the current backend (Around, a search,
+     * a talk circle) while the app has run, or null. Not a suspend function, so a screen can call it
+     * while it draws: after an activity re-creation it finds the person a sheet was open for again.
+     */
+    fun knownPerson(ref: String): Person? = session?.connect?.knownPerson(ref)
 
     /** What this device knows of the other person of [meetId] (their opener and about), for after a meet. */
     suspend fun personForMeet(meetId: String): SeenPerson? = read(null) { session?.connect?.personForMeet(meetId) }
