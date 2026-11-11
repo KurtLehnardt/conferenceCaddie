@@ -89,17 +89,18 @@ const records = () => [...fake.store('caddie-people-nudges').values()].map((r) =
 const addressOf = (p) => (p.platform === 'apns' ? `apns:${p.path.split('/').pop()}` : p.platform === 'fcm' ? `fcm:${p.payload.message.token}` : `web:${p.endpoint}`);
 // The words of a recorded push, whatever its channel.
 const wordsOf = (p) => {
-  if (p.platform === 'apns') return { title: p.payload.aps.alert.title, body: p.payload.aps.alert.body, url: p.payload.data.url };
-  if (p.platform === 'fcm') return { title: p.payload.message.notification.title, body: p.payload.message.notification.body, url: p.payload.message.data.url };
-  return { title: p.payload.title, body: p.payload.body, url: p.payload.data.url };
+  if (p.platform === 'apns') return { title: p.payload.aps.alert.title, body: p.payload.aps.alert.body, link: p.payload.deepLink };
+  if (p.platform === 'fcm') return { title: p.payload.message.notification.title, body: p.payload.message.notification.body, link: p.payload.message.data.deepLink };
+  return { title: p.payload.title, body: p.payload.body, link: p.payload.data.url };
 };
+const ALERT = { title: 'Conference Caddie', body: 'Someone whose experience matches yours is in your zone right now', link: 'caddie://people?around=1' };
 
 describe('push nudge with native push', () => {
-  test('one nudge reaches every subscription and registration of both people, with the same words and nothing else', async () => {
+  test('one nudge reaches every subscription and registration of both people: the Web Push words, and the generic alert natively', async () => {
     const tApns = apnsToken();
     const vApns = apnsToken();
     const vFcm = fcmToken();
-    const { t, v, me } = await pair({ web: true, apns: [tApns] }, { apns: [vApns], fcm: [vFcm] });
+    const { t, v, me } = await pair({ web: true, apns: [tApns] }, { web: true, apns: [vApns], fcm: [vFcm] });
     const before = Date.now();
     const lines = [];
     const error = console.error;
@@ -110,23 +111,32 @@ describe('push nudge with native push', () => {
       console.error = error;
     }
     assert.deepEqual(lines, [], 'every push was accepted');
-    assert.deepEqual(fake.pushes.map(addressOf).sort(), [`apns:${tApns}`, `apns:${vApns}`, `fcm:${vFcm}`, `web:https://push.example.test/${t.profileId}`].sort());
+    assert.deepEqual(fake.pushes.map(addressOf).sort(), [`apns:${tApns}`, `apns:${vApns}`, `fcm:${vFcm}`, `web:https://push.example.test/${t.profileId}`, `web:https://push.example.test/${v.profileId}`].sort());
     assert.equal(records().length, 1);
-    assert.deepEqual(records()[0].receivers.sort(), [t.profileId, v.profileId].sort(), 'a person with only native registrations is a receiver');
+    assert.deepEqual(records()[0].receivers.sort(), [t.profileId, v.profileId].sort());
 
+    // Web Push, end-to-end encrypted to the browser, carries the passage and the zone.
     const words = new Map(fake.pushes.map((p) => [addressOf(p), wordsOf(p)]));
     const toT = words.get(`web:https://push.example.test/${t.profileId}`);
-    const toV = words.get(`apns:${vApns}`);
-    assert.deepEqual(words.get(`apns:${tApns}`), toT, 'Web Push and APNs carry the same nudge');
-    assert.deepEqual(words.get(`fcm:${vFcm}`), toV, 'APNs and FCM carry the same nudge');
+    const toV = words.get(`web:https://push.example.test/${v.profileId}`);
     for (const w of [toT, toV]) {
       assert.equal(w.title, 'Conference Caddie');
       assert.match(w.body, /^Someone who's worked on .+ is in Hall A right now$/);
-      assert.equal(w.url, `/e/${EVENT}#/people?around=1`);
+      assert.equal(w.link, `/e/${EVENT}#/people?around=1`);
     }
     assert.notDeepEqual(toT.body, toV.body, 'each hears about the other');
 
-    // Nothing about either person but the passage: no name, ref, profile_id, spot line or distance.
+    // APNs and FCM, which Apple and Google read in plain text, carry the generic alert: the same
+    // bytes for both people, with nothing from either profile, the zone or the conference.
+    for (const address of [`apns:${tApns}`, `apns:${vApns}`, `fcm:${vFcm}`]) assert.deepEqual(words.get(address), ALERT, address);
+    const native = fake.pushes.filter((p) => p.platform);
+    assert.equal(new Set(native.filter((p) => p.platform === 'apns').map((p) => JSON.stringify(p.payload))).size, 1, 'one APNs payload for everyone');
+    const nativeText = JSON.stringify(native.map((p) => p.payload));
+    for (const leak of ['Hall A', 'Hall', 'eBPF', 'ebpf', 'probes', 'Postgres', 'production', 'worked on', EVENT, '/e/', '"url"', toT.body, toV.body]) {
+      assert.ok(!nativeText.includes(leak), `${leak} reached a native push`);
+    }
+
+    // Nothing about either person in any push: no name, ref, profile_id, spot line or distance.
     const sent = JSON.stringify(fake.pushes.map((p) => p.payload));
     for (const leak of ['Harry', 'Vic', 'Trigger', 'Match', refFor(EVENT, t.profileId), refFor(EVENT, v.profileId), t.profileId, v.profileId, SPOT, 'coffee', 'distance', 'profile_id', '"ref"', '1.5', '2.5']) {
       assert.ok(!sent.includes(leak), `${leak} reached a push`);

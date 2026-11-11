@@ -28,12 +28,16 @@ const FCM_ENV = { FCM_SERVICE_ACCOUNT_JSON: JSON.stringify(ACCOUNT) };
 // of the environment.
 Object.assign(process.env, APNS_ENV, FCM_ENV);
 const native = await import('../server/native-push.mjs');
-const { createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, FCM_TOKEN_URL, FCM_SCOPE, fcmSendUrl } = native;
+const { createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, FCM_TOKEN_URL, FCM_SCOPE, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
 for (const k of SETTINGS) delete process.env[k];
 
 const APNS_TOKEN = crypto.randomBytes(32).toString('hex');
 const FCM_TOKEN = `${crypto.randomBytes(8).toString('base64url')}:APA91b${crypto.randomBytes(100).toString('base64url')}`;
-const PAYLOAD = { title: 'Conference Caddie', body: "Someone who's worked on eBPF probes is in Hall A right now", data: { url: '/e/testconf-2099#/people?around=1' } };
+// The generic alert, byte for byte: what every native push shows, whoever it is for.
+const ALERT_TITLE = 'Conference Caddie';
+const ALERT_BODY = 'Someone whose experience matches yours is in your zone right now';
+const APNS_BYTES = `{"aps":{"alert":{"title":"${ALERT_TITLE}","body":"${ALERT_BODY}"},"sound":"default"},"deepLink":"caddie://people?around=1"}`;
+const fcmBytes = (token, ttl = 600) => `{"message":{"token":"${token}","notification":{"title":"${ALERT_TITLE}","body":"${ALERT_BODY}"},"data":{"deepLink":"caddie://people?around=1"},"android":{"ttl":"${ttl}s","priority":"normal","notification":{"tag":"caddie-nudge"}}}}`;
 const T0 = Date.UTC(2099, 5, 1, 9, 0, 0);
 const MIN = 60_000;
 
@@ -84,7 +88,7 @@ const reg = (over = {}) => ({ platform: 'apns', token: APNS_TOKEN, environment: 
 describe('APNs', () => {
   test('the provider token is an ES256 JWT with kid, iss and iat, signed by the .p8 key', async () => {
     const { push, calls } = apnsChannel([{ status: 200 }]);
-    assert.equal(await push.send(reg(), PAYLOAD), 'sent');
+    assert.equal(await push.send(reg()), 'sent');
     const auth = calls[0].headers.authorization;
     assert.match(auth, /^bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     const [h, c, s] = auth.slice('bearer '.length).split('.');
@@ -97,10 +101,10 @@ describe('APNs', () => {
     assert.equal(crypto.verify('sha256', Buffer.from(`${h}.${c}`), { key: other, dsaEncoding: 'ieee-p1363' }, signature), false);
   });
 
-  test('the request: host by environment, /3/device/{token}, the topic, alert, priority 5, expiry in 600 s, and the nudge only', async () => {
+  test('the request: host by environment, /3/device/{token}, the topic, alert, priority 5, expiry in 600 s, and the generic alert only', async () => {
     const { push, calls } = apnsChannel([{ status: 200 }], { APNS_BUNDLE_ID: 'app.conferencecaddie.dev' });
-    await push.send(reg(), PAYLOAD, { ttl: 600 });
-    await push.send(reg({ environment: 'sandbox' }), PAYLOAD, { ttl: 600 });
+    await push.send(reg(), { ttl: 600 });
+    await push.send(reg({ environment: 'sandbox' }), { ttl: 600 });
     assert.equal(calls[0].origin, 'https://api.push.apple.com');
     assert.equal(calls[1].origin, 'https://api.sandbox.push.apple.com');
     assert.equal(APNS_ORIGINS.production, 'https://api.push.apple.com');
@@ -115,23 +119,25 @@ describe('APNs', () => {
       'apns-collapse-id': 'caddie-nudge',
       'content-type': 'application/json',
     });
-    assert.deepEqual(calls[0].payload, { aps: { alert: { title: PAYLOAD.title, body: PAYLOAD.body }, sound: 'default' }, deepLink: 'caddie://people?around=1', data: { url: PAYLOAD.data.url } });
+    assert.equal(calls[0].body, APNS_BYTES, 'the exact bytes: the constant alert and the deep link, nothing else');
+    assert.equal(calls[1].body, APNS_BYTES);
+    assert.equal(APNS_BODY, APNS_BYTES);
   });
 
   test('the topic defaults to app.conferencecaddie', async () => {
     const { push, calls } = apnsChannel([{ status: 200 }]);
-    await push.send(reg(), PAYLOAD);
+    await push.send(reg());
     assert.equal(calls[0].headers['apns-topic'], 'app.conferencecaddie');
     assert.equal(calls[0].headers['apns-expiration'], String(Math.floor(T0 / 1000) + 600), 'the default TTL is the Web Push one, 600 s');
   });
 
   test('the provider token is reused for 40 minutes, then renewed', async () => {
     const { push, calls, clock } = apnsChannel([{ status: 200 }]);
-    await push.send(reg(), PAYLOAD);
+    await push.send(reg());
     clock.t += 39 * MIN;
-    await push.send(reg(), PAYLOAD);
+    await push.send(reg());
     clock.t += 1 * MIN;
-    await push.send(reg(), PAYLOAD);
+    await push.send(reg());
     const tokens = calls.map((c) => c.headers.authorization);
     assert.equal(tokens[0], tokens[1], 'reused within 40 minutes');
     assert.notEqual(tokens[1], tokens[2], 'renewed at 40 minutes');
@@ -141,7 +147,7 @@ describe('APNs', () => {
   test('410 and 400 BadDeviceToken or DeviceTokenNotForTopic mean the token is gone', async () => {
     for (const answer of [{ status: 410, reason: 'Unregistered' }, { status: 410, reason: 'ExpiredToken' }, { status: 400, reason: 'BadDeviceToken' }, { status: 400, reason: 'DeviceTokenNotForTopic' }]) {
       const { push, lines } = apnsChannel([answer]);
-      assert.equal(await push.send(reg(), PAYLOAD), 'gone', JSON.stringify(answer));
+      assert.equal(await push.send(reg()), 'gone', JSON.stringify(answer));
       assert.deepEqual(lines, []);
     }
   });
@@ -149,13 +155,13 @@ describe('APNs', () => {
   test('other refusals, rate limits and server errors fail without deleting, with one clean log line', async () => {
     for (const answer of [{ status: 400, reason: 'BadExpirationDate' }, { status: 400, reason: 'BadTopic' }, { status: 429, reason: 'TooManyRequests' }, { status: 500, reason: 'InternalServerError' }, { status: 503, reason: 'ServiceUnavailable' }, { status: 413, reason: 'PayloadTooLarge' }]) {
       const { push, lines, calls } = apnsChannel([answer]);
-      assert.equal(await push.send(reg(), PAYLOAD), 'failed', JSON.stringify(answer));
+      assert.equal(await push.send(reg()), 'failed', JSON.stringify(answer));
       assert.equal(calls.length, 1, 'no retry');
       assert.deepEqual(lines, [`Native push failed: apns ${answer.status} ${answer.reason}`]);
       assertClean(lines);
     }
     const odd = apnsChannel([{ status: 400, reason: 'Bad Device "token" <x>' }]);
-    assert.equal(await odd.push.send(reg(), PAYLOAD), 'failed');
+    assert.equal(await odd.push.send(reg()), 'failed');
     assert.deepEqual(odd.lines, ['Native push failed: apns 400'], 'a reason that is not a plain code is not logged');
   });
 
@@ -164,7 +170,7 @@ describe('APNs', () => {
     const reset = Object.assign(new Error(`connect ECONNRESET ${APNS_TOKEN}`), { code: 'ECONNRESET' });
     for (const [err, want] of [[timeout, 'timeout'], [reset, 'ECONNRESET'], [new Error(`odd ${APNS_TOKEN}`), 'network error']]) {
       const { push, lines } = apnsChannel([err]);
-      assert.equal(await push.send(reg(), PAYLOAD), 'failed');
+      assert.equal(await push.send(reg()), 'failed');
       assert.deepEqual(lines, [`Native push failed: apns ${want}`]);
       assertClean(lines);
     }
@@ -173,9 +179,9 @@ describe('APNs', () => {
   test('403 ExpiredProviderToken or InvalidProviderToken renews the provider token and retries once', async () => {
     for (const reason of ['ExpiredProviderToken', 'InvalidProviderToken']) {
       const { push, calls, clock, lines } = apnsChannel([{ status: 200 }, { status: 403, reason }, { status: 200 }]);
-      await push.send(reg(), PAYLOAD);
+      await push.send(reg());
       clock.t += 25 * MIN;
-      assert.equal(await push.send(reg(), PAYLOAD), 'sent', reason);
+      assert.equal(await push.send(reg()), 'sent', reason);
       assert.equal(calls.length, 3);
       assert.equal(calls[1].headers.authorization, calls[0].headers.authorization, 'the cached token was tried first');
       assert.notEqual(calls[2].headers.authorization, calls[1].headers.authorization, 'the retry has a new token');
@@ -186,30 +192,30 @@ describe('APNs', () => {
 
   test('a renewed token that is refused again fails after exactly one retry', async () => {
     const { push, calls, clock, lines } = apnsChannel([{ status: 200 }, { status: 403, reason: 'ExpiredProviderToken' }]);
-    await push.send(reg(), PAYLOAD);
+    await push.send(reg());
     clock.t += 30 * MIN;
-    assert.equal(await push.send(reg(), PAYLOAD), 'failed');
+    assert.equal(await push.send(reg()), 'failed');
     assert.equal(calls.length, 3, 'the first send, the refused one and one retry');
     assert.deepEqual(lines, ['Native push failed: apns 403 ExpiredProviderToken']);
   });
 
   test('a provider token younger than 20 minutes is not renewed on a 403, because Apple refuses renewals that frequent', async () => {
     const { push, calls, clock, lines } = apnsChannel([{ status: 200 }, { status: 403, reason: 'InvalidProviderToken' }]);
-    await push.send(reg(), PAYLOAD);
+    await push.send(reg());
     clock.t += 5 * MIN;
-    assert.equal(await push.send(reg(), PAYLOAD), 'failed');
+    assert.equal(await push.send(reg()), 'failed');
     assert.equal(calls.length, 2, 'no retry');
     assert.deepEqual(lines, ['Native push failed: apns 403 InvalidProviderToken']);
     const first = apnsChannel([{ status: 403, reason: 'ExpiredProviderToken' }, { status: 200 }]);
-    assert.equal(await first.push.send(reg(), PAYLOAD), 'failed', 'a token minted for this very push is not renewed either');
+    assert.equal(await first.push.send(reg()), 'failed', 'a token minted for this very push is not renewed either');
     assert.equal(first.calls.length, 1);
   });
 
   test('403 for another reason is not retried', async () => {
     const { push, calls, clock } = apnsChannel([{ status: 200 }, { status: 403, reason: 'BadCertificateEnvironment' }, { status: 200 }]);
-    await push.send(reg(), PAYLOAD);
+    await push.send(reg());
     clock.t += 30 * MIN;
-    assert.equal(await push.send(reg(), PAYLOAD), 'failed');
+    assert.equal(await push.send(reg()), 'failed');
     assert.equal(calls.length, 2);
   });
 });
@@ -250,7 +256,7 @@ const tokenViolation = { '@type': 'type.googleapis.com/google.rpc.BadRequest', f
 describe('FCM', () => {
   test('the OAuth assertion is an RS256 JWT for the messaging scope, signed by the service account key', async () => {
     const { push, tokenCalls } = fcmChannel();
-    assert.equal(await push.send(fcmReg(), PAYLOAD), 'sent');
+    assert.equal(await push.send(fcmReg()), 'sent');
     const [call] = tokenCalls();
     assert.equal(call.init.method, 'POST');
     assert.equal(call.init.headers['Content-Type'], 'application/x-www-form-urlencoded');
@@ -264,51 +270,53 @@ describe('FCM', () => {
     assert.equal(crypto.verify('sha256', Buffer.from(`${h}.${c}`), rsa.publicKey, Buffer.from(s, 'base64url')), true);
   });
 
-  test('the send: the project URL, the access token, and the nudge with a 600 s TTL at normal priority', async () => {
+  test('the send: the project URL, the access token, and the generic alert with a 600 s TTL at normal priority', async () => {
     const { push, sendCalls } = fcmChannel();
-    await push.send(fcmReg(), PAYLOAD, { ttl: 600 });
+    await push.send(fcmReg(), { ttl: 600 });
     const [call] = sendCalls();
     assert.equal(call.url, 'https://fcm.googleapis.com/v1/projects/caddie-test-project/messages:send');
     assert.equal(call.url, fcmSendUrl('caddie-test-project'));
     assert.equal(call.init.method, 'POST');
     assert.deepEqual(call.init.headers, { Authorization: 'Bearer t1', 'Content-Type': 'application/json' });
+    assert.equal(call.init.body, fcmBytes(FCM_TOKEN), 'the exact bytes: the token, the constant alert and the deep link, nothing else');
     assert.deepEqual(JSON.parse(call.init.body), {
       message: {
         token: FCM_TOKEN,
-        notification: { title: PAYLOAD.title, body: PAYLOAD.body },
-        data: { url: PAYLOAD.data.url, deepLink: 'caddie://people?around=1' },
+        notification: { title: ALERT_TITLE, body: ALERT_BODY },
+        data: { deepLink: 'caddie://people?around=1' },
         android: { ttl: '600s', priority: 'normal', notification: { tag: 'caddie-nudge' } },
       },
     });
+    assert.deepEqual(fcmMessageOf(FCM_TOKEN, 600), JSON.parse(call.init.body));
     assert.ok(call.init.signal instanceof AbortSignal, 'every request has a timeout');
   });
 
   test('FCM_PROJECT_ID overrides the service account project', async () => {
     const { push, sendCalls } = fcmChannel({}, { FCM_PROJECT_ID: 'caddie-other-project' });
-    await push.send(fcmReg(), PAYLOAD);
+    await push.send(fcmReg());
     assert.equal(sendCalls()[0].url, 'https://fcm.googleapis.com/v1/projects/caddie-other-project/messages:send');
   });
 
   test('the access token is cached until five minutes before it expires, and concurrent sends share one request', async () => {
     const { push, tokenCalls, sendCalls, clock } = fcmChannel();
-    await Promise.all([push.send(fcmReg(), PAYLOAD), push.send(fcmReg(), PAYLOAD), push.send(fcmReg(), PAYLOAD)]);
+    await Promise.all([push.send(fcmReg()), push.send(fcmReg()), push.send(fcmReg())]);
     assert.equal(tokenCalls().length, 1, 'one token request for three concurrent sends');
     clock.t += 54 * MIN;
-    await push.send(fcmReg(), PAYLOAD);
+    await push.send(fcmReg());
     assert.equal(tokenCalls().length, 1, 'still cached at 54 minutes of 60');
     clock.t += 1 * MIN;
-    await push.send(fcmReg(), PAYLOAD);
+    await push.send(fcmReg());
     assert.equal(tokenCalls().length, 2, 'renewed at 55 minutes');
     assert.deepEqual(sendCalls().map((c) => c.init.headers.Authorization), ['Bearer t1', 'Bearer t1', 'Bearer t1', 'Bearer t1', 'Bearer t2']);
   });
 
   test('401 renews the access token and retries once', async () => {
     const ok = fcmChannel({ sends: [fcmError(401, 'UNAUTHENTICATED'), { status: 200, body: {} }] });
-    assert.equal(await ok.push.send(fcmReg(), PAYLOAD), 'sent');
+    assert.equal(await ok.push.send(fcmReg()), 'sent');
     assert.deepEqual(ok.sendCalls().map((c) => c.init.headers.Authorization), ['Bearer t1', 'Bearer t2']);
     assert.deepEqual(ok.lines, []);
     const again = fcmChannel({ sends: [fcmError(401, 'UNAUTHENTICATED')] });
-    assert.equal(await again.push.send(fcmReg(), PAYLOAD), 'failed');
+    assert.equal(await again.push.send(fcmReg()), 'failed');
     assert.equal(again.sendCalls().length, 2, 'exactly one retry');
     assert.deepEqual(again.lines, ['Native push failed: fcm 401 UNAUTHENTICATED']);
   });
@@ -316,7 +324,7 @@ describe('FCM', () => {
   test('404 UNREGISTERED and 400 INVALID_ARGUMENT on message.token mean the token is gone', async () => {
     for (const answer of [fcmError(404, 'NOT_FOUND', 'UNREGISTERED'), fcmError(400, 'INVALID_ARGUMENT', 'INVALID_ARGUMENT', [tokenViolation])]) {
       const { push, lines } = fcmChannel({ sends: [answer] });
-      assert.equal(await push.send(fcmReg(), PAYLOAD), 'gone', JSON.stringify(answer));
+      assert.equal(await push.send(fcmReg()), 'gone', JSON.stringify(answer));
       assert.deepEqual(lines, []);
     }
   });
@@ -333,7 +341,7 @@ describe('FCM', () => {
       [{ status: 500 }, 'Native push failed: fcm 500'],
     ]) {
       const { push, lines, sendCalls } = fcmChannel({ sends: [answer] });
-      assert.equal(await push.send(fcmReg(), PAYLOAD), 'failed', line);
+      assert.equal(await push.send(fcmReg()), 'failed', line);
       assert.equal(sendCalls().length, 1, 'no retry');
       assert.deepEqual(lines, [line]);
       assertClean(lines);
@@ -342,33 +350,43 @@ describe('FCM', () => {
 
   test('a refused or broken token request fails the push and logs only its status', async () => {
     const refused = fcmChannel({ token: [{ status: 400, body: { error: 'invalid_grant', error_description: `bad ${PRIVATE_KEY_ID}` } }] });
-    assert.equal(await refused.push.send(fcmReg(), PAYLOAD), 'failed');
+    assert.equal(await refused.push.send(fcmReg()), 'failed');
     assert.equal(refused.sendCalls().length, 0);
     assert.deepEqual(refused.lines, ['Native push failed: fcm token 400']);
     const empty = fcmChannel({ token: [{ status: 200, body: { token_type: 'Bearer' } }] });
-    assert.equal(await empty.push.send(fcmReg(), PAYLOAD), 'failed');
+    assert.equal(await empty.push.send(fcmReg()), 'failed');
     assert.deepEqual(empty.lines, ['Native push failed: fcm token invalid response']);
     const down = fcmChannel({ sends: [Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } })] });
-    assert.equal(await down.push.send(fcmReg(), PAYLOAD), 'failed');
+    assert.equal(await down.push.send(fcmReg()), 'failed');
     assert.deepEqual(down.lines, ['Native push failed: fcm ENOTFOUND']);
     const slow = fcmChannel({ sends: [new DOMException('The operation was aborted due to timeout', 'TimeoutError')] });
-    assert.equal(await slow.push.send(fcmReg(), PAYLOAD), 'failed');
+    assert.equal(await slow.push.send(fcmReg()), 'failed');
     assert.deepEqual(slow.lines, ['Native push failed: fcm timeout']);
     assertClean([...refused.lines, ...empty.lines, ...down.lines, ...slow.lines]);
   });
 });
 
 describe('both channels', () => {
-  test('a push carries the nudge title, body and URL and nothing else from the payload', async () => {
+  test('every native push is the same generic alert: no zone, passage, name, ref, profile id, conference or spot line', async () => {
     const apns = apnsChannel([{ status: 200 }]);
     const fcm = fcmChannel();
-    // Fields a nudge payload never has; were one ever added, it must still not reach the phone.
-    const leaky = { ...PAYLOAD, name: 'Ada Lovelace', ref: '0123456789abcdef', profile_id: 'AAECAwQFBgcICQoLDA0ODw', distance_m: 12, spot: 'by the coffee', data: { ...PAYLOAD.data, ref: '0123456789abcdef' } };
-    await apns.push.send(reg(), leaky);
-    await fcm.push.send(fcmReg(), leaky);
-    const sent = JSON.stringify([apns.calls[0].payload, JSON.parse(fcm.sendCalls()[0].init.body)]);
-    for (const leak of ['Ada', '0123456789abcdef', 'AAECAwQFBgcICQoLDA0ODw', 'distance', 'coffee', 'spot', 'profile_id', '"ref"', '"name"']) {
-      assert.ok(!sent.includes(leak), `${leak} reached the push`);
+    const otherApns = crypto.randomBytes(32).toString('hex');
+    const otherFcm = `${crypto.randomBytes(8).toString('base64url')}:APA91b${crypto.randomBytes(100).toString('base64url')}`;
+    await apns.push.send(reg());
+    await apns.push.send(reg({ token: otherApns, environment: 'sandbox' }));
+    await fcm.push.send(fcmReg());
+    await fcm.push.send(fcmReg({ token: otherFcm }));
+    assert.deepEqual(apns.calls.map((c) => c.body), [APNS_BYTES, APNS_BYTES], 'the same bytes for every APNs push');
+    assert.deepEqual(fcm.sendCalls().map((c) => c.init.body), [fcmBytes(FCM_TOKEN), fcmBytes(otherFcm)], 'the same bytes for every FCM push but the token');
+    assert.deepEqual(NATIVE_ALERT, { title: ALERT_TITLE, body: ALERT_BODY, deepLink: 'caddie://people?around=1' });
+    assert.ok(Object.isFrozen(NATIVE_ALERT));
+    // Nothing a nudge knows about the people or the place can be in it: the payload holds only
+    // these keys and these constant strings.
+    const keys = (o, prefix = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v, `${prefix}${k}.`) : [`${prefix}${k}`]));
+    assert.deepEqual(keys(JSON.parse(APNS_BYTES)).sort(), ['aps.alert.body', 'aps.alert.title', 'aps.sound', 'deepLink']);
+    assert.deepEqual(keys(JSON.parse(fcmBytes(FCM_TOKEN))).sort(), ['message.android.notification.tag', 'message.android.priority', 'message.android.ttl', 'message.data.deepLink', 'message.notification.body', 'message.notification.title', 'message.token']);
+    for (const text of [APNS_BYTES, fcmBytes(FCM_TOKEN)]) {
+      assert.doesNotMatch(text, /"url"|\/e\/|testconf|worked on|Hall|zone":|profile_id|"ref"|"name"|spot|distance/);
     }
   });
 
@@ -378,10 +396,10 @@ describe('both channels', () => {
     const push = createNativePush({}, { apnsTransport: stub.transport, now: h.now, log: h.log });
     assert.equal(push.apns, false);
     assert.equal(push.fcm, false);
-    assert.equal(await push.send(reg(), PAYLOAD), 'failed');
+    assert.equal(await push.send(reg()), 'failed');
     const both = createNativePush({ ...APNS_ENV, ...FCM_ENV }, { apnsTransport: stub.transport, fetch: fcmStub().fetchImpl, now: h.now, log: h.log });
-    assert.equal(await both.send({ platform: '__proto__', token: APNS_TOKEN }, PAYLOAD), 'failed');
-    assert.equal(await both.send({ platform: 'webpush', token: APNS_TOKEN }, PAYLOAD), 'failed');
+    assert.equal(await both.send({ platform: '__proto__', token: APNS_TOKEN }), 'failed');
+    assert.equal(await both.send({ platform: 'webpush', token: APNS_TOKEN }), 'failed');
     assert.equal(stub.calls.length, 0);
     assert.deepEqual(h.lines, []);
   });
@@ -574,25 +592,18 @@ describe('the HTTP/2 transport', () => {
     const push = createNativePush(APNS_ENV, { apnsTransport: (o, req) => origins.push(o) && real(origin, req), now: h.now, log: h.log });
     try {
       const before = requests.length;
-      assert.equal(await push.send(reg(), PAYLOAD), 'sent');
-      assert.equal(await push.send(reg({ token: 'dead'.repeat(16) }), PAYLOAD), 'gone');
+      assert.equal(await push.send(reg()), 'sent');
+      assert.equal(await push.send(reg({ token: 'dead'.repeat(16) })), 'gone');
       assert.deepEqual(origins, ['https://api.push.apple.com', 'https://api.push.apple.com']);
       const got = requests[before];
       assert.equal(got[':path'], `/3/device/${APNS_TOKEN}`);
       assert.equal(got['apns-push-type'], 'alert');
       assert.equal(got['apns-priority'], '5');
       assert.match(got.authorization, /^bearer ey/);
-      assert.deepEqual(JSON.parse(got.body).aps.alert, { title: PAYLOAD.title, body: PAYLOAD.body });
+      assert.equal(got.body, APNS_BYTES);
       assert.deepEqual(h.lines, []);
     } finally {
       real.close();
     }
   });
-});
-
-test('the native deep link names the apps\' own scheme for the nudge route only', async () => {
-  const { deepLinkOf } = await import('../server/native-push.mjs');
-  assert.equal(deepLinkOf('/e/testconf-2099#/people?around=1'), 'caddie://people?around=1');
-  assert.equal(deepLinkOf('/e/testconf-2099#/people'), 'caddie://people');
-  assert.equal(deepLinkOf(''), 'caddie://people');
 });

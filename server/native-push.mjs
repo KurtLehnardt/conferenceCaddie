@@ -26,8 +26,12 @@
 //   names the setting and the rule, never its value. The two secrets are removed from
 //   process.env as soon as they are read. No key, JWT, access token or device token is ever
 //   logged.
-// - The message is the Web Push nudge's and nothing else: the title, the body and the app URL
-//   that nudge.mjs gives. It never carries a name, a distance, a ref, a profile_id or a spot line.
+// - The message is a generic alert, the same bytes for every push: the constant title and body of
+//   NATIVE_ALERT and the constant deep link caddie://people?around=1. APNs and FCM payloads reach
+//   Apple and Google in plain text, unlike Web Push payloads, which are end-to-end encrypted, so a
+//   native push carries nothing about anyone: no zone, no passage, no name, no ref, no profile_id,
+//   no conference and no spot line. The app opens Around now, which shows the match through the
+//   authenticated API.
 // - Every push has one outcome: 'sent'; 'gone', when the platform says the token will never work
 //   again (APNs 410, or 400 BadDeviceToken or DeviceTokenNotForTopic; FCM 404 UNREGISTERED, or
 //   400 INVALID_ARGUMENT naming message.token), and the caller then deletes the registration; or
@@ -294,16 +298,29 @@ const errorClass = (err) => {
   return typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? code : 'network error';
 };
 
-// The link the native apps open when the notification is tapped. The Web Push payload names a web
-// route (/e/{slug}#/people?around=1); the apps take their own scheme, which the iOS app delegate and
-// the Android activity accept only when it starts with caddie://.
-export const deepLinkOf = (url) => (/#\/people\?around=1$/.test(url) ? 'caddie://people?around=1' : 'caddie://people');
+// The one notification every native push shows. The body follows the web app's push notice ("Nudges
+// tell you when someone whose experience matches yours is in your zone. They never say who until
+// you open the app"). The deep link is the apps' own scheme, which the iOS app delegate and the
+// Android activity accept only when it starts with caddie://; it opens the People tab on Around now
+// of the conference the app has open.
+export const NATIVE_ALERT = Object.freeze({
+  title: 'Conference Caddie',
+  body: 'Someone whose experience matches yours is in your zone right now',
+  deepLink: 'caddie://people?around=1',
+});
 
-// The visible notification of the nudge, from the payload nudge.mjs sends by Web Push.
-const messageOf = (payload) => {
-  const url = String(payload.data?.url ?? '');
-  return { title: String(payload.title), body: String(payload.body), url, deepLink: deepLinkOf(url) };
-};
+// The APNs body, the same bytes for every push.
+export const APNS_BODY = JSON.stringify({ aps: { alert: { title: NATIVE_ALERT.title, body: NATIVE_ALERT.body }, sound: 'default' }, deepLink: NATIVE_ALERT.deepLink });
+
+/** The FCM HTTP v1 message for one registration token: the same for every push but the token. */
+export const fcmMessageOf = (token, ttl) => ({
+  message: {
+    token,
+    notification: { title: NATIVE_ALERT.title, body: NATIVE_ALERT.body },
+    data: { deepLink: NATIVE_ALERT.deepLink },
+    android: { ttl: `${ttl}s`, priority: 'normal', notification: { tag: NUDGE_TAG } },
+  },
+});
 
 function apnsChannel(config, { transport, now, log }) {
   let provider = null; // { token, issuedAt }
@@ -325,10 +342,8 @@ function apnsChannel(config, { transport, now, log }) {
     return age >= 0 && age < PROVIDER_TOKEN_MIN_AGE_MS ? null : mint();
   };
 
-  return async function send(registration, payload, { ttl }) {
-    const m = messageOf(payload);
+  return async function send(registration, { ttl }) {
     const origin = registration.environment === 'sandbox' ? APNS_ORIGINS.sandbox : APNS_ORIGINS.production;
-    const body = JSON.stringify({ aps: { alert: { title: m.title, body: m.body }, sound: 'default' }, deepLink: m.deepLink, data: { url: m.url } });
     const attempt = (token) => transport(origin, {
       path: `/3/device/${registration.token}`,
       headers: {
@@ -340,7 +355,7 @@ function apnsChannel(config, { transport, now, log }) {
         'apns-collapse-id': NUDGE_TAG,
         'content-type': 'application/json',
       },
-      body,
+      body: APNS_BODY,
     });
     let res = await attempt(providerToken());
     let reason = reasonOf(parse(res.body)?.reason, /^[A-Za-z]{1,64}$/);
@@ -421,16 +436,8 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
     return pending;
   }
 
-  return async function send(registration, payload, { ttl }) {
-    const m = messageOf(payload);
-    const body = JSON.stringify({
-      message: {
-        token: registration.token,
-        notification: { title: m.title, body: m.body },
-        data: { url: m.url, deepLink: m.deepLink },
-        android: { ttl: `${ttl}s`, priority: 'normal', notification: { tag: NUDGE_TAG } },
-      },
-    });
+  return async function send(registration, { ttl }) {
+    const body = JSON.stringify(fcmMessageOf(registration.token, ttl));
     const post = (token) => fetchImpl(sendUrl, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -459,9 +466,9 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
 /**
  * The native push channels of one configuration. Options exist for the tests: apnsTransport
  * ((origin, request) => { status, body }), fetch (for the OAuth token and FCM), now and log.
- * Returns { apns, fcm, send(registration, payload, { ttl }) }, where apns and fcm say whether the
- * channel is on, registration is { platform, token, environment } and payload is the Web Push
- * nudge payload { title, body, data: { url } }. send resolves to 'sent', 'gone' or 'failed'.
+ * Returns { apns, fcm, send(registration, { ttl }) }, where apns and fcm say whether the channel is
+ * on and registration is { platform, token, environment }. send pushes NATIVE_ALERT, and nothing
+ * else, and resolves to 'sent', 'gone' or 'failed'.
  */
 export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = Date.now, log = (line) => console.error(line), timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const stub = env.PUSH_TRANSPORT === 'stub' ? stubTransports(env) : null;
@@ -481,12 +488,12 @@ export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = D
   return Object.freeze({
     apns: Boolean(channels.apns),
     fcm: Boolean(channels.fcm),
-    async send(registration, payload, { ttl = DEFAULT_TTL_SECONDS } = {}) {
+    async send(registration, { ttl = DEFAULT_TTL_SECONDS } = {}) {
       const platform = registration?.platform;
       const channel = platform === 'apns' || platform === 'fcm' ? channels[platform] : null;
       if (!channel) return 'failed';
       try {
-        return await channel(registration, payload, { ttl });
+        return await channel(registration, { ttl });
       } catch (err) {
         log(`Native push failed: ${platform} ${errorClass(err)}`);
         return 'failed';

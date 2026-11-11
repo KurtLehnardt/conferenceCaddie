@@ -1,6 +1,6 @@
 // The server-side nudge: "Someone who's worked on {evidence} is in {zone} right now", sent as a
-// Web Push, and through APNs or FCM to the official apps, to both people of a strong match who
-// are in the same zone.
+// Web Push, and as a generic alert through APNs or FCM to the official apps, to both people of a
+// strong match who are in the same zone.
 //
 // Env: as people.mjs; ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges) records every nudge
 // sent; VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (Secret Manager caddie-vapid-private) and
@@ -23,10 +23,12 @@
 // - The channels share both limits. A receiver is anyone with a Web Push subscription or a native
 //   registration on a channel this server sends on, and one nudge to a receiver is one push to
 //   each of their subscriptions and registrations, counted once against the hourly limit.
-// - The push names nobody: the title is "Conference Caddie", the body is the sentence above with
-//   the other person's matched passage (<mark> stripped, about 80 characters, else their first
-//   speak topic), the data is the app URL. No name, no distance, no ref, no profile_id, and never
-//   a spot line.
+// - The push names nobody. The Web Push one, which is end-to-end encrypted to the browser, has the
+//   title "Conference Caddie", the sentence above with the other person's matched passage (<mark>
+//   stripped, about 80 characters, else their first speak topic) and the zone as its body, and the
+//   app URL as its data. A native push goes to Apple and Google in plain text, so it carries none
+//   of that: it is the constant NATIVE_ALERT of native-push.mjs, the same bytes for every receiver.
+//   No push carries a name, a distance, a ref, a profile_id or a spot line.
 // - A profile hidden after reports, or a sample (demo or seeded) profile, never takes part: as the
 //   trigger the rule stops before any query, and as the other person the query leaves them out
 //   (peopleQuery drops hidden documents; sample ones are filtered here). So a hidden profile's
@@ -119,15 +121,16 @@ async function recentCount(eventId, profileId, nowMs) {
   return json.count ?? 0;
 }
 
-// Sends one payload to every subscription and native registration of one person. A
-// subscription the push service reports gone (404 or 410), or a registration APNs or FCM reports
-// gone, is deleted; the ids of those are returned so the caller stops using them.
+// Sends one nudge to every subscription and native registration of one person: the Web Push
+// payload to each subscription, and the generic native alert, which takes no payload, to each
+// registration. A subscription the push service reports gone (404 or 410), or a registration APNs
+// or FCM reports gone, is deleted; the ids of those are returned so the caller stops using them.
 async function pushTo(send, subs, payload) {
   const data = JSON.stringify(payload);
   const gone = [];
   for (const s of subs) {
     if (s.native) {
-      if ((await NATIVE_PUSH.send(s.native, payload, { ttl: TTL_SECONDS })) === 'gone') {
+      if ((await NATIVE_PUSH.send(s.native, { ttl: TTL_SECONDS })) === 'gone') {
         gone.push(s.id);
         await deleteSubscriptionById(s.id).catch(() => undefined);
       }
