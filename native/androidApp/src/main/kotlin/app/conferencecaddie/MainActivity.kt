@@ -109,10 +109,15 @@ class MainActivity : ComponentActivity(), PlatformActions {
         super.onDestroy()
     }
 
-    /** Hands a tapped notification's caddie:// link to the screens (see AndroidNotifier). */
+    /**
+     * Hands a tapped notification's caddie:// link to the screens (see AndroidNotifier). This
+     * activity is exported, so only a link that comes with the app's own tap key counts; the link
+     * and the key are then removed from the intent the activity keeps.
+     */
     private fun deliverNotificationTap(intent: Intent?) {
-        val link = AndroidNotifier.tappedDeepLink(intent) ?: return
+        val link = AndroidNotifier.tappedDeepLink(this, intent) ?: return
         intent?.removeExtra(AndroidNotifier.EXTRA_DEEP_LINK)
+        intent?.removeExtra(AndroidNotifier.EXTRA_TAP_KEY)
         NotificationTaps.deliver(link)
     }
 

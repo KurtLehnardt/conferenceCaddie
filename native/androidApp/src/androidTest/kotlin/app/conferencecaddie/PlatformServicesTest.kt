@@ -124,8 +124,9 @@ class PlatformServicesTest {
 
     @Test
     fun aColdStartFromATapDeliversTheLink() {
-        val intent = Intent(context, MainActivity::class.java)
-            .putExtra(AndroidNotifier.EXTRA_DEEP_LINK, "caddie://inbox")
+        // The extras of the notifier's own tap intent: the link and this install's tap key.
+        val tap = AndroidNotifier(context, R.drawable.ic_stat_caddie).tapIntent("cold-start", "caddie://inbox")!!
+        val intent = Intent(context, MainActivity::class.java).putExtras(tap)
         ActivityScenario.launch<MainActivity>(intent).use {
             waitFor { lastTap() != null }
             assertEquals("caddie://inbox", lastTap())
