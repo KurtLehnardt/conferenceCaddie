@@ -231,6 +231,10 @@ object Strings {
         const val PASTE_LABEL = "Your schedule's text"
         const val PASTE_PLACEHOLDER = "Paste the talk titles, one per line, or the whole page"
         const val FIND_TALKS = "Find talks"
+
+        /** Native only: a file another app opened in or shared to the app, waiting for a tap. */
+        fun offered(name: String) = "Find this conference's talks in “$name”?"
+        const val UNNAMED_FILE = "the file you shared"
         const val NOTE = "Your file is read once to find matching talks and is not stored."
         fun marked(n: Int) = "Marked ${plural(n, "talk", "talks")} as Interested"
         const val DONE_BODY = "They are in My schedule on this device, by day and time."

@@ -103,6 +103,37 @@ class ImportModelTest {
     }
 
     @Test
+    fun aFileFromAnotherAppWaitsForATap() = runTest(StandardTestDispatcher()) {
+        val pending = Pending()
+        val m = model(pending)
+        m.offer(PickedFile("shared.ics", "text/calendar", "BEGIN:VCALENDAR".encodeToByteArray()))
+        advanceUntilIdle()
+        assertTrue(pending.answers.isEmpty(), "a shared file was read before the person asked")
+        assertFalse(m.busy)
+        m.runOffered(emptySet())
+        advanceUntilIdle()
+        assertEquals(1, pending.answers.size)
+        assertNull(m.offered)
+        pending.answers[0].complete(ImportOutcome.Done(empty, onServer = false))
+        advanceUntilIdle()
+        // Closing and opening again forgets it.
+        m.offer(PickedFile("again.csv", "text/csv", "Title".encodeToByteArray()))
+        m.reset()
+        assertNull(m.offered)
+    }
+
+    @Test
+    fun anErrorDuringAnImportIsShownNotThrown() = runTest(StandardTestDispatcher()) {
+        // An allocation that fails while a hostile file is read is an Error, not an Exception.
+        val m = ImportModel(this) { throw Error("an allocation failed") }
+        m.pasteText = "text"
+        m.runText(emptySet())
+        advanceUntilIdle()
+        assertEquals(Strings.Import.UNAVAILABLE, m.error)
+        assertFalse(m.busy)
+    }
+
+    @Test
     fun filesTheDeviceCouldNotReadNeverReachTheCore() = runTest(StandardTestDispatcher()) {
         val pending = Pending()
         val m = model(pending)

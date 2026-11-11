@@ -3,7 +3,6 @@ package app.conferencecaddie.shared.importer
 import kotlin.time.Clock
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -77,11 +76,8 @@ internal object ScheduleParser {
         val t = JsText.trimStart(text)
         if (JsText.startsWithAsciiIgnoreCase(t, "BEGIN:VCALENDAR")) return Detected(Format.Ics)
         if (t.startsWith('{') || t.startsWith('[')) {
-            val value = try {
-                Json.parseToJsonElement(t)
-            } catch (_: Exception) {
-                null
-            }
+            // Read with a bound on memory: a hostile file cannot build a tree of millions of values.
+            val value = BoundedJson().parse(t)
             if (value is JsonObject || value is JsonArray) return Detected(Format.Json, value)
         }
         val ext = JsText.extension(filename)

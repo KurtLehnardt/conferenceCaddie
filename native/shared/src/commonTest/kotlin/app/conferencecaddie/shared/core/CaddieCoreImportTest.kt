@@ -332,4 +332,22 @@ class CaddieCoreImportTest {
         assertTrue(sizes.all { it == 0 || it == talks.size }, "never part of the list: $sizes")
         assertNull(core.state.value.interestedSnapshots[Fixtures.A])
     }
+
+    @Test
+    fun aBulkMarkKeepsTheOrderItWasGiven() = runTest {
+        // The clock stands still, so only the order given can tell the marks apart.
+        val core = launch(http(), FakePost { error("not asked") })
+        val ready = core.ready()
+        val talks = assertIs<BundleState.Ready>(ready.bundle).bundle.talks.filter { it.isTalk }
+        assertTrue(talks.size >= 3)
+        // Not in talk id order, so an order by id would show.
+        val given = talks.sortedByDescending { it.talkId }
+        core.setInterested(given, true)
+        assertEquals(given.map { it.talkId }, core.until { it.interested.size == given.size }.interested)
+        // Clear list, then Undo in the order the talks had been marked: the list comes back the same.
+        core.setInterested(given, false)
+        core.until { it.interested.isEmpty() }
+        core.setInterested(given, true)
+        assertEquals(given.map { it.talkId }, core.until { it.interested.size == given.size }.interested)
+    }
 }

@@ -227,6 +227,10 @@ class ImportUiTest {
         start()
         IncomingHandoff.offerFile(PickedFile("Calendar.ics", "text/calendar", ics().encodeToByteArray()))
         waitFor(tag = "import-sheet")
+        // Nothing is read until the person asks for it.
+        waitFor(text = Strings.Import.offered("Calendar.ics"))
+        onNodeWithTag("import-review").assertDoesNotExist()
+        onNodeWithTag("import-offered-find").performClick()
         waitFor(tag = "import-review")
         assertEquals(Strings.Import.found(1, "Alpha Conference"), summary())
         // The start time in the file matches the talk's to the minute.

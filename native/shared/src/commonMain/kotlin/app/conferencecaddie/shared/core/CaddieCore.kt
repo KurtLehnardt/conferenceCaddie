@@ -18,6 +18,7 @@ import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.importer.ImportInput
 import app.conferencecaddie.shared.importer.ImportOutcome
 import app.conferencecaddie.shared.importer.ImportRefusal
+import app.conferencecaddie.shared.importer.LegacyInterested
 import app.conferencecaddie.shared.importer.MAX_IMPORT_TEXT
 import app.conferencecaddie.shared.importer.ScheduleImport
 import app.conferencecaddie.shared.importer.ServerScheduleImport
@@ -473,24 +474,57 @@ class CaddieCore(
     fun setInterested(talk: Talk, interested: Boolean) = mark(talk.talkId, talk, interested)
 
     /**
-     * Marks or unmarks every talk of [talks] in one call, keeping a copy of each marked talk as
-     * [setInterested] does, and publishes the selected conference's list once at the end, so the
+     * Marks or unmarks every talk of [talks] in one call, in their order, keeping a copy of each
+     * marked talk as [setInterested] does, and publishes the selected conference's list once at the end, so the
      * screens never show half of an import (or of a cleared list) in between. Each talk lands in its
      * own conference, from its id.
      */
     fun setInterested(talks: List<Talk>, interested: Boolean) = command {
         if (talks.isEmpty()) return@command
         val s = _state.value
-        val bySlug = talks.groupBy { it.talkId.substringBefore(':', "") }.filterKeys { it.isNotEmpty() }
+        val bySlug = talks.withIndex().groupBy { it.value.talkId.substringBefore(':', "") }.filterKeys { it.isNotEmpty() }
         val now = nowMs()
         for ((slug, list) in bySlug) {
             val key = BundleSync.scope(s.backend.base, slug)
-            for (talk in list) database.setInterested(key, talk.talkId, interested, now, if (interested) InterestedTalk.from(talk) else null)
+            // One millisecond apart, in the order given, so the list keeps that order (the marks are
+            // read back by when they were made): an import in the file's order, an Undo of Clear
+            // list in the order the talks had been marked.
+            for ((index, talk) in list) {
+                database.setInterested(key, talk.talkId, interested, now + index, if (interested) InterestedTalk.from(talk) else null)
+            }
         }
         val selected = s.selectedSlug
         if (selected != null && selected in bySlug) {
             val key = BundleSync.scope(s.backend.base, selected)
             _state.value = _state.value.copy(interested = database.interested(key), interestedSnapshots = database.interestedSnapshots(key))
+        }
+    }
+
+    /**
+     * Keeps the Interested lists the Capacitor app left in its WebView's local storage ([lists]:
+     * each storage key with its value, as the host read them), once, when the native app is
+     * installed over it. That app always talked to the official server, so the marks go to the
+     * build's default backend, each conference's in the order they were made, and a talk already
+     * marked here keeps its own mark. Keys and values are untrusted; [LegacyInterested] checks and
+     * bounds them.
+     */
+    fun importLegacyInterested(lists: Map<String, String>) = command {
+        val base = defaultBackend.base
+        var at = nowMs() - LegacyInterested.MAX_TALKS.toLong() * lists.size.coerceAtMost(100)
+        for ((key, value) in lists.entries.take(100)) {
+            val slug = LegacyInterested.slugOf(key) ?: continue
+            val scope = BundleSync.scope(base, slug)
+            val have = database.interested(scope).toSet()
+            for (mark in LegacyInterested.read(slug, value)) {
+                if (mark.talkId in have) continue
+                database.setInterested(scope, mark.talkId, true, at++, mark.copy)
+            }
+        }
+        val s = _state.value
+        val selected = s.selectedSlug
+        if (s.backend.base == base && selected != null) {
+            val scope = BundleSync.scope(base, selected)
+            _state.value = s.copy(interested = database.interested(scope), interestedSnapshots = database.interestedSnapshots(scope))
         }
     }
 
@@ -513,7 +547,17 @@ class CaddieCore(
      * Parsing and matching run off the main thread. [ImportRefusal.Unavailable] when no bundle of the
      * selected conference is ready.
      */
-    suspend fun importSchedule(input: ImportInput): ImportOutcome {
+    suspend fun importSchedule(input: ImportInput): ImportOutcome = try {
+        importOrRefuse(input)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        // A file or answer the bounds did not foresee (an allocation that fails included) refuses the
+        // import instead of ending the app.
+        ImportOutcome.Refused(ImportRefusal.Unavailable)
+    }
+
+    private suspend fun importOrRefuse(input: ImportInput): ImportOutcome {
         val s = _state.value
         val ready = s.bundle as? BundleState.Ready ?: return ImportOutcome.Refused(ImportRefusal.Unavailable)
         val slug = s.selectedSlug

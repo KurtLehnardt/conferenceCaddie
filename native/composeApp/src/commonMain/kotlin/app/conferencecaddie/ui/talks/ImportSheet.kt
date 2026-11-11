@@ -111,6 +111,13 @@ class ImportModel(
     var done by mutableStateOf<Done?>(null)
         private set
 
+    /**
+     * A file another app handed over ("Open in", "Share"), waiting for the person to ask for it to
+     * be read: nothing is parsed before that tap.
+     */
+    var offered by mutableStateOf<PickedFile?>(null)
+        private set
+
     private var job: Job? = null
 
     // The import that is running, kept until it ends, so one that the old scope cut short (a
@@ -126,6 +133,7 @@ class ImportModel(
 
     fun reset() {
         unfinished = null
+        offered = null
         job?.cancel()
         busy = false
         error = null
@@ -145,6 +153,7 @@ class ImportModel(
 
     /** Imports a file the person chose or opened in the app. */
     fun runFile(file: PickedFile, interested: Set<String>) {
+        offered = null
         val bytes = file.bytes
         when {
             file.tooLarge -> showError(Strings.Import.TOO_LARGE)
@@ -152,6 +161,19 @@ class ImportModel(
             bytes.isEmpty() -> showError(Strings.Import.EMPTY_FILE)
             else -> start(ImportInput.File(bytes, file.name, file.mime), interested)
         }
+    }
+
+    /** Starts clean with [file] waiting on the first page for the person's tap ([runOffered]). */
+    fun offer(file: PickedFile) {
+        reset()
+        offered = file
+    }
+
+    /** Reads the file another app handed over, once the person asked for it. */
+    fun runOffered(interested: Set<String>) {
+        val file = offered ?: return
+        offered = null
+        runFile(file, interested)
     }
 
     /** Imports the pasted text. */
@@ -205,7 +227,8 @@ class ImportModel(
                 unfinished = null
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
+                // Errors too: an import must never end the app.
                 error = Strings.Import.UNAVAILABLE
                 unfinished = null
             } finally {
@@ -326,6 +349,25 @@ private fun ColumnScope.StartPage(model: ImportModel, conference: Conference, in
                 CaddieButton(Strings.Import.CANCEL, model::cancel, variant = ButtonVariant.Text, small = true)
             }
         } else {
+            model.offered?.let { file ->
+                // A file from another app is read only once the person asks for it.
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                        .background(c.fill, RoundedCornerShape(Caddie.dimens.radius))
+                        .padding(12.dp)
+                        .testTag("import-offered"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(Strings.Import.offered(file.name.ifBlank { Strings.Import.UNNAMED_FILE }), style = Caddie.type.stateBody, color = c.text)
+                    CaddieButton(
+                        Strings.Import.FIND_TALKS,
+                        onClick = { model.runOffered(interested) },
+                        modifier = Modifier.fillMaxWidth().testTag("import-offered-find"),
+                    )
+                }
+            }
             CaddieButton(
                 Strings.Import.CHOOSE_FILE,
                 onClick = onPickFile,

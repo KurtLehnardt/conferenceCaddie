@@ -80,10 +80,15 @@ class ImportBoundsTest {
         // The first import loads and compiles everything once, as the server's module was loaded
         // before its timings.
         text("Inside the Kubernetes Scheduler")
+        // The bound is relative to an ordinary input of the same size, so a slow runner (a debug
+        // Kotlin/Native build on a shared machine) slows both: a pattern that backtracks takes seconds,
+        // a hundred times or more what reading 200 KB of words takes, while a slow machine does not.
+        val baseline = (1..3).minOf { run(ImportInput.Text("Inside the Kubernetes Scheduler ".repeat(6_000))).ms }
+        val limit = maxOf(500L, baseline * 20)
         val slow = ArrayList<String>()
         for ((name, input) in backtracking) {
             val r = run(input)
-            if (r.ms >= 500) slow += "$name took ${r.ms} ms"
+            if (r.ms >= limit) slow += "$name took ${r.ms} ms (limit $limit ms, baseline $baseline ms)"
         }
         assertTrue(slow.isEmpty(), slow.joinToString("; "))
     }

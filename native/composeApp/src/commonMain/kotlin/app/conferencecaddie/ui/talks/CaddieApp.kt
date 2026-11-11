@@ -137,6 +137,8 @@ fun CaddieApp(
     var myDaySlug by rememberSaveable { mutableStateOf<String?>(null) }
     var clearOpen by rememberSaveable { mutableStateOf(false) }
     var shellRequest by remember { mutableStateOf<ShellRequest?>(null) }
+    // Each request to the shell gets the next number, so two equal requests are told apart.
+    val requestIds = remember { RequestIds() }
     // Import my schedule: the core imports on the device or through the backend, as its
     // capabilities say.
     val importer = if (owner != null) {
@@ -276,9 +278,9 @@ fun CaddieApp(
         if (ready == null) return@LaunchedEffect
         pendingFile = null
         toast = null
-        importer.reset()
+        // The sheet opens with the file waiting; it is read only when the person taps Find talks.
+        importer.offer(file)
         importOpen = true
-        importer.runFile(file, state.interested.toSet())
     }
     // Another conference closes Import my schedule, as a route change closes the web's sheet.
     LaunchedEffect(state.selectedSlug) {
@@ -323,7 +325,7 @@ fun CaddieApp(
             else -> Unit
         }
         shellRequest = ShellRequest(
-            id = Clock.System.now().toEpochMilliseconds(),
+            id = ++requestIds.last,
             tab = when (link.tab) {
                 AppLink.Tab.People -> Tab.People
                 AppLink.Tab.ForYou -> Tab.ForYou
@@ -483,11 +485,11 @@ fun CaddieApp(
                     core.setUiSetting(MY_SCHEDULE_VIEW, "day")
                     myDay = day
                     myDaySlug = state.selectedSlug
-                    shellRequest = ShellRequest(id = Clock.System.now().toEpochMilliseconds(), tab = Tab.Interested)
+                    shellRequest = ShellRequest(id = ++requestIds.last, tab = Tab.Interested)
                 },
                 onSwitchConference = {
                     importOpen = false
-                    shellRequest = ShellRequest(id = Clock.System.now().toEpochMilliseconds(), switcher = true)
+                    shellRequest = ShellRequest(id = ++requestIds.last, switcher = true)
                 },
                 onClose = { importOpen = false },
             )
@@ -548,6 +550,11 @@ fun CaddieApp(
 }
 
 private const val THEME = "theme"
+
+/** The last id given to a [ShellRequest]. */
+private class RequestIds {
+    var last = 0L
+}
 
 /** The List or Day choice of My schedule (the web's caddie.myschedule.view.v1). */
 private const val MY_SCHEDULE_VIEW = "myschedule.view.v1"

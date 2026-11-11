@@ -4,9 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -57,7 +55,11 @@ class MainActivity : ComponentActivity(), PlatformActions {
             query = get("caddie.query")
         }
         // A link or file that started the app; after a rotation it was handled already.
-        if (savedInstanceState == null) handOff(intent)
+        if (savedInstanceState == null) {
+            handOff(intent)
+            // Once, after an update over the Capacitor app: its Interested lists.
+            CapacitorMigration.maybeRun(this, core)
+        }
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
         setContent {
             CaddieApp(
@@ -80,29 +82,13 @@ class MainActivity : ComponentActivity(), PlatformActions {
         handOff(intent)
     }
 
-    /**
-     * Hands a `caddie://` link, or a schedule file opened in or shared to the app, to the screens.
-     * Only `content:` files are read: a `file:` address could name the app's own private files, and
-     * the app must never read those for another app.
-     */
+    /** Hands a `caddie://` link, or a schedule file opened in or shared to the app, to the screens ([IncomingIntents]). */
     private fun handOff(intent: Intent?) {
-        intent ?: return
-        val data = intent.data
-        when (intent.action) {
-            Intent.ACTION_VIEW -> when (data?.scheme?.lowercase()) {
-                "caddie" -> IncomingHandoff.offerLink(data.toString())
-                "content" -> readInBackground(data, intent.type, IncomingHandoff::offerFile)
-            }
-            Intent.ACTION_SEND -> {
-                val stream = if (Build.VERSION.SDK_INT >= 33) {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
-                }
-                if (stream?.scheme?.lowercase() == "content") readInBackground(stream, intent.type, IncomingHandoff::offerFile)
-            }
-        }
+        IncomingIntents.handOff(
+            intent,
+            onLink = { IncomingHandoff.offerLink(it) },
+            onFile = { uri, type -> readInBackground(uri, type, IncomingHandoff::offerFile) },
+        )
     }
 
     override fun pickScheduleFile(onPicked: (PickedFile?) -> Unit) {
@@ -126,37 +112,10 @@ class MainActivity : ComponentActivity(), PlatformActions {
         runCatching { startActivity(Intent.createChooser(send, null)) }
     }
 
-    /**
-     * Reads at most [PickedFile.MAX_FILE_BYTES] (plus one byte, to tell a larger file) of [uri] off the
-     * main thread, then calls [deliver] on the main thread. A file that cannot be read arrives with
-     * null bytes.
-     */
+    /** Reads [uri] off the main thread ([IncomingIntents.read]), then calls [deliver] on the main thread. */
     private fun readInBackground(uri: Uri, typeHint: String?, deliver: (PickedFile) -> Unit) {
         thread(name = "caddie-read-file") {
-            val name = runCatching {
-                contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                    if (c.moveToFirst()) c.getString(0) else null
-                }
-            }.getOrNull() ?: uri.lastPathSegment.orEmpty()
-            val mime = runCatching { contentResolver.getType(uri) }.getOrNull() ?: typeHint.orEmpty()
-            val limit = PickedFile.MAX_FILE_BYTES
-            val file = try {
-                contentResolver.openInputStream(uri)?.use { input ->
-                    val buffer = java.io.ByteArrayOutputStream()
-                    val chunk = ByteArray(64 * 1024)
-                    var total = 0
-                    while (total <= limit) {
-                        val n = input.read(chunk, 0, minOf(chunk.size, limit + 1 - total))
-                        if (n < 0) break
-                        buffer.write(chunk, 0, n)
-                        total += n
-                    }
-                    if (total > limit) PickedFile(name.take(255), mime.take(127), null, tooLarge = true)
-                    else PickedFile(name.take(255), mime.take(127), buffer.toByteArray())
-                } ?: PickedFile(name.take(255), mime.take(127), null)
-            } catch (_: Exception) {
-                PickedFile(name.take(255), mime.take(127), null)
-            }
+            val file = IncomingIntents.read(contentResolver, uri, typeHint)
             runOnUiThread { deliver(file) }
         }
     }

@@ -3,7 +3,6 @@ package app.conferencecaddie.shared.importer
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.net.PostJson
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -63,7 +62,7 @@ internal class ServerScheduleImport(private val post: PostJson) {
     // The server's own sentence when it sent a short plain one, else the device's refusal.
     private fun refusal(text: String, local: ImportRefusal): ImportOutcome.Refused {
         val message = try {
-            ((Json.parseToJsonElement(text) as? JsonObject)?.get("error") as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ((BoundedJson().parse(text) as? JsonObject)?.get("error") as? JsonPrimitive)?.takeIf { it.isString }?.content
         } catch (_: Exception) {
             null
         }
@@ -73,7 +72,7 @@ internal class ServerScheduleImport(private val post: PostJson) {
 
     private fun parse(text: String, prepared: ScheduleImport.Prepared, bundle: TalkBundle): ImportResult? {
         val o = try {
-            Json.parseToJsonElement(text) as? JsonObject
+            BoundedJson().parse(text) as? JsonObject
         } catch (_: Exception) {
             null
         } ?: return null
