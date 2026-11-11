@@ -1699,7 +1699,7 @@ mark {
   position: relative;
   display: flex;
   justify-content: center;
-  margin-top: 16px;
+  margin-top: 32px;
 }
 
 .settings-tip {

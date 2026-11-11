@@ -12,57 +12,44 @@ export interface GuideStep {
   body: string;
 }
 
-// Every name here is one the app shows: the tabs People, For you, Search and Interested (whose
-// screen is titled My schedule), the profile's two topic pickers, and Settings with its gear.
+// Every name here is one the app shows: the tabs People, For you and Interested (whose screen is
+// titled My schedule), the profile's two topic pickers, "See who's here", and Settings. Each body
+// is 20 words or fewer, so a step reads at a glance with the screen still in view.
 export const GUIDE_STEPS: GuideStep[] = [
   {
-    id: 'welcome',
+    id: 'people',
     tab: 'people',
     position: 'bottom',
     title: 'Welcome to Conference Caddie',
-    body: 'Find the right talk, and the right people around it. This quick tour shows where everything is. It takes about a minute, and you can skip it at any time.',
+    body: 'People first: attendees who share your topics show here, with why you matched and an opener.',
   },
   {
     id: 'topics',
     tab: 'profile',
     position: 'bottom',
     reveal: 'section.pp-picker',
-    title: 'Say what you want to learn',
-    body: 'In your profile, pick the topics you want to learn about and the topics you can speak to. You can also describe a problem you are working on. All of it stays on this phone until you choose to be visible.',
-  },
-  {
-    id: 'people',
-    tab: 'people',
-    position: 'bottom',
-    title: 'People to meet',
-    body: 'Attendees who share your topics show up here, with the reason you matched and a line to start the conversation. You see others only while you are visible to them too, and you choose when.',
-  },
-  {
-    id: 'circles',
-    tab: 'search',
-    position: 'bottom',
-    title: 'Talk circles',
-    body: "Mark a talk as interested, then choose to share your profile for that talk, and See who's here shows who else is interested in it. People appear only if they shared their profile for that talk too.",
+    title: 'Pick your topics',
+    body: "Pick topics to learn about and, below, topics you can speak to. It stays on this phone until you're visible.",
   },
   {
     id: 'for-you',
     tab: 'for-you',
     position: 'bottom',
     title: 'For you',
-    body: 'Talks picked from the topics you want to learn, each with the reason it was suggested. Talks that have ended and talks you already marked are left out.',
+    body: 'Talks picked from what you want to learn, each with why.',
   },
   {
     id: 'schedule',
     tab: 'interested',
     position: 'bottom',
     title: 'My schedule',
-    body: 'The talks you mark are kept in the Interested tab, as a list or by day, and they stay on this phone without a connection. You can also import your schedule from a PDF, CSV, calendar or text file in Settings.',
+    body: "Talks you mark live here and work offline. Share your profile on a talk, then See who's here.",
   },
   {
     id: 'settings',
     tab: 'settings',
     position: 'top',
-    title: 'Settings, and this guide',
-    body: 'The gear at the top right opens Settings: your profile, schedule import and appearance. The question mark at the very bottom of Settings shows this guide again.',
+    title: 'Settings',
+    body: 'Profile, schedule import and appearance live here. Tap ? at the bottom to replay this tour.',
   },
 ];

@@ -61,6 +61,17 @@ test('a skipped guide is remembered and does not show again', () => {
   assert.equal(claimAutoGuide(false), false);
 });
 
+test('a guide that opened and was left without a button counts as seen on the next visit', () => {
+  // The guide writes 'shown' when its first dialog opens; a reload or Back then does not bring it back.
+  markGuide('shown');
+  assert.equal(readGuideOutcome(), 'shown');
+  resetGuideClaim(); // a new page load
+  assert.equal(claimAutoGuide(false), false);
+  // Finishing afterwards replaces it.
+  markGuide('done');
+  assert.equal(readGuideOutcome(), 'done');
+});
+
 test('any value under the key counts as seen, even one this version does not understand', () => {
   localStorage.setItem(GUIDE_KEY, 'not json');
   assert.equal(readGuideOutcome(), 'done');
@@ -75,6 +86,11 @@ test('a device that already has a profile or topics is onboarded: no guide, noth
   assert.equal(isOnboarded(profile({ display_name: 'Sam' }), 0), true);
   assert.equal(isOnboarded(profile({ interests: 'getting Postgres failover under a minute' }), 0), true);
   assert.equal(isOnboarded(profile({ expertise: 'ran Postgres operators' }), 0), true);
+  // Any text counts, not only the name and the two topic descriptions.
+  assert.equal(isOnboarded(profile({ about: 'SRE at X' }), 0), true);
+  assert.equal(isOnboarded(profile({ linkedin_url: 'https://www.linkedin.com/in/sam' }), 0), true);
+  assert.equal(isOnboarded(profile({ contact_note: 'Find me at the coffee stand' }), 0), true);
+  assert.equal(isOnboarded(profile({ about: '   ', linkedin_url: '', contact_note: '' }), 0), false);
   assert.equal(isOnboarded(profile({ topics: { a: { learn: [], speak: [] } } }), 0), false);
   assert.equal(isOnboarded(profile({ topics: { a: { learn: [{ topic_id: 'x' }], speak: [] } } }), 0), true);
   assert.equal(isOnboarded(profile({ topics: { a: { learn: [], speak: [{ topic_id: 'x' }] } } }), 0), true);
@@ -115,6 +131,7 @@ test('the guide walks through the real screens, with no raw ids', () => {
   for (const s of GUIDE_STEPS) {
     assert.ok(tabs.includes(s.tab), `${s.id} shows a real screen`);
     assert.ok(s.title.length > 0 && s.body.length > 0);
+    assert.ok(s.body.split(/\s+/).length <= 20, `${s.id} is 20 words or fewer`);
     assert.ok(!/[0-9a-f]{16}|\b[A-Za-z0-9_-]{22}\b/.test(s.title + s.body), `${s.id} has no raw id`);
   }
   assert.equal(GUIDE_STEPS[0].tab, 'people');

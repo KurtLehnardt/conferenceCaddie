@@ -264,7 +264,7 @@ export function App() {
     if (!searchable || !isTab(tab) || tab === 'here') return;
     const t = window.setTimeout(() => {
       const open = modalOpen || !!document.querySelector('[aria-modal="true"], .swal2-container');
-      maybeStartGuide(searchable.slug, open);
+      maybeStartGuide(searchable.slug, open, () => tabViews.current.views);
     }, 700);
     return () => window.clearTimeout(t);
   }, [searchable?.slug, tab, modalOpen]);
@@ -603,7 +603,7 @@ export function App() {
               onTheme={setTheme}
               canImport={!!searchable && online}
               importNote={!searchable ? 'Open a conference first' : !online ? 'Needs a connection' : null}
-              onHelp={searchable ? () => replayGuide(searchable.slug) : undefined}
+              onHelp={searchable ? () => replayGuide(searchable.slug, () => tabViews.current.views) : undefined}
               onImport={() => {
                 setToast(null);
                 setImportOpen(true);

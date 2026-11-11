@@ -29,11 +29,20 @@ function HelpButton({ onClick }: { onClick: () => void }) {
         }}
         onPointerEnter={(e) => e.pointerType !== 'touch' && setTip(true)}
         onPointerLeave={() => setTip(false)}
-        onFocus={(e) => (e.currentTarget as HTMLElement).matches(':focus-visible') && setTip(true)}
+        onFocus={(e) => {
+          // Safari before 15.4 throws on :focus-visible; show the tip on focus there.
+          let visible = true;
+          try {
+            visible = (e.currentTarget as HTMLElement).matches(':focus-visible');
+          } catch {
+            // Keep the default.
+          }
+          if (visible) setTip(true);
+        }}
         onBlur={() => setTip(false)}
         onKeyDown={(e) => e.key === 'Escape' && tip && (e.stopPropagation(), setTip(false))}
       >
-        <CircleQuestionMark size={24} aria-hidden="true" />
+        <CircleQuestionMark size={22} aria-hidden="true" />
       </button>
       {tip && (
         <span class="settings-tip" aria-hidden="true">

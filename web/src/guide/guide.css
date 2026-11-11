@@ -55,6 +55,18 @@
   text-align: left;
 }
 
+/* The dialog takes focus itself after a touch or a click, so it names itself to a screen reader;
+   it is not a control and draws no ring. */
+.caddie-guide .caddie-guide-popup:focus {
+  outline: none;
+}
+
+/* When the guide scrolls the profile's topic picker into view, it stops below the app bar. This
+   rule stays after the guide ends, which only affects scrolling a picker into view. */
+section.pp-picker {
+  scroll-margin-top: calc(var(--appbar-h) + var(--safe-top) + 8px);
+}
+
 .caddie-guide .caddie-guide-title {
   margin: 0 0 8px;
   padding: 0;

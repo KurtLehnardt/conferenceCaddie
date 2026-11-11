@@ -4,7 +4,11 @@
 /** The versioned key that remembers the guide was finished or skipped. A new guide gets a new key. */
 export const GUIDE_KEY = 'caddie.guide.v1';
 
-export type GuideOutcome = 'done' | 'skipped';
+/**
+ * How the guide ended. 'shown' is written when the guide first opens by itself, so that leaving it
+ * without a button (a reload, closing the tab, the browser's Back) still counts as seen.
+ */
+export type GuideOutcome = 'done' | 'skipped' | 'shown';
 
 // Set the first time the guide is claimed in this page load, whether or not the key could be
 // written. It is what keeps the guide from showing again when storage is blocked.
@@ -17,7 +21,7 @@ export function readGuideOutcome(): GuideOutcome | null | undefined {
     if (!raw) return null;
     try {
       const outcome = (JSON.parse(raw) as { outcome?: unknown } | null)?.outcome;
-      return outcome === 'skipped' ? 'skipped' : 'done';
+      return outcome === 'skipped' || outcome === 'shown' ? outcome : 'done';
     } catch {
       // Any value under the key means the guide has been seen.
       return 'done';
@@ -63,16 +67,20 @@ interface ProfileLike {
   display_name: string;
   interests: string;
   expertise: string;
+  about?: string;
+  linkedin_url?: string;
+  contact_note?: string;
   topics: Record<string, { learn: unknown[]; speak: unknown[] }>;
 }
 
 /**
- * True when the device already holds a profile with a name, topics or text, or talks marked for
+ * True when the device already holds a profile with a name, topics or any text, or talks marked for
  * this conference: someone who has used the app before and does not need the welcome.
  */
 export function isOnboarded(profile: ProfileLike | null, markedTalks: number): boolean {
   if (markedTalks > 0) return true;
   if (!profile) return false;
-  if (profile.display_name.trim() || profile.interests.trim() || profile.expertise.trim()) return true;
+  const text = [profile.display_name, profile.interests, profile.expertise, profile.about, profile.linkedin_url, profile.contact_note];
+  if (text.some((v) => typeof v === 'string' && v.trim())) return true;
   return Object.values(profile.topics).some((t) => t.learn.length > 0 || t.speak.length > 0);
 }
