@@ -64,9 +64,9 @@ screen_has() {
   grep -qF "$1" <<<"$xml"
 }
 
-# Whether Settings shows: its first group heading is on screen, "YOU" when the server offers people
-# features and "APPEARANCE" without them, and nothing else shows either. On a small screen the
-# people groups push Appearance below the fold.
+# Whether Settings shows: one of its group headings is on screen, "YOU" (Import my schedule, and
+# Profile when the server offers people features) or "APPEARANCE", and nothing else shows either. On
+# a small screen the people groups push Appearance below the fold.
 settings_shown() {
   local xml
   xml=$(ui_dump)

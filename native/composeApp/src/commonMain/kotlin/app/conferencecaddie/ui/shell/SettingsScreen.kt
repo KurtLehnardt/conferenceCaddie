@@ -53,9 +53,11 @@ import app.conferencecaddie.ui.theme.ThemePreference
  * Storage group (saved schedules). A server typed here is checked by BackendUrl and then handed to
  * [onServerTyped], which shows the same confirmation a link gets.
  *
- * You holds the Profile row, which [onOpenProfile] opens; without it (no people features) the group
- * is left out. [people] draws the people groups between You and Appearance, in the web's order.
- * The web's "Import my schedule" row joins You when the native import arrives.
+ * You holds, in the web's order, the Profile row, which [onOpenProfile] opens (left out without
+ * people features), and the "Import my schedule" row when [ShellActions.onImport] is set; that row
+ * is disabled, with [ShellState.importNote] as its hint, while no conference is open. Without either
+ * row the group is left out. [people] draws the people groups between You and Appearance, in the
+ * web's order.
  */
 @Composable
 fun SettingsScreen(
@@ -80,15 +82,29 @@ fun SettingsScreen(
             .testTag("settings-screen"),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        if (onOpenProfile != null) {
+        val onImport = actions.onImport
+        if (onOpenProfile != null || onImport != null) {
             SettingsGroup(Strings.Settings.YOU, Modifier.testTag("settings-you")) {
-                SettingsNavRow(
-                    icon = LucideIcon.UserRound,
-                    label = Strings.Settings.PROFILE,
-                    hint = state.profileName.ifBlank { Strings.Settings.SET_UP_PROFILE },
-                    onClick = onOpenProfile,
-                    first = true,
-                )
+                if (onOpenProfile != null) {
+                    SettingsNavRow(
+                        icon = LucideIcon.UserRound,
+                        label = Strings.Settings.PROFILE,
+                        hint = state.profileName.ifBlank { Strings.Settings.SET_UP_PROFILE },
+                        onClick = onOpenProfile,
+                        first = true,
+                    )
+                }
+                if (onImport != null) {
+                    SettingsNavRow(
+                        icon = LucideIcon.FileUp,
+                        label = Strings.Settings.IMPORT,
+                        hint = state.importNote ?: Strings.Settings.IMPORT_HINT,
+                        onClick = onImport,
+                        first = onOpenProfile == null,
+                        enabled = state.importNote == null,
+                        modifier = Modifier.testTag("settings-import"),
+                    )
+                }
             }
         }
         people?.invoke(this)

@@ -15,7 +15,7 @@ import app.conferencecaddie.ui.theme.ThemePreference
 object BuildDefaults {
     /** Decision 6 (docs/NATIVE_PLAN.md): the live tier 3 server is the default backend. */
     const val OFFICIAL_SERVER = "https://conference-caddie-265846417372.us-west1.run.app"
-    const val VERSION = "0.1.0"
+    const val VERSION = "0.4.0"
 }
 
 /**

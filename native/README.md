@@ -5,8 +5,10 @@ platforms, with the UI written once in Compose Multiplatform. The UI follows the
 (see Design system below). Phase 2a gives the apps the talk features of the plan: they read a
 backend's capabilities, download its talk bundles, and search, filter and keep talks on the device,
 offline too (see Talk features below). Phase 2b adds meaning-based search, For you and the topic
-picker, all on the device with the bge-small-en-v1.5 model through ONNX Runtime. People appears only
-on backends that serve people features (phase 3). The
+picker, all on the device with the bge-small-en-v1.5 model through ONNX Runtime. Phase 2c adds the
+web's schedule views (the full schedule on the Search tab and My schedule's Day timeline), the
+Interested options, Import my schedule, and `caddie://` links. People appears only on backends that
+serve people features (phase 3). The
 Capacitor app in `web/android` is still the Android app people use today. The design and the phases
 these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
@@ -14,10 +16,10 @@ these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
 | Path | What it is |
 |---|---|
-| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), the platform interfaces (`Embedder`, `BleRadio`, `Notifier`, `SecureStore`, and the people features' `PlatformServices.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
-| `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, For you, the topic picker, Search with Why this rank, the Filters sheet, the talk sheet and My schedule). The query model and its vocabulary are its Compose resources. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
-| `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`, shows the permission prompts the platform services ask for and hands notification taps to the screens. Its instrumented tests (the smoke test, the secure store and the platform services) are in `src/androidTest`. |
-| `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController`, its app delegate hands the APNs token and notification taps to Kotlin, and a build phase runs Gradle to build and embed the framework. |
+| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), the schedule import (`importer/`: the Worker's parser and matcher ported to common Kotlin, and the client of a backend's import route), the `caddie://` link parser (`AppLink`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), the platform interfaces (`Embedder`, `BleRadio`, `Notifier`, `SecureStore`, and the people features' `PlatformServices.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
+| `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, For you, the topic picker, Search with Why this rank, the full schedule, the Filters sheet, the talk sheet, My schedule with its Day timeline, and Import my schedule). `ui/platform` holds what the hosts provide (the file picker and the share sheet, `PlatformActions`) and the hand-off of links and files from the platforms (`IncomingHandoff`). The query model and its vocabulary are its Compose resources. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
+| `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`, receives `caddie://` links and schedule files, opens the file picker and the share sheet, shows the permission prompts the platform services ask for and hands notification taps to the screens. Its instrumented tests (the smoke test, the secure store and the platform services) are in `src/androidTest`. |
+| `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController` and hands the URLs the system opens it with to the shared code, its app delegate hands the APNs token and notification taps to Kotlin, and a build phase runs Gradle to build and embed the framework. |
 | `gradle/libs.versions.toml` | Every dependency version, with the reasons for the choices. |
 | `scripts/generate-app-icons.py` | Makes the app icons and the iOS launch image from the web app's icons. |
 | `licenses/` | Licence texts of third-party material the apps ship: the lucide icons, the Apache 2.0 libraries, and the native code Skiko bundles into the iOS app (Skia, HarfBuzz, ICU and others). |
@@ -163,7 +165,8 @@ Debug builds take launch options that open a screen directly, for screenshots an
 `-caddie.tab Search`, `-caddie.open settings` (or `switcher`), `-caddie.theme dark`,
 `-caddie.connect https://example.org`, `-caddie.gallery 1` (the Search components drawn with the
 web's sample talk) and `-caddie.people` (below); the talk screens add theirs (Trying the talk
-features against local bundles). On iOS they are launch arguments
+features against local bundles), among them `-caddie.link <caddie:// link>`, which hands a link
+over as the platform would. On iOS they are launch arguments
 (`xcrun simctl launch <device> app.conferencecaddie -caddie.tab Search`); on Android they are intent
 extras (`adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.tab Search`). Release
 builds ignore them. `-caddie.connect` follows the rules of a `caddie://connect` link: the address is
@@ -184,7 +187,9 @@ host and anything presented from it follow it too.
   the web's NeedsConnection; Profile and Settings still work. It also routes notification taps
   (`NotificationTaps`: `caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`), shows
   the controller's notices as toasts, and draws the sheets several screens share (Ask to talk shop,
-  Report, the block confirmation) once.
+  Report, the block confirmation) once. Links from outside the app (`caddie://e/...`,
+  `caddie://connect`) take the other path, `IncomingHandoff` and `AppLink` in `CaddieApp`, which
+  moves the shell with a `ShellRequest`; a people route there only opens the People tab.
 - Every screen takes the `PeopleUiState` it draws and a `PeopleHost`: the controller, moving
   around (`openProfile()`, `openInbox()`, `openMeet(id)`, `openPeople(request)`, `back()`), the
   shell's toast, those shared sheets, and opening talks and links. Nothing reaches the controller
@@ -351,7 +356,22 @@ to need attention; the signing settings `ios-sign` passes are `CODE_SIGN_STYLE=M
 `CODE_SIGN_IDENTITY="Apple Distribution"` and the profile's UUID as
 `PROVISIONING_PROFILE_SPECIFIER`. If signing fails with `errSecInternalComponent`, the key's
 partition list (`apple:`) or trusted tools (`/usr/bin/codesign`) are too narrow for the tool the
-log names.
+log names. The upload uses `xcrun altool --upload-package <ipa> --api-key --api-issuer`, which the
+help of altool in Xcode 26.4 and 27.1 gives for an IPA; if the runner's Xcode refuses it, the older
+form is `xcrun altool --upload-app -f <ipa> -t ios --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID"`.
+
+What the maintainer adds before the first TestFlight build (checked against `native.yml` in phase
+2c; the Android signing secrets and the variable `ANDROID_RELEASE_CERT_SHA256` already exist, since
+the APK sign job runs on `main`):
+
+1. In the Apple Developer account: the bundle id `app.conferencecaddie`, an Apple Distribution
+   certificate, and an App Store provisioning profile for the bundle id with that certificate.
+2. In App Store Connect: the app, and a team API key with the App Manager role.
+3. In the GitHub environment `release`, these seven secrets, exactly so named:
+   `IOS_DIST_CERT_P12_BASE64`, `IOS_DIST_CERT_PASSWORD`, `IOS_APPSTORE_PROFILE_BASE64`,
+   `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8_BASE64`.
+
+The next push to `main` (or a manual run on `main`) then archives, signs and uploads.
 
 The build path `ios-sign` uses can be tried locally without signing. Archive once the normal way,
 which leaves the framework in `composeApp/build/xcode-frameworks/Release/iphoneos<version>/` and
@@ -409,9 +429,39 @@ Decision 6 in `docs/NATIVE_PLAN.md` makes the live tier 3 server the default bac
 the Server URL field starts with it. When it cannot be reached and nothing is cached, the app falls
 back to the tier 1 demo on GitHub Pages for talk features. A server typed in Settings, like one from a
 `caddie://connect` link, is switched to only after a confirmation that names its base URL exactly
-and warns when it is not the official server. Registering the `caddie://` link itself is still to
-do. The People tab shows only when the capabilities enable people features; the Compose UI tests
-check that gating.
+and warns when it is not the official server. The People tab shows only when the capabilities enable
+people features; the Compose UI tests check that gating. Until the capabilities are known the shell
+shows the first tab it has, and an untouched shell moves to People when it appears; a tab the person
+picked stays picked.
+
+## Links
+
+Both apps register the `caddie` scheme (Android: an intent filter on `MainActivity`, which is
+`singleTask` so a link reaches the running app; iOS: `CFBundleURLTypes`, handled by SwiftUI's
+`onOpenURL`). `AppLink` in `shared` parses what arrives; everything in a link is untrusted:
+
+- `caddie://connect?url=<backend, percent-encoded>`, an operator's link or the QR code that holds
+  one, only ever opens the confirmation that names the server. It must be https, with no debug
+  exception, and the switch it confirms never gets the local http exception a typed server has.
+  The phones' camera apps open the link in a QR code, so the apps have no scanner of their own.
+- `caddie://e/<slug>`, optionally with `#/<tab>` and `?view=<view>&day=<YYYY-MM-DD>` after the tab,
+  is the web's route (`web/src/lib/route.ts`) with `caddie://` in place of the web's origin:
+  `caddie://e/kubecon-cloudnativecon-north-america-2026#/search?view=schedule&day=2026-11-11` opens
+  that day of the full schedule, and `#/interested?view=day` My schedule's Day view. The slug must
+  be a bundle slug the backend lists (otherwise the app says the conference is not available here
+  and changes nothing); an unknown tab, a view that does not fit its tab and a day that is not a
+  date are dropped. The people routes (`here`, `inbox`, `meet`, `profile`) open the People tab.
+- Anything else, and any link longer than 2,048 characters, is ignored.
+
+There are no https App Links or Universal Links (`DECISIONS.md`, phase 2c): they need files at the
+root of a domain the project serves the web app from, which no free host the project uses offers.
+
+Try a link on a device or simulator:
+
+```sh
+adb shell am start -a android.intent.action.VIEW -d "'caddie://e/kubecon-cloudnativecon-north-america-2026#/search?view=schedule'"
+xcrun simctl openurl booted "caddie://connect?url=https%3A%2F%2Fkurtlehnardt.github.io%2FconferenceCaddie"
+```
 
 ## Talk features
 
@@ -476,6 +526,37 @@ check that gating.
     --takedown https://github.com/KurtLehnardt/conferenceCaddie/issues --publisher-name "Conference Caddie"
   cd native && ./gradlew :shared:smokeTalks -Pcaddie.smokeSite=/tmp/site
   ```
+- **The full schedule.** The Search tab's "Search | Schedule" switch shows the schedule one day at a
+  time, from the bundle, in start order under each start time, with day chips (Today on today's,
+  judged in the conference's time zone), the schedule's own filters (the time chips are left out, as
+  on the web), events and showcases, a star on each talk, and Jump to now while the conference runs.
+  The filters work offline too, since the bundle is on the device.
+- **My schedule.** List or Day, kept on the device as the web keeps it; the Day timeline puts talks
+  at the same time side by side in equal columns, with a Now line today, and nothing is flagged.
+  The Interested options (the app bar's menu) clear the list after a question, with Undo, and share
+  it as text through the system's share sheet (native only).
+- **Import my schedule.** Settings → You → Import my schedule reads a CSV or TSV, calendar (.ics),
+  JSON or text file from the system's picker, a file opened in or shared to the app, or pasted text,
+  up to 5 MB or 200,000 characters. PDF and Word files are not read (decision 8). On a backend whose
+  capabilities say `imports.schedule: device` (tier 1) the device parses and matches the file as the
+  Worker does; on one that says `server` (tier 3) the app sends the file's text to
+  `POST /api/import/schedule` with the file name and type as hints, and imports on the device when
+  that backend cannot be reached. The review, the labels and the marking follow the web; the talks
+  are marked on this device only. A file another app opens in or shares to the app waits on the
+  sheet's first page until the person taps Find talks. Android reads only `content:` addresses that
+  another app hands over, never a `file:` address, and at most 5 MB of them; iOS deletes the copy
+  the system makes for the app once it is read. JSON is read with a bound on memory
+  (`importer/BoundedJson`): at most 200,000 values are built, and nothing nested deeper than 512
+  levels is read as JSON. `ScheduleImport`'s tests include every case of `test/import-bounds.test.mjs` and 28 files
+  whose candidates and matches equal the Worker's (`shared/scripts/generate-import-fixtures.mjs`).
+- **Updating from the Capacitor app.** The native Android app installs over the Capacitor app
+  v0.3.0 (same application id and key). At its first start after that update it reads the old
+  app's Interested lists from the old WebView's local storage (`CapacitorMigration`, through a
+  hidden WebView at the old origin, `https://localhost`, made once the first frame is drawn; network
+  loads blocked, every request answered by the app, Safe Browsing and WebView metrics off) and keeps
+  them for the official server. The marks and the marker that stops it running again are written
+  in one transaction; it tries at most three times. The old app's people profile and device secret are not moved yet (phase 3), so
+  delete a profile in the old app before updating if you made one.
 - **Storage.** SQLite through the bundled androidx.sqlite driver, in two files on one connection:
   the main database (settings and the marked talks) and a cache database attached as `cache` (the
   cached lists, the installed bundles and the search index, all of which can be downloaded again).
@@ -716,5 +797,5 @@ Done in phase 2a: version negotiation with the "update the app" outcome, conserv
 unknown values and an unknown `tier` read as `unknown`, the dependency rules, `server-rotate`, the
 fixed service UUID and clamped numbers, the https `bundle_base` rule, `Capabilities.Legacy` equal to
 `legacy-effective.json`, discovery with the per-backend cache, the connect-link parser and its
-confirmation screen, and the contract fixtures in `commonTest`. Still to do: routing `caddie://connect`
-links and QR codes from the platforms to the confirmation screen.
+confirmation screen, and the contract fixtures in `commonTest`. Done in phase 2c: routing
+`caddie://connect` links and QR codes from the platforms to the confirmation screen (see Links).

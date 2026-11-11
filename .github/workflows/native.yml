@@ -131,6 +131,11 @@ jobs:
       - name: Unsigned release APK
         run: ./gradlew -Pcaddie.unsignedRelease=true :androidApp:assembleRelease
 
+      # A WebView calls the methods marked @JavascriptInterface by name (CapacitorMigration), so the
+      # R8 build must keep their names; the instrumented tests run the debug build, which R8 leaves alone.
+      - name: Check that R8 kept the JavaScript interface
+        run: bash scripts/check-javascript-interface.sh
+
       # One APK per ABI (androidApp/build.gradle.kts): arm64-v8a is the one that is published.
       - name: Report the release APK sizes
         run: |

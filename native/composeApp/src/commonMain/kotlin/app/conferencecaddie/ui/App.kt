@@ -102,7 +102,9 @@ fun visibleTabs(peopleEnabled: Boolean): List<Tab> = Tab.entries.filter { it != 
  * The caller owns the data ([state]) and answers [actions]; [content] supplies each tab's screen and
  * the people pages. [initialTab] opens another tab than the first one, if the backend offers it.
  * [navigation] holds where the shell is; pass one from [rememberShellNavigation] to move around the
- * shell from outside it.
+ * shell from outside it. [request] moves the shell from outside too, once per request: to a tab or
+ * Settings (a `caddie://` link), or to the conference switcher (Import my schedule's "Switch
+ * conference").
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -112,6 +114,7 @@ fun App(
     content: TabContent = TabContent(),
     initialTab: Tab? = null,
     navigation: ShellNavigation = rememberShellNavigation(initialTab),
+    request: ShellRequest? = null,
 ) {
     val peopleEnabled = state.capabilities.people.enabled
     val tabs = visibleTabs(peopleEnabled)
@@ -137,6 +140,14 @@ fun App(
             navigation.closePages { it == PeoplePage.Inbox || it is PeoplePage.Meet }
             shownConference = state.selectedConferenceId
         }
+    }
+    // A link's tab leaves every page and shows the tab, as a tap on it would; a link to Settings opens
+    // it as the gear does. The switcher shows only when the request asks for it.
+    LaunchedEffect(request) {
+        val r = request ?: return@LaunchedEffect
+        r.tab?.let(navigation::selectTab)
+        if (r.settings) navigation.openSettings()
+        navigation.switcherOpen = r.switcher
     }
 
     val uriHandler = LocalUriHandler.current
@@ -277,6 +288,13 @@ fun App(
         }
     }
 }
+
+/**
+ * A move of the shell asked from outside it: show [tab] (leaving Settings), open [settings], or open
+ * the conference [switcher]. [id] tells two equal requests apart, so a second link to the tab the
+ * person has since left shows it again.
+ */
+data class ShellRequest(val id: Long, val tab: Tab? = null, val settings: Boolean = false, val switcher: Boolean = false)
 
 /** A server waiting for confirmation, and whether it came from a link (else from Settings). */
 private data class PendingServer(val base: String, val fromLink: Boolean)
