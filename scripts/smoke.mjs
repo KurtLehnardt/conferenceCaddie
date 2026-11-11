@@ -975,7 +975,18 @@ await check('e1: include_events adds co-located events and showcases, and nothin
   report(problems.length === 0, 'e1: include_events adds co-located events and showcases, and nothing else', problems.length ? problems.join('; ') : `${shown.length} events in "${track}", ${off.json.total} results off and ${on.json.total} on`);
 });
 
+// Once the primary conference's last talk has ended, For you and Happening now (which the server filters
+// with end > now) have nothing to return for it, so the checks that need upcoming talks print SKIP
+// instead of failing on "no results" or passing vacuously.
+const PRIMARY_OVER_WHY = 'no talk of the primary conference is still to come (the server only suggests talks whose end is after now)';
+function skipIfPrimaryOver() {
+  const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+  const now = Date.now();
+  if (talks.length && !talks.some((d) => Date.parse(d.end) > now)) throw new SkipCheck(PRIMARY_OVER_WHY);
+}
+
 await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
+  skipIfPrimaryOver();
   const bad = await search({ query: 'kubernetes', filters: { include_events: 'yes' } });
   const ambient = new Set(readNdjson(PRIMARY).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
   const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['kubernetes', 'ebpf'], interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
@@ -1074,6 +1085,7 @@ await check('n1: Happening now is available exactly when the conference has talk
 });
 
 await check('n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', async () => {
+  skipIfPrimaryOver();
   const slack = 2 * 60_000;
   const at = Date.now();
   const r = await search({ query: '', size: 50, filters: { happening_now: true } });
@@ -1083,6 +1095,8 @@ await check('n2: Happening now keeps only talks in progress or starting within 6
   const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
   const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
   const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
+  // An empty window makes the bound above vacuous, and no talk is then inspected for being outside it.
+  if (r.status === 200 && r.json.total === 0) throw new SkipCheck('no talk is in progress or starting within 60 minutes, so the window has nothing to check');
   const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
   report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
 });
@@ -2131,6 +2145,7 @@ try {
 
   await check('r1: For you puts talks with a wanted topic first and never an ended or marked one', async () => {
     const name = 'r1: For you puts talks with a wanted topic first and never an ended or marked one';
+    skipIfPrimaryOver();
     // The topic is chosen now: the one with the most talks that have not ended (end after now, as the
     // server decides it), and at least MIN_UPCOMING, because two are marked and one must remain.
     const candidates = [];
@@ -2268,6 +2283,7 @@ try {
   });
 
   await check('r7: the learn and problems text alone returns talks with a relevant passage', async () => {
+    skipIfPrimaryOver();
     const r = await ask([], [], { interests: 'our GPU inference costs are too high', size: 10 });
     if (r.status !== 200) throw new Error(`status ${r.status}`);
     const results = r.json.results ?? [];
@@ -2287,6 +2303,7 @@ try {
   // for a conference to one copy (a preference), so the same request must always give the same
   // order. Many talks share a topic, so the tie is real for a single learn topic.
   await check('r8: the same For you request made five times returns the same talk order', async () => {
+    skipIfPrimaryOver();
     const topic = labelOf.has('ai') ? 'ai' : [...labelOf.keys()][0];
     if (!topic) {
       skip('r8: the same For you request made five times returns the same talk order', 'the conference has no topics');
