@@ -1,7 +1,7 @@
 // Builds the topic list of one conference from its talk titles and tags every talk with the
 // topics found in its title.
 //
-// Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name]
+// Usage: node scripts/topics.mjs --event <slug> [--dry-run] [--talks-index name] [--topics-index name] [--work-index name]
 // Env:   ES_URL (default: the Elastic Cloud deployment), and an admin-capable key in ES_ADMIN_API_KEY,
 //        ELASTISEARCH_API_KEY or ES_API_KEY (the topics step writes, so the read-only key is not enough).
 //
@@ -18,11 +18,14 @@
 //    it, so "cloud" and "native" do not sit beside "cloud native" (see COLLAPSE_COVERAGE).
 // 5. The conference's topic documents are replaced (only when they differ), and talks.topics is set
 //    with a Bulk API partial update that omits title and abstract, only where the value changed.
+// With --dry-run nothing is written to the topics or talks index: the topic list is printed as JSON
+// and the script stops. Only the temporary work index is created and deleted.
 // The work index is deleted at the end. Re-running with the same data changes nothing.
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { mergeTargets } from './lib/topics.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
@@ -40,13 +43,15 @@ const opt = (name) => {
   args.splice(i, 2);
   return v;
 };
+const dryRun = args.includes('--dry-run');
+if (dryRun) args.splice(args.indexOf('--dry-run'), 1);
 const slug = opt('--event');
 const talksIndex = opt('--talks-index') || 'caddie-talks';
 const topicsFlag = opt('--topics-index');
 const topicsIndex = topicsFlag || 'caddie-topics';
 const workIndex = opt('--work-index') || `caddie-topicwork-${slug}`;
 if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug)) {
-  console.error('Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name]');
+  console.error('Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name] [--dry-run]');
   process.exit(1);
 }
 
@@ -215,7 +220,7 @@ async function main() {
   const talks = await loadTalks();
   if (talks.length === 0) throw new Error(`No kind:talk documents for conference ${slug} in ${talksIndex}. Ingest the conference first.`);
 
-  await ensureTopicsIndex();
+  if (!dryRun) await ensureTopicsIndex();
   await createWorkIndex(stopwords);
   try {
     // Work index: one document per talk, with the same _id as the talk.
@@ -224,18 +229,24 @@ async function main() {
     await bulk(lines);
 
     // Count talks per term with a terms aggregation on the analysed title.
-    const aliasTerms = Object.keys(fixups.merge).map((id) => id.replace(/-/g, ' '));
+    // Aliases and merge targets are counted even when they occur in fewer than three talks. A target
+    // that reaches three talks together with its aliases stays a candidate (mergeTargets, shared
+    // with the bundle builder).
+    const aliasTerms = [...new Set(Object.entries(fixups.merge).flatMap(([a, c]) => [a, c]).map((id) => id.replace(/-/g, ' ')))];
     const agg = await es('POST', `/${workIndex}/_search`, {
       size: 0,
       aggs: {
         terms: { terms: { field: 'title', size: CANDIDATES, min_doc_count: MIN_TALKS, order: [{ _count: 'desc' }, { _key: 'asc' }] } },
-        // Alias terms are counted even when they occur in fewer than three talks.
+        // Alias and target terms are counted even when they occur in fewer than three talks.
         ...(aliasTerms.length ? { alias_terms: { terms: { field: 'title', include: aliasTerms, size: aliasTerms.length, min_doc_count: 1 } } } : {}),
       },
     });
     if (agg.status !== 200) fail('Terms aggregation', agg);
     const candidates = agg.json.aggregations.terms.buckets.map((b) => ({ term: b.key, count: b.doc_count }));
-    if (candidates.length === 0) throw new Error('No term occurs in at least three talk titles.');
+    const docCount = new Map();
+    for (const b of agg.json.aggregations.terms.buckets) docCount.set(b.key, b.doc_count);
+    for (const b of agg.json.aggregations.alias_terms?.buckets ?? []) docCount.set(b.key, b.doc_count);
+    if (candidates.length === 0 && Object.keys(fixups.merge).length === 0) throw new Error('No term occurs in at least three talk titles.');
     const wanted = new Set(candidates.map((c) => c.term));
     for (const t of aliasTerms) wanted.add(t);
 
@@ -265,6 +276,9 @@ async function main() {
         talkTerms.set(doc._id, set);
       }
     }
+    // Merge targets below three talks on their own but at three with their aliases join the
+    // candidates, after the regular ones, exactly as in scripts/lib/topics.mjs buildTopics.
+    candidates.push(...mergeTargets(talkTerms.values(), docCount, fixups.merge, new Set(candidates.map((c) => c.term))));
     const labelOf = (term) => {
       const m = casings.get(term);
       if (!m) return term;
@@ -334,6 +348,11 @@ async function main() {
     topics.sort((a, b) => b.talk_count - a.talk_count || a.label.localeCompare(b.label) || a.topic_id.localeCompare(b.topic_id));
     topics.splice(MAX_TOPICS);
     topics.forEach((t, i) => { t.rank = i + 1; });
+
+    if (dryRun) {
+      console.log(JSON.stringify(topics.map((t) => ({ topic_id: t.topic_id, label: t.label, talk_count: t.talk_count, rank: t.rank, aliases: t.aliases.map((a) => a.replace(/-/g, ' ')) }))));
+      return;
+    }
 
     // Replace the conference's topic documents, but only when they differ from what is stored.
     const desired = topics.map((t) => ({
