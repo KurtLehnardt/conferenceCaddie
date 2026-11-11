@@ -63,6 +63,7 @@ import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.CaddieTheme
 import app.conferencecaddie.ui.theme.ThemePreference
 import kotlin.time.Clock
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 
 /**
@@ -92,7 +93,11 @@ fun CaddieApp(
     embedder: (suspend () -> Embedder?)? = null,
 ) {
     val state by core.state.collectAsState()
-    val scope = rememberCoroutineScope()
+    // The screens' models run in this scope. The core searches and works out For you off the main
+    // thread; the main dispatcher brings each model back to the main thread before it changes
+    // what the screens show, whatever dispatcher the composition has (a UI test's would otherwise
+    // go on in the core's thread, and Compose would not hear of the change).
+    val scope = rememberCoroutineScope { Dispatchers.Main.immediate }
     // The Search screen's state outlives the composition while its owner lives (the activity across
     // a rotation on Android); without an owner it lives as long as this composition.
     val owner = LocalViewModelStoreOwner.current
