@@ -28,7 +28,12 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** The scheduler keeps the periodic nudge job scheduled exactly while a background check is wanted. */
+/**
+ * The scheduler keeps the periodic nudge job scheduled exactly while a background check is wanted.
+ * The tests schedule under [TEST_JOB_ID], not the app's job id: they run in the app's process, where
+ * the activity of other tests has made the process's own controller and scheduler, and where the
+ * system may run the job at once, whose service then cancels the app's job for the real state.
+ */
 @RunWith(AndroidJUnit4::class)
 class BackgroundNudgeSchedulerTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -49,21 +54,21 @@ class BackgroundNudgeSchedulerTest {
 
     @Before
     fun clean() {
-        jobs.cancel(BackgroundNudgeScheduler.JOB_ID)
+        jobs.cancel(TEST_JOB_ID)
     }
 
     @After
     fun tearDown() {
         scope.cancel()
-        jobs.cancel(BackgroundNudgeScheduler.JOB_ID)
+        jobs.cancel(TEST_JOB_ID)
     }
 
-    private fun scheduler() = BackgroundNudgeScheduler(context, state, scope, now = { now }, notificationsAllowed = { notifications })
+    private fun scheduler() = BackgroundNudgeScheduler(context, state, scope, now = { now }, notificationsAllowed = { notifications }, jobId = TEST_JOB_ID)
 
     private fun awaitPending(expected: Boolean): JobInfo? = runBlocking {
         withTimeout(10_000) {
-            while ((jobs.getPendingJob(BackgroundNudgeScheduler.JOB_ID) != null) != expected) delay(50)
-            jobs.getPendingJob(BackgroundNudgeScheduler.JOB_ID)
+            while ((jobs.getPendingJob(TEST_JOB_ID) != null) != expected) delay(50)
+            jobs.getPendingJob(TEST_JOB_ID)
         }
     }
 
@@ -98,7 +103,7 @@ class BackgroundNudgeSchedulerTest {
         notifications = false
         scheduler().start()
         runBlocking { delay(500) }
-        assertNull(jobs.getPendingJob(BackgroundNudgeScheduler.JOB_ID))
+        assertNull(jobs.getPendingJob(TEST_JOB_ID))
 
         // A Loading state (a cold start) does not cancel a pending job.
         notifications = true
@@ -106,7 +111,7 @@ class BackgroundNudgeSchedulerTest {
         awaitPending(true)
         state.value = PeopleUiState(availability = PeopleAvailability.Loading)
         runBlocking { delay(500) }
-        assertNotNull(jobs.getPendingJob(BackgroundNudgeScheduler.JOB_ID))
+        assertNotNull(jobs.getPendingJob(TEST_JOB_ID))
     }
 
     @Test
@@ -114,9 +119,14 @@ class BackgroundNudgeSchedulerTest {
         scheduler().start()
         awaitPending(true)
         // Another scheduler (the next process) must not replace the job that is already pending.
-        val first = jobs.getPendingJob(BackgroundNudgeScheduler.JOB_ID)
+        val first = jobs.getPendingJob(TEST_JOB_ID)
         state.value = wanted().copy(saveCount = 1)
         runBlocking { delay(300) }
-        assertEquals(first, jobs.getPendingJob(BackgroundNudgeScheduler.JOB_ID))
+        assertEquals(first, jobs.getPendingJob(TEST_JOB_ID))
+    }
+
+    private companion object {
+        /** Not the app's [BackgroundNudgeScheduler.JOB_ID], which the app's own scheduler and job manage. */
+        const val TEST_JOB_ID = BackgroundNudgeScheduler.JOB_ID + 1
     }
 }

@@ -30,6 +30,10 @@ import kotlinx.coroutines.launch
  *
  * The job is changed only when the decision changes, and an already pending job is left alone, so
  * an app start does not restart the period.
+ *
+ * [jobId] is [JOB_ID] in the app. The instrumented tests give their scheduler another id, because
+ * they run in the app's process, where the process's own scheduler ([CaddiePeople]) and a run of
+ * the job itself cancel [JOB_ID] whenever the real people state does not want it.
  */
 class BackgroundNudgeScheduler(
     context: Context,
@@ -37,6 +41,7 @@ class BackgroundNudgeScheduler(
     private val scope: CoroutineScope,
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
     private val notificationsAllowed: () -> Boolean = { notificationsAllowed(context) },
+    private val jobId: Int = JOB_ID,
 ) {
     private val app = context.applicationContext
     private val jobs = app.getSystemService(JobScheduler::class.java)
@@ -64,11 +69,11 @@ class BackgroundNudgeScheduler(
 
     private fun apply(wanted: Boolean) {
         if (!wanted) {
-            jobs.cancel(JOB_ID)
+            jobs.cancel(jobId)
             return
         }
-        if (jobs.getPendingJob(JOB_ID) != null) return
-        val info = JobInfo.Builder(JOB_ID, ComponentName(app, BackgroundNudgeJobService::class.java))
+        if (jobs.getPendingJob(jobId) != null) return
+        val info = JobInfo.Builder(jobId, ComponentName(app, BackgroundNudgeJobService::class.java))
             .setPeriodic(PERIOD_MS)
             .setPersisted(false)
             .build()
