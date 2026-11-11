@@ -1215,8 +1215,15 @@ export function evidenceFor(hit) {
   return plain ? escapeHtml(plain) : null;
 }
 
+// Closes a reason with a period, unless its inserted text already ends a sentence (a talk title
+// such as "... Here's What the Data Says." or "Why Not?", or a cut passage ending in an ellipsis),
+// so no reason ends in "..", "?." or "!.". Closing quotes, brackets and highlight tags after the
+// punctuation are allowed. The same rule as sentence() in worker/src/people/view.js.
+const ENDS_SENTENCE = /[.!?\u2026]["'\u2019\u201d)\]]*(?:<\/?[a-z]+>)*\s*$/i;
+const sentence = (text) => (ENDS_SENTENCE.test(text) ? text.trimEnd() : `${text}.`);
+
 // The reason templates of the product brief, filled from this result's own fields.
-function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evidence = null, zone = null } = {}) {
+export function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evidence = null, zone = null } = {}) {
   const reasons = [];
   const named = (ids) => ids.filter((id) => labels.has(id)).map((id) => labels.get(id));
   const theirSpeak = new Set(them.speak_topics ?? []);
@@ -1224,13 +1231,13 @@ function reasonsFor(me, them, labels, talkTitles, passage, circleTalkId, { evide
   const theirShared = new Set(them.shared_talk_ids ?? []);
   const canSpeak = named((me.learn_topics ?? []).filter((t) => theirSpeak.has(t)));
   const wantLearn = named((me.speak_topics ?? []).filter((t) => theirLearn.has(t)));
-  if (evidence) reasons.push(`They've worked on ${cutText(unescapeHtml(evidence), PASSAGE_MAX)}.`);
+  if (evidence) reasons.push(sentence(`They've worked on ${cutText(unescapeHtml(evidence), PASSAGE_MAX)}`));
   if (canSpeak.length) reasons.push(`They can speak to ${listFormat.format(canSpeak.slice(0, 4))}, which you want to learn about.`);
   if (wantLearn.length) reasons.push(`They want to learn about ${listFormat.format(wantLearn.slice(0, 4))}, which you can speak to.`);
   const both = [...talkTitles.keys()].filter((id) => id !== circleTalkId && theirShared.has(id));
-  if (both.length) reasons.push(`You are both interested in ${listFormat.format(both.slice(0, 2).map((id) => talkTitles.get(id)))}.`);
-  if (passage && !evidence) reasons.push(`Ask them about ${passage}.`);
-  if (circleTalkId && talkTitles.has(circleTalkId)) reasons.push(`You are both interested in ${talkTitles.get(circleTalkId)}.`);
+  if (both.length) reasons.push(sentence(`You are both interested in ${listFormat.format(both.slice(0, 2).map((id) => talkTitles.get(id)))}`));
+  if (passage && !evidence) reasons.push(sentence(`Ask them about ${passage}`));
+  if (circleTalkId && talkTitles.has(circleTalkId)) reasons.push(sentence(`You are both interested in ${talkTitles.get(circleTalkId)}`));
   if (zone) reasons.push(`They're in ${zone} right now.`);
   return reasons;
 }
