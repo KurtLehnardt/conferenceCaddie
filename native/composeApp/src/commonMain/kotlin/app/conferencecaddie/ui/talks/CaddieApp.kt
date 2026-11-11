@@ -54,6 +54,7 @@ import app.conferencecaddie.ui.components.MenuItem
 import app.conferencecaddie.ui.components.OverflowMenu
 import app.conferencecaddie.ui.platform.Incoming
 import app.conferencecaddie.ui.platform.IncomingHandoff
+import app.conferencecaddie.ui.platform.PickedFile
 import app.conferencecaddie.ui.platform.PlatformActions
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.SkeletonCard
@@ -135,6 +136,18 @@ fun CaddieApp(
     var myDaySlug by rememberSaveable { mutableStateOf<String?>(null) }
     var clearOpen by rememberSaveable { mutableStateOf(false) }
     var shellRequest by remember { mutableStateOf<ShellRequest?>(null) }
+    // Import my schedule: the core imports on the device or through the backend, as its
+    // capabilities say.
+    val importer = if (owner != null) {
+        viewModel(viewModelStoreOwner = owner, key = "import") { ImportViewModel(scope) { core.importSchedule(it) } }.model
+    } else {
+        remember(core) { ImportModel(scope) { core.importSchedule(it) } }
+    }
+    remember(importer, scope) { importer.attach(scope) }
+    var importOpen by rememberSaveable { mutableStateOf(false) }
+    // A file opened in the app before its conference's schedule is ready waits for it.
+    var pendingFile by remember { mutableStateOf<PickedFile?>(null) }
+    var importSlug by remember { mutableStateOf<String?>(null) }
     var pendingOpen by remember { mutableStateOf<AppLink.Open?>(null) }
     val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
     var pickerOpen by remember { mutableStateOf(false) }
@@ -233,8 +246,23 @@ fun CaddieApp(
                 is AppLink.Open -> pendingOpen = link
                 null -> Unit
             }
-            is Incoming.File -> Unit
+            // A file opened in or shared to the app opens Import my schedule with it.
+            is Incoming.File -> pendingFile = item.file
         }
+    }
+    LaunchedEffect(pendingFile, ready != null) {
+        val file = pendingFile ?: return@LaunchedEffect
+        if (ready == null) return@LaunchedEffect
+        pendingFile = null
+        toast = null
+        importer.reset()
+        importOpen = true
+        importer.runFile(file, state.interested.toSet())
+    }
+    // Another conference closes Import my schedule, as a route change closes the web's sheet.
+    LaunchedEffect(state.selectedSlug) {
+        if (importSlug != null && importSlug != state.selectedSlug) importOpen = false
+        importSlug = state.selectedSlug
     }
     // A conference link waits for the conference list, selects its conference if the backend lists
     // it, then shows its tab, view and day.
@@ -287,7 +315,8 @@ fun CaddieApp(
     }
 
     App(
-        state = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast),
+        state = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast)
+            .copy(importNote = if (ready == null) Strings.Settings.IMPORT_NEEDS_CONFERENCE else null),
         actions = ShellActions(
             onSelectConference = core::selectConference,
             onRetryConferences = { core.refresh(force = true) },
@@ -322,6 +351,11 @@ fun CaddieApp(
                 toast = null
             },
             onOpenUrl = openUrl,
+            onImport = {
+                toast = null
+                importer.reset()
+                importOpen = true
+            },
         ),
         content = TabContent(
             forYou = {
@@ -403,6 +437,40 @@ fun CaddieApp(
         initialTab = launch.tab ?: if (initialQuery != null) Tab.Search else null,
         request = shellRequest,
     )
+
+    if (importOpen && ready != null) {
+        CaddieTheme(theme) {
+            ImportSheet(
+                model = importer,
+                conference = ready.bundle.conference,
+                interested = interestedIds,
+                onPickFile = {
+                    platform.pickScheduleFile { file -> if (file != null) importer.runFile(file, state.interested.toSet()) }
+                },
+                onMark = { talks ->
+                    // The device list only; nothing is shared (web markImported).
+                    val have = state.interested.toSet()
+                    val added = talks.filter { it.talkId !in have && it.talkId.substringBefore(':') == state.selectedSlug }
+                    if (added.isNotEmpty()) core.setInterested(added, true)
+                    added.map { it.talkId }
+                },
+                onUndo = { ids -> core.setInterested(ids.mapNotNull { id -> ready.bundle.talksById[id] }, false) },
+                onViewSchedule = { day ->
+                    importOpen = false
+                    myView = MyScheduleView.Day
+                    core.setUiSetting(MY_SCHEDULE_VIEW, "day")
+                    myDay = day
+                    myDaySlug = state.selectedSlug
+                    shellRequest = ShellRequest(id = Clock.System.now().toEpochMilliseconds(), tab = Tab.Interested)
+                },
+                onSwitchConference = {
+                    importOpen = false
+                    shellRequest = ShellRequest(id = Clock.System.now().toEpochMilliseconds(), switcher = true)
+                },
+                onClose = { importOpen = false },
+            )
+        }
+    }
 
     if (clearOpen) {
         val n = interestedTalks.size
@@ -641,6 +709,3 @@ private fun shellState(
         isDebugBuild = isDebugBuild,
     )
 }
-
-// TEMP(2c): replaced by CaddieCore.setInterested(List<Talk>, Boolean) from the import branch.
-private fun CaddieCore.setInterested(talks: List<Talk>, on: Boolean) = talks.forEach { setInterested(it, on) }

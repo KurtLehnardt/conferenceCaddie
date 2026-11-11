@@ -61,6 +61,8 @@ data class ShellState(
     val pendingConnect: String? = null,
     val toast: ToastData? = null,
     val isDebugBuild: Boolean = false,
+    /** Why Import my schedule cannot open now (no conference is open), shown in place of its hint. */
+    val importNote: String? = null,
 ) {
     val selectedConference: ConferenceItem? get() = conferences?.firstOrNull { it.id == selectedConferenceId }
 }
@@ -84,6 +86,8 @@ class ShellActions(
     val onToastAction: () -> Unit = {},
     /** Opens an http(s) link in the browser; the shell never passes any other scheme. */
     val onOpenUrl: ((String) -> Unit)? = null,
+    /** Opens Import my schedule; null leaves its row out of Settings. */
+    val onImport: (() -> Unit)? = null,
 )
 
 /**

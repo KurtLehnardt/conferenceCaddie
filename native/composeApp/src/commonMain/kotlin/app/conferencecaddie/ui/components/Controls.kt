@@ -236,8 +236,9 @@ fun SettingsNavRow(
     onClick: () -> Unit,
     first: Boolean = false,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
-    SettingsRow(first = first, onClick = onClick, enabled = enabled) {
+    SettingsRow(modifier, first = first, onClick = onClick, enabled = enabled) {
         LucideImage(icon, null, size = 20.dp)
         Column(Modifier.weight(1f)) {
             Text(label, style = Caddie.type.body.copy(fontWeight = Caddie.type.chip.fontWeight), color = Caddie.colors.text)
