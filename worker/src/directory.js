@@ -11,6 +11,8 @@ import { utcDay } from './lib/time.js';
 
 const CONFERENCES_PER_MIN = 120;
 const CRON_DAYS_AFTER_END = 3;
+// DELETE /internal/conference/<slug>: the Worker's second step of DELETE /admin/conference.
+const RETIRE_PATH_RE = /^\/internal\/conference\/([a-z0-9][a-z0-9-]{0,119})$/;
 
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
@@ -113,6 +115,11 @@ export class DirectoryDO extends DurableObject {
         if (nonce === 'replay') return json(401, { error: 'admin_replay' });
       }
       if (path === '/admin/conferences' && request.method === 'PUT') return await this.#upsert(request);
+      if (path === '/admin/stats' && (request.method === 'GET' || request.method === 'HEAD')) return this.#stats();
+      // The directory half of a conference removal. The Worker calls it only after the object's
+      // /internal/wipe accepted the request's nonce, so it records none of its own (W2).
+      const retire = RETIRE_PATH_RE.exec(path);
+      if (retire && request.method === 'DELETE') return this.#retire(retire[1]);
       if (path === '/internal/cron-targets') return this.#cronTargets();
       if (path === '/internal/usage' && request.method === 'PUT') {
         const body = await readJson(request, new Set(['day', 'usage', 'holds']));
@@ -143,17 +150,35 @@ export class DirectoryDO extends DurableObject {
   // into each ConferenceDO, the documents of the searchable conferences and of those whose object
   // was given a document before (has_object), so an object learns that its conference became
   // unavailable and still serves its owners' deletes.
+  //
+  // A slug with a retired row (DELETE /admin/conference) is skipped and listed in skipped_retired,
+  // unless its document carries the top-level key "unretire": true, which deletes the row first.
+  // The key is never stored. It must be a boolean when present (400 otherwise, before anything is
+  // written); it lives in the body, never the query, so the signature's body hash covers it.
   async #upsert(request) {
     const body = await readJson(request, new Set(['conferences']));
     if (!Array.isArray(body.conferences) || body.conferences.length > 5000) throw bad('conferences must be an array');
+    for (const raw of body.conferences) {
+      if (isPlainObject(raw) && raw.unretire !== undefined && typeof raw.unretire !== 'boolean') throw bad('unretire must be a boolean');
+    }
     const existing = new Map(this.sql.exec('SELECT slug, doc, route_prefix, has_object FROM conferences').toArray().map((r) => [r.slug, r]));
+    const retired = new Set(this.sql.exec('SELECT slug FROM retired').toArray().map((r) => r.slug));
     const used = new Set([...existing.values()].map((r) => r.route_prefix));
     const now = Date.now();
     let upserted = 0;
     const searchable = [];
+    const skipped = [];
     for (const raw of body.conferences) {
       if (!isPlainObject(raw) || typeof raw.slug !== 'string' || !SLUG_RE.test(raw.slug)) continue;
-      const { _id, ...doc } = raw;
+      const { _id, unretire, ...doc } = raw;
+      if (retired.has(doc.slug)) {
+        if (unretire !== true) {
+          if (!skipped.includes(doc.slug)) skipped.push(doc.slug);
+          continue;
+        }
+        this.sql.exec('DELETE FROM retired WHERE slug = ?', doc.slug);
+        retired.delete(doc.slug);
+      }
       const text = JSON.stringify(doc);
       const prev = existing.get(doc.slug);
       let prefix = prev?.route_prefix;
@@ -180,7 +205,41 @@ export class DirectoryDO extends DurableObject {
       if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix });
     }
     this.docs = null;
-    return json(200, { upserted, searchable });
+    return json(200, { upserted, searchable, skipped_retired: skipped });
+  }
+
+  // DELETE /internal/conference/<slug>: deletes the conference row (removed: 1, or 0 when the
+  // directory did not know it) and writes or refreshes its tombstone. Idempotent.
+  #retire(slug) {
+    const removed = this.sql.exec('DELETE FROM conferences WHERE slug = ? RETURNING 1', slug).toArray().length;
+    this.sql.exec('INSERT INTO retired (slug, at_ms) VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET at_ms = excluded.at_ms', slug, Date.now());
+    this.docs = null;
+    return json(200, { ok: true, removed });
+  }
+
+  // GET /admin/stats without event: the day's usage per conference and the conferences whose object
+  // still held personal data at the last cron visit, both as the cron stored them (it runs every 10
+  // minutes): {day, usage: {<slug>: {requests, rows_read, rows_written}}, holds: {<slug>: true}}.
+  // day is null before the first cron run. A conference whose stored totals belong to another UTC
+  // day than the cron's is left out of usage, as the cron's own sums leave it out.
+  #stats() {
+    let stored = null;
+    try {
+      stored = JSON.parse(this.sql.exec("SELECT v FROM meta WHERE k = 'usage'").toArray()[0]?.v ?? 'null');
+    } catch {
+      stored = null;
+    }
+    const day = typeof stored?.day === 'string' ? stored.day : null;
+    const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+    const usage = {};
+    const totals = isPlainObject(stored?.usage) ? stored.usage : {};
+    for (const slug of Object.keys(totals).sort()) {
+      const u = totals[slug];
+      if (!SLUG_RE.test(slug) || !isPlainObject(u) || day === null || u.day !== day) continue;
+      usage[slug] = { requests: n(u.requests), rows_read: n(u.rows_read), rows_written: n(u.rows_written) };
+    }
+    const holds = Object.fromEntries(this.sql.exec('SELECT slug FROM conferences WHERE holds = 1 ORDER BY slug').toArray().map((r) => [r.slug, true]));
+    return json(200, { day, usage, holds });
   }
 
   // The conferences whose object the cron visits, whatever their status: those with an object

@@ -41,9 +41,14 @@
 // Output is counts only. Exit code: 0 when every event was pushed, 2 when one failed, 1 on a
 // usage error.
 //
+// Removed conferences: the Worker keeps a tombstone for every conference the operator removed
+// (DELETE /admin/conference) and answers PUT /admin/conferences with the slugs it skipped for that
+// reason (skipped_retired). Each is logged by name, its talks are not pushed, and the run does not
+// count it as failed; `caddie-admin conferences unretire` brings it back.
 // --report <file> writes what reached the Worker as JSON, also when the run fails part way:
 //   { "upserted": [slugs whose conference document was stored],
 //     "kept": [slugs whose document was held back because the schedule fetch failed],
+//     "skipped_retired": [slugs the Worker skipped because they were removed],
 //     "pushed": [searchable slugs whose talks, topics and facets were all stored],
 //     "failed": [searchable slugs whose push failed], "not_attempted": [searchable slugs not tried] }
 // ingest.yml stages the talk files of exactly these conferences for the talk bundles
@@ -170,6 +175,22 @@ export async function pushEvent(conf, prepared, { admin, dryRun, generation, reb
   return `${head}; upserted ${total.upserted}, unchanged ${total.unchanged}, embedded ${total.embedded}, pending ${pendingAfter ?? '?'}; finalized ${fin.talks ?? '?'} talks, deleted ${fin.deleted ?? 0}, unshared ${fin.unshared ?? 0}; topics stored ${tp.topics ?? '?'}, facets stored ${fc.facets ?? '?'}.`;
 }
 
+/**
+ * PUT /admin/conferences with the documents to store. Logs the upsert count, then each slug the
+ * Worker skipped because the operator removed it (skipped_retired), by name, so the operator sees
+ * why a conference did not come back. Only well-formed slugs are logged or returned. Returns the
+ * skipped slugs.
+ */
+export async function upsertConferences(admin, docs, log = console.log) {
+  const r = await admin('PUT', '/admin/conferences', { conferences: docs });
+  log(`Conferences upserted: ${r.upserted ?? '?'}.`);
+  const skipped = Array.isArray(r.skipped_retired) ? [...new Set(r.skipped_retired.filter((s) => typeof s === 'string' && isSlug(s)))] : [];
+  for (const slug of skipped) {
+    log(`${slug}: skipped, the Worker holds it as removed (DELETE /admin/conference); its talks are not pushed. To bring it back, run caddie-admin conferences unretire --event ${slug}.`);
+  }
+  return skipped;
+}
+
 // The slugs the Worker lists as searchable (GET /api/conferences), or an empty set when it cannot
 // say, in which case nothing is kept back.
 async function liveSearchable(api) {
@@ -184,7 +205,7 @@ async function liveSearchable(api) {
 }
 
 // What reached the Worker in this run, for --report.
-const report = { upserted: [], kept: [], pushed: [], failed: [], not_attempted: [] };
+const report = { upserted: [], kept: [], skipped_retired: [], pushed: [], failed: [], not_attempted: [] };
 
 async function main() {
   const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty'], values: ['api', 'report', 'events-from'], multi: ['event'] });
@@ -229,7 +250,7 @@ async function main() {
   // Validated before anything is sent, as the bundle build validates it.
   const takedowns = loadTakedowns(join(DATA, 'takedowns.json'), { dataDir: DATA });
 
-  const searchable = confs.filter((c) => c.status === 'searchable' && existsSync(join(DATA, c.slug, 'talks.ndjson')));
+  let searchable = confs.filter((c) => c.status === 'searchable' && existsSync(join(DATA, c.slug, 'talks.ndjson')));
   console.log(`Conferences: ${confs.length} selected, ${searchable.length} searchable with a talk file${dryRun ? ' (dry run)' : ''}.`);
   // The talks each conference will get, with the takedowns applied. A conference whose takedown
   // entries do not apply is not pushed (its talks stay as the Worker has them) and counts as failed.
@@ -252,10 +273,12 @@ async function main() {
     const live = await liveSearchable(api);
     const kept = confs.filter((c) => c.status !== 'searchable' && c.status_reason === 'fetch_failed' && live.has(c.slug));
     for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
-    const r = await admin('PUT', '/admin/conferences', { conferences: confs.filter((c) => !kept.includes(c)).map(forWorker) });
-    console.log(`Conferences upserted: ${r.upserted ?? '?'}.`);
+    const sent = confs.filter((c) => !kept.includes(c));
+    const retired = new Set(await upsertConferences(admin, sent.map(forWorker)));
     report.kept = kept.map((c) => c.slug);
-    report.upserted = confs.filter((c) => !kept.includes(c)).map((c) => c.slug);
+    report.skipped_retired = [...retired];
+    report.upserted = sent.map((c) => c.slug).filter((s) => !retired.has(s));
+    searchable = searchable.filter((c) => !retired.has(c.slug));
   }
 
   let pushed = 0;

@@ -35,6 +35,16 @@ const OWNER_ROUTES = new Set([
 // The tables whose rows the cron still has to purge; while any holds a row, the directory keeps
 // the conference among the cron targets.
 const HELD_TABLES = ['people', 'presence', 'blocks', 'meets', 'push_subs', 'nudges', 'nudge_sends', 'ble_caps'];
+// Every table a wipe (DELETE /admin/conference, POST /internal/wipe) empties: each table of
+// schema.js and the meter's usage_days, so nothing of the conference is left, and only admin_nonces
+// is kept, because it holds the wipe's own nonce and the replay check needs it. The full-text
+// tables are emptied through their virtual tables, never their shadow tables. meta keeps its
+// schema_version row (the database's shape, not conference data). storage.deleteAll() is not
+// used, so the tables and their indexes stay and the object can take the conference again.
+const WIPE_TABLES = [
+  'talks_fts', 'talk_vectors', 'talks', 'topics', 'facets', 'people_fts', 'shared_talks', 'presence', 'blocks', 'meets',
+  'reports', 'push_subs', 'nudges', 'nudge_sends', 'ble_caps', 'people', 'usage_days', 'meta',
+];
 
 function matchRoute(routes, method, path) {
   const allowed = new Set();
@@ -75,6 +85,10 @@ export class ConferenceDO extends DurableObject {
     this.conf = null;
     this.slug = null;
     this.store = new Store(this);
+    // How many times this instance was wiped. A request's ctx remembers the value it started with,
+    // and its SQL throws once the value has moved (#ctx), so a request that was waiting on an await
+    // when the wipe ran cannot write into the emptied object.
+    this.wipes = 0;
     state.blockConcurrencyWhile(async () => {
       migrate(state.storage.sql);
       this.#loadConf();
@@ -166,9 +180,15 @@ export class ConferenceDO extends DurableObject {
 
   #ctx(request, now) {
     const meter = this.meter;
+    const wipes = this.wipes;
     return {
       env: this.env,
-      sql: { exec: (q, ...b) => this.exec(q, ...b) },
+      sql: {
+        exec: (q, ...b) => {
+          if (this.wipes !== wipes) throw new HttpError(400, { error: 'conference is not available' });
+          return this.exec(q, ...b);
+        },
+      },
       slug: this.slug,
       conf: this.conf,
       now,
@@ -268,7 +288,36 @@ export class ConferenceDO extends DurableObject {
     return out;
   }
 
+  // POST /internal/wipe (DELETE /admin/conference in the Worker): the only internal route that
+  // takes the admin nonce the Worker forwards, which is recorded first, as for every /admin/*
+  // request (W2): missing headers are 404, a timestamp past the object's clock window 401
+  // admin_skew, a nonce seen before 401 admin_replay, and nothing is deleted for any of them. Then
+  // every row of WIPE_TABLES goes, in one transaction, and the caches, the conference document
+  // (this.conf) and the query-vector cache are dropped. Answers {ok, deleted: {table: rows}}; a
+  // second wipe answers zero counts.
+  #wipe(request) {
+    const nonce = consumeAdminNonce((q, ...b) => this.exec(q, ...b), request.headers, Date.now());
+    if (nonce === 'missing') return json(404, { error: 'Not found' });
+    if (nonce === 'skew') return json(401, { error: 'admin_skew' });
+    if (nonce === 'replay') return json(401, { error: 'admin_replay' });
+    const deleted = {};
+    this.state.storage.transactionSync(() => {
+      for (const t of WIPE_TABLES) {
+        const where = t === 'meta' ? " WHERE k != 'schema_version'" : '';
+        deleted[t] = Number(this.exec(`SELECT COUNT(*) AS n FROM ${t}${where}`).one().n);
+        if (deleted[t]) this.exec(`DELETE FROM ${t}${where}`);
+      }
+    });
+    this.wipes += 1;
+    this.store.close();
+    this.store = new Store(this);
+    this.embedState = newEmbedState();
+    this.conf = null;
+    return json(200, { ok: true, deleted });
+  }
+
   async #internal(request, path) {
+    if (path === '/internal/wipe' && request.method === 'POST') return this.#wipe(request);
     if (path === '/internal/conference' && request.method === 'PUT') {
       const body = await readJson(request, new Set(['doc', 'route_prefix']));
       if (!body.doc || typeof body.doc.slug !== 'string' || typeof body.route_prefix !== 'string') throw new HttpError(400, { error: 'doc and route_prefix are required' });

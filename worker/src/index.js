@@ -418,6 +418,8 @@ async function handleAdmin(request, env, url, header) {
   // The bytes that were hashed, never request.body (already consumed).
   const body = raw && raw.byteLength > 0 ? raw : undefined;
   const verified = { nonce: header.nonce, ts: header.ts };
+  if (path === '/admin/conference') return removeConference(request, env, url, verified);
+  if (path === '/admin/stats' && !url.searchParams.has('event')) return directoryStats(request, env, verified);
 
   if (path === '/admin/conferences') {
     if (method !== 'PUT') throw reply(405, { error: 'Method not allowed' }, { Allow: 'PUT' });
@@ -428,8 +430,10 @@ async function handleAdmin(request, env, url, header) {
     });
     if (!res.ok) return res;
     // searchable: the documents to copy into each conference's object (searchable ones, and those
-    // whose object exists, so it learns its status).
-    const { upserted, searchable: docs } = await res.json();
+    // whose object exists, so it learns its status). skipped_retired: the slugs the directory left
+    // alone because they were removed (DELETE /admin/conference) and the document did not carry
+    // "unretire": true.
+    const { upserted, searchable: docs, skipped_retired: skipped = [] } = await res.json();
     const searchable = docs.filter((c) => c.doc?.status === 'searchable');
     directory = null;
     let synced = 0;
@@ -441,8 +445,8 @@ async function handleAdmin(request, env, url, header) {
       });
       if (r.ok) synced += 1;
     }
-    console.log(`admin conferences upserted=${upserted} searchable=${searchable.length} synced=${synced}`);
-    return json(200, { upserted, searchable: searchable.length, synced });
+    console.log(`admin conferences upserted=${upserted} searchable=${searchable.length} synced=${synced} skipped_retired=${skipped.length}`);
+    return json(200, { upserted, searchable: searchable.length, synced, skipped_retired: skipped });
   }
 
   if (!CONFERENCE_ADMIN_PATHS.has(path)) throw reply(404, { error: 'Not found' });
@@ -459,12 +463,49 @@ async function handleAdmin(request, env, url, header) {
   });
 }
 
+// DELETE /admin/conference?event=<slug> (W7.4): removes a conference. First the conference's object
+// wipes itself (POST /internal/wipe, which records this request's nonce before it deletes
+// anything, so a replay is 401 admin_replay and deletes nothing), then the directory deletes the
+// conference row and writes its tombstone (retired), which keeps PUT /admin/conferences from
+// bringing the slug back. The slug need not be in the directory: an unknown one still has its
+// object wiped and gets a tombstone. Answers {ok, deleted: {<table>: rows}, directory: 1 | 0,
+// retired: true}. A second removal answers zero counts and refreshes the tombstone.
+async function removeConference(request, env, url, verified) {
+  if (request.method !== 'DELETE') throw reply(405, { error: 'Method not allowed' }, { Allow: 'DELETE' });
+  const slug = url.searchParams.get('event');
+  if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw reply(400, { error: 'event must be a conference slug' });
+  const wiped = await callDo(conferenceStub(env, slug), 'https://conference.internal/internal/wipe', {
+    method: 'POST',
+    headers: forwardHeaders(request, slug, verified),
+  });
+  if (!wiped.ok) return wiped;
+  const { deleted } = await wiped.json();
+  const dir = await callDo(directoryStub(env), `https://directory.internal/internal/conference/${slug}`, {
+    method: 'DELETE',
+    headers: forwardHeaders(request, null),
+  });
+  directory = null;
+  if (!dir.ok) return dir;
+  const { removed } = await dir.json();
+  return json(200, { ok: true, deleted, directory: removed, retired: true });
+}
+
+// GET /admin/stats without event (W7.5): the cross-conference usage totals and holds the cron
+// stores, from the DirectoryDO, which records the nonce first.
+async function directoryStats(request, env, verified) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') throw reply(405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' });
+  return callDo(directoryStub(env), 'https://directory.internal/admin/stats', {
+    method: request.method,
+    headers: forwardHeaders(request, null, verified),
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // The fetch handler.
 
 function template(path) {
   if (MEET_PATH_RE.test(path)) return path.split('/').length > 4 ? '/api/meet/:id/:action' : '/api/meet/:id';
-  if (ROUTES[path] || CONFERENCE_ADMIN_PATHS.has(path) || ['/api/health', '/api/capabilities', '/api/push/vapid', '/api/conferences', '/admin/conferences'].includes(path)) return path;
+  if (ROUTES[path] || CONFERENCE_ADMIN_PATHS.has(path) || ['/api/health', '/api/capabilities', '/api/push/vapid', '/api/conferences', '/admin/conferences', '/admin/conference'].includes(path)) return path;
   return path.startsWith('/admin/') ? '/admin/other' : path.startsWith('/api/') ? '/api/other' : '/other';
 }
 

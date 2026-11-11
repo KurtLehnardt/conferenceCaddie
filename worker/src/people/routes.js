@@ -37,8 +37,8 @@ const MEMBERS_SIZE = 50;
 const QUERY_MAX = 300;
 const HOUR_MS = 60 * 60_000;
 const REPORTS_PER_HOUR = 20;
-// Distinct reporters at which a target is hidden from everyone but its owner.
-const HIDE_AT = 2;
+// The number of distinct reporters at which a target is hidden (HIDE_AT) lives in store.js with
+// the rest of the hide rule, because the admin routes apply it too.
 const MAX_SIGHTINGS = 50;
 const SIGHTINGS_PER_MINUTE = 6;
 const SIGHTINGS_PER_MINUTE_IP = 300;
@@ -110,14 +110,12 @@ function checkSharedTalks(ctx, ids) {
 }
 
 // The report flags of a profile that is being created: reports outlive the profile row, so a
-// profile hidden after reports whose owner deletes it and makes it again is hidden again. Only the
-// operator's unhide (which deletes the reports) undoes a hide.
+// profile hidden after reports whose owner deletes it and makes it again is hidden again. The rule
+// is store.reportFlags: HIDE_AT distinct reporters, or the operator's report (an operator block or
+// hide) on its own. Only the operator undoes a hide: an unhide deletes the reports, an unblock the
+// operator's one.
 function reportFlags(ctx, ref) {
-  const counts = { profile: 0, spot: 0 };
-  for (const r of ctx.sql.exec("SELECT target_kind, COUNT(*) AS n FROM reports WHERE target_kind IN ('profile', 'spot') AND target_id = ? GROUP BY target_kind", ref)) {
-    counts[r.target_kind] = r.n;
-  }
-  return { hidden: counts.profile >= HIDE_AT, spot_hidden: counts.spot >= HIDE_AT };
+  return ctx.store.reportFlags(ref);
 }
 
 async function putProfile(ctx, req) {
@@ -336,8 +334,9 @@ async function blocks(ctx, req) {
 
 // ---------------------------------------------------------------------------------------------
 // Reports. One report per reporter per target ({kind}:{target}:{reporter}), so sending the same
-// report twice is harmless. Two distinct reporters hide the target through store.hideTarget. The
-// reporter never learns who else reported; no profile_id or reporter id leaves the object.
+// report twice is harmless. Two distinct reporters, or the operator's report alone, hide the target
+// through store.hideTarget (store.reportHides). The reporter never learns who else reported; no
+// profile_id or reporter id leaves the object.
 
 const REPORT_KINDS = new Set(['profile', 'meet', 'spot']);
 const REASONS = new Set(['harassment', 'hate', 'sexual', 'spam', 'other']);
@@ -398,8 +397,7 @@ async function report(ctx, req) {
      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
     `${r.kind}:${r.id}:${me.profile_id}`, r.kind, r.id, profileId, me.profile_id, r.reason, Date.now(),
   );
-  const n = ctx.sql.exec('SELECT COUNT(*) AS n FROM reports WHERE target_kind = ? AND target_id = ?', r.kind, r.id).one().n;
-  const hidden = n >= HIDE_AT;
+  const hidden = ctx.store.reportHides(r.kind, r.id);
   if (hidden) ctx.store.hideTarget(r.kind, r.id, profileId);
   return json(200, { ok: true, hidden });
 }
