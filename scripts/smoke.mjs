@@ -2459,6 +2459,15 @@ try {
           await new Promise((resolve) => setTimeout(resolve, 5000));
         }
       };
+      // The probes below take up to about two minutes. If a window boundary fell inside them, the
+      // server's w-1..w+1 table would move under the tokens and the check would fail although the
+      // server is right. So wait for the next window first when less than 150 s of this one is left.
+      const windowS = capsDoc.ble.window_s ?? 600;
+      const waitForWindow = async () => {
+        const left = windowS - (Math.floor(Date.now() / 1000) % windowS);
+        if (left < 150) await new Promise((resolve) => setTimeout(resolve, (left + 2) * 1000));
+      };
+      await waitForWindow();
       // (a) windows w-1, w, w+1 resolve the target; w-2 and w+2 resolve nobody.
       for (const dw of [0, -1, 1]) if (!(await resolvesT(tokenOf(keyOld, dw)))) problems.push(`the token of window ${dw >= 0 ? '+' : ''}${dw} did not resolve`);
       for (const dw of [-2, 2]) {
@@ -2471,6 +2480,7 @@ try {
       if (!(await who(tokenOf(keyOld))).includes(target)) problems.push('after a presence write without ble the current token no longer resolves');
       // (c) re-key: a new key and key id, the sightings answer names the new id, the old key's token
       // resolves nobody and the new key's token resolves the target.
+      await waitForWindow();
       const second = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: T3, label: 'BU-presence' });
       const keyNew = second.json.ble_key;
       if (second.status !== 200 || !keyNew) {
