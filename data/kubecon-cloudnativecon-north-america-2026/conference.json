@@ -36,14 +36,14 @@
     "slides_question": "Presentation Slides"
   },
   "counts": {
-    "sessions": 602,
-    "talk": 485,
-    "ambient": 77,
+    "sessions": 600,
+    "talk": 484,
+    "ambient": 76,
     "break": 21,
     "housekeeping": 19,
     "with_slides": 130,
     "sponsor": 72
   },
-  "ingested_at": "2026-11-11T08:22:40.480Z",
+  "ingested_at": "2026-11-11T16:28:25.846Z",
   "raw_fetched_at": "2026-11-11T07:04:14.947Z"
 }
