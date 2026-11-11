@@ -28,6 +28,17 @@ export const PENDING_DELETE_QUERY = { bool: { filter: [{ term: { open_to_meet: f
 const noValue = (v) => v === undefined || v === null || (Array.isArray(v) && v.length === 0);
 export const isPendingDelete = (source) => source?.open_to_meet === false && noValue(source.shared_talk_ids);
 
+// Reports (server/report.mjs). Distinct reporters at which a target is hidden from everyone but
+// its owner, and the reporter id of a report the operator files with the caddie-admin CLI
+// (attendees block, moderation hide), which counts as HIDE_AT on its own in both counts the server
+// keeps (reporterCount after a report, reportCountsFor on a create or full reindex), so an
+// operator hide survives a profile rewrite and a profile re-made from the same device. The
+// report's _id is {kind}:{target_id}:operator, the form of every report id, so one operator
+// report per target exists and attendees unblock deletes exactly that one.
+export const HIDE_AT = 2;
+export const OPERATOR_REPORTER = 'operator';
+export const operatorReportId = (kind, targetId) => `${kind}:${targetId}:${OPERATOR_REPORTER}`;
+
 // The offset of a time zone from UTC at an instant, in milliseconds, through Intl.
 function zoneOffsetMs(utcMs, timeZone) {
   const parts = new Intl.DateTimeFormat('en-US', {

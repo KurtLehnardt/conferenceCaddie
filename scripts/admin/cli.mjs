@@ -1,9 +1,11 @@
 // Command tree, argument parsing, help, exit codes and the run loop of the caddie-admin CLI.
 // main() returns the exit code and never calls process.exit, so tests can call it in-process.
 //
-// Exit codes: 0 success, 1 backend or request failure, 2 usage, 3 confirmation missing or refused,
-// 4 not found, 5 not supported on this tier.
+// Exit codes: 0 success, 1 backend or request failure, or finished with warnings (see stderr; audit
+// counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on
+// this tier.
 
+import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { appendAudit } from './audit.mjs';
@@ -312,9 +314,10 @@ export const COMMAND_TREE = {
         },
       },
       unhide: {
-        usage: 'conferences unhide --event <slug>',
-        summary: 'undo conferences hide',
+        usage: 'conferences unhide --event <slug> [--yes --confirm <slug>]',
+        summary: 'undo conferences hide: the conference becomes visible again and the committed files are rewritten',
         options: { ...EVENT_OPTION },
+        destructive: true,
         method: 'unhideConference',
         prepare(v, p) {
           expectPositionals(p, 0);
@@ -364,7 +367,7 @@ export const COMMAND_TREE = {
       },
       usage: {
         usage: 'stats usage',
-        summary: 'meters and totals (tier 2) or cluster health and index sizes (tier 3)',
+        summary: 'meters and totals (tier 2) or cluster health and index sizes (tier 3; _cluster/health and _cat/indices need the monitor privilege, which the admin key holds)',
         options: {},
         method: 'usage',
         prepare(v, p) {
@@ -396,7 +399,7 @@ const GLOBAL_HELP = [
   '  --confirm <target>  with --yes, the exact target; replaces typing it, and is required off a terminal',
   '  --dry-run           preview only, even with --yes',
   '  -h, --help          this help',
-  'Exit codes: 0 ok, 1 backend failure, 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on this tier.',
+  'Exit codes: 0 ok, 1 backend failure, or finished with warnings (see stderr; audit counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on this tier.',
 ];
 
 function rootHelp() {
@@ -472,6 +475,9 @@ export async function main(argv, deps = {}) {
     prompt: deps.prompt ?? readlinePrompt(stdin, stderr),
     createAdapter: deps.createAdapter ?? defaultCreateAdapter,
     now: deps.now ?? (() => new Date()),
+    // The child-process runner and the fetch the adapters use; the tests inject recording ones.
+    spawn: deps.spawn ?? spawnSync,
+    fetch: deps.fetch ?? ((...args) => globalThis.fetch(...args)),
   };
   const json = argv.includes('--json');
   const secrets = [];
@@ -563,7 +569,7 @@ async function run(argv, ctx) {
   };
 
   // The mode the operator asked for, so a refused confirmation is audited as a refused run.
-  let mode = destructive && (values['dry-run'] || !values.yes) ? 'dry-run' : 'run';
+  let mode = values['dry-run'] || (destructive && !values.yes) ? 'dry-run' : 'run';
   try {
     mode = await resolveMode({
       destructive,
@@ -574,14 +580,18 @@ async function run(argv, ctx) {
       isTTY: d.isTTY,
       prompt: d.prompt,
     });
-    const adapter = d.createAdapter(backend, { credential });
+    const adapter = d.createAdapter(backend, { credential, env, spawn: d.spawn, fetch: d.fetch, now: d.now });
     const result = (await adapter[command.method]({ ...args, mode })) ?? {};
-    writeAudit({ mode, result: 'ok', counts: result.counts });
+    const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+    writeAudit({ mode, result: warnings.length ? 'warned' : 'ok', counts: warnings.length ? { ...(result.counts ?? {}), warnings: warnings.length } : result.counts });
     const text = values.json
       ? renderJson({ command: commandName, backend: backend.name, tier: backend.tier, mode, result })
       : renderHuman({ command: commandName, mode, result });
     stdout.write(redact(text));
-    return 0;
+    // A command that did its work but reports warnings (for example a delete whose best-effort
+    // second pass failed) says so on stderr and exits 1, so a script notices.
+    for (const warning of warnings) stderr.write(redact(`caddie-admin: warning: ${warning}\n`));
+    return warnings.length ? 1 : 0;
   } catch (error) {
     writeAudit({ mode, result: auditResult(error) });
     throw error;

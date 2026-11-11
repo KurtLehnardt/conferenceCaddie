@@ -179,10 +179,11 @@ describe('CLI-3 exit codes', () => {
   test('0 on success', async () => {
     assert.equal((await invoke(['stats', 'usage'])).code, 0);
   });
-  test('1 on a backend failure, and for the unimplemented real adapter', async () => {
+  test('1 on a backend failure, and for the unimplemented real tier 2 adapter', async () => {
     const r = await invoke(['stats', 'usage'], { behavior: throwing(new AdminError('boom')) });
     assert.equal(r.code, 1);
-    const real = await invoke(['stats', 'usage'], { noStub: true });
+    // The real tier 2 adapter still throws (PR C); tier 3 is real now and is tested in admin-es.test.mjs.
+    const real = await invoke(['stats', 'usage', '--backend', 't2'], { noStub: true });
     assert.equal(real.code, 1);
     assert.match(real.stderr, /not implemented in this release/);
     assert.equal(JSON.parse(real.audit.trim().split('\n').at(-1)).result, 'failed');
@@ -420,6 +421,7 @@ describe('SEC-11 confirmation', () => {
     { name: 'conferences hide', argv: ['conferences', 'hide', '--event', SLUG], target: SLUG, method: 'hideConference' },
     { name: 'conferences remove', argv: ['conferences', 'remove', '--event', SLUG], target: SLUG, method: 'removeConference' },
     { name: 'conferences unretire', argv: ['conferences', 'unretire', '--event', SLUG], target: SLUG, method: 'unretireConference' },
+    { name: 'conferences unhide', argv: ['conferences', 'unhide', '--event', SLUG], target: SLUG, method: 'unhideConference' },
   ];
   for (const c of cases) {
     describe(c.name, () => {
@@ -467,10 +469,16 @@ describe('SEC-11 confirmation', () => {
     });
   }
 
-  test('non-destructive commands run without --yes', async () => {
+  test('non-destructive commands run without --yes, and --dry-run previews them too', async () => {
     const r = await invoke(['conferences', 'refresh', '--event', SLUG, '--allow-shrink']);
     assert.equal(r.calls[0].args.mode, 'run');
     assert.deepEqual(r.calls[0].args.options, { allowShrink: true });
+    for (const argv of [['conferences', 'refresh', '--event', SLUG], ['conferences', 'add', '--event', SLUG], ['attendees', 'view', '--event', SLUG, REF], ['stats', 'counts']]) {
+      const dry = await invoke([...argv, '--dry-run']);
+      assert.equal(dry.code, 0, argv.join(' '));
+      assert.equal(dry.calls[0].args.mode, 'dry-run', argv.join(' '));
+      assert.equal(JSON.parse(dry.audit.trim().split('\n').at(-1)).mode, 'dry-run');
+    }
   });
 
   test('only moderation rules reload is destructive', async () => {
@@ -527,6 +535,18 @@ describe('SEC-12 audit log', () => {
     } finally {
       rmSync(sub, { recursive: true, force: true });
     }
+  });
+
+  test('a result with warnings is audited as warned with the count, printed on stderr, and exits 1', async () => {
+    const r = await invoke(['stats', 'usage'], { behavior: () => ({ summary: 'done', counts: { rows: 2 }, warnings: ['second pass failed: status 503'] }) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /^caddie-admin: warning: second pass failed: status 503$/m);
+    assert.match(r.stdout, /^done$/m);
+    const entry = JSON.parse(auditLines().at(-1));
+    assert.equal(entry.result, 'warned');
+    assert.deepEqual(entry.counts, { rows: 2, warnings: 1 });
+    const help = await invoke(['-h']);
+    assert.match(help.stdout, /1 backend failure, or finished with warnings \(see stderr; audit counts\.warnings\)/);
   });
 
   test('appendAudit drops unknown keys and free text', async () => {

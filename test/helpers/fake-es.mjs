@@ -285,14 +285,14 @@ export class FakeES {
     for (const h of this.hooks.filter((x) => x.when === when && x.tag === tag && x.nth === n)) await h.fn(this);
   }
 
-  async handle(method, url, rawBody) {
+  async handle(method, url, rawBody, headers = {}) {
     const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     const [index, op, docKey] = parts;
     const params = url.searchParams;
     const tag = this.tagOf(method, index, op, docKey, params, rawBody);
     let body;
     if (rawBody !== undefined && rawBody !== null && op !== '_bulk') body = JSON.parse(String(rawBody));
-    this.log.push({ tag, method, path: url.pathname, params: new URLSearchParams(params), body: op === '_bulk' ? String(rawBody) : body });
+    this.log.push({ tag, method, path: url.pathname, params: new URLSearchParams(params), body: op === '_bulk' ? String(rawBody) : body, headers });
     if (this.held?.tags.has(tag)) {
       const held = this.held;
       held.seen.add(tag);
@@ -310,6 +310,11 @@ export class FakeES {
   }
 
   answer(method, index, op, docKey, params, body, rawBody, tag, failure) {
+    if (index === '_cluster' && op === 'health') return json(this.clusterHealth ?? { cluster_name: 'fake', status: 'green', number_of_nodes: 1, active_shards: this.indices.size, unassigned_shards: 0 });
+    if (index === '_cat' && op === 'indices') {
+      const pattern = new RegExp(`^${(docKey ?? '*').replace(/[.]/g, '\\.').replace(/\*/g, '.*')}$`);
+      return json(this.catIndices ?? [...this.indices].filter(([name]) => pattern.test(name)).map(([name, docs]) => ({ index: name, 'docs.count': String(docs.size), 'store.size': `${docs.size}kb` })));
+    }
     if (method === 'HEAD') return new Response(null, { status: this.indices.has(index) ? 200 : 404 });
     if (op === '_mapping' && method === 'PUT') {
       this.mappings = [...(this.mappings ?? []), { index, properties: body?.properties ?? {} }];
@@ -675,7 +680,7 @@ export async function serve(cluster) {
     for await (const chunk of req) chunks.push(chunk);
     const raw = chunks.length ? Buffer.concat(chunks).toString('utf8') : undefined;
     try {
-      const answer = await cluster.handle(req.method, new URL(req.url, 'http://127.0.0.1'), raw);
+      const answer = await cluster.handle(req.method, new URL(req.url, 'http://127.0.0.1'), raw, req.headers);
       const text = await answer.text();
       res.writeHead(answer.status, { 'content-type': 'application/json' });
       res.end(text);
