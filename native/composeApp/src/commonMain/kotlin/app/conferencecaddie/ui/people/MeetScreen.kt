@@ -3,6 +3,7 @@ package app.conferencecaddie.ui.people
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -14,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,6 +51,7 @@ import app.conferencecaddie.ui.components.Pill
 import app.conferencecaddie.ui.components.caddieClickable
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.PlatformTouchTarget
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -97,7 +100,7 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var view by remember { mutableStateOf<MeetUi>(MeetUi.Loading) }
-    var spotMe by remember { mutableStateOf("") }
+    var spotMe by rememberSaveable { mutableStateOf("") }
     var spotSaved by remember { mutableStateOf(false) }
     var spotError by remember { mutableStateOf<String?>(null) }
     var rendezvous by remember { mutableStateOf("") }
@@ -120,7 +123,8 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
                 val mine = d.mine.spotMe
                 if (!run.seededSpot && !mine.isNullOrEmpty()) {
                     run.seededSpot = true
-                    spotMe = mine
+                    // Text restored after an activity's re-creation is what was typed; it stays.
+                    if (spotMe.isEmpty()) spotMe = mine
                 }
                 d.rendezvous?.takeIf { it.isNotEmpty() }?.let { rendezvous = it }
                 view = when (d.state) {
@@ -509,13 +513,13 @@ private fun ThemCard(
 
 /**
  * .pp-spot-report: the small "Report" text button at the end of their zone line (padding 0/8,
- * 14/600 accent ink). The web's is 32 dp tall; this one keeps the 44 dp touch target.
+ * 14/600 accent ink). The web's is 32 dp tall; this one keeps a touch target of at least 48 dp.
  */
 @Composable
 private fun SpotReportButton(onClick: () -> Unit) {
     Box(
         Modifier
-            .heightIn(min = Caddie.dimens.minTouch)
+            .defaultMinSize(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget)
             .caddieClickable(Pill, onClick = onClick)
             .padding(horizontal = 8.dp)
             .testTag("meet-spot-report"),

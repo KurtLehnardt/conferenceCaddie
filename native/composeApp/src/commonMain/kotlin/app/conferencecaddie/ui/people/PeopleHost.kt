@@ -6,6 +6,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.people.Person
@@ -53,6 +54,11 @@ class PeopleHost(
     val openTalk: (talkId: String) -> Unit,
     /** Opens an http(s) link in the browser; nothing else is opened. */
     val openUrl: (url: String) -> Unit,
+    /**
+     * What the host keeps across an activity's re-creation: pass the one from [rememberPeopleUi]
+     * (saved with the instance state) so the open sheets and the pending request come back.
+     */
+    private val memory: PeopleHostMemory = PeopleHostMemory(),
 ) {
     // ---------------------------------------------------------------------------------------------
     // Moving around
@@ -74,7 +80,7 @@ class PeopleHost(
      * does what it asks once it shows (a search from a topic chip, "Around now" from a nudge).
      */
     fun openPeople(request: PeopleRequest? = null) {
-        if (request != null) this.request = request
+        if (request != null) memory.request = request
         navigator.selectTab(Tab.People)
     }
 
@@ -82,12 +88,11 @@ class PeopleHost(
     fun back() = navigator.back()
 
     /** What the People screen should do when it next shows, or null; see [requestHandled]. */
-    var request: PeopleRequest? by mutableStateOf(null)
-        private set
+    val request: PeopleRequest? get() = memory.request
 
     /** The People screen did what [handled] asked; a newer request stays. */
     fun requestHandled(handled: PeopleRequest) {
-        if (request == handled) request = null
+        if (memory.request == handled) memory.request = null
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -99,35 +104,49 @@ class PeopleHost(
     // ---------------------------------------------------------------------------------------------
     // Sheets and dialogs that more than one screen opens
 
-    /** The person "Ask to talk shop" is open for, or null. */
-    var asking: Person? by mutableStateOf(null)
-        private set
+    // The person asked of is kept by ref only; the object is the one given to ask(), or, after the
+    // activity was re-created, the person found again among the people the controller holds.
+    private var askedPerson: Person? = null
+
+    /** The ref "Ask to talk shop" is open for, or null. */
+    val askingRef: String? get() = memory.askingRef
+
+    /**
+     * The person "Ask to talk shop" is open for, or null. After a re-creation it is looked up in the
+     * controller's state (the people around); null while the ref is open but the person is not known.
+     */
+    val asking: Person?
+        get() {
+            val ref = memory.askingRef ?: return null
+            askedPerson?.takeIf { it.ref == ref }?.let { return it }
+            return controller.state.value.around.people.firstOrNull { it.ref == ref }
+        }
 
     /** Opens AskSheet for [person]. */
     fun ask(person: Person) {
-        asking = person
+        askedPerson = person
+        memory.askingRef = person.ref
     }
 
     fun closeAsk() {
-        asking = null
+        askedPerson = null
+        memory.askingRef = null
     }
 
     /** What ReportSheet is open for, or null. */
-    var reporting: ReportTarget? by mutableStateOf(null)
-        private set
+    val reporting: ReportTarget? get() = memory.reporting
 
     /** Opens ReportSheet for [target]. */
     fun report(target: ReportTarget) {
-        reporting = target
+        memory.reporting = target
     }
 
     fun closeReport() {
-        reporting = null
+        memory.reporting = null
     }
 
     /** The person the block confirmation is open for, or null. */
-    var blocking: BlockTarget? by mutableStateOf(null)
-        private set
+    val blocking: BlockTarget? get() = memory.blocking
 
     /**
      * Blocks [name] (connect.ts blockWithConfirm): asks first ("Block {name}?"), then blocks, which
@@ -136,16 +155,16 @@ class PeopleHost(
      * server answers, for a screen that drops a card of its own (an incoming ask).
      */
     fun confirmBlock(ref: String, name: String, after: () -> Unit = {}) {
-        blocking = BlockTarget(ref, name, after)
+        memory.blocking = BlockTarget(ref, name, after)
     }
 
     fun closeBlock() {
-        blocking = null
+        memory.blocking = null
     }
 
     /** The confirmation's Block: runs the block of [target]. */
     internal fun block(target: BlockTarget) {
-        blocking = null
+        memory.blocking = null
         target.after()
         scope.launch {
             val message = controller.block(target.ref, target.name)
@@ -188,13 +207,56 @@ class PeopleHost(
     // ---------------------------------------------------------------------------------------------
     // What this run remembers
 
-    private var waved: Set<String> by mutableStateOf(emptySet())
-
     /** True when this run waved at [ref], so their card says "Waved" rather than "No reply yet". */
-    fun hasWaved(ref: String): Boolean = ref in waved
+    fun hasWaved(ref: String): Boolean = ref in memory.waved
 
     fun markWaved(ref: String) {
-        waved = waved + ref
+        memory.waved = memory.waved + ref
+    }
+}
+
+/**
+ * The host's state that survives an activity's re-creation: the refs and small values of the open
+ * sheets, the pending request and the refs waved at, never a person or a screen's data. Saved with
+ * [Saver] by [rememberPeopleUi]. The block confirmation's `after` callback belongs to a screen that
+ * is composed again; it is not saved, so a confirmation restored after a re-creation blocks without
+ * it (the card it would drop comes back with the next inbox refresh).
+ */
+@Stable
+class PeopleHostMemory {
+    internal var askingRef: String? by mutableStateOf(null)
+    internal var reporting: ReportTarget? by mutableStateOf(null)
+    internal var blocking: BlockTarget? by mutableStateOf(null)
+    internal var waved: Set<String> by mutableStateOf(emptySet())
+    internal var request: PeopleRequest? by mutableStateOf(null)
+
+    companion object {
+        val Saver: Saver<PeopleHostMemory, Any> = Saver(
+            save = { m ->
+                arrayListOf<Any?>(
+                    m.askingRef,
+                    m.reporting?.let { arrayListOf(it.ref, it.name, it.kind.name, it.id) },
+                    m.blocking?.let { arrayListOf(it.ref, it.name) },
+                    ArrayList(m.waved),
+                    m.request?.let { arrayListOf(it.aroundNow, it.query, it.hereZone, it.id) },
+                )
+            },
+            restore = { saved ->
+                val list = saved as List<*>
+                PeopleHostMemory().also { m ->
+                    m.askingRef = list[0] as String?
+                    (list[1] as List<*>?)?.let { r ->
+                        val kind = ReportKind.entries.firstOrNull { it.name == r[2] }
+                        if (kind != null) m.reporting = ReportTarget(r[0] as String, r[1] as String, kind, r[3] as String)
+                    }
+                    (list[2] as List<*>?)?.let { b -> m.blocking = BlockTarget(b[0] as String, b[1] as String) }
+                    m.waved = (list[3] as List<*>).filterIsInstance<String>().toSet()
+                    (list[4] as List<*>?)?.let { q ->
+                        m.request = PeopleRequest(q[0] as Boolean, q[1] as String?, q[2] as String?, q[3] as Long)
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -245,7 +307,11 @@ data class PeopleRequest(
     val aroundNow: Boolean = false,
     /** A search to run, with the search bar open (TopicPicker's "Find people who've done this"). */
     val query: String? = null,
-    /** A zone from `caddie://here/{zone}`: presence on in it (PresenceControls). Not routed yet. */
+    /**
+     * A zone from `caddie://here/{zone}` (not routed yet): People opens the presence setup with that
+     * zone chosen (PresenceControls, validated by `controller.matchZone`). Presence is never turned
+     * on by the request alone; the person taps "I'm around".
+     */
     val hereZone: String? = null,
     val id: Long = nextRequestId(),
 )

@@ -16,6 +16,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -87,7 +88,14 @@ fun PeoplePageContent(page: PeoplePage, state: PeopleUiState, host: PeopleHost, 
 /** The sheets and the dialog that more than one people screen opens, drawn once: AskSheet, ReportSheet and the block confirmation. */
 @Composable
 fun PeopleSheets(state: PeopleUiState, host: PeopleHost) {
-    host.asking?.let { person -> AskSheet(person, state, host, onClose = host::closeAsk) }
+    val asking = host.asking
+    // After an activity's re-creation only the ref of the person asked of comes back; the sheet
+    // drops if the controller no longer knows them once it has finished loading.
+    val unknown = host.askingRef != null && asking == null && state.availability != PeopleAvailability.Loading
+    LaunchedEffect(unknown) {
+        if (unknown) host.closeAsk()
+    }
+    asking?.let { person -> AskSheet(person, state, host, onClose = host::closeAsk) }
     host.reporting?.let { target -> ReportSheet(target, host, onClose = host::closeReport) }
     host.blocking?.let { target -> BlockConfirmDialog(target.name, onConfirm = { host.block(target) }, onDismiss = host::closeBlock) }
 }
@@ -127,10 +135,15 @@ private fun CirclesOfflineNote() {
 class PeopleUi internal constructor(
     val state: PeopleUiState,
     val host: PeopleHost,
-    private val talks: PeopleTalks,
+    talks: PeopleTalks,
     private val online: Boolean,
-    private val searchable: Boolean,
+    searchable: Boolean,
+    private val slots: PeopleSlots = PeopleSlots(host),
 ) {
+    init {
+        slots.update(PeopleInputs(state, talks, online, searchable))
+    }
+
     /** True while the backend offers people features to this app (and over https, outside debug builds). */
     val enabled: Boolean get() = state.features.enabled
 
@@ -153,40 +166,27 @@ class PeopleUi internal constructor(
     )
 
     /** TabContent.people. */
-    val tab: @Composable () -> Unit = { PeopleType { PeopleTab(state, host, talks, online) } }
+    val tab: @Composable () -> Unit get() = slots.tab
 
     /** TabContent.peoplePage. */
-    val page: @Composable (PeoplePage) -> Unit = { page -> PeopleType { PeoplePageContent(page, state, host, talks, online) } }
+    val page: @Composable (PeoplePage) -> Unit get() = slots.page
 
     /** TabContent.settingsPeople: the people groups, once a conference is ready. */
-    val settings: @Composable ColumnScope.() -> Unit = { if (ready) PeopleType { SettingsPeople(state, host) } }
+    val settings: @Composable ColumnScope.() -> Unit get() = slots.settings
 
     /** TabContent.appBarActions: Requests on the People tab. */
-    val appBarActions: @Composable (Tab) -> Unit = { tab ->
-        if (tab == Tab.People && enabled && searchable) RequestsButton(badge, host::openInbox)
-    }
+    val appBarActions: @Composable (Tab) -> Unit get() = slots.appBarActions
 
     /**
      * TalkSheet's `peopleControls`: online, U1's [TalkPeopleControls]; offline, "Talk circles need a
-     * connection." for an Interested talk; null without people features.
+     * connection." for an Interested talk; null without people features. The lambda is the same
+     * instance across recompositions (it reads the latest state itself), so lists that take it can
+     * skip.
      */
-    val talkControls: (@Composable (Talk) -> Unit)?
-        get() = if (!ready) {
-            null
-        } else {
-            { talk ->
-                val interested = talk.talkId in talks.interested
-                PeopleType { if (online) TalkPeopleControls(talk.talkId, interested, state, host) else if (interested) CirclesOfflineNote() }
-            }
-        }
+    val talkControls: (@Composable (Talk) -> Unit)? get() = if (ready) slots.talkControls else null
 
-    /** InterestedScreen's `shareAll`: U1's [ShareAllControls], online with people features on, else null. */
-    val shareAll: (@Composable (List<String>) -> Unit)?
-        get() = if (online && ready) {
-            { ids -> PeopleType { ShareAllControls(ids, state, host) } }
-        } else {
-            null
-        }
+    /** InterestedScreen's `shareAll`: U1's [ShareAllControls], online with people features on, else null. Stable like [talkControls]. */
+    val shareAll: (@Composable (List<String>) -> Unit)? get() = if (online && ready) slots.shareAll else null
 
     /** True while one of the shared sheets or the block confirmation is open. */
     val hasSheet: Boolean get() = host.asking != null || host.reporting != null || host.blocking != null
@@ -194,6 +194,62 @@ class PeopleUi internal constructor(
     /** The shared sheets; draw them once, outside the shell, in the app's theme. */
     @Composable
     fun Sheets() = PeopleType { PeopleSheets(state, host) }
+}
+
+/** What the People layer's slots read: one value, so a slot changes by reading it and not by being made again. */
+internal class PeopleInputs(
+    val state: PeopleUiState,
+    val talks: PeopleTalks,
+    val online: Boolean,
+    val searchable: Boolean,
+)
+
+/**
+ * The slots of [PeopleUi] as lambdas that live as long as the [PeopleHost]. Each reads the latest
+ * [PeopleInputs] when it runs, so a new state recomposes what it draws, while the lambda itself stays
+ * the same instance and does not make the lists that hold it recompose.
+ */
+internal class PeopleSlots(private val host: PeopleHost) {
+    private val latest = mutableStateOf<PeopleInputs?>(null, referentialEqualityPolicy())
+
+    fun update(inputs: PeopleInputs) {
+        latest.value = inputs
+    }
+
+    private fun inputs(): PeopleInputs = checkNotNull(latest.value)
+
+    val tab: @Composable () -> Unit = {
+        val i = inputs()
+        PeopleType { PeopleTab(i.state, host, i.talks, i.online) }
+    }
+
+    val page: @Composable (PeoplePage) -> Unit = { page ->
+        val i = inputs()
+        PeopleType { PeoplePageContent(page, i.state, host, i.talks, i.online) }
+    }
+
+    val settings: @Composable ColumnScope.() -> Unit = {
+        val i = inputs()
+        if (i.state.features.enabled && i.state.availability == PeopleAvailability.Ready) PeopleType { SettingsPeople(i.state, host) }
+    }
+
+    val appBarActions: @Composable (Tab) -> Unit = { tab ->
+        val i = inputs()
+        if (tab == Tab.People && i.state.features.enabled && i.searchable) {
+            RequestsButton(if (i.state.features.enabled) i.state.inbox.count else 0, host::openInbox)
+        }
+    }
+
+    val talkControls: @Composable (Talk) -> Unit = { talk ->
+        val i = inputs()
+        val interested = talk.talkId in i.talks.interested
+        PeopleType { if (i.online) TalkPeopleControls(talk.talkId, interested, i.state, host) else if (interested) CirclesOfflineNote() }
+    }
+
+    val shareAll: @Composable (List<String>) -> Unit = { ids ->
+        val i = inputs()
+        PeopleType { ShareAllControls(ids, i.state, host) }
+    }
 }
 
 /**
@@ -221,7 +277,8 @@ fun rememberPeopleUi(
     val toast by rememberUpdatedState(showToast)
     val talkOpener by rememberUpdatedState(openTalk)
     val urlOpener by rememberUpdatedState(openUrl)
-    val host = remember(controller, navigation) {
+    val memory = rememberSaveable(saver = PeopleHostMemory.Saver) { PeopleHostMemory() }
+    val host = remember(controller, navigation, memory) {
         PeopleHost(
             controller = controller,
             navigator = navigation,
@@ -229,6 +286,7 @@ fun rememberPeopleUi(
             toast = { message, action -> toast(message, action?.label, action?.onClick) },
             openTalk = { talkOpener(it) },
             openUrl = { urlOpener(it) },
+            memory = memory,
         )
     }
     val enabled by rememberUpdatedState(state.features.enabled)
@@ -271,7 +329,8 @@ fun rememberPeopleUi(
         controller.clearNotice()
     }
 
-    return PeopleUi(state, host, talks, online, searchable)
+    val slots = remember(host) { PeopleSlots(host) }
+    return PeopleUi(state, host, talks, online, searchable, slots)
 }
 
 /** Requests and Meet up open over the People tab, so Back returns there. */
