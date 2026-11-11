@@ -1138,9 +1138,15 @@ internal class ProfileSync(
 
     /** Stops every timer of this backend's sync, when the controller switches to another backend. */
     fun stop() {
+        // The controller keeps this session and may take it up again, so the timers are also
+        // forgotten: a cancelled job left here would hold back the next degraded re-send, and a
+        // cancelled debounce would still read as an edit waiting to be sent.
         timer?.cancel()
+        timer = null
         resendJob?.cancel()
+        resendJob = null
         retryJob?.cancel()
+        retryJob = null
         retriesStarted = false
     }
 

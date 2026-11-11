@@ -5,7 +5,6 @@ import app.conferencecaddie.shared.PeopleServices
 import kotlin.time.Clock
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -85,7 +84,8 @@ class SyncFailureTest {
         val t = setUp()
         t.h.server.profilePut = { t.h.server.echoProfile(it) }
         t.kv.failing = true
-        assertFailsWith<IllegalStateException> { t.controller.shareForTalk("$FIXTURE_SLUG:1001", true) }
+        // The controller turns the failure into its generic message rather than throwing into the screen.
+        assertEquals(ProfileSync.GENERIC_MESSAGE, t.controller.shareForTalk("$FIXTURE_SLUG:1001", true))
         assertEquals(SyncStatus.State.Error, t.controller.state.value.sync.state)
 
         t.kv.failing = false

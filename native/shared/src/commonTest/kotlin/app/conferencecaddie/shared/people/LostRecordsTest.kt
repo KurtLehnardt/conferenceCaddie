@@ -188,7 +188,8 @@ class LostRecordsTest {
         runCurrent()
 
         val s = again.state.value
-        assertEquals(ProfileSync.KEY_LOST_MESSAGE, s.notice)
+        assertEquals(ProfileSync.KEY_LOST_MESSAGE, s.notice?.message)
+        assertTrue(s.notice?.opensProfile == true, "the notice offers the profile")
         assertFalse(s.visibility.onServer || s.visibility.maybeOnServer, "this phone no longer holds a profile on the server")
         assertFalse(s.visibility.openToMeet)
         assertTrue(s.visibility.sharedTalkIds.isEmpty())
@@ -221,7 +222,7 @@ class LostRecordsTest {
         val again = relaunch(h, h.kv, InMemorySecureStore())
         again.updateContext(h.context())
         runCurrent()
-        assertEquals(ProfileSync.KEY_LOST_MESSAGE, again.state.value.notice)
+        assertEquals(ProfileSync.KEY_LOST_MESSAGE, again.state.value.notice?.message)
         assertFalse(again.state.value.deletes.unfinished, "this phone can never finish it")
         advanceTimeBy(3_600_000)
         assertTrue(deletes(h).isEmpty())
@@ -242,7 +243,7 @@ class LostRecordsTest {
         again.updateContext(h.context())
         runCurrent()
         val s = again.state.value
-        assertEquals(ProfileSync.DELETED_NO_KEY_MESSAGE, s.notice)
+        assertEquals(ProfileSync.DELETED_NO_KEY_MESSAGE, s.notice?.message)
         assertFalse(s.deletes.unfinished)
         assertEquals(Profile.EMPTY, s.profile)
         assertEquals(listOf("Bo"), s.met.map { it.displayName }, "People I met stays")
