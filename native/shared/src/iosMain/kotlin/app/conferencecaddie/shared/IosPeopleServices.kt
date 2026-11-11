@@ -10,7 +10,9 @@ object IosPeopleServices {
      * The people features' platform services on iOS: the Keychain-backed [IosSecureStore],
      * [IosLocationProvider], [IosNotifier], APNs through [IosPushRegistrar], and the app's page in
      * the Settings app. Call it on the main thread, from the app (never from tests: the push
-     * registrar and the settings link reach UIApplication when used).
+     * registrar and the settings link reach UIApplication when used). The main thread matters: the
+     * location manager is created here, eagerly, and Core Location wants it made where its callbacks
+     * are delivered.
      */
     fun create(): PeopleServices {
         val notifier = IosNotifier()

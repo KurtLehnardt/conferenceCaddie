@@ -12,6 +12,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import platform.Foundation.NSBundle
 import platform.Foundation.NSData
 import platform.Foundation.NSError
+import platform.Foundation.NSProcessInfo
 import platform.Foundation.create
 import platform.UIKit.UIApplication
 import platform.UIKit.registerForRemoteNotifications
@@ -54,9 +55,21 @@ class IosPushRegistrar(private val notifier: Notifier) : PushRegistrar {
 object ApsEnvironment {
     /** "sandbox" or "production". */
     fun ofThisApp(): String {
-        val path = NSBundle.mainBundle.pathForResource("embedded", ofType = "mobileprovision") ?: return PRODUCTION
-        val data = NSData.create(contentsOfFile = path) ?: return PRODUCTION
-        return fromProfile(bytesOf(data))
+        val path = NSBundle.mainBundle.pathForResource("embedded", ofType = "mobileprovision")
+        val data = path?.let { NSData.create(contentsOfFile = it) }
+        val simulator = NSProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] != null
+        return resolve(data?.let { bytesOf(it) }, simulator)
+    }
+
+    /**
+     * The environment for an app with the given embedded [profile] (null when it has none). A
+     * simulator build has no profile and no real APNs token, and never reaches production, so it
+     * reports the sandbox; a device build without a profile is an App Store or TestFlight install.
+     */
+    fun resolve(profile: ByteArray?, simulator: Boolean): String = when {
+        profile != null -> fromProfile(profile)
+        simulator -> SANDBOX
+        else -> PRODUCTION
     }
 
     /**

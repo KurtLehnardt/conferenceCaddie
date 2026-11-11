@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.LocationRequest
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
@@ -21,8 +22,9 @@ import kotlinx.coroutines.flow.callbackFlow
  * and otherwise GPS and network positions are both requested.
  *
  * Android cannot tell "never asked" from "refused for good" without an activity, so the provider
- * remembers in a small preferences file whether it has asked, and asks the attached activity
- * ([AndroidPermissions]) whether the system would still show the prompt.
+ * remembers in a small preferences file whether the system has answered a request, and asks the
+ * attached activity ([AndroidPermissions]) whether the system would still show the prompt. Without
+ * an activity nothing is known, and the state stays "not asked".
  */
 class AndroidLocationProvider(context: Context) : LocationProvider {
     private val app = context.applicationContext
@@ -32,23 +34,24 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
     override fun access(): LocationAccess {
         val lm = manager ?: return LocationAccess.Unavailable
         if (providers(lm).isEmpty() || !isEnabled(lm)) return LocationAccess.Unavailable
-        if (granted(Manifest.permission.ACCESS_FINE_LOCATION)) return LocationAccess.Precise
-        if (granted(Manifest.permission.ACCESS_COARSE_LOCATION)) return LocationAccess.Approximate
-        if (!prefs.getBoolean(KEY_ASKED, false)) return LocationAccess.NotAsked
-        // Asked before: the prompt still shows when Android wants a rationale (refused once).
-        return if (AndroidPermissions.shouldShowRationale(Manifest.permission.ACCESS_FINE_LOCATION) == true) {
-            LocationAccess.NotAsked
-        } else {
-            LocationAccess.Denied
-        }
+        return decideAccess(
+            fine = granted(Manifest.permission.ACCESS_FINE_LOCATION),
+            coarse = granted(Manifest.permission.ACCESS_COARSE_LOCATION),
+            asked = prefs.getBoolean(KEY_ASKED, false),
+            rationale = AndroidPermissions.shouldShowRationale(Manifest.permission.ACCESS_FINE_LOCATION),
+        )
     }
 
     override suspend fun requestAccess(): LocationAccess {
         val before = access()
         if (before == LocationAccess.Precise || before == LocationAccess.Unavailable) return before
-        prefs.edit().putBoolean(KEY_ASKED, true).apply()
         // Android 12 and newer need both together; the person then chooses precise or approximate.
-        AndroidPermissions.request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        // A state that reads Denied is asked about once more: Android answers at once, without a
+        // prompt, when the refusal is for good, and shows the prompt when the earlier reading was
+        // wrong (a dismissed prompt, a request that ran with no activity attached).
+        val answer = AndroidPermissions.request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        // Only an answer from the system counts as having asked; with no activity there is none.
+        if (answer.isNotEmpty()) prefs.edit().putBoolean(KEY_ASKED, true).apply()
         return access()
     }
 
@@ -77,8 +80,17 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
                 .maxByOrNull { it.elapsedRealtimeNanos }
                 ?.let { fix(it) }
                 ?.let { trySend(it) }
-            for (provider in providers) {
-                lm.requestLocationUpdates(provider, MIN_INTERVAL_MS, 0f, listener, Looper.getMainLooper())
+            if (Build.VERSION.SDK_INT >= 31 && providers == listOf(LocationManager.FUSED_PROVIDER)) {
+                // The legacy call gives the fused provider balanced quality; this asks for the best
+                // position, like the web's enableHighAccuracy.
+                val request = LocationRequest.Builder(MIN_INTERVAL_MS)
+                    .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+                    .build()
+                lm.requestLocationUpdates(LocationManager.FUSED_PROVIDER, request, app.mainExecutor, listener)
+            } else {
+                for (provider in providers) {
+                    lm.requestLocationUpdates(provider, MIN_INTERVAL_MS, 0f, listener, Looper.getMainLooper())
+                }
             }
         } catch (e: SecurityException) {
             // The permission was withdrawn in between; emit nothing.
@@ -128,4 +140,18 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
         const val MIN_INTERVAL_MS = 5_000L
         const val MAX_AGE_MS = 10_000L
     }
+}
+
+/**
+ * The access to report from the permission state. [asked] is true once the system has answered a
+ * request; [rationale] is Android's `shouldShowRequestPermissionRationale` (true after one refusal,
+ * false before any request and after a refusal for good), or null with no activity attached.
+ * Refused for good is only concluded from a system answer with no rationale left; a state that
+ * cannot be read, or that may still show the prompt, is "not asked", so the person is asked again.
+ */
+fun decideAccess(fine: Boolean, coarse: Boolean, asked: Boolean, rationale: Boolean?): LocationAccess = when {
+    fine -> LocationAccess.Precise
+    coarse -> LocationAccess.Approximate
+    !asked || rationale != false -> LocationAccess.NotAsked
+    else -> LocationAccess.Denied
 }
