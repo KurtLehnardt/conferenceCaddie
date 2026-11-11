@@ -8,11 +8,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 
 // For you when working out the suggestions fails: the list on screen stays, the error says so, and
 // the next refresh tries again, the same inputs included.
+@OptIn(ExperimentalCoroutinesApi::class)
 class ForYouModelTest {
     private val list = ForYou.Result.Ready(items = emptyList(), degraded = false)
 
