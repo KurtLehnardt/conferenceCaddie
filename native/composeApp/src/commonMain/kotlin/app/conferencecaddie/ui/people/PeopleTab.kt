@@ -297,15 +297,30 @@ fun rememberPeopleUi(
 
     // A people route waits until people features are on, so the notification tap or link that
     // opened the app is not lost while the capabilities load; it is then shown once. The hand-off
-    // gave it up when the app took it, so it waits here; a newer request replaces one still waiting.
-    var routed by remember { mutableStateOf(0L) }
-    LaunchedEffect(host, request) {
-        val r = request ?: return@LaunchedEffect
-        val people = r.people ?: return@LaunchedEffect
-        if (r.id == routed) return@LaunchedEffect
+    // gave it up when the app took it, and the app keeps the request only in memory, so the waiting
+    // route is kept in saved state: an activity re-created meanwhile (a rotation, a theme change)
+    // still shows it. A newer request replaces one still waiting, and a route that was shown is
+    // cleared, so it never comes back after a re-creation.
+    var waiting by rememberSaveable { mutableStateOf<String?>(null) }
+    // The id of the last request taken in, so a request the app still holds is not queued again
+    // after a re-creation. Ids start over with the app's memory, so the id is forgotten once the
+    // app no longer holds a request.
+    var taken by rememberSaveable { mutableStateOf(0L) }
+    LaunchedEffect(request) {
+        if (request == null) {
+            taken = 0L
+            return@LaunchedEffect
+        }
+        val people = request.people ?: return@LaunchedEffect
+        if (request.id == taken) return@LaunchedEffect
+        taken = request.id
+        waiting = encodePeopleRoute(people)
+    }
+    LaunchedEffect(host, waiting) {
+        val encoded = waiting ?: return@LaunchedEffect
         snapshotFlow { enabled }.first { it }
-        routed = r.id
-        route(people, host, navigation)
+        waiting = null
+        decodePeopleRoute(encoded)?.let { route(it, host, navigation) }
     }
 
     var launched by rememberSaveable { mutableStateOf(false) }
@@ -354,5 +369,33 @@ private fun route(route: AppLink.PeopleRoute, host: PeopleHost, navigation: Shel
         }
         AppLink.PeopleRoute.Profile -> host.openProfile()
         is AppLink.PeopleRoute.Here -> host.openPeople(PeopleRequest(hereZone = route.zone))
+    }
+}
+
+/**
+ * A people route as a short string, so a route that waits for people features can be kept in saved
+ * state: `home:1` or `home:0` (Around now on or off), `inbox`, `meet:<id>`, `profile` and
+ * `here:<zone>`. The zone is everything after the first colon, so it may hold colons and spaces.
+ */
+internal fun encodePeopleRoute(route: AppLink.PeopleRoute): String = when (route) {
+    is AppLink.PeopleRoute.Home -> if (route.aroundNow) "home:1" else "home:0"
+    AppLink.PeopleRoute.Inbox -> "inbox"
+    is AppLink.PeopleRoute.Meet -> "meet:${route.meetId}"
+    AppLink.PeopleRoute.Profile -> "profile"
+    is AppLink.PeopleRoute.Here -> "here:${route.zone}"
+}
+
+/** The route [encodePeopleRoute] wrote, or null for a string that is none (saved state of another version). */
+internal fun decodePeopleRoute(encoded: String): AppLink.PeopleRoute? {
+    val kind = encoded.substringBefore(':')
+    val rest = encoded.substringAfter(':', "")
+    return when {
+        encoded == "home:1" -> AppLink.PeopleRoute.Home(aroundNow = true)
+        encoded == "home:0" -> AppLink.PeopleRoute.Home(aroundNow = false)
+        encoded == "inbox" -> AppLink.PeopleRoute.Inbox
+        encoded == "profile" -> AppLink.PeopleRoute.Profile
+        kind == "meet" && rest.isNotEmpty() -> AppLink.PeopleRoute.Meet(rest)
+        kind == "here" && rest.isNotEmpty() -> AppLink.PeopleRoute.Here(rest)
+        else -> null
     }
 }
