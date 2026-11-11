@@ -1,7 +1,10 @@
 name: Deploy the talk bundles to GitHub Pages
 
-# Builds https://kurtlehnardt.github.io/conferenceCaddie/ and publishes it with the official Pages
-# actions. The site holds only public talk data, never the web app:
+# Builds the GitHub Pages site of the repository it runs in, https://<owner>.github.io/<repository>/
+# (for KurtLehnardt/conferenceCaddie, https://kurtlehnardt.github.io/conferenceCaddie/; the first step
+# of the build job works the addresses out, and repository variables can override them), and
+# publishes it with the official Pages actions. The site holds only public talk data, never the web
+# app:
 # - the talk bundles of tier 1 (docs/BUNDLES.md, docs/contracts/talk-bundle.md): bundles/<slug>/<hash16>/
 #   {bundle.json, vectors.i8}, bundles/conferences.json (with a copy at conferences.json), the
 #   builder's bundles/build-info.json and bundles/sources.json, and the tier 1 capabilities.json,

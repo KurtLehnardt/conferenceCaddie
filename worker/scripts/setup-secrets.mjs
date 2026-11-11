@@ -3,7 +3,7 @@
 //
 // Usage, from anywhere in the repository, after `bash worker/scripts/deploy.sh`:
 //   node worker/scripts/setup-secrets.mjs [--only-missing] [--dry-run] [--rotate-ref-salt] [--skip-gh]
-//   node worker/scripts/setup-secrets.mjs --rotate-admin-token [--dry-run] [--skip-gh]
+//   node worker/scripts/setup-secrets.mjs --rotate-admin-token [--replace-next] [--dry-run] [--skip-gh]
 //
 // Secrets:
 //   ADMIN_TOKEN        32 random bytes as hex. Opens the /admin routes (ingest, migration, smoke
@@ -55,6 +55,12 @@
 //                         2. written to the token file (mode 0600), only after step 1 succeeded, so a
 //                            failed step 1 leaves the old token in the file,
 //                         3. set as the GitHub secret CADDIE_ADMIN_TOKEN (unless --skip-gh).
+//                       Each step leaves the token file and the GitHub secret holding a value the
+//                       Worker accepts, so no client is refused. That holds only when the Worker has no
+//                       ADMIN_TOKEN_NEXT yet: with one already set, a rotation is in progress, and
+//                       replacing its value would make the Worker refuse a token file and a GitHub
+//                       secret that may hold exactly that value. The run then stops without changing
+//                       anything and says what to do (finish the earlier rotation, or --replace-next).
 //                       Then it prints the two commands that finish the rotation, which are not run
 //                       here, because an ingest or a smoke that started before step 2 still signs with
 //                       the old token:
@@ -62,11 +68,20 @@
 //                         npx wrangler secret delete ADMIN_TOKEN_NEXT
 //                       The value is never printed. On a failure the output says which of the three
 //                       steps ran and what to do (docs/FREE_HOSTING.md, Rotate ADMIN_TOKEN).
+//   --replace-next      With --rotate-admin-token: replace an ADMIN_TOKEN_NEXT that is already set, for
+//                       an earlier rotation that stopped at its Worker or token-file step. Until all
+//                       three steps of this run are done, the token file and the GitHub secret may
+//                       hold the old ADMIN_TOKEN_NEXT, which the Worker no longer accepts, and the
+//                       output says so at every failure. Refused with --skip-gh, because the GitHub
+//                       secret must then be set again.
 // Env: ADMIN_TOKEN_FILE (default ~/.config/conference-caddie/admin-token, the file the smoke,
-//      migration and moderation scripts read); CADDIE_GH_REPO, <owner>/<name> (default: what
-//      `gh repo view --json nameWithOwner -q .nameWithOwner` says for this clone, and when that
-//      fails the script stops and names the variable; --skip-gh needs neither);
-//      CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are read by wrangler itself.
+//      migration and moderation scripts read); CADDIE_GH_REPO, <owner>/<name> (default: the
+//      github.com repository that the git remote "origin" of this clone names, in https or ssh
+//      form; when that cannot be worked out the script stops and names the variable; --skip-gh
+//      needs neither). `gh repo view` is not used: in a fork clone, which has the original as
+//      "upstream", it names the original, and the secret would go to the wrong repository.
+//      CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are read by wrangler itself. Each child
+//      process gets only the environment it needs (wrangler no GitHub token, gh no Cloudflare one).
 
 import { spawn } from 'node:child_process';
 import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
@@ -76,6 +91,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const WORKER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = resolve(WORKER_DIR, '..');
 const TOKEN_FILE = resolve(process.env.ADMIN_TOKEN_FILE || join(homedir(), '.config', 'conference-caddie', 'admin-token'));
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const NAMES = ['ADMIN_TOKEN', 'REF_SALT', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY', 'BLE_MASTER_KEYRING'];
@@ -84,7 +100,7 @@ const GH_SECRET = 'CADDIE_ADMIN_TOKEN';
 // The Worker secret of a rotation in progress (see --rotate-admin-token).
 const NEXT_NAME = 'ADMIN_TOKEN_NEXT';
 const USAGE = 'Usage: node worker/scripts/setup-secrets.mjs [--only-missing] [--dry-run] [--rotate-ref-salt] [--skip-gh]\n'
-  + '       node worker/scripts/setup-secrets.mjs --rotate-admin-token [--dry-run] [--skip-gh]';
+  + '       node worker/scripts/setup-secrets.mjs --rotate-admin-token [--replace-next] [--dry-run] [--skip-gh]';
 
 let options;
 try {
@@ -94,6 +110,7 @@ try {
       'dry-run': { type: 'boolean', default: false },
       'rotate-ref-salt': { type: 'boolean', default: false },
       'rotate-admin-token': { type: 'boolean', default: false },
+      'replace-next': { type: 'boolean', default: false },
       'skip-gh': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -113,6 +130,15 @@ if (options.help) {
 if (options['rotate-admin-token'] && (options['only-missing'] || options['rotate-ref-salt'])) {
   console.error('--rotate-admin-token does nothing but start the rotation, so it cannot be combined with --only-missing or --rotate-ref-salt.');
   console.error(USAGE);
+  process.exit(2);
+}
+if (options['replace-next'] && !options['rotate-admin-token']) {
+  console.error('--replace-next goes with --rotate-admin-token.');
+  console.error(USAGE);
+  process.exit(2);
+}
+if (options['replace-next'] && options['skip-gh']) {
+  console.error('--replace-next cannot be combined with --skip-gh: the GitHub secret may hold the ADMIN_TOKEN_NEXT that is being replaced, which the Worker would then refuse, so it has to be set again.');
   process.exit(2);
 }
 const dryRun = options['dry-run'];
@@ -162,11 +188,35 @@ function redact(text) {
   return out;
 }
 
+// The environment of a child: what any tool needs to run (PATH, HOME, locale, temp directory,
+// proxies and certificates), plus the prefixes of the variables that tool reads, and nothing else.
+// wrangler gets the Cloudflare and npm settings but no GitHub token, gh gets the GitHub settings but
+// no Cloudflare token, and git only the common part (no GIT_* variable steers it to another repository).
+const COMMON_ENV = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'COLORTERM', 'NO_COLOR', 'FORCE_COLOR', 'CI', 'TZ', 'LANG',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', '__CF_USER_TEXT_ENCODING',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
+]);
+const COMMON_PREFIXES = ['LC_', 'XDG_'];
+const TOOL_PREFIXES = {
+  npx: ['CLOUDFLARE_', 'WRANGLER_', 'CF_', 'npm_config_', 'NPM_CONFIG_', 'NODE_'],
+  gh: ['GH_', 'GITHUB_'],
+};
+function childEnv(command) {
+  const prefixes = [...COMMON_PREFIXES, ...(TOOL_PREFIXES[command] ?? [])];
+  const out = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (COMMON_ENV.has(name) || prefixes.some((p) => name.startsWith(p))) out[name] = value;
+  }
+  return out;
+}
+
 // Runs a command with the given text on its standard input. Its output is captured, never
 // streamed, so nothing the child echoes reaches the terminal.
 function run(command, args, { input = '', cwd = WORKER_DIR } = {}) {
   return new Promise((resolvePromise) => {
-    const child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd, env: childEnv(command), stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -198,29 +248,60 @@ async function workerSecretNames() {
   }
 }
 
-// The repository whose secret CADDIE_ADMIN_TOKEN is set: CADDIE_GH_REPO, or what gh says for this
-// clone. There is no built-in default, so a fork never writes to the original's secrets. Only
-// asked for when a step needs it (never with --skip-gh); it stops the script when it cannot say.
-let ghRepoName;
+// The owner and name of a github.com remote URL in https or ssh form, or null. Strict: the host is
+// github.com itself, the owner and name are plain, there is no user name or password in an https
+// URL, and nothing follows the name but an optional ".git" and, for https, a "/".
+const OWNER = '([A-Za-z0-9][A-Za-z0-9_-]*)';
+const NAME = '([A-Za-z0-9._-]+?)';
+const REMOTE_FORMS = [
+  new RegExp(`^https://github\\.com/${OWNER}/${NAME}(?:\\.git)?/?$`, 'i'),
+  new RegExp(`^git@github\\.com:${OWNER}/${NAME}(?:\\.git)?$`, 'i'),
+  new RegExp(`^ssh://git@github\\.com/${OWNER}/${NAME}(?:\\.git)?$`, 'i'),
+];
+function repoFromRemoteUrl(url) {
+  for (const form of REMOTE_FORMS) {
+    const m = form.exec(url);
+    if (m && m[2] !== '.' && m[2] !== '..') return `${m[1]}/${m[2]}`;
+  }
+  return null;
+}
+
+// The repository whose secret CADDIE_ADMIN_TOKEN is set: CADDIE_GH_REPO, or the github.com
+// repository the git remote "origin" of this clone names. There is no built-in default, so a fork
+// never writes to the original's secrets, and `gh repo view` is not asked: in a fork clone made by
+// `gh repo fork --clone` it names the original ("upstream"), not the fork. Only asked for when a step
+// needs it (never with --skip-gh); it stops the script when it cannot say.
+let ghRepoFound;
 async function ghRepo() {
-  if (ghRepoName) return ghRepoName;
+  if (ghRepoFound) return ghRepoFound.name;
   const fromEnv = (process.env.CADDIE_GH_REPO ?? '').trim();
   if (fromEnv) {
     if (!REPO_RE.test(fromEnv)) {
       console.error('CADDIE_GH_REPO must look like <owner>/<name>.');
       process.exit(2);
     }
-    return (ghRepoName = fromEnv);
+    ghRepoFound = { name: fromEnv, source: 'CADDIE_GH_REPO' };
+    return fromEnv;
   }
-  const result = await run('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']);
-  const found = result.stdout.trim();
-  if (result.code === 0 && REPO_RE.test(found)) return (ghRepoName = found);
-  console.error('CADDIE_GH_REPO is not set and gh could not tell which repository this clone belongs to'
-    + ` (gh repo view --json nameWithOwner -q .nameWithOwner failed${result.code === 127 ? ': gh is not installed' : ''}).`);
+  const result = await run('git', ['-C', REPO_ROOT, 'remote', 'get-url', 'origin'], { cwd: REPO_ROOT });
+  const name = result.code === 0 ? repoFromRemoteUrl(result.stdout.trim()) : null;
+  if (name) {
+    ghRepoFound = { name, source: 'the git remote "origin"' };
+    return name;
+  }
+  const why = result.code === 127 ? 'git is not installed'
+    : result.code !== 0 ? 'this clone has no remote named "origin"'
+      : '"origin" is not a github.com address in https or ssh form';
+  console.error(`CADDIE_GH_REPO is not set and the repository could not be worked out from this clone (${why}).`);
   console.error('Set CADDIE_GH_REPO=<owner>/<name> (the repository that holds the ingest workflow), or pass --skip-gh to leave the GitHub secret alone.');
-  const detail = failureText(result);
-  if (detail && result.code !== 127) console.error(detail);
   process.exit(1);
+}
+
+// Says where the GitHub secret goes, before anything is changed.
+async function announceRepo() {
+  const name = await ghRepo();
+  console.log(`The GitHub secret ${GH_SECRET} goes to ${name} (from ${ghRepoFound.source}).`);
+  return name;
 }
 
 async function githubSecretNames() {
@@ -303,9 +384,15 @@ async function readTokenFile() {
 // operator can read), and the GitHub secret last, from the same value. The two commands that make
 // the new value the ADMIN_TOKEN and drop ADMIN_TOKEN_NEXT are printed, not run: a running ingest
 // or smoke still signs with the token it started with.
+//
+// That holds only when the Worker has no ADMIN_TOKEN_NEXT yet. With one already set, an earlier
+// rotation was started, and the token file and the GitHub secret may hold exactly its value;
+// putting a new value there would make the Worker refuse them. So the run stops, and --replace-next
+// is the explicit choice to go on, with every hint then saying that the two may be refused.
 async function rotateAdminToken() {
   const skipGh = options['skip-gh'];
   const file = shellPath(TOKEN_FILE);
+  let nextExists = false;
 
   // Read-only checks first, so a failure here leaves everything as it was.
   const { names, error } = await workerSecretNames();
@@ -322,35 +409,59 @@ async function rotateAdminToken() {
       process.exit(1);
     }
     console.log(`Note: ${why} A real run stops here.`);
-  } else if (names.has(NEXT_NAME)) {
-    console.log(`${NEXT_NAME} is already set on the Worker (an earlier rotation was not finished); this run replaces it. ADMIN_TOKEN keeps working.`);
+  } else {
+    nextExists = names.has(NEXT_NAME);
   }
   // Asked for before anything changes, so an unresolvable repository stops the run early.
   const repo = skipGh ? null : await ghRepo();
   const ghSetFromFile = `gh secret set ${GH_SECRET} --repo ${repo ?? (process.env.CADDIE_GH_REPO?.trim() || '<owner>/<name>')} < ${file}`;
   const finishing = `  npx wrangler secret put ADMIN_TOKEN < ${file}\n  npx wrangler secret delete ${NEXT_NAME}`;
 
+  const replacing = nextExists && options['replace-next'];
+  if (nextExists && !replacing) {
+    const why = `${NEXT_NAME} is already set on the Worker, so an earlier rotation was started and not finished, and this run would replace its value. That can lock clients out: `
+      + `the token file and ${GH_SECRET} may hold exactly the value that is ${NEXT_NAME} now, and the Worker would stop accepting it. Nothing was changed. Find out where the earlier rotation stopped:\n`
+      + `  - It went through all three steps (its output ended with the two finishing commands): run them, from ${WORKER_DIR}:\n${finishing.replace(/^/gm, '    ')}\n`
+      + `  - The finishing "put" of ADMIN_TOKEN already ran: only  npx wrangler secret delete ${NEXT_NAME}  is left.\n`
+      + `  - It stopped at its GitHub step (the token file holds the new value, ${GH_SECRET} the old one): run  ${ghSetFromFile}  and then the two finishing commands.\n`
+      + `  - It stopped at its Worker step or its token-file step (the token file and ${GH_SECRET} still hold the ADMIN_TOKEN): run this command again with --replace-next.`;
+    if (!dryRun) {
+      console.error(why);
+      process.exit(1);
+    }
+    console.log(`Note: ${why}\nA real run stops here.`);
+  }
+
   if (dryRun) {
     console.log('Dry run: nothing is generated or changed.');
+    if (replacing) console.log(`${NEXT_NAME} is already set on the Worker; --replace-next would replace it.`);
     console.log(`Would set ${NEXT_NAME}: npx wrangler secret put ${NEXT_NAME}  (a new value, 32 random bytes as hex, on standard input; the Worker then accepts the old and the new token)`);
     console.log(`Would write the new value to ${TOKEN_FILE}  (mode 0600), only after ${NEXT_NAME} was set`);
     if (skipGh) console.log(`Would leave the GitHub secret ${GH_SECRET} alone (--skip-gh).`);
-    else console.log(`Would set ${GH_SECRET}: gh secret set ${GH_SECRET} --repo ${repo}  (value on standard input)`);
+    else console.log(`Would set ${GH_SECRET}: gh secret set ${GH_SECRET} --repo ${repo}  (value on standard input; the repository is ${ghRepoFound.source === 'CADDIE_GH_REPO' ? 'CADDIE_GH_REPO' : 'what the git remote "origin" names'})`);
     console.log(`Would then print the two commands that finish the rotation, from ${WORKER_DIR} (this script never runs them):\n${finishing}`);
     return;
   }
 
+  if (!skipGh) await announceRepo();
+  if (replacing) {
+    console.log(`${NEXT_NAME} is already set on the Worker; --replace-next replaces it. From the Worker step on, the token file and ${GH_SECRET} may hold the old ${NEXT_NAME}, which the Worker then no longer accepts, until this run has been through all three steps.`);
+  }
   const token = randomHex(32);
-  await putWorkerSecret(NEXT_NAME, token,
-    `Nothing else was changed: ADMIN_TOKEN, ${TOKEN_FILE} and the GitHub secret ${GH_SECRET} keep their old values and keep working. Run the same command again; a ${NEXT_NAME} that was stored anyway is replaced.`);
-  await writeTokenFile(token,
-    `The Worker now accepts a new ${NEXT_NAME} that is saved nowhere, and ADMIN_TOKEN, the token file and ${GH_SECRET} are unchanged, so every client keeps working. Fix the path (ADMIN_TOKEN_FILE) and run the same command again; it replaces ${NEXT_NAME}.`);
+  await putWorkerSecret(NEXT_NAME, token, replacing
+    ? `Nothing was changed by this run: ${NEXT_NAME}, the token file and ${GH_SECRET} are as they were. Run the same command again.`
+    : `Nothing else was changed: ADMIN_TOKEN, ${TOKEN_FILE} and the GitHub secret ${GH_SECRET} keep their old values and keep working. Run the same command again; if it then says ${NEXT_NAME} is already set (the put may have gone through), the token file and ${GH_SECRET} still hold the ADMIN_TOKEN, so run it with --replace-next.`);
+  await writeTokenFile(token, replacing
+    ? `The Worker now accepts a new ${NEXT_NAME} that is saved nowhere. The token file and ${GH_SECRET} may hold the old ${NEXT_NAME}, which the Worker no longer accepts (only the ADMIN_TOKEN is still accepted), so a client that uses them is refused until a run of this command with --replace-next has been through all three steps. Fix the path (ADMIN_TOKEN_FILE) and run it again.`
+    : `The Worker now accepts a new ${NEXT_NAME} that is saved nowhere, and ADMIN_TOKEN, the token file and ${GH_SECRET} are unchanged, so every client keeps working. Fix the path (ADMIN_TOKEN_FILE) and run the same command again with --replace-next.`);
   if (skipGh) {
     console.log(`Skipped the GitHub secret (--skip-gh): ${GH_SECRET} still holds the old token. Run this before the two commands below, or the ingest workflow is refused once ADMIN_TOKEN changes:\n  ${ghSetFromFile}`);
   } else {
-    await putGithubSecret(GH_SECRET, token,
-      `The Worker accepts the new token as ${NEXT_NAME} and ${TOKEN_FILE} holds it; ${GH_SECRET} still holds the old token, which the Worker still accepts as ADMIN_TOKEN, so the ingest keeps working for now.\n`
-      + `Retry with this command, and do not run the two finishing commands before it succeeds:\n  ${ghSetFromFile}`);
+    await putGithubSecret(GH_SECRET, token, replacing
+      ? `The token file holds the new value. ${GH_SECRET} holds an older one: if that is the old ${NEXT_NAME} (the earlier rotation had got as far as its GitHub step), the Worker no longer accepts it and the ingest is refused until this command succeeds; if it is the ADMIN_TOKEN, it is still accepted.\n`
+        + `Run this command, and do not run the two finishing commands before it succeeds:\n  ${ghSetFromFile}`
+      : `The Worker accepts the new token as ${NEXT_NAME} and ${TOKEN_FILE} holds it; ${GH_SECRET} still holds the old token, which the Worker still accepts as ADMIN_TOKEN, so the ingest keeps working for now.\n`
+        + `Retry with this command, and do not run the two finishing commands before it succeeds:\n  ${ghSetFromFile}`);
   }
   console.log(`${NEXT_NAME} is live: the Worker accepts the old and the new token. The token file${skipGh ? '' : ` and ${GH_SECRET}`} hold${skipGh ? 's' : ''} the new one.`);
   console.log(`To finish the rotation, run these two commands in this order from ${WORKER_DIR}, once any running ingest or smoke has finished (it signs with the token it started with):\n${finishing}`);
@@ -393,6 +504,11 @@ if (plan.has('VAPID_PRIVATE_KEY') || plan.has('VAPID_PUBLIC_KEY')) {
 }
 for (const name of NAMES) if (!plan.has(name) && has(name) && options['only-missing']) console.log(`Skipping ${name}: already set on the Worker.`);
 
+// The repository of the GitHub secret is worked out before anything is changed, whenever GitHub
+// will be touched, so a clone it cannot be worked out for stops the run before ADMIN_TOKEN is put
+// and the token file is written, not after.
+if (!options['skip-gh'] && (plan.has('ADMIN_TOKEN') || has('ADMIN_TOKEN'))) await ghRepo();
+
 // ADMIN_TOKEN already on the Worker: make sure the GitHub secret exists, from the local file.
 let syncGithubFromFile = false;
 if (!plan.has('ADMIN_TOKEN') && has('ADMIN_TOKEN') && !options['skip-gh']) {
@@ -415,6 +531,7 @@ if (dryRun) {
   process.exit(0);
 }
 
+if (plan.has('ADMIN_TOKEN') && !options['skip-gh']) await announceRepo();
 if (plan.has('ADMIN_TOKEN')) {
   const token = randomHex(32);
   await putWorkerSecret('ADMIN_TOKEN', token);

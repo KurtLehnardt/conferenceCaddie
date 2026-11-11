@@ -58,7 +58,10 @@ Worker allows through `ALLOWED_ORIGINS`).
   pair, `ADMIN_TEST_ROUTES=1` (the smoke's `/admin/test/*` fixtures, which a deployed Worker serves
   only when that variable is `"1"`; see [Smoke](#smoke)) and `EMBED_FAKE=1`. With `EMBED_FAKE=1`
   embeddings are deterministic feature-hashed vectors and no Workers AI call is made. Running
-  `dev-vars.mjs` again adds a name the file lacks and keeps the ones it has.
+  `dev-vars.mjs` again adds a name the file lacks and keeps the ones it has. After pulling the
+  change that added `ADMIN_TEST_ROUTES`, re-run `npm --prefix worker run dev-vars` (or add
+  `ADMIN_TEST_ROUTES=1` to your existing `.dev.vars` by hand): without it the local smoke silently
+  skips its fixture checks, because the local Worker answers 404 to them.
 - Real embeddings in a local run (needed for the smoke's semantic checks): `wrangler dev --local`
   cannot reach the AI binding, and a remote dev session cannot be authenticated with an account
   API token, so the Worker sends its embedding calls to a small local proxy instead:
@@ -150,15 +153,20 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    The first `BLE_MASTER_KEYRING` (Bluetooth derived tokens v1, one random master) is created
    when the Worker has none and never replaced; rotate it by hand (docs/FREE_HOSTING.md).
    The output names secrets only. The GitHub secret goes to the repository in `CADDIE_GH_REPO`
-   (`<owner>/<name>`) or, when that is unset, the one `gh repo view --json nameWithOwner -q
-   .nameWithOwner` reports for the clone; if neither works the script stops and names the
-   variable (`--skip-gh` needs neither). To replace `ADMIN_TOKEN` later without an outage, see
-   [Rotating the admin token](#rotating-the-admin-token).
+   (`<owner>/<name>`) or, when that is unset, the github.com repository that the git remote
+   `origin` of the clone names (https or ssh form, parsed strictly; it is printed before anything
+   is changed); if neither works the script stops and names the variable (`--skip-gh` needs
+   neither). `gh repo view` is not used, because in a clone made by `gh repo fork --clone` it names
+   the original repository (`upstream`), not the fork. To replace `ADMIN_TOKEN` later without an
+   outage, see [Rotating the admin token](#rotating-the-admin-token).
 
    For a fork or a copy, also edit `VAPID_SUBJECT` in `worker/wrangler.toml` (the contact the push
-   services receive: an `https:` URL or a `mailto:` address; it names this repository's page), and
-   see the repository variables `CADDIE_SITE_URL`, `CADDIE_BUNDLE_BASE` and `CADDIE_TAKEDOWN_URL`
-   of `.github/workflows/pages.yml`, which override the addresses it derives from the repository.
+   services receive: an `https:` URL or a `mailto:` address; it names this repository's page), set
+   `TALKS_BUNDLE_BASE` in its `[vars]` to your own bundle address (the capabilities document's
+   `talks.bundle_base` defaults to `https://kurtlehnardt.github.io/conferenceCaddie/bundles/`,
+   `src/capabilities.js`), and see the repository variables `CADDIE_SITE_URL`,
+   `CADDIE_BUNDLE_BASE` and `CADDIE_TAKEDOWN_URL` of `.github/workflows/pages.yml`, which override
+   the addresses it derives from the repository.
 
 3. **Migrate the data** from the Elasticsearch backup (one time).
 
@@ -235,7 +243,9 @@ instead of FAIL, once it sees that `GET /admin/stats` answers 200 with the same 
 run them against the deployed Worker, deploy once with the variable and once without:
 `cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1` (the app already built by an earlier
 `deploy.sh`), run the smoke, then `bash worker/scripts/deploy.sh` again, because every wrangler
-deploy replaces the Worker's variables with those of `wrangler.toml`.
+deploy replaces the Worker's variables with those of `wrangler.toml`. Never set it with
+`wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
+deleted it.
 
 `SMOKE_ADMIN_AUTH=signed` makes the smoke sign its admin calls ([Admin requests](#admin-requests)).
 Its default is still the old bearer, which this Worker answers with 404, until the smoke's own
@@ -330,8 +340,10 @@ stored version is at least `SCHEMA_VERSION`.
 The Worker verifies a signature with `ADMIN_TOKEN` and, when `ADMIN_TOKEN_NEXT` is also set (at
 least 32 characters after trimming), with that one too. It still needs a valid `ADMIN_TOKEN`:
 without one every admin request answers 404, whatever `ADMIN_TOKEN_NEXT` holds. A rotation starts
-with one command and ends with two, and no client is refused at any point. From the repository
-root, with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set:
+with one command and ends with two. Each step of the script leaves the token file and the
+repository secret holding a value the Worker accepts, so no client is refused, as long as the
+Worker has no `ADMIN_TOKEN_NEXT` yet when it starts (see the end of this section for the case where
+it has). From the repository root, with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set:
 
 ```sh
 node worker/scripts/setup-secrets.mjs --rotate-admin-token --dry-run   # names only, changes nothing
@@ -344,7 +356,8 @@ the old and the new token; writes them to `~/.config/conference-caddie/admin-tok
 `ADMIN_TOKEN_FILE` changes the path), only after the Worker put succeeded; and sets the repository
 secret `CADDIE_ADMIN_TOKEN` (`--skip-gh` leaves it). It never prints the value, and it does nothing
 else: no other secret is touched, and it cannot be combined with `--only-missing` or
-`--rotate-ref-salt`. It then prints the two commands that finish the rotation, which you run from
+`--rotate-ref-salt`. It prints where the repository secret goes before it changes anything, then
+the two commands that finish the rotation, which you run from
 `worker/` once any running ingest or smoke has finished (a client signs with the token it read when
 it started), in this order:
 
@@ -357,7 +370,8 @@ npx wrangler secret delete ADMIN_TOKEN_NEXT
 Run the `delete` only after the `put` succeeded, and never print the token file. If a step of the
 script fails, it says which state that left: after the Worker step nothing changed, so run it
 again; after the file step the Worker holds an `ADMIN_TOKEN_NEXT` that was saved nowhere and the old
-token still works everywhere, so run it again (it replaces `ADMIN_TOKEN_NEXT`); after the
+token still works everywhere, so run it again with `--replace-next` (the second run would
+otherwise stop, because `ADMIN_TOKEN_NEXT` is now set); after the
 repository-secret step the file holds the new value and `CADDIE_ADMIN_TOKEN` the old one, so run the
 `gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < <token file>` command it prints before the
 two finishing commands. Running `setup-secrets.mjs --only-missing` at any point is safe: it never
@@ -365,8 +379,20 @@ looks at `ADMIN_TOKEN_NEXT`, and only because the Worker accepts both keys durin
 that skips `ADMIN_TOKEN` or sets a missing repository secret from the file still leaves every
 client with a token the Worker accepts. A stale `CADDIE_ADMIN_TOKEN` after the last command is the
 failed-signature symptom described above. Every value the script writes has no whitespace around
-it, the Worker trims each secret it reads, and the clients trim what they read. The same recipe is
-in docs/FREE_HOSTING.md (Operations runbook).
+it, the Worker trims each secret it reads, and the clients trim what they read.
+
+If the Worker already has an `ADMIN_TOKEN_NEXT`, an earlier rotation was started, and the script
+exits 1 without changing anything: replacing its value would make the Worker refuse a token file
+and a repository secret that may hold exactly that value. It lists the cases. If the earlier run went
+through all three steps, run the two finishing commands; if the finishing `put` already ran, only
+the `delete` is left; if it stopped at its GitHub step, run the `gh secret set` command it printed
+and then the finishing commands; if it stopped at its Worker or token-file step (the file and the
+repository secret still hold the `ADMIN_TOKEN`), run the script again with `--replace-next`.
+`--replace-next` is the explicit choice to replace the `ADMIN_TOKEN_NEXT` that is there: until the
+run has been through all three steps, the token file and the repository secret may hold the old
+`ADMIN_TOKEN_NEXT`, which the Worker then no longer accepts, and the output says so at every failure
+point. It cannot be combined with `--skip-gh`. The same recipe is in docs/FREE_HOSTING.md
+(Operations runbook).
 
 ## Moderation
 
