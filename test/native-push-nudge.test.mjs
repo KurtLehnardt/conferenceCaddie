@@ -52,16 +52,15 @@ const apnsToken = () => crypto.randomBytes(32).toString('hex');
 const fcmToken = () => `${crypto.randomBytes(8).toString('base64url')}:APA91b${crypto.randomBytes(100).toString('base64url')}`;
 
 // Puts a person around in Hall A with a spot line, straight into the stand-in, with the given
-// Web Push subscription (web: true) and native registrations.
-function around(d, { web = false, apns = [], fcm = [] } = {}) {
+// Web Push subscription (web: true) and native registrations (a device has at most one per
+// platform: apns and fcm are tokens).
+function around(d, { web = false, apns = null, fcm = null } = {}) {
   const id = `${EVENT}:${d.profileId}`;
   const until = new Date(Date.now() + 30 * 60_000).toISOString();
   fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_spot: SPOT, presence_since: new Date().toISOString(), presence_until: until, presence_location: { lat: 1.5, lon: 2.5 } });
   if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
-  for (const [platform, tokens] of [['apns', apns], ['fcm', fcm]]) {
-    for (const token of tokens) {
-      fake.put('caddie-people-push', registrationId(EVENT, platform, token), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
-    }
+  for (const [platform, token] of [['apns', apns], ['fcm', fcm]]) {
+    if (token) fake.put('caddie-people-push', registrationId(EVENT, d.profileId, platform), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
   }
 }
 
@@ -95,7 +94,7 @@ describe('push nudge with native push', () => {
     const tApns = apnsToken();
     const vApns = apnsToken();
     const vFcm = fcmToken();
-    const { t, v, me } = await pair({ web: true, apns: [tApns] }, { web: true, apns: [vApns], fcm: [vFcm] });
+    const { t, v, me } = await pair({ web: true, apns: tApns }, { web: true, apns: vApns, fcm: vFcm });
     const before = Date.now();
     const lines = [];
     const error = console.error;
@@ -156,7 +155,7 @@ describe('push nudge with native push', () => {
   test('the hourly limit covers the channels together and counts a receiver once per nudge', async () => {
     const tApns = apnsToken();
     const tFcm = fcmToken();
-    const { t, v, me } = await pair({ web: true, apns: [tApns], fcm: [tFcm] }, { apns: [apnsToken()] });
+    const { t, v, me } = await pair({ web: true, apns: tApns, fcm: tFcm }, { apns: apnsToken() });
     // T was nudged twice in the last hour already.
     for (const i of [1, 2]) {
       fake.put('caddie-people-nudges', `earlier-${i}`, { event_id: EVENT, day: 'x', profile_ids: [t.profileId, `someone${i}`], receivers: [t.profileId], created_at: new Date(Date.now() - i * 60_000).toISOString(), expires_at: FUTURE });
@@ -171,7 +170,7 @@ describe('push nudge with native push', () => {
     const w = newDevice();
     assert.equal((await put(w, 'Wanda Third', { expertise: 'Kafka', interests: 'ebpf probes', learn: ['ebpf'] })).status, 200);
     const wFcm = fcmToken();
-    around(w, { fcm: [wFcm] });
+    around(w, { fcm: wFcm });
     fake.pushes.length = 0;
     await nudgeAfterPresence({ ...docOf(t) }, CONF);
     assert.deepEqual(fake.pushes.map(addressOf), [`fcm:${wFcm}`]);
@@ -179,17 +178,18 @@ describe('push nudge with native push', () => {
   });
 
   test('a registration APNs or FCM reports gone is deleted; a refusal for another reason keeps it', async () => {
-    const goneApns = apnsToken();
-    const badApns = apnsToken();
-    const busyApns = apnsToken();
-    const goneFcm = fcmToken();
-    const keptFcm = fcmToken();
-    const { me } = await pair({ apns: [goneApns, busyApns], fcm: [goneFcm] }, { apns: [badApns], fcm: [keptFcm] });
+    const [goneApns, goneFcm, badApns, keptFcm, topicApns, busyFcm] = [apnsToken(), fcmToken(), apnsToken(), fcmToken(), apnsToken(), fcmToken()];
+    const { t, v, me } = await pair({ apns: goneApns, fcm: goneFcm }, { apns: badApns, fcm: keptFcm });
+    const w = newDevice();
+    assert.equal((await put(w, 'Wanda Third', { expertise: 'Kafka', interests: 'ebpf probes', learn: ['ebpf'] })).status, 200);
+    around(w, { apns: topicApns, fcm: busyFcm });
+    const fcmError = (code, status, errorCode) => ({ error: { code, status, details: errorCode ? [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode }] : [] } });
     answers.set(goneApns, { status: 410, body: { reason: 'Unregistered', timestamp: Date.now() } });
+    answers.set(goneFcm, { status: 404, body: fcmError(404, 'NOT_FOUND', 'UNREGISTERED') });
     answers.set(badApns, { status: 400, body: { reason: 'BadDeviceToken' } });
-    answers.set(busyApns, { status: 429, body: { reason: 'TooManyRequests' } });
-    answers.set(goneFcm, { status: 404, body: { error: { code: 404, status: 'NOT_FOUND', details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'UNREGISTERED' }] } } });
-    answers.set(keptFcm, { status: 503, body: { error: { code: 503, status: 'UNAVAILABLE' } } });
+    answers.set(keptFcm, { status: 503, body: fcmError(503, 'UNAVAILABLE') });
+    answers.set(topicApns, { status: 400, body: { reason: 'DeviceTokenNotForTopic' } });
+    answers.set(busyFcm, { status: 429, body: fcmError(429, 'RESOURCE_EXHAUSTED', 'QUOTA_EXCEEDED') });
     const lines = [];
     const error = console.error;
     console.error = (...args) => lines.push(args.join(' '));
@@ -198,13 +198,14 @@ describe('push nudge with native push', () => {
     } finally {
       console.error = error;
     }
-    assert.equal(fake.pushes.length, 5, 'every registration was tried');
+    assert.equal(fake.pushes.length, 6, 'every registration was tried once');
     const store = fake.store('caddie-people-push');
-    assert.equal(store.has(registrationId(EVENT, 'apns', goneApns)), false, 'APNs 410: deleted');
-    assert.equal(store.has(registrationId(EVENT, 'apns', badApns)), false, 'APNs 400 BadDeviceToken: deleted');
-    assert.equal(store.has(registrationId(EVENT, 'fcm', goneFcm)), false, 'FCM 404 UNREGISTERED: deleted');
-    assert.equal(store.has(registrationId(EVENT, 'apns', busyApns)), true, 'APNs 429: kept');
-    assert.equal(store.has(registrationId(EVENT, 'fcm', keptFcm)), true, 'FCM 503: kept');
-    assert.deepEqual(lines.sort(), ['Native push failed: apns 429 TooManyRequests', 'Native push failed: fcm 503 UNAVAILABLE']);
+    assert.equal(store.has(registrationId(EVENT, t.profileId, 'apns')), false, 'APNs 410: deleted');
+    assert.equal(store.has(registrationId(EVENT, t.profileId, 'fcm')), false, 'FCM 404 UNREGISTERED: deleted');
+    assert.equal(store.has(registrationId(EVENT, v.profileId, 'apns')), false, 'APNs 400 BadDeviceToken: deleted');
+    assert.equal(store.has(registrationId(EVENT, v.profileId, 'fcm')), true, 'FCM 503: kept');
+    assert.equal(store.has(registrationId(EVENT, w.profileId, 'apns')), true, 'APNs 400 DeviceTokenNotForTopic: kept, since a wrong topic gives it for every token');
+    assert.equal(store.has(registrationId(EVENT, w.profileId, 'fcm')), true, 'FCM 429: kept');
+    assert.deepEqual(lines.sort(), ['Native push failed: apns 400 DeviceTokenNotForTopic', 'Native push failed: fcm 429 QUOTA_EXCEEDED', 'Native push failed: fcm 503 UNAVAILABLE']);
   });
 });

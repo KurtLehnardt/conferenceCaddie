@@ -17,8 +17,10 @@
 //   requester at that conference (403 profile_required otherwise), like every Find & connect write.
 // - A subscription document is keyed by sha256(endpoint), so the same browser subscribing twice
 //   writes one document, and a subscription can be removed by its endpoint alone. A native
-//   registration is keyed by sha256(platform:token) in the same way. Both carry the conference and
-//   the profile_id, and expire with the conference (expires_at = visible_until); the purge deletes
+//   registration is keyed by sha256(event:profile_id:platform): one per device, platform and
+//   conference, so a token the platform rotated replaces the old one, and the delete route removes
+//   it only while it still holds the token the request names. Both carry the conference and the
+//   profile_id, and expire with the conference (expires_at = visible_until); the purge deletes
 //   them then, and deleteConnections deletes them with the profile.
 // - The endpoint, the two keys and a native token are stored unindexed and never returned to
 //   anyone. The index is dynamic: false and does not map platform, token or environment, so a
@@ -53,11 +55,11 @@ const profileRequired = () => new HttpError(403, { error: 'profile_required' });
 // The document id of a subscription: the hash of its endpoint, so the endpoint itself is never a
 // path segment and never indexed.
 export const subscriptionId = (endpoint) => crypto.createHash('sha256').update(endpoint, 'utf8').digest('hex');
-// The document id of a native registration: the hash of its conference, platform and token, so the
-// same token registered again at that conference overwrites its document, while one app install
-// (which has one token) keeps a registration at every conference it is used at. An endpoint is an
-// https URL, so the two never meet.
-export const registrationId = (event, platform, token) => crypto.createHash('sha256').update(`${event}:${platform}:${token}`, 'utf8').digest('hex');
+// The document id of a native registration: the hash of its conference, profile and platform. The
+// profile_id is the device's own id, so a device keeps one registration per platform at each
+// conference it is used at, and a new token (the platforms rotate them) overwrites the old one
+// rather than leaving it to fail. A subscription id hashes an https URL, so the two never meet.
+export const registrationId = (event, profileId, platform) => crypto.createHash('sha256').update(`${event}:${profileId}:${platform}`, 'utf8').digest('hex');
 
 function writer(req) {
   limit(`people-write:ip:${clientIp(req)}`, LIMITS.writeIp);
@@ -161,7 +163,7 @@ async function putRegistration(req, res) {
   const me = await requireProfile(device, conf.slug);
   const now = Date.now();
   if (Date.parse(conf.visibleUntil) <= now) throw bad('conference has ended');
-  const { status } = await people('PUT', `${idx(PUSH_INDEX)}/_doc/${registrationId(conf.slug, reg.platform, reg.token)}?refresh=wait_for`, {
+  const { status } = await people('PUT', `${idx(PUSH_INDEX)}/_doc/${registrationId(conf.slug, me.profile_id, reg.platform)}?refresh=wait_for`, {
     event_id: conf.slug,
     profile_id: me.profile_id,
     platform: reg.platform,
@@ -174,19 +176,24 @@ async function putRegistration(req, res) {
   sendJson(res, 200, { ok: true });
 }
 
-// Works whether or not the platform is configured, so a device can always remove its token.
+// Removes the requester's registration for that platform at that conference, but only while it
+// still holds the token the request names: a stale client (an old install's last call, a retried
+// request) cannot remove the registration a fresh token replaced it with. The document is read and
+// deleted only if it is unchanged since (if_seq_no), so a PUT in between wins. The token is not
+// indexed, so it is compared here rather than in a query. Works whether or not the platform is
+// configured, so a device can always remove its token, and answers 200 either way.
 async function deleteRegistration(req, res) {
   const device = writer(req);
   const body = await jsonBody(req, NATIVE_DELETE_KEYS);
   const reg = registrationOf(body);
   const conf = await conferenceFor(body.event);
   const me = await requireProfile(device, conf.slug);
-  // Only the registration's own profile can remove it; anyone else's request changes nothing.
-  await deleteWhere(PUSH_INDEX, conf.slug, {
-    bool: {
-      filter: [{ ids: { values: [registrationId(conf.slug, reg.platform, reg.token)] } }, { term: { event_id: conf.slug } }, { term: { profile_id: me.profile_id } }],
-    },
-  });
+  const path = `${idx(PUSH_INDEX)}/_doc/${registrationId(conf.slug, me.profile_id, reg.platform)}`;
+  const { status, json } = await people('GET', `${path}?_source_includes=event_id,profile_id,platform,token`, undefined, { okStatuses: [404] });
+  const stored = status === 200 && json.found ? json._source ?? {} : null;
+  if (stored && stored.event_id === conf.slug && stored.profile_id === me.profile_id && stored.platform === reg.platform && stored.token === reg.token) {
+    await people('DELETE', `${path}?refresh=wait_for&if_seq_no=${json._seq_no}&if_primary_term=${json._primary_term}`, undefined, { okStatuses: [404, 409] });
+  }
   sendJson(res, 200, { ok: true });
 }
 
@@ -198,19 +205,31 @@ async function vapid(req, res) {
   sendJson(res, 200, { publicKey: key }, { 'Cache-Control': 'public, max-age=3600' });
 }
 
+// The most subscriptions and registrations one receiver is pushed to per nudge: the newest ones. A
+// device has at most one registration per platform; a browser normally one subscription.
+export const TARGETS_PER_PROFILE = 10;
+
 // Every live Web Push subscription and native registration of these people at one conference,
 // as [{ id, profile_id, subscription: { endpoint, keys: { p256dh, auth } } }] for a subscription
 // and [{ id, profile_id, native: { platform, token, environment } }] for a registration. Used by
-// nudge.mjs.
+// nudge.mjs. One search per person (at most 21: the writer and the 20 candidates), in parallel,
+// each capped at TARGETS_PER_PROFILE, newest first: one person's many subscriptions can never
+// crowd another person's out of a shared page, and the pushes one nudge sends stay bounded. A
+// person over the cap is one log line, without an id.
 export async function pushTargetsFor(eventId, profileIds) {
   const ids = [...new Set(profileIds)].filter(Boolean);
-  if (!ids.length) return [];
-  const { json } = await people('POST', `${idx(PUSH_INDEX)}/_search?ignore_unavailable=true`, {
-    size: 100,
-    _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth', 'platform', 'token', 'environment'],
-    query: { bool: { filter: [{ term: { event_id: eventId } }, { terms: { profile_id: ids } }, { range: { expires_at: { gt: 'now' } } }] } },
-  });
-  return (json.hits?.hits ?? []).flatMap((h) => {
+  const pages = await Promise.all(ids.map(async (profileId) => {
+    const { json } = await people('POST', `${idx(PUSH_INDEX)}/_search?ignore_unavailable=true`, {
+      size: TARGETS_PER_PROFILE,
+      sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }],
+      _source: ['profile_id', 'endpoint', 'keys_p256dh', 'keys_auth', 'platform', 'token', 'environment'],
+      query: { bool: { filter: [{ term: { event_id: eventId } }, { term: { profile_id: profileId } }, { range: { expires_at: { gt: 'now' } } }] } },
+    });
+    const total = json.hits?.total?.value ?? 0;
+    if (total > TARGETS_PER_PROFILE) console.error(`Push targets capped: one receiver has ${total}, the newest ${TARGETS_PER_PROFILE} are used`);
+    return json.hits?.hits ?? [];
+  }));
+  return pages.flat().flatMap((h) => {
     const source = h._source ?? {};
     if (!source.profile_id) return [];
     if (source.endpoint && source.keys_p256dh && source.keys_auth) {
