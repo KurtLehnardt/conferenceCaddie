@@ -55,8 +55,10 @@ the new files. For hot reload while working on the app, run the Vite dev server 
 Worker allows through `ALLOWED_ORIGINS`).
 
 - `.dev.vars` holds development-only values: a random `ADMIN_TOKEN` and `REF_SALT`, a fresh VAPID
-  pair, and `EMBED_FAKE=1`. With `EMBED_FAKE=1` embeddings are deterministic feature-hashed vectors
-  and no Workers AI call is made.
+  pair, `ADMIN_TEST_ROUTES=1` (the smoke's `/admin/test/*` fixtures, which a deployed Worker serves
+  only when that variable is `"1"`; see [Smoke](#smoke)) and `EMBED_FAKE=1`. With `EMBED_FAKE=1`
+  embeddings are deterministic feature-hashed vectors and no Workers AI call is made. Running
+  `dev-vars.mjs` again adds a name the file lacks and keeps the ones it has.
 - Real embeddings in a local run (needed for the smoke's semantic checks): `wrangler dev --local`
   cannot reach the AI binding, and a remote dev session cannot be authenticated with an account
   API token, so the Worker sends its embedding calls to a small local proxy instead:
@@ -119,8 +121,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    ```
 
    The script makes sure the account has a `workers.dev` subdomain (it reads it with the
-   Cloudflare API and, when there is none, creates `kurtlehnardt`, or
-   `conference-caddie-<6 random letters>` if that name is taken), builds the web app in Worker
+   Cloudflare API and, when there is none, creates the one named by the optional environment
+   variable `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<6 random letters>` when the variable
+   is unset or that name is taken; an account that already has a subdomain keeps it, whatever the
+   variable says), builds the web app in Worker
    mode into `web/dist-worker/`, then runs `npx wrangler deploy`, which uploads the app with the
    Worker. It prints only the subdomain and the app URL, which is also the API's base. Until
    step 2 has run, the admin routes answer 404, because admin fails closed without `ADMIN_TOKEN`.
@@ -145,7 +149,16 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.
    The first `BLE_MASTER_KEYRING` (Bluetooth derived tokens v1, one random master) is created
    when the Worker has none and never replaced; rotate it by hand (docs/FREE_HOSTING.md).
-   The output names secrets only.
+   The output names secrets only. The GitHub secret goes to the repository in `CADDIE_GH_REPO`
+   (`<owner>/<name>`) or, when that is unset, the one `gh repo view --json nameWithOwner -q
+   .nameWithOwner` reports for the clone; if neither works the script stops and names the
+   variable (`--skip-gh` needs neither). To replace `ADMIN_TOKEN` later without an outage, see
+   [Rotating the admin token](#rotating-the-admin-token).
+
+   For a fork or a copy, also edit `VAPID_SUBJECT` in `worker/wrangler.toml` (the contact the push
+   services receive: an `https:` URL or a `mailto:` address; it names this repository's page), and
+   see the repository variables `CADDIE_SITE_URL`, `CADDIE_BUNDLE_BASE` and `CADDIE_TAKEDOWN_URL`
+   of `.github/workflows/pages.yml`, which override the addresses it derives from the repository.
 
 3. **Migrate the data** from the Elasticsearch backup (one time).
 
@@ -204,12 +217,25 @@ node scripts/smoke.mjs
 ```
 
 `BASE_URL` is the app, and the API defaults to the same origin. The admin token makes it a Worker
-run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures, sends
-the app's own origin as `Origin` (`SMOKE_ORIGIN` changes it), checks the static files' security
+run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures (see
+below), sends the app's own origin as `Origin` (`SMOKE_ORIGIN` changes it), checks the static files' security
 and cache headers (`host1`), and scans `web/dist-worker/` for leaked keys (`SMOKE_DIST` changes
 it). For a local run, build the app with `npm --prefix web run build:worker`, start
 `npx wrangler dev --local --port 8787` as above, load the data, and use
 `BASE_URL=http://localhost:8787`.
+
+The four `/admin/test/*` routes (`POST` and `DELETE /admin/test/profile`,
+`POST /admin/test/age-presence`, `POST /admin/test/meter-restart`) are the smoke's fixtures. The
+Worker serves them only when its variable `ADMIN_TEST_ROUTES` is the string `"1"`; otherwise they
+answer 404, to a correctly signed request as to any other, before the conference is looked up.
+`wrangler.toml` does not set the variable and `dev-vars.mjs` writes it into `.dev.vars`, so a local
+run has every check, while against the deployed Worker the smoke prints SKIP, naming the variable,
+for the checks that need a fixture (`meter1`, the expired profile, the aged presence and `unav1`)
+instead of FAIL, once it sees that `GET /admin/stats` answers 200 with the same credentials. To
+run them against the deployed Worker, deploy once with the variable and once without:
+`cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1` (the app already built by an earlier
+`deploy.sh`), run the smoke, then `bash worker/scripts/deploy.sh` again, because every wrangler
+deploy replaces the Worker's variables with those of `wrangler.toml`.
 
 `SMOKE_ADMIN_AUTH=signed` makes the smoke sign its admin calls ([Admin requests](#admin-requests)).
 Its default is still the old bearer, which this Worker answers with 404, until the smoke's own
@@ -276,7 +302,7 @@ retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `a
 `moderation.mjs` also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
 Cloudflare Access application in front of `/admin/*`; the Worker does not check them, and the
 signature stays the check that matters. To rotate the token without an outage, see
-docs/FREE_HOSTING.md (Operations runbook).
+[Rotating the admin token](#rotating-the-admin-token).
 
 A failed signature takes one token from a bucket of ten per minute per `CF-Connecting-IP`, and an
 empty bucket makes the Worker answer 404 before it computes anything; valid requests never take
@@ -298,6 +324,49 @@ and are harmless to the older code, which never reads them. After a rollback the
 stay at `schema_version` 3, so the next schema change must use version 4: a later change that bumps
 to 3 again would be skipped silently, because `migrate()` in `src/schema.js` does nothing when the
 stored version is at least `SCHEMA_VERSION`.
+
+### Rotating the admin token
+
+The Worker verifies a signature with `ADMIN_TOKEN` and, when `ADMIN_TOKEN_NEXT` is also set (at
+least 32 characters after trimming), with that one too. It still needs a valid `ADMIN_TOKEN`:
+without one every admin request answers 404, whatever `ADMIN_TOKEN_NEXT` holds. A rotation starts
+with one command and ends with two, and no client is refused at any point. From the repository
+root, with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set:
+
+```sh
+node worker/scripts/setup-secrets.mjs --rotate-admin-token --dry-run   # names only, changes nothing
+node worker/scripts/setup-secrets.mjs --rotate-admin-token
+```
+
+The script generates 32 random bytes as hex and, in this order: puts them as `ADMIN_TOKEN_NEXT`
+(`npx wrangler secret put`, on standard input, no trailing newline), which makes the Worker accept
+the old and the new token; writes them to `~/.config/conference-caddie/admin-token` (mode 0600,
+`ADMIN_TOKEN_FILE` changes the path), only after the Worker put succeeded; and sets the repository
+secret `CADDIE_ADMIN_TOKEN` (`--skip-gh` leaves it). It never prints the value, and it does nothing
+else: no other secret is touched, and it cannot be combined with `--only-missing` or
+`--rotate-ref-salt`. It then prints the two commands that finish the rotation, which you run from
+`worker/` once any running ingest or smoke has finished (a client signs with the token it read when
+it started), in this order:
+
+```sh
+cd worker
+npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token
+npx wrangler secret delete ADMIN_TOKEN_NEXT
+```
+
+Run the `delete` only after the `put` succeeded, and never print the token file. If a step of the
+script fails, it says which state that left: after the Worker step nothing changed, so run it
+again; after the file step the Worker holds an `ADMIN_TOKEN_NEXT` that was saved nowhere and the old
+token still works everywhere, so run it again (it replaces `ADMIN_TOKEN_NEXT`); after the
+repository-secret step the file holds the new value and `CADDIE_ADMIN_TOKEN` the old one, so run the
+`gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < <token file>` command it prints before the
+two finishing commands. Running `setup-secrets.mjs --only-missing` at any point is safe: it never
+looks at `ADMIN_TOKEN_NEXT`, and only because the Worker accepts both keys during the overlap, a run
+that skips `ADMIN_TOKEN` or sets a missing repository secret from the file still leaves every
+client with a token the Worker accepts. A stale `CADDIE_ADMIN_TOKEN` after the last command is the
+failed-signature symptom described above. Every value the script writes has no whitespace around
+it, the Worker trims each secret it reads, and the clients trim what they read. The same recipe is
+in docs/FREE_HOSTING.md (Operations runbook).
 
 ## Moderation
 

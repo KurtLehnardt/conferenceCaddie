@@ -49,11 +49,18 @@ new_sqlite_classes = ["ConferenceDO", "DirectoryDO"]
 crons = ["*/10 * * * *"]
 
 [vars]
+# ADMIN_TEST_ROUTES is deliberately not set here: the smoke's /admin/test/* fixtures answer 404 on a
+# deployed Worker unless this variable is the string "1" (src/index.js, handleAdmin).
+# worker/scripts/dev-vars.mjs sets it for a local run (.dev.vars).
 # Extra origins allowed to call the API cross-origin, for local development only (the Vite dev
 # server and preview). The app itself is served by this Worker, so its own origin is always
 # allowed (src/index.js); native apps send no Origin header and get no CORS headers.
 ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173,http://127.0.0.1:4173"
 EMBED_MODEL = "@cf/baai/bge-small-en-v1.5"
+# VAPID_SUBJECT is the contact the push services receive with every Web Push request (the "sub" claim
+# of the VAPID token, RFC 8292): an https: URL or a mailto: address of whoever operates this
+# deployment. A value to edit: this one is the original repository's page, so a fork or a copy sets its
+# own before deploying. Web Push is off while it is empty or removed.
 VAPID_SUBJECT = "https://github.com/KurtLehnardt/conferenceCaddie"
 DAILY_REQUEST_BUDGET = "70000"
 ROWS_READ_SOFT_CAP = "3500000"
