@@ -568,21 +568,27 @@ internal class BleRuntime(
                     // ble_required, profile_required or any other refusal: the server holds no live
                     // session for this phone, so it stops here without another request.
                     e.status == 403 -> stop(r.slug)
-                    e.status == 429 -> {
+                    e.status == 429 || e.noAnswer || e.status >= 500 || e.kind == PeopleError.Kind.BadResponse -> {
                         putBack(r, batch)
-                        val wait = e.retryAfterSeconds?.let { it * 1000 } ?: api.pace.pacedMs(r.intervalMs)
-                        r.backoffUntil = now() + wait
-                    }
-                    e.noAnswer || e.status >= 500 || e.kind == PeopleError.Kind.BadResponse -> {
-                        putBack(r, batch)
-                        r.backoffMs = if (r.backoffMs == 0L) r.intervalMs else min(r.backoffMs * 2, BACKOFF_MAX_MS)
-                        r.backoffUntil = now() + r.backoffMs
+                        backOff(r, e)
                     }
                     // Any other 4xx refused this batch as it was; it is not sent again.
                     else -> Unit
                 }
             }
         }
+    }
+
+    // The wait before the next request after one that failed: Retry-After (or the interval stretched
+    // by the API's pace) after a 429, otherwise the interval, then twice as long each time, at most
+    // five minutes. A request that goes through resets it.
+    private fun backOff(r: Run, e: PeopleError) {
+        if (e.status == 429) {
+            r.backoffUntil = now() + (e.retryAfterSeconds?.let { it * 1000 } ?: api.pace.pacedMs(r.intervalMs))
+            return
+        }
+        r.backoffMs = if (r.backoffMs == 0L) r.intervalMs else min(r.backoffMs * 2, BACKOFF_MAX_MS)
+        r.backoffUntil = now() + r.backoffMs
     }
 
     // Sightings of a report that did not go through wait for the next one (and still age out).
@@ -623,8 +629,15 @@ internal class BleRuntime(
             }
             is ApiResult.Failed -> {
                 if (run !== r) return
-                // Presence or the profile is gone on the server; anything else is tried again.
-                if (a.error.status == 403) stop(slug) else r.rekeyDue = true
+                // Presence or the profile is gone on the server; anything else is tried again, after
+                // the same wait as a failed report, so an offline phone with nothing heard does not
+                // send presence writes back to back.
+                if (a.error.status == 403) {
+                    stop(slug)
+                } else {
+                    r.rekeyDue = true
+                    backOff(r, a.error)
+                }
                 return
             }
             is ApiResult.Ok -> a.value

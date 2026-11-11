@@ -137,6 +137,30 @@ class BleRekeyNotifyTest {
         assertTrue(b.view.on)
     }
 
+    @Test
+    fun aReKeyThatKeepsFailingBacksOffInsteadOfRetryingAtOnce() = runTest {
+        val b = BleRig(this)
+        b.on()
+        // Offline for the re-key writes, with nothing else heard: the retries wait 10, 20, 40 and
+        // 80 seconds (doubling from the interval), not one write after another.
+        b.h.server.presencePut = { FakeApiHttp.json(503, """{"error":"People are temporarily unavailable"}""") }
+        b.h.server.sightings = { b.answer(keyId = "AAAAAAAAAAA") }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        assertEquals(1, b.presencePuts().size)
+        advanceTimeBy(9_000)
+        runCurrent()
+        assertEquals(1, b.presencePuts().size, "no retry before the interval")
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(2, b.presencePuts().size)
+        advanceTimeBy(150_000)
+        runCurrent()
+        // Retries at 10, 30, 70 and 150 seconds after the first failure.
+        assertEquals(5, b.presencePuts().size)
+        assertTrue(b.view.on, "a failed re-key keeps running")
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Notifications
 
