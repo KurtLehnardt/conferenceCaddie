@@ -56,31 +56,70 @@ set -euo pipefail
 # Deployment settings come from the environment or, for the ones not set there, from an optional
 # local file of KEY=VALUE lines (never committed; override the path with CADDIE_DEPLOY_ENV):
 #   ${XDG_CONFIG_HOME:-~/.config}/conference-caddie/deploy.env
-# Only these keys are read from it, as plain text (the file is not executed):
+# Only these keys are read from it, as plain text (the file is not executed; see the parser below):
 #   GC_PROJECT          Google Cloud project id (required)
 #   GC_REGION           Cloud Run region (default us-west1)
 #   ES_URL              the Elasticsearch address, https://<deployment>.es.io:443 (required, no default)
-#   CADDIE_BUNDLE_BASE  the published talk bundles' base URL, an https URL ending in "/" (optional;
-#                       passed to the service as TALKS_BUNDLE_BASE, empty keeps the server's default)
+#   CADDIE_BUNDLE_BASE  the published talk bundles' base URL, an https URL ending in "/" (required;
+#                       passed to the service as TALKS_BUNDLE_BASE)
 DEPLOY_ENV_FILE="${CADDIE_DEPLOY_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie/deploy.env}"
+# Lines are KEY=VALUE, optionally with a leading "export " and leading spaces, CRLF line ends, and
+# one pair of matching single or double quotes around the value. A key given twice takes its last
+# value, as in a shell. Anything else in the file is ignored.
 if [ -f "$DEPLOY_ENV_FILE" ]; then
+  # tr drops CR and sed strips leading and trailing blanks and a leading "export ".
   while IFS= read -r line || [ -n "$line" ]; do
+    line="$(printf '%s' "$line" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/^export[[:space:]][[:space:]]*//' -e 's/[[:space:]]*$//')"
     case "$line" in
       GC_PROJECT=*|GC_REGION=*|ES_URL=*|CADDIE_BUNDLE_BASE=*)
         key="${line%%=*}"
         value="${line#*=}"
-        value="${value%\"}"; value="${value#\"}"
-        # The environment wins over the file.
-        if [ -z "${!key:-}" ]; then export "$key=$value"; fi
+        # One pair of matching quotes around the value.
+        value="$(printf '%s' "$value" | sed -e "s/^\"\(.*\)\"$/\1/" -e "s/^'\(.*\)'$/\1/")"
+        printf -v "FILE_$key" '%s' "$value"
         ;;
     esac
   done < "$DEPLOY_ENV_FILE"
 fi
+# The environment wins over the file. SETTINGS_FROM says which of the two supplied the values.
+USED_ENV=0
+USED_FILE=0
+for key in GC_PROJECT GC_REGION ES_URL CADDIE_BUNDLE_BASE; do
+  if [ -n "${!key:-}" ]; then
+    USED_ENV=1
+  elif file_key="FILE_$key"; [ -n "${!file_key:-}" ]; then
+    export "$key=${!file_key}"
+    USED_FILE=1
+  fi
+done
+if [ "$USED_ENV" = 1 ] && [ "$USED_FILE" = 1 ]; then SETTINGS_FROM="environment and $DEPLOY_ENV_FILE"
+elif [ "$USED_FILE" = 1 ]; then SETTINGS_FROM="$DEPLOY_ENV_FILE"
+else SETTINGS_FROM="environment"; fi
 : "${GC_PROJECT:?Set GC_PROJECT to your Google Cloud project id (environment or $DEPLOY_ENV_FILE).}"
 : "${ES_URL:?Set ES_URL to your Elasticsearch address, https://<deployment>.es.io:443 (environment or $DEPLOY_ENV_FILE).}"
+: "${CADDIE_BUNDLE_BASE:?Set CADDIE_BUNDLE_BASE to the published talk bundles base URL, an https URL ending in / (environment or $DEPLOY_ENV_FILE).}"
 PROJECT="$GC_PROJECT"
 REGION="${GC_REGION:-us-west1}"
-TALKS_BUNDLE_BASE="${CADDIE_BUNDLE_BASE:-}"
+TALKS_BUNDLE_BASE="$CADDIE_BUNDLE_BASE"
+# A bad value must stop the script here, before any gcloud call, not deploy and fail at run time.
+BUNDLE_BASE_RE='^https://[^/[:space:]?#@]+(/[^[:space:]?#]*)?/$'
+if ! [[ "$ES_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
+  echo "ES_URL must be https://<host>[:port] with no quotes, path or spaces." >&2
+  exit 1
+fi
+ES_URL="${ES_URL%/}"
+if ! [[ "$PROJECT" =~ ^[a-z][a-z0-9-]{4,61}[a-z0-9]$ ]]; then
+  echo "GC_PROJECT must be a Google Cloud project id." >&2
+  exit 1
+fi
+if ! [[ "$REGION" =~ ^[a-z]+-[a-z]+[0-9]+$ ]]; then
+  echo "GC_REGION must be a Google Cloud region such as us-west1." >&2
+  exit 1
+fi
+if ! [[ "$TALKS_BUNDLE_BASE" =~ $BUNDLE_BASE_RE ]] || [ "${#TALKS_BUNDLE_BASE}" -gt 2048 ]; then
+  echo "CADDIE_BUNDLE_BASE must be an https URL ending in \"/\" without credentials, query or fragment." >&2
+  exit 1
+fi
 # The Cloud Run service name; SERVICE=conference-caddie-test npm run deploy deploys a second
 # service for testing without touching the live one.
 SERVICE="${SERVICE:-conference-caddie}"
@@ -158,6 +197,8 @@ newest_enabled_version() {
 # project-level roles in this project; on the official deployment with FCM it holds Firebase Cloud
 # Messaging API Admin on the Firebase project (step 7a of docs/OPERATOR_CHECKLIST.md), nothing else.
 RUNTIME_SA="caddie-runtime@$PROJECT.iam.gserviceaccount.com"
+
+echo "Deploying $SERVICE to $PROJECT ($REGION), ES_URL=$ES_URL, bundles=$TALKS_BUNDLE_BASE (from: $SETTINGS_FROM)" >&2
 
 ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI,PEOPLE_SEMANTIC_MIN_SIMILARITY=$PEOPLE_SEMANTIC_MIN_SIMILARITY,PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY,PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY,TALKS_BUNDLE_BASE=$TALKS_BUNDLE_BASE"
 SECRETS="ES_API_KEY=$READ_SECRET:latest,ES_PEOPLE_API_KEY=$PEOPLE_SECRET:latest"

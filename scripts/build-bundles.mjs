@@ -72,7 +72,7 @@ import { buildTopics, readFixups } from './lib/topics.mjs';
 import { SOURCES_FILE, parseSources, planBuild, serializeSources, sourceSha256, takedownsMatching } from './lib/bundle-sources.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DEFAULT_BASE_URL = process.env.CADDIE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+export const DEFAULT_BASE_URL = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
 export const DEFAULT_OUT = 'dist-pages';
 export const PUBLISHER = Object.freeze({
   name: 'Conference Caddie (Kurt Lehnardt)',
@@ -105,7 +105,7 @@ export class UsageError extends Error {}
 /** Parses the command line. Throws UsageError with a one-line reason. */
 export function parseArgs(argv) {
   const opts = {
-    out: DEFAULT_OUT, only: null, baseUrl: DEFAULT_BASE_URL, offline: false, noModelDownload: false, check: false, smoke: false,
+    out: DEFAULT_OUT, only: null, baseUrl: process.env.CADDIE_BUNDLE_BASE || DEFAULT_BASE_URL, offline: false, noModelDownload: false, check: false, smoke: false,
     reuseFrom: undefined, publisherName: PUBLISHER.name, takedown: PUBLISHER.takedown, live: null, liveSince: null, fresh: [],
   };
   for (let i = 0; i < argv.length; i++) {

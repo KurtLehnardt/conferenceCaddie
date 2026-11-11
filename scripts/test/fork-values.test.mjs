@@ -20,7 +20,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const IDENTIFIERS = [
   ['Elastic Cloud cluster id', /fc875c88f9f44f159f1a359ee724d82b/],
   ['Google Cloud project id', /project-9205d6eb-366e-4844-b77/],
-  ['Cloud Run service address', /conference-caddie-265846417372/],
+  ['Cloud Run service address or project number', /265846417372/],
   ['workers.dev host', /krlehnardt\.workers\.dev/],
 ];
 

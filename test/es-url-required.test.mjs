@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,17 +20,43 @@ function run(args, extraEnv = {}) {
 }
 
 test('ingest --no-fetch --dry-run exits 0 with no ES_URL and no key', () => {
-  // --no-fetch rewrites the conference's ingested_at even on a dry run; put the file back.
-  const file = path.join(ROOT, 'data', 'kubecon-cloudnativecon-north-america-2026', 'conference.json');
-  const before = fs.readFileSync(file);
-  let r;
+  // --no-fetch rewrites the conference's ingested_at even on a dry run, so it runs on a temp copy
+  // of the data (CADDIE_DATA_DIR); the tracked files are never touched.
+  const slug = 'kubecon-cloudnativecon-north-america-2026';
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'caddie-ingest-'));
   try {
-    r = run(['scripts/ingest.mjs', '--event', 'kubecon-cloudnativecon-north-america-2026', '--no-fetch', '--dry-run', '--skip-topics']);
+    fs.cpSync(path.join(ROOT, 'data', slug), path.join(tmp, slug), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'raw'));
+    fs.cpSync(path.join(ROOT, 'data', 'raw', slug), path.join(tmp, 'raw', slug), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, 'data', 'raw', 'lf-events-upcoming.json'), path.join(tmp, 'raw', 'lf-events-upcoming.json'));
+    const r = run(['scripts/ingest.mjs', '--event', slug, '--no-fetch', '--dry-run', '--skip-topics'], { CADDIE_DATA_DIR: tmp });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Network calls this run: 0/);
+    assert.ok(fs.existsSync(path.join(tmp, slug, 'conference.json')));
   } finally {
-    fs.writeFileSync(file, before);
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /Network calls this run: 0/);
+});
+
+test('ingest without --dry-run and without ES_URL says "Set ES_URL." before any download', () => {
+  const r = run(['scripts/ingest.mjs', '--all-upcoming'], { ES_API_KEY: 'dummy', CADDIE_DATA_DIR: os.tmpdir() });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr + r.stdout, /Set ES_URL\./);
+});
+
+test('make-dummy-people without an app address says so', () => {
+  const r = run(['scripts/make-dummy-people.mjs'], { ES_API_KEY: 'dummy', ES_URL: 'https://es.invalid:443' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /APP_URL/);
+});
+
+test('seed-people and build-facets say "Set ES_URL." rather than a stack trace', () => {
+  for (const [script, env] of [['scripts/seed-people.mjs', { ELASTISEARCH_API_KEY: 'dummy' }], ['scripts/build-facets.mjs', { ELASTISEARCH_API_KEY: 'dummy' }]]) {
+    const r = run([script], env);
+    assert.equal(r.status, 1, script);
+    assert.match(r.stderr, /Set ES_URL\./, script);
+    assert.doesNotMatch(r.stderr, /\n\s+at /, script);
+  }
 });
 
 test('scripts/lib/es.mjs makes no request at import and fails on the first call', async () => {

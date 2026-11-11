@@ -23,15 +23,19 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fetchOnce, networkCalls } from './lib/http.mjs';
 import { LF_LIST_URL, deriveEvents, extractSchedConfig, locationLabel } from './lib/lf.mjs';
 import { feedIds, viewAllUrl, apiDataUrl, parseViewAll } from './lib/sessionize.mjs';
 import { loadZoneTables, resolveTimeZone } from './lib/zones.mjs';
 import { buildTalks } from './lib/classify.mjs';
 import { hasKey, es, existingHashes, runBulk } from './lib/es.mjs';
+import { esUrl } from './lib/es-url.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+// Where the conferences and raw downloads are read and written. CADDIE_DATA_DIR points a test at a
+// copy so it never touches the tracked data; the time zone tables always come from the repository.
+const dataDir = process.env.CADDIE_DATA_DIR ? resolve(process.env.CADDIE_DATA_DIR) : join(root, 'data');
 
 class Fatal extends Error {}
 function fail(message) {
@@ -88,7 +92,7 @@ const writeJson = (path, value) => writeFile(path, JSON.stringify(value, null, 2
 // raw file instead, and a missing file is fatal.
 async function getRaw(url, rawPath) {
   if (opts.noFetch) {
-    if (!existsSync(rawPath)) fail(`--no-fetch: the raw file ${rawPath.slice(root.length + 1)} is missing.`);
+    if (!existsSync(rawPath)) fail(`--no-fetch: the raw file ${relative(root, rawPath)} is missing.`);
     return { text: readFileSync(rawPath, 'utf8') };
   }
   const res = await fetchOnce(url);
@@ -107,7 +111,7 @@ function emptyCounts() {
 
 function previousRawFetchedAt(slug, rawDir) {
   try {
-    const prev = JSON.parse(readFileSync(join(root, 'data', slug, 'conference.json'), 'utf8'));
+    const prev = JSON.parse(readFileSync(join(dataDir, slug, 'conference.json'), 'utf8'));
     if (prev.raw_fetched_at) return prev.raw_fetched_at;
   } catch { /* no previous document */ }
   try {
@@ -119,8 +123,8 @@ function previousRawFetchedAt(slug, rawDir) {
 
 // Returns { conf, summary, stop } where stop is true when the embedding limit was hit.
 async function processEvent(ev) {
-  const rawDir = join(root, 'data/raw', ev.slug);
-  const outDir = join(root, 'data', ev.slug);
+  const rawDir = join(dataDir, 'raw', ev.slug);
+  const outDir = join(dataDir, ev.slug);
   const lines = [];
   const conf = {
     slug: ev.slug,
@@ -305,7 +309,7 @@ function planOps(docs, existing) {
 }
 
 async function writeConference(conf) {
-  writeJson(join(root, 'data', conf.slug, 'conference.json'), conf);
+  writeJson(join(dataDir, conf.slug, 'conference.json'), conf);
   if (opts.dryRun) return;
   const { status, json } = await es('PUT', `/${encodeURIComponent(opts.confIndex)}/_doc/${encodeURIComponent(conf.slug)}?refresh=wait_for`, conf);
   if (status >= 300) fail(`Writing the conference document for ${conf.slug} to ${opts.confIndex} failed with status ${status}: ${json?.error?.type ?? ''}`);
@@ -331,8 +335,15 @@ function runTopicsHook(slug) {
 // ---------- Main ----------
 async function main() {
   if (!opts.dryRun && mode[0] !== '--list' && !hasKey()) fail('Set ES_API_KEY or ELASTISEARCH_API_KEY to index, or pass --dry-run.');
+  if (!opts.dryRun && mode[0] !== '--list') {
+    try {
+      esUrl();
+    } catch (e) {
+      fail(`${e.message} Or pass --dry-run.`);
+    }
+  }
 
-  const listPath = join(root, 'data/raw/lf-events-upcoming.json');
+  const listPath = join(dataDir, 'raw/lf-events-upcoming.json');
   const listRaw = await getRaw(LF_LIST_URL, listPath);
   if (listRaw.error) fail(`Fetching the LF event list failed: ${listRaw.error}`);
   let events;

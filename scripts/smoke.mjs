@@ -93,8 +93,9 @@ const PRIMARY = process.env.SMOKE_CONFERENCE || process.env.CADDIE_SMOKE_CONFERE
 const EXTRA = (process.env.SMOKE_EXTRA ?? 'mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026').split(',').map((s) => s.trim()).filter(Boolean);
 // ES_URL has no default (a fork's key must not reach another cluster); read when a request needs it.
 const esUrl = () => {
-  if (!process.env.ES_URL) throw new Error('Set ES_URL.');
-  return process.env.ES_URL.replace(/\/$/, '');
+  const url = String(process.env.ES_URL || '').trim().replace(/\/+$/, '');
+  if (!url) throw new Error('Set ES_URL.');
+  return url;
 };
 const ES_WRITE_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY || '';
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';

@@ -32,6 +32,10 @@ import { esUrlOrExit } from './lib/es-url.mjs';
 const KEY = process.env.ES_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const TALKS_INDEX = process.env.ES_INDEX || 'caddie-talks';
 const APP_URL = (process.env.APP_URL || process.env.CADDIE_APP_URL || '').replace(/\/$/, '');
+if (!APP_URL) {
+  console.error('Set APP_URL or CADDIE_APP_URL to the app address (for example https://caddie.example.workers.dev).');
+  process.exit(1);
+}
 const COUNT = 100;
 const SET_SIZE = 10;
 const SHARED = 10;
