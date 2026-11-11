@@ -31,7 +31,7 @@ const ACCESS_TOKEN_PREFIX = 'ya29.stand-in-access-token-';
 // the environment.
 Object.assign(process.env, APNS_ENV, FCM_ENV);
 const native = await import('../server/native-push.mjs');
-const { AUTH_FAILURES_MAX, createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, METADATA_TOKEN_URL, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
+const { AUTH_FAILURES_MAX, createNativePush, nativeTokenOf, signJwt, http2Transport, apnsConfigFrom, fcmConfigFrom, APNS_ORIGINS, FCM_TOKEN_URL, fcmSendUrl, NATIVE_ALERT, APNS_BODY, fcmMessageOf } = native;
 for (const k of SETTINGS) delete process.env[k];
 
 const APNS_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -267,7 +267,7 @@ function fcmStub({ sends = [{ status: 200, body: { name: 'projects/caddie-test-p
   let sent = 0;
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
-    if (url === METADATA_TOKEN_URL) {
+    if (url === FCM_TOKEN_URL) {
       const a = token[Math.min(tokens, token.length - 1)];
       tokens++;
       if (a instanceof Error) throw a;
@@ -279,7 +279,7 @@ function fcmStub({ sends = [{ status: 200, body: { name: 'projects/caddie-test-p
     if (a instanceof Error) throw a;
     return new Response(a.body === undefined ? null : JSON.stringify(a.body), { status: a.status });
   };
-  return { fetchImpl, calls, tokenCalls: () => calls.filter((c) => c.url === METADATA_TOKEN_URL), sendCalls: () => calls.filter((c) => c.url !== METADATA_TOKEN_URL) };
+  return { fetchImpl, calls, tokenCalls: () => calls.filter((c) => c.url === FCM_TOKEN_URL), sendCalls: () => calls.filter((c) => c.url !== FCM_TOKEN_URL) };
 }
 
 function fcmChannel(opts = {}, env = {}) {
@@ -295,11 +295,12 @@ const fcmError = (code, status, errorCode, extra = []) => ({ status: code, body:
 const tokenViolation = { '@type': 'type.googleapis.com/google.rpc.BadRequest', fieldViolations: [{ field: 'message.token', description: 'The registration token is not a valid FCM registration token' }] };
 
 describe('FCM', () => {
-  test('the access token is the runtime service account\'s, from the metadata server, with no key', async () => {
+  test('the access token is the runtime service account\'s, from the metadata server, with no key and only the firebase.messaging scope', async () => {
     const { push, tokenCalls } = fcmChannel();
     assert.equal(await push.send(fcmReg()), 'sent');
     const [call] = tokenCalls();
-    assert.equal(call.url, 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token');
+    assert.equal(call.url, 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/firebase.messaging');
+    assert.deepEqual(new URL(call.url).searchParams.getAll('scopes'), ['https://www.googleapis.com/auth/firebase.messaging'], 'not cloud-platform');
     assert.equal(call.init.method, undefined, 'a GET');
     assert.equal(call.init.body, undefined);
     assert.deepEqual(call.init.headers, { 'Metadata-Flavor': 'Google' });

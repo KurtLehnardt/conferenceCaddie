@@ -46,9 +46,13 @@ import http2 from 'node:http2';
 
 export const DEFAULT_BUNDLE_ID = 'app.conferencecaddie';
 export const APNS_ORIGINS = Object.freeze({ production: 'https://api.push.apple.com', sandbox: 'https://api.sandbox.push.apple.com' });
-// The runtime service account's access token on Cloud Run. Its scope there is cloud-platform, which
-// messages.send accepts beside firebase.messaging.
-export const METADATA_TOKEN_URL = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
+// The runtime service account's access token on Cloud Run, asked for with the one OAuth scope that
+// FCM's messages.send needs, firebase.messaging, rather than the default cloud-platform, which
+// would let a leaked token reach every Google Cloud API the account may use. The FCM channel caches
+// it on its own: server/moderation.mjs asks the metadata server for its own token, with the default
+// scope, and keeps that apart.
+export const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+export const FCM_TOKEN_URL = `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token?scopes=${FCM_SCOPE}`;
 export const fcmSendUrl = (projectId) => `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`;
 
 // apns-priority 5 is APNs' "normal": delivered with the device's power state in mind. It is what
@@ -298,7 +302,7 @@ function stubTransports(env) {
       return record({ platform: 'apns', origin, path, headers: rest, payload: JSON.parse(body) });
     },
     fetch: async (target, init) => {
-      if (target === METADATA_TOKEN_URL) return new Response(JSON.stringify({ access_token: 'stub-access-token', expires_in: 3600, token_type: 'Bearer' }), { status: 200 });
+      if (target === FCM_TOKEN_URL) return new Response(JSON.stringify({ access_token: 'stub-access-token', expires_in: 3600, token_type: 'Bearer' }), { status: 200 });
       const r = await record({ platform: 'fcm', url: target, payload: JSON.parse(init.body) });
       return new Response(r.body || null, { status: r.status });
     },
@@ -455,12 +459,12 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
   let failedAt = null; // when the last token request failed
   const sendUrl = fcmSendUrl(config.projectId);
 
-  // The runtime service account's token from the metadata server. No key is held here: Cloud Run
-  // mints it for the service's own identity.
+  // The runtime service account's token from the metadata server, with the firebase.messaging
+  // scope only. No key is held here: Cloud Run mints it for the service's own identity.
   async function requestAccessToken() {
     let res;
     try {
-      res = await fetchImpl(METADATA_TOKEN_URL, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(timeoutMs) });
+      res = await fetchImpl(FCM_TOKEN_URL, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(timeoutMs) });
     } catch (err) {
       throw new PushFailure(`token ${errorClass(err)}`);
     }
