@@ -21,10 +21,23 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 
 /**
- * [Http] and [ApiHttp] over Ktor. Redirects are followed only within https (Ktor's default refuses
- * an https to http downgrade). No cookies are stored (no cookie plugin is installed, OkHttp keeps
- * none, and the iOS engine is set up without cookie storage) and nothing is sent that the caller did
- * not ask for: no `Origin`, no credentials of Ktor's own. The bundle code's requests are public GETs.
+ * [Http] and [ApiHttp] over Ktor. No cookies are stored (no cookie plugin is installed, OkHttp keeps
+ * none, and the iOS engine is set up without cookie storage), no answer is cached (OkHttp has no
+ * cache configured, and the iOS engine has no URL cache), and nothing is sent that the caller did
+ * not ask for: no `Origin`, no credentials of Ktor's own.
+ *
+ * Redirects differ between the two:
+ * - [get] (the bundle code and capabilities discovery) follows them, only within https (Ktor's
+ *   default refuses an https to http downgrade). These requests are public GETs that carry no
+ *   credential, so the host a redirect points to learns nothing it could not fetch itself, and a
+ *   static host may redirect (a moved file, a custom domain).
+ * - [send] (the People API) follows none: a 3xx is returned as the answer, which the People API
+ *   client turns into a failed call like any other status outside 2xx. Ktor removes only
+ *   `Authorization` when a redirect leaves the host, so following one would hand the device's
+ *   `X-Caddie-Device` credential to whatever host the `Location` header names. The People API never
+ *   answers with a redirect, so one only comes from something between the app and the server.
+ * Neither engine follows a redirect on its own: Ktor sets up OkHttp and NSURLSession not to, and
+ * leaves it to its HttpRedirect plugin, which [send]'s client does not install.
  *
  * The body is streamed, never buffered by Ktor first: a declared `Content-Length` above the limit
  * is refused before anything is read, and an undeclared or false one stops the read as soon as the
@@ -32,6 +45,12 @@ import kotlinx.coroutines.isActive
  * an endless body costs at most the limit in memory, once.
  */
 class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { configure() }) : Http, ApiHttp {
+    /**
+     * The client of [send]: [client]'s engine and settings without the redirect plugin, so a 3xx
+     * reaches the caller as it is and no request goes to the host it names.
+     */
+    private val apiClient: HttpClient = client.config { followRedirects = false }
+
     override suspend fun get(url: String, ifNoneMatch: String?, maxBytes: Long): HttpResponse =
         client.prepareGet(url) {
             if (ifNoneMatch != null) header(HttpHeaders.IfNoneMatch, ifNoneMatch)
@@ -60,7 +79,7 @@ class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { c
         // answer cannot hold the request open either (the web's WRITE_TIMEOUT_MS works the same way).
         // The body goes through the same capped reader.
         return try {
-            client.prepareRequest(url) {
+            apiClient.prepareRequest(url) {
                 this.method = HttpMethod.parse(method)
                 timeout { requestTimeoutMillis = timeoutMs }
                 for ((name, value) in headers) header(name, value)
@@ -85,7 +104,10 @@ class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { c
         }
     }
 
-    fun close() = client.close()
+    fun close() {
+        apiClient.close()
+        client.close()
+    }
 
     companion object {
         /** Connection timeout, and the default whole-request timeout for small documents. */

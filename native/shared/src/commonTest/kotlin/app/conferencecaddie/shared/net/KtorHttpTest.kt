@@ -1,6 +1,12 @@
 package app.conferencecaddie.shared.net
 
 import app.conferencecaddie.shared.net.KtorHttp.Companion.configure
+import app.conferencecaddie.shared.people.ApiResult
+import app.conferencecaddie.shared.people.BACKEND
+import app.conferencecaddie.shared.people.DeviceCredential
+import app.conferencecaddie.shared.people.Pace
+import app.conferencecaddie.shared.people.PeopleApi
+import app.conferencecaddie.shared.people.SLUG
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -15,11 +21,14 @@ import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.writer
 import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.time.Clock
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.TimeSource
@@ -36,6 +45,8 @@ import kotlinx.coroutines.withContext
 // KtorHttp against Ktor's mock engine: the size limit holds whether or not the host declares a
 // length, If-None-Match goes out only when there is an ETag, and a 304 passes through. The People
 // API requests (send) read through the same capped reader, and their time limit covers the answer.
+// The People API requests follow no redirect, so the device credential never leaves the backend's
+// host; the bundle GETs still follow one.
 @OptIn(ExperimentalAtomicApi::class)
 class KtorHttpTest {
     private val url = "https://caddie.example/bundles/conferences.json"
@@ -197,5 +208,82 @@ class KtorHttpTest {
         val h = http { awaitCancellation() }
         assertFailsWith<RequestTimeout> { h.send("DELETE", api, emptyMap(), null, timeoutMs = 500, maxBytes = 1024) }
         assertTrue(currentCoroutineContext().isActive)
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Redirects
+
+    private fun redirectingTo(target: String, status: HttpStatusCode = HttpStatusCode.Found) = http { request ->
+        if (request.url.host == "caddie.example") {
+            respond("", status, headersOf(HttpHeaders.Location, target))
+        } else {
+            respond("""{"requests":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+    }
+
+    @Test
+    fun aPeopleRequestDoesNotFollowARedirectToAnotherHost() = test {
+        val h = redirectingTo("https://elsewhere.example/collect")
+        val r = h.send("GET", "https://caddie.example/api/meet/inbox?event=e", mapOf("X-Caddie-Device" to "d.s"), null, timeoutMs = 5_000, maxBytes = 1024)
+        assertEquals(302, r.status)
+        assertEquals("https://elsewhere.example/collect", r.header("location"))
+        assertEquals(listOf("caddie.example"), requests.map { it.url.host })
+        assertTrue(requests.none { it.url.host != "caddie.example" && it.headers["X-Caddie-Device"] != null })
+    }
+
+    @Test
+    fun noRedirectStatusIsFollowedForAnyMethod() = test {
+        for (status in listOf(HttpStatusCode.MovedPermanently, HttpStatusCode.Found, HttpStatusCode.SeeOther, HttpStatusCode.TemporaryRedirect, HttpStatusCode.PermanentRedirect)) {
+            for (method in listOf("GET", "PUT", "POST", "DELETE")) {
+                requests.clear()
+                val h = redirectingTo("https://caddie.example.attacker.example/api/people/profile", status)
+                val body = if (method == "PUT" || method == "POST") "{}".encodeToByteArray() else null
+                val r = h.send(method, api, mapOf("X-Caddie-Device" to "d.s"), body, timeoutMs = 5_000, maxBytes = 1024)
+                assertEquals(status.value, r.status, "$method $status")
+                assertEquals(1, requests.size, "$method $status went to one host only")
+            }
+        }
+    }
+
+    @Test
+    fun aRedirectedPeopleReadFailsAndTheCredentialStaysWithTheBackend() = test {
+        val h = redirectingTo("https://elsewhere.example/collect")
+        val people = PeopleApi(h, BACKEND, { DeviceCredential.generate(BACKEND) }, Pace(Clock.System))
+        val error = assertIs<ApiResult.Failed>(people.inbox(SLUG)).error
+        assertEquals(302, error.status)
+        assertFalse(error.noAnswer)
+        assertIs<ApiResult.Failed>(people.blocks(SLUG))
+        assertIs<ApiResult.Failed>(people.readMeet("QEFCQ0RFRkdISUpLTE1OTw"))
+        assertTrue(requests.isNotEmpty())
+        assertTrue(requests.all { it.url.host == "caddie.example" }, "nothing went to the host the redirect named")
+        assertTrue(requests.all { it.headers[PeopleApi.DEVICE_HEADER] != null }, "the credential went to the backend only")
+    }
+
+    @Test
+    fun aBundleGetStillFollowsARedirect() = test {
+        val h = http { request ->
+            when (request.url.host) {
+                "caddie.example" -> respond("", HttpStatusCode.MovedPermanently, headersOf(HttpHeaders.Location, "https://files.example/bundles/conferences.json"))
+                else -> respond("""{"conferences":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ETag, "\"v2\""))
+            }
+        }
+        val r = h.get(url, null, maxBytes = 1024)
+        assertEquals(200, r.status)
+        assertEquals("""{"conferences":[]}""", r.text())
+        assertEquals("\"v2\"", r.etag)
+        assertEquals(listOf("caddie.example", "files.example"), requests.map { it.url.host })
+        assertTrue(requests.none { it.headers["X-Caddie-Device"] != null })
+    }
+
+    @Test
+    fun aBundleGetIsNotRedirectedToPlainHttp() = test {
+        val h = http { request ->
+            when (request.url.host) {
+                "caddie.example" -> respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "http://files.example/bundles/conferences.json"))
+                else -> respond("{}", HttpStatusCode.OK)
+            }
+        }
+        assertEquals(302, h.get(url, null, maxBytes = 1024).status)
+        assertEquals(listOf("caddie.example"), requests.map { it.url.host })
     }
 }
