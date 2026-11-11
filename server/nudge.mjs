@@ -209,9 +209,10 @@ export async function nudgeAfterPresence(me, conf, { pause = pairPause } = {}) {
     const url = `/e/${encodeURIComponent(conf.slug)}#/people?around=1`;
     // What the other person hears about me: my own words, the same fallback evidenceFor uses.
     const myPassage = passageOf(me.expertise || me.about || null, me, topics.labels);
-    // Only the subscriptions and registrations of a channel this server sends on.
+    // Only the subscriptions and registrations of a channel this server sends on, chosen before
+    // pushTargetsFor's cut to ten per receiver, so a target on a channel that is off takes no place.
     const usable = (s) => (s.native ? NATIVE_PUSH[s.native.platform] === true : Boolean(send));
-    let subs = (await pushTargetsFor(conf.slug, [me.profile_id, ...hits.map((h) => h._source.profile_id)])).filter(usable);
+    let subs = await pushTargetsFor(conf.slug, [me.profile_id, ...hits.map((h) => h._source.profile_id)], { usable });
     const subsOf = (id) => subs.filter((s) => s.profile_id === id);
     const drop = (gone) => {
       if (gone.length) subs = subs.filter((s) => !gone.includes(s.id));

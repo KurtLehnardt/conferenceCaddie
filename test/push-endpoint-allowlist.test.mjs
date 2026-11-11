@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import https from 'node:https';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { FakeES, useCluster, bootPurgeDone, INDEX, EVENT, FUTURE, newDevice, addPerson, request, quietly } from './helpers/fake-es.mjs';
 import { PUSH_SERVICE_HOSTS, isPushServiceEndpoint } from '../server/push-hosts.mjs';
 import * as workerPush from '../worker/src/push/webpush.js';
@@ -22,7 +23,7 @@ import * as workerPush from '../worker/src/push/webpush.js';
 for (const k of ['PUSH_STUB_URL', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT']) delete process.env[k];
 process.env.PUSH_TRANSPORT = 'stub';
 
-const { handlePushApi, subscriptionId, pushTargetsFor, TARGETS_PER_PROFILE } = await import('../server/push.mjs');
+const { handlePushApi, subscriptionId, pushTargetsFor, TARGETS_PER_PROFILE, TARGETS_READ_PER_PROFILE, SUBS_PER_PROFILE } = await import('../server/push.mjs');
 const { loadTransport, PUSH_TIMEOUT_MS } = await import('../server/nudge.mjs');
 
 before(() => bootPurgeDone());
@@ -223,8 +224,22 @@ describe('PUT /api/push/subscription', () => {
 // for good on 403 profile_required, or on a 400 whose error starts "conference has ended" or
 // "conference is not available" (conferenceRefuses). An endpoint off the list must not look like
 // either, and tier 3 must give those two messages where the Worker does.
+// The 400 pattern conferenceRefuses in web/src/people/push.ts switches off on, read from that file
+// rather than copied, so a change there is a change here. The root tests cannot import TypeScript.
+function webSwitchOff400() {
+  const source = readFileSync(new URL('../web/src/people/push.ts', import.meta.url), 'utf8');
+  const fn = /function conferenceRefuses\([\s\S]*?\n\}/.exec(source)?.[0] ?? '';
+  const m = /err\.status === 400\) return \/((?:[^/\\\n]|\\.)+)\/([a-z]*)\.test\(/.exec(fn);
+  assert.ok(m, 'the 400 pattern of conferenceRefuses in web/src/people/push.ts');
+  return new RegExp(m[1], m[2]);
+}
+
 describe('the answers the web app\'s re-sync tells apart', () => {
-  const SWITCH_OFF_400 = /^conference (has ended|is not available)/;
+  const SWITCH_OFF_400 = webSwitchOff400();
+
+  test('the pattern read from the web app is the one these tests expect', () => {
+    assert.equal(String(SWITCH_OFF_400), String(/^conference (has ended|is not available)/));
+  });
 
   test('an endpoint off the list is a 400 the re-sync does not take as the end of the conference', async () => {
     const { device } = setup();
@@ -249,12 +264,69 @@ describe('the answers the web app\'s re-sync tells apart', () => {
     assert.match(r.body.error, SWITCH_OFF_400);
   });
 
+  test('an unknown or ended conference wins over an endpoint off the list', async () => {
+    const { cluster, device } = setup();
+    const mine = cluster.source(INDEX.people, `${EVENT}:${device.profileId}`);
+    cluster.put(INDEX.people, `${ENDED}:${device.profileId}`, { ...mine, event_id: ENDED });
+    const offList = { endpoint: 'https://push.example.test/off-list', keys: keys() };
+    const unknown = await request(handlePushApi, 'PUT', '/api/push/subscription', device, { event: 'nosuchconf-2099', subscription: offList });
+    assert.deepEqual(unknown, { status: 400, body: { error: 'conference is not available' } });
+    const ended = await request(handlePushApi, 'PUT', '/api/push/subscription', device, { event: ENDED, subscription: offList });
+    assert.deepEqual(ended, { status: 400, body: { error: 'conference has ended' } });
+    const strangerEnded = await request(handlePushApi, 'PUT', '/api/push/subscription', newDevice(), { event: ENDED, subscription: offList });
+    assert.match(strangerEnded.body.error, SWITCH_OFF_400, 'no profile at an ended conference is still a switch-off answer');
+  });
+
   test('no profile at the conference is 403 profile_required', async () => {
     const { cluster } = setup();
     const stranger = newDevice();
     const r = await request(handlePushApi, 'PUT', '/api/push/subscription', stranger, { event: EVENT, subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: keys() } });
     assert.deepEqual(r, { status: 403, body: { error: 'profile_required' } });
     assert.equal(cluster.ids(INDEX.push).length, 0);
+  });
+});
+
+describe('a profile keeps at most ten subscriptions at a conference, as on the Worker', () => {
+  const storeAt = (cluster, device, endpoint, createdAt) => cluster.put(INDEX.push, subscriptionId(endpoint), {
+    event_id: EVENT, profile_id: device.profileId, endpoint, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: createdAt, expires_at: FUTURE,
+  });
+  const past = (minute) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString();
+
+  test('a new subscription removes the oldest beyond ten, with guarded deletes; registrations and other people stay', async () => {
+    const { cluster, device } = setup();
+    const other = person(cluster);
+    for (let i = 0; i < 12; i++) storeAt(cluster, device, `https://fcm.googleapis.com/fcm/send/old-${i}`, past(i));
+    storeAt(cluster, other, 'https://fcm.googleapis.com/fcm/send/someone-else', past(0));
+    cluster.put(INDEX.push, 'reg-apns', { event_id: EVENT, profile_id: device.profileId, platform: 'apns', token: 'ab'.repeat(32), environment: 'production', created_at: past(0), expires_at: FUTURE });
+    const fresh = 'https://fcm.googleapis.com/fcm/send/fresh';
+    assert.deepEqual(await subscribe(device, fresh), { status: 200, body: { ok: true } });
+    const mine = cluster.ids(INDEX.push).map((id) => cluster.source(INDEX.push, id)).filter((d) => d.profile_id === device.profileId && d.endpoint).map((d) => d.endpoint).sort();
+    assert.equal(mine.length, SUBS_PER_PROFILE);
+    assert.deepEqual(mine, [fresh, ...Array.from({ length: 9 }, (_, i) => `https://fcm.googleapis.com/fcm/send/old-${i + 3}`)].sort());
+    assert.ok(cluster.source(INDEX.push, 'reg-apns'), 'a native registration is not counted and not touched');
+    assert.ok(cluster.source(INDEX.push, subscriptionId('https://fcm.googleapis.com/fcm/send/someone-else')), "another person's subscription stays");
+    const bulk = cluster.log.filter((e) => e.path === `/${INDEX.push}/_bulk`);
+    assert.equal(bulk.length, 1);
+    assert.equal(bulk[0].params.get('refresh'), 'wait_for', 'no refresh privilege needed');
+    const items = bulk[0].body.split('\n').filter(Boolean).map((l) => JSON.parse(l).delete);
+    assert.equal(items.length, 3);
+    assert.ok(items.every((d) => Number.isInteger(d.if_seq_no) && Number.isInteger(d.if_primary_term)), 'every delete is guarded');
+  });
+
+  test('ten or fewer subscriptions are left alone, with no delete sent', async () => {
+    const { cluster, device } = setup();
+    for (let i = 0; i < 8; i++) storeAt(cluster, device, `https://fcm.googleapis.com/fcm/send/old-${i}`, past(i));
+    assert.equal((await subscribe(device, 'https://fcm.googleapis.com/fcm/send/fresh')).status, 200);
+    assert.equal(cluster.ids(INDEX.push).length, 9);
+    assert.equal(cluster.log.filter((e) => e.path === `/${INDEX.push}/_bulk`).length, 0);
+  });
+
+  test('an endpoint may be 1,000 characters long, as on the Worker, and no longer', async () => {
+    const { cluster } = setup();
+    const base = 'https://fcm.googleapis.com/fcm/send/';
+    const longest = base + 'a'.repeat(1000 - base.length);
+    assert.equal((await subscribe(person(cluster), longest)).status, 200);
+    assert.deepEqual(await subscribe(person(cluster), `${longest}a`), { status: 400, body: { error: 'endpoint must be a push service URL' } });
   });
 });
 
@@ -272,33 +344,79 @@ describe('a subscription stored before the rule', () => {
     assert.equal(cluster.source(INDEX.push, subscriptionId(legacy)), null);
   });
 
-  test('is skipped by pushTargetsFor, so no nudge is sent to it, with a log line that names its host only', async () => {
+  // pushTargetsFor with console.warn and console.error captured.
+  const targetsOf = async (device, options) => {
+    const { result: { result: targets, lines: errors }, lines: warns } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId], options)));
+    return { targets, errors, warns };
+  };
+  const at = (day, minute) => new Date(Date.UTC(2099, 0, day, 0, minute)).toISOString();
+
+  test('is skipped by pushTargetsFor, so no nudge is sent to it, with one line per receiver that names hosts only', async () => {
     const { cluster, device } = setup();
     store(cluster, device, legacy);
     store(cluster, device, allowed);
     store(cluster, device, 'https://192.0.2.10/push');
-    const { result: { result: targets, lines: errors }, lines } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId])));
+    store(cluster, device, 'https://push.example.test/another');
+    const { targets, errors, warns } = await targetsOf(device);
     assert.deepEqual(targets.map((t) => t.subscription?.endpoint), [allowed]);
-    assert.deepEqual(lines.sort(), ['push skipped: endpoint host not allowed: 192.0.2.10', 'push skipped: endpoint host not allowed: push.example.test']);
+    assert.equal(warns.length, 1, 'one line for the receiver, not one per row');
+    assert.match(warns[0], /^push skipped: endpoint host not allowed: /);
+    assert.deepEqual(warns[0].replace(/^push skipped: endpoint host not allowed: | \(.*\)$/g, '').split(', ').sort(), ['192.0.2.10', 'push.example.test']);
+    assert.match(warns[0], /\(3 subscriptions of one receiver\)$/);
     assert.deepEqual(errors, []);
-    assert.ok(!lines.join('\n').includes('stored-before-the-rule'), 'never the path');
+    assert.ok(!warns.join('\n').includes('stored-before-the-rule') && !warns.join('\n').includes('another'), 'never a path');
     assert.ok(cluster.source(INDEX.push, subscriptionId(legacy)), 'skipped, not deleted: the purge removes it with the conference');
+  });
+
+  test('the skip line names at most five hosts', async () => {
+    const { cluster, device } = setup();
+    for (let i = 0; i < 7; i++) store(cluster, device, `https://host${i}.example.test/x`);
+    const { warns } = await targetsOf(device);
+    assert.equal(warns.length, 1);
+    assert.match(warns[0], /, and 2 more \(7 subscriptions of one receiver\)$/);
+    assert.equal(warns[0].match(/host\d\.example\.test/g).length, 5);
   });
 
   test('takes none of the ten places a receiver has: off-list rows are dropped before the cut', async () => {
     const { cluster, device } = setup();
     // Three usable subscriptions, then twelve newer rows stored before the rule.
     const good = [0, 1, 2].map((i) => `https://fcm.googleapis.com/fcm/send/older-${i}`);
-    good.forEach((e, i) => store(cluster, device, e, new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString()));
-    for (let i = 0; i < 12; i++) store(cluster, device, `https://push.example.test/newer-${i}`, new Date(Date.UTC(2099, 0, 2, 0, i)).toISOString());
-    const { result: { result: targets, lines: errors } } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId])));
+    good.forEach((e, i) => store(cluster, device, e, at(1, i)));
+    for (let i = 0; i < 12; i++) store(cluster, device, `https://push.example.test/newer-${i}`, at(2, i));
+    const { targets, errors } = await targetsOf(device);
     assert.deepEqual(targets.map((t) => t.subscription.endpoint), [...good].reverse());
     assert.deepEqual(errors, [], 'not over the cap: only usable rows count toward it');
-    // And with more usable rows than places, the newest usable ones are kept.
-    for (let i = 3; i < 13; i++) store(cluster, device, `https://fcm.googleapis.com/fcm/send/older-${i}`, new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString());
-    const { result: { result: capped } } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId])));
-    assert.equal(capped.length, TARGETS_PER_PROFILE);
-    assert.deepEqual(capped.map((t) => t.subscription.endpoint), Array.from({ length: 10 }, (_, i) => `https://fcm.googleapis.com/fcm/send/older-${12 - i}`));
+  });
+
+  test('with more usable targets than places, the newest ten are kept and the cap is logged', async () => {
+    const { cluster, device } = setup();
+    for (let i = 0; i < 12; i++) store(cluster, device, `https://fcm.googleapis.com/fcm/send/n-${i}`, at(1, i));
+    const { targets, errors } = await targetsOf(device);
+    assert.equal(targets.length, TARGETS_PER_PROFILE);
+    assert.deepEqual(targets.map((t) => t.subscription.endpoint), Array.from({ length: 10 }, (_, i) => `https://fcm.googleapis.com/fcm/send/n-${11 - i}`));
+    assert.deepEqual(errors, ['Push targets capped: one receiver has 12, the newest 10 are used']);
+  });
+
+  test('a receiver whose read window holds fewer than ten usable targets gets its own log line', async () => {
+    const { cluster, device } = setup();
+    store(cluster, device, allowed, at(1, 0));
+    for (let i = 0; i < TARGETS_READ_PER_PROFILE + 1; i++) store(cluster, device, `https://push.example.test/flood-${i}`, at(2, i));
+    const { targets, errors } = await targetsOf(device);
+    assert.deepEqual(targets, [], 'the one usable row is older than the window');
+    assert.deepEqual(errors, [`Push targets cut short: one receiver has ${TARGETS_READ_PER_PROFILE + 2}, the newest ${TARGETS_READ_PER_PROFILE} were read and 0 of them are used`]);
+  });
+
+  test('the caller\'s channel filter applies before the cut, so a target on a channel that is off takes no place', async () => {
+    const { cluster, device } = setup();
+    const apns = 'ab'.repeat(32);
+    cluster.put(INDEX.push, 'reg-apns', { event_id: EVENT, profile_id: device.profileId, platform: 'apns', token: apns, environment: 'production', created_at: at(1, 0), expires_at: FUTURE });
+    for (let i = 0; i < 12; i++) store(cluster, device, `https://fcm.googleapis.com/fcm/send/web-${i}`, at(2, i));
+    const nativeOnly = await targetsOf(device, { usable: (t) => Boolean(t.native) });
+    assert.deepEqual(nativeOnly.targets.map((t) => t.native?.token), [apns], 'Web Push off: the older registration is still a target');
+    assert.deepEqual(nativeOnly.errors, []);
+    const webOnly = await targetsOf(device, { usable: (t) => !t.native });
+    assert.equal(webOnly.targets.length, TARGETS_PER_PROFILE);
+    assert.ok(webOnly.targets.every((t) => t.subscription));
   });
 
   test('a person whose only subscription is off the list is no push target at all', async () => {

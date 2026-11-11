@@ -16,8 +16,8 @@
 // components/push_messaging/push_messaging_utils.cc). Edge, both the Chromium-based one and the
 // legacy one, delivers through WNS (*.notify.windows.com), not FCM. Firefox uses Mozilla autopush
 // and Safari uses Apple. An entry that starts with a dot matches any subdomain of it, never the
-// bare domain; every other entry matches that exact host only. Anything else is refused, so a subscription can never make this server send signed
-// requests to a host the person chose.
+// bare domain; every other entry matches that exact host only. Anything else is refused, so a
+// subscription can never make this server send signed requests to a host the person chose.
 export const PUSH_SERVICE_HOSTS = Object.freeze([
   'fcm.googleapis.com',
   'android.googleapis.com',
