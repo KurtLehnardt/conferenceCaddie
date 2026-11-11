@@ -1,7 +1,9 @@
-// GET /api/capabilities: what this backend can do (docs/contracts/capabilities.md), computed once
-// from the server's configuration when it starts, so the document always matches what the server
-// serves. Public, cacheable for five minutes, and readable from any origin, because it carries
-// nothing private and a tier 1 page may read it from another origin.
+// GET /api/capabilities: what this backend can do (docs/contracts/capabilities.md), computed from
+// the server's configuration when it starts, so the document always matches what the server
+// serves. push.apns and push.fcm are read at every request, because native-push.mjs turns a
+// channel off at runtime when its platform keeps refusing it. Public, cacheable for five minutes,
+// and readable from any origin, because it carries nothing private and a tier 1 page may read it
+// from another origin.
 //
 // Env:
 //   TALKS_BUNDLE_BASE  where conferences.json and the talk bundles live (an https URL ending in
@@ -10,13 +12,21 @@
 //   BLE_MASTER_KEYRING and BLE_NEAR_RSSI, through server/ble-config.mjs (ble.mode and near_rssi).
 //   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT: push.webpush is true only when all
 //                      three are set, which is when nudge.mjs can send.
+//   APNS_* and FCM_PROJECT_ID, through server/native-push.mjs: push.apns is true only when the
+//                      APNs key, its key id and the team id are all set and well-formed, and
+//                      push.fcm only when FCM_PROJECT_ID is, which is when nudge.mjs can send
+//                      through them; either turns false after five authentication failures in a
+//                      row, until the server restarts.
 //
 // Tier 3 serves every People API v1 route with server-side ranking and polling, the talk search
-// routes and both server imports. It holds no APNs or FCM key, so push.apns and push.fcm are false.
+// routes and both server imports. Only the official deployment holds the APNs key and may send
+// through the app's Firebase project, so on every other tier 3 server push.apns and push.fcm are
+// false.
 
 import { take, clientIp } from './ratelimit.mjs';
 import { SERVICE_UUID, WINDOW_S } from '../contracts/js/ble-token.mjs';
 import { BLE_MODE, NEAR_RSSI, SIGHTINGS_MIN_INTERVAL_S, COLOCATION_REQUIRED } from './ble-config.mjs';
+import { NATIVE_PUSH } from './native-push.mjs';
 
 export const DEFAULT_BUNDLE_BASE = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
 // The pattern of talks.bundle_base in contracts/schema/capabilities.v1.schema.json.
@@ -48,9 +58,10 @@ export const webPushConfigured = (env) => Boolean(env.VAPID_PUBLIC_KEY && env.VA
 
 /**
  * The capabilities document of this tier 3 server for a configuration:
- * { bleMode: 'derived-v1' | 'server-rotate', nearRssi, webpush, bundleBase }.
+ * { bleMode: 'derived-v1' | 'server-rotate', nearRssi, webpush, apns, fcm, bundleBase }, where
+ * apns and fcm default to false.
  */
-export function capabilitiesDocument({ bleMode, nearRssi, webpush, bundleBase }) {
+export function capabilitiesDocument({ bleMode, nearRssi, webpush, apns = false, fcm = false, bundleBase }) {
   return {
     api_version: 1,
     tier: 'paid',
@@ -64,19 +75,29 @@ export function capabilitiesDocument({ bleMode, nearRssi, webpush, bundleBase })
       sightings_min_interval_s: SIGHTINGS_MIN_INTERVAL_S,
       colocation_required: COLOCATION_REQUIRED,
     },
-    push: { apns: false, fcm: false, webpush },
+    push: { apns, fcm, webpush },
     imports: { github: 'server', schedule: 'server' },
   };
 }
 
-/** This server's document. */
-export const CAPABILITIES = Object.freeze(capabilitiesDocument({
+// What the start fixed. An unusable TALKS_BUNDLE_BASE throws here, so the server never starts.
+const FIXED = Object.freeze({
   bleMode: BLE_MODE,
   nearRssi: NEAR_RSSI,
   webpush: webPushConfigured(process.env),
   bundleBase: bundleBaseFrom(process.env.TALKS_BUNDLE_BASE),
-}));
-const BODY = JSON.stringify(CAPABILITIES);
+});
+
+/** This server's document now. */
+export const currentCapabilities = () => capabilitiesDocument({ ...FIXED, apns: NATIVE_PUSH.apns, fcm: NATIVE_PUSH.fcm });
+
+// The body for each pair of native push flags, built once.
+const bodies = new Map();
+function body() {
+  const key = `${NATIVE_PUSH.apns}:${NATIVE_PUSH.fcm}`;
+  if (!bodies.has(key)) bodies.set(key, JSON.stringify(currentCapabilities()));
+  return bodies.get(key);
+}
 
 function send(res, status, body, headers) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), ...headers });
@@ -94,5 +115,5 @@ export function handleCapabilities(req, res) {
     send(res, 429, JSON.stringify({ error: 'Too many requests' }), { 'Retry-After': String(rate.retryAfterSec), 'Cache-Control': 'no-store' });
     return;
   }
-  send(res, 200, BODY, { 'Cache-Control': `public, max-age=${MAX_AGE_S}`, 'Access-Control-Allow-Origin': '*' });
+  send(res, 200, body(), { 'Cache-Control': `public, max-age=${MAX_AGE_S}`, 'Access-Control-Allow-Origin': '*' });
 }

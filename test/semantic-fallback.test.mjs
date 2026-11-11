@@ -25,6 +25,8 @@ const { handleRecommendationsApi } = await import('../server/recommend.mjs');
 const { validate: validateSearch, search } = await import('../server/search.mjs');
 const { handleBleApi } = await import('../server/ble.mjs');
 const { nudgeAfterPresence } = await import('../server/nudge.mjs');
+// The pause between the two pushes of a pair, which these tests do not wait for.
+const NO_PAUSE = { pause: async () => {} };
 
 // Moves the clock past any semantic pause for the rest of the file.
 const skipPause = () => advanceClock(SEMANTIC_PAUSE_MS + 1000);
@@ -231,7 +233,7 @@ describe('Bluetooth sightings and the push nudge', () => {
     const { asker } = await twoAround();
     fake.inject = (c) => (c.index === 'caddie-people' && semanticBody(c.body) ? esError(500, 'status_exception', 'inference unavailable') : undefined);
     const me = { ...fake.doc('caddie-people', `${EVENT}:${asker.profileId}`), expertise: 'eBPF tracing' };
-    await quietly(() => nudgeAfterPresence(me, { slug: EVENT, timeZone: 'UTC', visibleUntil: FUTURE }));
+    await quietly(() => nudgeAfterPresence(me, { slug: EVENT, timeZone: 'UTC', visibleUntil: FUTURE }, NO_PAUSE));
     assert.ok(fake.pushes.length >= 1, 'a push was sent');
     assert.ok(fake.pushes.every((p) => /^Someone who's worked on .+ is in Hall A right now$/.test(p.payload.body)), JSON.stringify(fake.pushes));
     const searches = fake.peopleSearches();

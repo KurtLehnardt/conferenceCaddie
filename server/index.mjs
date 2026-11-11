@@ -8,6 +8,9 @@
 //      ES_PEOPLE_REPORTS_INDEX (default caddie-people-reports), ES_PEOPLE_PUSH_INDEX (default
 //      caddie-people-push), ES_PEOPLE_NUDGES_INDEX (default caddie-people-nudges), REF_SALT
 //      (optional), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (secret) and VAPID_SUBJECT for push nudges,
+//      APNS_KEY_ID, APNS_TEAM_ID, APNS_KEY_FILE (the path of the secret .p8 key file Cloud Run
+//      mounts), APNS_BUNDLE_ID and FCM_PROJECT_ID (FCM uses the runtime service account, no key)
+//      for native push on the official deployment (native-push.mjs),
 //      BLE_NEAR_RSSI (default -75, the Bluetooth "a few metres" threshold of ble.mjs),
 //      PEOPLE_SEMANTIC_MIN_SIMILARITY, PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY and
 //      PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY (the semantic people floors of people.mjs, logged at start),

@@ -550,6 +550,43 @@
       "required": ["event", "endpoint"],
       "additionalProperties": false,
       "properties": { "event": { "$ref": "#/$defs/Slug" }, "endpoint": { "type": "string", "pattern": "^https://", "maxLength": 2048 } }
+    },
+
+    "NativePlatform": { "description": "apns for the iOS app (Apple Push Notification service), fcm for the Android app (Firebase Cloud Messaging).", "enum": ["apns", "fcm"] },
+    "ApnsToken": {
+      "description": "An APNs device token: the bytes the app receives from registerForRemoteNotifications, as hexadecimal digits (32 bytes today; Apple says the length may grow). Either case; the backend stores it lowercase.",
+      "type": "string",
+      "pattern": "^([0-9A-Fa-f]{2}){32,100}$"
+    },
+    "FcmToken": { "description": "An FCM registration token, as the Firebase SDK gives it.", "type": "string", "pattern": "^[A-Za-z0-9_:-]{32,4096}$" },
+    "PushNativePutRequest": {
+      "description": "Optional route PUT /api/push/native. environment applies to apns only: sandbox for a development build, production (the default) otherwise.",
+      "type": "object",
+      "required": ["event", "platform", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "platform": { "$ref": "#/$defs/NativePlatform" },
+        "token": { "type": "string" },
+        "environment": { "enum": ["production", "sandbox"] }
+      },
+      "if": { "properties": { "platform": { "const": "apns" } } },
+      "then": { "properties": { "token": { "$ref": "#/$defs/ApnsToken" } } },
+      "else": { "properties": { "token": { "$ref": "#/$defs/FcmToken" } }, "not": { "required": ["environment"] } }
+    },
+    "PushNativeDeleteRequest": {
+      "description": "Optional route DELETE /api/push/native.",
+      "type": "object",
+      "required": ["event", "platform", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "event": { "$ref": "#/$defs/Slug" },
+        "platform": { "$ref": "#/$defs/NativePlatform" },
+        "token": { "type": "string" }
+      },
+      "if": { "properties": { "platform": { "const": "apns" } } },
+      "then": { "properties": { "token": { "$ref": "#/$defs/ApnsToken" } } },
+      "else": { "properties": { "token": { "$ref": "#/$defs/FcmToken" } } }
     }
   }
 }
