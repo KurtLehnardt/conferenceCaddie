@@ -1,0 +1,6 @@
+[
+  { "index": "caddie-talks-v3", "docs.count": "1234", "store.size": "41.2mb" },
+  { "index": "caddie-people-v2", "docs.count": "132", "store.size": "2.1mb" },
+  { "index": "caddie-people-reports-v1", "docs.count": "3", "store.size": "12.4kb" },
+  { "index": "caddie-conferences-v1", "docs.count": "7", "store.size": "38.1kb" }
+]

@@ -25,11 +25,13 @@
 //    it, so "cloud" and "native" do not sit beside "cloud native" (see COLLAPSE_COVERAGE).
 //
 // The topic list of a conference that already has topics on the Worker is frozen, because people
-// store topic ids in their profiles. Only the topics of each talk are recomputed against it.
+// store topic ids in their profiles. Only the topics of each talk, the talk counts and the ranks
+// are recomputed against it; the ranks follow the same order rule as a fresh build.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { cmp, compareTopics, mergeTargets } from '../../scripts/lib/topics.mjs';
 import { ROOT, UsageError, adminClient, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson } from './lib.mjs';
 
 export const MIN_TALKS = 3;
@@ -92,6 +94,13 @@ export function titleTerms(title, stop) {
   return terms;
 }
 
+// The order of the topic list: most talks first, then label, then topic id. Both the builder and a
+// frozen list (assignFrozen) rank by this rule, and rank 1 is the first topic in this order. It is
+// the comparator of scripts/lib/topics.mjs (the builder behind the bundles and the contract
+// fixtures), which orders by UTF-16 code unit and so does not depend on the ICU version, instead
+// of String.prototype.localeCompare, which orders accented and kana labels differently.
+export { compareTopics };
+
 const idOf = (term) => term.replace(/ /g, '-');
 const termOf = (topicId) => topicId.replace(/-/g, ' ');
 
@@ -109,7 +118,11 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .slice(0, CANDIDATES)
     .map(([term, count]) => ({ term, count }));
-  if (candidates.length === 0) throw new Error('No term occurs in at least three talk titles.');
+  // A merge target that reaches MIN_TALKS only with its aliases stays a candidate (mergeTargets).
+  candidates.push(...mergeTargets(perTalk.map((p) => p.terms), counts, fixups.merge, new Set(candidates.map((c) => c.term))));
+  // With no candidate the steps below give an empty list and talks without topics, as the bundle
+  // builder and tier 3 do for a conference too small for any shared term.
+  if (candidates.length === 0) warnings.push('No term occurs in at least three talk titles; the conference has no topics.');
 
   // Alias terms are counted even when they occur in fewer than three talks.
   const wanted = new Set(candidates.map((c) => c.term));
@@ -132,10 +145,11 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     const m = casings.get(term);
     if (!m) return term;
     // Most common casing; ties go to the casing that has a capital letter, then alphabetical.
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || a[0].localeCompare(b[0]))[0][0];
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || cmp(a[0], b[0]))[0][0];
   };
 
-  // Fix-ups. A fix-up never adds a topic: a merge needs its canonical topic to be a candidate.
+  // Fix-ups. A fix-up never adds a topic: a merge needs its canonical topic to be a candidate, alone
+  // or together with its aliases (mergeTargets).
   const topicIds = new Map(); // topic_id -> { term, label, aliases:Set<topic_id>, members:Set<term> }
   for (const c of candidates) topicIds.set(idOf(c.term), { term: c.term, label: labelOf(c.term), aliases: new Set(), members: new Set([c.term]) });
   for (const id of fixups.remove) {
@@ -191,7 +205,7 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
     for (const set of talkTerms.values()) if (holds(set, t)) count++;
     topics.push({ topic_id: id, label: t.label, aliases: [...t.aliases].sort(), talk_count: count, members: t.members });
   }
-  topics.sort((a, b) => b.talk_count - a.talk_count || a.label.localeCompare(b.label) || a.topic_id.localeCompare(b.topic_id));
+  topics.sort(compareTopics);
   topics.splice(MAX_TOPICS);
   topics.forEach((t, i) => { t.rank = i + 1; });
 
@@ -213,57 +227,91 @@ export function buildTopics(talks, { slug, stop = loadStoplist(), fixups = loadF
 }
 
 // Recomputes the topics of each talk against a frozen list (documents shaped like the ones
-// GET /admin/topics returns). The ids, labels, aliases and ranks stay as they are; talk_count is
-// refreshed. Returns { topics, assignments }.
+// GET /admin/topics returns). The ids, labels and aliases stay as they are, which keeps the topic
+// ids people store in their profiles valid. talk_count is refreshed and the ranks are recomputed
+// from the new counts with the builder's rule (compareTopics), so the list a later GET /api/topics
+// serves is in the order buildTopics would give for the same talks. A topic whose count has
+// fallen below MIN_TALKS or to zero is kept, at the end of the list. Each talk's topic ids are
+// listed in the new rank order. Returns { topics, assignments }, with topics in rank order.
 export function assignFrozen(talks, frozen, { slug, stop = loadStoplist() }) {
-  const ordered = [...frozen].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
-  const members = ordered.map((t) => new Set([termOf(t.topic_id), ...(t.aliases || []).map(termOf)]));
-  const counts = new Array(ordered.length).fill(0);
-  const assignments = new Map();
+  const members = frozen.map((t) => new Set([termOf(t.topic_id), ...(t.aliases || []).map(termOf)]));
+  const counts = new Array(frozen.length).fill(0);
+  const matches = new Map(); // talk id -> indexes into `frozen`
   for (const talk of talks) {
     const terms = titleTerms(talk.title || '', stop);
-    const ids = [];
-    ordered.forEach((t, i) => {
+    const hit = [];
+    frozen.forEach((t, i) => {
       for (const m of members[i]) {
         if (terms.has(m)) {
-          ids.push(t.topic_id);
+          hit.push(i);
           counts[i]++;
           break;
         }
       }
     });
-    assignments.set(talk.talk_id, ids);
+    matches.set(talk.talk_id, hit);
   }
-  const topics = ordered.map((t, i) => ({
-    conference: slug,
+  const ordered = frozen.map((t, i) => ({
+    index: i,
     topic_id: t.topic_id,
     label: t.label,
     label_exact: t.label_exact ?? t.label,
     aliases: t.aliases || [],
     talk_count: counts[i],
-    rank: t.rank,
+  }));
+  ordered.sort(compareTopics);
+  const rankOf = new Array(frozen.length);
+  ordered.forEach((t, r) => { rankOf[t.index] = r + 1; });
+  const assignments = new Map();
+  for (const [id, hit] of matches) {
+    assignments.set(id, hit.sort((a, b) => rankOf[a] - rankOf[b]).map((i) => frozen[i].topic_id));
+  }
+  const topics = ordered.map((t) => ({
+    conference: slug,
+    topic_id: t.topic_id,
+    label: t.label,
+    label_exact: t.label_exact,
+    aliases: t.aliases,
+    talk_count: t.talk_count,
+    rank: rankOf[t.index],
   }));
   return { topics, assignments };
+}
+
+// The topic list stored on the Worker for a conference, or [] when the Worker does not know it.
+async function storedTopics(admin, slug) {
+  let stored;
+  try {
+    stored = (await admin('GET', `/admin/topics?event=${encodeURIComponent(slug)}`)).topics;
+  } catch (e) {
+    // A 404 is the Worker's answer to a failed admin authorization (an unknown conference answers 400
+    // instead), and in a dry run push-ingest's softAdmin turns any error into a 404. It means "nothing
+    // stored" and not an error because a real run has already sent PUT /admin/conferences with the same
+    // token, so a failed authorization would have stopped it there, and a dry run sends nothing.
+    if (e.status !== 404) throw e;
+    stored = [];
+  }
+  if (!Array.isArray(stored)) throw new Error('GET /admin/topics did not return a topics array.');
+  return stored;
 }
 
 // Chooses between the stored list and a fresh one. `admin` is an adminClient or null.
 // Returns { mode, topics, assignments, warnings, collapsed } where mode is 'frozen', 'built'
 // (the Worker holds no topics yet, or --rebuild-topics), or 'built-offline' (no Worker to ask).
-export async function resolveTopics(talks, { slug, admin = null, rebuild = false, stop = loadStoplist() }) {
+// A rebuild that finds no topics while the Worker holds some throws before any talk or topic is sent,
+// unless allowEmpty (--allow-empty) is given; PUT /admin/topics refuses that change too.
+export async function resolveTopics(talks, { slug, admin = null, rebuild = false, allowEmpty = false, stop = loadStoplist() }) {
   const topicTalks = talks.filter((t) => t.kind === 'talk');
+  let stored = null;
   if (admin && !rebuild) {
-    let stored;
-    try {
-      stored = (await admin('GET', `/admin/topics?event=${encodeURIComponent(slug)}`)).topics;
-    } catch (e) {
-      // A conference the Worker does not know yet has no topics to freeze.
-      if (e.status !== 404) throw e;
-      stored = [];
-    }
-    if (!Array.isArray(stored)) throw new Error('GET /admin/topics did not return a topics array.');
+    stored = await storedTopics(admin, slug);
     if (stored.length > 0) return { mode: 'frozen', warnings: [], collapsed: [], ...assignFrozen(topicTalks, stored, { slug, stop }) };
   }
   const built = buildTopics(topicTalks, { slug, stop });
+  if (admin && built.topics.length === 0 && !allowEmpty) {
+    const n = (stored ?? await storedTopics(admin, slug)).length;
+    if (n > 0) throw new Error(`${slug}: the rebuilt topic list is empty and would replace the ${n} stored topics; no talk or topic was sent. Re-run with --allow-empty if the conference really has no topics.`);
+  }
   return { mode: admin ? 'built' : 'built-offline', ...built };
 }
 
@@ -287,7 +335,8 @@ async function main() {
     if (!token) throw new UsageError('--api needs ADMIN_TOKEN (or ADMIN_TOKEN_FILE).');
     admin = adminClient(normalizeApiBase(args.api), token);
   }
-  const result = await resolveTopics(talks, { slug: args.event, admin, rebuild: args['rebuild-topics'] });
+  // This command only reads, so an empty rebuilt list is reported rather than refused.
+  const result = await resolveTopics(talks, { slug: args.event, admin, rebuild: args['rebuild-topics'], allowEmpty: true });
   for (const w of result.warnings) console.warn(w);
   const tagged = [...result.assignments.values()].filter((ids) => ids.length).length;
   console.log(`Event ${args.event}: ${talks.filter((t) => t.kind === 'talk').length} talks, ${result.topics.length} topics (${result.mode}), ${tagged} talks tagged.`);

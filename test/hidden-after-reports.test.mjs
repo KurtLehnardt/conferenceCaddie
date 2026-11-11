@@ -34,7 +34,7 @@ function around(d, extra = {}) {
   const id = `${EVENT}:${d.profileId}`;
   const until = new Date(Date.now() + 30 * 60_000).toISOString();
   fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_spot: SPOT, presence_since: new Date().toISOString(), presence_until: until, ...extra });
-  fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+  fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
 }
 
 // The trigger T (expertise eBPF) and a strong match V (wants to learn eBPF), both around.
@@ -212,5 +212,79 @@ describe('hidden after reports survives deleting and re-making the profile', () 
     const retry = await request(handlePeopleApi, 'PUT', '/api/people/profile', h, profileBody('Harry', H_TEXT));
     assert.equal(retry.status, 200);
     assert.equal(retry.body.hidden_for_owner, true);
+  });
+});
+
+// An operator report (caddie-admin attendees block, moderation hide): reporter_id 'operator', one
+// per target, and both counts the server keeps treat it as reaching HIDE_AT on its own.
+function operatorReport(d, kind) {
+  const ref = refFor(EVENT, d.profileId);
+  fake.put('caddie-people-reports', `${kind}:${ref}:operator`, { event_id: EVENT, target_kind: kind, target_id: ref, target_profile_id: d.profileId, reporter_id: 'operator', reason: 'operator', created_at: new Date().toISOString() });
+}
+
+describe('ATT-8: an operator report counts as the hide threshold on its own', () => {
+  test('one operator report on file: the re-made profile is hidden (reportCountsFor)', async () => {
+    fake.reset();
+    const h = newDevice();
+    assert.equal((await put(h, 'Harry', H_TEXT)).status, 200);
+    operatorReport(h, 'profile');
+    const again = await offAndOn(h);
+    assert.equal(again.status, 200);
+    assert.equal(again.body.hidden_for_owner, true);
+    assert.equal(docOf(h).hidden, true);
+    assert.equal(docOf(h).spot_hidden, false);
+  });
+
+  test('a full reindex keeps an operator hide even when the flag was lost', async () => {
+    fake.reset();
+    const h = newDevice();
+    assert.equal((await put(h, 'Harry', H_TEXT)).status, 200);
+    operatorReport(h, 'profile');
+    fake.put('caddie-people', `${EVENT}:${h.profileId}`, { ...docOf(h), hidden: false });
+    const r = await put(h, 'Harry', { ...H_TEXT, about: 'changed, so this is a full reindex' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.hidden_for_owner, true);
+    assert.equal(docOf(h).hidden, true);
+  });
+
+  test('an operator spot report hides the spot line only', async () => {
+    fake.reset();
+    const h = newDevice();
+    operatorReport(h, 'spot');
+    const made = await request(handlePeopleApi, 'PUT', '/api/people/profile', h, profileBody('Harry', H_TEXT));
+    assert.equal(made.status, 200);
+    assert.equal(made.body.hidden_for_owner, false);
+    assert.equal(docOf(h).spot_hidden, true);
+    assert.equal(docOf(h).hidden, false);
+  });
+
+  test('one human report after an operator report hides at once (reporterCount)', async () => {
+    fake.reset();
+    const h = newDevice();
+    const v = newDevice();
+    assert.equal((await put(v, 'Vic', { learn: ['ebpf'] })).status, 200);
+    assert.equal((await put(h, 'Harry', H_TEXT)).status, 200);
+    // The profile is live and visible; the operator's report alone was filed straight into the store.
+    operatorReport(h, 'profile');
+    const { handleReportApi } = await import('../server/report.mjs');
+    const ref = refFor(EVENT, h.profileId);
+    const r = await request(handleReportApi, 'POST', '/api/people/report', v, { event: EVENT, ref, context: { kind: 'profile', id: ref }, reason: 'spam' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.hidden, true);
+    assert.equal(docOf(h).hidden, true);
+  });
+
+  test('one human report without an operator report does not hide', async () => {
+    fake.reset();
+    const h = newDevice();
+    const v = newDevice();
+    assert.equal((await put(v, 'Vic', { learn: ['ebpf'] })).status, 200);
+    assert.equal((await put(h, 'Harry', H_TEXT)).status, 200);
+    const { handleReportApi } = await import('../server/report.mjs');
+    const ref = refFor(EVENT, h.profileId);
+    const r = await request(handleReportApi, 'POST', '/api/people/report', v, { event: EVENT, ref, context: { kind: 'profile', id: ref }, reason: 'spam' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.hidden, false);
+    assert.equal(docOf(h).hidden, false);
   });
 });

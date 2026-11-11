@@ -3,6 +3,8 @@ package app.conferencecaddie.ui
 import androidx.compose.ui.uikit.OnFocusBehavior
 import androidx.compose.ui.window.ComposeUIViewController
 import app.conferencecaddie.shared.BackendUrl
+import app.conferencecaddie.shared.IosPeopleServices
+import app.conferencecaddie.shared.IosSelfTest
 import app.conferencecaddie.shared.core.IosCore
 import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
 import app.conferencecaddie.ui.platform.IosPlatformActions
@@ -12,6 +14,8 @@ import app.conferencecaddie.ui.talks.EmbeddingModel
 import app.conferencecaddie.ui.talks.TalkLaunch
 import app.conferencecaddie.ui.theme.HostController
 import kotlin.experimental.ExperimentalNativeApi
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
 import platform.Foundation.NSBundle
 import platform.Foundation.NSProcessInfo
 import platform.UIKit.UIViewController
@@ -37,8 +41,18 @@ fun MainViewController(): UIViewController {
             (BackendUrl.normalise(url, allowLocalHttp = true) as? BackendUrl.Valid)?.let { core.setBackend(it) }
         }
         query = get("caddie.query")
+        // -caddie.selftest securestore (or location) checks a platform service in the app, where the
+        // Keychain and Core Location are available (the Kotlin/Native test process has neither), and
+        // prints one line.
+        get("caddie.selftest")?.let { check ->
+            MainScope().launch { println("caddie.selftest $check: ${IosSelfTest.run(check)}") }
+        }
     }
     val version = NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: ""
+    // The people features, next to the core, with the platform services: the Keychain, location,
+    // notifications and APNs registration. Created on the main thread by the first call only (a
+    // second call reuses the controller and makes no second set), never in tests.
+    val people = IosCore.people({ IosPeopleServices.create() }, allowLocalHttp = isDebugBuild)
     return ComposeUIViewController(
         configure = {
             // The screens keep their fields above the keyboard themselves (imePadding), as on
@@ -54,6 +68,7 @@ fun MainViewController(): UIViewController {
             initialQuery = query,
             talkLaunch = talkLaunch,
             embedder = { EmbeddingModel.load() },
+            people = people,
             platform = IosPlatformActions,
         )
     }.also { HostController.current = it }

@@ -376,7 +376,8 @@ function PeopleList({
   if (!results.length) {
     return (
       <p class="pp-hint pp-pad">
-        {groupZone ? AROUND_EMPTY : searching ? SEARCH_EMPTY : 'No matches yet. Add more topics to your profile, or check back as more people join.'}
+        {/* "Around now" with no words typed is not a word search, so it gets the around copy. */}
+        {groupZone || (around && !query.trim()) ? AROUND_EMPTY : searching ? SEARCH_EMPTY : 'No matches yet. Add more topics to your profile, or check back as more people join.'}
       </p>
     );
   }

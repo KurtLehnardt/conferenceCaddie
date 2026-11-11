@@ -16,10 +16,10 @@ these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
 | Path | What it is |
 |---|---|
-| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), the schedule import (`importer/`: the Worker's parser and matcher ported to common Kotlin, and the client of a backend's import route), the `caddie://` link parser (`AppLink`), `core/CaddieCore`, which ties them together for the screens, and the platform interfaces `Embedder`, `BleRadio`, `Notifier` and `SecureStore`. Its tests in `commonTest` run on the JVM and on the iOS simulator; `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
+| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), the schedule import (`importer/`: the Worker's parser and matcher ported to common Kotlin, and the client of a backend's import route), the `caddie://` link parser (`AppLink`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), the platform interfaces (`Embedder`, `BleRadio`, `Notifier`, `SecureStore`, and the people features' `PlatformServices.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
 | `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, For you, the topic picker, Search with Why this rank, the full schedule, the Filters sheet, the talk sheet, My schedule with its Day timeline, and Import my schedule). `ui/platform` holds what the hosts provide (the file picker and the share sheet, `PlatformActions`) and the hand-off of links and files from the platforms (`IncomingHandoff`). The query model and its vocabulary are its Compose resources. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
-| `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`, receives `caddie://` links and schedule files, and opens the file picker and the share sheet. Its instrumented smoke test is in `src/androidTest`. |
-| `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController` and hands the URLs the system opens it with to the shared code, and a build phase runs Gradle to build and embed the framework. |
+| `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`, receives `caddie://` links and schedule files, opens the file picker and the share sheet, shows the permission prompts the platform services ask for and hands notification taps to the screens. Its instrumented tests (the smoke test, the secure store and the platform services) are in `src/androidTest`. |
+| `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController` and hands the URLs the system opens it with to the shared code, its app delegate hands the APNs token and notification taps to Kotlin, and a build phase runs Gradle to build and embed the framework. |
 | `gradle/libs.versions.toml` | Every dependency version, with the reasons for the choices. |
 | `scripts/generate-app-icons.py` | Makes the app icons and the iOS launch image from the web app's icons. |
 | `licenses/` | Licence texts of third-party material the apps ship: the lucide icons, the Apache 2.0 libraries, and the native code Skiko bundles into the iOS app (Skia, HarfBuzz, ICU and others). |
@@ -68,7 +68,7 @@ From `native/`:
 ./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-<abi>-debug.apk
 ./gradlew :androidApp:installDebug      # installs on a connected phone or a running emulator
 ./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests and the model measurement on a phone or emulator
-./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented smoke test
+./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented tests
 ./gradlew :androidApp:assembleRelease && scripts/release-smoke.sh   # the R8 release build, started on the device
 ./gradlew :shared:smokeTalks -Pcaddie.smokeSite=<dir>   # the talk checks of scripts/smoke.mjs (see Talk features)
 ```
@@ -110,16 +110,27 @@ and words. Everything lives in `composeApp/src/commonMain/kotlin/app/conferencec
 |---|---|
 | `theme` | `CaddieTheme`: the web's design tokens from `web/src/styles.css` (`CaddieColors` for light and dark, `CaddieDimens`, `CaddieType`), provided as `Caddie.colors`, `Caddie.dimens` and `Caddie.type` and mapped onto Material 3. Dark mode follows the system unless the Theme setting says Light or Dark, as on the web. |
 | `icons` | `LucideIcon`: every lucide icon the web app uses, generated from the `lucide-preact` package by `composeApp/scripts/generate-lucide-icons.mjs`, drawn by `LucideIcon.vector()` with the web's stroke widths. |
-| `components` | The web's components: `AppBar`, `SwitcherButton`, `NavBar`, `CaddieButton`, `CaddieIconButton`, `CaddieChip` (toggle, dropdown and action chips), `FiltersChip`, `TimePhraseChip`, `SuggestionChip`, `ChipRow`, `SearchField`, `TalkCard`, `InterestedToggle`, `CaddieSheet`, `ConfirmDialog`, `Segmented`, `SwitchRow`, `OptionRow`, the settings rows, `StateView`, `ErrorBanner`, `Toast`, `OfflineBadge`, `NeedsConnection` and `SkeletonCard`. |
+| `components` | The web's components: `AppBar` (with `AppBarBack` and Profile's `AppBarLabeledBack`), `SwitcherButton`, `NavBar`, `CaddieButton`, `CaddieIconButton`, `CaddieChip` (toggle, dropdown and action chips), `FiltersChip`, `TimePhraseChip`, `SuggestionChip`, `ChipRow`, `SearchField`, `TalkCard`, `InterestedToggle`, `CaddieSheet`, `ConfirmDialog`, `Segmented`, `SwitchRow`, `OptionRow`, the settings rows, `StateView`, `ErrorBanner`, `Toast`, `OfflineBadge`, `NeedsConnection` and `SkeletonCard`. |
 | `strings` | `Strings`: the web's copy word for word, grouped by the web file it comes from. Copy that only the native apps need is marked "native only". |
 | `format` | `Format`: dates and times written as `web/src/lib/time.ts` writes them. |
-| `shell` | `App()`'s parts: `ShellState`, `ShellActions` and `TabContent`, the Settings screen, the conference switcher and the server confirmation. `StandaloneShell` runs the shell without a backend until the talk features replace it. |
+| `shell` | `App()`'s parts: `ShellState`, `ShellActions` and `TabContent`, `ShellNavigation` (the tab and the pages over it), the Settings screen, the conference switcher and the server confirmation. `StandaloneShell` runs the shell without a backend until the talk features replace it. |
+| `people` | The people screens on `PeopleController` (phase 3): the People tab, Profile, Requests, Meet up, the people groups of Settings, the talk circles, and their building blocks. See People screens below. |
 
 `App(state, actions, content)` is the web's shell: the conference switcher in the app bar, the
 Offline badge and the Settings gear on its right, and the tab bar People (only when the backend
-serves people features), For you, Search and Interested. Settings is a screen of its own with Back,
-as on the web. The caller owns the data (`ShellState`), answers `ShellActions`, and supplies each
-tab's screen through `TabContent`; tab content reaches the shell through `LocalShellNavigator`.
+serves people features), For you, Search and Interested. The caller owns the data (`ShellState`),
+answers `ShellActions`, and supplies each tab's screen through `TabContent`; tab content reaches the
+shell through `LocalShellNavigator`.
+
+Settings, Profile, Requests and Meet up are pages of their own over the tabs, with Back, as the
+web's non-tab routes are. `ShellNavigation` keeps them as a stack (`ShellPage.Settings` and
+`PeoplePage.Profile`, `PeoplePage.Inbox`, `PeoplePage.Meet(id)`): `openPage()` puts one on top or
+goes back to it when it is already open, `back()` leaves the top one (the system Back and the iOS
+edge swipe do this), and `selectTab()` leaves them all. The app bar's Back follows the web: Settings,
+Requests and Meet up lead to the tab screen, and Profile's labelled "‹ Settings" leads to Settings.
+Requests and Meet up keep People selected in the tab bar. A caller that moves around the shell from
+outside it (a notification tap) makes the navigation with `rememberShellNavigation()` and passes it
+to `App()`.
 
 In a window at least 768 dp wide (a tablet, or a phone in landscape) the shell takes the web's wide
 layout: the tabs move to a rail on the left with the app icon on top, the app bar and the screen stay
@@ -152,9 +163,10 @@ The app icons and the iOS launch image come from `web/public/icons` through
 
 Debug builds take launch options that open a screen directly, for screenshots and manual checks:
 `-caddie.tab Search`, `-caddie.open settings` (or `switcher`), `-caddie.theme dark`,
-`-caddie.connect https://example.org` and `-caddie.gallery 1` (the Search components drawn with the
-web's sample talk); the talk screens add theirs (Trying the talk features against local bundles),
-among them `-caddie.link <caddie:// link>`, which hands a link over as the platform would. On iOS they are launch arguments
+`-caddie.connect https://example.org`, `-caddie.gallery 1` (the Search components drawn with the
+web's sample talk) and `-caddie.people` (below); the talk screens add theirs (Trying the talk
+features against local bundles), among them `-caddie.link <caddie:// link>`, which hands a link
+over as the platform would. On iOS they are launch arguments
 (`xcrun simctl launch <device> app.conferencecaddie -caddie.tab Search`); on Android they are intent
 extras (`adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.tab Search`). Release
 builds ignore them. `-caddie.connect` follows the rules of a `caddie://connect` link: the address is
@@ -162,6 +174,55 @@ normalised, and anything a link could not name (not https, credentials, a query)
 
 On iOS a Light or Dark Theme setting is applied to the app's window, so the status bar, the SwiftUI
 host and anything presented from it follow it too.
+
+### People screens
+
+`ui/people` draws the web's people screens (`web/src/people`) on the shared `PeopleController`:
+
+- `PeopleTab.kt` puts them in the shell. `rememberPeopleUi()` collects the controller's state and
+  gives `App()` the People tab, the people pages, the people groups of Settings and the Requests
+  button with its badge, and the talk screens their slots (`TalkSheet`'s `peopleControls`,
+  `InterestedScreen`'s `shareAll`). The People tab shows only when the backend's capabilities and
+  the controller both have people features on. Offline, the People tab, Requests and Meet up show
+  the web's NeedsConnection; Profile and Settings still work. It also shows the people route of
+  the shell's `ShellRequest` once people features are on: every `caddie://` link, a tapped
+  notification's (`caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`) included,
+  goes through `IncomingHandoff` and `AppLink` in `CaddieApp`, and a people route
+  (`AppLink.PeopleRoute`) opens People (with Around now), Requests, Meet up, Profile, or the
+  presence setup on a zone, which turns presence on only when the person taps "I'm around". It
+  shows the controller's notices as toasts, and draws the sheets several screens share (Ask to talk
+  shop, Report, the block confirmation) once.
+- Every screen takes the `PeopleUiState` it draws and a `PeopleHost`: the controller, moving
+  around (`openProfile()`, `openInbox()`, `openMeet(id)`, `openPeople(request)`, `back()`), the
+  shell's toast, those shared sheets, and opening talks and links. Nothing reaches the controller
+  through a CompositionLocal.
+- `PeopleComponents.kt` holds the building blocks with the web's sizes (people.css): `PeopleCard`,
+  `PeoplePrompt`, `PeopleNotice`, `PeopleBanner`, `PeopleTextField`, `PeopleSelect`, `RadioRow`,
+  `PeopleSwitchRow` (Settings, in-card and presence sizes), `BandPill`, `SamplePill`, `SampleNote`,
+  `AroundLine`, `PersonFrame`, `OpenerBox`, the headings, `ActionsRow`, `RefreshBar`,
+  `OverflowMenu`, and `EvidenceText`, which shows the server's evidence with its `<mark>`
+  highlights and treats nothing else as markup. Its header lists the web's computed-style quirks
+  that the screens keep, such as the danger-styled text buttons that render in the accent ink.
+  Its controls reserve the platform's touch target (`minimumInteractiveComponentSize()`) and grow
+  with large text, and `PeopleScreenColumn` ends above the keyboard (`imePadding()`), as Settings
+  does; a screen built on a `LazyColumn` adds `imePadding()` itself.
+- The people pages (Profile, Requests, Meet up) and the People tab draw in the shell's content
+  column, so in a wide window they sit in its centred 720 dp column next to the rail, with the same
+  insets as Settings.
+- Copy shared by several screens is in `PeopleCommonStrings`; each group of screens has its own
+  strings file, and the web's logic-file copy is the shared module's `PeopleText`.
+
+`-caddie.people` opens a people screen once people features are on: `home`, `around` (Around now
+on), `search:<text>`, `profile`, `inbox`, `meet:<id>` or `settings-people` (Settings, whose people
+groups follow You), for example
+`xcrun simctl launch <device> app.conferencecaddie -caddie.people search:kubernetes`.
+
+The parity screenshots of the people screens (`PeopleParityShots` in composeApp's common tests)
+draw every state with the web mock's people at 390 and 320 dp, light and dark, and save PNGs.
+Normal test runs skip them. On Android, pass the instrumentation argument `caddieParity=1`
+(optionally `caddieParityOnly=<state>,<state>`) and pull the PNGs from
+`/data/local/tmp/caddie-parity` with `adb pull`; on iOS, set `SIMCTL_CHILD_CADDIE_PARITY_DIR` to a folder on this Mac (and optionally
+`SIMCTL_CHILD_CADDIE_PARITY_ONLY`) for `:composeApp:iosSimulatorArm64Test`.
 
 ## Build and run on iOS
 
@@ -267,7 +328,7 @@ on a runner only in the job that needs it. In `.github/workflows/native.yml`:
 |---|---|---|
 | `IOS_DIST_CERT_P12_BASE64` | `ios-sign` | The Apple Distribution certificate and its private key, exported from Keychain Access as `.p12`, base64-encoded |
 | `IOS_DIST_CERT_PASSWORD` | `ios-sign` | The password chosen for that `.p12` |
-| `IOS_APPSTORE_PROFILE_BASE64` | `ios-sign` | An App Store provisioning profile for `app.conferencecaddie`, base64-encoded |
+| `IOS_APPSTORE_PROFILE_BASE64` | `ios-sign` | An App Store provisioning profile for `app.conferencecaddie` that includes Push Notifications, base64-encoded |
 | `APPLE_TEAM_ID` | `ios-sign` | The Apple Developer team id |
 | `ASC_KEY_ID` | `testflight-upload` | The App Store Connect API key id |
 | `ASC_ISSUER_ID` | `testflight-upload` | The issuer id shown above the API keys list |
@@ -276,10 +337,20 @@ on a runner only in the job that needs it. In `.github/workflows/native.yml`:
 The job `testflight-gate` reads whether all seven exist; when one is missing, the three jobs are
 skipped with a notice.
 
-Before the first upload, register the bundle id `app.conferencecaddie`, create the distribution
-certificate and the App Store profile in the Apple Developer account, create the app in App Store
-Connect, and create a team API key with the App Manager role (Users and Access, then
-Integrations). Upload the secrets with stdin, for example
+Before the first upload, register the bundle id `app.conferencecaddie` with the Push
+Notifications capability, create the distribution certificate and the App Store profile in the
+Apple Developer account, create the app in App Store Connect, and create a team API key with the
+App Manager role (Users and Access, then Integrations).
+
+The app requests the Push Notifications capability (`iosApp/iosApp.entitlements`,
+`aps-environment`), so a profile without it cannot sign the archive. If the App ID or the profile
+was made before the capability was enabled, enable Push Notifications on the App ID
+(Certificates, Identifiers & Profiles, then Identifiers), regenerate the App Store profile, and
+upload it again as `IOS_APPSTORE_PROFILE_BASE64`. Xcode takes the entitlement's value from the
+profile, so the signed app has `production`. The official server also needs an APNs
+authentication key (`.p8`) to send pushes; that key belongs to the server, never to the app or
+these secrets. Device builds with automatic signing need a paid team, because personal teams
+cannot use Push Notifications. Upload the secrets with stdin, for example
 `base64 -i dist.p12 | gh secret set IOS_DIST_CERT_P12_BASE64 --env release`.
 
 **These jobs have not run yet**, because the secrets do not exist. Expect the first run on `main`
@@ -381,7 +452,14 @@ Both apps register the `caddie` scheme (Android: an intent filter on `MainActivi
   that day of the full schedule, and `#/interested?view=day` My schedule's Day view. The slug must
   be a bundle slug the backend lists (otherwise the app says the conference is not available here
   and changes nothing); an unknown tab, a view that does not fit its tab and a day that is not a
-  date are dropped. The people routes (`here`, `inbox`, `meet`, `profile`) open the People tab.
+  date are dropped. The people routes open the People tab with an `AppLink.PeopleRoute`:
+  `#/people` the People home (`?around=1` with "Around now" on), `#/inbox` Requests,
+  `#/meet/<meet_id>` Meet up, `#/profile` the profile and `#/here/<zone>` a zone, percent-decoded
+  and at most 120 characters, that the screen matches against the conference's zones. A meet id
+  or zone that does not fit is dropped and the People tab opens without it.
+- `caddie://people?around=1`, `caddie://inbox` and `caddie://meet/<meet_id>`, the links of the
+  app's own notifications (see People platform services), open the same screens on the selected
+  conference. Only those exact shapes are taken on these hosts.
 - Anything else, and any link longer than 2,048 characters, is ignored.
 
 There are no https App Links or Universal Links (`DECISIONS.md`, phase 2c): they need files at the
@@ -532,19 +610,132 @@ picker, `caddie.talk <talk id>` opens a talk, `caddie.mark <id>,<id>` marks talk
 first` opens the first search result's Why this rank, so screenshots need no taps. A value with a space
 needs its own quotes inside `adb shell`, for example `-e caddie.query "'kubernetes security'"`.
 
+## People features
+
+Phase 3 puts the people features of the web app (`web/src/people`) in `shared/people`. The screens
+(`composeApp/.../ui/people`, under Design system) are built on `PeopleController` alone; its KDoc
+is the reference for them.
+
+| File | What it is |
+|---|---|
+| `PeopleApi.kt` | One suspend function per route of `contracts/routes/people-api.v1.json`, plus the native push route (`NativePush`). It sends `X-Caddie-Device` only to the backend the credential belongs to, puts the conference in the body or in `?event=`, never sends `Origin` or cookies, waits 20 s for profile writes and deletes and the presence delete (the web's `WRITE_TIMEOUT_MS`) and 30 s for the rest, retries a free-text 409 once where the route table says to, and reads `X-Caddie-Pace`. |
+| `PeopleError.kt` | The contract's client rule for errors: a `Kind` per stable code, the status class otherwise, and the web's wording for each (`friendly()`, `explainBadRequest()`). |
+| `PeopleModels.kt` | A kotlinx.serialization type per `$defs` entry of `contracts/schema/people-api.v1.schema.json`. A request sends exactly the keys it is given (`Opt`: absent, `null` or a value); answers are read leniently. |
+| `DeviceCredential.kt` | `profile_id` (16 random bytes) and `secret` (32), base64url, generated once per backend base and kept in the `SecureStore` under `SecureStore.scopedKey(backend, "people.device.v1")`. Never printed. |
+| `PeopleRecords.kt`, `PeopleStore.kt` | The device-side records of `web/src/people/storage.ts` (profile, visibility, presence, push, blocks, people met, the watch list, nudge records, unfinished deletes) as JSON in `PeopleDatabase`, a key-value file of their own that no backup carries (iOS `caddie/people/people.db`, excluded from backup; Android `no_backup/people/people.db`), under `people:v1:{backend base}#...`, so they last exactly as long as the device credential. A corrupt file is replaced; any other failure to open it keeps the launch's records in memory (`PeopleKeyValue.inMemory`). |
+| `ProfileSync.kt` | `sync.ts`: profile writes one at a time under one write lock, the delete that is marked before it is sent and retried from 30 seconds doubling to 30 minutes, no write while a delete covers the conference, "Delete my profile", the degraded re-send after 70 s, retired topics. |
+| `PresenceRuntime.kt` | `presence.ts`: zones, hour and day modes, expiry, five minutes in the background, "Still in {zone}?", and the position (precise access and `gps_bands` only, at most every 30 s stretched by the pace, accuracy in whole metres). |
+| `ConnectRuntime.kt` | `connect.ts`, `nudges.ts` and `watch.ts`: the inbox poll (45 s, stretched by the pace, held back by Retry-After), asks, the blocks cache, nudges once per person per day with a local notification when the app is not in the foreground, and the watch list. |
+| `PeopleText.kt`, `PeoplePrivacy.kt` | The web's wording that lives in its logic files, the zones, and the privacy helpers the screens must use for a zone, a band, a spot line or a distance. |
+| `PeopleController.kt`, `PeopleState.kt` | The one object the screens use: `state` (a `PeopleUiState` per selected conference) and the actions. |
+
+To build one, pass the app's `KtorHttp` (it is both `Http` and `ApiHttp`), the database and the
+platform's `PeopleServices`, then bind it to the core:
+
+```kotlin
+val people = PeopleController.create(database, http, services, scope, allowLocalHttp)
+people.bind(core.state)
+// and from the platform's lifecycle: people.setForeground(true / false)
+```
+
+`AndroidCore.people()` and `IosCore.people()` build the app's one controller this way, bound to
+the core, from the `PeopleServices` the host passes in. The people checks of
+`scripts/smoke.mjs` run through `PeopleApi` against a live backend with:
+
+```sh
+./gradlew :shared:jvmTest --tests '*LivePeopleSmokeTest*' \
+  -Pcaddie.liveBase=https://conference-caddie-265846417372.us-west1.run.app
+```
+
+Every test profile it makes is named "Caddie Native Test ...", uses the smoke's synthetic words, and
+is deleted and checked to be gone at the end. Without `-Pcaddie.liveBase` the test does nothing.
+
+## People platform services
+
+The people features reach the phone through the interfaces in
+`shared/src/commonMain/.../PlatformServices.kt` and `Platform.kt`, passed in once as
+`PeopleServices`. Each platform has a factory. On Android the process's one controller, with its
+services, comes from `CaddiePeople.controller(context)` in `androidApp`, which `MainActivity` and
+the background nudge job share; on iOS `MainViewController` calls the factory once at start-up to
+build the people controller.
+
+| | Android (`shared/src/androidMain`) | iOS (`shared/src/iosMain`) |
+|---|---|---|
+| Factory | `AndroidPeopleServices.create(context, R.drawable.ic_stat_caddie)` | `IosPeopleServices.create()`, on the main thread |
+| `SecureStore` | `AndroidSecureStore`: an AES-256-GCM key in the Android Keystore, values in the private file `caddie_secure_store` | `IosSecureStore`: Keychain items of the service `app.conferencecaddie.secure-store`, after first unlock, this device only, never in iCloud Keychain |
+| `LocationProvider` | `AndroidLocationProvider`: the platform's LocationManager (no Play services), while in use only | `IosLocationProvider`: Core Location, "when in use" only |
+| `Notifier` | `AndroidNotifier`: the "Nudges" channel; while a visible profile has presence on at a live conference, a periodic `JobScheduler` job (`BackgroundNudgeJobService`, every 15 minutes, not persisted across a reboot) runs the nudge check in the background | `IosNotifier`: UserNotifications |
+| `PushRegistrar` | `NoPush` (no Firebase in the APK, see `DECISIONS.md`) | `IosPushRegistrar`: APNs, channel `apns` |
+| `SystemSettings` | the app's page in Settings | the app's page in the Settings app |
+
+- **Permission prompts.** On Android they need an activity: `MainActivity` registers an
+  ActivityResult launcher and attaches it to `AndroidPermissions`, which the services use. On iOS
+  the services ask the system directly. The screens show the web's explanation before asking.
+- **Notification taps.** A notification carries a `caddie://` link (`caddie://people?around=1`,
+  `caddie://inbox`, `caddie://meet/{meet_id}`). On Android it is the intent extra
+  `AndroidNotifier.EXTRA_DEEP_LINK`, which `MainActivity` reads in `onCreate` and `onNewIntent`
+  and takes only with this install's tap key; on iOS it is `deepLink` in the notification's
+  `userInfo`, which the app delegate in `iOSApp.swift` passes to `openNotificationTap`
+  (`IosIncoming.kt`, reading it with `IosNotificationTaps`). Both take only those exact links
+  (`isNotificationDeepLink`) and hand them to `IncomingHandoff`, the same way every `caddie://`
+  link goes: `AppLink.parse` reads them as the People tab with a `PeopleRoute`, which `CaddieApp`
+  passes on in the shell's `ShellRequest`. A remote (APNs) notification must put its link at
+  the top level of the payload under `deepLink`. iOS shows notifications as banners while the app
+  is open too.
+- **APNs.** `IosPushRegistrar.register()` asks for notification permission, registers with iOS and
+  waits up to 20 seconds for the token, which the app delegate hands to `IosPush`. The token's
+  environment is the one the app was signed for: `ApsEnvironment` reads `aps-environment` from the
+  provisioning profile embedded in the app (`development` gives `sandbox`), and an App Store or
+  TestFlight install, which has no embedded profile, always reports `production`.
+- **Tests.** `androidApp/src/androidTest` checks the Keystore store (round trip, overwrite, remove,
+  two backends kept apart, nothing readable in the file, a tampered or moved value, a lost key),
+  the notification channel and the tap routing through `MainActivity`, and positions from a test
+  location provider. The Keychain tests in `shared/src/iosTest` run under Gradle: the simulator
+  test executable carries the entitlements of `src/iosTest/simulator-tests.entitlements` in its
+  `__TEXT,__entitlements` section, as an Xcode simulator build does, and the simulator test tasks
+  boot their simulator first (`simctl bootstatus -b`) and run in it, because a standalone
+  simulator process has no Keychain (`errSecNotAvailable`, -25291). A missing Keychain fails them.
+  Debug builds also run the same checks in the app, with a simulator build that carries the app's
+  entitlements (an unsigned build gets `errSecMissingEntitlement`, -34018):
+
+  ```sh
+  xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -sdk iphonesimulator \
+    -destination 'generic/platform=iOS Simulator' CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
+  xcrun simctl install <device> "<DerivedData>/Build/Products/Debug-iphonesimulator/Conference Caddie.app"
+  xcrun simctl launch --console <device> app.conferencecaddie -caddie.selftest securestore
+  xcrun simctl privacy <device> grant location app.conferencecaddie
+  xcrun simctl location <device> set 37.7749,-122.4194
+  xcrun simctl launch --console <device> app.conferencecaddie -caddie.selftest location
+  ```
+
+  Each prints one line, `caddie.selftest securestore: passed` or what failed, never a value or a
+  position.
+
 ## Privacy
 
 - ONNX Runtime's telemetry is switched off on both platforms (Talk features, No telemetry).
 - Android: `allowBackup` is false, and `data_extraction_rules.xml` excludes every domain, the
   device-protected `device_*` domains included, from cloud backup and device-to-device transfer,
-  because the app will hold per-backend device secrets. The Capacitor app in `web/android` has the
-  same settings, since its WebView storage holds the people features' device secret.
-- iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking, no tracking domains and, for
-  now, no collected data. It declares the required-reason APIs that `nm -u` finds in the Release
-  device framework: `stat` and `fstat` (FileTimestamp, `C617.1`, from Skia and ICU) and
-  `mach_absolute_time` (SystemBootTime, `35F9.1`, from Skia). Phase 2a's bundled SQLite and file
-  cache add `lstat` (FileTimestamp) and `statfs` and `fstatfs` (DiskSpace, declared with `E174.1`).
-  No user-defaults API is linked. Check again when dependencies change:
+  because the app holds per-backend device secrets (the secure store's `caddie_secure_store` file
+  and the `caddie_permissions` file are SharedPreferences, so the `sharedpref` rules cover them).
+  The Capacitor app in `web/android` has the same settings, since its WebView storage holds the
+  people features' device secret.
+- Android permissions: `INTERNET`, and for the people features `ACCESS_COARSE_LOCATION` and
+  `ACCESS_FINE_LOCATION` (asked together, only while the app is in use; no background location)
+  and `POST_NOTIFICATIONS` (Android 13 and newer). `android.hardware.location` is not required.
+- iOS: `Info.plist` has `NSLocationWhenInUseUsageDescription` and no background modes;
+  notifications need no usage text. `iosApp/iosApp.entitlements` requests Push Notifications.
+- iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking and no tracking domains. Its
+  collected data is what the people features send to the official backend, all linked to the
+  profile, none for tracking, all for the app's function: name, other user contact info, other
+  user content, precise location, user ID (the random per-backend profile id) and device ID (the
+  APNs token); the comment in the file says what each covers. It declares the required-reason
+  APIs that `nm -u` finds in the Release device framework: `stat` and `fstat` (FileTimestamp,
+  `C617.1`, from Skia and ICU) and `mach_absolute_time` (SystemBootTime, `35F9.1`, from Skia).
+  Phase 2a's bundled SQLite and file cache add `lstat` (FileTimestamp) and `statfs` and `fstatfs`
+  (DiskSpace, declared with `E174.1`). Phase 3's Keychain, Core Location and UserNotifications
+  code adds none (checked on 2026-11-10). No user-defaults API is linked. Check again when
+  dependencies change:
 
   ```sh
   ./gradlew :composeApp:linkReleaseFrameworkIosArm64
@@ -599,7 +790,7 @@ dependencies.
 - **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
   It is skipped with a notice when the signing secrets are missing.
 - **UI tests on an Android emulator** (Ubuntu): the Compose UI tests, the measurement of the shipped
-  model (its numbers go to the job summary), the instrumented smoke test and
+  model (its numbers go to the job summary), the app's instrumented tests and
   `scripts/release-smoke.sh` on the R8 release build, on an API 34 emulator started by
   `reactivecircus/android-emulator-runner`. The emulator's booted state is cached as a snapshot.
   No secrets. The release APK is signed only after this job passes.

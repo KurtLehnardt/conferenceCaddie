@@ -65,9 +65,22 @@ const SPONSOR_WORD = /sponsor/i;
 
 const isHttp = (s) => typeof s === 'string' && /^https?:\/\//i.test(s.trim());
 
+// A cancelled session. Sessionize has no dedicated flag in view/All (every committed session says
+// status "Accepted"), so organisers cancel by retitling: "CANCELED: ...", "Cancelled - ...",
+// "[Cancelled] ...". A session counts as cancelled when its status says so, or when its title starts
+// with "canceled" or "cancelled" in any case, optionally inside brackets or parentheses, followed by
+// a colon, a dash or whitespace (or nothing). Cancelled sessions of every kind are dropped by
+// buildTalks, so they leave the talk file, the search index, the Worker and the talk bundles.
+const CANCELLED_STATUS = /^\s*cancel{1,2}ed\s*$/i;
+const CANCELLED_TITLE = /^\s*(?:[[(]\s*cancel{1,2}ed\s*[\])]|cancel{1,2}ed(?=$|[\s:\-\u2013\u2014]))/i;
+export function isCancelled(session) {
+  return CANCELLED_STATUS.test(String(session?.status ?? '')) || CANCELLED_TITLE.test(String(session?.title ?? ''));
+}
+
 // conf: { slug, time_zone, sessionize_public_slug, sessionize_site_published, official_schedule_url }
-// Returns { docs, counts, mapping, unresolved }. unresolved lists names that could not be resolved;
-// a caller must treat any as fatal.
+// Returns { docs, counts, mapping, unresolved, cancelled }. unresolved lists names that could not be
+// resolved; a caller must treat any as fatal. cancelled lists the session ids that were dropped
+// because they are cancelled (isCancelled); they are not in docs and not in counts.
 export function buildTalks(feed, config, conf) {
   const mapping = categoryMapping(feed, config);
   const { track: trackGroup, level: levelGroup, tagGroups } = mapping.groups;
@@ -97,8 +110,13 @@ export function buildTalks(feed, config, conf) {
   const counts = { sessions: 0, talk: 0, ambient: 0, break: 0, housekeeping: 0, with_slides: 0, sponsor: 0 };
   const unresolved = [];
   const docs = [];
+  const cancelled = [];
 
   for (const s of feed.sessions ?? []) {
+    if (isCancelled(s)) {
+      cancelled.push(String(s.id));
+      continue;
+    }
     const title = String(s.title ?? '').trim();
     const abstract = String(s.description ?? '').replace(/\r\n?/g, '\n').trim();
 
@@ -186,5 +204,5 @@ export function buildTalks(feed, config, conf) {
     if (sponsor) counts.sponsor++;
   }
 
-  return { docs, counts, mapping: mapping.public, unresolved };
+  return { docs, counts, mapping: mapping.public, unresolved, cancelled };
 }

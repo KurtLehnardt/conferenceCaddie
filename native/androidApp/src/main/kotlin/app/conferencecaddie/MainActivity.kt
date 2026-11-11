@@ -9,6 +9,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import app.conferencecaddie.shared.AndroidNotifier
+import app.conferencecaddie.shared.AndroidPermissions
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.ui.platform.IncomingHandoff
@@ -39,9 +41,22 @@ class MainActivity : ComponentActivity(), PlatformActions {
         readInBackground(uri, null, supersede = false) { file -> if (callback != null) callback(file) else IncomingHandoff.offerFile(file, picked = true) }
     }
 
+    // The platform services ask for permissions through this activity (AndroidPermissions). The
+    // launcher is registered on every creation, so an answer that arrives after a re-creation still
+    // reaches the waiting request.
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { AndroidPermissions.deliver(it) }
+    private val permissionHost = object : AndroidPermissions.Host {
+        override fun launch(permissions: Array<String>) = permissionLauncher.launch(permissions)
+        override fun shouldShowRationale(permission: String) = shouldShowRequestPermissionRationale(permission)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        AndroidPermissions.attach(permissionHost)
+        // A re-created activity keeps the intent that started it, so only a fresh start is a tap.
+        if (savedInstanceState == null) deliverNotificationTap(intent)
         // Debug builds are debuggable; release builds are not. This avoids generating BuildConfig.
         val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val core = AndroidCore.get(this, allowLocalHttp = isDebugBuild)
@@ -66,6 +81,11 @@ class MainActivity : ComponentActivity(), PlatformActions {
             CapacitorMigration.maybeRun(this, core)
         }
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
+        // The people features: the process's one controller and platform services (the Keystore-backed
+        // secure store, location, notifications and the permission prompts of this activity), which
+        // the background nudge job shares. They are made on the first call only, not on every
+        // re-creation of the activity.
+        val people = CaddiePeople.controller(this)
         setContent {
             CaddieApp(
                 core = core,
@@ -75,6 +95,7 @@ class MainActivity : ComponentActivity(), PlatformActions {
                 initialQuery = query,
                 talkLaunch = talkLaunch,
                 embedder = { EmbeddingModel.load() },
+                people = people,
                 platform = this,
             )
         }
@@ -84,7 +105,34 @@ class MainActivity : ComponentActivity(), PlatformActions {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        deliverNotificationTap(intent)
         handOff(intent)
+    }
+
+    // The system's notification switch for the app may have changed while it was away, which no
+    // people state shows: the background nudge job is checked again.
+    override fun onResume() {
+        super.onResume()
+        CaddiePeople.recheckBackgroundNudges()
+    }
+
+    override fun onDestroy() {
+        AndroidPermissions.detach(permissionHost, finishing = isFinishing)
+        super.onDestroy()
+    }
+
+    /**
+     * Hands a tapped notification's caddie:// link to the screens (see AndroidNotifier), the way
+     * every caddie:// link goes ([IncomingHandoff], then the app's link router). This activity is
+     * exported, so only a link that comes with the app's own tap key counts; the link and the key
+     * are then removed from the intent the activity keeps. It is apart from [handOff]: a tap is
+     * an extra, never a VIEW intent's data.
+     */
+    private fun deliverNotificationTap(intent: Intent?) {
+        val link = AndroidNotifier.tappedDeepLink(this, intent) ?: return
+        intent?.removeExtra(AndroidNotifier.EXTRA_DEEP_LINK)
+        intent?.removeExtra(AndroidNotifier.EXTRA_TAP_KEY)
+        IncomingHandoff.offerLink(link)
     }
 
     /** Hands a `caddie://` link, or a schedule file opened in or shared to the app, to the screens ([IncomingIntents]). */

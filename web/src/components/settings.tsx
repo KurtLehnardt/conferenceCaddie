@@ -1,11 +1,57 @@
 import type { ComponentChildren } from 'preact';
-import { ChevronRight, ExternalLink, FileUp, Smartphone, UserRound } from 'lucide-preact';
+import { useState } from 'preact/hooks';
+import { ChevronRight, CircleQuestionMark, ExternalLink, FileUp, Smartphone, UserRound } from 'lucide-preact';
 import type { ThemePref } from '../lib/storage';
 import { useProfileName } from '../people/index';
 import { Segmented } from './common';
 import { isStandalone, openInstallCard } from './install';
 
 declare const __APP_VERSION__: string;
+
+const HELP_LABEL = 'Show the welcome guide';
+
+/**
+ * The help icon at the bottom of Settings. The tooltip shows on mouse hover and on keyboard focus,
+ * and Escape hides it. A tap does not rely on it: the tap itself starts the guide.
+ */
+function HelpButton({ onClick }: { onClick: () => void }) {
+  const [tip, setTip] = useState(false);
+  return (
+    <div class="settings-help">
+      <button
+        type="button"
+        class="icon-btn"
+        aria-label={HELP_LABEL}
+        data-guide-help
+        onClick={() => {
+          setTip(false);
+          onClick();
+        }}
+        onPointerEnter={(e) => e.pointerType !== 'touch' && setTip(true)}
+        onPointerLeave={() => setTip(false)}
+        onFocus={(e) => {
+          // Safari before 15.4 throws on :focus-visible; show the tip on focus there.
+          let visible = true;
+          try {
+            visible = (e.currentTarget as HTMLElement).matches(':focus-visible');
+          } catch {
+            // Keep the default.
+          }
+          if (visible) setTip(true);
+        }}
+        onBlur={() => setTip(false)}
+        onKeyDown={(e) => e.key === 'Escape' && tip && (e.stopPropagation(), setTip(false))}
+      >
+        <CircleQuestionMark size={22} aria-hidden="true" />
+      </button>
+      {tip && (
+        <span class="settings-tip" aria-hidden="true">
+          {HELP_LABEL}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function SettingsScreen({
   theme,
@@ -14,6 +60,7 @@ export function SettingsScreen({
   importNote,
   onImport,
   people,
+  onHelp,
 }: {
   theme: ThemePref;
   onTheme: (t: ThemePref) => void;
@@ -24,6 +71,8 @@ export function SettingsScreen({
   onImport: () => void;
   /** The people sections (blocked people, people I met, people I watch) for the current conference. */
   people?: ComponentChildren;
+  /** Starts the welcome guide again. The help icon is shown only when this is given. */
+  onHelp?: () => void;
 }) {
   const name = useProfileName();
   return (
@@ -119,6 +168,8 @@ export function SettingsScreen({
           </div>
         </div>
       </section>
+
+      {onHelp && <HelpButton onClick={onHelp} />}
     </div>
   );
 }

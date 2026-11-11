@@ -1,6 +1,12 @@
 package app.conferencecaddie.shared.net
 
 import app.conferencecaddie.shared.net.KtorHttp.Companion.configure
+import app.conferencecaddie.shared.people.ApiResult
+import app.conferencecaddie.shared.people.BACKEND
+import app.conferencecaddie.shared.people.DeviceCredential
+import app.conferencecaddie.shared.people.Pace
+import app.conferencecaddie.shared.people.PeopleApi
+import app.conferencecaddie.shared.people.SLUG
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -15,22 +21,32 @@ import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.writer
 import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.time.Clock
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 
 // KtorHttp against Ktor's mock engine: the size limit holds whether or not the host declares a
-// length, If-None-Match goes out only when there is an ETag, and a 304 passes through.
+// length, If-None-Match goes out only when there is an ETag, and a 304 passes through. The People
+// API requests (send) read through the same capped reader, and their time limit covers the answer.
+// The People API requests follow no redirect, so the device credential never leaves the backend's
+// host; the bundle GETs still follow one.
 @OptIn(ExperimentalAtomicApi::class)
 class KtorHttpTest {
     private val url = "https://caddie.example/bundles/conferences.json"
@@ -142,5 +158,132 @@ class KtorHttpTest {
         assertContentEquals(bytes, KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 1_000_000, declared = null))
         assertFailsWith<ResponseTooLarge> { KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 299_999, declared = 299_999) }
         assertContentEquals(ByteArray(0), KtorHttp.readBounded(ByteReadChannel(ByteArray(0)), maxBytes = 10, declared = null))
+    }
+
+    private val api = "https://caddie.example/api/people/profile"
+
+    @Test
+    fun aPeopleRequestSendsItsMethodHeadersAndJsonOnly() = test {
+        val h = http { respond("""{"ok":true}""", HttpStatusCode.OK, headersOf("X-Caddie-Pace" to listOf("2"), HttpHeaders.ContentType to listOf("application/json"))) }
+        val r = h.send("PUT", api, mapOf("X-Caddie-Device" to "d.s", "Accept" to "application/json"), """{"event":"e"}""".encodeToByteArray(), timeoutMs = 5_000, maxBytes = 1024)
+        assertEquals(200, r.status)
+        assertEquals("""{"ok":true}""", r.text())
+        assertEquals("2", r.header("x-caddie-pace"))
+        val sent = requests.single()
+        assertEquals("PUT", sent.method.value)
+        assertEquals("d.s", sent.headers["X-Caddie-Device"])
+        assertNull(sent.headers[HttpHeaders.Origin])
+        assertNull(sent.headers[HttpHeaders.Cookie])
+        assertEquals("application/json", sent.body.contentType?.toString())
+    }
+
+    @Test
+    fun aPeopleAnswerAboveTheCapIsRefusedDeclaredOrNot() = test {
+        val declared = http { respond(ByteArray(10), HttpStatusCode.OK, headersOf(HttpHeaders.ContentLength, "5000")) }
+        assertFailsWith<ResponseTooLarge> { declared.send("GET", api, emptyMap(), null, timeoutMs = 5_000, maxBytes = 4096) }
+        val undeclared = http { respond(ByteReadChannel(ByteArray(5000)), HttpStatusCode.OK) }
+        assertFailsWith<ResponseTooLarge> { undeclared.send("GET", api, emptyMap(), null, timeoutMs = 5_000, maxBytes = 4096) }
+    }
+
+    @Test
+    fun aPeopleAnswerThatStallsHalfwayRunsOutOfTime() = test {
+        val h = http {
+            // The headers and the start of the body arrive, then nothing more.
+            val body = writers.writer {
+                channel.writeFully("""{"results":[""".encodeToByteArray())
+                channel.flush()
+                awaitCancellation()
+            }.channel
+            respond(body, HttpStatusCode.OK)
+        }
+        val started = TimeSource.Monotonic.markNow()
+        val e = assertFailsWith<RequestTimeout> { h.send("POST", api, emptyMap(), "{}".encodeToByteArray(), timeoutMs = 500, maxBytes = 1024) }
+        assertEquals(500, e.limitMs)
+        assertTrue(started.elapsedNow().inWholeMilliseconds < 10_000, "the limit ended the read")
+        assertTrue(currentCoroutineContext().isActive, "the caller is not cancelled by the request's timeout")
+    }
+
+    @Test
+    fun aPeopleRequestWithNoAnswerRunsOutOfTime() = test {
+        val h = http { awaitCancellation() }
+        assertFailsWith<RequestTimeout> { h.send("DELETE", api, emptyMap(), null, timeoutMs = 500, maxBytes = 1024) }
+        assertTrue(currentCoroutineContext().isActive)
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Redirects
+
+    private fun redirectingTo(target: String, status: HttpStatusCode = HttpStatusCode.Found) = http { request ->
+        if (request.url.host == "caddie.example") {
+            respond("", status, headersOf(HttpHeaders.Location, target))
+        } else {
+            respond("""{"requests":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+    }
+
+    @Test
+    fun aPeopleRequestDoesNotFollowARedirectToAnotherHost() = test {
+        val h = redirectingTo("https://elsewhere.example/collect")
+        val r = h.send("GET", "https://caddie.example/api/meet/inbox?event=e", mapOf("X-Caddie-Device" to "d.s"), null, timeoutMs = 5_000, maxBytes = 1024)
+        assertEquals(302, r.status)
+        assertEquals("https://elsewhere.example/collect", r.header("location"))
+        assertEquals(listOf("caddie.example"), requests.map { it.url.host })
+        assertTrue(requests.none { it.url.host != "caddie.example" && it.headers["X-Caddie-Device"] != null })
+    }
+
+    @Test
+    fun noRedirectStatusIsFollowedForAnyMethod() = test {
+        for (status in listOf(HttpStatusCode.MovedPermanently, HttpStatusCode.Found, HttpStatusCode.SeeOther, HttpStatusCode.TemporaryRedirect, HttpStatusCode.PermanentRedirect)) {
+            for (method in listOf("GET", "PUT", "POST", "DELETE")) {
+                requests.clear()
+                val h = redirectingTo("https://caddie.example.attacker.example/api/people/profile", status)
+                val body = if (method == "PUT" || method == "POST") "{}".encodeToByteArray() else null
+                val r = h.send(method, api, mapOf("X-Caddie-Device" to "d.s"), body, timeoutMs = 5_000, maxBytes = 1024)
+                assertEquals(status.value, r.status, "$method $status")
+                assertEquals(1, requests.size, "$method $status went to one host only")
+            }
+        }
+    }
+
+    @Test
+    fun aRedirectedPeopleReadFailsAndTheCredentialStaysWithTheBackend() = test {
+        val h = redirectingTo("https://elsewhere.example/collect")
+        val people = PeopleApi(h, BACKEND, { DeviceCredential.generate(BACKEND) }, Pace(Clock.System))
+        val error = assertIs<ApiResult.Failed>(people.inbox(SLUG)).error
+        assertEquals(302, error.status)
+        assertFalse(error.noAnswer)
+        assertIs<ApiResult.Failed>(people.blocks(SLUG))
+        assertIs<ApiResult.Failed>(people.readMeet("QEFCQ0RFRkdISUpLTE1OTw"))
+        assertTrue(requests.isNotEmpty())
+        assertTrue(requests.all { it.url.host == "caddie.example" }, "nothing went to the host the redirect named")
+        assertTrue(requests.all { it.headers[PeopleApi.DEVICE_HEADER] != null }, "the credential went to the backend only")
+    }
+
+    @Test
+    fun aBundleGetStillFollowsARedirect() = test {
+        val h = http { request ->
+            when (request.url.host) {
+                "caddie.example" -> respond("", HttpStatusCode.MovedPermanently, headersOf(HttpHeaders.Location, "https://files.example/bundles/conferences.json"))
+                else -> respond("""{"conferences":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ETag, "\"v2\""))
+            }
+        }
+        val r = h.get(url, null, maxBytes = 1024)
+        assertEquals(200, r.status)
+        assertEquals("""{"conferences":[]}""", r.text())
+        assertEquals("\"v2\"", r.etag)
+        assertEquals(listOf("caddie.example", "files.example"), requests.map { it.url.host })
+        assertTrue(requests.none { it.headers["X-Caddie-Device"] != null })
+    }
+
+    @Test
+    fun aBundleGetIsNotRedirectedToPlainHttp() = test {
+        val h = http { request ->
+            when (request.url.host) {
+                "caddie.example" -> respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "http://files.example/bundles/conferences.json"))
+                else -> respond("{}", HttpStatusCode.OK)
+            }
+        }
+        assertEquals(302, h.get(url, null, maxBytes = 1024).status)
+        assertEquals(listOf("caddie.example"), requests.map { it.url.host })
     }
 }

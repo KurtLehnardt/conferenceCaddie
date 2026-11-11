@@ -7,12 +7,13 @@
   "scripts": {
     "dev": "npm --prefix ../web run build:worker && wrangler dev --local --port 8787",
     "deploy": "bash scripts/deploy.sh",
-    "dev-vars": "node scripts/dev-vars.mjs"
+    "dev-vars": "node scripts/dev-vars.mjs",
+    "test": "node --test \"test/*.test.mjs\""
   },
   "devDependencies": {
     "wrangler": "4.159.0"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   }
 }

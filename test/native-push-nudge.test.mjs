@@ -63,7 +63,7 @@ function around(d, { web = false, apns = null, fcm = null } = {}) {
   const id = `${EVENT}:${d.profileId}`;
   const until = new Date(Date.now() + 30 * 60_000).toISOString();
   fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_spot: SPOT, presence_since: new Date().toISOString(), presence_until: until, presence_location: { lat: 1.5, lon: 2.5 } });
-  if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+  if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
   for (const [platform, token] of [['apns', apns], ['fcm', fcm]]) {
     if (token) fake.put('caddie-people-push', registrationId(EVENT, d.profileId, platform), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
   }
@@ -110,14 +110,14 @@ describe('push nudge with native push', () => {
       console.error = error;
     }
     assert.deepEqual(lines, [], 'every push was accepted');
-    assert.deepEqual(fake.pushes.map(addressOf).sort(), [`apns:${tApns}`, `apns:${vApns}`, `fcm:${vFcm}`, `web:https://push.example.test/${t.profileId}`, `web:https://push.example.test/${v.profileId}`].sort());
+    assert.deepEqual(fake.pushes.map(addressOf).sort(), [`apns:${tApns}`, `apns:${vApns}`, `fcm:${vFcm}`, `web:https://fcm.googleapis.com/fcm/send/${t.profileId}`, `web:https://fcm.googleapis.com/fcm/send/${v.profileId}`].sort());
     assert.equal(records().length, 1);
     assert.deepEqual(records()[0].receivers.sort(), [t.profileId, v.profileId].sort());
 
     // Web Push, end-to-end encrypted to the browser, carries the passage and the zone.
     const words = new Map(fake.pushes.map((p) => [addressOf(p), wordsOf(p)]));
-    const toT = words.get(`web:https://push.example.test/${t.profileId}`);
-    const toV = words.get(`web:https://push.example.test/${v.profileId}`);
+    const toT = words.get(`web:https://fcm.googleapis.com/fcm/send/${t.profileId}`);
+    const toV = words.get(`web:https://fcm.googleapis.com/fcm/send/${v.profileId}`);
     for (const w of [toT, toV]) {
       assert.equal(w.title, 'Conference Caddie');
       assert.match(w.body, /^Someone who's worked on .+ is in Hall A right now$/);
@@ -166,7 +166,7 @@ describe('push nudge with native push', () => {
       fake.put('caddie-people-nudges', `earlier-${i}`, { event_id: EVENT, day: 'x', profile_ids: [t.profileId, `someone${i}`], receivers: [t.profileId], created_at: new Date(Date.now() - i * 60_000).toISOString(), expires_at: FUTURE });
     }
     await nudgeAfterPresence(me, CONF, NO_PAUSE);
-    const toT = fake.pushes.filter((p) => [`apns:${tApns}`, `fcm:${tFcm}`, `web:https://push.example.test/${t.profileId}`].includes(addressOf(p)));
+    const toT = fake.pushes.filter((p) => [`apns:${tApns}`, `fcm:${tFcm}`, `web:https://fcm.googleapis.com/fcm/send/${t.profileId}`].includes(addressOf(p)));
     assert.equal(toT.length, 3, 'the third nudge of the hour reaches all three of T\'s channels');
     const pairRecord = records().find((r) => r.profile_ids.includes(v.profileId));
     assert.deepEqual(pairRecord.receivers.sort(), [t.profileId, v.profileId].sort(), 'and counts once');
@@ -195,10 +195,10 @@ describe('push nudge with native push', () => {
     const pauses = [];
     await nudgeAfterPresence(me, CONF, { pause: async () => pauses.push(fake.pushes.map(addressOf).sort()) });
     assert.equal(pauses.length, 1, 'one pause, in the pair with two receivers');
-    assert.deepEqual(pauses[0], [`apns:${tApns}`, `web:https://push.example.test/${t.profileId}`].sort(), 'all of the first person\'s pushes go out before it');
+    assert.deepEqual(pauses[0], [`apns:${tApns}`, `web:https://fcm.googleapis.com/fcm/send/${t.profileId}`].sort(), 'all of the first person\'s pushes go out before it');
     const after = fake.pushes.map(addressOf).slice(2);
-    assert.deepEqual(after.slice(0, 2).sort(), [`fcm:${vFcm}`, `web:https://push.example.test/${v.profileId}`].sort(), 'all of the second person\'s after it');
-    assert.deepEqual(after.slice(2), [`web:https://push.example.test/${w.profileId}`]);
+    assert.deepEqual(after.slice(0, 2).sort(), [`fcm:${vFcm}`, `web:https://fcm.googleapis.com/fcm/send/${v.profileId}`].sort(), 'all of the second person\'s after it');
+    assert.deepEqual(after.slice(2), [`web:https://fcm.googleapis.com/fcm/send/${w.profileId}`]);
   });
 
   test('the pause is a random whole number of milliseconds from 0 to 3000', () => {
@@ -233,7 +233,7 @@ describe('push nudge with native push', () => {
     assert.deepEqual(targetSearches()[0].body.aggs.receivers.terms, { field: 'profile_id', size: 3 });
     // The writer hears about both matches, and each match about the writer: the pushes main sent.
     const sent = fake.pushes.map(addressOf).sort();
-    assert.deepEqual(sent, [t, t, v, w].map((d) => `web:https://push.example.test/${d.profileId}`).sort());
+    assert.deepEqual(sent, [t, t, v, w].map((d) => `web:https://fcm.googleapis.com/fcm/send/${d.profileId}`).sort());
     assert.equal(records().length, 2);
 
     // The same day again: both records exist, so the creates answer 409 and nothing is sent; the
@@ -249,7 +249,7 @@ describe('push nudge with native push', () => {
     const tApns = apnsToken();
     const { v, me } = await pair({ apns: tApns }, {});
     for (let i = 0; i < 12; i++) {
-      fake.put('caddie-people-push', `flood-${i}`, { event_id: EVENT, profile_id: v.profileId, endpoint: `https://push.example.test/flood/${i}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString(), expires_at: FUTURE });
+      fake.put('caddie-people-push', `flood-${i}`, { event_id: EVENT, profile_id: v.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/flood/${i}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString(), expires_at: FUTURE });
     }
     const lines = [];
     const error = console.error;
@@ -260,7 +260,7 @@ describe('push nudge with native push', () => {
       console.error = error;
     }
     const toV = fake.pushes.filter((p) => !p.platform).map((p) => p.endpoint).sort();
-    assert.deepEqual(toV, Array.from({ length: 10 }, (_, i) => `https://push.example.test/flood/${i + 2}`).sort(), 'the newest ten');
+    assert.deepEqual(toV, Array.from({ length: 10 }, (_, i) => `https://fcm.googleapis.com/fcm/send/flood/${i + 2}`).sort(), 'the newest ten');
     assert.deepEqual(fake.pushes.filter((p) => p.platform).map(addressOf), [`apns:${tApns}`]);
     assert.deepEqual(lines, ['Push targets capped: one receiver has 12, the newest 10 are used']);
   });

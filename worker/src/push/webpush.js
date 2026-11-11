@@ -207,6 +207,41 @@ export async function vapidJwt(env, audience, nowMs = Date.now()) {
   return token;
 }
 
+// The hosts of the browser push services this Worker delivers to. Chrome Stable, Opera, Samsung
+// Internet and other Chromium browsers deliver through FCM (fcm.googleapis.com; android.googleapis.com
+// is the older FCM and GCM host). Chromium builds that report a channel other than Stable (Chrome
+// Beta, Dev and Canary, unbranded Chromium, and some other Chromium-based browsers) use
+// jmt17.google.com instead (GetGcmEndpointForChannel in Chromium's
+// components/push_messaging/push_messaging_utils.cc). Chromium-based Edge delivers through WNS
+// (*.notify.windows.com), not FCM. Firefox uses Mozilla autopush and Safari uses Apple.
+// An entry that starts with a dot matches any subdomain of it; every other entry matches that exact
+// host only. Anything else is refused, so a subscription can never make the Worker send signed
+// requests to a host the person chose.
+export const PUSH_SERVICE_HOSTS = Object.freeze([
+  'fcm.googleapis.com',
+  'android.googleapis.com',
+  'jmt17.google.com',
+  '.push.services.mozilla.com',
+  '.notify.windows.com',
+  'web.push.apple.com',
+  '.push.apple.com',
+]);
+
+// True when value is a https URL on a known push service host, on the default port, with no
+// user name or password. IP literals never match, because no allowed host is an IP address.
+export function isPushServiceEndpoint(value) {
+  let u;
+  try {
+    u = new URL(value);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port !== '') return false;
+  const host = u.hostname.toLowerCase();
+  if (!host || host.endsWith('.')) return false;
+  return PUSH_SERVICE_HOSTS.some((h) => (h.startsWith('.') ? host.endsWith(h) && host.length > h.length : host === h));
+}
+
 // The fetch() arguments that deliver payload (a string) to one subscription
 // ({ endpoint, p256dh, auth }). Throws a fixed-message Error on a malformed subscription.
 export async function buildPushRequest(env, sub, payload, nowMs = Date.now()) {
@@ -223,6 +258,9 @@ export async function buildPushRequest(env, sub, payload, nowMs = Date.now()) {
     url: sub.endpoint,
     init: {
       method: 'POST',
+      // A redirect is never followed, so the VAPID-signed request cannot be forwarded to a host
+      // that is not on the push service list. Known push services do not redirect.
+      redirect: 'manual',
       headers: {
         TTL: String(TTL_SECONDS),
         Urgency: 'normal',

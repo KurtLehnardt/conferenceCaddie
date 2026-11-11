@@ -19,13 +19,19 @@
 // Env: CADDIE_API_BASE (the Worker URL, when --api is not given); ADMIN_TOKEN, or ADMIN_TOKEN_FILE
 //      (default ~/.config/conference-caddie/admin-token, written by setup-secrets.mjs).
 //
-// The admin token is sent only in the Authorization header and is never printed. The Worker never
+// The admin token never leaves this machine and is never printed: each request carries an
+// X-Caddie-Admin signature made with it (scripts/lib/admin-sign.mjs), and no Authorization header.
+// The API base must be the Worker's origin, with no path, over https (plain http for localhost
+// only). With CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET both set, the Cloudflare Access
+// service token headers are sent too, as worker/ingest/lib.mjs sends them. The Worker never
 // returns profile ids or reporter ids from these routes, and this script prints neither.
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
+import { accessHeaders, isRedirect, normalizeApiBase } from '../ingest/lib.mjs';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const REF_RE = /^[0-9a-f]{16}$/;
@@ -80,11 +86,9 @@ const showContent = opts['show-content'];
 const rawBase = opts.api ?? process.env.CADDIE_API_BASE ?? '';
 let base;
 try {
-  const u = new URL(rawBase);
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('protocol');
-  base = u.origin + u.pathname.replace(/\/+$/, '');
-} catch {
-  usage('--api <base> (or CADDIE_API_BASE) must be the Worker URL, for example https://conference-caddie.<subdomain>.workers.dev.');
+  base = normalizeApiBase(rawBase);
+} catch (err) {
+  usage(`${err.message} --api <base> (or CADDIE_API_BASE) is the Worker URL, for example https://conference-caddie.<subdomain>.workers.dev.`);
 }
 
 function readToken() {
@@ -114,17 +118,31 @@ function parseTarget(value) {
 
 const redact = (text) => String(text ?? '').split(token).join('[ADMIN_TOKEN]');
 
-async function admin(method, path, body) {
-  const url = `${base}/admin/moderation?${new URLSearchParams(path)}`;
+// query is a plain object of parameters. Its values are a slug or an ISO instant, which the
+// signer's query charset allows as they are, so they are joined without percent-encoding (the
+// signer refuses a "%"); anything else is a usage error before a request is made.
+async function admin(method, query, body) {
+  const path = `/admin/moderation?${Object.entries(query).map(([k, v]) => `${k}=${v}`).join('&')}`;
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  let signed;
+  try {
+    signed = signAdminRequest({ method, path, base, body: payload, key: token });
+  } catch (err) {
+    usage(err.message);
+  }
   let res;
   try {
-    res = await fetch(url, {
+    res = await fetch(signed.url, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        [HEADER_NAME]: signed.header,
+        ...accessHeaders(process.env),
+        ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: payload,
+      // Never followed: fetch drops only Authorization on a cross-origin redirect, so the signed
+      // header and the Access secret would go to the other origin.
+      redirect: 'manual',
       signal: AbortSignal.timeout(30_000),
     });
   } catch (err) {
@@ -132,9 +150,17 @@ async function admin(method, path, body) {
     console.error(`Could not reach the Worker at ${base} (${why}). Check --api or CADDIE_API_BASE.`);
     process.exit(1);
   }
+  if (isRedirect(res)) {
+    console.error(`The Worker answered ${method} /admin/moderation with status ${res.status}, a redirect. Admin calls never follow redirects; --api (or CADDIE_API_BASE) must be the Worker's own origin.`);
+    process.exit(1);
+  }
   const json = await res.json().catch(() => ({}));
   if (res.status === 404) {
-    console.error(`The Worker answered 404 to ${method} /admin/moderation. Either the admin token is wrong or not set on the Worker (admin routes answer 404 then), or the conference ${slug} is unknown there.`);
+    console.error(`The Worker answered 404 to ${method} /admin/moderation. Either the admin token is wrong or not set on the Worker (admin routes answer 404 then; after ten wrong signatures from one address in a minute they answer 404 to every request from it for up to a minute), or the conference ${slug} is unknown there.`);
+    process.exit(1);
+  }
+  if (res.status === 401 && json?.error === 'admin_skew') {
+    console.error("The Worker refused the request's timestamp (admin_skew): it was more than five minutes from the Worker's clock or the conference object's when the request reached them. Either this machine's clock is off, the request body took that long to arrive, or the Worker's and the object's clocks disagree; check this machine's clock and try again.");
     process.exit(1);
   }
   if (!res.ok) {

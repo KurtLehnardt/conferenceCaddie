@@ -6,13 +6,18 @@
 // - At most 40 push requests per call by default, below the Free plan's 50 subrequests per
 //   request. A caller that sends several payloads in one request (the nudge rule) passes one
 //   shared budget object so the total stays at 40.
-// - A subscription the push service reports gone (404 or 410) is deleted at once.
+// - A subscription the push service reports gone (404 or 410) is deleted at once. A row whose
+//   endpoint is not on a known push service host is skipped before the send budget is counted,
+//   logged by host only, and kept, so a gap in the host list never destroys subscriptions. Each
+//   push request times out after PUSH_TIMEOUT_MS.
 // - A failure is one log line with a status or an error class, never an endpoint, a key, a
 //   payload or a person.
 
-import { buildPushRequest, vapidConfigured } from './webpush.js';
+import { buildPushRequest, isPushServiceEndpoint, vapidConfigured } from './webpush.js';
 
 export const MAX_SENDS = 40;
+// How long one push request may take before it is abandoned.
+export const PUSH_TIMEOUT_MS = 10_000;
 
 // The live subscriptions of these people: [{ id, profile_id, endpoint, p256dh, auth }].
 export function subscriptionsFor(ctx, profileIds, now = Date.now()) {
@@ -36,7 +41,11 @@ export function subscriptionsFor(ctx, profileIds, now = Date.now()) {
 export async function sendPush(ctx, profileIds, payload, { budget = { left: MAX_SENDS } } = {}) {
   try {
     if (!vapidConfigured(ctx.env) || !(budget.left > 0)) return 0;
-    const subs = subscriptionsFor(ctx, profileIds).slice(0, Math.max(0, budget.left));
+    // A row whose endpoint is not on the push service allowlist is never sent to and never deleted,
+    // and it must not use up the shared budget either, so it is dropped before the budget cut.
+    const subs = subscriptionsFor(ctx, profileIds)
+      .filter((s) => allowed(s))
+      .slice(0, Math.max(0, budget.left));
     if (!subs.length) return 0;
     budget.left -= subs.length;
     const data = JSON.stringify(payload);
@@ -48,10 +57,32 @@ export async function sendPush(ctx, profileIds, payload, { budget = { left: MAX_
   }
 }
 
+// The host of an endpoint for a log line, or a fixed word when it does not parse. Never the path or
+// query. Cut at 64 characters, as the refusal at subscribe time (push/routes.js) cuts it.
+function hostOf(endpoint) {
+  try {
+    return new URL(endpoint).hostname.toLowerCase().slice(0, 64);
+  } catch {
+    return 'unparseable';
+  }
+}
+
+// True when the row's endpoint is on the push service allowlist. Otherwise the row is kept, and
+// the host is logged (host only, never the path, which is the secret) as a warning, like the refusal
+// at subscribe time, so a push service missing from the list shows up.
+function allowed(sub) {
+  if (isPushServiceEndpoint(sub.endpoint)) return true;
+  console.warn(`push skipped: endpoint host not allowed: ${hostOf(sub.endpoint)}`);
+  return false;
+}
+
 async function deliver(ctx, sub, data) {
   try {
+    // sendPush already dropped rows whose endpoint is not allowed; this is the last guard before a
+    // signed request goes out, and it keeps the row.
+    if (!isPushServiceEndpoint(sub.endpoint)) return false;
     const { url, init } = await buildPushRequest(ctx.env, sub, data);
-    const res = await fetch(url, init);
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(PUSH_TIMEOUT_MS) });
     try {
       await res.body?.cancel();
     } catch {

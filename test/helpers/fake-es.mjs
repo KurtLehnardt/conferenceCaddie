@@ -21,6 +21,8 @@ import assert from 'node:assert/strict';
 
 export const ES_HOST = 'es.caddie.test';
 export const EVENT = 'testconf-2099';
+// Elasticsearch's default index.max_inner_result_window: top_hits from + size may not exceed it.
+const MAX_INNER_RESULT_WINDOW = 100;
 export const FUTURE = '2099-12-31T23:59:59.000Z';
 export const INDEX = {
   people: 'caddie-people',
@@ -283,14 +285,14 @@ export class FakeES {
     for (const h of this.hooks.filter((x) => x.when === when && x.tag === tag && x.nth === n)) await h.fn(this);
   }
 
-  async handle(method, url, rawBody) {
+  async handle(method, url, rawBody, headers = {}) {
     const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     const [index, op, docKey] = parts;
     const params = url.searchParams;
     const tag = this.tagOf(method, index, op, docKey, params, rawBody);
     let body;
     if (rawBody !== undefined && rawBody !== null && op !== '_bulk') body = JSON.parse(String(rawBody));
-    this.log.push({ tag, method, path: url.pathname, params: new URLSearchParams(params), body: op === '_bulk' ? String(rawBody) : body });
+    this.log.push({ tag, method, path: url.pathname, params: new URLSearchParams(params), body: op === '_bulk' ? String(rawBody) : body, headers });
     if (this.held?.tags.has(tag)) {
       const held = this.held;
       held.seen.add(tag);
@@ -308,6 +310,11 @@ export class FakeES {
   }
 
   answer(method, index, op, docKey, params, body, rawBody, tag, failure) {
+    if (index === '_cluster' && op === 'health') return json(this.clusterHealth ?? { cluster_name: 'fake', status: 'green', number_of_nodes: 1, active_shards: this.indices.size, unassigned_shards: 0 });
+    if (index === '_cat' && op === 'indices') {
+      const pattern = new RegExp(`^${(docKey ?? '*').replace(/[.]/g, '\\.').replace(/\*/g, '.*')}$`);
+      return json(this.catIndices ?? [...this.indices].filter(([name]) => pattern.test(name)).map(([name, docs]) => ({ index: name, 'docs.count': String(docs.size), 'store.size': `${docs.size}kb` })));
+    }
     if (method === 'HEAD') return new Response(null, { status: this.indices.has(index) ? 200 : 404 });
     if (op === '_mapping' && method === 'PUT') {
       this.mappings = [...(this.mappings ?? []), { index, properties: body?.properties ?? {} }];
@@ -375,11 +382,13 @@ export class FakeES {
   // Terms aggregations ({ terms: { field, size, include } }) over every matching document, each
   // bucket with its own sub-aggregations (aggs); and top_hits ({ top_hits: { size, sort, _source,
   // seq_no_primary_term } }, size 3 by default as in Elasticsearch) over the documents of its
-  // bucket, or of the whole search. Any other aggregation answers no buckets.
+  // bucket, or of the whole search; from + size over 100 (index.max_inner_result_window, the
+  // default) throws, as Elasticsearch refuses it. Any other aggregation answers no buckets.
   aggregate(index, found, aggs) {
     return Object.fromEntries(Object.entries(aggs).map(([name, spec]) => {
       if (spec.top_hits) {
-        const { size = 3, sort, _source: source, seq_no_primary_term: withSeq = false } = spec.top_hits;
+        const { from = 0, size = 3, sort, _source: source, seq_no_primary_term: withSeq = false } = spec.top_hits;
+        if (from + size > MAX_INNER_RESULT_WINDOW) throw new Error(`fake Elasticsearch: top_hits from + size ${from + size} is over index.max_inner_result_window ${MAX_INNER_RESULT_WINDOW}`);
         const specs = sortSpecs(sort);
         const compare = comparer(specs);
         const sorted = specs.length ? [...found].sort(([, a], [, b]) => compare(sortValuesOf(specs, a), sortValuesOf(specs, b))) : found;
@@ -671,7 +680,7 @@ export async function serve(cluster) {
     for await (const chunk of req) chunks.push(chunk);
     const raw = chunks.length ? Buffer.concat(chunks).toString('utf8') : undefined;
     try {
-      const answer = await cluster.handle(req.method, new URL(req.url, 'http://127.0.0.1'), raw);
+      const answer = await cluster.handle(req.method, new URL(req.url, 'http://127.0.0.1'), raw, req.headers);
       const text = await answer.text();
       res.writeHead(answer.status, { 'content-type': 'application/json' });
       res.end(text);

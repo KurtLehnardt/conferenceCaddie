@@ -8,6 +8,9 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "caddie-admin": "scripts/caddie-admin.mjs"
+  },
   "scripts": {
     "es:setup": "node scripts/es-setup.mjs",
     "ingest": "node scripts/ingest.mjs",
@@ -22,6 +25,7 @@
     "push:setup": "node scripts/es-setup-push.mjs",
     "push:vapid-keys": "node scripts/vapid-keys.mjs",
     "moderation": "node scripts/moderation.mjs",
+    "admin": "node scripts/caddie-admin.mjs",
     "rules:setup": "node scripts/es-setup-rules.mjs",
     "rules:reload": "node scripts/moderation-rules.mjs --reload-rules",
     "start": "node server/index.mjs",
@@ -29,7 +33,7 @@
     "build": "npm --prefix web ci && npm --prefix web run build",
     "bundles": "node scripts/build-bundles.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test \"test/*.test.mjs\" \"worker/test/*.test.mjs\" \"scripts/test/*.test.mjs\"",
     "deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {

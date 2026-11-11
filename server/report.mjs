@@ -32,6 +32,7 @@
 import { clientIp } from './ratelimit.mjs';
 import { refFor } from './device.mjs';
 import { peoplePreference, withPreference } from './preference.mjs';
+import { HIDE_AT, OPERATOR_REPORTER } from './people-shared.mjs';
 // people.mjs imports reportCountsFor and HIDE_AT from here in turn; neither module uses the other's
 // bindings while it is being evaluated, so the cycle is safe.
 import {
@@ -44,8 +45,12 @@ export const REPORTS_INDEX = process.env.ES_PEOPLE_REPORTS_INDEX || 'caddie-peop
 
 const HOUR_MS = 60 * 60_000;
 const REPORTS_PER_HOUR = 20;
-// Distinct reporters at which a target is hidden from everyone but its owner.
-export const HIDE_AT = 2;
+// Distinct reporters at which a target is hidden from everyone but its owner (people-shared.mjs,
+// so the operator CLI reads the same value without importing this module). A report whose
+// reporter_id is OPERATOR_REPORTER, filed by the operator with caddie-admin, counts as HIDE_AT on
+// its own in both counts below, so an operator hide survives a profile rewrite and a profile
+// re-made from the same device.
+export { HIDE_AT };
 
 const KINDS = new Set(['profile', 'meet', 'spot']);
 const REASONS = new Set(['harassment', 'hate', 'sexual', 'spam', 'other']);
@@ -94,12 +99,19 @@ async function targetProfileId(me, slug, { ref, kind, id }) {
   return them.profile_id;
 }
 
-// Distinct reporters of one target. Every report document is one reporter, by its _id.
+// Distinct reporters of one target. Every report document is one reporter, by its _id. One
+// size-0 search with a terms aggregation on reporter_id, included for the operator's id only, so
+// an operator report lifts the count to HIDE_AT whatever else is on file.
 async function reporterCount(slug, kind, id) {
-  const { json } = await people('POST', `${idx(REPORTS_INDEX)}/_count?ignore_unavailable=true`, {
+  const { json } = await people('POST', withPreference(`${idx(REPORTS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(slug)), {
+    size: 0,
+    track_total_hits: true,
     query: { bool: { filter: [{ term: { event_id: slug } }, { term: { target_kind: kind } }, { term: { target_id: id } }] } },
+    aggs: { operator: { terms: { field: 'reporter_id', size: 1, include: [OPERATOR_REPORTER] } } },
   });
-  return json.count ?? 0;
+  const total = json.hits?.total?.value ?? 0;
+  const operator = (json.aggregations?.operator?.buckets ?? []).some((b) => b.key === OPERATOR_REPORTER && (b.doc_count ?? 0) > 0);
+  return operator ? Math.max(total, HIDE_AT) : total;
 }
 
 // The distinct reporters of one person's profile and of their spot line, as { profile, spot }:
@@ -108,15 +120,19 @@ async function reporterCount(slug, kind, id) {
 // because the reports outlive the document: a profile hidden after reports whose owner turns both
 // visibility choices off (which deletes the document) and on again is hidden again. A missing
 // reports index counts as none. Throws the transport's UpstreamError when the search fails, and
-// the caller fails closed.
+// the caller fails closed. A kind whose reports include the operator's counts as HIDE_AT at least.
 export async function reportCountsFor(slug, ref) {
   const { json } = await people('POST', withPreference(`${idx(REPORTS_INDEX)}/_search?ignore_unavailable=true`, peoplePreference(slug)), {
     size: 0,
     query: { bool: { filter: [{ term: { event_id: slug } }, { terms: { target_kind: ['profile', 'spot'] } }, { term: { target_id: ref } }] } },
-    aggs: { kinds: { terms: { field: 'target_kind', size: 2 } } },
+    aggs: { kinds: { terms: { field: 'target_kind', size: 2 }, aggs: { operator: { terms: { field: 'reporter_id', size: 1, include: [OPERATOR_REPORTER] } } } } },
   });
   const counts = { profile: 0, spot: 0 };
-  for (const b of json.aggregations?.kinds?.buckets ?? []) if (b.key === 'profile' || b.key === 'spot') counts[b.key] = b.doc_count ?? 0;
+  for (const b of json.aggregations?.kinds?.buckets ?? []) {
+    if (b.key !== 'profile' && b.key !== 'spot') continue;
+    const operator = (b.operator?.buckets ?? []).some((o) => o.key === OPERATOR_REPORTER && (o.doc_count ?? 0) > 0);
+    counts[b.key] = operator ? Math.max(b.doc_count ?? 0, HIDE_AT) : (b.doc_count ?? 0);
+  }
   return counts;
 }
 

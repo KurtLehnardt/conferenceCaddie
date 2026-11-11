@@ -26,11 +26,35 @@
 //                        fixtures: POST /admin/test/profile (the expired profile),
 //                        POST /admin/test/age-presence (the aged presence) and GET /admin/stats (the
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
-//                        The token is only ever sent as an Authorization header to API_BASE.
+//                        Check meter1 also uses POST /admin/test/meter-restart (a new usage meter).
+//                        The reports the run makes are removed at the end with POST /admin/moderation.
+//                        The token is only ever used towards API_BASE: as the key of the X-Caddie-Admin
+//                        signature (SMOKE_ADMIN_AUTH=signed) or as a bearer (SMOKE_ADMIN_AUTH=bearer).
+//   SMOKE_ADMIN_AUTH     signed or bearer: how the admin calls authenticate. signed builds the
+//                        X-Caddie-Admin header of scripts/lib/admin-sign.mjs for every admin call, with a
+//                        fresh nonce and timestamp on each attempt, and sends no Authorization header;
+//                        bearer sends Authorization: Bearer <token>, the scheme of a Worker that has not
+//                        deployed the signed admin routes yet. Default bearer in this release; it flips to
+//                        signed once the Worker change is deployed, and the bearer path is then removed.
+//                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
+//                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
+//                        Worker) and the checks that need them (meter1, the expired profile, the aged
+//                        presence, unav1) print SKIP instead of FAIL.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
 //   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when the web app (SMOKE_DIST) has not been built.
+//   SMOKE_TALKS          bundle or data: where the checks that need a conference's own talks (d, e1,
+//                        e2, n1, n2, m2, x, o, sch1 and the import picks) take them from. bundle (the
+//                        default against a deployed Worker) reads the published talk bundles, the ones native
+//                        clients use: the ingest run publishes them from the same fetch it pushes to
+//                        the Worker, so a schedule change upstream moves both and passes, while a
+//                        Worker that serves other talks than the bundles fails. data (the default
+//                        against Cloud Run, whose index is loaded by hand, and against an API on
+//                        localhost or 127.0.0.1, which is loaded from the seed) reads the committed
+//                        data/ snapshot. Check bun1 compares every searchable conference with its bundle.
+//   SMOKE_BUNDLE_BASE    the talk bundle base for SMOKE_TALKS=bundle, an https URL ending in "/" (or
+//                        http://localhost or http://127.0.0.1 for a local test). Default https://kurtlehnardt.github.io/conferenceCaddie/bundles/.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
@@ -70,8 +94,10 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
+import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
 
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -114,6 +140,31 @@ function readAdminToken() {
 }
 const ADMIN_TOKEN = readAdminToken();
 
+// How the admin calls authenticate (SMOKE_ADMIN_AUTH above). The signed scheme needs a key of at
+// least 32 characters, which the Worker requires of ADMIN_TOKEN anyway.
+const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'bearer').toLowerCase();
+if (!['signed', 'bearer'].includes(ADMIN_AUTH)) {
+  console.log('FAIL config: SMOKE_ADMIN_AUTH must be signed or bearer');
+  process.exit(1);
+}
+if (ADMIN_TOKEN && ADMIN_AUTH === 'signed' && ADMIN_TOKEN.length < 32) {
+  console.log('FAIL config: the admin token must have at least 32 characters to sign with (SMOKE_ADMIN_AUTH=signed)');
+  process.exit(1);
+}
+// The auth headers of one admin attempt. A signed header carries a fresh nonce and timestamp
+// each time it is built, so a retry never resends one. `key` is the real token unless a probe
+// deliberately signs with a wrong one.
+function adminAuthHeaders(method, path, body, key = ADMIN_TOKEN) {
+  return adminAuth(method, path, body, key).headers;
+}
+// The auth headers and the URL of one admin attempt. In signed mode the URL is the one the signer
+// canonicalised and signed, so what is sent is exactly what the signature covers.
+function adminAuth(method, path, body, key = ADMIN_TOKEN) {
+  if (ADMIN_AUTH === 'bearer') return { headers: { Authorization: `Bearer ${key}` }, url: `${API_BASE}${path}` };
+  const signed = signAdminRequest({ method, path, base: API_BASE, body, key });
+  return { headers: { 'X-Caddie-Admin': signed.header }, url: signed.url };
+}
+
 // Which API this is. The Worker needs the CORS checks, the admin fixtures and text-only imports;
 // Cloud Run serves everything from one origin and keeps the Elasticsearch helpers.
 const API_KIND_ENV = (process.env.SMOKE_API || '').toLowerCase();
@@ -129,6 +180,22 @@ const SEND_ORIGIN = IS_WORKER;
 // The Worker serving the web app itself, on BASE_URL's origin (the free stack as deployed).
 const WORKER_SERVES_APP = IS_WORKER && !CROSS_ORIGIN_API;
 const DIST_DIR = process.env.SMOKE_DIST || (WORKER_SERVES_APP ? 'web/dist-worker' : 'web/dist');
+// A local API (wrangler dev or a local server) on this machine.
+// Where the expected talks of a conference come from (SMOKE_TALKS above). A Worker on this machine
+// is loaded from the committed data/, not from the schedules the ingest published, so it is compared
+// with data/ by default.
+const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER && !LOCAL_API ? 'bundle' : 'data')).toLowerCase();
+if (!['bundle', 'data'].includes(TALKS_FROM)) {
+  console.log('FAIL config: SMOKE_TALKS must be bundle or data');
+  process.exit(1);
+}
+const BUNDLE_BASE = process.env.SMOKE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+// https, or plain http to this machine for a local test.
+if (TALKS_FROM === 'bundle' && !/^https:\/\/[^\s?#]+\/$/.test(BUNDLE_BASE) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?\/$/.test(BUNDLE_BASE)) {
+  console.log('FAIL config: SMOKE_BUNDLE_BASE must be an https URL that ends in "/"');
+  process.exit(1);
+}
 
 // Where the three helpers that reach behind the API get their way in: the Worker's admin fixtures,
 // Elasticsearch (Cloud Run only), or nowhere, in which case the checks that need them are skipped.
@@ -186,9 +253,8 @@ const LEARN = ['ebpf', 'gpu', 'llm'];
 // empty while they are around: a nudge is looked for without a search text, so it reads topics,
 // interests and expertise and never about, and a semantic neighbour cannot pick them either.
 const runTag = crypto.randomBytes(4).toString('hex');
-// A local API (wrangler dev or a local server): checks that need test profiles with a specific match
-// to be around, or a conference to be flipped, run only here unless asked for.
-const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+// A local API (LOCAL_API, wrangler dev or a local server): checks that need test profiles with a
+// specific match to be around, or a conference to be flipped, run only there unless asked for.
 // What A wants to learn (A's interests) and B, C, R and the expired profile have worked on (their
 // expertise; B also wants it, so B finds R).
 const SMOKE_SUBJECT = `zqvsmoke${runTag} vexmorlith quabbit flarnishing`;
@@ -224,11 +290,14 @@ function report(ok, name, detail = '') {
 function skip(name, why) {
   console.log(`SKIP ${name} (${why})`);
 }
+// Thrown inside a check that cannot run here (a gated fixture route): the check prints SKIP, not FAIL.
+class SkipCheck extends Error {}
 async function check(name, fn) {
   try {
     await fn();
   } catch (err) {
-    report(false, name, err.message);
+    if (err instanceof SkipCheck) skip(name, err.message);
+    else report(false, name, err.message);
   }
 }
 
@@ -361,27 +430,75 @@ async function readBackShared(device, event, requested, before, label) {
   }
 }
 
-// The Worker's admin routes. The token goes only in the Authorization header, and no Origin header
-// is sent, because the Worker answers 404 to an admin request that carries one. Nothing here prints
-// the token, a request body or a response body.
+// The Worker's admin routes. The token goes only into the auth header (adminAuthHeaders), and no
+// Origin header is sent, because the Worker answers 404 to an admin request that carries one. Like
+// api(), a 5xx or a network failure is retried once with a NOTE line, and the retry builds its
+// headers afresh, so a signed attempt is never resent with the same nonce. A retry can repeat a
+// write whose answer was lost; every admin write the run makes is idempotent (the fixture profile
+// and the aged presence are upserts, a meter restart reads the stored totals, PUT /admin/conferences
+// upserts, the fixture delete and the unhide are no-ops the second time), so that is safe. Flags
+// for a route go in the JSON body, never in the query string, so the body hash covers them.
+// Nothing here prints the token, a request body or a response body.
 async function admin(method, path, body) {
-  const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  const text = await res.text();
-  let json = {};
-  try {
-    json = JSON.parse(text);
-  } catch {
-    /* keep {} */
+  const serialised = body === undefined ? undefined : JSON.stringify(body);
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { headers, url } = adminAuth(method, path, serialised);
+      if (serialised !== undefined) headers['Content-Type'] = 'application/json';
+      const res = await fetch(url, {
+        method,
+        headers,
+        body: serialised,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      const text = await res.text();
+      if (res.status >= 500 && attempt === 0) {
+        retried++;
+        console.log(`NOTE ${method} ${path.split('?')[0]} (admin) answered ${res.status} on the first attempt; retrying once`);
+        continue;
+      }
+      let json = {};
+      try {
+        json = JSON.parse(text);
+      } catch {
+        /* keep {} */
+      }
+      otherResponses.push({ label: 'admin', path: path.split('?')[0], text, headersText: headerText(res.headers) });
+      noteFixtureAnswer(path, res.status);
+      return { status: res.status, json, headers: res.headers };
+    } catch (err) {
+      // A request the signer refuses is a bug in this script, not a network failure: no retry.
+      if (err instanceof UsageError) throw err;
+      lastError = err;
+      if (attempt === 0) {
+        retried++;
+        console.log(`NOTE ${method} ${path.split('?')[0]} (admin) failed on the first attempt (${err.message}); retrying once`);
+      }
+    }
   }
-  otherResponses.push({ label: 'admin', path: path.split('?')[0], text, headersText: headerText(res.headers) });
-  return { status: res.status, json, headers: res.headers };
+  throw lastError;
+}
+
+// Whether the Worker serves its /admin/test/* fixtures. A deployed Worker has them gated off unless
+// ADMIN_TEST_ROUTES is "1" (then they answer 404 while the other admin routes work), and the checks
+// that need them print SKIP. Decided once, on the first fixture call that answers 404: when
+// GET /admin/stats answers 200 with the same credentials, the fixtures are gated; otherwise the
+// 404 is an auth or routing failure and the check fails as before.
+let fixturesGated = null;
+const FIXTURES_GATED_WHY = 'the Worker answers 404 to /admin/test/*: its fixtures are gated off; deploy it with ADMIN_TEST_ROUTES=1 to run this check';
+function noteFixtureAnswer(path, status) {
+  if (!path.startsWith('/admin/test/') || fixturesGated !== null) return;
+  if (status !== 404) fixturesGated = false;
+}
+async function fixture(method, path, body) {
+  const r = await admin(method, path, body);
+  if (r.status === 404 && fixturesGated === null) {
+    const stats = await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`);
+    fixturesGated = stats.status === 200;
+  }
+  if (r.status === 404 && fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+  return r;
 }
 
 // A page of the web app, relative to BASE_URL (which includes the base path).
@@ -397,7 +514,7 @@ async function staticPage(path) {
 // nothing is re-embedded). Both leave the profile's meets open, as lapsing does.
 async function agePresence(device, who) {
   if (WRITE_MODE === 'admin') {
-    const r = await admin('POST', `/admin/test/age-presence?event=${encodeURIComponent(PRIMARY)}`, { profile_id: device.profileId, until_ms: Date.now() - 60_000 });
+    const r = await fixture('POST', `/admin/test/age-presence?event=${encodeURIComponent(PRIMARY)}`, { profile_id: device.profileId, until_ms: Date.now() - 60_000 });
     if (r.status !== 200) throw new Error(`aging ${who}'s presence gave ${r.status}`);
     return;
   }
@@ -418,10 +535,58 @@ async function search(body) {
   return r;
 }
 
+// A conference's own items (every kind), from the published bundle or the committed data/
+// (SMOKE_TALKS). Bundle talks carry the fields the checks read (talk_id, kind, title, speakers, room,
+// track, tags, start, end, day, end_minutes).
+const bundleTalks = new Map(); // slug -> { docs } or { error }, filled by loadBundleTalks
 const readNdjson = (slug) => {
+  if (TALKS_FROM === 'bundle') {
+    const ref = bundleTalks.get(slug);
+    if (!ref) throw new Error(`the published bundle of ${slug} was not loaded`);
+    if (ref.error) throw new Error(`the published bundle of ${slug}: ${ref.error}`);
+    return ref.docs;
+  }
   const file = join(ROOT, 'data', slug, 'talks.ndjson');
   return readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
 };
+
+// Reads the published index and the bundle.json of each slug, checked against the index's size and
+// SHA-256. Returns the index (readConferenceIndex) or null when it cannot be read; failures per slug
+// are kept in bundleTalks and fail the checks that need them.
+async function loadBundleTalks(slugs) {
+  const get = async (url) => {
+    const res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`${new URL(url).pathname} gave ${res.status}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  };
+  let index;
+  try {
+    index = readConferenceIndex(JSON.parse((await get(`${BUNDLE_BASE}conferences.json`)).toString('utf8')));
+    if (!index.ok) throw new Error(`the published conferences.json is not a usable index (${index.reason})`);
+  } catch (err) {
+    for (const slug of slugs) bundleTalks.set(slug, { error: err.message });
+    return null;
+  }
+  for (const slug of slugs) {
+    const entry = index.conferences.find((c) => c.conference.slug === slug)?.bundle;
+    if (!entry) {
+      bundleTalks.set(slug, { error: 'the published index has no bundle for it' });
+      continue;
+    }
+    try {
+      const bytes = await get(`${BUNDLE_BASE}${entry.path}${BUNDLE_FILE}`);
+      const meta = entry.files[BUNDLE_FILE];
+      if (bytes.length !== meta.bytes || sha256hex(bytes) !== meta.sha256) throw new Error(`${entry.path}${BUNDLE_FILE} does not match the index`);
+      bundleTalks.set(slug, { docs: JSON.parse(bytes.toString('utf8')).talks ?? [], path: entry.path });
+    } catch (err) {
+      bundleTalks.set(slug, { error: err.message });
+    }
+  }
+  return index;
+}
 
 // The UTC offset of a zone at an instant, as "+03:00", through Intl.
 function offsetAt(iso, timeZone) {
@@ -459,6 +624,9 @@ function profileBody(event, who, { learn = [], speak = [], about = '', interests
 
 // Test profiles created in this run, so they can be removed at the end.
 const created = []; // { device, event }
+// The refs the report check (q10) reported. Reports are never purged automatically, so with an
+// admin token the run removes them again through POST /admin/moderation (action unhide).
+const reportedRefs = [];
 async function putProfile(device, event, who, opts, { open = false, shared = [] } = {}) {
   const r = await api('PUT', '/api/people/profile', { event, profile: profileBody(event, who, opts), open_to_meet: open, shared_talk_ids: shared }, { device, label: `${who}-put` });
   if (r.status === 200 && !created.some((c) => c.device === device && c.event === event)) created.push({ device, event });
@@ -483,6 +651,30 @@ await check('conf: GET /api/conferences lists the conferences', async () => {
     missing.length ? `not searchable: ${missing.join(', ')}` : leakedKeys.length ? `internal keys: ${[...new Set(leakedKeys)].join(', ')}` : `${searchable.length} searchable, ${conferences.length - searchable.length} unavailable`);
 });
 const confBySlug = new Map(conferences.map((c) => [c.slug, c]));
+
+// The expected talks (SMOKE_TALKS), and, with the bundles, check bun1: the Worker and the published
+// bundles list the same searchable conferences with the same talk counts. The ingest run publishes
+// both from one fetch, so a difference means one of them missed a publish (or a Pages deploy of the
+// same run is still in progress: the index is cached for up to ten minutes).
+if (TALKS_FROM === 'data') {
+  console.log('NOTE talks: the expected talks come from the committed data/ (SMOKE_TALKS=data)');
+} else {
+  const published = await loadBundleTalks([PRIMARY, ...EXTRA]);
+  const loaded = [...bundleTalks].filter(([, r]) => r.docs).map(([slug, r]) => `${slug} ${r.path}`);
+  console.log(`NOTE talks: the expected talks come from the published bundles at ${new URL(BUNDLE_BASE).origin}${loaded.length ? `: ${loaded.join(', ')}` : ''} (SMOKE_TALKS=data uses the committed data/)`);
+  await check('bun1: the published talk bundles list the Worker\'s searchable conferences with the same talk counts', async () => {
+    if (!published) throw new Error(bundleTalks.get(PRIMARY)?.error ?? 'the published index could not be read');
+    const bundled = new Map(published.conferences.filter((c) => c.bundle).map((c) => [c.conference.slug, c.bundle.talk_count]));
+    const problems = [];
+    for (const c of conferences.filter((x) => x.status === 'searchable')) {
+      if (!bundled.has(c.slug)) problems.push(`${c.slug} has no published bundle`);
+      else if (bundled.get(c.slug) !== c.talk_count) problems.push(`${c.slug}: the Worker has ${c.talk_count} talks, the bundle ${bundled.get(c.slug)}`);
+    }
+    for (const slug of bundled.keys()) if (confBySlug.get(slug)?.status !== 'searchable') problems.push(`${slug} has a bundle but is not searchable on the Worker`);
+    report(problems.length === 0, 'bun1: the published talk bundles list the Worker\'s searchable conferences with the same talk counts',
+      problems.length ? `${problems.slice(0, 3).join('; ')}; the Worker and the bundles hold different schedules until an ingest run publishes both` : `${bundled.size} conferences`);
+  });
+}
 
 // The capabilities document of the Worker (cap1) or of the tier 3 server (cap3), validated as a
 // producer's (docs/contracts/capabilities.md), in closed mode. Later checks read ble.mode from it.
@@ -662,13 +854,55 @@ if (!IS_WORKER) {
       if (/"usage"|"talks"|"people"/.test(text)) bad.push(`${label} returned counts`);
       return bad;
     };
+    const probePath = `/admin/stats?event=${encodeURIComponent(PRIMARY)}`;
     const problems = [
       ...(await probe('no token', {})),
-      ...(await probe('a wrong token', { Authorization: `Bearer ${crypto.randomBytes(32).toString('hex')}` })),
+      ...(await probe('a wrong token', adminAuthHeaders('GET', probePath, undefined, crypto.randomBytes(32).toString('hex')))),
     ];
     // With the real token, an Origin header must still be refused, because a browser page must never reach admin.
-    if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { Authorization: `Bearer ${ADMIN_TOKEN}`, Origin: SMOKE_ORIGIN })));
+    // The probe is signed in signed mode on purpose: the Worker refuses the Origin header before it
+    // verifies anything, so a valid signature proves the refusal is the Origin rule and not the signature.
+    if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { ...adminAuthHeaders('GET', probePath, undefined), Origin: SMOKE_ORIGIN })));
     report(problems.length === 0, 'adm1: the admin routes answer 404 without a valid token and send no CORS headers', problems.length ? problems.join('; ') : `${ADMIN_TOKEN ? 3 : 2} requests, all 404 without CORS headers`);
+  });
+}
+
+// The daily meter behind X-Caddie-Pace and the soft caps. Five requests must raise the day's
+// counts by at least five, and a reading must never go down within a UTC day, even across a new
+// meter. POST /admin/test/meter-restart starts a new meter from the stored totals and drops the
+// old one's unwritten counts, as an eviction of the object would (on a deployed Worker that loses
+// at most a few seconds of real counts). The second restart comes right after a reading taken
+// while the meter still held unwritten counts, so a meter that reports counts it has not stored
+// fails here whenever the run gets from the first reading to the last within its 15-second write
+// interval, which it does in well under a second.
+if (IS_WORKER && ADMIN_TOKEN) {
+  await check('meter1: the daily usage meter counts requests and never goes down across a new meter', async () => {
+    const name = 'meter1: the daily usage meter counts requests and never goes down across a new meter';
+    const ev = encodeURIComponent(PRIMARY);
+    const usage = async () => (await admin('GET', `/admin/stats?event=${ev}`)).json.usage ?? null;
+    const restart = async () => (await fixture('POST', `/admin/test/meter-restart?event=${ev}`, {})).status;
+    const started = Date.now();
+    const first = await restart();
+    const before = await usage();
+    for (let i = 0; i < 5; i++) await api('GET', `/api/topics?event=${ev}`, undefined, { label: 'meter' });
+    const middle = await usage();
+    const second = await restart();
+    const after = await usage();
+    const took = Date.now() - started;
+    const problems = [];
+    if (first !== 200 || second !== 200) problems.push(`meter-restart gave ${first} and ${second}`);
+    if (!before || !middle || !after) problems.push('no usage in /admin/stats');
+    else if (before.day === middle.day && middle.day === after.day) {
+      if (middle.requests < before.requests + 5) problems.push(`five requests raised requests from ${before.requests} only to ${middle.requests}`);
+      if (after.requests < middle.requests + 1) problems.push(`requests went from ${middle.requests} to ${after.requests} across a new meter`);
+      for (const f of ['rows_read', 'rows_written']) {
+        if (middle[f] < before[f] || after[f] < middle[f]) problems.push(`${f} went ${before[f]}, ${middle[f]}, ${after[f]}`);
+      }
+    }
+    const detail = before && middle && after
+      ? `requests ${before.requests}, ${middle.requests}, then ${after.requests} after a new meter; rows written ${before.rows_written}, ${middle.rows_written}, ${after.rows_written}; ${took} ms`
+      : '';
+    report(problems.length === 0, name, problems.length ? problems.join('; ') : detail);
   });
 }
 
@@ -731,13 +965,13 @@ await check('d: no break, housekeeping or ambient item appears', async () => {
 });
 
 // e. The events and showcases toggle: off by default, and when on it adds only kind "ambient" items,
-// never a break or a housekeeping item. The expectation comes from the committed data.
+// never a break or a housekeeping item. The expectation comes from the expected talks (SMOKE_TALKS).
 await check('e1: include_events adds co-located events and showcases, and nothing else', async () => {
   const docs = readNdjson(PRIMARY);
   const ambient = new Map(docs.filter((d) => d.kind === 'ambient').map((d) => [d.talk_id, d]));
   const other = new Map(docs.filter((d) => d.kind === 'break' || d.kind === 'housekeeping').map((d) => [d.talk_id, d]));
   const track = [...ambient.values()].find((d) => d.track === 'Solutions Showcase')?.track ?? [...ambient.values()][0]?.track;
-  if (!track) throw new Error('no ambient item in the committed data');
+  if (!track) throw new Error('no ambient item in the expected talks');
   const off = await search({ query: '', size: 50, filters: { track: [track] } });
   const on = await search({ query: '', size: 50, filters: { track: [track], include_events: true } });
   if (off.status !== 200 || on.status !== 200) throw new Error(`status ${off.status} and ${on.status}`);
@@ -811,7 +1045,7 @@ await check('k2: debug must be a boolean, and browse mode has no ranking details
 });
 
 // Time phrases: "tuesday afternoon" leaves the text and becomes two filters. The expectation is
-// computed from the committed data, not from the response: every talk starts on that day at or
+// computed from the expected talks (SMOKE_TALKS), not from the response: every talk starts on that day at or
 // after 12:00, and the day's lunch from the break items bounds "after lunch".
 const minutesOf = (iso) => Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
 await check('m1: "tuesday afternoon" leaves the text, filters the results and can be removed', async () => {
@@ -831,7 +1065,7 @@ await check('m1: "tuesday afternoon" leaves the text, filters the results and ca
 
 // Happening now: the chip's window is judged by Elasticsearch against its own clock, and the chip is
 // available only on days the conference is running in its own time zone. Both expectations are
-// computed here from the committed data and the local clock, with two minutes of slack for skew.
+// computed here from the expected talks (SMOKE_TALKS) and the local clock, with two minutes of slack for skew.
 const localDayIn = (ms, timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
 await check('n1: Happening now is available exactly when the conference has talks today in its own zone', async () => {
   const problems = [];
@@ -1295,16 +1529,18 @@ try {
   // straight to Elasticsearch on Cloud Run), because the API always sets visible_until to the end of
   // the conference.
   if (WRITE_MODE === 'admin') {
-    const r = await admin('POST', `/admin/test/profile?event=${encodeURIComponent(PRIMARY)}`, {
-      profile_id: expiredProfileId,
-      secret_hash: expiredSecretHash,
-      display_name: testName('Expired'),
-      visible_until_ms: Date.now() - 3600_000,
-      open_to_meet: true,
-      shared_talk_ids: [T],
+    await check('p1b: the expired test profile is written', async () => {
+      const r = await fixture('POST', `/admin/test/profile?event=${encodeURIComponent(PRIMARY)}`, {
+        profile_id: expiredProfileId,
+        secret_hash: expiredSecretHash,
+        display_name: testName('Expired'),
+        visible_until_ms: Date.now() - 3600_000,
+        open_to_meet: true,
+        shared_talk_ids: [T],
+      });
+      expiredWritten = r.status === 200;
+      if (!expiredWritten) report(false, 'p1b: the expired test profile is written', `status ${r.status}`);
     });
-    expiredWritten = r.status === 200;
-    if (!expiredWritten) report(false, 'p1b: the expired test profile is written', `status ${r.status}`);
   } else if (WRITE_MODE === 'es') {
     const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'PUT',
@@ -1394,7 +1630,7 @@ try {
 
   await check('p7: expired profiles never appear', async () => {
     if (!expiredWritten) {
-      skip('p7: expired profiles never appear', NO_WRITE_WHY);
+      skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
       return;
     }
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
@@ -1519,6 +1755,36 @@ try {
     const badZone = await api('PUT', '/api/presence', { event: PRIMARY, zone: 'No Such Zone', spot: '' }, { device: A, label: 'A-presence' });
     const ok = none.status === 403 && none.json.error === 'profile_required' && circleOnly.status === 403 && circleOnly.json.error === 'profile_required' && badZone.status === 400;
     report(ok, 'q3: presence needs a visible profile', `no profile ${none.status} ${none.json.error}, circle-only ${circleOnly.status} ${circleOnly.json.error}, unknown zone ${badZone.status}`);
+  });
+
+  // Both backends accept a push subscription only on a known browser push service host, so a
+  // profile can never make them send signed requests to a host of its choosing. The accepted
+  // subscription is removed again at once.
+  await check('push1: a push subscription must point at a known push service', async () => {
+    const P = newDevice();
+    // A visible profile with no words of the other checks, deleted again below so it never shows up in them.
+    const made = await putProfile(P, PRIMARY, 'P', { about: 'Push subscription check.' }, { open: true });
+    if (made.status !== 200) throw new Error(`the push test profile gave ${made.status}`);
+    const ecdh = crypto.createECDH('prime256v1');
+    ecdh.generateKeys();
+    const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
+    const sub = (endpoint) => api('PUT', '/api/push/subscription', { event: PRIMARY, subscription: { endpoint, keys } }, { device: P, label: 'P-push' });
+    const problems = [];
+    for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x', 'https://x.jmt17.google.com/fcm/send/x', 'https://jmt17.google.com.evil.com/fcm/send/x', 'https://jmt17.google.com:8443/fcm/send/x']) {
+      const r = await sub(endpoint);
+      if (r.status !== 400) problems.push(`${new URL(endpoint).host} gave ${r.status}`);
+    }
+    // fcm.googleapis.com is Chrome Stable; jmt17.google.com is Chrome Beta, Dev, Canary and Chromium.
+    for (const host of ['fcm.googleapis.com', 'jmt17.google.com']) {
+      const good = `https://${host}/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
+      const ok = await sub(good);
+      if (ok.status !== 200) problems.push(`${host} gave ${ok.status}`);
+      const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
+      if (del.status !== 200) problems.push(`delete of ${host} gave ${del.status}`);
+    }
+    const gone = await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: P, label: 'P-delete' });
+    if (gone.status !== 200) problems.push(`profile delete gave ${gone.status}`);
+    report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals, subdomain and look-alike hosts and other ports refused; fcm.googleapis.com and jmt17.google.com accepted and removed');
   });
 
   await check('q4: a listed word is rejected', async () => {
@@ -1798,6 +2064,7 @@ try {
     const beforeB = await seenBy(B, 'B');
     if (!beforeA.ref) throw new Error('R is not in A\'s matches before any report');
     const refR = beforeA.ref;
+    reportedRefs.push(refR);
     const reportR = (device, who, reason = 'spam') => api('POST', '/api/people/report', { event: PRIMARY, ref: refR, context: { kind: 'profile', id: refR }, reason }, { device, label: `${who}-report` });
     const first = await reportR(A, 'A');
     const again = await reportR(A, 'A', 'other');
@@ -2227,6 +2494,8 @@ try {
       skip('unav1: an owner can delete while the conference is unavailable', 'needs SMOKE_UNAVAILABLE=<slug>, an admin token and a local API');
       return;
     }
+    // A Worker with its fixtures gated off is a deployed one, whose conferences must not be flipped.
+    if (fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
     const doc = JSON.parse(readFileSync(join(ROOT, 'data', slug, 'conference.json'), 'utf8'));
     const U = newDevice();
     await putProfile(U, slug, 'U', {}, { open: true });
@@ -2247,6 +2516,15 @@ try {
 } catch (err) {
   report(false, 'people checks', err.message);
 } finally {
+  // Remove the reports the run made, while their target still exists, so none is left behind.
+  if (WRITE_MODE === 'admin') {
+    for (const ref of reportedRefs) {
+      // A failed cleanup is a FAIL, so a run never claims to leave no reports when it did.
+      const r = await admin('POST', `/admin/moderation?event=${encodeURIComponent(PRIMARY)}`, { action: 'unhide', kind: 'profile', id: ref })
+        .catch((err) => ({ status: 0, json: { error: err.message } }));
+      if (r.status !== 200) report(false, 'cleanup: reports', `unhide of a reported test profile gave ${r.status}; remove its reports by hand`);
+    }
+  }
   // Remove every test profile, whatever happened above.
   for (const { device, event } of created) {
     await api('DELETE', `/api/people/profile?event=${encodeURIComponent(event)}`, undefined, { device, label: 'cleanup' }).catch(() => {});
