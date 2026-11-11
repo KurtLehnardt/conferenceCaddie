@@ -30,7 +30,7 @@ Object.assign(process.env, {
 });
 
 const people = await import('../server/people.mjs');
-const { handlePushApi, registrationId, subscriptionId, pushTargetsFor, deleteRegistrationIfUnchanged, TARGETS_PER_PROFILE } = await import('../server/push.mjs');
+const { handlePushApi, registrationId, subscriptionId, pushTargetsFor, deleteRegistrationIfUnchanged, TARGETS_PER_PROFILE, TARGETS_READ_PER_PROFILE } = await import('../server/push.mjs');
 const { currentCapabilities } = await import('../server/capabilities.mjs');
 const CAPABILITIES = currentCapabilities();
 const { validator } = await import('../contracts/js/schemas.mjs');
@@ -353,7 +353,7 @@ test('pushTargetsFor reads every receiver in one search, so one receiver with ma
   assert.equal(body.size, 0, 'the hits come from the aggregation only');
   assert.deepEqual(body.query.bool.filter[1], { terms: { profile_id: [device.profileId, other.profileId, 'nobody'] } });
   assert.deepEqual(body.aggs.receivers.terms, { field: 'profile_id', size: 3 }, 'one bucket for each distinct receiver');
-  assert.equal(body.aggs.receivers.aggs.newest.top_hits.size, TARGETS_PER_PROFILE);
+  assert.equal(body.aggs.receivers.aggs.newest.top_hits.size, TARGETS_READ_PER_PROFILE, 'reads more than it keeps, so unusable rows are dropped before the cut');
   assert.deepEqual(body.aggs.receivers.aggs.newest.top_hits.sort, [{ created_at: { order: 'desc', unmapped_type: 'date' } }]);
   assert.deepEqual(await pushTargetsFor(EVENT, []), [], 'no receiver, no search');
   assert.equal(cluster.log.filter((e) => e.path.startsWith(`/${INDEX.push}/_search`)).length, 1);

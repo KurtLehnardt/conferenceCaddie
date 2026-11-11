@@ -22,7 +22,7 @@ import * as workerPush from '../worker/src/push/webpush.js';
 for (const k of ['PUSH_STUB_URL', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT']) delete process.env[k];
 process.env.PUSH_TRANSPORT = 'stub';
 
-const { handlePushApi, subscriptionId, pushTargetsFor } = await import('../server/push.mjs');
+const { handlePushApi, subscriptionId, pushTargetsFor, TARGETS_PER_PROFILE } = await import('../server/push.mjs');
 const { loadTransport, PUSH_TIMEOUT_MS } = await import('../server/nudge.mjs');
 
 before(() => bootPurgeDone());
@@ -152,8 +152,13 @@ const keys = () => {
 const subscribe = (device, endpoint) => request(handlePushApi, 'PUT', '/api/push/subscription', device, { event: EVENT, subscription: { endpoint, keys: keys(), expirationTime: null } });
 const unsubscribe = (device, endpoint) => request(handlePushApi, 'DELETE', '/api/push/subscription', device, { event: EVENT, endpoint });
 
+// A conference that ended in 2020, beside the helpers' live one. The server caches the conference
+// list on its first read, so every cluster of this file holds it.
+const ENDED = 'endedconf-2020';
+
 function setup() {
   const cluster = useCluster(new FakeES());
+  cluster.put(INDEX.conferences, ENDED, { slug: ENDED, status: 'searchable', end_date: '2020-01-02', time_zone: 'UTC' });
   const device = newDevice();
   addPerson(cluster, device);
   return { cluster, device };
@@ -214,11 +219,50 @@ describe('PUT /api/push/subscription', () => {
   });
 });
 
+// The web app's re-sync (resyncPush in web/src/people/push.ts) turns a conference's nudge switch off
+// for good on 403 profile_required, or on a 400 whose error starts "conference has ended" or
+// "conference is not available" (conferenceRefuses). An endpoint off the list must not look like
+// either, and tier 3 must give those two messages where the Worker does.
+describe('the answers the web app\'s re-sync tells apart', () => {
+  const SWITCH_OFF_400 = /^conference (has ended|is not available)/;
+
+  test('an endpoint off the list is a 400 the re-sync does not take as the end of the conference', async () => {
+    const { device } = setup();
+    const { result } = await warnings(() => subscribe(device, 'https://push.example.test/off-list'));
+    assert.equal(result.status, 400);
+    assert.doesNotMatch(result.body.error, SWITCH_OFF_400);
+  });
+
+  test('an unknown conference is 400 "conference is not available"', async () => {
+    const { device } = setup();
+    const r = await request(handlePushApi, 'PUT', '/api/push/subscription', device, { event: 'nosuchconf-2099', subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: keys() } });
+    assert.deepEqual(r, { status: 400, body: { error: 'conference is not available' } });
+    assert.match(r.body.error, SWITCH_OFF_400);
+  });
+
+  test('an ended conference is 400 "conference has ended" for someone with a profile there', async () => {
+    const { cluster, device } = setup();
+    const mine = cluster.source(INDEX.people, `${EVENT}:${device.profileId}`);
+    cluster.put(INDEX.people, `${ENDED}:${device.profileId}`, { ...mine, event_id: ENDED });
+    const r = await request(handlePushApi, 'PUT', '/api/push/subscription', device, { event: ENDED, subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: keys() } });
+    assert.deepEqual(r, { status: 400, body: { error: 'conference has ended' } });
+    assert.match(r.body.error, SWITCH_OFF_400);
+  });
+
+  test('no profile at the conference is 403 profile_required', async () => {
+    const { cluster } = setup();
+    const stranger = newDevice();
+    const r = await request(handlePushApi, 'PUT', '/api/push/subscription', stranger, { event: EVENT, subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: keys() } });
+    assert.deepEqual(r, { status: 403, body: { error: 'profile_required' } });
+    assert.equal(cluster.ids(INDEX.push).length, 0);
+  });
+});
+
 describe('a subscription stored before the rule', () => {
   const legacy = 'https://push.example.test/stored-before-the-rule';
   const allowed = 'https://fcm.googleapis.com/fcm/send/kept';
-  const store = (cluster, device, endpoint) => cluster.put(INDEX.push, subscriptionId(endpoint), {
-    event_id: EVENT, profile_id: device.profileId, endpoint, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE,
+  const store = (cluster, device, endpoint, createdAt = '2099-01-01T00:00:00.000Z') => cluster.put(INDEX.push, subscriptionId(endpoint), {
+    event_id: EVENT, profile_id: device.profileId, endpoint, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: createdAt, expires_at: FUTURE,
   });
 
   test('can still be removed by its owner', async () => {
@@ -228,21 +272,39 @@ describe('a subscription stored before the rule', () => {
     assert.equal(cluster.source(INDEX.push, subscriptionId(legacy)), null);
   });
 
-  test('is skipped by pushTargetsFor, so no nudge is sent to it, with one log line that names no endpoint or host', async () => {
+  test('is skipped by pushTargetsFor, so no nudge is sent to it, with a log line that names its host only', async () => {
     const { cluster, device } = setup();
     store(cluster, device, legacy);
     store(cluster, device, allowed);
     store(cluster, device, 'https://192.0.2.10/push');
-    const { result: targets, lines } = await quietly(() => pushTargetsFor(EVENT, [device.profileId]));
+    const { result: { result: targets, lines: errors }, lines } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId])));
     assert.deepEqual(targets.map((t) => t.subscription?.endpoint), [allowed]);
-    assert.deepEqual(lines, ['Push targets skipped: 2 stored subscription(s) not on a known push service host']);
+    assert.deepEqual(lines.sort(), ['push skipped: endpoint host not allowed: 192.0.2.10', 'push skipped: endpoint host not allowed: push.example.test']);
+    assert.deepEqual(errors, []);
+    assert.ok(!lines.join('\n').includes('stored-before-the-rule'), 'never the path');
     assert.ok(cluster.source(INDEX.push, subscriptionId(legacy)), 'skipped, not deleted: the purge removes it with the conference');
+  });
+
+  test('takes none of the ten places a receiver has: off-list rows are dropped before the cut', async () => {
+    const { cluster, device } = setup();
+    // Three usable subscriptions, then twelve newer rows stored before the rule.
+    const good = [0, 1, 2].map((i) => `https://fcm.googleapis.com/fcm/send/older-${i}`);
+    good.forEach((e, i) => store(cluster, device, e, new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString()));
+    for (let i = 0; i < 12; i++) store(cluster, device, `https://push.example.test/newer-${i}`, new Date(Date.UTC(2099, 0, 2, 0, i)).toISOString());
+    const { result: { result: targets, lines: errors } } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId])));
+    assert.deepEqual(targets.map((t) => t.subscription.endpoint), [...good].reverse());
+    assert.deepEqual(errors, [], 'not over the cap: only usable rows count toward it');
+    // And with more usable rows than places, the newest usable ones are kept.
+    for (let i = 3; i < 13; i++) store(cluster, device, `https://fcm.googleapis.com/fcm/send/older-${i}`, new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString());
+    const { result: { result: capped } } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId])));
+    assert.equal(capped.length, TARGETS_PER_PROFILE);
+    assert.deepEqual(capped.map((t) => t.subscription.endpoint), Array.from({ length: 10 }, (_, i) => `https://fcm.googleapis.com/fcm/send/older-${12 - i}`));
   });
 
   test('a person whose only subscription is off the list is no push target at all', async () => {
     const { cluster, device } = setup();
     store(cluster, device, legacy);
-    const { result: targets } = await quietly(() => pushTargetsFor(EVENT, [device.profileId]));
+    const { result: { result: targets } } = await warnings(() => quietly(() => pushTargetsFor(EVENT, [device.profileId])));
     assert.deepEqual(targets, []);
   });
 });
