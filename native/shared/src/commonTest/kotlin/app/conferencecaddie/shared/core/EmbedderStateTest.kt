@@ -16,11 +16,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
+import kotlin.time.TestTimeSource
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.runTest
@@ -32,16 +36,17 @@ import kotlinx.io.files.SystemTemporaryDirectory
 
 // The query embedder's life in the core: offered but not loaded until a text search needs it,
 // loaded once, retried after a failure only once the pause has passed, kept across a switch of
-// backend, and released and loaded again when memory is short.
+// backend, and released when memory is short: at once, or as soon as a load still running ends.
+// A released model is loaded again only by a text whose embedding is not cached.
 class EmbedderStateTest {
     private val backend = "https://caddie.example"
     private val bundleBase = "$backend/bundles/"
     private val root = Path(SystemTemporaryDirectory, "caddie-embedder-${Random.nextLong().toULong()}")
     private val files = BundleFiles(Path(root, "bundles"))
-    private var nowMs = 4_076_125_200_000L // 2099-03-02T09:00:00Z
     private val clock = object : Clock {
-        override fun now(): Instant = Instant.fromEpochMilliseconds(nowMs)
+        override fun now(): Instant = Instant.fromEpochMilliseconds(4_076_125_200_000L) // 2099-03-02T09:00:00Z
     }
+    private val time = TestTimeSource()
     private val entry = BundleEntry.read(Fixtures.entry)!!
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val database = CaddieDatabase.open(Path(root.also { SystemFileSystem.createDirectories(Path(it, "bundles")) }, "caddie.db").toString())
@@ -70,14 +75,18 @@ class EmbedderStateTest {
     private suspend fun CaddieCore.until(predicate: (CoreState) -> Boolean): CoreState =
         withContext(Dispatchers.Default) { withTimeout(20_000) { state.first(predicate) } }
 
-    /** An embedder that counts its loads and its closes; the first [failures] loads fail. */
-    private class Loads(private val failures: Int) {
+    /**
+     * An embedder that counts its loads and its closes; the first [failures] loads fail, and each
+     * load waits for [gate] when there is one.
+     */
+    private class Loads(private val failures: Int, private val gate: CompletableDeferred<Unit>? = null) {
         var attempts = 0
         var closed = 0
         suspend fun load(): Embedder {
             attempts++
+            gate?.await()
             if (attempts <= failures) error("the model is missing")
-            val inner = FakeEmbedder(mapOf("kubernetes" to FakeEmbedder.vec(0f, 1f)))
+            val inner = FakeEmbedder(mapOf("kubernetes" to FakeEmbedder.vec(0f, 1f), "pods" to FakeEmbedder.vec(1f, 0f)))
             return object : Embedder by inner {
                 override suspend fun close() {
                     closed++
@@ -88,7 +97,7 @@ class EmbedderStateTest {
 
     private suspend fun core(): CaddieCore {
         database.setSetting("backend", backend)
-        return CaddieCore(database, files, http(), scope, allowLocalHttp = false, clock = clock).also {
+        return CaddieCore(database, files, http(), scope, allowLocalHttp = false, clock = clock, timeSource = time).also {
             it.start()
             it.until { s -> s.bundle is BundleState.Ready }
         }
@@ -112,12 +121,12 @@ class EmbedderStateTest {
         assertTrue(core.search(SearchRequest(query = "kubernetes"))!!.degraded, "a failed model is reported")
 
         // Within the pause no search tries again.
-        nowMs += CaddieCore.RETRY_FIRST_MS - 1
+        time += (CaddieCore.RETRY_FIRST_MS - 1).milliseconds
         core.search(SearchRequest(query = "kubernetes"))
         assertEquals(1, loads.attempts)
 
         // After it, the next search does, and meaning-based matching joins.
-        nowMs += 2
+        time += 2.milliseconds
         core.search(SearchRequest(query = "kubernetes"))
         core.until { it.semantic == SemanticState.Ready }
         assertEquals(2, loads.attempts)
@@ -131,7 +140,7 @@ class EmbedderStateTest {
     }
 
     @Test
-    fun aReleasedModelIsClosedAndLoadedAgainWhenNeeded() = runTest {
+    fun aReleasedModelIsClosedAndLoadedAgainOnlyForANewText() = runTest {
         val core = core()
         val loads = Loads(failures = 0)
         core.useEmbedder(loads::load)
@@ -141,10 +150,40 @@ class EmbedderStateTest {
         assertEquals(0, loads.attempts, "For you without learn text needs no model")
         core.search(SearchRequest(query = "kubernetes"))
         core.until { it.semantic == SemanticState.Ready }
+        assertTrue(core.search(SearchRequest(query = "kubernetes"))!!.semantic, "the embedding is now cached")
 
         core.releaseEmbedder()
         core.until { it.semantic == SemanticState.Idle }
         assertEquals(1, loads.closed)
+        // The same text, with another filter, is answered from the cached embedding.
+        assertTrue(core.search(SearchRequest(query = "kubernetes", hideSponsor = true))!!.semantic)
+        assertEquals(1, loads.attempts, "a cached text does not load the model again")
+        assertEquals(SemanticState.Idle, core.state.value.semantic)
+        // A new text does.
+        core.search(SearchRequest(query = "pods"))
+        core.until { it.semantic == SemanticState.Ready }
+        assertEquals(2, loads.attempts)
+    }
+
+    @Test
+    fun aReleaseDuringALoadClosesTheModelOnceItHasLoaded() = runTest {
+        val core = core()
+        val gate = CompletableDeferred<Unit>()
+        val loads = Loads(failures = 0, gate = gate)
+        core.useEmbedder(loads::load)
+        core.until { it.semantic == SemanticState.Idle }
+        core.search(SearchRequest(query = "kubernetes"))
+        core.until { it.semantic == SemanticState.Loading }
+
+        core.releaseEmbedder().join()
+        gate.complete(Unit)
+        core.until { it.semantic == SemanticState.Idle }
+        withContext(Dispatchers.Default) { withTimeout(20_000) { while (loads.closed == 0) delay(10) } }
+        assertEquals(1, loads.closed, "the model loaded during the release is closed")
+        assertEquals(1, loads.attempts)
+        assertEquals(SemanticState.Idle, core.state.value.semantic)
+
+        // The next text search loads it again.
         core.search(SearchRequest(query = "kubernetes"))
         core.until { it.semantic == SemanticState.Ready }
         assertEquals(2, loads.attempts)

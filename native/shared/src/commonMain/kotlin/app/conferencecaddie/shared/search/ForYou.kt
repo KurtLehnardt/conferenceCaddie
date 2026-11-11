@@ -57,9 +57,14 @@ class ForYou(
         data class Ready(val items: List<Item>, val degraded: Boolean) : Result
     }
 
+    private fun learnText(request: Request): String = request.text.replace(SPACE, " ").trim().take(MAX_TEXT)
+
+    /** The text [recommend] embeds for [request], or "" when it embeds nothing (no text, or no vectors). */
+    internal fun embeddedText(request: Request): String = if (bundle.vectors == null) "" else learnText(request)
+
     suspend fun recommend(request: Request, nowMs: Long): Result {
         val learn = request.learnTopics.distinct().take(MAX_TOPICS)
-        val text = request.text.replace(SPACE, " ").trim().take(MAX_TEXT)
+        val text = learnText(request)
         val marked = request.interested
         val vectors = bundle.vectors
         val markedRows = marked.mapNotNull { vectors?.rowOf(it) }

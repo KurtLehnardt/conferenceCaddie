@@ -45,6 +45,27 @@ class BgeEmbedderTest {
         assertFails("a vocabulary without the special tokens") { BgeEmbedder.create(model, "hello\nworld\n") }
     }
 
+    // The core closes the embedder when memory is short and creates it again for the next text
+    // search: a second session after the first was closed must give the same vectors, and a closed
+    // embedder must refuse to embed rather than touch a released session.
+    @Test
+    fun anEmbedderCanBeClosedAndCreatedAgain() = runTest {
+        val vocab = embeddingText("vocab.txt")
+        val model = embeddingBytes("model_quantized.onnx")
+        val query = listOf(BgeEmbedder.queryText("kubernetes autoscaling"))
+        val first = BgeEmbedder.create(model, vocab)
+        val before = first.embed(query).single()
+        first.close()
+        first.close()
+        assertTrue(runCatching { first.embed(query) }.exceptionOrNull() is IllegalStateException, "a closed embedder embeds")
+        repeat(2) { round ->
+            val again = BgeEmbedder.create(model, vocab)
+            val after = again.embed(query).single()
+            again.close()
+            assertTrue(cosine(before, after) > 0.9999, "round $round: ${cosine(before, after)}")
+        }
+    }
+
     private fun JsonArray.floats() = FloatArray(size) { this[it].jsonPrimitive.double.toFloat() }
 
     /**

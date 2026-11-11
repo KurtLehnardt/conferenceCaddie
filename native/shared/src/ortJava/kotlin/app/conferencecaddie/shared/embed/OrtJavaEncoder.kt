@@ -9,7 +9,10 @@ import java.nio.LongBuffer
 // Compiled into both androidMain and jvmMain (see shared/build.gradle.kts): ONNX Runtime's Java API
 // is the same in onnxruntime-android and in the JVM package.
 
-internal actual fun openEncoder(model: ByteArray, threads: Int): EncoderSession = OrtJavaEncoder(model, threads)
+internal actual fun openEncoder(model: ByteArray, threads: Int): EncoderSession {
+    requireOnnxRuntimeTelemetryDisabled()
+    return OrtJavaEncoder(model, threads)
+}
 
 private class OrtJavaEncoder(model: ByteArray, threads: Int) : EncoderSession {
     private val env = OrtEnvironment.getEnvironment().also { it.setTelemetry(false) }

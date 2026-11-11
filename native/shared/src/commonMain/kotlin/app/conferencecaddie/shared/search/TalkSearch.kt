@@ -260,6 +260,21 @@ class TalkSearch(
             .map { it.first }
             .toList()
 
+    /**
+     * Whether the embedding of [text] as a search query is cached, so a search for it needs no
+     * embedder. [text] is what the search embeds ([embeddedText]).
+     */
+    suspend fun hasQueryVector(text: String): Boolean = queryVectors.contains(text)
+
+    /**
+     * The text a search for [request] embeds: its query without the time phrases, or "" when it
+     * embeds nothing (no text, or a bundle without vectors).
+     */
+    internal fun embeddedText(request: SearchRequest): String {
+        if (bundle.vectors == null) return ""
+        return TimePhrases.parse(request.query.trim().take(MAX_QUERY), shape, request.ignorePhrases).text
+    }
+
     /** The embedding of [text] as a search query, or null without a working embedder. */
     suspend fun queryVector(text: String): FloatArray? {
         queryVectors.get(text)?.let { return it }
@@ -402,6 +417,8 @@ internal class QueryVectorCache(private val capacity: Int = 16) {
     suspend fun get(text: String): FloatArray? = mutex.withLock {
         map.remove(text)?.also { map[text] = it }
     }
+
+    suspend fun contains(text: String): Boolean = mutex.withLock { text in map }
 
     suspend fun put(text: String, vector: FloatArray) = mutex.withLock {
         map.remove(text)

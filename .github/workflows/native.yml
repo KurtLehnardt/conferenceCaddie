@@ -202,6 +202,18 @@ jobs:
         with:
           name: unsigned-${{ env.APK }}
 
+      # The published APK is the arm64-v8a one (androidApp/build.gradle.kts): its native libraries
+      # must all be under lib/arm64-v8a/. This only lists the archive's entries.
+      - name: Check the APK's ABI
+        if: env.HAS_ANDROID_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          abis=$(unzip -Z1 "unsigned-$APK" | sed -n 's|^lib/\([^/]*\)/.*|\1|p' | sort -u)
+          if [ "$abis" != "arm64-v8a" ]; then
+            echo "::error title=Wrong ABI::The release APK has native libraries for '$(printf '%s' "$abis" | tr '\n' ' ')', not only arm64-v8a."
+            exit 1
+          fi
+
       - name: Sign and check the certificate
         if: env.HAS_ANDROID_SIGNING == 'true'
         env:
@@ -640,6 +652,10 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           apps=("$RUNNER_TEMP/unsigned.xcarchive/Products/Applications/"*.app)
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "::warning title=No app size::Expected one app in the archive; the size is not reported."
+            exit 0
+          fi
           app="${apps[0]}"
           ditto -c -k --keepParent "$app" "$RUNNER_TEMP/app-size.zip"
           {

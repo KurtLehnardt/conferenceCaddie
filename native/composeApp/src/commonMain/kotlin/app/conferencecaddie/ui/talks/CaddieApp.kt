@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -106,7 +107,7 @@ fun CaddieApp(
     } else {
         remember(core) { SearchModel(scope) { core.search(it) } }
     }
-    remember(search, scope) { search.attach(scope) }
+    SideEffect { search.attach(scope) }
     val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
     var pickerOpen by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
@@ -159,7 +160,9 @@ fun CaddieApp(
     }
     // For you asks again whenever what it depends on changes, and every minute, as talks end, but
     // only while it is on screen (the effect lives in its tab); coming back to it catches up.
-    val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, state.semantic, nowMs / 60_000)
+    // A model given back for memory (Ready to Idle) changes nothing For you shows, so it does not ask again.
+    val forYouSemantic = if (state.semantic == SemanticState.Idle) SemanticState.Ready else state.semantic
+    val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, forYouSemantic, nowMs / 60_000)
 
     // The person is told once when the stored data could not be opened.
     LaunchedEffect(state.storageReset) {

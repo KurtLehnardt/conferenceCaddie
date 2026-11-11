@@ -21,7 +21,10 @@ import app.conferencecaddie.shared.search.SearchRequest
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.shared.search.TalkSearch
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -223,6 +226,8 @@ class CaddieCore(
     private val scope: CoroutineScope,
     private val allowLocalHttp: Boolean,
     private val clock: Clock = Clock.System,
+    /** Times the pause before a failed model load is tried again; monotonic, unlike [clock]. */
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) {
     private val sync = BundleSync(http, database, files) { nowMs() }
     private val mutex = Mutex()
@@ -301,18 +306,25 @@ class CaddieCore(
     /** Searches the selected conference's bundle, off the main thread; null while no bundle is ready. */
     suspend fun search(request: SearchRequest): SearchResult? {
         val ready = _state.value.bundle as? BundleState.Ready ?: return null
-        if (request.query.isNotBlank()) ensureEmbedder()
+        // The model is needed only for a text whose embedding is not cached, so a released model is
+        // not loaded again by a search that only changes filters.
+        val text = ready.search.embeddedText(request)
+        if (text.isNotEmpty() && !ready.search.hasQueryVector(text)) ensureEmbedder()
         return withContext(Dispatchers.Default) { ready.search.search(request) }
     }
 
     // The query embedder. It is loaded only once something needs meaning-based matching (a text
     // search, or For you with learn text), not at every start, and is guarded by embedderMutex.
+    // embedderGeneration counts the loads and releases, so a state written for one of them is
+    // dropped once another has happened; releaseRequested is a release asked for during a load.
     @kotlin.concurrent.Volatile
     private var embedder: Embedder? = null
     private var loader: (suspend () -> Embedder?)? = null
     private var embedderJob: Job? = null
     private var embedderFailures = 0
-    private var embedderRetryAtMs = 0L
+    private var embedderRetryAt: TimeMark? = null
+    private var embedderGeneration = 0L
+    private var releaseRequested = false
     private val embedderMutex = Mutex()
 
     /**
@@ -334,33 +346,38 @@ class CaddieCore(
     }
 
     /**
-     * Gives the embedder's memory back (the platform asked for memory). The next text search loads
-     * it again.
+     * Gives the embedder's memory back (the platform asked for memory). A load still running is
+     * released as soon as it finishes. The next text search that needs the model loads it again.
+     * The returned job ends once the release is done or recorded.
      */
-    fun releaseEmbedder() {
+    fun releaseEmbedder(): Job =
         scope.launch {
-            val released = embedderMutex.withLock {
-                val e = embedder ?: return@launch
+            val (released, generation) = embedderMutex.withLock {
+                val e = embedder
+                if (e == null) {
+                    if (embedderJob?.isActive == true) releaseRequested = true
+                    return@launch
+                }
                 embedder = null
-                e
+                e to ++embedderGeneration
             }
             released.close()
-            command { _state.update { if (it.semantic == SemanticState.Ready) it.copy(semantic = SemanticState.Idle) else it } }
+            publishSemantic(generation) { if (it == SemanticState.Ready) SemanticState.Idle else it }
         }
-    }
 
     /** Starts loading the embedder when it is offered, not loaded, not loading and not resting after a failure. */
     private suspend fun ensureEmbedder() {
         embedderMutex.withLock {
             val load = loader ?: return
             if (embedder != null || embedderJob?.isActive == true) return
-            if (embedderFailures > 0 && nowMs() < embedderRetryAtMs) return
+            if (embedderRetryAt?.hasNotPassedNow() == true) return
             embedderJob = scope.launch { loadEmbedder(load) }
         }
     }
 
     private suspend fun loadEmbedder(load: suspend () -> Embedder?) {
-        command { _state.update { it.copy(semantic = SemanticState.Loading) } }
+        val started = embedderMutex.withLock { embedderGeneration }
+        publishSemantic(started) { SemanticState.Loading }
         val loaded = try {
             load()
         } catch (e: CancellationException) {
@@ -368,17 +385,33 @@ class CaddieCore(
         } catch (_: Throwable) {
             null
         }
-        embedderMutex.withLock {
-            embedder = loaded
+        val (generation, unwanted) = embedderMutex.withLock {
+            val unwanted = loaded?.takeIf { releaseRequested }
+            releaseRequested = false
+            embedder = if (unwanted != null) null else loaded
             if (loaded == null) {
                 embedderFailures++
                 val pause = RETRY_FIRST_MS shl (embedderFailures - 1).coerceAtMost(10)
-                embedderRetryAtMs = nowMs() + pause.coerceAtMost(RETRY_MAX_MS)
+                embedderRetryAt = timeSource.markNow() + pause.coerceAtMost(RETRY_MAX_MS).milliseconds
             } else {
                 embedderFailures = 0
+                embedderRetryAt = null
             }
+            ++embedderGeneration to unwanted
         }
-        command { _state.update { it.copy(semantic = if (loaded != null) SemanticState.Ready else SemanticState.Unavailable) } }
+        unwanted?.close()
+        val next = when {
+            loaded == null -> SemanticState.Unavailable
+            unwanted != null -> SemanticState.Idle
+            else -> SemanticState.Ready
+        }
+        publishSemantic(generation) { next }
+    }
+
+    // Publishes the embedder's state for [generation], unless a later load or release has happened.
+    private fun publishSemantic(generation: Long, next: (SemanticState) -> SemanticState) = command {
+        if (embedderMutex.withLock { embedderGeneration } != generation) return@command
+        _state.update { it.copy(semantic = next(it.semantic)) }
     }
 
     /**
@@ -389,8 +422,9 @@ class CaddieCore(
         val s = _state.value
         val ready = s.bundle as? BundleState.Ready ?: return null
         if (ready.bundle.conference.slug != s.selectedSlug) return null
-        if (s.learn.text.isNotBlank()) ensureEmbedder()
         val request = ForYou.Request(s.learn.topics, s.learn.text, s.interested.toSet(), size)
+        val text = ready.forYou.embeddedText(request)
+        if (text.isNotEmpty() && !ready.search.hasQueryVector(text)) ensureEmbedder()
         return withContext(Dispatchers.Default) { ready.forYou.recommend(request, nowMs()) }
     }
 
@@ -433,7 +467,8 @@ class CaddieCore(
 
     /**
      * Waits until every call made before it has run and every fetch they started has finished, as
-     * the next call would see it. For tests, and for a host that must close the database.
+     * the next call would see it. For tests, and for a host that must close the database. It does
+     * not wait for the query embedder to load or be released; [CoreState.semantic] tells that.
      */
     suspend fun awaitIdle() {
         while (true) {
