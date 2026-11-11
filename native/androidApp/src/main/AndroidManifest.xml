@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Bluetooth, notification and foreground-service permissions arrive with the BleRadio
-         implementation; the skeleton only talks to the network. -->
+    <!-- Bluetooth and foreground-service permissions arrive with the BleRadio implementation. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The people features: the device's position for presence ("Use my position too"), only
+         while the app is in use, so there is no background location and no foreground service.
+         Android 12 and newer need both location permissions in the same request; the person then
+         picks precise or approximate. POST_NOTIFICATIONS shows nudges on Android 13 and newer. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The app works without location hardware; the position switch is then hidden. -->
+    <uses-feature android:name="android.hardware.location" android:required="false" />
 
     <!-- No backups and no device-to-device transfer: the app will hold per-backend device secrets
          that must not leave the phone. allowBackup="false" covers Android 11 and older;

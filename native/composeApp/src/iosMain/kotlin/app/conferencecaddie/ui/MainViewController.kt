@@ -3,12 +3,15 @@ package app.conferencecaddie.ui
 import androidx.compose.ui.uikit.OnFocusBehavior
 import androidx.compose.ui.window.ComposeUIViewController
 import app.conferencecaddie.shared.BackendUrl
+import app.conferencecaddie.shared.IosSelfTest
 import app.conferencecaddie.shared.core.IosCore
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
 import app.conferencecaddie.ui.talks.TalkLaunch
 import app.conferencecaddie.ui.theme.HostController
 import kotlin.experimental.ExperimentalNativeApi
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
 import platform.Foundation.NSBundle
 import platform.Foundation.NSProcessInfo
 import platform.UIKit.UIViewController
@@ -32,6 +35,12 @@ fun MainViewController(): UIViewController {
             (BackendUrl.normalise(url, allowLocalHttp = true) as? BackendUrl.Valid)?.let { core.setBackend(it) }
         }
         query = get("caddie.query")
+        // -caddie.selftest securestore (or location) checks a platform service in the app, where the
+        // Keychain and Core Location are available (the Kotlin/Native test process has neither), and
+        // prints one line.
+        get("caddie.selftest")?.let { check ->
+            MainScope().launch { println("caddie.selftest $check: ${IosSelfTest.run(check)}") }
+        }
     }
     val version = NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: ""
     return ComposeUIViewController(
@@ -41,6 +50,13 @@ fun MainViewController(): UIViewController {
             onFocusBehavior = OnFocusBehavior.DoNothing
         },
     ) {
-        CaddieApp(core = core, isDebugBuild = isDebugBuild, appVersion = version, launch = launch, initialQuery = query, talkLaunch = talkLaunch)
+        CaddieApp(
+            core = core,
+            isDebugBuild = isDebugBuild,
+            appVersion = version,
+            launch = launch,
+            initialQuery = query,
+            talkLaunch = talkLaunch,
+        )
     }.also { HostController.current = it }
 }

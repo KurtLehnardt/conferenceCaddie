@@ -3,8 +3,9 @@ package app.conferencecaddie.shared
 import kotlinx.coroutines.flow.Flow
 
 // Interfaces that each platform implements and injects at start-up (docs/NATIVE_PLAN.md, section
-// 10.3). Android implements them in Kotlin in androidMain; iOS implements them in Swift and passes
-// them in, because Core Bluetooth, the Keychain and ONNX Runtime are easiest to reach from Swift.
+// 10.3). Android implements them in Kotlin in androidMain. iOS implements them in Kotlin in iosMain
+// where the platform bindings reach the API (the Keychain, notifications), and in Swift, passed in,
+// where they do not (Core Bluetooth and ONNX Runtime are easiest to reach from Swift).
 
 /** Turns text into embedding vectors on the device (bge-small-en-v1.5 through ONNX Runtime). */
 interface Embedder {

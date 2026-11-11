@@ -22,15 +22,20 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 
 // KtorHttp against Ktor's mock engine: the size limit holds whether or not the host declares a
-// length, If-None-Match goes out only when there is an ETag, and a 304 passes through.
+// length, If-None-Match goes out only when there is an ETag, and a 304 passes through. The People
+// API requests (send) read through the same capped reader, and their time limit covers the answer.
 @OptIn(ExperimentalAtomicApi::class)
 class KtorHttpTest {
     private val url = "https://caddie.example/bundles/conferences.json"
@@ -142,5 +147,55 @@ class KtorHttpTest {
         assertContentEquals(bytes, KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 1_000_000, declared = null))
         assertFailsWith<ResponseTooLarge> { KtorHttp.readBounded(ByteReadChannel(bytes), maxBytes = 299_999, declared = 299_999) }
         assertContentEquals(ByteArray(0), KtorHttp.readBounded(ByteReadChannel(ByteArray(0)), maxBytes = 10, declared = null))
+    }
+
+    private val api = "https://caddie.example/api/people/profile"
+
+    @Test
+    fun aPeopleRequestSendsItsMethodHeadersAndJsonOnly() = test {
+        val h = http { respond("""{"ok":true}""", HttpStatusCode.OK, headersOf("X-Caddie-Pace" to listOf("2"), HttpHeaders.ContentType to listOf("application/json"))) }
+        val r = h.send("PUT", api, mapOf("X-Caddie-Device" to "d.s", "Accept" to "application/json"), """{"event":"e"}""".encodeToByteArray(), timeoutMs = 5_000, maxBytes = 1024)
+        assertEquals(200, r.status)
+        assertEquals("""{"ok":true}""", r.text())
+        assertEquals("2", r.header("x-caddie-pace"))
+        val sent = requests.single()
+        assertEquals("PUT", sent.method.value)
+        assertEquals("d.s", sent.headers["X-Caddie-Device"])
+        assertNull(sent.headers[HttpHeaders.Origin])
+        assertNull(sent.headers[HttpHeaders.Cookie])
+        assertEquals("application/json", sent.body.contentType?.toString())
+    }
+
+    @Test
+    fun aPeopleAnswerAboveTheCapIsRefusedDeclaredOrNot() = test {
+        val declared = http { respond(ByteArray(10), HttpStatusCode.OK, headersOf(HttpHeaders.ContentLength, "5000")) }
+        assertFailsWith<ResponseTooLarge> { declared.send("GET", api, emptyMap(), null, timeoutMs = 5_000, maxBytes = 4096) }
+        val undeclared = http { respond(ByteReadChannel(ByteArray(5000)), HttpStatusCode.OK) }
+        assertFailsWith<ResponseTooLarge> { undeclared.send("GET", api, emptyMap(), null, timeoutMs = 5_000, maxBytes = 4096) }
+    }
+
+    @Test
+    fun aPeopleAnswerThatStallsHalfwayRunsOutOfTime() = test {
+        val h = http {
+            // The headers and the start of the body arrive, then nothing more.
+            val body = writers.writer {
+                channel.writeFully("""{"results":[""".encodeToByteArray())
+                channel.flush()
+                awaitCancellation()
+            }.channel
+            respond(body, HttpStatusCode.OK)
+        }
+        val started = TimeSource.Monotonic.markNow()
+        val e = assertFailsWith<RequestTimeout> { h.send("POST", api, emptyMap(), "{}".encodeToByteArray(), timeoutMs = 500, maxBytes = 1024) }
+        assertEquals(500, e.limitMs)
+        assertTrue(started.elapsedNow().inWholeMilliseconds < 10_000, "the limit ended the read")
+        assertTrue(currentCoroutineContext().isActive, "the caller is not cancelled by the request's timeout")
+    }
+
+    @Test
+    fun aPeopleRequestWithNoAnswerRunsOutOfTime() = test {
+        val h = http { awaitCancellation() }
+        assertFailsWith<RequestTimeout> { h.send("DELETE", api, emptyMap(), null, timeoutMs = 500, maxBytes = 1024) }
+        assertTrue(currentCoroutineContext().isActive)
     }
 }

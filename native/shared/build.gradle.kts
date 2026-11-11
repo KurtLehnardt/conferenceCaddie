@@ -27,7 +27,7 @@ abstract class GenerateContractFixtures : DefaultTask() {
     @TaskAction
     fun generate() {
         val root = fixturesDir.get().asFile
-        val files = listOf("capabilities", "bundle")
+        val files = listOf("capabilities", "bundle", "people-api")
             .flatMap { sub -> root.resolve(sub).walkTopDown().filter { it.isFile }.toList() }
             .sortedBy { it.relativeTo(root).invariantSeparatorsPath }
         val out = StringBuilder()
@@ -105,6 +105,23 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.test)
                 implementation(libs.ktor.client.mock)
             }
+        }
+    }
+}
+
+// The live People API harness (jvmTest, LivePeopleSmokeTest) runs only when a backend is named:
+//   ./gradlew :shared:jvmTest --tests '*LivePeopleSmokeTest*' -Pcaddie.liveBase=https://...
+// It then always runs (never up to date, never from the build cache) and prints its PASS, FAIL and
+// SKIP lines. Without the property the test returns at once.
+val liveBase: String = providers.gradleProperty("caddie.liveBase").orElse("").get()
+tasks.named<Test>("jvmTest") {
+    inputs.property("caddieLiveBase", liveBase)
+    systemProperty("caddie.liveBase", liveBase)
+    if (liveBase.isNotEmpty()) {
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        testLogging {
+            showStandardStreams = true
         }
     }
 }

@@ -1,40 +1,89 @@
 package app.conferencecaddie.shared.net
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
+import io.ktor.client.request.prepareRequest
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse as KtorResponse
 import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.http.content.ByteArrayContent
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 
 /**
- * [Http] over Ktor. Redirects are followed only within https (Ktor's default refuses an https to
- * http downgrade). No cookies are stored and no credentials are sent: every request the app makes
- * is a public GET.
+ * [Http] and [ApiHttp] over Ktor. Redirects are followed only within https (Ktor's default refuses
+ * an https to http downgrade). No cookies are stored (no cookie plugin is installed, OkHttp keeps
+ * none, and the iOS engine is set up without cookie storage) and nothing is sent that the caller did
+ * not ask for: no `Origin`, no credentials of Ktor's own. The bundle code's requests are public GETs.
  *
  * The body is streamed, never buffered by Ktor first: a declared `Content-Length` above the limit
  * is refused before anything is read, and an undeclared or false one stops the read as soon as the
  * bytes passed the limit. The bytes go straight into the array the caller gets, so a host that sends
  * an endless body costs at most the limit in memory, once.
  */
-class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { configure() }) : Http {
+class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { configure() }) : Http, ApiHttp {
     override suspend fun get(url: String, ifNoneMatch: String?, maxBytes: Long): HttpResponse =
         client.prepareGet(url) {
             if (ifNoneMatch != null) header(HttpHeaders.IfNoneMatch, ifNoneMatch)
             timeout { requestTimeoutMillis = requestTimeoutFor(maxBytes) }
         }.execute { response ->
-            val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            if (declared != null && declared > maxBytes) throw ResponseTooLarge(maxBytes)
             HttpResponse(
                 status = response.status.value,
-                body = readBounded(response.bodyAsChannel(), maxBytes, declared),
+                body = readCapped(response, maxBytes),
                 etag = response.headers[HttpHeaders.ETag],
                 cacheControl = response.headers[HttpHeaders.CacheControl],
             )
         }
+
+    override suspend fun send(
+        method: String,
+        url: String,
+        headers: Map<String, String>,
+        body: ByteArray?,
+        timeoutMs: Long,
+        maxBytes: Long,
+    ): HttpResponse {
+        // As get(): the whole-request timeout through Ktor's HttpTimeout, here the caller's limit
+        // rather than one that grows with the size (a People API answer is small, and the web waits
+        // 20 or 30 seconds), with the connect and socket timeouts every request has. The request
+        // timeout lasts until the body has been read, so a server that stalls in the middle of its
+        // answer cannot hold the request open either (the web's WRITE_TIMEOUT_MS works the same way).
+        // The body goes through the same capped reader.
+        return try {
+            client.prepareRequest(url) {
+                this.method = HttpMethod.parse(method)
+                timeout { requestTimeoutMillis = timeoutMs }
+                for ((name, value) in headers) header(name, value)
+                if (body != null) setBody(ByteArrayContent(body, ContentType.Application.Json))
+            }.execute { response ->
+                HttpResponse(
+                    status = response.status.value,
+                    body = readCapped(response, maxBytes),
+                    headers = response.headers.entries().associate { (name, values) -> name.lowercase() to values.joinToString(", ") },
+                )
+            }
+        } catch (e: HttpRequestTimeoutException) {
+            throw RequestTimeout(timeoutMs)
+        } catch (e: CancellationException) {
+            // An engine may end a body read cut short by the request timeout with the cancellation
+            // that carries it. That is this request's timeout, not the caller's cancellation, as
+            // long as the caller is still active.
+            if (currentCoroutineContext().isActive && generateSequence<Throwable>(e) { it.cause }.any { it is HttpRequestTimeoutException }) {
+                throw RequestTimeout(timeoutMs)
+            }
+            throw e
+        }
+    }
 
     fun close() = client.close()
 
@@ -107,6 +156,16 @@ class KtorHttp(private val client: HttpClient = HttpClient(platformEngine()) { c
                 requestTimeoutMillis = REQUEST_TIMEOUT_MS
                 socketTimeoutMillis = SOCKET_TIMEOUT_MS
             }
+        }
+
+        /**
+         * Streams the body of [response], throwing [ResponseTooLarge] as soon as it passes
+         * [maxBytes], or before reading anything when the declared `Content-Length` already does.
+         */
+        private suspend fun readCapped(response: KtorResponse, maxBytes: Long): ByteArray {
+            val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+            if (declared != null && declared > maxBytes) throw ResponseTooLarge(maxBytes)
+            return readBounded(response.bodyAsChannel(), maxBytes, declared)
         }
     }
 }

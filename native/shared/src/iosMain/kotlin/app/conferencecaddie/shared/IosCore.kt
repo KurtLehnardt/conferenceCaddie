@@ -1,8 +1,10 @@
 package app.conferencecaddie.shared.core
 
+import app.conferencecaddie.shared.PeopleServices
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.KtorHttp
+import app.conferencecaddie.shared.people.PeopleController
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,9 +16,13 @@ import platform.Foundation.NSNumber
 import platform.Foundation.NSURLIsExcludedFromBackupKey
 import platform.Foundation.NSUserDomainMask
 
-/** The one [CaddieCore] of the app. */
+/** The one [CaddieCore] and [PeopleController] of the app. */
 object IosCore {
     private var instance: CaddieCore? = null
+    private var peopleInstance: PeopleController? = null
+    private lateinit var database: CaddieDatabase
+    private lateinit var http: KtorHttp
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /**
      * The app's core, created on first use, on the main thread. Everything lives in Application
@@ -45,15 +51,30 @@ object IosCore {
         }
         val dbPath = dir.URLByAppendingPathComponent("caddie.db")!!.path!!
         val cachePath = cache.URLByAppendingPathComponent("cache.db")!!.path!!
+        database = CaddieDatabase.openLazily(dbPath, cachePath)
+        http = KtorHttp()
         CaddieCore(
-            database = CaddieDatabase.openLazily(dbPath, cachePath),
+            database = database,
             files = BundleFiles(Path(bundles.path!!)),
-            http = KtorHttp(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            http = http,
+            scope = scope,
             allowLocalHttp = allowLocalHttp,
         ).also {
             instance = it
             it.start()
+        }
+    }
+
+    /**
+     * The app's people features, created on first use on the main thread, next to the core (the same
+     * database and HTTP client) and bound to its state. [services] are the platform's; they are used
+     * by the first call only, which every later call returns.
+     */
+    fun people(services: PeopleServices, allowLocalHttp: Boolean): PeopleController = peopleInstance ?: run {
+        val core = get(allowLocalHttp)
+        PeopleController.create(database, http, services, scope, allowLocalHttp).also {
+            it.bind(core.state)
+            peopleInstance = it
         }
     }
 }
