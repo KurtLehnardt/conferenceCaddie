@@ -143,31 +143,17 @@ object PeopleZones {
         return names.filter { it.lowercase() !in fixedLower }.sortedWith(compareBy<String> { it.lowercase() }.thenBy { it }) + FIXED
     }
 
-    /** The zone from [zones] that matches a deep-link value, ignoring case and encoding; else null. */
-    fun match(zones: List<String>, raw: String): String? {
-        val value = percentDecode(raw) ?: raw
-        val key = value.replace(SEPARATORS, " ").trim().lowercase()
+    /**
+     * The zone from [zones] that a link's [zone] names (`#/here/<zone>`, as the web's matchZone),
+     * ignoring case and taking `-`, `_` and `+` for spaces; else null. [zone] is already
+     * percent-decoded (AppLink decodes it once), so it is not decoded again: a zone whose name holds
+     * `%41` is matched by those three characters, never by `A`.
+     */
+    fun match(zones: List<String>, zone: String): String? {
+        val key = zone.replace(SEPARATORS, " ").trim().lowercase()
         if (key.isEmpty()) return null
         return zones.firstOrNull { it.lowercase() == key || it.replace(SEPARATORS, " ").lowercase() == key }
     }
 
     private val SEPARATORS = Regex("[-_+]+")
-
-    private fun percentDecode(s: String): String? {
-        val out = ArrayList<Byte>()
-        var i = 0
-        while (i < s.length) {
-            val c = s[i]
-            if (c == '%') {
-                if (i + 2 >= s.length) return null
-                val b = s.substring(i + 1, i + 3).toIntOrNull(16) ?: return null
-                out += b.toByte()
-                i += 3
-            } else {
-                c.toString().encodeToByteArray().forEach { out += it }
-                i++
-            }
-        }
-        return out.toByteArray().decodeToString()
-    }
 }

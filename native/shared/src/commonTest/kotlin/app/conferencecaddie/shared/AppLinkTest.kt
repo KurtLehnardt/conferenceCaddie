@@ -77,7 +77,7 @@ class AppLinkTest {
     fun aPeopleRouteThatDoesNotFitIsDropped() {
         // As the web's router: the People tab opens, without the route.
         for (route in listOf(
-            "meet", "meet/", "meet/abc/def", "meet/abc%3D", "meet/abc.def", "meet/" + "a".repeat(129), "meet/%41bc",
+            "meet", "meet/", "meet/abc/def", "meet/../../api/people/profile", "meet/a%2Fb", "meet/abc%3D", "meet/abc.def", "meet/" + "a".repeat(129), "meet/%41bc",
             "here", "here/", "here/%20%20", "here/" + "z".repeat(AppLink.MAX_ZONE + 1), "here/Hall%0AA", "here/Hall%00A",
             "here/Hall%E2%80%AEA", "here/Hall%E2%80%A8A", "here/Hall%C2%85A", "here/Hall%ZZ", "here/Hall%C3",
             "here/" + "%E2%82%AC".repeat(AppLink.MAX_ZONE + 1),
@@ -132,6 +132,8 @@ class AppLinkTest {
             "caddie://meet/abc.def",
             "caddie://Meet/abc",
             "caddie://meet/" + "a".repeat(129),
+            "caddie://meet/../../api/people/profile",
+            "caddie://meet/a%2Fb",
             "caddie://profile",
             "caddie://here/hall-a",
             "caddie://people@evil.example?around=1",
@@ -160,6 +162,7 @@ class AppLinkTest {
         val refused = listOf(
             "",
             "https://kurtlehnardt.github.io/conferenceCaddie/e/kubecon-2026",
+            "https://caddie.example/people?around=1",
             "javascript:alert(1)",
             "caddie:e/kubecon-2026",
             "caddie://evil.example/e/kubecon-2026",
