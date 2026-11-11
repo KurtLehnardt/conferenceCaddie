@@ -1,7 +1,7 @@
 // The admin-auth plumbing of scripts/smoke.mjs: with SMOKE_ADMIN_AUTH=signed every admin call
 // carries an X-Caddie-Admin header that verifies with scripts/lib/admin-sign.mjs and no
-// Authorization header; a retried admin call is signed afresh (a new nonce); the default, bearer,
-// sends Authorization: Bearer as before; and when the Worker's /admin/test/* fixtures answer 404
+// Authorization header, which is the default; a retried admin call is signed afresh (a new nonce);
+// SMOKE_ADMIN_AUTH=bearer sends Authorization: Bearer; and when the Worker's /admin/test/* fixtures answer 404
 // while GET /admin/stats works, the checks that need them print SKIP naming ADMIN_TEST_ROUTES.
 //
 // Run with `npm test`. The smoke runs as a child process against a loopback stub that answers
@@ -118,8 +118,8 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     // The two runs are independent, each with its own stub, so they run at once.
     const [s, b] = await Promise.all([stubWorker({ authOk: signedOk }), stubWorker({ authOk: bearerOk })]);
     const [rs, rb] = await Promise.all([
-      runSmoke(s.port, { SMOKE_ADMIN_AUTH: 'signed' }),
-      runSmoke(b.port, {}),
+      runSmoke(s.port, {}),
+      runSmoke(b.port, { SMOKE_ADMIN_AUTH: 'bearer' }),
     ]);
     signed = { ...rs, requests: s.requests, server: s.server };
     bearer = { ...rb, requests: b.requests, server: b.server };
@@ -174,7 +174,7 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     assert.ok(bearerFailed && bearer.requests.some((r) => r !== bearerFailed && r.path === bearerFailed.path && bearerOk(r)));
   });
 
-  test('SMK-1: the default is bearer, which sends Authorization: Bearer and no X-Caddie-Admin', () => {
+  test('SMK-1: SMOKE_ADMIN_AUTH=bearer sends Authorization: Bearer and no X-Caddie-Admin', () => {
     const calls = adminCalls(bearer.requests, bearerOk);
     assert.ok(calls.length >= 3);
     for (const r of calls) {
@@ -224,6 +224,18 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
       }
     }
   });
+});
+
+test('the default is signed: no SMOKE_ADMIN_AUTH sends X-Caddie-Admin and no Authorization', async () => {
+  const { server, requests, port } = await stubWorker({ authOk: signedOk });
+  try {
+    await runSmoke(port, {});
+    const calls = adminCalls(requests, signedOk);
+    assert.ok(calls.length >= 3);
+    assert.ok(requests.every((r) => r.authorization === null));
+  } finally {
+    server.close();
+  }
 });
 
 test('SMOKE_ADMIN_AUTH refuses an unknown value before any request', async () => {

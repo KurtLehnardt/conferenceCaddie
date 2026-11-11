@@ -33,9 +33,9 @@
 //   SMOKE_ADMIN_AUTH     signed or bearer: how the admin calls authenticate. signed builds the
 //                        X-Caddie-Admin header of scripts/lib/admin-sign.mjs for every admin call, with a
 //                        fresh nonce and timestamp on each attempt, and sends no Authorization header;
-//                        bearer sends Authorization: Bearer <token>, the scheme of a Worker that has not
-//                        deployed the signed admin routes yet. Default bearer in this release; it flips to
-//                        signed once the Worker change is deployed, and the bearer path is then removed.
+//                        bearer sends Authorization: Bearer <token>, the scheme of a local or old Worker
+//                        that does not have the signed admin routes (a current Worker answers it 404).
+//                        Default signed. No admin request follows a redirect: a 3xx is a FAIL.
 //                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
 //                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
 //                        Worker) and the checks that need them (meter1, the expired profile, the aged
@@ -94,6 +94,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
+import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
@@ -141,7 +142,7 @@ const ADMIN_TOKEN = readAdminToken();
 
 // How the admin calls authenticate (SMOKE_ADMIN_AUTH above). The signed scheme needs a key of at
 // least 32 characters, which the Worker requires of ADMIN_TOKEN anyway.
-const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'bearer').toLowerCase();
+const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase();
 if (!['signed', 'bearer'].includes(ADMIN_AUTH)) {
   console.log('FAIL config: SMOKE_ADMIN_AUTH must be signed or bearer');
   process.exit(1);
@@ -2129,17 +2130,28 @@ try {
   // Talks for you.
 
   await check('r1: For you puts talks with a wanted topic first and never an ended or marked one', async () => {
-    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interests: 'kernel level tracing and observability', interested_talk_ids: [], size: 20 }, { label: 'recs' });
+    const name = 'r1: For you puts talks with a wanted topic first and never an ended or marked one';
+    // The topic is chosen now: the one with the most talks that have not ended (end after now, as the
+    // server decides it), and at least MIN_UPCOMING, because two are marked and one must remain.
+    const candidates = [];
+    for (const t of (topicsBySlug.get(PRIMARY) ?? []).slice(0, 12)) {
+      const r = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [t.topic_id], interested_talk_ids: [], size: 50 }, { label: 'recs' });
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      candidates.push({ topic_id: t.topic_id, label: t.label, upcoming: countUpcoming(r.json.results ?? [], t.topic_id, Date.now()) });
+    }
+    const topic = pickUpcomingTopic(candidates);
+    if (!topic) throw new SkipCheck(`no topic has ${MIN_UPCOMING} or more talks that have not ended`);
+    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: [], size: 20 }, { label: 'recs' });
     if (first.status !== 200) throw new Error(`status ${first.status}`);
     const marked = (first.json.results ?? []).slice(0, 2).map((r) => r.talk_id);
-    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interests: 'kernel level tracing and observability', interested_talk_ids: marked, size: 50 }, { label: 'recs' });
-    const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const results = second.json.results ?? [];
     const now = Date.now();
     const problems = [];
     if (!results.length) problems.push('no results');
-    const hasWanted = (r) => (r.topics ?? []).some((t) => t.topic_id === 'ebpf');
-    if (results[0] && !(hasWanted(results[0]) && results[0].why.topics.includes('eBPF'))) problems.push(`the first result "${results[0].title}" lacks eBPF`);
+    const hasWanted = (r) => (r.topics ?? []).some((t) => t.topic_id === topic.topic_id);
+    if (results[0] && !(hasWanted(results[0]) && results[0].why.topics.includes(topic.label))) problems.push(`the first result "${results[0].title}" lacks ${topic.label}`);
     const chipResults = chips.json.results ?? [];
     if (!chipResults.length || !chipResults.every(hasWanted)) problems.push('a chips-only result lacks the wanted topic');
     for (const r of [...results, ...chipResults]) {
@@ -2150,7 +2162,7 @@ try {
     const empty = await api('POST', '/api/recommendations', { event: PRIMARY, interested_talk_ids: [] }, { label: 'recs' });
     if (!(empty.status === 200 && empty.json.needs_profile === true)) problems.push('an empty profile does not get needs_profile');
     const unique = [...new Set(problems)];
-    report(unique.length === 0, 'r1: For you puts talks with a wanted topic first and never an ended or marked one', unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions, first "${results[0].title}"`);
+    report(unique.length === 0, name, unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions on ${topic.label} (${topic.upcoming} upcoming), first "${results[0].title}"`);
   });
 
   await check('r2: For you does not cross conferences', async () => {
