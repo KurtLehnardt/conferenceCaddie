@@ -3,6 +3,7 @@
 //
 // Usage:
 //   node worker/ingest/push-ingest.mjs --api <base> [--event <slug> ...] [--dry-run] [--rebuild-topics]
+//                                      [--report <file>]
 // Env: ADMIN_TOKEN, or ADMIN_TOKEN_FILE naming a file that holds it (not needed with --dry-run).
 //
 // Steps:
@@ -20,8 +21,16 @@
 //    deletes talks.
 // Output is counts only. Exit code: 0 when every event was pushed, 2 when one failed, 1 on a
 // usage error.
+//
+// --report <file> writes what reached the Worker as JSON, also when the run fails part way:
+//   { "upserted": [slugs whose conference document was stored],
+//     "kept": [slugs whose document was held back because the schedule fetch failed],
+//     "pushed": [searchable slugs whose talks, topics and facets were all stored],
+//     "failed": [searchable slugs whose push failed], "not_attempted": [searchable slugs not tried] }
+// ingest.yml stages the talk files of exactly these conferences for the talk bundles
+// (scripts/stage-ingest-data.mjs), so the bundles never run ahead of the Worker.
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, withTopics } from './lib.mjs';
@@ -94,8 +103,12 @@ async function liveSearchable(api) {
   }
 }
 
+// What reached the Worker in this run, for --report.
+const report = { upserted: [], kept: [], pushed: [], failed: [], not_attempted: [] };
+
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics'], values: ['api'], multi: ['event'] });
+  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics'], values: ['api', 'report'], multi: ['event'] });
+  reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
   const dryRun = args['dry-run'];
@@ -140,6 +153,8 @@ async function main() {
     for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
     const r = await admin('PUT', '/admin/conferences', { conferences: confs.filter((c) => !kept.includes(c)) });
     console.log(`Conferences upserted: ${r.upserted ?? '?'}.`);
+    report.kept = kept.map((c) => c.slug);
+    report.upserted = confs.filter((c) => !kept.includes(c)).map((c) => c.slug);
   }
 
   let pushed = 0;
@@ -148,20 +163,32 @@ async function main() {
     try {
       console.log(await pushEvent(conf, { admin: softAdmin, dryRun, generation, rebuild: args['rebuild-topics'], stop }));
       pushed++;
+      if (!dryRun) report.pushed.push(conf.slug);
     } catch (e) {
       failed++;
+      if (!dryRun) report.failed.push(conf.slug);
       console.log(`${conf.slug}: FAILED, ${e.message}`);
       if (e.status === 503) break; // The daily limit is reached; the other events would fail the same way.
     }
   }
   console.log(`Events ${dryRun ? 'checked' : 'pushed'}: ${pushed}, failed: ${failed}, not attempted: ${searchable.length - pushed - failed}.`);
+  if (!dryRun) report.not_attempted = searchable.map((c) => c.slug).filter((s) => !report.pushed.includes(s) && !report.failed.includes(s));
   return failed ? 2 : 0;
+}
+
+let reportFile = null;
+function writeReport() {
+  if (reportFile) writeFileSync(reportFile, `${JSON.stringify(report, null, 2)}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().then(
-    (code) => { process.exitCode = code; },
+    (code) => {
+      writeReport();
+      process.exitCode = code;
+    },
     (e) => {
+      writeReport();
       console.error(e.message);
       process.exitCode = e instanceof UsageError ? 1 : 2;
     },

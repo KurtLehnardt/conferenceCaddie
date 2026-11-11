@@ -29,7 +29,7 @@
     "build": "npm --prefix web ci && npm --prefix web run build",
     "bundles": "node scripts/build-bundles.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --test \"test/*.test.mjs\" \"worker/test/*.test.mjs\"",
+    "test": "node --test \"test/*.test.mjs\" \"worker/test/*.test.mjs\" \"scripts/test/*.test.mjs\"",
     "deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {
