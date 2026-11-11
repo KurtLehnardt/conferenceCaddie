@@ -206,7 +206,8 @@ internal fun TalkResult(
     rank: (@Composable () -> Unit)? = null,
 ) {
     val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
-    val passage = if (showEvidence) remember(talk.talkId, searchText) { Evidence.forTalk(talk, searchText) } else null
+    // Keyed on the talk itself, so a newer bundle that edits a talk's abstract changes its passage too.
+    val passage = if (showEvidence) remember(talk, searchText) { Evidence.forTalk(talk, searchText) } else null
     TalkCard(
         title = talk.title,
         whenText = whenText(talk, bundle.conference),
