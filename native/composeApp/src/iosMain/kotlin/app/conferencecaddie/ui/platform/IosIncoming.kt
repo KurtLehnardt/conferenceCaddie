@@ -1,5 +1,6 @@
 package app.conferencecaddie.ui.platform
 
+import app.conferencecaddie.shared.IosNotificationTaps
 import app.conferencecaddie.ui.theme.HostController
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ObjCSignatureOverride
@@ -19,6 +20,7 @@ import platform.Foundation.NSFileSize
 import platform.Foundation.NSHomeDirectory
 import platform.Foundation.NSNumber
 import platform.Foundation.NSTemporaryDirectory
+import platform.Foundation.NSThread
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLTypeIdentifierKey
 import platform.Foundation.dataWithContentsOfURL
@@ -35,6 +37,8 @@ import platform.UniformTypeIdentifiers.UTTypeJSON
 import platform.UniformTypeIdentifiers.UTTypePlainText
 import platform.UniformTypeIdentifiers.UTTypeTabSeparatedText
 import platform.darwin.NSObject
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 import platform.posix.memcpy
 
 /**
@@ -47,6 +51,22 @@ fun openIncomingUrl(url: NSURL) {
     when {
         scheme == "caddie" -> url.absoluteString?.let { IncomingHandoff.offerLink(it) }
         url.isFileURL() -> IosFiles.read(url) { IncomingHandoff.offerFile(it) }
+    }
+}
+
+/**
+ * Called from Swift (iOSApp.swift, the notification centre's delegate) with the `userInfo` of a
+ * tapped notification. The app's own link in it ([IosNotificationTaps.deepLink]) takes the way of
+ * every `caddie://` link, through [IncomingHandoff] to the app's link router, on the main thread.
+ * A tap that launched the app arrives before the screens exist; the hand-off keeps the link until
+ * the app takes it.
+ */
+fun openNotificationTap(userInfo: Map<Any?, *>) {
+    val link = IosNotificationTaps.deepLink(userInfo) ?: return
+    if (NSThread.isMainThread) {
+        IncomingHandoff.offerLink(link)
+    } else {
+        dispatch_async(dispatch_get_main_queue()) { IncomingHandoff.offerLink(link) }
     }
 }
 

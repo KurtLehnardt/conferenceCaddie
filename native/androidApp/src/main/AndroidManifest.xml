@@ -65,7 +65,10 @@
             </intent-filter>
             <!-- caddie://connect?url=... (an operator's server link or QR code, which the app only
                  ever offers to switch to after the person confirms) and caddie://e/<slug>#/<tab>,
-                 the web's routes. No https App Links: see DECISIONS.md, phase 2c. -->
+                 the web's routes, the people screens' among them (#/inbox, #/meet/<id>). No https
+                 App Links: see DECISIONS.md, phase 2c. The links of the app's own notifications
+                 (caddie://inbox and the like) are not listed: a tap brings its link as an extra
+                 with the install's tap key (AndroidNotifier). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

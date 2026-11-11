@@ -393,7 +393,7 @@ class PeopleController(
         r.s.presenceRuntime.sharePosition(r.slug, on).also { publish() }
     }
 
-    /** The zone of the selected conference that a deep link (`caddie://here/{zone}`) names, or null. */
+    /** The zone of the selected conference that a deep link (`caddie://e/<slug>#/here/<zone>`) names, or null. */
     fun matchZone(raw: String): String? = PeopleZones.match(_state.value.zones, raw)
 
     // ---------------------------------------------------------------------------------------------

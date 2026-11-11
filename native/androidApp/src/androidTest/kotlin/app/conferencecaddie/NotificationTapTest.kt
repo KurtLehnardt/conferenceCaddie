@@ -9,17 +9,9 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.conferencecaddie.shared.AndroidNotifier
-import app.conferencecaddie.shared.NotificationTaps
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.onSubscription
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -32,7 +24,8 @@ import org.junit.runner.RunWith
 /**
  * MainActivity is exported, so any installed app can start it with a deep link extra. Only an
  * intent that carries this install's tap key, which only the notifier's own PendingIntents carry,
- * counts as a notification tap; anything else opens the app and nothing more.
+ * counts as a notification tap, whose link goes to the app's link hand-off (IncomingHandoff);
+ * anything else opens the app and nothing more.
  */
 @RunWith(AndroidJUnit4::class)
 class NotificationTapTest {
@@ -51,12 +44,7 @@ class NotificationTapTest {
 
     @Before
     fun setUp() {
-        NotificationTaps.handled()
-        val watching = CompletableDeferred<Unit>()
-        tapWatch = CoroutineScope(Dispatchers.Default).launch {
-            NotificationTaps.taps.onSubscription { watching.complete(Unit) }.collect { taps += it }
-        }
-        runBlocking { withTimeout(5_000) { watching.await() } }
+        tapWatch = IncomingLinks.watch(taps)
     }
 
     @After
