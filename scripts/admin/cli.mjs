@@ -4,6 +4,7 @@
 // Exit codes: 0 success, 1 backend or request failure, 2 usage, 3 confirmation missing or refused,
 // 4 not found, 5 not supported on this tier.
 
+import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { appendAudit } from './audit.mjs';
@@ -364,7 +365,7 @@ export const COMMAND_TREE = {
       },
       usage: {
         usage: 'stats usage',
-        summary: 'meters and totals (tier 2) or cluster health and index sizes (tier 3)',
+        summary: 'meters and totals (tier 2) or cluster health and index sizes (tier 3; _cluster/health and _cat/indices need the monitor privilege, which the admin key holds)',
         options: {},
         method: 'usage',
         prepare(v, p) {
@@ -472,6 +473,9 @@ export async function main(argv, deps = {}) {
     prompt: deps.prompt ?? readlinePrompt(stdin, stderr),
     createAdapter: deps.createAdapter ?? defaultCreateAdapter,
     now: deps.now ?? (() => new Date()),
+    // The child-process runner and the fetch the adapters use; the tests inject recording ones.
+    spawn: deps.spawn ?? spawnSync,
+    fetch: deps.fetch ?? ((...args) => globalThis.fetch(...args)),
   };
   const json = argv.includes('--json');
   const secrets = [];
@@ -574,7 +578,7 @@ async function run(argv, ctx) {
       isTTY: d.isTTY,
       prompt: d.prompt,
     });
-    const adapter = d.createAdapter(backend, { credential });
+    const adapter = d.createAdapter(backend, { credential, env, spawn: d.spawn, fetch: d.fetch, now: d.now });
     const result = (await adapter[command.method]({ ...args, mode })) ?? {};
     writeAudit({ mode, result: 'ok', counts: result.counts });
     const text = values.json

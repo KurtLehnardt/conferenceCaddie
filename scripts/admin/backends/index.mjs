@@ -1,6 +1,7 @@
 // Adapter factory of the caddie-admin CLI. An adapter serves the commands of one backend tier:
-// tier 3 talks to Elasticsearch with the admin key (PR A1), tier 2 to the Worker's signed /admin
-// routes (PR C). In this release every method throws, so the command skeleton can be tested alone.
+// tier 3 talks to Elasticsearch with the admin key (es.mjs), tier 2 to the Worker's signed /admin
+// routes (PR C; every method throws until then). The conference commands that write files
+// (commands/conferences.mjs) wrap the tier adapter, so both tiers share them.
 //
 // Adapter interface. Each method takes one object of named arguments and returns a result object
 // `{ items?: [...], summary?: '<one line>', counts?: { <name>: <integer> }, ... }`, or throws one
@@ -10,6 +11,7 @@
 //   kind     'profile' | 'spot' | 'meet'
 //   id       ref for a profile or spot, meet id (22 characters) for a meet
 //   slug     conference slug (conference commands; the same value as event)
+//   doc      the local data/<slug>/conference.json as rewritten (conference hide, unhide, unretire)
 //   line     the text of `moderation rules test`
 //   reason   one of spam, harassment, impersonation, off-topic, other (when given)
 //   options  plain object of the command's flags in camelCase, for example { allowShrink: true }.
@@ -19,8 +21,10 @@
 //            counts what a run would change and writes nothing.
 
 import { AdminError } from '../errors.mjs';
+import { adminRoot, withConferenceFiles } from '../commands/conferences.mjs';
+import { createEsAdapter } from './es.mjs';
 
-const NOT_IMPLEMENTED = 'not implemented in this release (PR A1 adds tier 3, PR C adds tier 2)';
+const NOT_IMPLEMENTED = 'not implemented in this release (PR C adds tier 2)';
 
 // Method name, the command it serves, and the arguments it reads.
 export const ADAPTER_METHODS = {
@@ -38,20 +42,16 @@ export const ADAPTER_METHODS = {
   listConferences: 'conferences list: { options: { all }, mode }',
   addConference: 'conferences add: { event, slug, mode }',
   refreshConference: 'conferences refresh: { event, slug, options: { allowShrink }, mode }',
-  hideConference: 'conferences hide: { event, slug, reason, mode }',
-  unhideConference: 'conferences unhide: { event, slug, mode }',
+  hideConference: 'conferences hide: { event, slug, reason, mode, doc }',
+  unhideConference: 'conferences unhide: { event, slug, mode, doc }',
   removeConference: 'conferences remove: { event, slug, reason, options: { purgeLocal }, mode }',
-  unretireConference: 'conferences unretire: { event, slug, mode }; tier 2 sends "unretire": true in the PUT /admin/conferences body, tier 3 clears the removed state',
+  unretireConference: 'conferences unretire: { event, slug, mode, doc }; tier 2 sends "unretire": true in the PUT /admin/conferences body, tier 3 clears the removed state',
   counts: 'stats counts: { event, mode }',
   usage: 'stats usage: { mode }',
   health: 'stats health: { mode }',
 };
 
-// `credential` is the admin key (tier 3) or admin token (tier 2). It is used only to sign or
-// authorize requests and is never returned, printed or logged.
-export function createAdapter(backend, { credential } = {}) {
-  void backend;
-  void credential;
+function notImplemented() {
   const adapter = {};
   for (const method of Object.keys(ADAPTER_METHODS)) {
     adapter[method] = async () => {
@@ -59,4 +59,13 @@ export function createAdapter(backend, { credential } = {}) {
     };
   }
   return adapter;
+}
+
+// `credential` is the admin key (tier 3) or admin token (tier 2). It is used only to sign or
+// authorize requests and is never returned, printed or logged. `env` is the process environment
+// (index names, CADDIE_ADMIN_ROOT); `spawn`, `fetch` and `now` are injectable for the tests.
+export function createAdapter(backend, { credential, env = {}, spawn, fetch, now = () => new Date() } = {}) {
+  const root = adminRoot(env);
+  const tier = backend.tier === 3 ? createEsAdapter(backend, { credential, env, spawn, fetch, root, now }) : notImplemented();
+  return withConferenceFiles(tier, { root, now });
 }

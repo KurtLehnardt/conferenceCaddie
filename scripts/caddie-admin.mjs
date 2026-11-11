@@ -18,6 +18,15 @@
 // <dir>/es-admin-key); tier 2 reads ADMIN_TOKEN, else the file ADMIN_TOKEN_FILE (default
 // <dir>/admin-token). A credential file must not be readable by anyone but its owner.
 //
+// Tier 3 (Elasticsearch): the backend entry holds es_url and, optionally, api (the Cloud Run
+// service URL that `stats health` reads), project and service (for the log command it prints).
+// `stats usage` calls _cluster/health and _cat/indices, which need the monitor privilege; the
+// admin key holds it. Destructive commands run the operator scripts (ingest, build-facets,
+// purge-expired-people, moderation-rules) as child processes with ES_URL and the key in their
+// environment only. The conference commands also rewrite data/<slug>/conference.json and
+// data/conference-operator.json, which the operator commits; CADDIE_ADMIN_ROOT points them at
+// another repository root (the tests use it).
+//
 // Privacy rules: a credential is never printed, logged or written to the audit log. The audit log
 // (<dir>/audit.jsonl, mode 0600) holds only times, the backend, the command, an id or slug, an enum
 // reason and counts. It never holds --note text, the --name search text, the moderation rules test

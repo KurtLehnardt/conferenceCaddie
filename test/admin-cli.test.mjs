@@ -179,10 +179,11 @@ describe('CLI-3 exit codes', () => {
   test('0 on success', async () => {
     assert.equal((await invoke(['stats', 'usage'])).code, 0);
   });
-  test('1 on a backend failure, and for the unimplemented real adapter', async () => {
+  test('1 on a backend failure, and for the unimplemented real tier 2 adapter', async () => {
     const r = await invoke(['stats', 'usage'], { behavior: throwing(new AdminError('boom')) });
     assert.equal(r.code, 1);
-    const real = await invoke(['stats', 'usage'], { noStub: true });
+    // The real tier 2 adapter still throws (PR C); tier 3 is real now and is tested in admin-es.test.mjs.
+    const real = await invoke(['stats', 'usage', '--backend', 't2'], { noStub: true });
     assert.equal(real.code, 1);
     assert.match(real.stderr, /not implemented in this release/);
     assert.equal(JSON.parse(real.audit.trim().split('\n').at(-1)).result, 'failed');
