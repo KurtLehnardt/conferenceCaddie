@@ -190,3 +190,23 @@ test('ties between accented and kana labels are ordered the same way by both bui
   const order = [tie('Éclair', 'b'), tie('Zebra', 'a'), tie('éclair', 'a'), tie('Éclair', 'a')];
   assert.deepEqual(order.sort(compareTopics).map((t) => `${t.label}/${t.topic_id}`), ['Zebra/a', 'Éclair/a', 'Éclair/b', 'éclair/a']);
 });
+
+test('a merge target that reaches three talks only with its aliases stays the topic, in both builders', () => {
+  // "pipeline" occurs in two titles and "pipelines" in four: the merge keeps the id "pipeline",
+  // counting all six talks, instead of falling back to "pipelines" (KubeCon after a cancellation).
+  const titles = ['Pipeline security for clusters', 'Pipeline caching for clusters', 'Pipelines at scale for clusters', 'Faster pipelines for clusters', 'Pipelines without tears for clusters', 'Pipelines and secrets for clusters'];
+  const talks = titles.map((title, i) => ({ talk_id: `fx:${i + 1}`, title }));
+  const fixups = { rename: {}, merge: { pipelines: 'pipeline' }, remove: [] };
+  const worker = buildTopics(talks, { slug: 'fx', stop, fixups }).topics;
+  const bundle = buildBundleTopics({ talks, stoplistText: STOPLIST_TEXT, fixups }).topics;
+  for (const list of [worker, bundle]) {
+    const ids = list.map((t) => t.topic_id);
+    assert.ok(ids.includes('pipeline'), `pipeline kept: ${ids.join(', ')}`);
+    assert.ok(!ids.includes('pipelines'), 'the alias is not a topic of its own');
+    assert.equal(list.find((t) => t.topic_id === 'pipeline').talk_count, 6);
+  }
+  // A target that occurs in no title is not created by a merge.
+  const none = talks.slice(2).map((t) => ({ ...t, title: t.title }));
+  const ids = buildBundleTopics({ talks: none, stoplistText: STOPLIST_TEXT, fixups }).topics.map((t) => t.topic_id);
+  assert.ok(!ids.includes('pipeline'), 'no topic from a merge target that no title holds');
+});
