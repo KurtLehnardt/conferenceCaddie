@@ -21,6 +21,8 @@ import assert from 'node:assert/strict';
 
 export const ES_HOST = 'es.caddie.test';
 export const EVENT = 'testconf-2099';
+// Elasticsearch's default index.max_inner_result_window: top_hits from + size may not exceed it.
+const MAX_INNER_RESULT_WINDOW = 100;
 export const FUTURE = '2099-12-31T23:59:59.000Z';
 export const INDEX = {
   people: 'caddie-people',
@@ -375,11 +377,13 @@ export class FakeES {
   // Terms aggregations ({ terms: { field, size, include } }) over every matching document, each
   // bucket with its own sub-aggregations (aggs); and top_hits ({ top_hits: { size, sort, _source,
   // seq_no_primary_term } }, size 3 by default as in Elasticsearch) over the documents of its
-  // bucket, or of the whole search. Any other aggregation answers no buckets.
+  // bucket, or of the whole search; from + size over 100 (index.max_inner_result_window, the
+  // default) throws, as Elasticsearch refuses it. Any other aggregation answers no buckets.
   aggregate(index, found, aggs) {
     return Object.fromEntries(Object.entries(aggs).map(([name, spec]) => {
       if (spec.top_hits) {
-        const { size = 3, sort, _source: source, seq_no_primary_term: withSeq = false } = spec.top_hits;
+        const { from = 0, size = 3, sort, _source: source, seq_no_primary_term: withSeq = false } = spec.top_hits;
+        if (from + size > MAX_INNER_RESULT_WINDOW) throw new Error(`fake Elasticsearch: top_hits from + size ${from + size} is over index.max_inner_result_window ${MAX_INNER_RESULT_WINDOW}`);
         const specs = sortSpecs(sort);
         const compare = comparer(specs);
         const sorted = specs.length ? [...found].sort(([, a], [, b]) => compare(sortValuesOf(specs, a), sortValuesOf(specs, b))) : found;

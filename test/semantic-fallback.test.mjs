@@ -198,7 +198,7 @@ async function twoAround() {
   const around = (d, token) => {
     const id = `${EVENT}:${d.profileId}`;
     fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_since: new Date().toISOString(), presence_until: until, ble_token: token, ble_token_until: until });
-    fake.put('caddie-people-push', `push-${token}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://push.example.test/${token}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
+    fake.put('caddie-people-push', `push-${token}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/${token}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
   };
   around(asker, 'AAAAAAAAAAAAAAAAAAAAAA');
   around(other, 'BBBBBBBBBBBBBBBBBBBBBB');

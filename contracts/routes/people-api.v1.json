@@ -231,7 +231,7 @@
       "query": [], "request": "PushSubscriptionPutRequest", "response": "Ok", "limits": ["people-write"], "capability": "push.webpush",
       "summary": "Store this browser's Web Push subscription for the requester's profile at one conference.",
       "errors": [
-        { "status": 400, "error": "*", "when": "a malformed subscription, or the conference has ended" },
+        { "status": 400, "error": "*", "when": "a malformed subscription, or an endpoint not on a known push service, or the conference has ended" },
         { "status": 403, "error": "profile_required" }
       ]
     },
