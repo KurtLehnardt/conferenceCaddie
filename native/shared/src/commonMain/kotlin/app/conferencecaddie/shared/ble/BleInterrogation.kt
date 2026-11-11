@@ -130,11 +130,15 @@ class BleInterrogation(
             .filter { (address, _) -> (failures[address]?.retryAt ?: Long.MIN_VALUE) <= nowMillis }
             .minWithOrNull(compareBy<Map.Entry<String, Pending>>({ it.value.kind.ordinal }, { -it.value.rssi }, { it.key }))
             ?: return null
-        pending.remove(best.key)
-        inFlight = best.key
+        // Read the entry before removing it: Kotlin/Native's HashMap refuses to read an entry once
+        // its map has changed (ConcurrentModificationException), which iOS runs.
+        val address = best.key
+        val chosen = best.value
+        pending.remove(address)
+        inFlight = address
         inFlightSince = nowMillis
         starts.addLast(nowMillis)
-        return Candidate(best.key, best.value.kind, best.value.rssi)
+        return Candidate(address, chosen.kind, chosen.rssi)
     }
 
     /** Records what the connection to [address] found; it is then no longer in flight. */
@@ -196,7 +200,9 @@ class BleInterrogation(
     }
 
     private fun prune(nowMillis: Long) {
-        pending.entries.removeAll { nowMillis - it.value.seenAt > OFFER_TTL_MS }
+        // The stale addresses are collected first, then removed, so no entry is read after its map changed.
+        val stale = pending.filterValues { nowMillis - it.seenAt > OFFER_TTL_MS }.keys
+        for (address in stale) pending.remove(address)
     }
 
     private fun trimStarts(nowMillis: Long) {
