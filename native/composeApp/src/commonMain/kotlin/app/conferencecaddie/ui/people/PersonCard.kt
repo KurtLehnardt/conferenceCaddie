@@ -119,14 +119,14 @@ fun PersonCard(
 internal fun broadReason(person: Person): String =
     person.reasons.firstOrNull { it.startsWith(PeopleStrings.ALSO_INTERESTED_IN) } ?: person.opener.orEmpty()
 
-/** True for an https link to linkedin.com (or one of its subdomains), the only links a card opens. */
-internal fun isLinkedInUrl(url: String): Boolean {
-    if (!url.startsWith("https://", ignoreCase = true)) return false
-    val authority = url.substring(8).substringBefore('/').substringBefore('?').substringBefore('#')
-    if (authority.contains('@') || authority.contains(':')) return false
-    val host = authority.lowercase()
-    return host == "linkedin.com" || host.endsWith(".linkedin.com")
-}
+/** True for a link the server itself accepts as `linkedin_url`, the only links a card opens. */
+internal fun isLinkedInUrl(url: String): Boolean = LINKEDIN_URL.matches(url)
+
+/**
+ * The only LinkedIn links a card opens: the server's own rule for `linkedin_url` (docs/CONTRACT.md,
+ * `PUT /api/people/profile`), so no backslash, user name, port or look-alike host can get through.
+ */
+private val LINKEDIN_URL = Regex("^https://(www\\.)?linkedin\\.com/in/[A-Za-z0-9_-]{3,100}/?$")
 
 /** .pp-person-head: the name, the Sample pill and the overflow menu, whose button reaches 10 dp into the card's padding. */
 @Composable

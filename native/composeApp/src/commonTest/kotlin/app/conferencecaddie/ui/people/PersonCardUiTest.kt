@@ -191,7 +191,10 @@ class PersonCardUiTest {
     fun onlyHttpsLinkedInLinksAreOpened() {
         assertTrue(isLinkedInUrl("https://www.linkedin.com/in/your-name"))
         assertTrue(isLinkedInUrl("https://linkedin.com/in/your-name"))
-        assertTrue(isLinkedInUrl("HTTPS://uk.LinkedIn.com/in/x"))
+        assertFalse(isLinkedInUrl("HTTPS://uk.LinkedIn.com/in/x"), "the server accepts only www.linkedin.com and linkedin.com")
+        assertFalse(isLinkedInUrl("https://evil.example\\.linkedin.com/in/your-name"), "a backslash ends no host")
+        assertFalse(isLinkedInUrl("https://www.linkedin.com:443/in/your-name"))
+        assertFalse(isLinkedInUrl("https://www.linkedin.com/in/your-name?x=1"))
         assertFalse(isLinkedInUrl("http://www.linkedin.com/in/your-name"))
         assertFalse(isLinkedInUrl("https://www.linkedin.com.evil.example/in/x"))
         assertFalse(isLinkedInUrl("https://evil.example/www.linkedin.com/in/x"))
