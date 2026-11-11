@@ -1,8 +1,9 @@
 // GET /api/capabilities: what this backend can do (docs/contracts/capabilities.md), computed from
 // the server's configuration when it starts, so the document always matches what the server
 // serves. push.apns and push.fcm are read at every request, because native-push.mjs turns a
-// channel off at runtime when its platform keeps refusing it. Public, cacheable for five minutes, and readable from any origin, because it carries
-// nothing private and a tier 1 page may read it from another origin.
+// channel off at runtime when its platform keeps refusing it. Public, cacheable for five minutes,
+// and readable from any origin, because it carries nothing private and a tier 1 page may read it
+// from another origin.
 //
 // Env:
 //   TALKS_BUNDLE_BASE  where conferences.json and the talk bundles live (an https URL ending in

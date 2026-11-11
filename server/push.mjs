@@ -27,7 +27,8 @@
 //   registration is kept in _source only and needed no mapping change. They leave the server only
 //   inside the push request to the browser's push service, to APNs or to FCM.
 // - A native registration for a platform this server does not push to (push.apns or push.fcm
-//   false) is refused with 404 push_unavailable and nothing is stored. Removing one always works.
+//   false, also after native-push.mjs turned the channel off at runtime) is refused with 404
+//   push_unavailable and nothing is stored. Removing one always works.
 // - Nothing from a request body or header is logged.
 
 import crypto from 'node:crypto';
