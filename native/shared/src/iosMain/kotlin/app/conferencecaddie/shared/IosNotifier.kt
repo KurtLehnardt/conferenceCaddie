@@ -46,7 +46,13 @@ class IosNotifier : Notifier {
     }
 }
 
-/** Called by the app delegate when a notification is tapped. */
+/**
+ * Called by the app delegate when a notification is tapped, a local one ([IosNotifier]) or a remote
+ * one (APNs, whose top-level `deepLink` arrives in the same `userInfo`). Only the app itself and the
+ * backend that holds its APNs key can post either, so no other app can hand a link over this way;
+ * the link must still be one of the exact links the app's notifications carry
+ * ([isNotificationDeepLink]), as on Android.
+ */
 object IosNotificationTaps {
     /** Hands the app's own deep link in [userInfo], if any, to [NotificationTaps]. */
     fun didReceive(userInfo: Map<Any?, *>) {

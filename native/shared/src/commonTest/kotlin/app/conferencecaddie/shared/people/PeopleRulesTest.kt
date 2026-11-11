@@ -116,10 +116,10 @@ class PeopleRulesTest {
     }
 
     @Test
-    fun recordsRoundTripThroughTheSettingsTableScopedByBackend() = runTest {
-        val db = CaddieDatabase.open(":memory:")
+    fun recordsRoundTripThroughThePeopleDatabaseScopedByBackend() = runTest {
+        val db = PeopleDatabase.openLazily(":memory:")
         try {
-            val kv = PeopleKeyValue.forDatabase(db)
+            val kv: PeopleKeyValue = db
             val store = PeopleStore(kv, BACKEND.base)
             store.load()
             store.setProfile(Profile(displayName = "Ana", topics = mapOf(SLUG to ConferenceTopics(learn = listOf(TopicRef("ebpf", "eBPF"))))))

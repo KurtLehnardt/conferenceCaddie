@@ -45,6 +45,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const people = await import('../server/people.mjs');
 const { handlePeopleApi, isBroad } = people;
 const { nudgeAfterPresence } = await import('../server/nudge.mjs');
+// The pause between the two pushes of a pair, which these tests do not wait for.
+const NO_PAUSE = { pause: async () => {} };
 const { handleBleApi } = await import('../server/ble.mjs');
 const { refFor } = await import('../server/device.mjs');
 
@@ -103,7 +105,7 @@ async function matchNames(s, body = {}) {
 }
 async function nudgedNames(s) {
   const me = fake.doc(PEOPLE, `${EVENT}:${s.me.profileId}`);
-  await nudgeAfterPresence(me, CONF);
+  await nudgeAfterPresence(me, CONF, NO_PAUSE);
   return sorted([...fake.store('caddie-people-nudges').values()].map((n) => s.nameOf.get(n.source.profile_ids.find((id) => id !== s.me.profileId))));
 }
 async function sightedNames(s) {

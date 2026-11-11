@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists-1.0.dtd">
+<!--
+  The entitlements of the iOS simulator test executable, linked into its __TEXT,__entitlements
+  section (shared/build.gradle.kts), as Xcode does for a simulator build. The simulator's Keychain
+  reads them from there, so IosSecureStoreTest can use the Keychain without a signing identity. The
+  team prefix is made up: the simulator does not check it. Nothing here reaches the app.
+-->
+<plist version="1.0">
+<dict>
+	<key>application-identifier</key>
+	<string>CADDIETEST.app.conferencecaddie.shared.tests</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>CADDIETEST.app.conferencecaddie.shared.tests</string>
+	</array>
+</dict>
+</plist>

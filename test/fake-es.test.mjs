@@ -34,3 +34,30 @@ test('a Bulk action with both if_seq_no and retry_on_conflict fails the whole re
   assert.equal(status, 400);
   assert.equal(cluster.source(INDEX.people, 'p').a, 1);
 });
+
+test('a terms aggregation gives each bucket its own top_hits: sorted, sized, with the asked fields, and _seq_no only when asked', async () => {
+  const cluster = new FakeES();
+  const at = (minute) => new Date(Date.UTC(2099, 0, 1, 0, minute)).toISOString();
+  cluster.put(INDEX.push, 'a1', { profile_id: 'a', created_at: at(1), token: 'x' });
+  cluster.put(INDEX.push, 'a2', { profile_id: 'a', created_at: at(3), token: 'y' });
+  cluster.put(INDEX.push, 'a3', { profile_id: 'a', created_at: at(2), token: 'z' });
+  cluster.put(INDEX.push, 'b1', { profile_id: 'b', created_at: at(0), token: 'w' });
+  cluster.put(INDEX.push, 'c1', { profile_id: 'c', created_at: at(9), token: 'v' });
+  const top = (extra = {}) => ({ size: 2, sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }], _source: ['profile_id', 'token'], ...extra });
+  const body = (extra) => JSON.stringify({ size: 0, query: { terms: { profile_id: ['a', 'b'] } }, aggs: { people: { terms: { field: 'profile_id', size: 5 }, aggs: { newest: { top_hits: top(extra) } } } } });
+  const { status, json } = await call(cluster, 'POST', `/${INDEX.push}/_search`, body({ seq_no_primary_term: true }));
+  assert.equal(status, 200);
+  assert.deepEqual(json.hits.hits, [], 'size 0');
+  const [a, b] = json.aggregations.people.buckets;
+  assert.deepEqual([a.key, a.doc_count, b.key, b.doc_count], ['a', 3, 'b', 1]);
+  assert.deepEqual(a.newest.hits.hits.map((h) => h._id), ['a2', 'a3'], 'newest first, two of three');
+  assert.equal(a.newest.hits.total.value, 3);
+  assert.deepEqual(a.newest.hits.hits[0]._source, { profile_id: 'a', token: 'y' });
+  assert.equal(a.newest.hits.hits[0]._seq_no, cluster.docs(INDEX.push).get('a2').seq);
+  assert.equal(a.newest.hits.hits[0]._primary_term, 1);
+  assert.deepEqual(b.newest.hits.hits.map((h) => h._id), ['b1']);
+  const plain = (await call(cluster, 'POST', `/${INDEX.push}/_search`, body())).json;
+  assert.equal(plain.aggregations.people.buckets[0].newest.hits.hits[0]._seq_no, undefined, 'no _seq_no unless asked');
+  const one = (await call(cluster, 'POST', `/${INDEX.push}/_search`, JSON.stringify({ size: 0, aggs: { people: { terms: { field: 'profile_id', size: 1 } } } }))).json;
+  assert.deepEqual(one.aggregations.people.buckets, [{ key: 'a', doc_count: 3 }], 'the terms size cuts the buckets, the biggest first');
+});

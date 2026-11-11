@@ -1,7 +1,9 @@
 package app.conferencecaddie
 
+import android.app.Activity
 import android.app.Application
 import android.content.ComponentCallbacks2
+import android.os.Bundle
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
 
@@ -14,6 +16,29 @@ class CaddieApplication : Application() {
         // the variable on the main thread before the core starts any thread and before the query
         // model can be loaded. openEncoder refuses to start ONNX Runtime without it.
         OnnxRuntimeTelemetry.disableForProcess()
+        // The background nudge job starts a cold process with no activity and needs to know that.
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) {
+                startedActivities++
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivities--
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
+    }
+
+    companion object {
+        @Volatile private var startedActivities = 0
+
+        /** True while an activity of the app is started (visible), the app's definition of being in the foreground. */
+        val hasStartedActivity: Boolean get() = startedActivities > 0
     }
 
     // The query model takes about 60 MB once loaded, and loads again in well under a second from the

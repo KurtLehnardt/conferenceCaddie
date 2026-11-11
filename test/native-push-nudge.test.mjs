@@ -13,21 +13,25 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { fake, EVENT, FUTURE, PUSH_HOST, newDevice, request, profileBody } from './lib/fake-es.mjs';
+import { writeKeyFile } from './helpers/apns-key.mjs';
 
 Object.assign(process.env, {
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
-  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  APNS_KEY_FILE: writeKeyFile(),
   FCM_PROJECT_ID: 'caddie-test-project',
 });
 delete process.env.APNS_BUNDLE_ID;
 
 const { handlePeopleApi } = await import('../server/people.mjs');
-const { nudgeAfterPresence } = await import('../server/nudge.mjs');
+const { nudgeAfterPresence, pairDelayMs, PAIR_JITTER_MAX_MS } = await import('../server/nudge.mjs');
+// The pause between the two pushes of a pair, which these tests do not wait for.
+const NO_PAUSE = { pause: async () => {} };
 const { registrationId } = await import('../server/push.mjs');
 const { refFor } = await import('../server/device.mjs');
 
-// Answers the stub gives for particular tokens ({ status, body }); every other push gets 201.
+// Answers the stub gives for particular tokens ({ status, body, meanwhile }); every other push gets
+// 201. meanwhile, when set, runs while the push is out, before the answer.
 const answers = new Map();
 const recorded = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
@@ -38,6 +42,7 @@ globalThis.fetch = async (input, init = {}) => {
     const answer = token ? answers.get(token) : undefined;
     if (answer) {
       fake.pushes.push(entry);
+      await answer.meanwhile?.();
       return new Response(JSON.stringify(answer.body), { status: answer.status });
     }
   }
@@ -100,7 +105,7 @@ describe('push nudge with native push', () => {
     const error = console.error;
     console.error = (...args) => lines.push(args.join(' '));
     try {
-      await nudgeAfterPresence(me, CONF);
+      await nudgeAfterPresence(me, CONF, NO_PAUSE);
     } finally {
       console.error = error;
     }
@@ -147,7 +152,7 @@ describe('push nudge with native push', () => {
 
     // Once per pair per day, whichever channels.
     fake.pushes.length = 0;
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     assert.equal(fake.pushes.length, 0);
     assert.equal(records().length, 1);
   });
@@ -160,7 +165,7 @@ describe('push nudge with native push', () => {
     for (const i of [1, 2]) {
       fake.put('caddie-people-nudges', `earlier-${i}`, { event_id: EVENT, day: 'x', profile_ids: [t.profileId, `someone${i}`], receivers: [t.profileId], created_at: new Date(Date.now() - i * 60_000).toISOString(), expires_at: FUTURE });
     }
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     const toT = fake.pushes.filter((p) => [`apns:${tApns}`, `fcm:${tFcm}`, `web:https://push.example.test/${t.profileId}`].includes(addressOf(p)));
     assert.equal(toT.length, 3, 'the third nudge of the hour reaches all three of T\'s channels');
     const pairRecord = records().find((r) => r.profile_ids.includes(v.profileId));
@@ -172,9 +177,92 @@ describe('push nudge with native push', () => {
     const wFcm = fcmToken();
     around(w, { fcm: wFcm });
     fake.pushes.length = 0;
-    await nudgeAfterPresence({ ...docOf(t) }, CONF);
+    await nudgeAfterPresence({ ...docOf(t) }, CONF, NO_PAUSE);
     assert.deepEqual(fake.pushes.map(addressOf), [`fcm:${wFcm}`]);
     assert.deepEqual(records().find((r) => r.profile_ids.includes(w.profileId)).receivers, [w.profileId]);
+  });
+
+  test('the pushes to the second person of a pair wait for the pause after those to the first, on every channel', async () => {
+    const [tApns, vFcm] = [apnsToken(), fcmToken()];
+    const { t, v, me } = await pair({ web: true, apns: tApns }, { web: true, fcm: vFcm });
+    const w = newDevice();
+    assert.equal((await put(w, 'Wanda Third', { expertise: 'Kafka', interests: 'ebpf probes', learn: ['ebpf'] })).status, 200);
+    around(w, { web: true });
+    // T is at two nudges this hour already, so only the first pair reaches T; the second pair
+    // reaches W alone and needs no pause.
+    fake.put('caddie-people-nudges', 'earlier', { event_id: EVENT, day: 'x', profile_ids: [t.profileId, 'someone'], receivers: [t.profileId], created_at: new Date(Date.now() - 60_000).toISOString(), expires_at: FUTURE });
+    fake.put('caddie-people-nudges', 'earlier-2', { event_id: EVENT, day: 'x', profile_ids: [t.profileId, 'someone-2'], receivers: [t.profileId], created_at: new Date(Date.now() - 120_000).toISOString(), expires_at: FUTURE });
+    const pauses = [];
+    await nudgeAfterPresence(me, CONF, { pause: async () => pauses.push(fake.pushes.map(addressOf).sort()) });
+    assert.equal(pauses.length, 1, 'one pause, in the pair with two receivers');
+    assert.deepEqual(pauses[0], [`apns:${tApns}`, `web:https://push.example.test/${t.profileId}`].sort(), 'all of the first person\'s pushes go out before it');
+    const after = fake.pushes.map(addressOf).slice(2);
+    assert.deepEqual(after.slice(0, 2).sort(), [`fcm:${vFcm}`, `web:https://push.example.test/${v.profileId}`].sort(), 'all of the second person\'s after it');
+    assert.deepEqual(after.slice(2), [`web:https://push.example.test/${w.profileId}`]);
+  });
+
+  test('the pause is a random whole number of milliseconds from 0 to 3000', () => {
+    assert.equal(PAIR_JITTER_MAX_MS, 3000);
+    const samples = Array.from({ length: 2000 }, () => pairDelayMs());
+    assert.ok(samples.every((ms) => Number.isInteger(ms) && ms >= 0 && ms <= 3000));
+    assert.ok(Math.min(...samples) < 500 && Math.max(...samples) > 2500, 'spread over the range');
+  });
+
+  test('by default the second person\'s pushes wait for a real timer, after the nudge was started', async (t) => {
+    const { me } = await pair({ web: true }, { web: true });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const done = nudgeAfterPresence(me, CONF);
+    const deadline = Date.now() + 2000;
+    while (fake.pushes.length < 1 && Date.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fake.pushes.length, 1, 'the first push went out, the second waits');
+    t.mock.timers.tick(PAIR_JITTER_MAX_MS);
+    await done;
+    assert.equal(fake.pushes.length, 2);
+  });
+
+  test('one search reads the targets of every receiver, however many matches, as Web Push did before native push', async () => {
+    const { t, v, me } = await pair({ web: true }, { web: true });
+    const w = newDevice();
+    assert.equal((await put(w, 'Wanda Third', { expertise: 'Kafka', interests: 'ebpf probes', learn: ['ebpf'] })).status, 200);
+    around(w, { web: true });
+    fake.calls.length = 0;
+    const targetSearches = () => fake.calls.filter((c) => c.index === 'caddie-people-push' && c.op === '_search');
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    assert.equal(targetSearches().length, 1, 'one search for the writer and both matches');
+    assert.deepEqual(targetSearches()[0].body.aggs.receivers.terms, { field: 'profile_id', size: 3 });
+    // The writer hears about both matches, and each match about the writer: the pushes main sent.
+    const sent = fake.pushes.map(addressOf).sort();
+    assert.deepEqual(sent, [t, t, v, w].map((d) => `web:https://push.example.test/${d.profileId}`).sort());
+    assert.equal(records().length, 2);
+
+    // The same day again: both records exist, so the creates answer 409 and nothing is sent; the
+    // one search is made first, as before.
+    fake.pushes.length = 0;
+    fake.calls.length = 0;
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    assert.equal(fake.pushes.length, 0);
+    assert.equal(targetSearches().length, 1);
+  });
+
+  test('a receiver with more than ten subscriptions and registrations gets the nudge on the newest ten, and the other receiver still gets theirs', async () => {
+    const tApns = apnsToken();
+    const { v, me } = await pair({ apns: tApns }, {});
+    for (let i = 0; i < 12; i++) {
+      fake.put('caddie-people-push', `flood-${i}`, { event_id: EVENT, profile_id: v.profileId, endpoint: `https://push.example.test/flood/${i}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString(), expires_at: FUTURE });
+    }
+    const lines = [];
+    const error = console.error;
+    console.error = (...args) => lines.push(args.join(' '));
+    try {
+      await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    } finally {
+      console.error = error;
+    }
+    const toV = fake.pushes.filter((p) => !p.platform).map((p) => p.endpoint).sort();
+    assert.deepEqual(toV, Array.from({ length: 10 }, (_, i) => `https://push.example.test/flood/${i + 2}`).sort(), 'the newest ten');
+    assert.deepEqual(fake.pushes.filter((p) => p.platform).map(addressOf), [`apns:${tApns}`]);
+    assert.deepEqual(lines, ['Push targets capped: one receiver has 12, the newest 10 are used']);
   });
 
   test('a registration APNs or FCM reports gone is deleted; a refusal for another reason keeps it', async () => {
@@ -194,7 +282,7 @@ describe('push nudge with native push', () => {
     const error = console.error;
     console.error = (...args) => lines.push(args.join(' '));
     try {
-      await nudgeAfterPresence(me, CONF);
+      await nudgeAfterPresence(me, CONF, NO_PAUSE);
     } finally {
       console.error = error;
     }
@@ -207,5 +295,27 @@ describe('push nudge with native push', () => {
     assert.equal(store.has(registrationId(EVENT, w.profileId, 'apns')), true, 'APNs 400 DeviceTokenNotForTopic: kept, since a wrong topic gives it for every token');
     assert.equal(store.has(registrationId(EVENT, w.profileId, 'fcm')), true, 'FCM 429: kept');
     assert.deepEqual(lines.sort(), ['Native push failed: apns 400 DeviceTokenNotForTopic', 'Native push failed: fcm 429 QUOTA_EXCEEDED', 'Native push failed: fcm 503 UNAVAILABLE']);
+    const deletes = fake.calls.filter((c) => c.index === 'caddie-people-push' && c.method === 'DELETE');
+    assert.equal(deletes.length, 3);
+    assert.ok(deletes.every((c) => c.params.has('if_seq_no') && c.params.get('if_primary_term') === '1'), 'each delete is guarded by the version that was read');
+  });
+
+  test('a token reported gone after the device registered a new one: the new registration stays', async () => {
+    const [oldApns, newApns, oldFcm, newFcm] = [apnsToken(), apnsToken(), fcmToken(), fcmToken()];
+    const { t, v, me } = await pair({ apns: oldApns }, { fcm: oldFcm });
+    const fcmError = (code, status, errorCode) => ({ error: { code, status, details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode }] } });
+    // While each push is out, the device registers the token the platform rotated to, and then the
+    // platform answers that the old token is gone.
+    const rotate = (d, platform, token) => () => {
+      const id = registrationId(EVENT, d.profileId, platform);
+      fake.put('caddie-people-push', id, { ...fake.doc('caddie-people-push', id), token, created_at: new Date().toISOString() });
+    };
+    answers.set(oldApns, { status: 410, body: { reason: 'Unregistered', timestamp: Date.now() }, meanwhile: rotate(t, 'apns', newApns) });
+    answers.set(oldFcm, { status: 404, body: fcmError(404, 'NOT_FOUND', 'UNREGISTERED'), meanwhile: rotate(v, 'fcm', newFcm) });
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    assert.equal(fake.pushes.length, 2);
+    assert.equal(fake.doc('caddie-people-push', registrationId(EVENT, t.profileId, 'apns'))?.token, newApns, 'APNs: the new token stays');
+    assert.equal(fake.doc('caddie-people-push', registrationId(EVENT, v.profileId, 'fcm'))?.token, newFcm, 'FCM: the new token stays');
+    assert.equal(fake.calls.filter((c) => c.index === 'caddie-people-push' && c.method === 'DELETE').length, 2, 'both deletes were tried, and refused');
   });
 });

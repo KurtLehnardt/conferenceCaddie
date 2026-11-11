@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared
 
+import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.useContents
@@ -37,43 +38,41 @@ import kotlin.coroutines.resume
  * [LocationProvider] on Core Location, "when in use" only: the app declares no background mode and
  * never asks for "always". The location manager and its delegate live on the main thread, where
  * Core Location delivers their callbacks; the provider keeps both for its whole life.
+ *
+ * The provider must be constructed on the main thread (the manager is created there, eagerly, so
+ * that no later call ever has to hop to the main thread and block on it). [access] reads a snapshot
+ * of the authorization state that the delegate refreshes on every change, so it is safe to call from
+ * any thread and never touches the manager.
  */
 @OptIn(ExperimentalForeignApi::class)
 class IosLocationProvider : LocationProvider {
     private val delegate = Delegate()
-    private val manager: CLLocationManager by lazy {
-        onMain {
-            CLLocationManager().apply {
-                desiredAccuracy = kCLLocationAccuracyBest
-                distanceFilter = kCLDistanceFilterNone
-                delegate = this@IosLocationProvider.delegate
-            }
-        }
+    private val manager: CLLocationManager = CLLocationManager().apply {
+        desiredAccuracy = kCLLocationAccuracyBest
+        distanceFilter = kCLDistanceFilterNone
+        delegate = this@IosLocationProvider.delegate
+        this@IosLocationProvider.delegate.refresh(this)
     }
 
     override fun access(): LocationAccess {
-        val lm = manager
-        return when (lm.authorizationStatus) {
+        val state = delegate.state
+        return when (state.status) {
             kCLAuthorizationStatusNotDetermined -> LocationAccess.NotAsked
             // Restricted (parental controls, device management) is not the person's choice and cannot
             // be changed in the app's settings.
             kCLAuthorizationStatusRestricted -> LocationAccess.Unavailable
             // Denied is also what an app sees when Location Services are off for the whole phone.
-            // Asking the class costs a call to the location daemon, so it happens only here.
             kCLAuthorizationStatusDenied ->
-                if (CLLocationManager.locationServicesEnabled()) LocationAccess.Denied else LocationAccess.Unavailable
+                if (state.servicesEnabled) LocationAccess.Denied else LocationAccess.Unavailable
             kCLAuthorizationStatusAuthorizedWhenInUse, kCLAuthorizationStatusAuthorizedAlways ->
-                if (lm.accuracyAuthorization == CLAccuracyAuthorization.CLAccuracyAuthorizationReducedAccuracy) {
-                    LocationAccess.Approximate
-                } else {
-                    LocationAccess.Precise
-                }
+                if (state.reducedAccuracy) LocationAccess.Approximate else LocationAccess.Precise
             else -> LocationAccess.Unavailable
         }
     }
 
     override suspend fun requestAccess(): LocationAccess = withContext(Dispatchers.Main) {
         val lm = manager
+        delegate.refresh(lm)
         if (lm.authorizationStatus == kCLAuthorizationStatusNotDetermined) {
             // iOS asks only once; the delegate hears the decision (and nothing while undecided).
             suspendCancellableCoroutine { waiter ->
@@ -103,12 +102,32 @@ class IosLocationProvider : LocationProvider {
         }
     }
 
-    /** The location manager's delegate. Every member is used on the main thread only. */
+    /** What [access] needs from Core Location, captured on the main thread. */
+    private class AuthState(val status: Int, val servicesEnabled: Boolean, val reducedAccuracy: Boolean)
+
+    /**
+     * The location manager's delegate. Its waiters and listeners are used on the main thread only;
+     * [state] is replaced as a whole and may be read from any thread.
+     */
     private class Delegate : NSObject(), CLLocationManagerDelegateProtocol {
+        @Volatile
+        var state = AuthState(kCLAuthorizationStatusNotDetermined, servicesEnabled = true, reducedAccuracy = false)
+            private set
+
+        /** Main thread only: reads the manager and the class-level services switch into [state]. */
+        fun refresh(manager: CLLocationManager) {
+            state = AuthState(
+                status = manager.authorizationStatus,
+                servicesEnabled = CLLocationManager.locationServicesEnabled(),
+                reducedAccuracy = manager.accuracyAuthorization == CLAccuracyAuthorization.CLAccuracyAuthorizationReducedAccuracy,
+            )
+        }
+
         val decisionWaiters = mutableListOf<CancellableContinuation<Unit>>()
         val listeners = mutableListOf<SendChannel<GeoFix>>()
 
         override fun locationManagerDidChangeAuthorization(manager: CLLocationManager) {
+            refresh(manager)
             if (manager.authorizationStatus == kCLAuthorizationStatusNotDetermined) return
             val waiting = decisionWaiters.toList()
             decisionWaiters.clear()

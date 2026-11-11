@@ -13,6 +13,7 @@ import java.util.zip.ZipFile
 import javax.inject.Inject
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
 
 // The platform-neutral core: models, the capabilities and talk bundle clients, the SQLite store and
@@ -326,6 +327,7 @@ val downloadOnnxRuntimeApple = tasks.registerPinned(
     layout.buildDirectory.file("downloads/onnxruntime-apple-$onnxRuntimeVersion.zip"),
 )
 val onnxRuntimeAppleDir = layout.buildDirectory.dir("onnxruntime-apple")
+val simulatorTestEntitlements = layout.projectDirectory.file("src/iosTest/simulator-tests.entitlements")
 val unpackOnnxRuntimeApple = tasks.register<UnpackOnnxRuntimeApple>("unpackOnnxRuntimeApple") {
     group = "caddie"
     archive.set(downloadOnnxRuntimeApple.flatMap { it.output })
@@ -366,7 +368,16 @@ kotlin {
         }
     }
     iosArm64 { onnxRuntime("ios-arm64") }
-    iosSimulatorArm64 { onnxRuntime("ios-simulator-arm64") }
+    iosSimulatorArm64 {
+        onnxRuntime("ios-simulator-arm64")
+        // The Keychain tests (IosSecureStoreTest) need an app's entitlements. The simulator reads them
+        // from the executable's __TEXT,__entitlements section, which is where Xcode puts them for a
+        // simulator build, so the test executable gets one too; no signing identity is involved.
+        binaries.withType<TestExecutable>().configureEach {
+            linkerOpts("-sectcreate", "__TEXT", "__entitlements", simulatorTestEntitlements.asFile.absolutePath)
+            linkTaskProvider.configure { inputs.file(simulatorTestEntitlements) }
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {
@@ -473,4 +484,14 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     dependsOn(downloadEmbeddingModel, downloadEmbeddingVocab)
     environment("SIMCTL_CHILD_CADDIE_EMBEDDING_DIR", embeddingDir.get().asFile.absolutePath)
     environment("SIMCTL_CHILD_ORT_DISABLE_TELEMETRY", "1")
+    // The tests run in a booted simulator, not a standalone process (simctl spawn --standalone),
+    // which has no Keychain at all (errSecNotAvailable). The simulator is booted here if it is not
+    // running yet, and left running, as Xcode leaves it after a test run.
+    standalone.set(false)
+    val simulator = device
+    doFirst {
+        val boot = ProcessBuilder("/usr/bin/xcrun", "simctl", "bootstatus", simulator.get(), "-b").redirectErrorStream(true).start()
+        val output = boot.inputStream.bufferedReader().readText()
+        if (boot.waitFor() != 0) throw GradleException("Could not boot the simulator ${simulator.get()}:\n$output")
+    }
 }

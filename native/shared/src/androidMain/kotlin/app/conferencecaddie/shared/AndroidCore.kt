@@ -6,6 +6,7 @@ import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.KtorHttp
 import app.conferencecaddie.shared.people.PeopleController
+import app.conferencecaddie.shared.people.PeopleDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,10 +22,11 @@ object AndroidCore {
 
     /**
      * The process's core, created on first use. The database and its cache database live in the
-     * app's database directory and the bundles in its files directory; all are excluded from backup
-     * and device transfer by the manifest's backup rules. Nothing is read here: the database opens
-     * on its own I/O thread at the first statement, so the main thread never waits for it, and a
-     * database that cannot be opened is replaced rather than crashing every start
+     * app's database directory and the bundles in its files directory (the people records are apart,
+     * see [people]); all are excluded from backup and device transfer by the manifest's backup rules
+     * (res/xml/data_extraction_rules.xml excludes every domain). Nothing is read here: the
+     * database opens on its own I/O thread at the first statement, so the main thread never waits
+     * for it, and a database that cannot be opened is replaced rather than crashing every start
      * ([CaddieDatabase.openLazily]).
      */
     fun get(context: Context, allowLocalHttp: Boolean): CaddieCore = instance ?: synchronized(this) {
@@ -48,14 +50,21 @@ object AndroidCore {
     }
 
     /**
-     * The process's people features, created on first use next to the core (the same database and
-     * HTTP client) and bound to its state. [services] are the platform's; they are used by the first
-     * call only, which every later call returns.
+     * The process's people features, created on first use next to the core (the same HTTP client)
+     * and bound to its state. [services] are the platform's; they are used by the first call only,
+     * which every later call returns.
+     *
+     * The records are in `no_backup/people/people.db` ([PeopleDatabase]), apart from the main
+     * database, as on iOS. They belong with the device credential, which never leaves the phone,
+     * and they name other attendees. The backup rules exclude the whole app already; the
+     * no-backup directory keeps the records out even if a later change lets the main database be
+     * backed up. The file opens on its own I/O thread at the first statement.
      */
     fun people(context: Context, services: PeopleServices, allowLocalHttp: Boolean): PeopleController = peopleInstance ?: synchronized(this) {
         peopleInstance ?: run {
             val core = get(context, allowLocalHttp)
-            PeopleController.create(database, http, services, scope, allowLocalHttp).also {
+            val records = PeopleDatabase.openLazily(context.applicationContext.noBackupFilesDir.resolve("people/people.db").absolutePath)
+            PeopleController.create(records, http, services, scope, allowLocalHttp).also {
                 it.bind(core.state)
                 peopleInstance = it
             }

@@ -15,16 +15,19 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { fake, EVENT, FUTURE, PUSH_HOST, newDevice, request, profileBody } from './lib/fake-es.mjs';
+import { writeKeyFile } from './helpers/apns-key.mjs';
 
 Object.assign(process.env, {
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
-  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  APNS_KEY_FILE: writeKeyFile(),
 });
 for (const k of ['APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT']) delete process.env[k];
 
 const { handlePeopleApi } = await import('../server/people.mjs');
 const { nudgeAfterPresence } = await import('../server/nudge.mjs');
+// The pause between the two pushes of a pair, which these tests do not wait for.
+const NO_PAUSE = { pause: async () => {} };
 const { handlePushApi, registrationId } = await import('../server/push.mjs');
 const { NATIVE_PUSH, AUTH_FAILURES_MAX } = await import('../server/native-push.mjs');
 const { currentCapabilities, handleCapabilities } = await import('../server/capabilities.mjs');
@@ -82,7 +85,7 @@ async function quietNudge(me) {
   const error = console.error;
   console.error = (...args) => lines.push(args.join(' '));
   try {
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
   } finally {
     console.error = error;
   }

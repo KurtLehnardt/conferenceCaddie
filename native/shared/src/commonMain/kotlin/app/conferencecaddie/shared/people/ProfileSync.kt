@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared.people
 
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Clock
@@ -58,6 +59,16 @@ internal interface SyncHost {
     /** The topic ids conference [slug] offers today (its installed bundle), or null when unknown. */
     fun topicIds(slug: String): Set<String>?
 
+    /** The selected conference of this backend, or null while none is selected. */
+    fun selectedSlug(): String?
+
+    /**
+     * Every conference of this backend's list ([PeopleContext.listed]), or null while the list is not
+     * known. "Delete my profile" reaches the ones that have not ended even where the records name
+     * none, because the records can be lost while the key survives.
+     */
+    fun listedConferences(): List<ConferenceInfo>?
+
     /** Presence the server cleared with the profile: off on the device, with its timers. */
     suspend fun presenceEndedOnServer(slug: String)
 
@@ -93,7 +104,9 @@ internal interface SyncHost {
  * longer after each failure: 30 seconds, doubling up to 30 minutes, or a longer Retry-After.
  *
  * Every function runs on the controller's serial dispatcher, so state changes between suspension
- * points are atomic, as in the web app's single thread.
+ * points are atomic, as in the web app's single thread. Work that runs on its own (the debounced
+ * save, the quiet re-send, the delete retries) catches a failure of the store, so a failing write
+ * leaves an error to show or a later retry, never a state that waits forever.
  */
 internal class ProfileSync(
     private val store: PeopleStore,
@@ -101,6 +114,8 @@ internal class ProfileSync(
     private val credentials: DeviceCredentials,
     private val scope: CoroutineScope,
     private val host: SyncHost,
+    // Every profile write and delete takes it; a parameter only so tests can reach its edge cases.
+    private val writeLock: Mutex = Mutex(),
 ) {
     private val clock get() = host.clock
     private fun now() = clock.now().toEpochMilliseconds()
@@ -119,7 +134,6 @@ internal class ProfileSync(
     private var inFlight = 0
     private val activeDeletes = LinkedHashSet<Deferred<Unit>>()
     private var syncDeferred = false
-    private val writeLock = Mutex()
     private val shareQueue = Mutex()
     private var resendJob: Job? = null
     private var resending = false
@@ -248,6 +262,10 @@ internal class ProfileSync(
                 resending = true
                 try {
                     resendProfile()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The store failed. The re-send is quiet and is not repeated; the next edit saves anyway.
                 } finally {
                     resending = false
                 }
@@ -280,11 +298,33 @@ internal class ProfileSync(
      * on the device, and the delete stays marked and is tried again. [auto] is set for the
      * automatic share of "sharing follows Interested", which ends quietly when a delete covers the
      * conference by the time its turn comes.
+     *
+     * A call that ends with an exception (the store could not write, or the call was cancelled)
+     * does not leave the status at Saving, and the exception goes on to the caller.
      */
     suspend fun changeVisibility(slug: String, patch: (Visibility) -> Visibility, auto: Boolean = false): String? {
+        try {
+            return changeVisibilityNow(slug, patch, auto)
+        } catch (e: CancellationException) {
+            if (status.state == SyncStatus.State.Saving && inFlight == 0) setStatus(SyncStatus.IDLE)
+            throw e
+        } catch (e: Exception) {
+            if (status.state == SyncStatus.State.Saving && inFlight == 0) setStatus(SyncStatus(SyncStatus.State.Error, GENERIC_MESSAGE))
+            throw e
+        }
+    }
+
+    private suspend fun changeVisibilityNow(slug: String, patch: (Visibility) -> Visibility, auto: Boolean): String? {
         deletesSettled()
         if (auto && (!store.visibility(slug).shareNew || writesBlocked(slug))) return null
         var current = store.visibility(slug)
+        // The records say the server holds this phone's profile, but the key it was made with is
+        // gone: a write would make a second profile under a new key, and a delete could not reach
+        // the first. Checked at start-up too (reconcileCredential); this catches a key that could
+        // not be read then.
+        if ((current.onServer || current.maybeOnServer) && store.deleteAll == null && credentials.lookup() == DeviceCredentials.Lookup.None) {
+            return forgetUnreachableProfile()
+        }
         if (!patch(current).wantsServer) {
             if (!current.onServer && !current.maybeOnServer) {
                 store.setVisibility(slug) { patch(it).copy(onServer = false) }
@@ -422,7 +462,23 @@ internal class ProfileSync(
         }
     }
 
+    /**
+     * The debounced save. If the store fails part-way, the save ends as an error rather than at
+     * Saving, and an edit held back for a delete no longer waits for one that is not running: the
+     * next edit is sent as usual.
+     */
     private suspend fun syncNow(current: String?) {
+        try {
+            syncNowUnguarded(current)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (holds.isEmpty()) syncDeferred = false
+            setStatus(SyncStatus(SyncStatus.State.Error, GENERIC_MESSAGE))
+        }
+    }
+
+    private suspend fun syncNowUnguarded(current: String?) {
         val p = store.profile
         val problem = profileProblem(p)
         if (problem != null || p == null) {
@@ -466,6 +522,74 @@ internal class ProfileSync(
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Records without their key
+
+    /**
+     * Checks the records against the device's key when the controller opens a backend's records.
+     * Records that say the server holds this phone's profile somewhere, or that a delete is
+     * unfinished, while the secure store holds no key for the backend, came to this phone without
+     * it: a move to a new phone, or a backup put back. The profile they describe stays on the server
+     * under a key this phone no longer has, so this phone can neither change nor delete it, and a
+     * visible write would make a second profile under a new key.
+     *
+     * The device then stops treating any conference as holding the profile ([forgetUnreachableProfile])
+     * and the returned notice says so. An unfinished "Delete my profile" finishes on this phone, as
+     * it would without a key anyway, and says what may be left on the server. A secure store that
+     * cannot be read now changes nothing: the key may well be there. Returns null when nothing
+     * changed, also when the store failed while the records were put right; the next start checks
+     * again.
+     */
+    suspend fun reconcileCredential(): String? = try {
+        reconcileNow()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
+    private suspend fun reconcileNow(): String? {
+        if (store.deleteAll == null && unreachable().isEmpty()) return null
+        if (credentials.lookup() != DeviceCredentials.Lookup.None) return null
+        if (store.deleteAll != null) {
+            wipeDevice()
+            return DELETED_NO_KEY_MESSAGE
+        }
+        return forgetUnreachableProfile()
+    }
+
+    /** The conferences whose records say the server holds, may hold, or is still deleting this phone's profile. */
+    private fun unreachable(): List<String> =
+        store.slugsWhere { it.visibility.onServer || it.visibility.maybeOnServer || it.deletePending != null }
+
+    /**
+     * For records that came without their key: at every conference they name, the visibility
+     * choices (sharing that follows Interested too), presence and push go off on the device and the
+     * delete mark goes, because this phone can never finish it. Nothing is sent: a new profile is
+     * made only when the user turns visibility on again. Returns the notice for the user.
+     */
+    private suspend fun forgetUnreachableProfile(): String {
+        for (slug in unreachable()) {
+            store.update(slug) { r ->
+                r.copy(
+                    visibility = r.visibility.copy(
+                        openToMeet = false,
+                        sharedTalkIds = emptyList(),
+                        shareNew = false,
+                        onServer = false,
+                        maybeOnServer = false,
+                        hiddenForOwner = false,
+                    ),
+                    deletePending = null,
+                )
+            }
+            host.presenceEndedOnServer(slug)
+            host.pushDeletedOnServer(slug)
+        }
+        host.changed()
+        return KEY_LOST_MESSAGE
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Deletes: holding writes, and the write lock
 
     private fun heldNow(slug: String): Boolean = holds.any { it.slugs == null || slug in it.slugs }
@@ -486,20 +610,27 @@ internal class ProfileSync(
     /**
      * Runs [fn] holding the write lock. Waiting gives up after [waitMs] and [fn] runs without the
      * lock; [fn] learns whether it holds it.
+     *
+     * The lock is taken under an owner of this call. The time limit can run out just after the
+     * lock was handed over, and the wait then reports a timeout although this call holds the lock;
+     * the owner tells, and the lock is given back at once instead of being held for good.
      */
     private suspend fun <T> withWriteLock(waitMs: Long, fn: suspend (exclusive: Boolean) -> T): T {
+        val owner = Any()
         val got = if (waitMs <= 0) {
-            writeLock.tryLock()
+            writeLock.tryLock(owner)
         } else {
-            withTimeoutOrNull(waitMs) {
-                writeLock.lock()
+            val locked = withTimeoutOrNull(waitMs) {
+                writeLock.lock(owner)
                 true
             } ?: false
+            if (!locked && writeLock.holdsLock(owner)) writeLock.unlock(owner)
+            locked
         }
         try {
             return fn(got)
         } finally {
-            if (got) writeLock.unlock()
+            if (got) writeLock.unlock(owner)
         }
     }
 
@@ -570,8 +701,12 @@ internal class ProfileSync(
     /** Seconds of the server's Retry-After, at most an hour, so a wrong header cannot stop the retries. */
     private fun retryAfterOf(e: PeopleError): Long = min(e.retryAfterSeconds ?: 0, 3600)
 
-    /** A record after one more failed attempt: the wait doubles from 30 seconds up to 30 minutes, or follows a longer Retry-After. */
-    private fun afterFailure(r: DeleteRetry, kind: DeleteFailure, retryAfterSec: Long): DeleteRetry {
+    /**
+     * A record after one more failed attempt: the wait doubles from 30 seconds up to 30 minutes, or
+     * follows a longer Retry-After. [kind] is null for an attempt that could not finish for a reason
+     * no request gave (the conference list is not known).
+     */
+    private fun afterFailure(r: DeleteRetry, kind: DeleteFailure?, retryAfterSec: Long): DeleteRetry {
         val attempts = r.attempts + 1
         val wait = min(RETRY_MAX_MS.toDouble(), RETRY_FIRST_MS * 2.0.pow(attempts - 1)).toLong()
         return r.copy(
@@ -605,8 +740,9 @@ internal class ProfileSync(
     private suspend fun stopActivity(slugs: List<String>, all: Boolean, livePresence: (String) -> Boolean): Boolean {
         try {
             host.stopRuntime(if (all) null else slugs.firstOrNull())
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
             // Stopping is best effort; the server ends presence and Bluetooth with the profile anyway.
         }
         val live = slugs.filter(livePresence)
@@ -689,12 +825,16 @@ internal class ProfileSync(
         return Deleted.Yes
     }
 
-    /** Removes the people data from the device. Only for after the server confirmed every delete. */
-    private suspend fun wipeDevice() {
+    /**
+     * Removes the people data from the device, and its key unless [forgetKey] is false. Only for
+     * after the server confirmed every delete, or once the server can hold nothing of this device
+     * that a delete from here could reach.
+     */
+    private suspend fun wipeDevice(forgetKey: Boolean = true) {
         host.forgetPush()
         host.resetRuntime()
         store.clearAllPeopleData()
-        credentials.forget()
+        if (forgetKey) credentials.forget()
         retryJob?.cancel()
         retryJob = null
         resendJob?.cancel()
@@ -745,12 +885,38 @@ internal class ProfileSync(
     }
 
     /**
+     * "Delete my profile" with the device's key at hand. The records say where the profile is, but
+     * they can be lost while the key survives: a database replaced after it could not be opened, or
+     * an iPhone app deleted and installed again, which keeps the Keychain. So the selected
+     * conference and every conference of the backend's list that has not ended are marked for a
+     * delete as well, as the conferences the records name are; the server answers a delete with
+     * nothing to delete with 200. A conference that has ended needs none: the server shows nothing
+     * there any more and removes what it held. The list is marked once per "Delete my profile", so
+     * a retry sends only what is still unconfirmed; while the list is not known, only the selected
+     * conference is marked, and the delete cannot finish.
+     */
+    private suspend fun markReachable() {
+        val all = store.deleteAll ?: return
+        if (all.listReached) return
+        val listed = host.listedConferences()
+        val now = now()
+        val slugs = listOfNotNull(host.selectedSlug()) + listed.orEmpty().filter { ConferenceWindow.isLive(it, now) }.map { it.slug }
+        for (slug in slugs.distinct()) if (store.deletePending(slug) == null) store.setDeletePending(slug, newRetry())
+        if (listed != null) store.updateDeleteAll { it.copy(listReached = true) }
+    }
+
+    /**
      * One pass of "Delete my profile": deletes on the server for every conference that holds the
-     * profile, may hold it, or has an unfinished delete, and removes the device's data, its key
-     * included, only when the server has confirmed every one of them.
+     * profile, may hold it, or has an unfinished delete, and with the device's key also for every
+     * conference still running ([markReachable]). The device's data goes only when the server has
+     * confirmed every one of them, and the key only when at least one delete was confirmed: without
+     * one, nothing says the server holds nothing under it. While the key cannot be read, or the
+     * conference list is not known, the delete stays unfinished and is tried again.
      */
     private suspend fun deleteEverywhere(certain: Boolean): DeleteResult {
         if (store.deleteAll == null) return DeleteResult(true, DELETED_MESSAGE)
+        val key = credentials.lookup()
+        if (key is DeviceCredentials.Lookup.Found) markReachable()
         val targets = (store.slugsMaybeOnServer() + store.slugsDeletePending()).distinct()
         val presenceStopped = stopActivity(targets, true, livePresence)
         var worst: DeleteFailure? = null
@@ -765,6 +931,9 @@ internal class ProfileSync(
                     val kind = failureKind(r.error)
                     if (worst == null || FAILURE_RANK.getValue(kind) > FAILURE_RANK.getValue(worst)) worst = kind
                     retryAfter = max(retryAfter, retryAfterOf(r.error))
+                    // The server limits writes per device: with many conferences marked, the rest of
+                    // this pass would be refused too, and the retry after the wait sends them.
+                    if (kind == DeleteFailure.Rate) break
                 }
             }
         }
@@ -784,8 +953,36 @@ internal class ProfileSync(
             host.changed()
             return DeleteResult(false, ALMOST_DONE_MESSAGE)
         }
-        wipeDevice()
-        return DeleteResult(true, if (noKey) DELETED_NO_KEY_MESSAGE else DELETED_MESSAGE)
+        when (key) {
+            // The key may be there but cannot be read: nothing is cleared, and nothing is claimed.
+            DeviceCredentials.Lookup.Unavailable -> {
+                store.updateDeleteAll { afterFailure(it, DeleteFailure.Offline, 0) }
+                host.changed()
+                return DeleteResult(false, PeopleError.SECURE_STORE_MESSAGE)
+            }
+            is DeviceCredentials.Lookup.Found -> {
+                if (store.deleteAll?.listReached != true) {
+                    // Done where the records and the selected conference say, but other running
+                    // conferences may hold the profile: the key stays until the list is known.
+                    store.updateDeleteAll { afterFailure(it, null, 0) }
+                    host.changed()
+                    return DeleteResult(false, listUnknownMessage(deleted > 0))
+                }
+                if (deleted == 0) {
+                    // No conference is still running and none holds the profile; with no delete
+                    // confirmed, keeping the key is harmless and claims nothing about the server.
+                    wipeDevice(forgetKey = false)
+                    return DeleteResult(true, DELETED_FROM_PHONE_MESSAGE)
+                }
+                wipeDevice()
+                return DeleteResult(true, DELETED_MESSAGE)
+            }
+            DeviceCredentials.Lookup.None -> {
+                wipeDevice()
+                // Without a key this phone deleted nothing on the server.
+                return DeleteResult(true, if (noKey) DELETED_NO_KEY_MESSAGE else DELETED_FROM_PHONE_MESSAGE)
+            }
+        }
     }
 
     /**
@@ -845,8 +1042,17 @@ internal class ProfileSync(
         return !hasUnfinishedDelete()
     }
 
-    /** Tries every unfinished delete again now, as the Try again button does. True when nothing is left unfinished. */
-    suspend fun finishPendingDeletes(): Boolean = retryPass(false)
+    /**
+     * Tries every unfinished delete again now, as the Try again button does. True when nothing is
+     * left unfinished; false too when the store failed, since the delete is then still unfinished.
+     */
+    suspend fun finishPendingDeletes(): Boolean = try {
+        retryPass(false)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
+    }
 
     private fun stuck(r: DeleteRetry?): StopTryingReason? {
         if (r == null) return null
@@ -885,12 +1091,23 @@ internal class ProfileSync(
         }
     }
 
-    /** Starts the retry the app runs on its own: only when due. */
+    /**
+     * Starts the retry the app runs on its own: only when due. A pass the store made fail is tried
+     * again, no sooner than the first backoff step, so a store that keeps failing cannot make the
+     * retries run in a tight loop.
+     */
     private suspend fun backgroundRetry() {
         retryJob?.cancel()
         retryJob = null
         if (!hasUnfinishedDelete()) return
-        retryPass(true)
+        try {
+            retryPass(true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            scheduleRetryTimer(RETRY_FIRST_MS)
+            return
+        }
         scheduleRetryTimer()
     }
 
@@ -921,9 +1138,15 @@ internal class ProfileSync(
 
     /** Stops every timer of this backend's sync, when the controller switches to another backend. */
     fun stop() {
+        // The controller keeps this session and may take it up again, so the timers are also
+        // forgotten: a cancelled job left here would hold back the next degraded re-send, and a
+        // cancelled debounce would still read as an edit waiting to be sent.
         timer?.cancel()
+        timer = null
         resendJob?.cancel()
+        resendJob = null
         retryJob?.cancel()
+        retryJob = null
         retriesStarted = false
     }
 
@@ -1000,6 +1223,21 @@ internal class ProfileSync(
         /** Shown when the user stopped trying after "Delete my profile". */
         const val DELETED_HERE_MESSAGE = "Your profile was deleted from this phone only. $LEFT_ON_SERVER"
 
+        /**
+         * Shown when "Delete my profile" cleared this phone without a delete on the server to
+         * confirm: the phone had no key, or no conference was still running.
+         */
+        const val DELETED_FROM_PHONE_MESSAGE = "Your profile was deleted from this phone."
+
+        /**
+         * Shown when the records say this phone's profile is on the server but the key it was made
+         * with is gone, as after a move to a new phone or a restore from a backup.
+         */
+        const val KEY_LOST_MESSAGE =
+            "This phone no longer has the key for the profile made on it before, for example after a move to a new phone or a restore from a backup. " +
+                "That profile may stay visible to other attendees until the conference ends, and this phone cannot delete it. " +
+                "Turning visibility on makes a new profile."
+
         /** Shown when every delete went through while a profile write may still have been in flight. */
         const val ALMOST_DONE_MESSAGE =
             "Your profile was deleted from our server. A change sent just before may still arrive, so the app deletes it once more shortly and then clears this phone."
@@ -1042,6 +1280,13 @@ internal class ProfileSync(
                     }
                 DeleteFailure.Bad -> "Our server could not handle the request, so $notYet.$partly Try again later, or update the app."
             }
+        }
+
+        /** What "Delete my profile" tells the user while the conference list it needs is not known. */
+        private fun listUnknownMessage(someDeleted: Boolean): String {
+            val notYet = if (someDeleted) "deleting your profile has not finished" else "your profile was not deleted yet"
+            return "The app needs the list of conferences to find everywhere our server may hold your profile and could not read it, so $notYet. " +
+                "Try again to finish once you are online."
         }
 
         /** What turning both visibility choices off tells the user when removing the server copy failed. */

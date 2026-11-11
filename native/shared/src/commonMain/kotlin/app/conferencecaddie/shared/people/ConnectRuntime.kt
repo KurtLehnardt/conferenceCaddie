@@ -322,8 +322,15 @@ internal class ConnectRuntime(
         host.changed()
     }
 
-    suspend fun removeMet(slug: String, index: Int) {
-        store.update(slug) { r -> r.copy(met = r.met.filterIndexed { i, _ -> i != index }) }
+    /**
+     * Removes [person] from People I met: the first entry equal to it, so a second tap on the same
+     * row removes nothing more, where a position would have removed the next person.
+     */
+    suspend fun removeMet(slug: String, person: MetPerson) {
+        store.update(slug) { r ->
+            val i = r.met.indexOf(person)
+            if (i < 0) r else r.copy(met = r.met.filterIndexed { j, _ -> j != i })
+        }
         host.changed()
     }
 
