@@ -284,3 +284,63 @@ From the review, and still true on the fixed Worker (`probe1`, `probe2` and the 
 - **No deploy, so no live smoke.** The Cloudflare token lacks "Workers Scripts: Edit". Run the smoke against the deployed Worker once it can be deployed. Set `BLE_MASTER_KEYRING` first, or the capabilities document will say `server-rotate`.
 - **The 403 `ble_rekey` answer was not exercised against a running Worker.** A retired master's sessions not resolving is covered by the parity run. The rule itself (a retired session with no rotated legacy token answers `ble_rekey`) is the tier 3 rule, ported line for line.
 - **`pages.yml` has not run on GitHub.** Its steps ran locally, in the same order and with the same arguments.
+
+## Live review of the deployed Worker (2026-11-11): findings and fixes
+
+An independent review ran against the live Worker at https://conference-caddie.krlehnardt.workers.dev, and a verifier reproduced each finding below. The fixes are in the pull request "Fix the live review findings on the free stack". Nothing was deployed by that change; the shipping step deploys from `main` after review.
+
+**How the fixes were checked.** The web tests (66 of 66), the repository tests (`npm test`, 510 of 510), `node worker/scripts/ble-parity.mjs` (29 of 29) and the local smoke against `wrangler dev --local` with real Workers AI embeddings through the local proxy and `SMOKE_UNAVAILABLE=pytorch-day-japan-2026` (98 PASS, 0 FAIL, 0 SKIP). The count grew from 93 because `main` gained the native push checks `np1` to `np3`, and this change adds `push1` and `meter1`.
+
+### sec-1. Push subscriptions accepted any https endpoint: fixed
+
+`PUT /api/push/subscription` now accepts an endpoint only on a known browser push service host, on the default port, with no user name or password: `fcm.googleapis.com`, `android.googleapis.com`, any subdomain of `push.services.mozilla.com` or `notify.windows.com`, `web.push.apple.com` and any subdomain of `push.apple.com` (`PUSH_SERVICE_HOSTS` in `worker/src/push/webpush.js`). IP literals, `localhost` and other hosts get 400 "endpoint must be a push service URL". `DELETE` still accepts any well-formed https endpoint, so an owner can remove a row stored before the rule. `deliver()` in `worker/src/push/send.js` deletes a stored row whose endpoint is not on the list instead of sending to it, and every push request now times out after 10 seconds (`AbortSignal.timeout`). The new smoke check `push1` covers it.
+
+For the other session: `server/push.mjs` (tier 3) has the same gap; its `endpointOf` checks only the https scheme. The same host list and a timeout on the push request would close it there.
+
+### cor-1. The daily usage meter lost counts and went backwards: fixed
+
+The conference object wrote its meter to storage only every 1,000 requests or at the cron call, and the live object is replaced far more often than that, so each new instance started again from an old total. The meter in `worker/src/conference.js` now writes after the first request of a new instance, then after 100 requests or 15 seconds, whichever comes first, in the response path after the request's rows are counted. A replaced instance therefore loses at most about 15 seconds of counts. The cost is about one written row per 15 seconds for each object that is busy all day (up to about 5,760 a day per object, and about 23,000 a day for four searchable conferences, which is 27% of the 85,000 written-rows soft cap). These rows count toward that cap, so a co-located event week with ten or more searchable conferences would use a large share of it; a longer interval is the lever if that happens. The new smoke check `meter1` is a sanity check only: it reads `/admin/stats` before and after five requests and fails if the day's counts did not grow by at least that much. It does not prove the fix, because one smoke run does not replace the object, and the old code passes it too. A failed meter write now leaves the write counters as they were, so the next request retries it.
+
+Left as is: requests the Worker answers without a conference object (`/api/conferences`, `/api/capabilities`, `/api/health`, `/api/push/vapid` and the Worker's own 400s) are still not metered. They are cheap, and metering them would need a shared counter that costs a Durable Object request per call. `docs/FREE_HOSTING.md` now says so.
+
+### cor-3. `X-Caddie-Pace` is missing on Worker-level responses: fixed in the docs
+
+Every polled route goes through a conference object, which sets the header, and a response without the header leaves the web app's pace unchanged (`notePace` in `web/src/lib/pace.ts` ignores a missing or malformed header); the pace falls back to 1 after 30 minutes without a reading. `docs/FREE_HOSTING.md` now says that every conference API response carries the header and that the Worker-level responses do not.
+
+### cor-4. The Pages talk bundles are older than the Worker's schedule: not fixed
+
+The bundles are built from the committed `data/` by design (`pages.yml`, `docs/BUNDLES.md`), and the ingest workflow commits nothing, so the bundles drift from the Worker after each ingest. A fix needs either a commit of the refreshed `data/` after each ingest (a workflow that writes to the repository, plus a change to `data/`, which this change does not own) or a Pages build that takes its talks from the Worker, which changes the bundle contract's single source. Both need a decision. Until then, a manual refresh of `data/` (`node scripts/ingest.mjs --event <slug> --dry-run --skip-topics`, then commit) rebuilds the bundles on the next push. The web app uses `/api/schedule` and is not affected. Native clients read their talks from the Pages bundles through `talks.bundle_base`, which both Cloud Run's and the Worker's `/api/capabilities` point at the same Pages bundles, so native clients are affected whichever backend they talk to. The released Android 0.3.0 app, which talks to Cloud Run, shows the stale times today: on 2026-11-10, during KubeCon North America 2026 (November 9 to 12), the live Pages bundle for `kubecon-cloudnativecon-north-america-2026` differed from the Worker's `/api/schedule` in the start or end times of 11 talks and the titles of 2, and lacked 1 talk. A refresh of `data/` for that conference is the immediate remedy and belongs in a separate change.
+
+### cor-6. People reasons ended in ".." after a title that ends a sentence: fixed
+
+`reasonsFor` in `worker/src/people/view.js` now closes a reason with a period only when the inserted title, passage or evidence does not already end in `.`, `?`, `!` or an ellipsis (closing quotes, brackets and highlight tags after it are allowed). The template wording is unchanged.
+
+For the other session: `server/people.mjs` builds the same reasons and has the same double period.
+
+### ux-3. The install card covered the bottom of every screen: fixed
+
+While the card is open, `web/src/components/install.tsx` measures it and marks the document, and `web/src/styles.css` adds the card's height (plus its offset above the nav and a gap) to the bottom padding of `.content`, on phones and on wide screens. "Delete my profile" and every other last control can now be scrolled clear of the card. The card still stays open across tabs until it is dismissed.
+
+### ux-4. "N people want to talk about this" looked like a link: fixed
+
+`.pp-count` in `web/src/people/people.css` now uses the secondary text colour and normal weight, so it reads as status text next to the accent-coloured links and toggles. It is used for the count line on talk cards and in the talk sheet, and for the shared summary on Interested.
+
+### ux-5. "Around now" with an empty search box showed the search copy: fixed
+
+`PeopleList` in `web/src/people/PeopleScreen.tsx` now shows the "Nobody else is around right now" copy when "Around now" is on and nothing is typed. With words typed it keeps the search copy.
+
+### ux-6. The share card on Interested had no side gutter: fixed
+
+`.pp-share-all` in `web/src/people/people.css` now has `margin: 0 var(--gutter) 16px`, the same gutter as the talk cards in `.results`.
+
+### After the critic's review of the fixes
+
+The critic found two false statements in these notes and in `docs/FREE_HOSTING.md`, both corrected above: the impact of cor-4 (native clients read the Pages bundles through `talks.bundle_base` whichever backend they use, so the released Android 0.3.0 app shows stale KubeCon times today) and the app's handling of a response without `X-Caddie-Pace` (it keeps its last pace, which falls back to 1 after 30 minutes). The same round also made these smaller changes:
+
+- `flush()` in `worker/src/conference.js` resets its write counters only after the write succeeds, so a failed meter write is retried on the next request.
+- `PUT /api/push/subscription` logs the host, never the endpoint, of each refused subscription, so a browser push service missing from the list shows up in the Worker's logs.
+- Push requests no longer follow redirects (`redirect: 'manual'`), so a redirect from an allowed host cannot forward the VAPID-signed request elsewhere.
+- `meter1` is described as the sanity check it is, and the meter's write cost is given for all searchable conferences together.
+- `docs/contracts/people-api.md` says that a backend may refuse a push endpoint that is not on a known push service, which the Worker does with the frozen fixture's `push.example.org` endpoint. Tier 3 (`server/`) still accepts it; adopting the same rule there needs a fixture change in `contracts/` and edits to `test/contracts-people-conformance.test.mjs` and the `test/native-push-*.test.mjs` files, which belong to the session that owns those directories.
+
+The checks were run again on this round: web tests 66 of 66, `npm test` 510 of 510, `ble-parity` 29 PASS and 0 FAIL, `tsc` clean, and the local smoke 98 PASS, 0 FAIL, 0 SKIP.

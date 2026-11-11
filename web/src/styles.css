@@ -1807,11 +1807,21 @@ mark {
   margin-left: -12px;
 }
 
+/* While the install card is open, the page gets the card's height (plus its offset above the
+   nav and a gap) as extra bottom padding, so nothing stays hidden under it at full scroll. */
+:root[data-install-open] .content {
+  padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 76px + var(--install-h, 0px) + 16px);
+}
+
 @media (min-width: 768px) {
   .install-region {
     left: var(--rail-w);
     bottom: calc(88px + var(--safe-bottom));
     justify-content: flex-start;
+  }
+
+  :root[data-install-open] .content {
+    padding-bottom: calc(88px + var(--safe-bottom) + var(--install-h, 0px) + 16px);
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Download, Share, SquarePlus, X } from 'lucide-preact';
 
 // Install onboarding. The card is offered once per device, after the first talk the person marks
@@ -79,6 +79,26 @@ export function openInstallCard(): void {
 export function InstallCard() {
   const [open, setOpen] = useState(false);
   const [, bump] = useState(0);
+  const region = useRef<HTMLDivElement>(null);
+
+  // While the card is open it floats over the bottom of every screen, so the page reserves its
+  // height as extra scroll room (styles.css, [data-install-open]). Otherwise the last controls
+  // of a page, such as "Delete my profile", would sit under the card even at full scroll.
+  useEffect(() => {
+    const el = region.current;
+    const doc = document.documentElement;
+    if (!open || !el) return;
+    const measure = () => doc.style.setProperty('--install-h', `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    measure();
+    doc.setAttribute('data-install-open', '');
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => {
+      ro?.disconnect();
+      doc.removeAttribute('data-install-open');
+      doc.style.removeProperty('--install-h');
+    };
+  }, [open]);
 
   useEffect(() => {
     const show = () => {
@@ -114,7 +134,7 @@ export function InstallCard() {
   };
 
   return (
-    <div class="install-region">
+    <div class="install-region" ref={region}>
       <section class="install-card" role="region" aria-label="Add Conference Caddie to your home screen">
         <button type="button" class="icon-btn install-close" aria-label="Dismiss" onClick={close}>
           <X size={20} aria-hidden="true" />

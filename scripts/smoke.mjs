@@ -649,6 +649,21 @@ if (!IS_WORKER) {
   });
 }
 
+// A sanity check of the daily meter behind X-Caddie-Pace and the soft caps: five requests must
+// raise the day's counts by at least five. One run does not replace the conference object, so
+// this does not prove that a replaced object keeps its counts.
+if (IS_WORKER && ADMIN_TOKEN) {
+  await check('meter1: the daily usage meter counts requests (sanity check)', async () => {
+    const usage = async () => (await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`)).json.usage ?? null;
+    const before = await usage();
+    for (let i = 0; i < 5; i++) await api('GET', `/api/topics?event=${encodeURIComponent(PRIMARY)}`, undefined, { label: 'meter' });
+    const after = await usage();
+    const sameDay = before && after && before.day === after.day;
+    const ok = Boolean(before && after) && (!sameDay || (after.requests >= before.requests + 5 && after.rows_read >= before.rows_read && after.rows_written >= before.rows_written));
+    report(ok, 'meter1: the daily usage meter counts requests (sanity check)', before && after ? `requests ${before.requests} then ${after.requests}, rows read ${before.rows_read} then ${after.rows_read}` : 'no usage in /admin/stats');
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // KubeCon search checks from the MVP, now with a conference.
 
@@ -1497,6 +1512,35 @@ try {
     const ok = none.status === 403 && none.json.error === 'profile_required' && circleOnly.status === 403 && circleOnly.json.error === 'profile_required' && badZone.status === 400;
     report(ok, 'q3: presence needs a visible profile', `no profile ${none.status} ${none.json.error}, circle-only ${circleOnly.status} ${circleOnly.json.error}, unknown zone ${badZone.status}`);
   });
+
+  // The Worker accepts a push subscription only on a known browser push service host, so a
+  // profile can never make it send signed requests to a host of its choosing. The accepted
+  // subscription is removed again at once.
+  if (IS_WORKER) {
+    await check('push1: a push subscription must point at a known push service', async () => {
+      const P = newDevice();
+      // A visible profile with no words of the other checks, deleted again below so it never shows up in them.
+      const made = await putProfile(P, PRIMARY, 'P', { about: 'Push subscription check.' }, { open: true });
+      if (made.status !== 200) throw new Error(`the push test profile gave ${made.status}`);
+      const ecdh = crypto.createECDH('prime256v1');
+      ecdh.generateKeys();
+      const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
+      const sub = (endpoint) => api('PUT', '/api/push/subscription', { event: PRIMARY, subscription: { endpoint, keys } }, { device: P, label: 'P-push' });
+      const problems = [];
+      for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x']) {
+        const r = await sub(endpoint);
+        if (r.status !== 400) problems.push(`${new URL(endpoint).host} gave ${r.status}`);
+      }
+      const good = `https://fcm.googleapis.com/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
+      const ok = await sub(good);
+      if (ok.status !== 200) problems.push(`fcm.googleapis.com gave ${ok.status}`);
+      const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
+      if (del.status !== 200) problems.push(`delete gave ${del.status}`);
+      const gone = await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: P, label: 'P-delete' });
+      if (gone.status !== 200) problems.push(`profile delete gave ${gone.status}`);
+      report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals and other ports refused; fcm.googleapis.com accepted and removed');
+    });
+  }
 
   await check('q4: a listed word is rejected', async () => {
     if (!WORDLIST.length) throw new Error('config/moderation-words.json has no words');
