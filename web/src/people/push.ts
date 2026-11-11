@@ -154,7 +154,7 @@ export async function subscribePush(slug: string): Promise<SubscribeResult> {
     }
     if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) return { ok: false, reason: 'error' };
     await putPushSubscription(slug, { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } });
-    setPush(slug, { on: true, endpoint: json.endpoint, notice_seen: true });
+    setPush(slug, { on: true, endpoint: json.endpoint, notice_seen: true, synced_at: Date.now() });
     return { ok: true };
   } catch (err) {
     if (err instanceof PeopleApiError && (err.code === 'profile_required' || err.code === 'no_device')) return { ok: false, reason: 'profile' };
@@ -164,16 +164,34 @@ export async function subscribePush(slug: string): Promise<SubscribeResult> {
 
 let resyncStarted = false;
 
+/** How long a conference's subscription counts as freshly sent: it is not sent again within this. */
+export const RESYNC_EVERY_MS = 24 * 60 * 60 * 1000;
+/** The longest random wait before the first PUT, so phones that open together do not send together. */
+export const RESYNC_SPREAD_MS = 30_000;
+
+/** The server will not take a subscription for this conference any more (no profile, ended or unknown). */
+function conferenceRefuses(err: unknown): boolean {
+  if (!(err instanceof PeopleApiError)) return false;
+  if (err.status === 403) return err.code === 'profile_required';
+  if (err.status === 400) return /^conference (has ended|is not available)/.test(err.code ?? '');
+  return false;
+}
+
 /**
- * Quietly tells the server about this browser's push subscription again, once per page load, for
- * every conference whose nudge switch is On. The PUT is idempotent (one row per endpoint), so this
- * restores a row the server lost, for example one deleted before a push service host was
- * allowed. It sends nothing unless notification permission is granted, the switch is On and the
- * browser really holds a subscription; it never asks for permission, never subscribes and never
- * shows anything. A failure is ignored: the next load tries again. The cost is one small request
- * per conference with nudges on.
+ * Quietly tells the server about this browser's push subscription again, for conferences whose
+ * nudge switch is On, at most once a day per conference (RESYNC_EVERY_MS) unless the browser's
+ * endpoint changed, in which case it is sent at once. The PUT is idempotent (one row per
+ * endpoint), so this restores a row the server lost, for example one deleted before a push service
+ * host was allowed. It sends nothing unless notification permission is granted, the switch is On
+ * and the browser really holds a subscription; it never asks for permission, never subscribes and
+ * never shows anything. When the server says a conference has ended, is unknown or has no profile
+ * for this device, that conference's switch is turned off here so it is not sent again. A failure
+ * is otherwise ignored: the next load tries again. The first PUT waits a random 0 to spreadMs
+ * milliseconds, so a room full of phones opened at the same break does not hit the Worker at the
+ * same moment. A switch turned Off while a PUT is in flight is honoured: the row that PUT made is
+ * deleted again.
  */
-export async function resyncPush(): Promise<void> {
+export async function resyncPush({ spreadMs = RESYNC_SPREAD_MS }: { spreadMs?: number } = {}): Promise<void> {
   if (resyncStarted || MOCK || !supportsPush()) return;
   resyncStarted = true;
   try {
@@ -183,14 +201,37 @@ export async function resyncPush(): Promise<void> {
     const reg = await navigator.serviceWorker.getRegistration(appPath(''));
     const json = (await reg?.pushManager.getSubscription())?.toJSON();
     if (!json?.endpoint || !json.keys?.p256dh || !json.keys.auth) return;
-    const body = { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } };
-    for (const slug of slugs) {
+    const endpoint = json.endpoint;
+    const body = { endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } };
+    const now = Date.now();
+    const due = slugs.filter((slug) => {
+      const state = getPush(slug);
+      const fresh = state.synced_at !== null && state.synced_at <= now && now - state.synced_at < RESYNC_EVERY_MS;
+      return !(fresh && state.endpoint === endpoint);
+    });
+    if (!due.length) return;
+    if (spreadMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.random() * spreadMs));
+    for (const slug of due) {
+      // The person may have turned this conference off while an earlier PUT was in flight.
+      if (!getPush(slug).on) continue;
       try {
         await putPushSubscription(slug, body);
-        if (getPush(slug).endpoint !== json.endpoint) setPush(slug, { endpoint: json.endpoint });
-      } catch {
-        // Offline, no visible profile here, or a delete is unfinished: leave the switch as it is.
+      } catch (err) {
+        // Ended, unknown or no profile: the server will never take it, so stop trying. Anything
+        // else (offline, rate limited, a delete unfinished) leaves the switch as it is.
+        if (conferenceRefuses(err)) pushDeletedOnServer(slug);
+        continue;
       }
+      if (!getPush(slug).on) {
+        // Turned Off while the PUT was in flight: the PUT re-created a row the person just removed.
+        try {
+          await deletePushSubscription(slug, endpoint);
+        } catch {
+          // The server deletes it with the conference, or on the next 410.
+        }
+        continue;
+      }
+      setPush(slug, { endpoint, synced_at: Date.now() });
     }
   } catch {
     // The browser would not say; nothing to restore.
@@ -200,7 +241,7 @@ export async function resyncPush(): Promise<void> {
 /** Removes the server's copy for this conference and, when no conference uses it, the browser's subscription. */
 export async function unsubscribePush(slug: string): Promise<void> {
   const state = getPush(slug);
-  setPush(slug, { on: false, endpoint: null });
+  setPush(slug, { on: false, endpoint: null, synced_at: null });
   if (state.endpoint) {
     try {
       await deletePushSubscription(slug, state.endpoint);
@@ -231,13 +272,13 @@ export async function dropBrowserSubscription(): Promise<void> {
 export function pushDeletedOnServer(slug: string): void {
   const state = getPush(slug);
   if (!state.on && !state.endpoint) return;
-  setPush(slug, { on: false, endpoint: null });
+  setPush(slug, { on: false, endpoint: null, synced_at: null });
   if (!slugsWithPush().length) void dropBrowserSubscription();
 }
 
 /** Turns nudges off everywhere on this device, as part of "Delete my profile". */
 export async function forgetPush(): Promise<void> {
-  for (const slug of slugsWithPush()) setPush(slug, { on: false, endpoint: null });
+  for (const slug of slugsWithPush()) setPush(slug, { on: false, endpoint: null, synced_at: null });
   await dropBrowserSubscription();
 }
 

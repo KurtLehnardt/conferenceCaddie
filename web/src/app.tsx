@@ -182,8 +182,9 @@ export function App() {
   // comes back to the foreground or back online.
   useEffect(() => startDeleteRetries(), []);
 
-  // A browser whose nudge switch is On tells the server about its push subscription once per load,
-  // so a row the server lost is restored without the person doing anything.
+  // A browser whose nudge switch is On tells the server about its push subscription at most once a
+  // day per conference (at once when the browser's endpoint changed), so a row the server lost is
+  // restored without the person doing anything.
   useEffect(() => {
     void resyncPush();
   }, []);

@@ -209,8 +209,9 @@ export async function vapidJwt(env, audience, nowMs = Date.now()) {
 
 // The hosts of the browser push services this Worker delivers to. Chrome Stable, Opera, Samsung
 // Internet and other Chromium browsers deliver through FCM (fcm.googleapis.com; android.googleapis.com
-// is the older FCM and GCM host). Chromium's non-Stable channels (Chrome Beta, Dev and Canary) and
-// unbranded Chromium use jmt17.google.com instead (GetGcmEndpointForChannel in Chromium's
+// is the older FCM and GCM host). Chromium builds that report a channel other than Stable (Chrome
+// Beta, Dev and Canary, unbranded Chromium, and some other Chromium-based browsers) use
+// jmt17.google.com instead (GetGcmEndpointForChannel in Chromium's
 // components/push_messaging/push_messaging_utils.cc). Chromium-based Edge delivers through WNS
 // (*.notify.windows.com), not FCM. Firefox uses Mozilla autopush and Safari uses Apple.
 // An entry that starts with a dot matches any subdomain of it; every other entry matches that exact

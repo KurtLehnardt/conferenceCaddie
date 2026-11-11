@@ -1,4 +1,4 @@
-# Runs the server tests (`npm test`) and the web app's tests (`npm --prefix web test`, when the web
+# Runs the server and Worker tests (`npm test` runs test/*.test.mjs and worker/test/*.test.mjs) and the web app's tests (`npm --prefix web test`, when the web
 # package has a test script) on Node 22, the oldest version package.json's engines field allows,
 # and on the latest Node. The server tests stub Elasticsearch in memory; nothing needs a secret or
 # any network beyond installing the dependencies.
@@ -49,6 +49,3 @@ jobs:
         run: |
           npm --prefix web ci
           npm --prefix web test --if-present
-
-      - name: Worker tests
-        run: npm --prefix worker test
