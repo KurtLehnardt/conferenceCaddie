@@ -2104,8 +2104,7 @@ try {
       const first = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: T3, label: 'BU-presence' });
       const keyOld = first.json.ble_key;
       if (first.status !== 200 || !keyOld) {
-        problems.push(`the first presence write gave ${first.status} without a key`);
-        return;
+        throw new Error(`the first presence write gave ${first.status} without a key`);
       }
       const who = (token) => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token, rssi: -50 }] }, { device: R3, label: 'BQ-sightings' })
         .then((r) => (r.json.nearby ?? []).map((p) => p.display_name));
@@ -2137,8 +2136,7 @@ try {
       const second = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: T3, label: 'BU-presence' });
       const keyNew = second.json.ble_key;
       if (second.status !== 200 || !keyNew) {
-        problems.push(`the re-key gave ${second.status} without a key`);
-        return;
+        throw new Error(`the re-key gave ${second.status} without a key`);
       }
       if (keyNew === keyOld || second.json.ble_key_id === first.json.ble_key_id) problems.push('the re-key returned the old key or key id');
       const own = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: crypto.randomBytes(16).toString('base64url'), rssi: -50 }] }, { device: T3, label: 'BU-sightings' });
