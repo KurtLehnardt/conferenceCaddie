@@ -9,14 +9,19 @@
 //
 // No dependencies, so a test can import it without the rest of the server.
 
-// Chrome Stable and most other Chromium browsers (FCM: fcm.googleapis.com, and its older name
-// android.googleapis.com), Firefox (Mozilla autopush), Edge, both the current Chromium-based one
-// and the legacy one (WNS, *.notify.windows.com), and Safari (Apple). An entry that starts with a
-// dot matches any subdomain of it, never the bare domain. Anything else is refused, so a subscription can never make this server send signed
+// Chrome Stable, Opera, Samsung Internet and most other Chromium browsers deliver through FCM
+// (fcm.googleapis.com; android.googleapis.com is the older FCM and GCM host). Chromium builds on a
+// channel other than Stable (Chrome Beta, Dev and Canary, and unbranded Chromium) use
+// jmt17.google.com instead (GetGcmEndpointForChannel in Chromium's
+// components/push_messaging/push_messaging_utils.cc). Edge, both the Chromium-based one and the
+// legacy one, delivers through WNS (*.notify.windows.com), not FCM. Firefox uses Mozilla autopush
+// and Safari uses Apple. An entry that starts with a dot matches any subdomain of it, never the
+// bare domain; every other entry matches that exact host only. Anything else is refused, so a subscription can never make this server send signed
 // requests to a host the person chose.
 export const PUSH_SERVICE_HOSTS = Object.freeze([
   'fcm.googleapis.com',
   'android.googleapis.com',
+  'jmt17.google.com',
   '.push.services.mozilla.com',
   '.notify.windows.com',
   'web.push.apple.com',

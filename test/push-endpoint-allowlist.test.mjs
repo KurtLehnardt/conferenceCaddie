@@ -31,6 +31,8 @@ before(() => bootPurgeDone());
 const ACCEPTED = [
   'https://fcm.googleapis.com/fcm/send/dGVzdA:APA91bHPRgkF3JUikC4ENAHEeMrd41Zxv3hVZjC9KtT8OvPVGJ',
   'https://android.googleapis.com/gcm/send/dGVzdA:APA91b',
+  // Chrome Beta, Dev and Canary, and unbranded Chromium.
+  'https://jmt17.google.com/fcm/send/x',
   'https://updates.push.services.mozilla.com/wpush/v2/gAAAAABk',
   'https://wns2-par02p.notify.windows.com/w/?token=BQYAAAB%2bdGVzdA%3d%3d',
   'https://web.push.apple.com/QGuQyavXutnMH9kz1dVzWd',
@@ -61,6 +63,11 @@ const REFUSED = [
   'https://notify.windows.com/w/',
   'https://evilpush.apple.com/x',
   'https://googleapis.com/fcm/send/x',
+  // jmt17.google.com is an exact host: no subdomain, no suffix, not its parent domain.
+  'https://x.jmt17.google.com/x',
+  'https://jmt17.google.com.evil.com/x',
+  'https://google.com/x',
+  'https://jmt17.google.com:8443/fcm/send/x',
   'https://evil-fcm.googleapis.com.example/x',
   // User info: the allowed name before @ is a user name, and the host is evil.com.
   'https://fcm.googleapis.com@evil.com/fcm/send/x',
