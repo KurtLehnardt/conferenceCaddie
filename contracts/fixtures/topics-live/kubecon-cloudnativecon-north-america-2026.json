@@ -1,10 +1,10 @@
 {
   "snapshot": {
-    "taken_on": "2026-11-10",
-    "fetched_at": "2026-11-10T08:51:32Z",
-    "source": "GET https://conference-caddie-265846417372.us-west1.run.app/api/topics?event=kubecon-cloudnativecon-north-america-2026",
+    "taken_on": "2026-11-11",
+    "fetched_at": "2026-11-11T07:19:04Z",
+    "source": "GET https://conference-caddie.krlehnardt.workers.dev/api/topics?event=kubecon-cloudnativecon-north-america-2026",
     "status": 200,
-    "note": "Public data from the live tier 3 service, captured once for the Phase 1 topics port: the Node topics builder is diffed against these lists before Elasticsearch is decommissioned. A snapshot, not a contract: it is never refreshed automatically."
+    "note": "Public data from the live tier 2 Worker, refreshed for the KubeCon North America 2026 data of 2026-11-11 (485 talks): the tier 3 service had not ingested that data yet. The Worker keeps each topic's rank from the first ingest and refreshes only talk_count, so the entries are put in the topics builder's order (talk_count descending, then label, then topic_id); ids, labels and counts are as served. The Node topics builder is diffed against these lists. A snapshot, not a contract: it is never refreshed automatically."
   },
   "event": "kubecon-cloudnativecon-north-america-2026",
   "topics": [
@@ -119,6 +119,11 @@
       "talk_count": 9
     },
     {
+      "topic_id": "dra",
+      "label": "DRA",
+      "talk_count": 8
+    },
+    {
       "topic_id": "istio",
       "label": "Istio",
       "talk_count": 8
@@ -141,11 +146,6 @@
     {
       "topic_id": "container",
       "label": "Container",
-      "talk_count": 7
-    },
-    {
-      "topic_id": "dra",
-      "label": "DRA",
       "talk_count": 7
     },
     {
@@ -214,6 +214,11 @@
       "talk_count": 6
     },
     {
+      "topic_id": "orchestration",
+      "label": "Orchestration",
+      "talk_count": 6
+    },
+    {
       "topic_id": "platform-engineering",
       "label": "Platform Engineering",
       "talk_count": 6
@@ -234,13 +239,13 @@
       "talk_count": 5
     },
     {
-      "topic_id": "network",
-      "label": "Network",
+      "topic_id": "kubevirt",
+      "label": "KubeVirt",
       "talk_count": 5
     },
     {
-      "topic_id": "orchestration",
-      "label": "Orchestration",
+      "topic_id": "network",
+      "label": "Network",
       "talk_count": 5
     },
     {
@@ -296,11 +301,6 @@
     {
       "topic_id": "kserve",
       "label": "KServe",
-      "talk_count": 4
-    },
-    {
-      "topic_id": "kubevirt",
-      "label": "KubeVirt",
       "talk_count": 4
     },
     {
