@@ -92,6 +92,12 @@ export function replaceTabParams(tab: Tab, params: TabParams): void {
   window.dispatchEvent(new Event('caddie:route'));
 }
 
+/** Puts back a hash that was read earlier, such as "#/people?around=1", without a history entry. */
+export function replaceHash(hash: string): void {
+  history.replaceState(history.state, '', `${location.pathname}${location.search}${hash}`);
+  window.dispatchEvent(new Event('caddie:route'));
+}
+
 export function conferencePath(slug: string, tab: Tab): string {
   return `${appPath(`e/${encodeURIComponent(slug)}`)}#/${tab}`;
 }

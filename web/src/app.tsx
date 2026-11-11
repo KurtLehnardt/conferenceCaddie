@@ -57,6 +57,7 @@ import {
   type TalkLike,
 } from './people/index';
 import { saveForOffline, useOnline } from './offline/status';
+import { maybeStartGuide, replayGuide } from './guide';
 import { NeedsConnection, OfflineBadge, OfflineSearch } from './offline/OfflineSearch';
 
 const DEBOUNCE_MS = 350;
@@ -255,6 +256,18 @@ export function App() {
   }, [tab, slug]);
 
   useEffect(() => applyTheme(theme), [theme]);
+
+  // The welcome guide opens by itself on a first visit to an event page, a moment after the shell
+  // has rendered, on one of the main tabs, and never over another dialog or sheet.
+  const modalOpen = switcherOpen || !!openTalk || importOpen || sheet.open || !!confirm;
+  useEffect(() => {
+    if (!searchable || !isTab(tab) || tab === 'here') return;
+    const t = window.setTimeout(() => {
+      const open = modalOpen || !!document.querySelector('[aria-modal="true"], .swal2-container');
+      maybeStartGuide(searchable.slug, open, () => tabViews.current.views);
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [searchable?.slug, tab, modalOpen]);
 
   // Back online: refresh the conference list. Online: save the current conference's schedule
   // shortly after it opens, so airplane mode works right away.
@@ -590,6 +603,7 @@ export function App() {
               onTheme={setTheme}
               canImport={!!searchable && online}
               importNote={!searchable ? 'Open a conference first' : !online ? 'Needs a connection' : null}
+              onHelp={searchable ? () => replayGuide(searchable.slug, () => tabViews.current.views) : undefined}
               onImport={() => {
                 setToast(null);
                 setImportOpen(true);

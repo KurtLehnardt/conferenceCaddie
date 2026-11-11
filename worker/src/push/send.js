@@ -6,13 +6,17 @@
 // - At most 40 push requests per call by default, below the Free plan's 50 subrequests per
 //   request. A caller that sends several payloads in one request (the nudge rule) passes one
 //   shared budget object so the total stays at 40.
-// - A subscription the push service reports gone (404 or 410) is deleted at once.
+// - A subscription the push service reports gone (404 or 410) is deleted at once, and so is one
+//   whose endpoint is not on a known push service host. Each push request times out after
+//   PUSH_TIMEOUT_MS.
 // - A failure is one log line with a status or an error class, never an endpoint, a key, a
 //   payload or a person.
 
-import { buildPushRequest, vapidConfigured } from './webpush.js';
+import { buildPushRequest, isPushServiceEndpoint, vapidConfigured } from './webpush.js';
 
 export const MAX_SENDS = 40;
+// How long one push request may take before it is abandoned.
+export const PUSH_TIMEOUT_MS = 10_000;
 
 // The live subscriptions of these people: [{ id, profile_id, endpoint, p256dh, auth }].
 export function subscriptionsFor(ctx, profileIds, now = Date.now()) {
@@ -50,8 +54,13 @@ export async function sendPush(ctx, profileIds, payload, { budget = { left: MAX_
 
 async function deliver(ctx, sub, data) {
   try {
+    // A row stored before the push service allowlist existed is dropped, never sent to.
+    if (!isPushServiceEndpoint(sub.endpoint)) {
+      ctx.sql.exec('DELETE FROM push_subs WHERE id = ?', sub.id);
+      return false;
+    }
     const { url, init } = await buildPushRequest(ctx.env, sub, data);
-    const res = await fetch(url, init);
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(PUSH_TIMEOUT_MS) });
     try {
       await res.body?.cancel();
     } catch {
