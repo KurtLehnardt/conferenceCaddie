@@ -38,17 +38,6 @@ internal fun cardLinks(talk: Talk): List<CardLink> = buildList {
     if (!event) talk.slidesUrl?.takeIf { isWebLink(it) }?.let { add(CardLink(Strings.Talk.SLIDES, LucideIcon.Presentation, it)) }
 }
 
-/** The start of the abstract the card shows under the tags, as the server's 200-character fragment. */
-internal fun evidenceText(talk: Talk): String? {
-    val text = talk.abstract.split(' ', '\n', '\t', '\r').filter { it.isNotEmpty() }.joinToString(" ")
-    if (text.isEmpty()) return null
-    if (text.length <= EVIDENCE_MAX) return text
-    val cut = text.substring(0, EVIDENCE_MAX)
-    val space = cut.lastIndexOf(' ')
-    return (if (space > EVIDENCE_MAX * 0.6) cut.substring(0, space) else cut) + "…"
-}
-
-private const val EVIDENCE_MAX = 200
 
 /** "Atlanta, United States" or "Virtual". */
 internal fun place(conference: Conference): String =

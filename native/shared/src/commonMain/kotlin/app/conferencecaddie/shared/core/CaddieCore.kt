@@ -3,6 +3,7 @@ package app.conferencecaddie.shared.core
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.CapabilitiesDiscovery
+import app.conferencecaddie.shared.Embedder
 import app.conferencecaddie.shared.asString
 import app.conferencecaddie.shared.bundle.BundleEntry
 import app.conferencecaddie.shared.bundle.BundleFiles
@@ -15,11 +16,15 @@ import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.Http
+import app.conferencecaddie.shared.search.ForYou
 import app.conferencecaddie.shared.search.SearchRequest
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.shared.search.TalkSearch
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,8 +39,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -74,6 +81,10 @@ data class CoreState(
      * without it. The screens tell the person once and call [CaddieCore.dismissStorageReset].
      */
     val storageReset: Boolean = false,
+    /** Whether meaning-based matching (the on-device query embedder) is available. */
+    val semantic: SemanticState = SemanticState.Off,
+    /** What the person wants to learn at the selected conference, for For you. */
+    val learn: LearnInput = LearnInput(),
     /**
      * True when this launch keeps its data in memory only, because the stored database could not
      * be opened (one from a newer version of the app, or a disk that refuses it): marks made now are
@@ -89,6 +100,31 @@ data class CoreState(
         val bundle = (bundle as? BundleState.Ready)?.bundle?.takeIf { it.conference.slug == selectedSlug }
         return interested.mapNotNull { id -> bundle?.talksById?.get(id) ?: interestedSnapshots[id]?.toTalk() }
     }
+}
+
+/** The query embedder's state. Search and For you use keywords alone unless it is [Ready]. */
+sealed interface SemanticState {
+    /** No embedder was offered (tests, or a host without the model). */
+    data object Off : SemanticState
+
+    /** An embedder is offered but not loaded: nothing has needed it yet, or it was released. */
+    data object Idle : SemanticState
+
+    data object Loading : SemanticState
+
+    data object Ready : SemanticState
+
+    /** The last load failed (the model is missing or ONNX Runtime refused it); keyword search goes on, and a later search tries again. */
+    data object Unavailable : SemanticState
+}
+
+/**
+ * For you's input: the topic ids the person wants to learn about at the selected conference, and
+ * the text of what they are trying to learn or figure out next, which is kept for every conference
+ * (as the web keeps it in the profile).
+ */
+data class LearnInput(val topics: List<String> = emptyList(), val text: String = "") {
+    val isEmpty: Boolean get() = topics.isEmpty() && text.isBlank()
 }
 
 sealed interface CapabilitiesState {
@@ -157,7 +193,9 @@ sealed interface BundleState {
         val search: TalkSearch,
         val offline: Boolean = false,
         val updateApp: Boolean = false,
-    ) : BundleState
+    ) : BundleState {
+        val forYou: ForYou = ForYou(bundle, search)
+    }
 
     /** The conference's bundle could not be loaded and none is installed. */
     data class Failed(val slug: String, val reason: Reason, val problems: List<String> = emptyList()) : BundleState
@@ -188,6 +226,8 @@ class CaddieCore(
     private val scope: CoroutineScope,
     private val allowLocalHttp: Boolean,
     private val clock: Clock = Clock.System,
+    /** Times the pause before a failed model load is tried again; monotonic, unlike [clock]. */
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) {
     private val sync = BundleSync(http, database, files) { nowMs() }
     private val mutex = Mutex()
@@ -263,8 +303,152 @@ class CaddieCore(
         _state.value = ensureBundle(selected)
     }
 
-    suspend fun search(request: SearchRequest): SearchResult? =
-        (_state.value.bundle as? BundleState.Ready)?.search?.search(request)
+    /** Searches the selected conference's bundle, off the main thread; null while no bundle is ready. */
+    suspend fun search(request: SearchRequest): SearchResult? {
+        val ready = _state.value.bundle as? BundleState.Ready ?: return null
+        // The model is needed only for a text whose embedding is not cached, so a released model is
+        // not loaded again by a search that only changes filters.
+        val text = ready.search.embeddedText(request)
+        if (text.isNotEmpty() && !ready.search.hasQueryVector(text)) ensureEmbedder()
+        return withContext(Dispatchers.Default) { ready.search.search(request) }
+    }
+
+    // The query embedder. It is loaded only once something needs meaning-based matching (a text
+    // search, or For you with learn text), not at every start, and is guarded by embedderMutex.
+    // embedderGeneration counts the loads and releases, so a state written for one of them is
+    // dropped once another has happened; releaseRequested is a release asked for during a load.
+    @kotlin.concurrent.Volatile
+    private var embedder: Embedder? = null
+    private var loader: (suspend () -> Embedder?)? = null
+    private var embedderJob: Job? = null
+    private var embedderFailures = 0
+    private var embedderRetryAt: TimeMark? = null
+    private var embedderGeneration = 0L
+    private var releaseRequested = false
+    private val embedderMutex = Mutex()
+
+    /**
+     * Offers the query embedder. Nothing is loaded yet ([SemanticState.Idle]): [load] runs, in the
+     * background, on the first text search or For you request that needs it. While it runs, and if it
+     * returns null or throws, search and For you use keywords alone; a failed load is tried again
+     * by a later search after a pause that doubles each time (from [RETRY_FIRST_MS] up to
+     * [RETRY_MAX_MS]). [CoreState.semantic] says which, so the screens can search again once the
+     * model is ready.
+     */
+    fun useEmbedder(load: suspend () -> Embedder?) = command {
+        // Through the core's queue, so of two offers the first one made is the one kept.
+        embedderMutex.withLock {
+            if (loader != null) return@command
+            loader = load
+        }
+        _state.update { if (it.semantic == SemanticState.Off) it.copy(semantic = SemanticState.Idle) else it }
+    }
+
+    /**
+     * Gives the embedder's memory back (the platform asked for memory). A load still running is
+     * released as soon as it finishes. The next text search that needs the model loads it again.
+     * The returned job ends once the release is done or recorded.
+     */
+    fun releaseEmbedder(): Job =
+        scope.launch {
+            val (released, generation) = embedderMutex.withLock {
+                val e = embedder
+                if (e == null) {
+                    if (embedderJob?.isActive == true) releaseRequested = true
+                    return@launch
+                }
+                embedder = null
+                e to ++embedderGeneration
+            }
+            released.close()
+            publishSemantic(generation) { if (it == SemanticState.Ready) SemanticState.Idle else it }
+        }
+
+    /** Starts loading the embedder when it is offered, not loaded, not loading and not resting after a failure. */
+    private suspend fun ensureEmbedder() {
+        embedderMutex.withLock {
+            val load = loader ?: return
+            if (embedder != null || embedderJob?.isActive == true) return
+            if (embedderRetryAt?.hasNotPassedNow() == true) return
+            embedderJob = scope.launch { loadEmbedder(load) }
+        }
+    }
+
+    private suspend fun loadEmbedder(load: suspend () -> Embedder?) {
+        val started = embedderMutex.withLock { embedderGeneration }
+        publishSemantic(started) { SemanticState.Loading }
+        val loaded = try {
+            load()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+        val (generation, unwanted) = embedderMutex.withLock {
+            val unwanted = loaded?.takeIf { releaseRequested }
+            releaseRequested = false
+            embedder = if (unwanted != null) null else loaded
+            if (loaded == null) {
+                embedderFailures++
+                val pause = RETRY_FIRST_MS shl (embedderFailures - 1).coerceAtMost(10)
+                embedderRetryAt = timeSource.markNow() + pause.coerceAtMost(RETRY_MAX_MS).milliseconds
+            } else {
+                embedderFailures = 0
+                embedderRetryAt = null
+            }
+            ++embedderGeneration to unwanted
+        }
+        unwanted?.close()
+        val next = when {
+            loaded == null -> SemanticState.Unavailable
+            unwanted != null -> SemanticState.Idle
+            else -> SemanticState.Ready
+        }
+        publishSemantic(generation) { next }
+    }
+
+    // Publishes the embedder's state for [generation], unless a later load or release has happened.
+    private fun publishSemantic(generation: Long, next: (SemanticState) -> SemanticState) = command {
+        if (embedderMutex.withLock { embedderGeneration } != generation) return@command
+        _state.update { it.copy(semantic = next(it.semantic)) }
+    }
+
+    /**
+     * Talks for you at the selected conference, from [CoreState.learn] and the marked talks, worked
+     * out off the main thread; null while no bundle is ready.
+     */
+    suspend fun forYou(size: Int = 20): ForYou.Result? {
+        val s = _state.value
+        val ready = s.bundle as? BundleState.Ready ?: return null
+        if (ready.bundle.conference.slug != s.selectedSlug) return null
+        val request = ForYou.Request(s.learn.topics, s.learn.text, s.interested.toSet(), size)
+        val text = ready.forYou.embeddedText(request)
+        if (text.isNotEmpty() && !ready.search.hasQueryVector(text)) ensureEmbedder()
+        return withContext(Dispatchers.Default) { ready.forYou.recommend(request, nowMs()) }
+    }
+
+    /** Sets the topics the person wants to learn about at the selected conference. */
+    fun setLearnTopics(topicIds: List<String>) = command {
+        val s = _state.value
+        val slug = s.selectedSlug ?: return@command
+        val topics = topicIds.distinct().take(ForYou.MAX_TOPICS)
+        database.setSetting(KEY_LEARN_TOPICS + BundleSync.scope(s.backend.base, slug), JsonArray(topics.map { JsonPrimitive(it) }).toString())
+        _state.update { if (it.selectedSlug == slug && it.backend == s.backend) it.copy(learn = it.learn.copy(topics = topics)) else it }
+    }
+
+    /** Sets what the person is trying to learn or figure out next (for every conference). */
+    fun setLearnText(text: String) = command {
+        val value = text.take(ForYou.MAX_TEXT)
+        database.setSetting(KEY_LEARN_TEXT, value.ifEmpty { null })
+        _state.update { it.copy(learn = it.learn.copy(text = value)) }
+    }
+
+    private suspend fun learnInput(key: String): LearnInput {
+        val topics = database.setting(KEY_LEARN_TOPICS + key)?.let { text ->
+            runCatching { (Capabilities.parseJson(text) as? JsonArray)?.mapNotNull { it.asString() } }.getOrNull()
+        }.orEmpty()
+        return LearnInput(topics, database.setting(KEY_LEARN_TEXT).orEmpty())
+    }
 
     /**
      * Marks or unmarks a talk. The conference comes from the talk id (`{slug}:{id}`), so a tap that
@@ -282,7 +466,8 @@ class CaddieCore(
 
     /**
      * Waits until every call made before it has run and every fetch they started has finished, as
-     * the next call would see it. For tests, and for a host that must close the database.
+     * the next call would see it. For tests, and for a host that must close the database. It does
+     * not wait for the query embedder to load or be released; [CoreState.semantic] tells that.
      */
     suspend fun awaitIdle() {
         while (true) {
@@ -361,11 +546,13 @@ class CaddieCore(
         session++
         val id = session
         val caps = storedCapabilities(backend.base)?.state?.copy(checking = true)
+        // The embedder belongs to the app, not to a backend, so its state carries over.
         var s = CoreState(
             backend,
             isDefault(backend),
             capabilities = caps ?: CapabilitiesState.Loading,
             storageReset = storageReset,
+            semantic = _state.value.semantic,
             storageInMemory = storageInMemory,
         )
         val index = caps?.let { bundleBase(it, backend) }?.let { sync.cachedIndex(it) }
@@ -392,6 +579,7 @@ class CaddieCore(
             bundle = installed?.let { current ?: ready(it, key, offline = false, updateApp = false, previous = null) } ?: BundleState.Loading(slug),
             interested = database.interested(key),
             interestedSnapshots = database.interestedSnapshots(key),
+            learn = learnInput(key),
         )
     }
 
@@ -498,6 +686,7 @@ class CaddieCore(
                     bundle = selection.bundle,
                     interested = selection.interested,
                     interestedSnapshots = selection.interestedSnapshots,
+                    learn = selection.learn,
                 )
             }
             _state.value = ensureBundle(next)
@@ -572,7 +761,14 @@ class CaddieCore(
     // thrown away by a refresh that found nothing new.
     private fun ready(bundle: TalkBundle, key: String, offline: Boolean, updateApp: Boolean, previous: BundleState.Ready?): BundleState.Ready {
         val search = previous?.takeIf { it.bundle.contentHash == bundle.contentHash && it.bundle.conference.slug == bundle.conference.slug }?.search
-            ?: TalkSearch(bundle, key, database) { clock.now() }
+            ?: TalkSearch(
+                bundle,
+                key,
+                database,
+                now = { clock.now() },
+                embedder = { embedder },
+                embedderFailed = { _state.value.semantic == SemanticState.Unavailable },
+            )
         return BundleState.Ready(previous?.bundle?.takeIf { it.contentHash == bundle.contentHash } ?: bundle, search, offline, updateApp)
     }
 
@@ -662,6 +858,12 @@ class CaddieCore(
         private const val KEY_HAD_DOCUMENT = "had_document:"
         private const val KEY_TYPED = "typed:"
         private const val KEY_UI = "ui:"
+        private const val KEY_LEARN_TOPICS = "learn_topics:"
+        private const val KEY_LEARN_TEXT = "learn_text"
+
+        /** The pause before a failed embedder load is tried again, doubled after each failure up to [RETRY_MAX_MS]. */
+        const val RETRY_FIRST_MS = 30_000L
+        const val RETRY_MAX_MS = 30 * 60_000L
 
         /** The conference list is fetched at most this often in the foreground. */
         const val INDEX_REFRESH_MS = 15 * 60 * 1000L

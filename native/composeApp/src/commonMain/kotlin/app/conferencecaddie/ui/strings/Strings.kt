@@ -167,6 +167,9 @@ object Strings {
         const val RELATED_ERROR = "Related talks are unavailable right now."
         const val TRY_AGAIN = "Try again"
         const val RELATED_NONE = "No related talks found."
+
+        /** Native only: the official-site link beside a related talk, which itself opens in the sheet. */
+        fun relatedOfficial(title: String) = "$title on the official site"
         const val CIRCLES_OFFLINE = "Talk circles need a connection."
         /** web/src/app.tsx (TalkSheet). */
         const val SHEET_TITLE = "Talk"
@@ -198,8 +201,91 @@ object Strings {
         const val PICK_BODY = "Pick topics you want to learn, or write what you're trying to learn or figure out next, to get talk suggestions."
         const val PICK_TOPICS = "Pick topics"
         const val FINDING = "Finding talks…"
+        const val ERROR = "Suggestions are unavailable right now."
         const val NONE = "No upcoming talks match your topics yet. Try adding a few more."
         const val NEEDS_CONNECTION_TITLE = "Suggestions need a connection"
+        const val WHY_LABEL = "You want to learn:"
+        const val INTERESTED_ON = "Interested"
+        const val DEGRADED = "Meaning-based matching is paused right now; these are keyword matches."
+
+        /** Native only: For you also suggests talks like the ones marked, so the lede says so. */
+        const val LEDE_NATIVE = "Talks picked from what you want to learn and the talks you marked. Ended talks and talks you marked are left out."
+
+        /** Native only: marking talks is enough to get suggestions on the device. */
+        const val PICK_BODY_NATIVE =
+            "Pick topics you want to learn, write what you're trying to learn or figure out next, or mark talks you're interested in, to get talk suggestions."
+
+        /** Native only: the reason for a suggestion found through the marked talks. */
+        const val LIKE_LABEL = "Like a talk you marked:"
+
+        /** Native only: meaning-based matching is unavailable on this device, not paused on a server. */
+        const val DEGRADED_NATIVE = "Meaning-based matching is not available on this device; these are keyword matches."
+    }
+
+    /** web/src/people/TopicPicker.tsx and ProfileScreen.tsx (the learn topics and text). */
+    object Topics {
+        const val LEARN_TITLE = "I want to learn about"
+        const val MAX = 30
+        fun count(n: Int) = "$n of $MAX"
+        const val FIND = "Find a topic"
+        fun findLabel(title: String) = "Find a topic for ${title.lowercase()}"
+        const val CLEAR = "Clear"
+        const val NO_MATCH = "No topic matches that. Try another word."
+        const val SUGGESTED = "Suggested for you"
+        const val COMMON = "Common at this conference"
+        fun showMore(n: Int) = "Show more ($n)"
+        const val SHOW_FEWER = "Show fewer"
+        const val FULL = "You have chosen 30 topics, the most a set can hold."
+        const val CHOSEN = "Chosen topics"
+        const val MATCHING = "Matching topics"
+        const val SUGGESTED_GROUP = "Suggested topics"
+        const val COMMON_GROUP = "Common topics"
+
+        /** A chip's name for assistive technology: "eBPF, 7 talks". */
+        fun chipLabel(label: String, count: Int?) = if (count == null) label else "$label, $count ${if (count == 1) "talk" else "talks"}"
+        const val TEXT_LABEL = "What I'm trying to learn or figure out next"
+        const val TEXT_PLACEHOLDER = "For example: getting Postgres failover under a minute, or why our GPU inference costs so much"
+        const val SPECIFIC_HINT = "The more specific, the better the matches."
+
+        /** Native only: closes the topic sheet. */
+        const val DONE = "Done"
+    }
+
+    /** web/src/components/search.tsx (RankDrawer and filterLines). */
+    object Rank {
+        const val WHY = "Why this rank"
+        const val PLACE = "Place in the fused ranking"
+        const val KEYWORD = "Keyword match"
+        const val MEANING = "Meaning match"
+        const val FILTERS = "Filters applied"
+        const val UNAVAILABLE = "Ranking details are not available for this talk right now."
+        fun keyword(rank: Int?, window: Int) = if (rank != null) "$rank of the top $window" else "Not in the top $window"
+        fun meaning(rank: Int?, k: Int) = if (rank != null) "$rank of the $k nearest" else "Not among the $k nearest"
+
+        /** Native only: the ranking runs on the device, not in Elasticsearch. */
+        const val NOTE_NATIVE = "This device ranks talks by keywords and by meaning, then fuses the two lists with reciprocal rank fusion. A high place in either list lifts a talk."
+
+        /** Native only: the keyword-only ranking when meaning-based matching is unavailable. */
+        const val NOTE_KEYWORDS_ONLY = "Meaning-based matching is not available on this device, so talks are ranked by keywords alone."
+
+        fun conferenceOnly(name: String) = "$name only"
+        const val TALKS_ONLY = "Talks only, without breaks or housekeeping"
+        const val WITH_EVENTS = "Talks, events and showcases, without breaks or housekeeping"
+        fun day(label: String) = "Day: $label"
+        const val MORNING = "Morning: starts before 12:00"
+        const val AFTERNOON = "Afternoon: starts at 12:00 or later"
+        fun startsAfter(hhmm: String) = "Starts at $hhmm or later"
+        fun startsBefore(hhmm: String) = "Starts before $hhmm"
+        fun track(values: List<String>) = "Track: ${values.joinToString(", ")}"
+        fun level(values: List<String>) = "Level: ${values.joinToString(", ")}"
+        fun tagGroup(group: String, values: List<String>) = "$group: ${values.joinToString(", ")}"
+        fun phrases(labels: List<String>) = "From your words: ${labels.joinToString(", ")}"
+        fun speaker(values: List<String>) = "Speaker: ${values.joinToString(", ")}"
+        fun room(values: List<String>) = "Room: ${values.joinToString(", ")}"
+        const val HAS_SLIDES = "Has slides"
+        const val NO_SLIDES = "No slides"
+        const val SPONSOR_HIDDEN = "Sponsor talks hidden"
+        const val HAPPENING_NOW = "Happening now: in progress or starting within 60 minutes"
     }
 
     /** Native only until the People screens arrive (phase 3); the wording follows the web's manifest. */

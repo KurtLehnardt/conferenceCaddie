@@ -70,7 +70,7 @@ class TalkScreensUiTest {
 
     @Test
     fun searchWithATimePhraseAndAFilterThenMarkATalk() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search)) }
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
         waitFor(tag = "talk-alpha-conf-2099:1")
         waitFor(text = Strings.Search.count(3, browse = true, includeEvents = false))
@@ -98,7 +98,9 @@ class TalkScreensUiTest {
         // Open a talk: the sheet shows the speaker's tagline and the related talks. The list is
         // lazy, so on a short screen the card is brought into view first.
         onNodeWithTag("search-results").performScrollToNode(hasTestTag("talk-alpha-conf-2099:3"))
-        onNodeWithText("Kubernetes scheduling deep dive").performClick()
+        // The title itself: a card is taller than a short screen once it has Why this rank, and a tap
+        // at the middle of the whole card can land on one of its buttons.
+        onNodeWithText("Kubernetes scheduling deep dive", useUnmergedTree = true).performClick()
         waitFor(tag = "talk-sheet")
         waitFor(text = "Maintainer").assertIsDisplayed()
         waitFor(tag = "related-talks")
@@ -118,7 +120,7 @@ class TalkScreensUiTest {
 
     @Test
     fun theSwitcherChangesConference() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search)) }
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
         waitFor(tag = "talk-alpha-conf-2099:1")
         onNodeWithTag("conference-switcher").performClick()
@@ -130,7 +132,7 @@ class TalkScreensUiTest {
 
     @Test
     fun filtersSheetNarrowsAndClears() = runComposeUiTest {
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search)) }
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
         waitFor(tag = "talk-alpha-conf-2099:1")
         // The Has slides chip narrows to the one talk with slides.

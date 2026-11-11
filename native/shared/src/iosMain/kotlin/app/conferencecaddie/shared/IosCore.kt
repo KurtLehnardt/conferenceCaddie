@@ -12,9 +12,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.io.files.Path
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSNumber
+import platform.Foundation.NSOperationQueue
 import platform.Foundation.NSURLIsExcludedFromBackupKey
 import platform.Foundation.NSUserDomainMask
+import platform.UIKit.UIApplicationDidReceiveMemoryWarningNotification
 
 /** The one [CaddieCore] and [PeopleController] of the app. */
 object IosCore {
@@ -62,6 +65,13 @@ object IosCore {
         ).also {
             instance = it
             it.start()
+            // iOS warns an app before it ends it for memory. The query model (about 60 MB once
+            // loaded) is given back then, as on Android; the next text search loads it again.
+            NSNotificationCenter.defaultCenter.addObserverForName(
+                UIApplicationDidReceiveMemoryWarningNotification,
+                `object` = null,
+                queue = NSOperationQueue.mainQueue,
+            ) { _ -> it.releaseEmbedder() }
         }
     }
 

@@ -4,8 +4,9 @@ import kotlinx.coroutines.flow.Flow
 
 // Interfaces that each platform implements and injects at start-up (docs/NATIVE_PLAN.md, section
 // 10.3). Android implements them in Kotlin in androidMain. iOS implements them in Kotlin in iosMain
-// where the platform bindings reach the API (the Keychain, notifications), and in Swift, passed in,
-// where they do not (Core Bluetooth and ONNX Runtime are easiest to reach from Swift).
+// where the platform bindings or a cinterop reach the API (the Keychain, notifications, ONNX
+// Runtime's C API), and in Swift, passed in, where they do not (Core Bluetooth is easiest to reach
+// from Swift).
 
 /** Turns text into embedding vectors on the device (bge-small-en-v1.5 through ONNX Runtime). */
 interface Embedder {
@@ -17,6 +18,9 @@ interface Embedder {
 
     /** Returns one vector per input text, in the same order. */
     suspend fun embed(texts: List<String>): List<FloatArray>
+
+    /** Releases what the embedder holds (an ONNX Runtime session, for example); later calls may fail. */
+    suspend fun close() {}
 }
 
 /** One Bluetooth sighting: a token heard from a nearby phone and its strongest signal. */

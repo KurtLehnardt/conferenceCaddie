@@ -54,8 +54,28 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE."""
 
-    /** Joins a text's hard line breaks (and the indentation after them) so its paragraphs wrap to the screen. */
-    private fun unwrap(text: String): String = text.replace(Regex("(?<!\n)\n(?!\n)[ \t]*"), " ")
+    /**
+     * Joins a text's hard line breaks (and the indentation after them) so its paragraphs wrap to the
+     * screen. Only the short lucide text needs it here: scripts/third-party-notices.py does the same
+     * to the generated notices, so nothing scans their hundreds of kilobytes on the phone.
+     */
+    private fun unwrap(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            val lone = c == '\n' && (i == 0 || text[i - 1] != '\n') && (i + 1 >= text.length || text[i + 1] != '\n')
+            if (lone) {
+                out.append(' ')
+                i++
+                while (i < text.length && (text[i] == ' ' || text[i] == '\t')) i++
+            } else {
+                out.append(c)
+                i++
+            }
+        }
+        return out.toString()
+    }
 
     /** The modules a licence covers, grouped by the platforms that ship them, as the lines shown above its text. */
     private fun moduleLines(notice: ThirdPartyNotices.Notice): String {
@@ -81,6 +101,6 @@ SOFTWARE."""
         ),
         LicenceSection("Lucide icons", unwrap(LUCIDE)),
     ) + ThirdPartyNotices.NOTICES.map { notice ->
-        LicenceSection(notice.title, moduleLines(notice) + "\n\n" + unwrap(notice.text))
+        LicenceSection(notice.title, moduleLines(notice) + "\n\n" + notice.text)
     }
 }

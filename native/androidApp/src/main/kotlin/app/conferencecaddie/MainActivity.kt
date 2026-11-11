@@ -14,6 +14,7 @@ import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
+import app.conferencecaddie.ui.talks.EmbeddingModel
 import app.conferencecaddie.ui.talks.TalkLaunch
 
 class MainActivity : ComponentActivity() {
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
                 launch = launch,
                 initialQuery = query,
                 talkLaunch = talkLaunch,
+                embedder = { EmbeddingModel.load() },
             )
         }
     }

@@ -183,7 +183,7 @@ class PeopleRulesTest {
             core.copy(
                 capabilities = ready,
                 selectedSlug = FIXTURE_SLUG,
-                bundle = app.conferencecaddie.shared.core.BundleState.Ready(FIXTURE_BUNDLE, app.conferencecaddie.shared.search.TalkSearch(FIXTURE_BUNDLE, "k", CaddieDatabase.open(":memory:")) { kotlin.time.Clock.System.now() }),
+                bundle = app.conferencecaddie.shared.core.BundleState.Ready(FIXTURE_BUNDLE, app.conferencecaddie.shared.search.TalkSearch(FIXTURE_BUNDLE, "k", CaddieDatabase.open(":memory:"))),
                 interested = listOf("$FIXTURE_SLUG:1001"),
             ),
         )!!

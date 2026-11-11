@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +35,7 @@ import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.Capabilities
+import app.conferencecaddie.shared.Embedder
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.core.BundleState
 import app.conferencecaddie.shared.core.CaddieCore
@@ -41,6 +43,7 @@ import app.conferencecaddie.shared.core.CapabilitiesState
 import app.conferencecaddie.shared.core.ConferencesState
 import app.conferencecaddie.shared.core.CoreState
 import app.conferencecaddie.shared.core.Defaults
+import app.conferencecaddie.shared.core.SemanticState
 import app.conferencecaddie.ui.App
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.SkeletonCard
@@ -61,13 +64,17 @@ import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.CaddieTheme
 import app.conferencecaddie.ui.theme.ThemePreference
 import kotlin.time.Clock
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 
 /**
  * The app on both platforms: the shell (header, switcher, tab bar, Settings) drawn from the shared
- * core's state, with the talk screens in its Search and Interested tabs. For you stays the shell's
- * placeholder until on-device recommendations arrive (phase 2b), and People appears only when the
- * backend serves people features (phase 3).
+ * core's state, with the talk screens in its For you, Search and Interested tabs. People appears only
+ * when the backend serves people features (phase 3).
+ *
+ * [embedder] loads the query embedder; the hosts pass [EmbeddingModel.load], the shipped model. Search
+ * and For you use keywords alone until it is loaded, for good if it returns null or fails, and
+ * without one (the UI tests that do not need it).
  *
  * [launch] holds the debug builds' launch options (the release hosts pass the defaults);
  * [initialQuery] types a search, which opens the Search tab, and [talkLaunch] opens a sheet or
@@ -84,9 +91,14 @@ fun CaddieApp(
     launch: DebugLaunch = DebugLaunch(),
     initialQuery: String? = null,
     talkLaunch: TalkLaunch = TalkLaunch(),
+    embedder: (suspend () -> Embedder?)? = null,
 ) {
     val state by core.state.collectAsState()
-    val scope = rememberCoroutineScope()
+    // The screens' models run in this scope. The core searches and works out For you off the main
+    // thread; the main dispatcher brings each model back to the main thread before it changes
+    // what the screens show, whatever dispatcher the composition has (a UI test's would otherwise
+    // go on in the core's thread, and Compose would not hear of the change).
+    val scope = rememberCoroutineScope { Dispatchers.Main.immediate }
     // The Search screen's state outlives the composition while its owner lives (the activity across
     // a rotation on Android); without an owner it lives as long as this composition.
     val owner = LocalViewModelStoreOwner.current
@@ -95,7 +107,9 @@ fun CaddieApp(
     } else {
         remember(core) { SearchModel(scope) { core.search(it) } }
     }
-    remember(search, scope) { search.attach(scope) }
+    SideEffect { search.attach(scope) }
+    val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
+    var pickerOpen by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val openUrl: (String) -> Unit = { url -> if (isWebLink(url)) runCatching { uriHandler.openUri(url) } }
     var theme by remember { mutableStateOf(launch.theme ?: ThemePreference.System) }
@@ -116,6 +130,13 @@ fun CaddieApp(
         core.refresh()
         onPauseOrDispose { }
     }
+    // The core loads the model in the background when a search first needs it; the search runs again
+    // once the model is ready, so the meaning-based list joins what is on screen, or once it failed,
+    // so the results say they are keyword matches.
+    LaunchedEffect(core) { if (embedder != null) core.useEmbedder(embedder) }
+    LaunchedEffect(state.semantic) {
+        if (state.semantic == SemanticState.Ready || state.semantic == SemanticState.Unavailable) search.submit()
+    }
     // The theme choice is kept on this device, as the web keeps it in local storage; a debug
     // launch option wins for that run.
     LaunchedEffect(core) {
@@ -134,9 +155,20 @@ fun CaddieApp(
     LaunchedEffect(talkLaunch, ready != null) {
         if (ready == null) return@LaunchedEffect
         talkLaunch.mark.forEach { if (it !in state.interested) core.setInterested(it, true) }
+        if (talkLaunch.learn != null) core.setLearnTopics(talkLaunch.learn)
+        talkLaunch.learnText?.let { core.setLearnText(it) }
         if (talkLaunch.sheet == "filters") search.sheet = ""
+        if (talkLaunch.sheet == "topics") pickerOpen = true
         talkLaunch.talk?.let { openTalk = it }
     }
+    // For you asks again whenever what it depends on changes, and every minute, as talks end, but
+    // only while it is on screen (the effect lives in its tab); coming back to it catches up.
+    // A model given back for memory (Ready to Idle) changes nothing For you shows, so it does not ask
+    // again then. Idle before the model was ever ready is another matter: the first Ready must refresh.
+    var modelWasReady by remember { mutableStateOf(false) }
+    LaunchedEffect(state.semantic) { if (state.semantic == SemanticState.Ready) modelWasReady = true }
+    val forYouSemantic = if (state.semantic == SemanticState.Idle && modelWasReady) SemanticState.Ready else state.semantic
+    val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, forYouSemantic, nowMs / 60_000)
 
     // The person is told once when the stored data could not be opened.
     LaunchedEffect(state.storageReset) {
@@ -198,9 +230,24 @@ fun CaddieApp(
             onOpenUrl = openUrl,
         ),
         content = TabContent(
+            forYou = {
+                BundleGate(state, core) { r ->
+                    LaunchedEffect(forYouInputs) { forYou.refresh(state.selectedSlug, forYouInputs) }
+                    ForYouScreen(
+                        model = forYou,
+                        bundle = r.bundle,
+                        learnTopics = state.learn.topics,
+                        interested = interestedIds,
+                        onToggleInterested = toggle,
+                        onOpenTalk = { openTalk = it.talkId },
+                        onOpenUrl = openUrl,
+                        onPickTopics = { pickerOpen = true },
+                    )
+                }
+            },
             search = {
                 BundleGate(state, core) { r ->
-                    SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl)
+                    SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl, openRank = talkLaunch.rank)
                 }
             },
             interested = {
@@ -211,6 +258,20 @@ fun CaddieApp(
         ),
         initialTab = launch.tab ?: if (initialQuery != null) Tab.Search else null,
     )
+
+    if (pickerOpen && ready != null) {
+        CaddieTheme(theme) {
+            TopicPickerSheet(
+                bundle = ready.bundle,
+                selected = state.learn.topics,
+                text = state.learn.text,
+                interested = state.interested,
+                onTopics = core::setLearnTopics,
+                onText = core::setLearnText,
+                onClose = { pickerOpen = false },
+            )
+        }
+    }
 
     // A marked talk the bundle no longer holds opens from its saved copy.
     val talk = openTalk?.let { id -> ready?.bundle?.talksById?.get(id) ?: interestedTalks.firstOrNull { it.talkId == id } }
@@ -235,17 +296,31 @@ fun CaddieApp(
 private const val THEME = "theme"
 
 /**
- * Debug launch options of the talk screens: `caddie.sheet filters` opens the Filters sheet,
- * `caddie.talk <talk id>` opens a talk, and `caddie.mark <id>,<id>` marks talks. Release hosts
- * never pass them.
+ * Debug launch options of the talk screens: `caddie.sheet filters` opens the Filters sheet and
+ * `caddie.sheet topics` the topic picker, `caddie.talk <talk id>` opens a talk, `caddie.mark
+ * <id>,<id>` marks talks, `caddie.learn <topic id>,<topic id>` and `caddie.learnText <text>` set
+ * what For you suggests from, and `caddie.rank first` (or a talk id) opens that search result's Why
+ * this rank. Release hosts never pass them.
  */
-data class TalkLaunch(val sheet: String? = null, val talk: String? = null, val mark: List<String> = emptyList()) {
+data class TalkLaunch(
+    val sheet: String? = null,
+    val talk: String? = null,
+    val mark: List<String> = emptyList(),
+    val learn: List<String>? = null,
+    val learnText: String? = null,
+    val rank: String? = null,
+) {
     companion object {
         fun from(get: (String) -> String?) = TalkLaunch(
             sheet = get("caddie.sheet"),
             talk = get("caddie.talk"),
-            mark = get("caddie.mark")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty(),
+            mark = list(get("caddie.mark")).orEmpty(),
+            learn = list(get("caddie.learn")),
+            learnText = get("caddie.learnText"),
+            rank = get("caddie.rank"),
         )
+
+        private fun list(value: String?) = value?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
     }
 }
 

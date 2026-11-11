@@ -4,8 +4,9 @@ This directory holds the native Android and iOS apps: a Kotlin Multiplatform cor
 platforms, with the UI written once in Compose Multiplatform. The UI follows the web app's design
 (see Design system below). Phase 2a gives the apps the talk features of the plan: they read a
 backend's capabilities, download its talk bundles, and search, filter and keep talks on the device,
-offline too (see Talk features below). For you is a placeholder until on-device recommendations
-arrive in phase 2b, and People appears only on backends that serve people features (phase 3). The
+offline too (see Talk features below). Phase 2b adds meaning-based search, For you and the topic
+picker, all on the device with the bge-small-en-v1.5 model through ONNX Runtime. People appears only
+on backends that serve people features (phase 3). The
 Capacitor app in `web/android` is still the Android app people use today. The design and the phases
 these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
@@ -13,8 +14,8 @@ these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
 | Path | What it is |
 |---|---|
-| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), keyword search (`search/`: FTS5, filters, facets, time phrases, suggestions), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), the platform interfaces (`Embedder`, `BleRadio`, `Notifier`, `SecureStore`, and the people features' `PlatformServices.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests and `jvmTest` holds the live People API harness. |
-| `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, Search, the Filters sheet, the talk sheet and My schedule). On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
+| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), the platform interfaces (`Embedder`, `BleRadio`, `Notifier`, `SecureStore`, and the people features' `PlatformServices.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
+| `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, For you, the topic picker, Search with Why this rank, the Filters sheet, the talk sheet and My schedule). The query model and its vocabulary are its Compose resources. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
 | `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`, shows the permission prompts the platform services ask for and hands notification taps to the screens. Its instrumented tests (the smoke test, the secure store and the platform services) are in `src/androidTest`. |
 | `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController`, its app delegate hands the APNs token and notification taps to Kotlin, and a build phase runs Gradle to build and embed the framework. |
 | `gradle/libs.versions.toml` | Every dependency version, with the reasons for the choices. |
@@ -36,6 +37,7 @@ Android application must be its own module and Kotlin Multiplatform modules use 
 | Android Gradle Plugin | 9.3.3 |
 | Gradle (wrapper) | 9.7.1 |
 | kotlinx.serialization / kotlinx.coroutines | 1.12.0 / 1.11.0 |
+| ONNX Runtime | 1.30.0 (Android, iOS and the JVM tests) |
 | Android | minSdk 26, targetSdk 36, compileSdk 37 |
 | iOS | deployment target 16.0; arm64 devices and arm64 simulators |
 
@@ -61,11 +63,12 @@ From `native/`:
 
 ```sh
 ./gradlew :shared:allTests              # shared tests on the JVM (and on the iOS simulator on a Mac)
-./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-debug.apk
+./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-<abi>-debug.apk
 ./gradlew :androidApp:installDebug      # installs on a connected phone or a running emulator
-./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests on a phone or emulator
+./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests and the model measurement on a phone or emulator
 ./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented tests
 ./gradlew :androidApp:assembleRelease && scripts/release-smoke.sh   # the R8 release build, started on the device
+./gradlew :shared:smokeTalks -Pcaddie.smokeSite=<dir>   # the talk checks of scripts/smoke.mjs (see Talk features)
 ```
 
 With more than one device connected, pick one with `ANDROID_SERIAL=emulator-5554`. The iOS
@@ -74,11 +77,23 @@ Kotlin plugin's default simulator; `-Pcaddie.iosTestDevice=<name or UDID>` picks
 
 You can also open `native/` in Android Studio and run the `androidApp` configuration.
 
+The build makes one APK per ABI, `androidApp-arm64-v8a-*.apk` for phones and `androidApp-x86_64-*.apk`
+for emulators and Chromebooks, because ONNX Runtime's native library is 23 to 39 MB per ABI. With
+the 34 MB query model the arm64-v8a release APK is about 40 MB; it is the one CI signs and the one
+published on GitHub Releases. There is no universal APK and no 32-bit build. `installDebug` and the
+connected tests pick the APK of the device's ABI.
+
 Release builds run R8 (code shrinking and resource shrinking). Compose, AndroidX and
 kotlinx.serialization bring their own keep rules; app-specific rules go in
-`androidApp/proguard-rules.pro`. Check a release build on a device after adding anything that uses
-reflection: `scripts/release-smoke.sh` installs the release build (signed with the debug key when no
-release key is set), starts it, and opens Settings, and CI runs it on the emulator.
+`androidApp/proguard-rules.pro`, which keeps ONNX Runtime's Java API for its JNI code. Check a
+release build on a device after adding anything that uses reflection: `scripts/release-smoke.sh`
+installs the release build of the device's ABI (signed with the debug key when no release key is
+set), checks the installed package for ONNX Runtime's telemetry provider and the network-state
+permission, starts it, opens Settings, and searches for letters that are in no talk, which only the
+query model can answer, so the model must load and run under R8. The search uses the official server
+and the published bundles, so the device needs a connection; that step is tried twice, and on a pull
+request whose runner cannot reach the server or the bundles it is skipped with a warning. CI runs it
+on the emulator.
 
 The native app uses the same application id as the Capacitor app, `app.conferencecaddie`. A phone
 cannot have both installed at once. Installing a debug build over a release build, or the other way
@@ -136,7 +151,7 @@ The app icons and the iOS launch image come from `web/public/icons` through
 Debug builds take launch options that open a screen directly, for screenshots and manual checks:
 `-caddie.tab Search`, `-caddie.open settings` (or `switcher`), `-caddie.theme dark`,
 `-caddie.connect https://example.org` and `-caddie.gallery 1` (the Search components drawn with the
-web's sample talk). On iOS they are launch arguments
+web's sample talk); the talk screens add theirs (Trying the talk features against local bundles). On iOS they are launch arguments
 (`xcrun simctl launch <device> app.conferencecaddie -caddie.tab Search`); on Android they are intent
 extras (`adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.tab Search`). Release
 builds ignore them. `-caddie.connect` follows the rules of a `caddie://connect` link: the address is
@@ -198,8 +213,8 @@ keystore password. A local signed build reads them inside one shell, without pri
 
 **In CI, Gradle never sees the key.** The build job runs `assembleRelease` with
 `-Pcaddie.unsignedRelease=true` on every run, pull requests included, so R8 and resource shrinking
-are checked before `main`. On `main` it keeps the unsigned APK for one day, and a separate job signs
-it. That job checks out no code and runs no Gradle or npm; it refuses an APK whose name is not the
+are checked before `main`. On `main` it keeps the unsigned arm64-v8a APK for one day, named
+`conference-caddie-native-<commit>-release.apk`, and a separate job signs it. That job checks out no code and runs no Gradle or npm; it refuses an APK whose name is not the
 release APK of the commit being built, decodes the keystore into the runner's
 temp directory with `umask 077`, runs `zipalign` and `apksigner` from the runner's Android SDK,
 deletes the keystore, and fails unless the APK's certificate matches the repository variable
@@ -363,6 +378,47 @@ check that gating.
 - **Search.** Keyword search runs on SQLite FTS5 (Porter stemmer) with the server's filters, facet
   counts, time phrases ("tuesday afternoon", "after lunch day 2"), Happening now and "Did you mean"
   chips. `DECISIONS.md` (Native apps phase 2a) lists where it differs from the server.
+- **Meaning.** A text search also embeds the query on the device and takes the 50 talks nearest to it
+  by cosine over the bundle's int8 vectors, then fuses that list with the keyword list by reciprocal
+  rank fusion (rank window 50, rank constant 60), as the server's rrf retriever does. Each result has
+  Why this rank with its fused, keyword and meaning places and the filters applied. Until the model is
+  loaded, and if it cannot be, search is keyword search alone; once it has failed, results say so.
+- **For you and the topic picker.** For you ports the server's recommendations (learn topics and the
+  learn text, fused; never ended or marked talks) and adds the talks nearest to the ones the person
+  marked. What the person wants to learn is kept on the device, per conference, and edited in the
+  web's topic picker in a sheet. Related talks are the bundle's lists, each with its official link.
+- **The query model.** `BAAI/bge-small-en-v1.5`, the int8 `onnx/model_quantized.onnx` of the
+  `Xenova/bge-small-en-v1.5` revision that `scripts/lib/embedder.mjs` pins, ships in the app with its
+  `vocab.txt` (34 MB in all). The build downloads both, and ONNX Runtime's iOS archive, from the URLs
+  in `gradle/pinned-downloads.properties` and refuses a file whose size or SHA-256 differs; the
+  verified files are kept in Gradle's user home under `caches/caddie-pinned`. Queries follow the
+  contract's embedding conventions (CLS pooling, L2 normalisation, the retrieval instruction), with a
+  WordPiece tokenizer in common Kotlin that matches transformers.js. `DECISIONS.md` (Native apps phase
+  2b) has the measurements and the reasons.
+- **No telemetry from ONNX Runtime.** ONNX Runtime 1.30 would upload usage events to Microsoft on
+  Android and iOS. The apps set `ORT_DISABLE_TELEMETRY` first thing at start, on the main thread
+  (`CaddieApplication.onCreate`, `MainViewController`), and every session turns telemetry events off;
+  the Android manifest also removes the AAR's telemetry provider and the network-state permission it
+  adds. `openEncoder` is the only code that may call ONNX Runtime (`scripts/check-onnxruntime-entry.sh`
+  fails on any other use), the `check<Variant>OnnxRuntimeManifest` task fails a build whose merged
+  manifest has the provider or the permission, and the release smoke test checks the installed
+  package. `openEncoder` also refuses to start ONNX Runtime unless the variable is set. Keep all of
+  this when ONNX Runtime is updated.
+- **The model loads when it is needed.** The core loads the model on the first text search (or For
+  you with learn text) whose embedding is not cached, tries again after a failure once a pause has
+  passed, and closes it when the system asks for memory (a load still running is closed when it
+  ends); the next such search loads it again.
+- **The smoke checks.** `TalkSmokeTest` runs the talk checks of `scripts/smoke.mjs` against the shared
+  search, For you and topic lists with the real model, over bundles built from `main`'s data, and
+  prints a PASS, FAIL or N/A line per check (the report is also written to
+  `shared/build/reports/smoke-talks.txt`):
+
+  ```sh
+  npm --prefix tools/bundles ci --ignore-scripts
+  node scripts/build-bundles.mjs --out /tmp/site --base-url https://127.0.0.1:8701/bundles/ \
+    --takedown https://github.com/KurtLehnardt/conferenceCaddie/issues --publisher-name "Conference Caddie"
+  cd native && ./gradlew :shared:smokeTalks -Pcaddie.smokeSite=/tmp/site
+  ```
 - **Storage.** SQLite through the bundled androidx.sqlite driver, in two files on one connection:
   the main database (settings and the marked talks) and a cache database attached as `cache` (the
   cached lists, the installed bundles and the search index, all of which can be downloaded again).
@@ -401,8 +457,11 @@ folder:
 
 `caddie.backend` and `caddie.query` are debug launch options next to the shell's (`caddie.tab`,
 `caddie.theme` and the others under Design system); the backend you pass stays selected, like one
-chosen in Settings. `caddie.sheet filters` opens the Filters sheet, `caddie.talk <talk id>` opens a
-talk, and `caddie.mark <id>,<id>` marks talks, so screenshots need no taps.
+chosen in Settings. `caddie.sheet filters` opens the Filters sheet and `caddie.sheet topics` the topic
+picker, `caddie.talk <talk id>` opens a talk, `caddie.mark <id>,<id>` marks talks, `caddie.learn
+<topic id>,<topic id>` and `caddie.learnText <text>` set what For you suggests from, and `caddie.rank
+first` opens the first search result's Why this rank, so screenshots need no taps. A value with a space
+needs its own quotes inside `adb shell`, for example `-e caddie.query "'kubernetes security'"`.
 
 ## People features
 
@@ -499,6 +558,7 @@ arrive later in phase 3.
 
 ## Privacy
 
+- ONNX Runtime's telemetry is switched off on both platforms (Talk features, No telemetry).
 - Android: `allowBackup` is false, and `data_extraction_rules.xml` excludes every domain, the
   device-protected `device_*` domains included, from cloud backup and device-to-device transfer,
   because the app holds per-backend device secrets (the secure store's `caddie_secure_store` file
@@ -546,33 +606,49 @@ Mac, so the iOS artifacts are covered, and review the diff:
 Then build the iOS app once with `xcodebuild` (see above), since Xcode's build phase resolves a few
 more artifacts; if it reports a missing checksum, add the task it names to the command.
 
+Files that are not Maven artifacts (the query model, its vocabulary and ONNX Runtime's iOS archive)
+are pinned in `gradle/pinned-downloads.properties` by URL, size and SHA-256 instead. When ONNX
+Runtime's version changes in the version catalog, the iOS archive's pin must change with it, and so
+must `licenses/onnxruntime.txt`; the build and the notices check stop when they disagree. When the
+bundle builder's `ONNX_REVISION` changes, the model and vocabulary pins must name the same revision;
+`:shared:checkEmbeddingRevision` fails until they do.
+
 Some artifacts differ by operating system (AAPT2 for Linux and macOS), so the file also lists the
 Linux variants that CI needs; when a Linux CI run fails verification, add the entry it names.
 Sources and Javadoc jars, which IDEs download, are trusted without checksums.
 
 ## Continuous integration
 
-`.github/workflows/native.yml` runs on pull requests and on pushes to `main` that touch `native/` or
-the workflow itself. Every action is pinned to a commit SHA, checkouts keep no credentials, and
+`.github/workflows/native.yml` runs on pull requests and on pushes to `main` that touch `native/`,
+the contracts, the bundle builder (`scripts/lib/embedder.mjs`, `scripts/build-bundles.mjs`), the
+smoke test (`scripts/smoke.mjs`), `data/`, `tools/bundles/` or the workflow itself. Every action is pinned to a commit SHA, checkouts keep no credentials, and
 Dependabot (`.github/dependabot.yml`) proposes weekly updates for the actions and the Gradle
 dependencies.
 
-- **Shared tests and Android build** (Ubuntu): `:shared:allTests` and `:androidApp:assembleDebug`,
-  with the debug APK kept as an artifact. On `main` it also builds the unsigned release APK.
+- **Shared tests and Android build** (Ubuntu): the ONNX Runtime entry check,
+  `:shared:allTests` (with `checkEmbeddingRevision` and `checkPinnedDownloads`) and
+  `:androidApp:assembleDebug`, with the arm64-v8a debug APK kept as an artifact. It builds the
+  unsigned release APKs on every run and writes their sizes to the job summary; on `main` it hands
+  the arm64-v8a one to the sign job.
+- **Talk checks against the on-device search** (Ubuntu): builds the bundles from the committed data
+  with `scripts/build-bundles.mjs` and runs `:shared:smokeTalks`; the table goes to the job summary.
 - **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
   It is skipped with a notice when the signing secrets are missing.
-- **UI tests on an Android emulator** (Ubuntu): the Compose UI tests, the app's instrumented tests
-  and `scripts/release-smoke.sh` on the R8 release build, on an API 34 emulator started by
+- **UI tests on an Android emulator** (Ubuntu): the Compose UI tests, the measurement of the shipped
+  model (its numbers go to the job summary), the app's instrumented tests and
+  `scripts/release-smoke.sh` on the R8 release build, on an API 34 emulator started by
   `reactivecircus/android-emulator-runner`. The emulator's booted state is cached as a snapshot.
   No secrets. The release APK is signed only after this job passes.
 - **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
   the third-party notices check, the Release device framework link, and an unsigned simulator build
-  of the Xcode project.
+  of the Xcode project. The TestFlight jobs write the Release app's size, installed and zipped, and
+  the signed IPA's size to their job summaries.
 - **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
   skipped when its secrets are missing.
 
-Gradle's caches (the open-source basic provider of `setup-gradle`) and Kotlin/Native's `~/.konan`
-are cached. Pull requests only read the caches; `main` writes them. The `~/.konan` key is the hash
+Gradle's caches (the open-source basic provider of `setup-gradle`), Kotlin/Native's `~/.konan`, the
+pinned downloads (keyed on `gradle/pinned-downloads.properties` and the runner's OS) and the bundle
+builder's fp32 model (keyed on its revision) are cached. Pull requests only read the caches; `main` writes them. The `~/.konan` key is the hash
 of the version catalog, with no fallback to older keys, so an old Kotlin/Native is never restored.
 
 The artifacts of this public repository can be downloaded by anyone signed in to GitHub.
