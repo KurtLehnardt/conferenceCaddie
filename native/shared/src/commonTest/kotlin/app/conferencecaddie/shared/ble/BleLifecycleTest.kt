@@ -180,23 +180,23 @@ class BleLifecycleTest {
         }
         stopped(BleStopReason.BluetoothOff).let { b ->
             assertEquals(BleProblem.BluetoothOff, b.view.problem)
-            assertEquals(PeopleText.BLE_STOPPED_BLUETOOTH_OFF, b.h.state.notice)
-            assertEquals("Bluetooth turned off, so finding people near you stopped.", b.h.state.notice)
+            assertEquals(PeopleText.BLE_STOPPED_BLUETOOTH_OFF, b.h.state.notice?.message)
+            assertEquals("Bluetooth turned off, so finding people near you stopped.", b.h.state.notice?.message)
             assertTrue(b.presencePuts().isEmpty())
         }
         stopped(BleStopReason.PermissionLost).let { b ->
             assertEquals(BleProblem.PermissionBlocked, b.view.problem)
-            assertNull(b.h.state.notice)
+            assertNull(b.h.state.notice?.message)
         }
         stopped(BleStopReason.AdvertiseFailed).let { b ->
             assertEquals(BleProblem.Unsupported, b.view.problem)
-            assertEquals("This phone's Bluetooth couldn't send the code.", b.h.state.notice)
+            assertEquals("This phone's Bluetooth couldn't send the code.", b.h.state.notice?.message)
             assertEquals("This phone's Bluetooth couldn't send the code.", b.view.message)
         }
         stopped(BleStopReason.Unsupported).let { b -> assertEquals(BleProblem.Unsupported, b.view.problem) }
         stopped(BleStopReason.System).let { b ->
             assertNull(b.view.problem)
-            assertNull(b.h.state.notice)
+            assertNull(b.h.state.notice?.message)
             assertTrue(b.presencePuts().isEmpty())
         }
         stopped(BleStopReason.User).let { b ->

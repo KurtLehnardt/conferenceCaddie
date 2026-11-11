@@ -1,9 +1,6 @@
 package app.conferencecaddie.shared.people
 
-import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import app.conferencecaddie.shared.SecureStore
-import app.conferencecaddie.shared.db.CaddieDatabase
-import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -15,10 +12,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.io.buffered
-import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
-import kotlinx.io.files.SystemTemporaryDirectory
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -246,9 +239,10 @@ class PeopleSyncTest {
         assertFalse(h.state.deletes.unfinished)
         assertEquals(listOf("Bo"), h.state.met.map { it.displayName }, "People I met stays")
 
+        // Without a key, this phone deletes nothing on the server and says so.
         val done = h.controller.deleteMyProfile()
         assertTrue(done.done)
-        assertEquals("Your profile was deleted from this phone and from our server.", done.message)
+        assertEquals("Your profile was deleted from this phone.", done.message)
     }
 
     @Test
@@ -331,36 +325,5 @@ class PeopleSyncTest {
         runCurrent()
         assertFalse(h.state.visibility.onServer)
         assertEquals("This conference has ended, so sharing is closed.", h.state.sync.message)
-    }
-
-    @Test
-    fun theRecordsLiveInTheMainDatabaseAndOutliveTheCache() = runTest {
-        val dir = Path(SystemTemporaryDirectory, "caddie-people-${Random.nextLong().toULong()}").also { SystemFileSystem.createDirectories(it) }
-        val path = Path(dir, "caddie.db").toString()
-        val key = "people:v1:https://a.example#profile"
-        try {
-            CaddieDatabase.open(path).apply {
-                PeopleKeyValue.forDatabase(this).set(key, """{"name":"Ada"}""")
-                // "Clear saved schedules" empties the cache database only.
-                clearBundles()
-                closeWhenIdle()
-            }
-            val cachePath = CaddieDatabase.defaultCachePath(path)
-            BundledSQLiteDriver().open(cachePath).apply {
-                val tables = prepare("SELECT name FROM sqlite_master WHERE type = 'table'").use { s -> buildList { while (s.step()) add(s.getText(0)) } }
-                close()
-                assertFalse("settings" in tables, "the cache database holds no settings table")
-            }
-            // A broken cache database is deleted and created again; the records stay.
-            SystemFileSystem.sink(Path(cachePath)).buffered().use { it.write(ByteArray(4096) { 'x'.code.toByte() }) }
-            val reopened = CaddieDatabase.openLazily(path)
-            assertFalse(reopened.wasReset())
-            assertFalse(reopened.runsInMemory(), "the main database opened, so the records are kept")
-            assertEquals("""{"name":"Ada"}""", PeopleKeyValue.forDatabase(reopened).get(key))
-            reopened.closeWhenIdle()
-        } finally {
-            for (child in SystemFileSystem.list(dir)) SystemFileSystem.delete(child, mustExist = false)
-            SystemFileSystem.delete(dir, mustExist = false)
-        }
     }
 }

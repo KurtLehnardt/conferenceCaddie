@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import app.conferencecaddie.shared.AndroidNotifier
+import app.conferencecaddie.shared.NotificationTapKey
 
 /**
  * The ongoing notification of [BleRadioService], which Android requires of a foreground service and
@@ -72,13 +73,19 @@ internal object BleRadioNotification {
         return builder.build()
     }
 
-    /** Opens the launcher activity with [DEEP_LINK], which it hands to NotificationTaps, like a nudge. */
+    /**
+     * Opens the launcher activity with [DEEP_LINK] and the app's tap key, which the activity checks
+     * before it hands the link on, like a nudge's tap (AndroidNotifier.tapIntent). When the key
+     * cannot be stored the link is left out, so the tap only opens the app.
+     */
     private fun open(context: Context): PendingIntent? {
         val activity = context.packageManager.getLaunchIntentForPackage(context.packageName)?.component ?: return null
         val intent = Intent()
             .setComponent(activity)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            .putExtra(AndroidNotifier.EXTRA_DEEP_LINK, DEEP_LINK)
+        NotificationTapKey.get(context.applicationContext, create = true)?.let { key ->
+            intent.putExtra(AndroidNotifier.EXTRA_DEEP_LINK, DEEP_LINK).putExtra(AndroidNotifier.EXTRA_TAP_KEY, key)
+        }
         // A PendingIntent of its own, so it never takes over a nudge's (AndroidNotifier does the same).
         if (Build.VERSION.SDK_INT >= 29) intent.identifier = "ble:finding-people"
         return PendingIntent.getActivity(context, 2, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

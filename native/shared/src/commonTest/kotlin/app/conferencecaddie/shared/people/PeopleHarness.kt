@@ -39,6 +39,9 @@ val PEOPLE_ON = Capabilities(
 val FIXTURE_BUNDLE: TalkBundle = TalkBundle.decode(Fixtures.HASH, Fixtures.files.getValue("bundle.json"))!!
 val FIXTURE_SLUG: String = FIXTURE_BUNDLE.conference.slug
 
+/** The fixture conference as the people context names it; no end date, so it counts as running. */
+val FIXTURE_CONFERENCE = ConferenceInfo(FIXTURE_SLUG, "Fixture Conference", "America/Denver")
+
 /**
  * A People API that behaves like the server for the routes the controller uses: profile writes
  * echo their choices, presence writes answer with an hour or the day (and a fresh derived-v1 key
@@ -137,12 +140,14 @@ class PeopleHarness(
 
     val state: PeopleUiState get() = controller.state.value
 
+    /** The fixture conference, selected and in the backend's list, as [PeopleContext.fromCore] gives it. */
     fun context(caps: Capabilities = PEOPLE_ON, interested: List<String> = emptyList(), bundle: TalkBundle? = FIXTURE_BUNDLE) = PeopleContext(
         backend = BACKEND,
         capabilities = caps.forThisApp(),
-        conference = ConferenceInfo(FIXTURE_SLUG, "Fixture Conference", "America/Denver"),
+        conference = FIXTURE_CONFERENCE,
         bundle = bundle,
         interested = interested,
+        listed = listOf(FIXTURE_CONFERENCE),
     )
 
     suspend fun start(caps: Capabilities = PEOPLE_ON, interested: List<String> = emptyList()) {

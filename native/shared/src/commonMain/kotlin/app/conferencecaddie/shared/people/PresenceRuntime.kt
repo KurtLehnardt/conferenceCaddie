@@ -241,6 +241,15 @@ internal class PresenceRuntime(
         host.presenceChanged(slug)
     }
 
+    /**
+     * Stops the timers and the position watch while another backend is selected. Unlike [reset] it
+     * leaves a presence write that is under way alone, so its answer is still recorded; [watch]
+     * installs everything again when the backend comes back.
+     */
+    fun pause() {
+        unwatch()
+    }
+
     /** Stops every presence timer and the position watch, for "Delete my profile". */
     fun reset() {
         epoch++
@@ -457,10 +466,11 @@ internal class PresenceRuntime(
     }
 
     // Keeps the watch in step with the stored state: running while presence is on with the
-    // position choice and the app in the foreground, stopped otherwise.
+    // position choice, the conference is the watched one and the app is in the foreground, stopped
+    // otherwise. A write that lands after its backend was left starts no watch.
     private fun syncPositionWatch(slug: String) {
         val p = get(slug)
-        val wanted = p.on && p.position && host.foreground() && canSendPosition()
+        val wanted = watchedSlug == slug && p.on && p.position && host.foreground() && canSendPosition()
         if (wanted && watchSlug != slug) startPositionWatch(slug) else if (!wanted && watchSlug != null) stopPositionWatch()
     }
 

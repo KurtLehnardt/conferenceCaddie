@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -78,9 +79,9 @@ private const val REVEAL_WAIT_MS = 15_000L
  * quiet refresh of the same list does not dim it. `state.reveal` ("See who") opens the Around view,
  * scrolls its card to the middle and rings it for four seconds, then `controller.consumeReveal()`.
  *
- * [request] is what a notification or another screen asked for (`aroundNow`: the Around view;
- * `query`: a search with the bar open; `hereZone`: for PresenceControls); the screen does it, then
- * calls `host.requestHandled(request)`. Owner U2.
+ * [request] is what a link (a tapped notification among them) or another screen asked for
+ * (`aroundNow`: the Around view; `query`: a search with the bar open; `hereZone`: for
+ * PresenceControls); the screen does it, then calls `host.requestHandled(request)`. Owner U2.
  */
 @Composable
 fun PeopleScreen(
@@ -98,10 +99,10 @@ fun PeopleScreen(
 
     // The search bar: the text as typed, the query it settles into, the chip, and whether the
     // search is open over the Around home.
-    var input by remember(slug) { mutableStateOf("") }
-    var query by remember(slug) { mutableStateOf("") }
-    var aroundChip by remember(slug) { mutableStateOf(false) }
-    var findOpen by remember(slug) { mutableStateOf(false) }
+    var input by rememberSaveable(slug) { mutableStateOf("") }
+    var query by rememberSaveable(slug) { mutableStateOf("") }
+    var aroundChip by rememberSaveable(slug) { mutableStateOf(false) }
+    var findOpen by rememberSaveable(slug) { mutableStateOf(false) }
     var pendingHere by remember { mutableStateOf<String?>(null) }
     var focusSearch by remember { mutableStateOf(false) }
     val debounce = remember { DebounceJob() }
@@ -387,6 +388,13 @@ fun PeopleScreen(
                     variant = ButtonVariant.Tonal,
                     icon = LucideIcon.Search,
                 )
+            }
+        }
+        // The web's ForYouRow, last on the home and left out while a search shows.
+        val forYouRow = talks.forYouRow
+        if (!searching && forYouRow != null) {
+            item(key = "for-you", contentType = "for-you") {
+                Box(Modifier.fillMaxWidth().padding(top = PeopleScreenGap)) { forYouRow() }
             }
         }
     }

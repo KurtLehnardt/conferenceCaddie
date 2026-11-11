@@ -16,6 +16,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -26,11 +27,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import app.conferencecaddie.shared.NotificationTaps
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.people.PeopleAvailability
 import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleUiState
+import app.conferencecaddie.ui.ShellRequest
 import app.conferencecaddie.ui.components.CaddieIconButton
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.NeedsConnection
@@ -87,7 +89,14 @@ fun PeoplePageContent(page: PeoplePage, state: PeopleUiState, host: PeopleHost, 
 /** The sheets and the dialog that more than one people screen opens, drawn once: AskSheet, ReportSheet and the block confirmation. */
 @Composable
 fun PeopleSheets(state: PeopleUiState, host: PeopleHost) {
-    host.asking?.let { person -> AskSheet(person, state, host, onClose = host::closeAsk) }
+    val asking = host.asking
+    // After an activity's re-creation only the ref of the person asked of comes back; the sheet
+    // drops if the controller no longer knows them once it has finished loading.
+    val unknown = host.askingRef != null && asking == null && state.availability != PeopleAvailability.Loading
+    LaunchedEffect(unknown) {
+        if (unknown) host.closeAsk()
+    }
+    asking?.let { person -> AskSheet(person, state, host, onClose = host::closeAsk) }
     host.reporting?.let { target -> ReportSheet(target, host, onClose = host::closeReport) }
     host.blocking?.let { target -> BlockConfirmDialog(target.name, onConfirm = { host.block(target) }, onDismiss = host::closeBlock) }
 }
@@ -127,10 +136,15 @@ private fun CirclesOfflineNote() {
 class PeopleUi internal constructor(
     val state: PeopleUiState,
     val host: PeopleHost,
-    private val talks: PeopleTalks,
+    talks: PeopleTalks,
     private val online: Boolean,
-    private val searchable: Boolean,
+    searchable: Boolean,
+    private val slots: PeopleSlots = PeopleSlots(host),
 ) {
+    init {
+        slots.update(PeopleInputs(state, talks, online, searchable))
+    }
+
     /** True while the backend offers people features to this app (and over https, outside debug builds). */
     val enabled: Boolean get() = state.features.enabled
 
@@ -153,40 +167,27 @@ class PeopleUi internal constructor(
     )
 
     /** TabContent.people. */
-    val tab: @Composable () -> Unit = { PeopleType { PeopleTab(state, host, talks, online) } }
+    val tab: @Composable () -> Unit get() = slots.tab
 
     /** TabContent.peoplePage. */
-    val page: @Composable (PeoplePage) -> Unit = { page -> PeopleType { PeoplePageContent(page, state, host, talks, online) } }
+    val page: @Composable (PeoplePage) -> Unit get() = slots.page
 
     /** TabContent.settingsPeople: the people groups, once a conference is ready. */
-    val settings: @Composable ColumnScope.() -> Unit = { if (ready) PeopleType { SettingsPeople(state, host) } }
+    val settings: @Composable ColumnScope.() -> Unit get() = slots.settings
 
     /** TabContent.appBarActions: Requests on the People tab. */
-    val appBarActions: @Composable (Tab) -> Unit = { tab ->
-        if (tab == Tab.People && enabled && searchable) RequestsButton(badge, host::openInbox)
-    }
+    val appBarActions: @Composable (Tab) -> Unit get() = slots.appBarActions
 
     /**
      * TalkSheet's `peopleControls`: online, U1's [TalkPeopleControls]; offline, "Talk circles need a
-     * connection." for an Interested talk; null without people features.
+     * connection." for an Interested talk; null without people features. The lambda is the same
+     * instance across recompositions (it reads the latest state itself), so lists that take it can
+     * skip.
      */
-    val talkControls: (@Composable (Talk) -> Unit)?
-        get() = if (!ready) {
-            null
-        } else {
-            { talk ->
-                val interested = talk.talkId in talks.interested
-                PeopleType { if (online) TalkPeopleControls(talk.talkId, interested, state, host) else if (interested) CirclesOfflineNote() }
-            }
-        }
+    val talkControls: (@Composable (Talk) -> Unit)? get() = if (ready) slots.talkControls else null
 
-    /** InterestedScreen's `shareAll`: U1's [ShareAllControls], online with people features on, else null. */
-    val shareAll: (@Composable (List<String>) -> Unit)?
-        get() = if (online && ready) {
-            { ids -> PeopleType { ShareAllControls(ids, state, host) } }
-        } else {
-            null
-        }
+    /** InterestedScreen's `shareAll`: U1's [ShareAllControls], online with people features on, else null. Stable like [talkControls]. */
+    val shareAll: (@Composable (List<String>) -> Unit)? get() = if (online && ready) slots.shareAll else null
 
     /** True while one of the shared sheets or the block confirmation is open. */
     val hasSheet: Boolean get() = host.asking != null || host.reporting != null || host.blocking != null
@@ -196,12 +197,70 @@ class PeopleUi internal constructor(
     fun Sheets() = PeopleType { PeopleSheets(state, host) }
 }
 
+/** What the People layer's slots read: one value, so a slot changes by reading it and not by being made again. */
+internal class PeopleInputs(
+    val state: PeopleUiState,
+    val talks: PeopleTalks,
+    val online: Boolean,
+    val searchable: Boolean,
+)
+
+/**
+ * The slots of [PeopleUi] as lambdas that live as long as the [PeopleHost]. Each reads the latest
+ * [PeopleInputs] when it runs, so a new state recomposes what it draws, while the lambda itself stays
+ * the same instance and does not make the lists that hold it recompose.
+ */
+internal class PeopleSlots(private val host: PeopleHost) {
+    private val latest = mutableStateOf<PeopleInputs?>(null, referentialEqualityPolicy())
+
+    fun update(inputs: PeopleInputs) {
+        latest.value = inputs
+    }
+
+    private fun inputs(): PeopleInputs = checkNotNull(latest.value)
+
+    val tab: @Composable () -> Unit = {
+        val i = inputs()
+        PeopleType { PeopleTab(i.state, host, i.talks, i.online) }
+    }
+
+    val page: @Composable (PeoplePage) -> Unit = { page ->
+        val i = inputs()
+        PeopleType { PeoplePageContent(page, i.state, host, i.talks, i.online) }
+    }
+
+    val settings: @Composable ColumnScope.() -> Unit = {
+        val i = inputs()
+        if (i.state.features.enabled && i.state.availability == PeopleAvailability.Ready) PeopleType { SettingsPeople(i.state, host) }
+    }
+
+    val appBarActions: @Composable (Tab) -> Unit = { tab ->
+        val i = inputs()
+        if (tab == Tab.People && i.state.features.enabled && i.searchable) {
+            RequestsButton(if (i.state.features.enabled) i.state.inbox.count else 0, host::openInbox)
+        }
+    }
+
+    val talkControls: @Composable (Talk) -> Unit = { talk ->
+        val i = inputs()
+        val interested = talk.talkId in i.talks.interested
+        PeopleType { if (i.online) TalkPeopleControls(talk.talkId, interested, i.state, host) else if (interested) CirclesOfflineNote() }
+    }
+
+    val shareAll: @Composable (List<String>) -> Unit = { ids ->
+        val i = inputs()
+        PeopleType { ShareAllControls(ids, i.state, host) }
+    }
+}
+
 /**
  * The People layer for [controller], or null without one (no people features in this host). It
  * collects the controller's state; makes the [PeopleHost] (toasts through [showToast], talks
- * through [openTalk], links through [openUrl], moves through [navigation]); routes notification
- * taps (NotificationTaps: `caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`) and the
- * debug [launch] option once people features are on; and toasts the controller's notices.
+ * through [openTalk], links through [openUrl], moves through [navigation]); shows the people route
+ * of the shell's [request] (`ShellRequest.people`: a link from another app or a QR code, or a
+ * tapped notification's `caddie://people?around=1`, `caddie://inbox` or `caddie://meet/{id}`, all
+ * read by `AppLink`) and the debug [launch] option once people features are on; and toasts the
+ * controller's notices.
  */
 @Composable
 fun rememberPeopleUi(
@@ -214,6 +273,7 @@ fun rememberPeopleUi(
     showToast: (message: String, actionLabel: String?, action: (() -> Unit)?) -> Unit,
     openTalk: (talkId: String) -> Unit,
     openUrl: (url: String) -> Unit,
+    request: ShellRequest? = null,
 ): PeopleUi? {
     if (controller == null) return null
     val state by controller.state.collectAsState()
@@ -221,7 +281,8 @@ fun rememberPeopleUi(
     val toast by rememberUpdatedState(showToast)
     val talkOpener by rememberUpdatedState(openTalk)
     val urlOpener by rememberUpdatedState(openUrl)
-    val host = remember(controller, navigation) {
+    val memory = rememberSaveable(saver = PeopleHostMemory.Saver) { PeopleHostMemory() }
+    val host = remember(controller, navigation, memory) {
         PeopleHost(
             controller = controller,
             navigator = navigation,
@@ -229,18 +290,37 @@ fun rememberPeopleUi(
             toast = { message, action -> toast(message, action?.label, action?.onClick) },
             openTalk = { talkOpener(it) },
             openUrl = { urlOpener(it) },
+            memory = memory,
         )
     }
     val enabled by rememberUpdatedState(state.features.enabled)
 
-    // A tap waits until people features are on, so the tap that opened the app is not lost while
-    // the capabilities load; it is then handled once.
-    LaunchedEffect(host) {
-        NotificationTaps.taps.collect { link ->
-            snapshotFlow { enabled }.first { it }
-            PeopleLink.parse(link)?.let { route(it, host, navigation) }
-            NotificationTaps.handled()
+    // A people route waits until people features are on, so the notification tap or link that
+    // opened the app is not lost while the capabilities load; it is then shown once. The hand-off
+    // gave it up when the app took it, and the app keeps the request only in memory, so the waiting
+    // route is kept in saved state: an activity re-created meanwhile (a rotation, a theme change)
+    // still shows it. A newer request replaces one still waiting, and a route that was shown is
+    // cleared, so it never comes back after a re-creation.
+    var waiting by rememberSaveable { mutableStateOf<String?>(null) }
+    // The id of the last request taken in, so a request the app still holds is not queued again
+    // after a re-creation. Ids start over with the app's memory, so the id is forgotten once the
+    // app no longer holds a request.
+    var taken by rememberSaveable { mutableStateOf(0L) }
+    LaunchedEffect(request) {
+        if (request == null) {
+            taken = 0L
+            return@LaunchedEffect
         }
+        val people = request.people ?: return@LaunchedEffect
+        if (request.id == taken) return@LaunchedEffect
+        taken = request.id
+        waiting = encodePeopleRoute(people)
+    }
+    LaunchedEffect(host, waiting) {
+        val encoded = waiting ?: return@LaunchedEffect
+        snapshotFlow { enabled }.first { it }
+        waiting = null
+        decodePeopleRoute(encoded)?.let { route(it, host, navigation) }
     }
 
     var launched by rememberSaveable { mutableStateOf(false) }
@@ -249,38 +329,73 @@ fun rememberPeopleUi(
         snapshotFlow { enabled }.first { it }
         launched = true
         when (launch) {
-            PeopleLaunch.Home -> host.openPeople()
-            PeopleLaunch.Around -> host.openPeople(PeopleRequest(aroundNow = true))
+            is PeopleLaunch.Route -> route(launch.route, host, navigation)
             is PeopleLaunch.Search -> host.openPeople(PeopleRequest(query = launch.text))
-            PeopleLaunch.Profile -> host.openProfile()
-            PeopleLaunch.Inbox -> route(PeopleLink.Inbox, host, navigation)
-            is PeopleLaunch.Meet -> route(PeopleLink.Meet(launch.meetId), host, navigation)
             PeopleLaunch.SettingsPeople -> navigation.openSettings()
         }
     }
 
     // Work the controller did by itself (an automatic share as talks are marked) reports here, as
-    // the web's toast does, with "Open profile" when the message is about the profile.
+    // the web's toast does, with "Open profile" when the controller says the fix is on the profile.
     LaunchedEffect(state.notice) {
         val notice = state.notice ?: return@LaunchedEffect
-        if (notice.contains("profile")) toast(notice, PeopleCommonStrings.OPEN_PROFILE, host::openProfile) else toast(notice, null, null)
+        if (notice.opensProfile) {
+            toast(notice.message, PeopleCommonStrings.OPEN_PROFILE, host::openProfile)
+        } else {
+            toast(notice.message, null, null)
+        }
         controller.clearNotice()
     }
 
-    return PeopleUi(state, host, talks, online, searchable)
+    val slots = remember(host) { PeopleSlots(host) }
+    return PeopleUi(state, host, talks, online, searchable, slots)
 }
 
-/** Requests and Meet up open over the People tab, so Back returns there. */
-private fun route(link: PeopleLink, host: PeopleHost, navigation: ShellNavigation) {
-    when (link) {
-        is PeopleLink.People -> host.openPeople(if (link.aroundNow) PeopleRequest(aroundNow = true) else null)
-        PeopleLink.Inbox -> {
+/**
+ * Shows [route]. Requests and Meet up open over the People tab, so Back returns there; Profile opens
+ * over whatever shows, as from Settings on the web; a zone opens People with the presence setup on
+ * that zone, which turns nothing on until the person taps "I'm around" (PresenceControls).
+ */
+private fun route(route: AppLink.PeopleRoute, host: PeopleHost, navigation: ShellNavigation) {
+    when (route) {
+        is AppLink.PeopleRoute.Home -> host.openPeople(if (route.aroundNow) PeopleRequest(aroundNow = true) else null)
+        AppLink.PeopleRoute.Inbox -> {
             navigation.selectTab(Tab.People)
             host.openInbox()
         }
-        is PeopleLink.Meet -> {
+        is AppLink.PeopleRoute.Meet -> {
             navigation.selectTab(Tab.People)
-            host.openMeet(link.meetId)
+            host.openMeet(route.meetId)
         }
+        AppLink.PeopleRoute.Profile -> host.openProfile()
+        is AppLink.PeopleRoute.Here -> host.openPeople(PeopleRequest(hereZone = route.zone))
+    }
+}
+
+/**
+ * A people route as a short string, so a route that waits for people features can be kept in saved
+ * state: `home:1` or `home:0` (Around now on or off), `inbox`, `meet:<id>`, `profile` and
+ * `here:<zone>`. The zone is everything after the first colon, so it may hold colons and spaces.
+ */
+internal fun encodePeopleRoute(route: AppLink.PeopleRoute): String = when (route) {
+    is AppLink.PeopleRoute.Home -> if (route.aroundNow) "home:1" else "home:0"
+    AppLink.PeopleRoute.Inbox -> "inbox"
+    is AppLink.PeopleRoute.Meet -> "meet:${route.meetId}"
+    AppLink.PeopleRoute.Profile -> "profile"
+    is AppLink.PeopleRoute.Here -> "here:${route.zone}"
+}
+
+/** The route [encodePeopleRoute] wrote, or null for a string that is none (saved state of another version). */
+internal fun decodePeopleRoute(encoded: String): AppLink.PeopleRoute? {
+    val kind = encoded.substringBefore(':')
+    val rest = encoded.substringAfter(':', "")
+    return when {
+        encoded == "home:1" -> AppLink.PeopleRoute.Home(aroundNow = true)
+        encoded == "home:0" -> AppLink.PeopleRoute.Home(aroundNow = false)
+        encoded == "inbox" -> AppLink.PeopleRoute.Inbox
+        encoded == "profile" -> AppLink.PeopleRoute.Profile
+        kind == "meet" && rest.isNotEmpty() -> AppLink.PeopleRoute.Meet(rest)
+        kind == "here" && rest.isNotEmpty() -> AppLink.PeopleRoute.Here(rest)
+        else -> null
     }
 }

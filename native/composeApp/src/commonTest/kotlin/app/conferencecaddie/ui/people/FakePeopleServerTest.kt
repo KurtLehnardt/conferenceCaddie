@@ -49,6 +49,7 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -103,13 +104,20 @@ class FakePeopleServerTest {
         val keyValue = InMemoryPeopleKeyValue()
     }
 
+    /**
+     * A controller at the Alpha conference. The backend's conference list names it too, as a core's
+     * would: "Delete my profile" reaches every conference of the list that has not ended, and stays
+     * unfinished while the list is not known.
+     */
     private suspend fun TestScope.rig(caps: Capabilities = peopleOn, services: PeopleServices = PeopleServices(InMemorySecureStore())): Rig = Rig(this, virtualClock(), services).also {
+        val alpha = ConferenceInfo(slug, "Alpha Conference", "UTC")
         it.controller.updateContext(
             PeopleContext(
                 backend = testBackendUrl(),
                 capabilities = caps.forThisApp(),
-                conference = ConferenceInfo(slug, "Alpha Conference", "UTC"),
+                conference = alpha,
                 bundle = null,
+                listed = listOf(alpha),
             ),
         )
         runCurrent()
@@ -627,5 +635,27 @@ class FakePeopleServerTest {
         r.controller.turnOffBluetooth()
         assertFalse(radio.running)
         assertNull(r.server.bleKeyId(r.me), "ble: false ended the session")
+    }
+
+    @Test
+    fun aHeldRequestAppliesOnlyWhenReleasedAndOnlyTheNextOneIsHeld() = runTest {
+        val r = rig()
+        makeVisible(r)
+        val hold = r.server.hold("PUT", "/api/presence")
+        val first = async { r.controller.turnOnPresence("Hallway", "") }
+        runCurrent()
+        assertTrue(hold.hasArrived)
+        assertEquals(1, r.server.requests("PUT", "/api/presence").size, "the held request is recorded")
+        assertNull(r.me.zone, "the held request is not applied yet")
+        assertFalse(first.isCompleted)
+
+        hold.release()
+        runCurrent()
+        assertNull(first.await())
+        assertEquals("Hallway", r.me.zone)
+
+        // Only the first matching request was held.
+        assertNull(r.controller.turnOnPresence("Outside", ""))
+        assertEquals("Outside", r.me.zone)
     }
 }

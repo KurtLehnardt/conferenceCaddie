@@ -17,6 +17,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -160,6 +161,37 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         deleteFailureStatus = status
     }
 
+    /**
+     * One request held on its way in: the server has recorded it but answers, and applies it, only
+     * once [release] is called. Cancelling the caller while it is held drops the request unapplied.
+     */
+    class Hold internal constructor(internal val method: String, internal val path: String) {
+        private val arrived = CompletableDeferred<Unit>()
+        private val gate = CompletableDeferred<Unit>()
+
+        /** True once a matching request has reached the server and is waiting. */
+        val hasArrived: Boolean get() = arrived.isCompleted
+
+        internal suspend fun wait() {
+            arrived.complete(Unit)
+            gate.await()
+        }
+
+        /** Lets the held request be applied and answered. */
+        fun release() {
+            gate.complete(Unit)
+        }
+    }
+
+    @kotlin.concurrent.Volatile
+    private var holds: List<Hold> = emptyList()
+
+    /**
+     * Holds the next request with [method] to [path], and only that one, until [Hold.release]. For
+     * tests of what happens when the screen that asked has gone by the time the answer comes.
+     */
+    fun hold(method: String, path: String): Hold = Hold(method, path).also { holds = holds + it }
+
     /** The recorded requests with [method] to [path]. */
     fun requests(method: String, path: String): List<RecordedRequest> = requests.filter { it.method == method && it.path == path }
 
@@ -237,6 +269,11 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
 
     override suspend fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?, timeoutMs: Long, maxBytes: Long): HttpResponse {
         requests += RecordedRequest(method, url, headers, body?.decodeToString())
+        val request = RecordedRequest(method, url, headers, null)
+        holds.firstOrNull { it.method == method && it.path == request.path }?.let { held ->
+            holds = holds - held
+            held.wait()
+        }
         return answer(method, url, headers, body?.decodeToString())
     }
 
@@ -1132,6 +1169,15 @@ class FakePerson internal constructor(private val server: FakePeopleServer, inte
     val ref: String get() = doc.ref
     val displayName: String get() = doc.displayName
     val slug: String get() = doc.slug
+
+    /** True while this person is visible conference-wide, as the server stores it. */
+    val openToMeet: Boolean get() = doc.openToMeet
+
+    /** The talk ids this person shares for, as the server stores them. */
+    val sharedTalkIds: List<String> get() = doc.shared
+
+    /** The zone this person's presence is on in, or null while presence is off, as the server stores it. */
+    val zone: String? get() = doc.zone
 
     /** True while the profile is hidden after reports. */
     val hidden: Boolean get() = doc.hidden

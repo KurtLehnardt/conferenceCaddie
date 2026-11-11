@@ -5,6 +5,11 @@ import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.embed.BgeEmbedder
+import app.conferencecaddie.shared.importer.ImportConfidence
+import app.conferencecaddie.shared.importer.ImportInput
+import app.conferencecaddie.shared.importer.ImportRefusal
+import app.conferencecaddie.shared.importer.ImportResult
+import app.conferencecaddie.shared.importer.ScheduleImport
 import app.conferencecaddie.shared.search.Evidence
 import app.conferencecaddie.shared.search.ForYou
 import app.conferencecaddie.shared.search.SearchRequest
@@ -14,12 +19,15 @@ import app.conferencecaddie.shared.search.TopicSearch
 import java.io.File
 import java.time.Instant as JavaInstant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.fail
 import kotlin.time.Clock
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -137,6 +145,7 @@ class TalkSmokeTest {
         forYouChecks()
         scheduleChecks()
         relatedChecks()
+        importChecks()
         evidenceCheck()
         notApplicable()
 
@@ -527,6 +536,83 @@ class TalkSmokeTest {
                 results.all { it.talkId.startsWith("$primary:") && it.title.isNotEmpty() && it.url != null && it.kind == "talk" }
             report(ok, "rel1: related talks are up to five other talks of the same conference", "${results.size} results, the first is \"${results.firstOrNull()?.title}\"")
         }
+    }
+
+    // im1 to im5: "Import my schedule" on the device (ScheduleImport), with the smoke test's file: five
+    // real titles of the primary conference in a schedule as an attendee might save it.
+    private fun importChecks() {
+        val picks = importPicks(primary, 5)
+        val pickIds = picks.mapNotNull { it.str("talk_id") }.toSet()
+        val body = scheduleText(picks, conf(primary).bundle.conference.timeZone ?: "UTC")
+        fun deviceImport(slug: String, input: ImportInput): ImportResult {
+            val checked = ScheduleImport.check(input) as? ScheduleImport.Checked.Ok ?: error("refused")
+            return ScheduleImport.onDevice(checked.prepared, conf(slug).bundle)
+        }
+        fun exactHits(r: ImportResult) = r.matched.count { it.talk.talkId in pickIds && it.confidence == ImportConfidence.ExactTitle }
+        val before = runBlocking { listOf(primary, extra[0]).map { database.installedBundle("https://smoke.example\n$it") to database.interested("https://smoke.example\n$it") } }
+
+        check("im1: a text file with 5 real titles gets at least 4 matches at \"exact title\"") {
+            val r = deviceImport(primary, ImportInput.Text(body))
+            val exact = exactHits(r)
+            val foreign = r.matched.count { !it.talk.talkId.startsWith("$primary:") }
+            report(picks.size == 5 && exact >= 4 && foreign == 0, "im1: a text file with 5 real titles gets at least 4 matches at \"exact title\"",
+                "$exact of ${picks.size} at exact title, ${r.matched.size} matched, ${r.unmatchedCount} unmatched, ${r.extractedChars} characters")
+        }
+        val other = extra[0]
+        check("im2: the same file against $other gets none of the first conference's talks") {
+            val r = deviceImport(other, ImportInput.Text(body))
+            val primaryIds = conf(primary).bundle.talksById.keys
+            val crossed = r.matched.filter { it.talk.talkId in primaryIds || !it.talk.talkId.startsWith("$other:") }
+            report(crossed.isEmpty(), "im2: the same file against $other gets none of the first conference's talks",
+                if (crossed.isNotEmpty()) "${crossed.size} crossed, for example \"${crossed[0].talk.title}\"" else "${r.matched.size} matched, all of $other")
+        }
+        na("im3: a PDF goes through the attachment processor and finds the same talks", "native v1 reads no PDF (docs/NATIVE_PLAN.md, decision 8); a PDF file is refused before it is read, which CaddieCoreImportTest checks")
+        check("im3b: text the browser extracted from a PDF, sent with its file name and type, finds the same talks") {
+            // extractPdfText(makePdf(lines)) in the smoke test gives the lines back, one per line.
+            val extracted = body.split('\n').joinToString("\n")
+            val prepared = ScheduleImport.Prepared(extracted, "schedule.pdf", "text/plain", isFile = false)
+            val exact = exactHits(ScheduleImport.onDevice(prepared, conf(primary).bundle))
+            report(exact >= 4, "im3b: text the browser extracted from a PDF, sent with its file name and type, finds the same talks", "$exact of ${picks.size} at exact title")
+        }
+        check("im4: a 6 MB upload gets 413, and unknown keys, binary files and unknown conferences are refused") {
+            val big = ScheduleImport.check(ImportInput.File(ByteArray(6 * 1024 * 1024) { 0x41 }, "big.txt", "text/plain"))
+            val binary = ScheduleImport.check(ImportInput.File(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff.toByte(), 0xfe.toByte(), 0x00, 0x80.toByte()), "x.png", "image/png"))
+            val reasons = listOf(big, binary).map { (it as? ScheduleImport.Checked.Refused)?.reason }
+            report(reasons == listOf(ImportRefusal.TooLarge, ImportRefusal.Unsupported), "im4: a 6 MB upload gets 413, and unknown keys, binary files and unknown conferences are refused",
+                "6 MB ${reasons[0]}, binary ${reasons[1]} (unknown keys and conferences are HTTP validation: N/A; the device imports only into the selected conference's bundle)")
+        }
+        check("im5: an import adds nothing to any index") {
+            val after = runBlocking { listOf(primary, extra[0]).map { database.installedBundle("https://smoke.example\n$it") to database.interested("https://smoke.example\n$it") } }
+            report(after == before, "im5: an import adds nothing to any index", "the installed bundles and the Interested lists of $primary and $other are unchanged; the device import stores nothing")
+        }
+    }
+
+    // importPicks in scripts/smoke.mjs: n talks with a unique, printable ASCII title of four words or more, spread over the talk ids.
+    private fun importPicks(slug: String, n: Int): List<JsonObject> {
+        val talks = conf(slug).data.filter { it.kind() == "talk" }
+        val seen = talks.groupingBy { it.str("title") }.eachCount()
+        val pool = talks
+            .filter { t -> val title = t.str("title") ?: ""; seen[title] == 1 && title.isNotEmpty() && title.all { it in ' '..'~' } && title.trim().split(Regex("\\s+")).size >= 4 }
+            .sortedBy { it.str("talk_id") }
+        val step = maxOf(1, pool.size / n)
+        return pool.filterIndexed { i, _ -> i % step == 0 }.take(n)
+    }
+
+    // scheduleText in scripts/smoke.mjs: day headers, time ranges, titles, speakers, rooms and calendar links.
+    private fun scheduleText(talks: List<JsonObject>, timeZone: String): String {
+        val zone = ZoneId.of(timeZone)
+        val day = DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.US)
+        // Intl writes a narrow no-break space before AM and PM.
+        val time = DateTimeFormatter.ofPattern("h:mm\u202Fa", Locale.US)
+        fun at(iso: String) = JavaInstant.parse(OffsetIso.toInstant(iso)).atZone(zone)
+        val lines = mutableListOf("My schedule", "")
+        for (t in talks.sortedBy { JavaInstant.parse(OffsetIso.toInstant(it.str("start")!!)) }) {
+            val start = at(t.str("start")!!)
+            val end = at(t.str("end")!!)
+            val speakers = t["speakers"]?.jsonArray?.joinToString(", ") { it.jsonPrimitive.content } ?: ""
+            lines += listOf(day.format(start), "", "${time.format(start)} – ${time.format(end)}", t.str("title")!!, "Speakers: $speakers", (t["room"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: "Room 1", "Add to calendar", "")
+        }
+        return lines.joinToString("\n")
     }
 
     // b

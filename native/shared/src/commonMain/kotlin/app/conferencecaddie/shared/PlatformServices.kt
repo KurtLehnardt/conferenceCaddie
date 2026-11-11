@@ -2,9 +2,6 @@ package app.conferencecaddie.shared
 
 import app.conferencecaddie.shared.ble.BlePlatform
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
 
 // The platform services the people features need, next to the interfaces in Platform.kt. Each
@@ -62,14 +59,20 @@ interface LocationProvider {
     fun fixes(): Flow<GeoFix>
 }
 
-/** A native push token for the backend's native push registration route. */
+/**
+ * A native push token for the backend's native push registration route. The token addresses this
+ * device, so [toString] leaves it out: a log line or a failed assertion that prints a token shows
+ * only its channel, environment and length.
+ */
 data class PushToken(
     /** "apns" or "fcm". */
     val channel: String,
     val token: String,
     /** APNs only: "production" or "sandbox", from the build's signing. Null for FCM. */
     val environment: String? = null,
-)
+) {
+    override fun toString(): String = "PushToken(channel=$channel, token=<redacted, ${token.length} chars>, environment=$environment)"
+}
 
 /**
  * Native push (docs/NATIVE_PLAN.md, decision 3): only the official backend holds the APNs and FCM
@@ -90,29 +93,6 @@ interface PushRegistrar {
 /** Opens this app's page in the system settings, where a refused permission can be changed. */
 fun interface SystemSettings {
     fun openAppSettings()
-}
-
-/**
- * Deep links from tapped notifications, handed over by the platform host and read by the screens.
- * The links the app writes are `caddie://people?around=1`, `caddie://inbox` and
- * `caddie://meet/{meet_id}`; anything else is ignored by the screens.
- */
-object NotificationTaps {
-    private val flow = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 4)
-
-    /** Taps not yet handled; the newest is replayed to a screen that starts after the tap. */
-    val taps: SharedFlow<String> = flow.asSharedFlow()
-
-    /** Called by the platform host when a notification is tapped. */
-    fun deliver(deepLink: String) {
-        flow.tryEmit(deepLink)
-    }
-
-    /** Called by the screens once a tap is handled, so it is not replayed again. */
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    fun handled() {
-        flow.resetReplayCache()
-    }
 }
 
 /** Everything the people features need from the platform, passed in once at start-up. */

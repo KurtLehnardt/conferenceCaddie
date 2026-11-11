@@ -204,6 +204,95 @@ object Strings {
         const val CLEAR = "Clear"
     }
 
+    /** web/src/components/schedule.tsx: the day chips, My schedule's Day timeline and the full schedule. */
+    object Schedule {
+        const val TODAY = "Today"
+        const val NOW = "Now"
+        const val EVENT = "Event or showcase"
+        fun interested(title: String) = "I'm interested: $title"
+        const val LOADING = "Loading the schedule…"
+        const val JUMP_TO_NOW = "Jump to now"
+        const val NOTHING_MATCHES = "Nothing on this day matches. Try removing a filter."
+        const val NO_TALKS = "No talks are listed yet."
+        const val UNAVAILABLE = "The schedule is unavailable right now."
+
+        /** "Tue, Nov 10 · 12 talks", or results when events and showcases are included. */
+        fun count(day: String, n: Int, events: Boolean) =
+            "$day · $n ${if (events) (if (n == 1) "result" else "results") else (if (n == 1) "talk" else "talks")}"
+
+        fun footnote(zone: String) = "Times are in the event's local time ($zone). Your own schedule lives on the official site."
+    }
+
+    /**
+     * web/src/components/import.tsx, without PDF: decision 8 of docs/NATIVE_PLAN.md leaves PDF out of
+     * the native apps, so the lines that name the file types are native only.
+     */
+    object Import {
+        const val TITLE = "Import my schedule"
+        fun lead(name: String) =
+            "Have a schedule from the official site, a calendar or a spreadsheet? Find its talks at $name and mark them as Interested."
+        const val READING = "Reading your schedule…"
+        const val CANCEL = "Cancel"
+        const val CHOOSE_FILE = "Choose a file"
+
+        /** Native only: the web's line without PDF. */
+        const val FORMATS = "CSV, plain text, calendar (.ics) or JSON, up to 5 MB."
+        const val PASTE_TOGGLE = "Paste text instead"
+        const val PASTE_LABEL = "Your schedule's text"
+        const val PASTE_PLACEHOLDER = "Paste the talk titles, one per line, or the whole page"
+        const val FIND_TALKS = "Find talks"
+
+        /** Native only: a file another app opened in or shared to the app, waiting for a tap. */
+        fun offered(name: String) = "Find this conference's talks in “$name”?"
+        const val UNNAMED_FILE = "the file you shared"
+        const val NOTE = "Your file is read once to find matching talks and is not stored."
+        fun marked(n: Int) = "Marked ${plural(n, "talk", "talks")} as Interested"
+        const val DONE_BODY = "They are in My schedule on this device, by day and time."
+        const val UNDO = "Undo"
+        const val VIEW_SCHEDULE = "View my schedule"
+        fun found(n: Int, name: String) = "Found ${plural(n, "talk", "talks")} at $name."
+        fun noneFound(name: String) = "No talks at $name were found in this file."
+        fun unmatched(n: Int) = " ${plural(n, "other entry", "other entries")} did not match a talk here."
+        const val FEW = "Few entries matched. Is this schedule for another conference?"
+        const val SWITCH = "Switch conference"
+        const val HELP = "Matches marked “please check” are left unticked. Tick the ones that are right."
+        const val ALREADY = "Already in Interested"
+        const val EXACT_TITLE = "Exact title"
+        const val TITLE_AND_SPEAKER = "Title and speaker match"
+        const val TITLE_AND_TIME = "Title and time match"
+        const val TITLE_WORDS = "Similar title, please check"
+        fun fromFile(excerpt: String) = "From your file: “$excerpt”"
+        const val START_OVER = "Start over"
+        fun mark(n: Int) = "Mark ${plural(n, "talk", "talks")} as Interested"
+        const val NOTHING = "Nothing to mark"
+
+        const val TOO_LARGE = "That file is larger than 5 MB. Export a shorter schedule, or paste its text instead."
+        const val EMPTY_FILE = "That file is empty."
+        const val PASTE_EMPTY = "Paste the text of your schedule first."
+        const val PASTE_TOO_LONG = "That text is too long. Paste at most 200,000 characters."
+        const val UNAVAILABLE = "Import is unavailable right now. Please try again."
+        const val UNOPENABLE = "That file could not be opened on this device."
+
+        /** Native only: the web's message without PDF. */
+        const val UNSUPPORTED = "That file type is not supported. Use a CSV, plain text, calendar (.ics) or JSON file."
+
+        /** Native only: a PDF, Word, OpenDocument or RTF file, which the apps do not read (decision 8). */
+        const val DOCUMENT =
+            "PDF and Word files can't be read in the app. Export the schedule as text, CSV or a calendar (.ics) file, or paste its text instead."
+
+        /** Native only: the web's message without the PDF advice. */
+        const val UNREADABLE = "No text could be read from that file. Export the schedule as text or CSV instead."
+
+        private fun plural(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
+    }
+
+    /** Native only: sharing My schedule through the system's share sheet (Interested options). */
+    object Share {
+        const val SHARE_LIST = "Share list"
+        fun subject(conference: String) = "My schedule at $conference"
+        fun footer(zone: String) = "Times are in the event's local time ($zone). Shared from Conference Caddie."
+    }
+
     /** web/src/people/ForYou.tsx and web/src/app.tsx. */
     object ForYou {
         const val LEDE = "Talks picked from what you want to learn. Ended talks and talks you marked are left out."
@@ -217,6 +306,11 @@ object Strings {
         const val WHY_LABEL = "You want to learn:"
         const val INTERESTED_ON = "Interested"
         const val DEGRADED = "Meaning-based matching is paused right now; these are keyword matches."
+
+        /** ForYouRow on the People home: its title, the link to the For you tab and a card's reason. */
+        const val ROW_TITLE = "For you"
+        const val SEE_ALL = "See all"
+        fun rowWhy(learn: List<String>) = "Learn: ${learn.joinToString(", ")}"
 
         /** Native only: For you also suggests talks like the ones marked, so the lede says so. */
         const val LEDE_NATIVE = "Talks picked from what you want to learn and the talks you marked. Ended talks and talks you marked are left out."
@@ -339,7 +433,9 @@ object Strings {
         const val PROFILE = "Profile"
         const val SET_UP_PROFILE = "Set up your profile"
         const val IMPORT = "Import my schedule"
-        const val IMPORT_HINT = "Find talks from a PDF, CSV, calendar or text file"
+        /** Native only: the web's hint without PDF (decision 8 of docs/NATIVE_PLAN.md). */
+        const val IMPORT_HINT = "Find talks from a CSV, calendar or text file"
+        const val IMPORT_NEEDS_CONFERENCE = "Open a conference first"
         const val APPEARANCE = "Appearance"
         const val THEME = "Theme"
         const val THEME_SYSTEM = "System"

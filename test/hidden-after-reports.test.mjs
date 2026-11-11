@@ -19,6 +19,8 @@ import { fake, EVENT, FUTURE, newDevice, request, profileBody, esError } from '.
 const { handlePeopleApi } = await import('../server/people.mjs');
 const { handleConnectApi } = await import('../server/connect.mjs');
 const { nudgeAfterPresence } = await import('../server/nudge.mjs');
+// The pause between the two pushes of a pair, which these tests do not wait for.
+const NO_PAUSE = { pause: async () => {} };
 const { refFor } = await import('../server/device.mjs');
 
 const CONF = { slug: EVENT, timeZone: 'UTC', visibleUntil: FUTURE };
@@ -53,7 +55,7 @@ const nudgeRecords = () => [...fake.store('caddie-people-nudges').keys()];
 describe('push nudge', () => {
   test('an ordinary strong match in the same zone is nudged, without any spot line', async () => {
     const { me } = await pair();
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     assert.equal(nudgeRecords().length, 1);
     assert.equal(fake.pushes.length, 2, 'both people are nudged');
     for (const p of fake.pushes) {
@@ -64,7 +66,7 @@ describe('push nudge', () => {
 
   test('a trigger hidden after reports sends nothing and runs no query', async () => {
     const { me } = await pair({ trigger: { hidden: true } });
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     assert.equal(fake.pushes.length, 0);
     assert.equal(nudgeRecords().length, 0);
     assert.equal(fake.peopleSearches().length, 0);
@@ -72,13 +74,13 @@ describe('push nudge', () => {
 
   test('a trigger hidden after reports with its spot hidden too sends nothing', async () => {
     const { me } = await pair({ trigger: { hidden: true, spot_hidden: true, presence_spot: null } });
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     assert.equal(fake.pushes.length, 0);
   });
 
   test('a sample trigger sends nothing and runs no query', async () => {
     const { me } = await pair({ trigger: { sample: true } });
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     assert.equal(fake.pushes.length, 0);
     assert.equal(nudgeRecords().length, 0);
     assert.equal(fake.peopleSearches().length, 0);
@@ -86,14 +88,14 @@ describe('push nudge', () => {
 
   test('a sample profile around in the same zone is never paired with a real attendee', async () => {
     const { me } = await pair({ other: { sample: true } });
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     assert.equal(fake.pushes.length, 0);
     assert.equal(nudgeRecords().length, 0);
   });
 
   test('a match hidden after reports is never paired', async () => {
     const { me } = await pair({ other: { hidden: true } });
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
     assert.equal(fake.pushes.length, 0);
     assert.equal(nudgeRecords().length, 0);
   });

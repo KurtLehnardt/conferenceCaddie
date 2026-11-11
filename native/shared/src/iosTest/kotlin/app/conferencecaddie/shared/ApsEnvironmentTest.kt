@@ -33,4 +33,11 @@ class ApsEnvironmentTest {
         assertEquals("production", ApsEnvironment.fromProfile(profile("<key>get-task-allow</key><true/>")))
         assertEquals("production", ApsEnvironment.fromProfile(ByteArray(0)))
     }
+
+    @Test
+    fun aSimulatorWithoutAProfileMeansTheSandboxAndADeviceWithoutOneProduction() {
+        assertEquals("sandbox", ApsEnvironment.resolve(null, simulator = true))
+        assertEquals("production", ApsEnvironment.resolve(null, simulator = false))
+        assertEquals("production", ApsEnvironment.resolve(profile("<key>aps-environment</key><string>production</string>"), simulator = true))
+    }
 }

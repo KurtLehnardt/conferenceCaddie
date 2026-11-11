@@ -13,7 +13,9 @@ import app.conferencecaddie.shared.ble.runningInSimulator
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import platform.CoreFoundation.CFRetain
 import platform.Foundation.CFBridgingRelease
@@ -129,7 +131,7 @@ object IosSelfTest {
      * access reads Precise and one fix arrives within 15 seconds.
      */
     suspend fun location(): String {
-        val provider = IosLocationProvider()
+        val provider = withContext(Dispatchers.Main) { IosLocationProvider() }
         val access = provider.requestAccess()
         if (access != LocationAccess.Precise) return "failed: access is $access"
         val fix = withTimeoutOrNull(15.seconds) { provider.fixes().first() } ?: return "failed: no position within 15 s"

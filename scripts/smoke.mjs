@@ -26,6 +26,7 @@
 //                        fixtures: POST /admin/test/profile (the expired profile),
 //                        POST /admin/test/age-presence (the aged presence) and GET /admin/stats (the
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
+//                        The reports the run makes are removed at the end with POST /admin/moderation.
 //                        The token is only ever sent as an Authorization header to API_BASE.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
@@ -458,6 +459,9 @@ function profileBody(event, who, { learn = [], speak = [], about = '', interests
 
 // Test profiles created in this run, so they can be removed at the end.
 const created = []; // { device, event }
+// The refs the report check (q10) reported. Reports are never purged automatically, so with an
+// admin token the run removes them again through POST /admin/moderation (action unhide).
+const reportedRefs = [];
 async function putProfile(device, event, who, opts, { open = false, shared = [] } = {}) {
   const r = await api('PUT', '/api/people/profile', { event, profile: profileBody(event, who, opts), open_to_meet: open, shared_talk_ids: shared }, { device, label: `${who}-put` });
   if (r.status === 200 && !created.some((c) => c.device === device && c.event === event)) created.push({ device, event });
@@ -642,6 +646,21 @@ if (!IS_WORKER) {
     // With the real token, an Origin header must still be refused, because a browser page must never reach admin.
     if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { Authorization: `Bearer ${ADMIN_TOKEN}`, Origin: SMOKE_ORIGIN })));
     report(problems.length === 0, 'adm1: the admin routes answer 404 without a valid token and send no CORS headers', problems.length ? problems.join('; ') : `${ADMIN_TOKEN ? 3 : 2} requests, all 404 without CORS headers`);
+  });
+}
+
+// A sanity check of the daily meter behind X-Caddie-Pace and the soft caps: five requests must
+// raise the day's counts by at least five. One run does not replace the conference object, so
+// this does not prove that a replaced object keeps its counts.
+if (IS_WORKER && ADMIN_TOKEN) {
+  await check('meter1: the daily usage meter counts requests (sanity check)', async () => {
+    const usage = async () => (await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`)).json.usage ?? null;
+    const before = await usage();
+    for (let i = 0; i < 5; i++) await api('GET', `/api/topics?event=${encodeURIComponent(PRIMARY)}`, undefined, { label: 'meter' });
+    const after = await usage();
+    const sameDay = before && after && before.day === after.day;
+    const ok = Boolean(before && after) && (!sameDay || (after.requests >= before.requests + 5 && after.rows_read >= before.rows_read && after.rows_written >= before.rows_written));
+    report(ok, 'meter1: the daily usage meter counts requests (sanity check)', before && after ? `requests ${before.requests} then ${after.requests}, rows read ${before.rows_read} then ${after.rows_read}` : 'no usage in /admin/stats');
   });
 }
 
@@ -1494,6 +1513,35 @@ try {
     report(ok, 'q3: presence needs a visible profile', `no profile ${none.status} ${none.json.error}, circle-only ${circleOnly.status} ${circleOnly.json.error}, unknown zone ${badZone.status}`);
   });
 
+  // The Worker accepts a push subscription only on a known browser push service host, so a
+  // profile can never make it send signed requests to a host of its choosing. The accepted
+  // subscription is removed again at once.
+  if (IS_WORKER) {
+    await check('push1: a push subscription must point at a known push service', async () => {
+      const P = newDevice();
+      // A visible profile with no words of the other checks, deleted again below so it never shows up in them.
+      const made = await putProfile(P, PRIMARY, 'P', { about: 'Push subscription check.' }, { open: true });
+      if (made.status !== 200) throw new Error(`the push test profile gave ${made.status}`);
+      const ecdh = crypto.createECDH('prime256v1');
+      ecdh.generateKeys();
+      const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
+      const sub = (endpoint) => api('PUT', '/api/push/subscription', { event: PRIMARY, subscription: { endpoint, keys } }, { device: P, label: 'P-push' });
+      const problems = [];
+      for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x']) {
+        const r = await sub(endpoint);
+        if (r.status !== 400) problems.push(`${new URL(endpoint).host} gave ${r.status}`);
+      }
+      const good = `https://fcm.googleapis.com/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
+      const ok = await sub(good);
+      if (ok.status !== 200) problems.push(`fcm.googleapis.com gave ${ok.status}`);
+      const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
+      if (del.status !== 200) problems.push(`delete gave ${del.status}`);
+      const gone = await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: P, label: 'P-delete' });
+      if (gone.status !== 200) problems.push(`profile delete gave ${gone.status}`);
+      report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals and other ports refused; fcm.googleapis.com accepted and removed');
+    });
+  }
+
   await check('q4: a listed word is rejected', async () => {
     if (!WORDLIST.length) throw new Error('config/moderation-words.json has no words');
     const word = WORDLIST[0];
@@ -1771,6 +1819,7 @@ try {
     const beforeB = await seenBy(B, 'B');
     if (!beforeA.ref) throw new Error('R is not in A\'s matches before any report');
     const refR = beforeA.ref;
+    reportedRefs.push(refR);
     const reportR = (device, who, reason = 'spam') => api('POST', '/api/people/report', { event: PRIMARY, ref: refR, context: { kind: 'profile', id: refR }, reason }, { device, label: `${who}-report` });
     const first = await reportR(A, 'A');
     const again = await reportR(A, 'A', 'other');
@@ -2139,6 +2188,15 @@ try {
 } catch (err) {
   report(false, 'people checks', err.message);
 } finally {
+  // Remove the reports the run made, while their target still exists, so none is left behind.
+  if (WRITE_MODE === 'admin') {
+    for (const ref of reportedRefs) {
+      // A failed cleanup is a FAIL, so a run never claims to leave no reports when it did.
+      const r = await admin('POST', `/admin/moderation?event=${encodeURIComponent(PRIMARY)}`, { action: 'unhide', kind: 'profile', id: ref })
+        .catch((err) => ({ status: 0, json: { error: err.message } }));
+      if (r.status !== 200) report(false, 'cleanup: reports', `unhide of a reported test profile gave ${r.status}; remove its reports by hand`);
+    }
+  }
   // Remove every test profile, whatever happened above.
   for (const { device, event } of created) {
     await api('DELETE', `/api/people/profile?event=${encodeURIComponent(event)}`, undefined, { device, label: 'cleanup' }).catch(() => {});

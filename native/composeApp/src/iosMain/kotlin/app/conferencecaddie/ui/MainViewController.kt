@@ -7,6 +7,7 @@ import app.conferencecaddie.shared.IosPeopleServices
 import app.conferencecaddie.shared.IosSelfTest
 import app.conferencecaddie.shared.core.IosCore
 import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
+import app.conferencecaddie.ui.platform.IosPlatformActions
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.talks.CaddieApp
 import app.conferencecaddie.ui.talks.EmbeddingModel
@@ -68,6 +69,7 @@ fun MainViewController(): UIViewController {
             talkLaunch = talkLaunch,
             embedder = { EmbeddingModel.load() },
             people = people,
+            platform = IosPlatformActions,
         )
     }.also { HostController.current = it }
 }

@@ -16,7 +16,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import app.conferencecaddie.FakeBleHardware.Companion.ad
-import app.conferencecaddie.shared.NotificationTaps
 import app.conferencecaddie.shared.ble.AndroidBleRadio
 import app.conferencecaddie.shared.ble.BleAccess
 import app.conferencecaddie.shared.ble.BleGattAnswer
@@ -34,13 +33,6 @@ import app.conferencecaddie.shared.ble.BleStopReason
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.onSubscription
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -241,20 +233,16 @@ class BleServiceLifecycleTest {
 
     @Test
     fun theNotificationOpensWhoIsAround() {
-        NotificationTaps.handled()
         val taps = CopyOnWriteArrayList<String>()
-        val subscribed = CompletableDeferred<Unit>()
-        val watch = CoroutineScope(Dispatchers.Default).launch {
-            NotificationTaps.taps.onSubscription { subscribed.complete(Unit) }.collect { taps += it }
-        }
+        val watch = IncomingLinks.watch(taps)
         // Started the way the launcher starts it, in the app's own task, so the tap reaches it through
         // onNewIntent (ActivityScenario would put it in the test's task, and a tap would open a second).
         val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val activity = instrumentation.startActivitySync(launch)
         try {
-            runBlocking { withTimeout(5_000) { subscribed.await() } }
             radio.start(config(), Source(payload(1)), Events())
             assertTrue(waitFor { fake.advertising != null && ongoing() != null })
+            // The tap carries the app's tap key, so the exported activity hands the link on.
             ongoing()!!.contentIntent.send()
             assertTrue(waitFor { taps.contains("caddie://people?around=1") })
         } finally {

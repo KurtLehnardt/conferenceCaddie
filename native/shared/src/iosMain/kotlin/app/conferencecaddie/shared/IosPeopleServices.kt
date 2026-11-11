@@ -22,6 +22,8 @@ object IosPeopleServices {
      * Settings app, and Bluetooth proximity on Core Bluetooth ([IosBleRadio], always the same one)
      * with its key in the Keychain ([IosBleKeyStore]). Call it on the main thread, from the app
      * (never from tests: the push registrar and the settings link reach UIApplication when used).
+     * The main thread matters: the location manager is created here, eagerly, and Core Location
+     * wants it made where its callbacks are delivered.
      */
     fun create(): PeopleServices {
         val notifier = IosNotifier()

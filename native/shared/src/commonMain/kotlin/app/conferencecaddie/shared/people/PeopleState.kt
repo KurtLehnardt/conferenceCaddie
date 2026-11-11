@@ -26,11 +26,19 @@ data class PeopleContext(
     /** The talks marked Interested at the selected conference, oldest first. */
     val interested: List<String> = emptyList(),
     /**
-     * True when this launch keeps the app's data, the people records included, in memory only,
-     * because the stored database could not be opened ([CoreState.storageInMemory]). The device
-     * credential is in the secure store and is not affected.
+     * True when this launch keeps the app's data in memory only, because the stored database could
+     * not be opened ([CoreState.storageInMemory]). The people records have a file of their own
+     * ([PeopleDatabase]), but a launch whose main database failed is treated as one whose records
+     * may not last either, so the controller creates nothing on the server that this phone could
+     * lose track of. The device credential is in the secure store and is not affected.
      */
     val storageInMemory: Boolean = false,
+    /**
+     * Every conference the backend's list names, the selected one included, or empty while the list
+     * is not known. "Delete my profile" reaches the ones still live ([ConferenceWindow]) even when the
+     * device's records were lost, and the Android background check reads the selected one's dates.
+     */
+    val listed: List<ConferenceInfo> = emptyList(),
 ) {
     companion object {
         /**
@@ -46,8 +54,8 @@ data class PeopleContext(
                 else -> Capabilities.None
             }
             val bundle = (state.bundle as? BundleState.Ready)?.bundle?.takeIf { it.conference.slug == state.selectedSlug }
-            val listed = (state.conferences as? ConferencesState.Ready)?.conferences
-                ?.firstOrNull { it.conference.slug == state.selectedSlug }?.conference
+            val all = (state.conferences as? ConferencesState.Ready)?.conferences.orEmpty().map { it.conference }
+            val listed = all.firstOrNull { it.slug == state.selectedSlug }
             val conference = (bundle?.conference ?: listed)?.let {
                 ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate)
             }
@@ -58,6 +66,7 @@ data class PeopleContext(
                 bundle,
                 if (conference != null) state.interested else emptyList(),
                 storageInMemory = state.storageInMemory,
+                listed = all.map { ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate) },
             )
         }
     }
@@ -102,7 +111,10 @@ data class PeopleFeatures(
 
 /** Whether the people screens have anything to show. */
 enum class PeopleAvailability {
-    /** The backend's capabilities are not known yet. */
+    /**
+     * The backend's capabilities are not known yet, or the people records of this backend could not
+     * be read yet (the controller tries again on the next change, the next action and on a timer).
+     */
     Loading,
 
     /** The backend offers no people features: the People tab is hidden. */
@@ -271,5 +283,16 @@ data class PeopleUiState(
     val ble: BleView = BleView(),
     val around: AroundView = AroundView(),
     /** A message from work the controller did on its own (an automatic share), for a toast; clear with [PeopleController.clearNotice]. */
-    val notice: String? = null,
+    val notice: PeopleNotice? = null,
+)
+
+/**
+ * A toast from work the controller did on its own, such as the automatic share of "sharing follows
+ * Interested". The controller decides whether the toast offers "Open profile", so no screen has to
+ * read the wording.
+ */
+data class PeopleNotice(
+    val message: String,
+    /** True when the fix is on the profile screen: the toast offers "Open profile" (web/src/app.tsx). */
+    val opensProfile: Boolean,
 )

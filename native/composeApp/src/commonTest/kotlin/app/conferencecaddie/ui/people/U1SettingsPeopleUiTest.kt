@@ -8,6 +8,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -15,9 +18,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import app.conferencecaddie.shared.people.BlockedPerson
 import app.conferencecaddie.shared.people.MetPerson
+import app.conferencecaddie.shared.people.PeopleAvailability
+import app.conferencecaddie.shared.people.PeopleKeyValue
 import app.conferencecaddie.shared.people.PushView
 import app.conferencecaddie.shared.people.Watch
 import app.conferencecaddie.ui.shell.ShellNavigation
@@ -27,6 +33,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 
 // The people groups of Settings (web SettingsPeople.tsx): Blocked people read from the server and
 // unblocked, People I met and People I'm watching removed, and the groups in the web's order. Run
@@ -117,5 +125,57 @@ class U1SettingsPeopleUiTest {
         val tops = listOf("set-blocked", "set-met", "set-watch", "set-nudges", "set-push").map { onNodeWithTag(it).getUnclippedBoundsInRoot().top }
         assertEquals(tops.sorted(), tops)
         assertEquals(tops.size, tops.toSet().size)
+    }
+
+    @Test
+    fun aDoubleTapOnRemoveRemovesOnePerson() = runComposeUiTest {
+        u1WaitReady(f)
+        // A controller of its own over records whose writes the test can hold, so the double tap
+        // lands while the first removal is still running.
+        val records = HeldKeyValue()
+        val controller = testPeopleController(f.server, f.scope, f.clock, keyValue = records).also { it.bind(f.core.state) }
+        try {
+            u1WaitOrDump("the second controller") { controller.state.value.availability == PeopleAvailability.Ready }
+            f.act {
+                controller.saveMet("Avery", "")
+                controller.saveMet("Blake", "")
+            }
+            val host = PeopleHost(controller, ShellNavigation(), f.scope, { _, _ -> }, {}, {})
+            setContent {
+                TestPhone {
+                    CaddieTheme {
+                        val state by controller.state.collectAsState()
+                        Column(Modifier.verticalScroll(rememberScrollState())) { PeopleIMet(state, host) }
+                    }
+                }
+            }
+            u1WaitForTag("met-remove-0")
+            onNodeWithText("Avery").assertIsDisplayed()
+
+            records.held.value = true
+            onNodeWithTag("met-remove-0").performTouchInput { doubleClick() }
+            // While Avery's removal runs, her Remove is off.
+            onNodeWithTag("met-remove-0").assertIsNotEnabled()
+            records.held.value = false
+            u1WaitGone(hasText("Avery"))
+            onNodeWithText("Blake").assertIsDisplayed()
+            onNodeWithTag("met-remove-0").assertIsEnabled()
+            assertEquals(listOf("Blake"), controller.state.value.met.map { it.displayName })
+        } finally {
+            controller.close()
+        }
+    }
+}
+
+/** People records in memory whose writes wait while [held] is true. */
+private class HeldKeyValue : PeopleKeyValue {
+    private val values = HashMap<String, String>()
+    val held = MutableStateFlow(false)
+
+    override suspend fun get(key: String): String? = values[key]
+
+    override suspend fun set(key: String, value: String?) {
+        held.first { !it }
+        if (value == null) values.remove(key) else values[key] = value
     }
 }

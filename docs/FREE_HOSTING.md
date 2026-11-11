@@ -4,35 +4,39 @@ This page describes the free version of Conference Caddie, which has no expiry a
 
 ## What you need to do next (read this first)
 
-The free stack is built, reviewed and fixed, but it is **not deployed**, and four things only you can do stand in the way. Nothing below has been done on your behalf. The app now lives on the Worker's own address, not on GitHub Pages (see [Where the app lives](#where-the-app-lives-and-why)).
+The free stack is **live** at https://conference-caddie.krlehnardt.workers.dev since 2026-11-11 (UTC). The web app and the API share that one origin; there is no separate API Worker. The deploy, the secrets, the migration, the repository variables, both workflows, the live checks and the new QR code are done (see [Status](#status-on-2026-11-11)). These things are left, and only you can do them:
 
-1. **Create a Cloudflare API token** with these Account permissions: Workers Scripts: Edit, Workers AI: Read and Account Settings: Read. The current token lacks Workers Scripts: Edit, so every call on a named Worker script answers HTTP 403.
-2. **Open Workers & Pages once** in the Cloudflare dashboard, so the account gets a `workers.dev` subdomain. (`worker/scripts/deploy.sh` can also create it, but only with the new token.)
-3. **Put the new token in `CLOUDFLARE_API_TOKEN`** (and keep `CLOUDFLARE_ACCOUNT_ID` set).
-4. **Run the deploy steps** in [Go live](#go-live-about-10-minutes): `bash worker/scripts/deploy.sh` (it builds the app and prints its URL), then `node worker/scripts/setup-secrets.mjs --only-missing`, then the migration, the repository variables `CADDIE_APP_URL` and `CADDIE_API_BASE`, the two workflows, the smoke script and the new QR code, exactly as listed there.
+1. **Delete any Cloudflare API token that is no longer used**, in the Cloudflare dashboard. Keep only the token the deploy uses, and make sure that is the one your shell exports as `CLOUDFLARE_API_TOKEN`.
+2. **Open the app on a phone and scan the new QR code** (`docs/demo/qr-kubecon.png`) once this change is merged.
+3. **Point the Android build at the Worker** (step 1 of [Approvals needed](#approvals-needed-shutting-down-the-paid-stack)). It is not irreversible, but installed APKs keep calling Cloud Run until it is done.
 
 One decision is also yours:
 
-- **Approve, step by step, the shutdown of the paid stack** (Cloud Run, Artifact Registry, Secret Manager, Elastic, billing). The full list with commands is in [Approvals needed](#approvals-needed-shutting-down-the-paid-stack). Several steps are irreversible. None has been done, and none should happen until the free stack has passed the live smoke for a full day and the Android build points at the Worker.
+- **The paid stack keeps running until you approve its shutdown.** Cloud Run, Artifact Registry, Secret Manager, Elastic and billing stay as they are until you approve, step by step, the shutdown steps already listed in [Approvals needed](#approvals-needed-shutting-down-the-paid-stack). Several steps are irreversible. None has been done, and none should happen until the free stack has passed the live smoke for a full day and the Android build points at the Worker.
 
 The detailed findings and checks are in [REVIEW_NOTES_FREE.md](../REVIEW_NOTES_FREE.md).
 
-## Status on 2026-11-10
+## Status on 2026-11-11
 
-The code is finished and tested locally, but **the Worker is not deployed yet**, so the free stack is not live.
+The free stack is **live** at https://conference-caddie.krlehnardt.workers.dev. Everything below was run against the deployed Worker on 2026-11-11 (UTC).
 
-- The Cloudflare API token in `CLOUDFLARE_API_TOKEN` is active and Workers AI works with it. Every call on a named Worker script (upload, secrets) answers HTTP 403 "No access to the specified resource", and so do `/workers/subdomain` and `/workers/durable_objects/namespaces`. The token therefore lacks the permission **Workers Scripts: Edit**, even though the brief said it had it. There is no wrangler login on the build machine to fall back on.
-- GitHub Pages is enabled (source: GitHub Actions). The Pages workflow publishes the talk bundles and a landing page on every push to `main` that changes the conference data, `config/`, the contracts or the bundle builder, and on a weekly schedule, without waiting for the Worker. The landing page says the app is "not live yet" until the repository variable `CADDIE_APP_URL` is set. The ingest workflow skips with a notice while the repository variable `CADDIE_API_BASE` and the secret `CADDIE_ADMIN_TOKEN` are unset, so it does not fail.
-- The last full local run of the ported smoke script (`scripts/smoke.mjs`), against a local Worker serving the Worker-mode app and the API on one port with real Workers AI embeddings, gave 93 PASS, 0 FAIL, 0 SKIP. That includes the new check `host1` (the app's security and cache headers). A browser run at 390x844 loaded a deep link directly, switched tabs, created and deleted a profile, saw the service worker register at scope `/`, and reloaded a deep link, online and offline.
+- **Deploy.** The account's `workers.dev` subdomain is `krlehnardt`. `bash worker/scripts/deploy.sh`, with the new token, built the Worker-mode app and deployed the Worker `conference-caddie` with no change to the code. `GET /` and the deep link `/e/kubecon-cloudnativecon-north-america-2026` serve the app; `GET /api/health`, `/api/capabilities` and `/api/conferences` answer JSON on the same origin.
+- **Secrets.** `node worker/scripts/setup-secrets.mjs --only-missing` set `ADMIN_TOKEN`, `REF_SALT`, `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY` and `BLE_MASTER_KEYRING` on the Worker, the repository secret `CADDIE_ADMIN_TOKEN`, and the local file `~/.config/conference-caddie/admin-token` (mode 0600). They took effect without a redeploy: `/api/capabilities` reports `ble.mode` `derived-v1`.
+- **Migration** from `data/exports/backup-2026-11-10T08-25-32`, exactly the expected counts: 62 conferences, 717 talks, 114 topics, 898 facets, 132 of 136 people (the labelled sample profiles, including the 100 dummy profiles; the 4 real profiles were not copied), 0 of 26 reports, and 15 of 15 moderation rules matched. All 717 talks and 132 profiles were embedded during the migration, with 0 pending. The first `POST /admin/embed-pending` afterwards re-embedded the 132 sample profiles once more, because the marker of the embedding conventions is only written on that first call (see [Known gaps](#known-gaps)); every conference now reports 0 pending.
+- **GitHub.** The repository variables `CADDIE_APP_URL` and `CADDIE_API_BASE` are both `https://conference-caddie.krlehnardt.workers.dev`. GitHub Pages is enabled with the workflow source. The Pages workflow (run 42966673369) and the ingest workflow for `kubecon-cloudnativecon-north-america-2026` (run 42966676952) both succeeded. The ingest brought KubeCon to the current Sessionize schedule: 602 rows, 56 upserted, 546 unchanged, 14 embedded, 4 deleted, 0 pending.
+- **Pages.** https://kurtlehnardt.github.io/conferenceCaddie/ serves the landing page, which links to https://conference-caddie.krlehnardt.workers.dev/ and to the KubeCon deep link. `conferences.json` (4 conferences with bundles), `capabilities.json` and the KubeCon bundle (`bundle.json` and `vectors.i8`, with a matching SHA-256) are served.
+- **Live smoke** (`BASE_URL=https://conference-caddie.krlehnardt.workers.dev ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token node scripts/smoke.mjs`): 91 PASS, 0 FAIL, 2 SKIP. The two skips are `ble2`, which runs against a deployed Worker only with `SMOKE_BLE=1`, and `unav1`, which runs only against a local Worker. One run with `SMOKE_BLE=1`, while the Worker held only sample profiles, gave 92 PASS, 0 FAIL, 1 SKIP, with `ble1` and `ble2` passing under `derived-v1`. The first run, made while the ingest was still writing, gave 88 PASS and 3 FAIL (`x`, `o` and `sch1`): the ingest had just added a KubeCon talk that the committed `data/` file does not have yet. After the local talk file was refreshed with `node scripts/ingest.mjs --event kubecon-cloudnativecon-north-america-2026 --dry-run --skip-topics` (not committed), every check passed.
+- **Bluetooth parity.** `node worker/scripts/ble-parity.mjs` gave 29 PASS, 0 FAIL. It runs the Worker's code against the contract fixtures and has no option to target a deployed Worker; the live Bluetooth behaviour is covered by `ble1` and `ble2` above.
+- **Phone flow** at 390x844 in headless Chrome against the live app: 14 of 14 checks passed (deep link, CSP, People tab, every main tab, search, service worker at scope `/`, manifest scope, profile create, People to meet, deep link after reload, a new tab, profile delete, no CSP violation, no page errors). The offline check (a deep link reloaded offline boots from the service worker cache) also passed.
+- **QR code.** `docs/demo/qr-kubecon.png` and `.svg` now open https://conference-caddie.krlehnardt.workers.dev/e/kubecon-cloudnativecon-north-america-2026. The PNG was decoded with OpenCV to confirm it.
+- **Test data.** After the checks, KubeCon holds the 132 sample profiles and no presence, meets, blocks, reports, push subscriptions or nudges; the other conferences hold no people. The smoke used to leave its two reports behind; it now removes them at the end of a run with an admin token.
 - The Cloud Run and Elasticsearch stack is untouched and still serves https://conference-caddie-265846417372.us-west1.run.app.
-
-To finish, follow [What you need to do next](#what-you-need-to-do-next-read-this-first) and then [Go live](#go-live-about-10-minutes).
 
 ## Review (2026-11-10)
 
 **Verdict.** The second review of the free stack found eight must-fix problems. Seven were fixed and checked locally in PR #24; the eighth, the shared origin, was fixed afterwards by moving the app to the Worker. With PR #24 merged, I found nothing else that blocks a deploy except the missing Cloudflare token permission. Without PR #24 the stack on `main` should not be deployed, because blocks can be escaped and native apps cannot discover the Worker's tier.
 
-**How it ran.** The Worker is not deployed, so the review and the fix round ran locally: `wrangler dev --local` with real Workers AI embeddings, plus the web app built in Pages mode and served under `/conferenceCaddie/` by a GitHub Pages stand-in. There was no live smoke run and no reading of CPU use on the deployed Worker.
+**How it ran.** The Worker was not deployed yet, so the review and the fix round ran locally: `wrangler dev --local` with real Workers AI embeddings, plus the web app built in Pages mode and served under `/conferenceCaddie/` by a GitHub Pages stand-in. There was no live smoke run and no reading of CPU use on the deployed Worker.
 
 **Must-fix items.** The fixes are on branch `fix/free-review` (2759457 and 2f6d613, rebased onto `origin/main` at 110c513) and open as [PR #24](https://github.com/KurtLehnardt/conferenceCaddie/pull/24). I did not push the fixes to `main`: the project rules allow that only when you say "push to main", and nothing was deployed.
 
@@ -62,7 +66,7 @@ To finish, follow [What you need to do next](#what-you-need-to-do-next-read-this
 
 ## Where the app lives, and why
 
-The web app is served by the Cloudflare Worker, on the Worker's own origin, together with the API: `https://conference-caddie.<subdomain>.workers.dev`. The exact address is printed by `worker/scripts/deploy.sh`.
+The web app is served by the Cloudflare Worker, on the Worker's own origin, together with the API: https://conference-caddie.krlehnardt.workers.dev. `worker/scripts/deploy.sh` prints this address on every deploy.
 
 It used to be planned for GitHub Pages at `https://kurtlehnardt.github.io/conferenceCaddie/`. That origin is shared by seven other live Pages sites of the same account, and every page on an origin can read that origin's `localStorage`. Any of those sites, or a compromise of any of them, could have read Conference Caddie's device secrets and acted as its users (review finding R18). On 2026-11-10 you chose to serve the app from the Worker instead (`DECISIONS.md`).
 
@@ -72,9 +76,9 @@ GitHub Pages now publishes only public data, which holds no secrets: the talk bu
 
 | What | URL | State |
 |---|---|---|
-| Web app and API (Cloudflare Worker) | `https://conference-caddie.<subdomain>.workers.dev` | Not deployed. `worker/scripts/deploy.sh` prints the real URL; it is stored in the repository variables `CADDIE_APP_URL` and `CADDIE_API_BASE`. |
-| KubeCon NA 2026 deep link (the QR code) | `https://conference-caddie.<subdomain>.workers.dev/e/kubecon-cloudnativecon-north-america-2026` | Works once the Worker is deployed. Regenerate the QR code for it with `node worker/scripts/make-qr.mjs`. |
-| Talk bundles and landing page (GitHub Pages) | https://kurtlehnardt.github.io/conferenceCaddie/ | Enabled, not published yet |
+| Web app and API, one origin (Cloudflare Worker `conference-caddie`) | https://conference-caddie.krlehnardt.workers.dev | Live since 2026-11-11. The API is under `/api` on the same origin. Stored in the repository variables `CADDIE_APP_URL` and `CADDIE_API_BASE`. |
+| KubeCon NA 2026 deep link (the QR code) | https://conference-caddie.krlehnardt.workers.dev/e/kubecon-cloudnativecon-north-america-2026 | Live. `docs/demo/qr-kubecon.png` and `.svg` open it. |
+| Talk bundles and landing page (GitHub Pages) | https://kurtlehnardt.github.io/conferenceCaddie/ | Published. The landing page links to the app. |
 | Old app (Cloud Run) | https://conference-caddie-265846417372.us-west1.run.app | Live, unchanged, the rollback |
 
 ## Architecture
@@ -124,7 +128,7 @@ GitHub Pages: public talk bundles, conferences.json, capabilities.json and a lan
 
 | Limit (Free plan) | What the app does about it |
 |---|---|
-| 100,000 Worker requests and 100,000 Durable Object requests a day | Each conference object meters its own requests, rows read and rows written per UTC day, and the cron adds them up. Every response carries `X-Caddie-Pace`, and the web app stretches all its polling by that factor before the cap. Polling also slows when the tab is hidden. If the cap is hit anyway, the Worker answers `503 {error:"daily_limit"}` with `Retry-After` until 00:00 UTC; the app says when the people features come back, and the static app (served without running the Worker) and the offline schedule keep working. |
+| 100,000 Worker requests and 100,000 Durable Object requests a day | Each conference object meters its own requests, rows read and rows written per UTC day, writes the totals to its storage on its first request, then on the first request 15 seconds or more after the last write or after 100 requests, whichever comes first (so an object evicted from memory loses only about 15 seconds of counts), and the cron adds them up. Each write is one written row, so a conference object busy all day writes up to about 5,760 rows a day for its meter, and four searchable conferences write up to about 23,000 (27% of the 85,000 written-rows soft cap). These rows count toward that cap like any other write. Requests the Worker answers without a conference object (`/api/conferences`, `/api/capabilities`, `/api/health`, `/api/push/vapid` and requests it refuses itself) are not metered. Every conference API response carries `X-Caddie-Pace`; those Worker-level responses do not. A response without the header leaves the app's pace unchanged, and the pace falls back to 1 after 30 minutes without a reading. The web app stretches all its polling by that factor before the cap. Polling also slows when the tab is hidden. If the cap is hit anyway, the Worker answers `503 {error:"daily_limit"}` with `Retry-After` until 00:00 UTC; the app says when the people features come back, and the static app (served without running the Worker) and the offline schedule keep working. |
 | 10 ms CPU per Worker request | The Worker only routes. Heavy work runs in the Durable Object, where the limit is far higher. |
 | 5,000,000 SQLite rows read a day | Keyword results are cached in memory, queries read row ids first, and near the soft cap (`ROWS_READ_SOFT_CAP`, 3,500,000) search falls back to an in-memory keyword match. |
 | 100,000 SQLite rows written a day | Profile search rows are rewritten only when text changes, unchanged talks are not rewritten on ingest, and nudges stop near the soft cap (`ROWS_WRITTEN_SOFT_CAP`, 85,000). |
@@ -135,13 +139,15 @@ GitHub Pages: public talk bundles, conferences.json, capabilities.json and a lan
 
 ## Go live (about 10 minutes)
 
-1. **The new token.** In the Cloudflare dashboard, create an account API token with Workers Scripts: Edit, Workers AI: Read and Account Settings: Read (add Workers Tail: Read only if you want CPU readings). Static assets need no extra permission. If the account has no `workers.dev` subdomain, create it under Workers & Pages, Overview. Put the new token in `CLOUDFLARE_API_TOKEN` and keep `CLOUDFLARE_ACCOUNT_ID` set.
+These are the steps that took the stack live on 2026-11-11; repeat them only to rebuild it.
+
+1. **The token.** In the Cloudflare dashboard, create an API token (a user token or an account token) with Workers Scripts: Edit, Workers AI: Read and Account Settings: Read (add Workers Tail: Read only if you want CPU readings). Static assets need no extra permission. If the account has no `workers.dev` subdomain, create it under Workers & Pages, Overview. Put the new token in `CLOUDFLARE_API_TOKEN` and keep `CLOUDFLARE_ACCOUNT_ID` set.
 2. From the repository root, in order (each step prints names, counts and URLs only):
 
    ```sh
    bash worker/scripts/deploy.sh                          # builds the app, deploys, prints the app URL
    node worker/scripts/setup-secrets.mjs --only-missing   # ADMIN_TOKEN, REF_SALT, VAPID pair, first BLE_MASTER_KEYRING
-   export CADDIE_APP_URL=https://conference-caddie.<subdomain>.workers.dev   # the URL deploy.sh printed
+   export CADDIE_APP_URL=https://conference-caddie.krlehnardt.workers.dev   # the URL deploy.sh printed
    export CADDIE_API_BASE="$CADDIE_APP_URL"                                 # the API is on the same origin
    export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
    node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE"
@@ -154,7 +160,9 @@ GitHub Pages: public talk bundles, conferences.json, capabilities.json and a lan
    ```
 
    The secrets live on the Worker, not in the app build, so a later `deploy.sh` keeps them. The smoke runs against the one origin: `BASE_URL` is the app, the API defaults to the same origin, and the admin token makes it a Worker run. Commit the two new QR files through a pull request.
-3. Check that the smoke ends with no FAIL, then open the app URL on a phone and scan the new QR code. Expected migration counts (from the last local run): 62 conferences, 717 talks, 114 topics, 898 facets, 132 of 136 people, 0 of 26 reports, 15 of 15 moderation rules.
+3. Check that the smoke ends with no FAIL, then open the app URL on a phone and scan the new QR code. Migration counts of the live run on 2026-11-11, the same as the last local run: 62 conferences, 717 talks, 114 topics, 898 facets, 132 of 136 people, 0 of 26 reports, 15 of 15 moderation rules.
+
+   The smoke compares the talks the Worker serves with the committed `data/<slug>/talks.ndjson`. The ingest workflow pushes the current Sessionize schedule and commits nothing, so after an ingest the checks `x`, `o` and `sch1` can fail on talks that were added or removed since the last commit. Refresh the local files first with `node scripts/ingest.mjs --event <slug> --dry-run --skip-topics` (no Elasticsearch is needed, and the refreshed files need not be committed).
 
 ## Operations runbook
 
@@ -188,10 +196,12 @@ Never print the file. The old token stops working as soon as the Worker secret i
 
 ## Known gaps
 
-- **Not deployed yet.** See the status section above. No live smoke run, CPU reading on the deployed Worker or live usage meter exists yet.
+- **No CPU reading yet.** The live smoke passed, but nobody has read the deployed Worker's CPU time or a full day of the usage meter yet.
+- **The smoke follows the committed talk files.** After the weekly ingest the live schedule can differ from `data/`, and the checks `x`, `o` and `sch1` then fail until the local files are refreshed (see [Go live](#go-live-about-10-minutes), step 3).
+- **The Pages talk bundles lag the Worker's schedule.** The bundles are built from the committed `data/`, and the ingest commits nothing, so after an ingest the bundles can hold old times, titles and cancellations until `data/` is refreshed and committed (`node scripts/ingest.mjs --event <slug> --dry-run --skip-topics`). The web app reads `/api/schedule` and is not affected. Native clients read their talks from the Pages bundles through `talks.bundle_base` in `/api/capabilities`, and both Cloud Run and the Worker point that at the same Pages bundles, so native clients are affected whichever backend they use. The released Android 0.3.0 app shows the stale times today: on 2026-11-10, during KubeCon North America 2026, its bundle differed from the Worker's schedule in the times of 11 talks and the titles of 2, and lacked 1 talk. See cor-4 in [REVIEW_NOTES_FREE.md](../REVIEW_NOTES_FREE.md).
+- **The first re-embed after a migration repeats the profiles.** The marker of the embedding conventions is written by the first `POST /admin/embed-pending` or cron run, not by the migration, so that first run marks every profile with text as pending and embeds it again (132 profiles on 2026-11-11, about 25 per call or cron run). Talks are not repeated. It costs a little of the daily Workers AI allowance once per conference.
 - **People vectors are server-side.** The capabilities document says `people.semantic: server` and `people.live: poll`: client-computed profile vectors and the WebSocket channel of the tier 2 fixture are not implemented.
 - **The import body cap is 1 MB** in the Worker, while the web app allows files up to 5 MB. Text files between about 750 KB and 5 MB get 413.
-- **The QR code still points at the old Pages address** until the Worker is deployed and `node worker/scripts/make-qr.mjs` rewrites it. The Pages landing page (also its 404 page) links to the app meanwhile.
 - **Four real profiles were not migrated.** The owners' device secrets live on the Cloud Run origin, so they make a new profile on the Worker's app.
 - **English-only embeddings.** bge-small is English-only. If non-English talks matter, set `EMBED_MODEL` to `@cf/baai/bge-m3`, clear the vectors and run the admin re-embed.
 - **Ranking differs from Elasticsearch.** FTS5 BM25 and the 0.61 people floor order results a little differently from the E5 and Lucene setup, and the smoke is the only gate.

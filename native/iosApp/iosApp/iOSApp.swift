@@ -15,8 +15,9 @@ struct iOSApp: App {
 }
 
 /// The UIKit callbacks SwiftUI does not offer: the launch options, the APNs device token and
-/// notification taps. Each one is handed straight to the shared Kotlin code (IosBle, IosPush,
-/// IosNotificationTaps).
+/// notification taps. Each one is handed straight to the Kotlin code (IosBle; IosPush;
+/// openNotificationTap, which reads the link with IosNotificationTaps and hands it over like any
+/// other caddie:// link).
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
         _ application: UIApplication,
@@ -49,14 +50,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         completionHandler([.banner, .list, .sound])
     }
 
-    /// A tap hands the notification's caddie:// link to the screens.
+    /// A tap hands the notification's caddie:// link to the app's link router, as onOpenURL does
+    /// with a link from another app. A tap that launches the app arrives here before the screens
+    /// exist; the hand-off keeps the link until they take it.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-            IosNotificationTaps.shared.didReceive(userInfo: response.notification.request.content.userInfo)
+            IosIncomingKt.openNotificationTap(userInfo: response.notification.request.content.userInfo)
         }
         completionHandler()
     }

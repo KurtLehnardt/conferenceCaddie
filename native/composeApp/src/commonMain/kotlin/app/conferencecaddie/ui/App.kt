@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.ui.components.LocalWideLayout
 import app.conferencecaddie.ui.components.NavRail
 import androidx.compose.foundation.layout.Column
@@ -102,7 +103,9 @@ fun visibleTabs(peopleEnabled: Boolean): List<Tab> = Tab.entries.filter { it != 
  * The caller owns the data ([state]) and answers [actions]; [content] supplies each tab's screen and
  * the people pages. [initialTab] opens another tab than the first one, if the backend offers it.
  * [navigation] holds where the shell is; pass one from [rememberShellNavigation] to move around the
- * shell from outside it.
+ * shell from outside it. [request] moves the shell from outside too, once per request: to a tab or
+ * Settings (a `caddie://` link), or to the conference switcher (Import my schedule's "Switch
+ * conference").
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -112,6 +115,7 @@ fun App(
     content: TabContent = TabContent(),
     initialTab: Tab? = null,
     navigation: ShellNavigation = rememberShellNavigation(initialTab),
+    request: ShellRequest? = null,
 ) {
     val peopleEnabled = state.capabilities.people.enabled
     val tabs = visibleTabs(peopleEnabled)
@@ -126,17 +130,31 @@ fun App(
     // A server typed in Settings waits here for the same confirmation a link gets.
     var typedServer by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // The people pages close when the backend stops serving people features. Requests and Meet up
-    // belong to one conference, so they close when another conference is selected, as on the web.
-    LaunchedEffect(peopleEnabled) {
-        if (!peopleEnabled) navigation.closePages { it is PeoplePage }
+    // The people pages close when the backend is known to serve no people features. Requests and
+    // Meet up belong to one conference, so they close when another conference is selected, as on
+    // the web. After a restore the capabilities are still loading (features read as off) and the
+    // conference is not selected yet; neither closes a page. Only a settled "off", and a real switch
+    // from one conference to another, do.
+    LaunchedEffect(peopleEnabled, state.tabsKnown) {
+        if (state.tabsKnown && !peopleEnabled) navigation.closePages { it is PeoplePage }
     }
     var shownConference by rememberSaveable { mutableStateOf(state.selectedConferenceId) }
     LaunchedEffect(state.selectedConferenceId) {
-        if (state.selectedConferenceId != shownConference) {
+        val selected = state.selectedConferenceId ?: return@LaunchedEffect
+        val shown = shownConference
+        if (shown != null && shown != selected) {
             navigation.closePages { it == PeoplePage.Inbox || it is PeoplePage.Meet }
-            shownConference = state.selectedConferenceId
         }
+        shownConference = selected
+    }
+    // A link's tab leaves every page and shows the tab, as a tap on it would; a link to Settings opens
+    // it as the gear does. The switcher shows only when the request asks for it. A people route is
+    // the People layer's to show (see ShellRequest).
+    LaunchedEffect(request) {
+        val r = request ?: return@LaunchedEffect
+        if (r.people == null) r.tab?.let(navigation::selectTab)
+        if (r.settings) navigation.openSettings()
+        navigation.switcherOpen = r.switcher
     }
 
     val uriHandler = LocalUriHandler.current
@@ -277,6 +295,23 @@ fun App(
         }
     }
 }
+
+/**
+ * A move of the shell asked from outside it: show [tab] (leaving Settings), open [settings], or open
+ * the conference [switcher]. [id] tells two equal requests apart, so a second link to the tab the
+ * person has since left shows it again. [people] is the People screen a link names (Requests, a
+ * meet, the profile, a zone, or the home with "Around now"), which comes with [tab] People. The
+ * People layer (rememberPeopleUi) shows it, tab and page together, once people features are on;
+ * the shell leaves the tab alone for such a request, so the tab and the page change at once and a
+ * route that waits for the people features does not move the shell meanwhile.
+ */
+data class ShellRequest(
+    val id: Long,
+    val tab: Tab? = null,
+    val settings: Boolean = false,
+    val switcher: Boolean = false,
+    val people: AppLink.PeopleRoute? = null,
+)
 
 /** A server waiting for confirmation, and whether it came from a link (else from Settings). */
 private data class PendingServer(val base: String, val fromLink: Boolean)

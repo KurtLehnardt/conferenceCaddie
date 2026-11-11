@@ -47,7 +47,9 @@ import app.conferencecaddie.ui.theme.Caddie
 /**
  * The Search tab's Search view (web/src/components/search.tsx): the search field, the "Did you
  * mean" suggestions, the chip row of filters and time phrases, the results count and the talk
- * cards. Everything runs on the device over the conference's bundle.
+ * cards. Everything runs on the device over the conference's bundle. [peopleControls] draws a
+ * talk's people controls in its card, as every web talk card carries TalkPeopleControls; null
+ * leaves them out.
  */
 @Composable
 fun SearchScreen(
@@ -59,6 +61,7 @@ fun SearchScreen(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     openRank: String? = null,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val result = model.result
     val conference = bundle.conference
@@ -101,7 +104,18 @@ fun SearchScreen(
                     }
                 }
             }
-            item("chips") { FilterChips(model, bundle, result) }
+            item("chips") {
+                FilterChips(
+                    filters = model.filters,
+                    activeCount = model.activeFilterCount,
+                    result = result,
+                    bundle = bundle,
+                    onChange = model::updateFilters,
+                    onSheet = { model.sheet = it },
+                    onClearAll = model::clearFilters,
+                    onRemovePhrase = model::removePhrase,
+                )
+            }
             if (result != null && !result.happeningNowAvailable) {
                 item("now-note") {
                     val range = if (conference.startDate != null && conference.endDate != null) {
@@ -167,6 +181,7 @@ fun SearchScreen(
                             TalkResult(
                                 talk, bundle, terms, talk.talkId in interested, nowMs, onToggleInterested, onOpenTalk, onOpenUrl,
                                 searchText = result.searchText,
+                                peopleControls = peopleControls,
                                 rank = if (browse) {
                                     null
                                 } else {
@@ -276,50 +291,68 @@ internal fun tagValues(bundle: TalkBundle, group: String): List<String> =
 internal fun showSlides(f: SearchRequest, result: SearchResult?): Boolean =
     f.hasSlides != null || result?.facets?.hasSlides?.any { it.value && it.count > 0 } == true
 
-/** The chip row (web ChipRow): phrases, Filters, Happening now, Day, Time, Track, Level, tags and toggles. */
+/**
+ * The chip row (web ChipRow): phrases, Filters, Happening now, Day, Time, Track, Level, tags and
+ * toggles. With [schedule] (the full schedule, which has its own day chips and Jump to now), the
+ * phrases, Happening now, Day and Time chips are left out, as on the web.
+ */
 @Composable
-private fun FilterChips(model: SearchModel, bundle: TalkBundle, result: SearchResult?) {
-    val f = model.filters
+internal fun FilterChips(
+    filters: SearchRequest,
+    activeCount: Int,
+    result: SearchResult?,
+    bundle: TalkBundle,
+    onChange: (SearchRequest) -> Unit,
+    onSheet: (String) -> Unit,
+    onClearAll: () -> Unit,
+    onRemovePhrase: (String) -> Unit = {},
+    schedule: Boolean = false,
+) {
+    val f = filters
     val conference = bundle.conference
     val nowOff = result != null && !result.happeningNowAvailable
-    val set = model::updateFilters
+    val set = onChange
     ChipRow(Modifier.fillMaxWidth().testTag("chip-row")) {
-        result?.timePhrases?.filter { it.applied }?.forEach { p ->
-            TimePhraseChip(p.label, p.days.singleOrNull()?.let { TalkTime.day(it) }, onRemove = { model.removePhrase(p.key) })
+        if (!schedule) {
+            result?.timePhrases?.filter { it.applied }?.forEach { p ->
+                TimePhraseChip(p.label, p.days.singleOrNull()?.let { TalkTime.day(it) }, onRemove = { onRemovePhrase(p.key) })
+            }
         }
-        FiltersChip(model.activeFilterCount, onClick = { model.sheet = "" })
-        CaddieChip(
-            label = Strings.Chips.HAPPENING_NOW,
-            active = f.happeningNow,
-            onClick = { if (!nowOff || f.happeningNow) set(f.copy(happeningNow = !f.happeningNow)) },
-            leadingIcon = LucideIcon.Clock,
-            disabled = nowOff,
-        )
-        CaddieChip(
-            label = f.day?.let { TalkTime.day(it) } ?: Strings.Chips.DAY,
-            active = f.day != null,
-            onClick = { model.sheet = "day" },
-            kind = ChipKind.Dropdown,
-            onClear = { set(f.copy(day = null)) },
-            clearLabel = Strings.Chips.CLEAR_DAY,
-        )
-        val time = timeValue(f)
-        CaddieChip(
-            label = when (time) {
-                TimeValue.Morning -> Strings.Chips.MORNING
-                TimeValue.Afternoon -> Strings.Chips.AFTERNOON
-                TimeValue.Any -> Strings.Chips.TIME
-            },
-            active = time != TimeValue.Any,
-            onClick = { model.sheet = "time" },
-            kind = ChipKind.Dropdown,
-            onClear = { set(withTime(f, TimeValue.Any)) },
-            clearLabel = Strings.Chips.CLEAR_TIME,
-        )
+        FiltersChip(activeCount, onClick = { onSheet("") })
+        if (!schedule) {
+            CaddieChip(
+                label = Strings.Chips.HAPPENING_NOW,
+                active = f.happeningNow,
+                onClick = { if (!nowOff || f.happeningNow) set(f.copy(happeningNow = !f.happeningNow)) },
+                leadingIcon = LucideIcon.Clock,
+                disabled = nowOff,
+            )
+            CaddieChip(
+                label = f.day?.let { TalkTime.day(it) } ?: Strings.Chips.DAY,
+                active = f.day != null,
+                onClick = { onSheet("day") },
+                kind = ChipKind.Dropdown,
+                onClear = { set(f.copy(day = null)) },
+                clearLabel = Strings.Chips.CLEAR_DAY,
+            )
+            val time = timeValue(f)
+            CaddieChip(
+                label = when (time) {
+                    TimeValue.Morning -> Strings.Chips.MORNING
+                    TimeValue.Afternoon -> Strings.Chips.AFTERNOON
+                    TimeValue.Any -> Strings.Chips.TIME
+                },
+                active = time != TimeValue.Any,
+                onClick = { onSheet("time") },
+                kind = ChipKind.Dropdown,
+                onClear = { set(withTime(f, TimeValue.Any)) },
+                clearLabel = Strings.Chips.CLEAR_TIME,
+            )
+        }
         CaddieChip(
             label = Strings.Chips.group(Strings.Chips.TRACK, f.tracks.toList()),
             active = f.tracks.isNotEmpty(),
-            onClick = { model.sheet = "track" },
+            onClick = { onSheet("track") },
             kind = ChipKind.Dropdown,
             onClear = { set(f.copy(tracks = emptySet())) },
             clearLabel = Strings.Chips.CLEAR_TRACK,
@@ -328,7 +361,7 @@ private fun FilterChips(model: SearchModel, bundle: TalkBundle, result: SearchRe
             CaddieChip(
                 label = Strings.Chips.group(Strings.Chips.LEVEL, f.levels.toList()),
                 active = f.levels.isNotEmpty(),
-                onClick = { model.sheet = "level" },
+                onClick = { onSheet("level") },
                 kind = ChipKind.Dropdown,
                 onClear = { set(f.copy(levels = emptySet())) },
                 clearLabel = Strings.Chips.CLEAR_LEVEL,
@@ -349,7 +382,7 @@ private fun FilterChips(model: SearchModel, bundle: TalkBundle, result: SearchRe
                 CaddieChip(
                     label = Strings.Chips.group(group, selected.toList()),
                     active = selected.isNotEmpty(),
-                    onClick = { model.sheet = "tag:$group" },
+                    onClick = { onSheet("tag:$group") },
                     kind = ChipKind.Dropdown,
                     onClear = { set(f.copy(tags = f.tags - group)) },
                     clearLabel = Strings.Chips.clearGroup(group),
@@ -386,7 +419,7 @@ private fun FilterChips(model: SearchModel, bundle: TalkBundle, result: SearchRe
         }
         CaddieChip(Strings.Chips.HIDE_SPONSOR, f.hideSponsor, { set(f.copy(hideSponsor = !f.hideSponsor)) })
         CaddieChip(Strings.Chips.EVENTS, f.includeEvents, { set(f.copy(includeEvents = !f.includeEvents)) })
-        if (model.activeFilterCount > 0) ClearAllButton(model::clearFilters)
+        if (activeCount > 0) ClearAllButton(onClearAll)
     }
 }
 

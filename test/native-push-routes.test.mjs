@@ -5,10 +5,10 @@
 // the people-write bucket, the delete's token check, and that a profile delete, visibility off,
 // the hourly purge and the finishing of a pending delete remove native registrations exactly as
 // they remove Web Push subscriptions. Also what nudge.mjs reads back (pushTargetsFor, one search
-// per receiver), and the capabilities this configuration advertises.
+// for every receiver), and the capabilities this configuration advertises.
 //
 // Run with `npm test`. Nothing reaches the network: fetch is replaced before the server modules
-// are imported, APNs is configured with a key generated for this run and FCM with a project id, and
+// are imported, APNs is configured with a key file generated for this run and FCM with a project id, and
 // PUSH_TRANSPORT=stub without PUSH_STUB_URL makes any push fail locally.
 
 import { test, describe, before } from 'node:test';
@@ -18,18 +18,19 @@ import {
   FakeES, useCluster, bootPurgeDone, INDEX, EVENT, FUTURE, newDevice, personId, addPerson,
   addConnections, request, quietly, HIDDEN_FOR_DELETE,
 } from './helpers/fake-es.mjs';
+import { writeKeyFile } from './helpers/apns-key.mjs';
 
 for (const k of ['APNS_BUNDLE_ID', 'PUSH_STUB_URL']) delete process.env[k];
 Object.assign(process.env, {
   PUSH_TRANSPORT: 'stub',
   APNS_KEY_ID: 'TESTKEY001',
   APNS_TEAM_ID: 'TESTTEAM01',
-  APNS_KEY_P8: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  APNS_KEY_FILE: writeKeyFile(),
   FCM_PROJECT_ID: 'caddie-test-project',
 });
 
 const people = await import('../server/people.mjs');
-const { handlePushApi, registrationId, subscriptionId, pushTargetsFor, TARGETS_PER_PROFILE } = await import('../server/push.mjs');
+const { handlePushApi, registrationId, subscriptionId, pushTargetsFor, deleteRegistrationIfUnchanged, TARGETS_PER_PROFILE } = await import('../server/push.mjs');
 const { currentCapabilities } = await import('../server/capabilities.mjs');
 const CAPABILITIES = currentCapabilities();
 const { validator } = await import('../contracts/js/schemas.mjs');
@@ -283,14 +284,51 @@ test('pushTargetsFor reads subscriptions and registrations back for nudge.mjs, a
   const fcmId = registrationId(EVENT, device.profileId, 'fcm');
   assert.deepEqual(Object.keys(byId).sort(), [subscriptionId('https://push.example.test/sub'), apnsId, fcmId, othersId, 'sandbox'].sort());
   assert.deepEqual(byId[subscriptionId('https://push.example.test/sub')].subscription, { endpoint: 'https://push.example.test/sub', keys: { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) } });
-  assert.deepEqual(byId[apnsId], { id: apnsId, profile_id: device.profileId, native: { platform: 'apns', token: tokens.apns, environment: 'production' } });
+  const guardOf = (id) => ({ seqNo: cluster.docs(INDEX.push).get(id).seq, primaryTerm: 1 });
+  assert.deepEqual(byId[apnsId], { id: apnsId, profile_id: device.profileId, native: { platform: 'apns', token: tokens.apns, environment: 'production' }, guard: guardOf(apnsId) });
   assert.deepEqual(byId[fcmId].native, { platform: 'fcm', token: tokens.fcm, environment: 'production' });
+  assert.deepEqual(byId[fcmId].guard, guardOf(fcmId), 'a registration carries the version it was read at');
   assert.equal(byId.sandbox.native.environment, 'sandbox');
+  assert.equal(byId[subscriptionId('https://push.example.test/sub')].guard, undefined, 'a subscription is deleted by id alone');
 });
 
-test('pushTargetsFor asks once per receiver, so one receiver with many subscriptions cannot crowd another out', async () => {
+test('a registration reported gone is deleted only while it is the document that was read', async () => {
+  const { cluster, device } = await withRegistrations();
+  const apnsId = registrationId(EVENT, device.profileId, 'apns');
+  const [read] = (await pushTargetsFor(EVENT, [device.profileId])).filter((t) => t.id === apnsId);
+  // The device registers a new token after the push went out: the document is rewritten.
+  const fresh = apnsToken();
+  assert.equal((await put(device, { event: EVENT, platform: 'apns', token: fresh })).status, 200);
+  await deleteRegistrationIfUnchanged(apnsId, read.guard);
+  assert.equal(cluster.source(INDEX.push, apnsId)?.token, fresh, 'the new token stays');
+  const attempt = cluster.log.findLast((e) => e.method === 'DELETE' && e.path === `/${INDEX.push}/_doc/${apnsId}`);
+  assert.equal(attempt.params.get('if_seq_no'), String(read.guard.seqNo));
+  assert.equal(attempt.params.get('if_primary_term'), '1');
+  // Unchanged since it was read: deleted. Already gone: nothing to do, and no error.
+  const [again] = (await pushTargetsFor(EVENT, [device.profileId])).filter((t) => t.id === apnsId);
+  await deleteRegistrationIfUnchanged(apnsId, again.guard);
+  assert.equal(cluster.source(INDEX.push, apnsId), null);
+  await deleteRegistrationIfUnchanged(apnsId, again.guard);
+  assert.ok(cluster.source(INDEX.push, registrationId(EVENT, device.profileId, 'fcm')), 'the other platform is untouched');
+});
+
+test('a delayed retry of an older PUT is the last write and wins until the device registers again (documented, DECISIONS.md)', async () => {
+  // The server can only order requests by arrival: a retry of the old token's PUT that arrives
+  // after the new token's is, to the server, the newer registration. The contract has the app
+  // send one registration call at a time and register its current token at every start.
+  const { cluster, device } = setup();
+  const [old, rotated] = [fcmToken(), fcmToken()];
+  const id = registrationId(EVENT, device.profileId, 'fcm');
+  for (const token of [old, rotated, old]) assert.equal((await put(device, { event: EVENT, platform: 'fcm', token })).status, 200);
+  assert.equal(cluster.source(INDEX.push, id).token, old, 'last write wins');
+  assert.equal((await put(device, { event: EVENT, platform: 'fcm', token: rotated })).status, 200, 'the next start');
+  assert.equal(cluster.source(INDEX.push, id).token, rotated);
+  assert.equal(cluster.ids(INDEX.push).length, 1);
+});
+
+test('pushTargetsFor reads every receiver in one search, so one receiver with many subscriptions cannot crowd another out', async () => {
   const { cluster, device, other, othersId } = await withRegistrations();
-  // 150 subscriptions of one person, older than nothing in particular, would fill any shared page.
+  // 150 subscriptions of one person would fill any shared page of hits.
   for (let i = 0; i < 150; i++) {
     const endpoint = `https://push.example.test/flood/${i}`;
     cluster.put(INDEX.push, subscriptionId(endpoint), { event_id: EVENT, profile_id: device.profileId, endpoint, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), created_at: new Date(Date.UTC(2099, 0, 1, 0, i)).toISOString(), expires_at: FUTURE });
@@ -300,7 +338,7 @@ test('pushTargetsFor asks once per receiver, so one receiver with many subscript
   console.error = (...args) => lines.push(args.join(' '));
   let targets;
   try {
-    targets = await pushTargetsFor(EVENT, [device.profileId, other.profileId]);
+    targets = await pushTargetsFor(EVENT, [device.profileId, other.profileId, device.profileId, 'nobody']);
   } finally {
     console.error = error;
   }
@@ -310,7 +348,15 @@ test('pushTargetsFor asks once per receiver, so one receiver with many subscript
   assert.deepEqual(mine.map((t) => t.subscription?.endpoint), Array.from({ length: 10 }, (_, i) => `https://push.example.test/flood/${149 - i}`));
   assert.deepEqual(lines, [`Push targets capped: one receiver has 153, the newest ${TARGETS_PER_PROFILE} are used`]);
   const searches = cluster.log.filter((e) => e.path.startsWith(`/${INDEX.push}/_search`));
-  assert.equal(searches.length, 2, 'one search per receiver');
+  assert.equal(searches.length, 1, 'one search for every receiver');
+  const { body } = searches[0];
+  assert.equal(body.size, 0, 'the hits come from the aggregation only');
+  assert.deepEqual(body.query.bool.filter[1], { terms: { profile_id: [device.profileId, other.profileId, 'nobody'] } });
+  assert.deepEqual(body.aggs.receivers.terms, { field: 'profile_id', size: 3 }, 'one bucket for each distinct receiver');
+  assert.equal(body.aggs.receivers.aggs.newest.top_hits.size, TARGETS_PER_PROFILE);
+  assert.deepEqual(body.aggs.receivers.aggs.newest.top_hits.sort, [{ created_at: { order: 'desc', unmapped_type: 'date' } }]);
+  assert.deepEqual(await pushTargetsFor(EVENT, []), [], 'no receiver, no search');
+  assert.equal(cluster.log.filter((e) => e.path.startsWith(`/${INDEX.push}/_search`)).length, 1);
 });
 
 test('this configuration advertises push.apns and push.fcm, and the document stays valid in closed mode', () => {

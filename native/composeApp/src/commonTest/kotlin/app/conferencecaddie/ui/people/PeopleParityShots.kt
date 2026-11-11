@@ -464,7 +464,7 @@ class PeopleParityShots {
     fun parityScreenshots() {
         val only = parityShotsRequested() ?: return
         val failures = ArrayList<String>()
-        for (state in PARITY_STATES) {
+        for (state in PARITY_STATES + PARITY_FIX_STATES) {
             val wanted = only.isEmpty() || state.name in only
             if (!wanted) continue
             val windows = buildList {
