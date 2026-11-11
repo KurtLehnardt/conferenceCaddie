@@ -1,0 +1,1055 @@
+{
+  "about": "Test vectors for the X-Caddie-Admin v1 request signature (scripts/lib/admin-sign.mjs). The Worker verifier (worker/src/lib/admin-auth.js) and the CLI are tested against this one file. Three kinds of case: \"sign\" (signer input and the exact header it must produce), \"verify\" (what the verifier answers for a header, given the keys it holds and its clock) and \"reject\" (input the signer refuses before anything is sent). All times are Unix seconds. Keys are UTF-8 after trimming, never hex-decoded.",
+  "version": "v1",
+  "header_name": "X-Caddie-Admin",
+  "header_format": "v1 <ts> <nonce> <bodySha256> <sig>",
+  "header_re": "^v1 (\\d{1,12}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$",
+  "canonical_format": "caddie-admin-v1\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n",
+  "query_re": "^[A-Za-z0-9_.:=&-]*$",
+  "empty_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "bodyless_methods": [
+    "GET",
+    "HEAD",
+    "DELETE"
+  ],
+  "skew_seconds": 300,
+  "min_key_length": 32,
+  "keys": {
+    "key1": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "key2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  },
+  "verify_reasons": {
+    "malformed": "the header is absent or does not match header_re (Worker: 404)",
+    "bodyless_body_hash": "GET, HEAD or DELETE with a bodySha256 other than empty_body_sha256 (Worker: 404)",
+    "no_key": "the Worker holds no usable key: ADMIN_TOKEN missing or shorter than 32 after trimming (Worker: 404)",
+    "signature": "no held key reproduces sig (Worker: take() the failed-auth bucket, 404)",
+    "skew": "|now - ts| > skew_seconds, checked only after the signature matched (Worker: 401 admin_skew)"
+  },
+  "reject_reasons": {
+    "_note": "Each reject case names the UsageError.code the signer throws.",
+    "query_charset": "the query string after \"?\" does not match query_re",
+    "body_on_bodyless_method": "a body on GET, HEAD or DELETE",
+    "key_too_short": "the key is missing or shorter than min_key_length after trimming",
+    "body_type": "the body is neither a string nor bytes",
+    "method": "the method is missing"
+  },
+  "cases": [
+    {
+      "id": "get-stats",
+      "kind": "sign",
+      "title": "GET without a body: the empty-body hash",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/stats?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/stats?event=testconf-2099",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "ts": 1762848000,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/stats?event=testconf-2099\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nAAAAAAAAAAAAAAAAAAAAAA\n",
+      "sig": "d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70"
+    },
+    {
+      "id": "post-moderation",
+      "kind": "sign",
+      "title": "POST with a JSON body",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "POST",
+      "path": "/admin/moderation?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": "{\"action\":\"unhide\",\"kind\":\"profile\",\"id\":\"0123456789abcdef\"}",
+      "url": "https://caddie.example/admin/moderation?event=testconf-2099",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "ts": 1762848000,
+      "nonce": "Jq2FZrk0Vwhoqk5B1gUwPg",
+      "body_sha256": "ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866",
+      "canonical": "caddie-admin-v1\nPOST\n/admin/moderation?event=testconf-2099\nba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866\n1762848000\nJq2FZrk0Vwhoqk5B1gUwPg\n",
+      "sig": "df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae"
+    },
+    {
+      "id": "get-since-iso",
+      "kind": "sign",
+      "title": "GET with since=<ISO instant>: \":\" and \"-\" pass the query charset",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00Z",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00Z",
+      "path_with_query": "/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00Z",
+      "ts": 1762848000,
+      "nonce": "x9Yl8mHxW3o0P2q1v6Z4jQ",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00Z\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nx9Yl8mHxW3o0P2q1v6Z4jQ\n",
+      "sig": "3605e4c6f56c80ad54d9b78b0429060251928e1783f2dd9b83a8484e9bff43c4",
+      "header": "v1 1762848000 x9Yl8mHxW3o0P2q1v6Z4jQ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 3605e4c6f56c80ad54d9b78b0429060251928e1783f2dd9b83a8484e9bff43c4"
+    },
+    {
+      "id": "get-q64",
+      "kind": "sign",
+      "title": "GET with q64=<base64url of \"Ann Lee\">: free text never travels raw",
+      "note": "q64 is base64url without padding of the UTF-8 search text \"Ann Lee\"; the signer would refuse q=Ann%20Lee (see reject-query-percent).",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/people/search?event=testconf-2099&q64=QW5uIExlZQ&limit=50",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/people/search?event=testconf-2099&q64=QW5uIExlZQ&limit=50",
+      "path_with_query": "/admin/people/search?event=testconf-2099&q64=QW5uIExlZQ&limit=50",
+      "ts": 1762848000,
+      "nonce": "b_-_b_-_b_-_b_-_b_-_bQ",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/people/search?event=testconf-2099&q64=QW5uIExlZQ&limit=50\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nb_-_b_-_b_-_b_-_b_-_bQ\n",
+      "sig": "cb9ccc8c812466c77546eab1b48c29d7187f1e0717099408fa28ff391ce14dd2",
+      "header": "v1 1762848000 b_-_b_-_b_-_b_-_b_-_bQ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 cb9ccc8c812466c77546eab1b48c29d7187f1e0717099408fa28ff391ce14dd2"
+    },
+    {
+      "id": "post-non-ascii",
+      "kind": "sign",
+      "title": "POST with a non-ASCII body: the hash covers the UTF-8 bytes",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "POST",
+      "path": "/admin/test/profile?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": "{\"display_name\":\"Zoë Łukasz 日本語 🙂\"}",
+      "url": "https://caddie.example/admin/test/profile?event=testconf-2099",
+      "path_with_query": "/admin/test/profile?event=testconf-2099",
+      "ts": 1762848000,
+      "nonce": "MTIzNDU2Nzg5MDEyMzQ1Ng",
+      "body_sha256": "9a83e8a59c3071e743a53ad05239260aace1e0d4d04e8a88255470f6c1f79ea9",
+      "canonical": "caddie-admin-v1\nPOST\n/admin/test/profile?event=testconf-2099\n9a83e8a59c3071e743a53ad05239260aace1e0d4d04e8a88255470f6c1f79ea9\n1762848000\nMTIzNDU2Nzg5MDEyMzQ1Ng\n",
+      "sig": "6355b2946d4531a4a26722642167b6f75565b137f4da007b5c4484019fd1cf09",
+      "header": "v1 1762848000 MTIzNDU2Nzg5MDEyMzQ1Ng 9a83e8a59c3071e743a53ad05239260aace1e0d4d04e8a88255470f6c1f79ea9 6355b2946d4531a4a26722642167b6f75565b137f4da007b5c4484019fd1cf09"
+    },
+    {
+      "id": "post-four-bytes",
+      "kind": "sign",
+      "title": "POST with a 4-byte body",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "POST",
+      "path": "/admin/test/meter-restart?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": "true",
+      "url": "https://caddie.example/admin/test/meter-restart?event=testconf-2099",
+      "path_with_query": "/admin/test/meter-restart?event=testconf-2099",
+      "ts": 1762848000,
+      "nonce": "nQ4t0Z8fV2sU7wY1cR5hLg",
+      "body_sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+      "canonical": "caddie-admin-v1\nPOST\n/admin/test/meter-restart?event=testconf-2099\nb5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b\n1762848000\nnQ4t0Z8fV2sU7wY1cR5hLg\n",
+      "sig": "d6cc476669008c5d691728090365dca9a573e3757e9083b7394065a28a8d52c9",
+      "header": "v1 1762848000 nQ4t0Z8fV2sU7wY1cR5hLg b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b d6cc476669008c5d691728090365dca9a573e3757e9083b7394065a28a8d52c9"
+    },
+    {
+      "id": "delete-empty",
+      "kind": "sign",
+      "title": "DELETE without a body: the empty-body hash",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "DELETE",
+      "path": "/admin/test/profile?event=testconf-2099&profile_id=Jq2FZrk0Vwhoqk5B1gUwPg",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/test/profile?event=testconf-2099&profile_id=Jq2FZrk0Vwhoqk5B1gUwPg",
+      "path_with_query": "/admin/test/profile?event=testconf-2099&profile_id=Jq2FZrk0Vwhoqk5B1gUwPg",
+      "ts": 1762848000,
+      "nonce": "Z0rQ7jN3mK9pX2cV5bH8fA",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nDELETE\n/admin/test/profile?event=testconf-2099&profile_id=Jq2FZrk0Vwhoqk5B1gUwPg\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nZ0rQ7jN3mK9pX2cV5bH8fA\n",
+      "sig": "4e29ef3178bd8f8bc7819345a6073c556b6df7898c4f43eada2843d3e3855b5f",
+      "header": "v1 1762848000 Z0rQ7jN3mK9pX2cV5bH8fA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 4e29ef3178bd8f8bc7819345a6073c556b6df7898c4f43eada2843d3e3855b5f"
+    },
+    {
+      "id": "head-empty",
+      "kind": "sign",
+      "title": "HEAD without a body: the empty-body hash",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "HEAD",
+      "path": "/admin/stats",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/stats",
+      "path_with_query": "/admin/stats",
+      "ts": 1762848000,
+      "nonce": "u8T3kP6wR1yL4nM7sD0qCg",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nHEAD\n/admin/stats\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nu8T3kP6wR1yL4nM7sD0qCg\n",
+      "sig": "08bb7ce9c87f0e17e4257a59b0520fb1ab3052f0bcb489fc76b2c1c26ab1babc",
+      "header": "v1 1762848000 u8T3kP6wR1yL4nM7sD0qCg e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 08bb7ce9c87f0e17e4257a59b0520fb1ab3052f0bcb489fc76b2c1c26ab1babc"
+    },
+    {
+      "id": "put-conferences",
+      "kind": "sign",
+      "title": "PUT with a JSON body on the DirectoryDO path",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "PUT",
+      "path": "/admin/conferences",
+      "base": "https://caddie.example",
+      "body": "{\"conferences\":[{\"slug\":\"testconf-2099\",\"name\":\"Test Conf 2099\",\"status\":\"searchable\"}]}",
+      "url": "https://caddie.example/admin/conferences",
+      "path_with_query": "/admin/conferences",
+      "ts": 1762848000,
+      "nonce": "c3F2b2xnbm5tdXNrZHBxZw",
+      "body_sha256": "120e2e9e9a88635d285ef23b93115e6931363359ff3e81ad01d536d0948c6131",
+      "canonical": "caddie-admin-v1\nPUT\n/admin/conferences\n120e2e9e9a88635d285ef23b93115e6931363359ff3e81ad01d536d0948c6131\n1762848000\nc3F2b2xnbm5tdXNrZHBxZw\n",
+      "sig": "d3dfc7d7d01439cba8a8df99a252c89fe8ee52a66c5c3224bef7e8db8ea7a186",
+      "header": "v1 1762848000 c3F2b2xnbm5tdXNrZHBxZw 120e2e9e9a88635d285ef23b93115e6931363359ff3e81ad01d536d0948c6131 d3dfc7d7d01439cba8a8df99a252c89fe8ee52a66c5c3224bef7e8db8ea7a186"
+    },
+    {
+      "id": "post-one-byte-diff",
+      "kind": "sign",
+      "title": "The body of post-moderation with one byte changed: a different hash and signature",
+      "note": "Compare with post-moderation: same key, method, path, ts and nonce; only the last byte of the body differs.",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "POST",
+      "path": "/admin/moderation?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": "{\"action\":\"unhide\",\"kind\":\"profile\",\"id\":\"0123456789abcdee\"}",
+      "url": "https://caddie.example/admin/moderation?event=testconf-2099",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "ts": 1762848000,
+      "nonce": "Jq2FZrk0Vwhoqk5B1gUwPg",
+      "body_sha256": "7140533e889ebf97d564f89825729305559995cf343828471f5b0654deea38d9",
+      "canonical": "caddie-admin-v1\nPOST\n/admin/moderation?event=testconf-2099\n7140533e889ebf97d564f89825729305559995cf343828471f5b0654deea38d9\n1762848000\nJq2FZrk0Vwhoqk5B1gUwPg\n",
+      "sig": "33e10b35cf314908e4db663f3a2678b1a1821dd9b5169074dfa839ae405f7ca4",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg 7140533e889ebf97d564f89825729305559995cf343828471f5b0654deea38d9 33e10b35cf314908e4db663f3a2678b1a1821dd9b5169074dfa839ae405f7ca4"
+    },
+    {
+      "id": "post-second-key",
+      "kind": "sign",
+      "title": "POST signed with the second key (ADMIN_TOKEN_NEXT during a rotation)",
+      "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "key_name": "key2",
+      "method": "POST",
+      "path": "/admin/moderation?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": "{\"action\":\"purge\"}",
+      "url": "https://caddie.example/admin/moderation?event=testconf-2099",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "ts": 1762848000,
+      "nonce": "W2x3Y4z5A6b7C8d9E0f1Gh",
+      "body_sha256": "65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983",
+      "canonical": "caddie-admin-v1\nPOST\n/admin/moderation?event=testconf-2099\n65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983\n1762848000\nW2x3Y4z5A6b7C8d9E0f1Gh\n",
+      "sig": "d295ae7daa27f518aaad5d451dbd78589584fa129a0495b3f135639f918dbcad",
+      "header": "v1 1762848000 W2x3Y4z5A6b7C8d9E0f1Gh 65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983 d295ae7daa27f518aaad5d451dbd78589584fa129a0495b3f135639f918dbcad"
+    },
+    {
+      "id": "post-key-trimmed",
+      "kind": "sign",
+      "title": "The key with surrounding whitespace signs exactly as key1: both sides trim",
+      "note": "Same ts and nonce as get-stats, so the header must be identical.",
+      "key": " \t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+      "key_name": "key1_padded",
+      "method": "GET",
+      "path": "/admin/stats?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/stats?event=testconf-2099",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "ts": 1762848000,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/stats?event=testconf-2099\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nAAAAAAAAAAAAAAAAAAAAAA\n",
+      "sig": "d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70"
+    },
+    {
+      "id": "put-body-flag",
+      "kind": "sign",
+      "title": "PUT /admin/conferences with allow_shrink in the body: flags travel in the body, so the hash and the signature change",
+      "note": "Compare with put-conferences: same key, method, path, ts and nonce; the body gained \"allow_shrink\": true, and body_sha256 and sig differ. A flag in the query would be outside the body hash and must not be used.",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "PUT",
+      "path": "/admin/conferences",
+      "base": "https://caddie.example",
+      "body": "{\"conferences\":[{\"slug\":\"testconf-2099\",\"name\":\"Test Conf 2099\",\"status\":\"searchable\"}],\"allow_shrink\":true}",
+      "url": "https://caddie.example/admin/conferences",
+      "path_with_query": "/admin/conferences",
+      "ts": 1762848000,
+      "nonce": "c3F2b2xnbm5tdXNrZHBxZw",
+      "body_sha256": "0d7cfdaaac554fafc05c7b7025065f11a8c006122e71ac644ff1a2b7ce8c6f11",
+      "canonical": "caddie-admin-v1\nPUT\n/admin/conferences\n0d7cfdaaac554fafc05c7b7025065f11a8c006122e71ac644ff1a2b7ce8c6f11\n1762848000\nc3F2b2xnbm5tdXNrZHBxZw\n",
+      "sig": "02adc9fd37e68eb0c921f079ae902a25fa543e74ec3be20cc433ee3e7c2d66bb",
+      "header": "v1 1762848000 c3F2b2xnbm5tdXNrZHBxZw 0d7cfdaaac554fafc05c7b7025065f11a8c006122e71ac644ff1a2b7ce8c6f11 02adc9fd37e68eb0c921f079ae902a25fa543e74ec3be20cc433ee3e7c2d66bb"
+    },
+    {
+      "id": "get-no-query",
+      "kind": "sign",
+      "title": "GET with no query string at all",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/stats",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/stats",
+      "path_with_query": "/admin/stats",
+      "ts": 1762848000,
+      "nonce": "D5e6F7g8H9i0J1k2L3m4No",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/stats\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nD5e6F7g8H9i0J1k2L3m4No\n",
+      "sig": "576b8f67583719b130563a59b4319026f80caffef8946f1551f06ea51c6ad011",
+      "header": "v1 1762848000 D5e6F7g8H9i0J1k2L3m4No e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 576b8f67583719b130563a59b4319026f80caffef8946f1551f06ea51c6ad011"
+    },
+    {
+      "id": "get-all-query-chars",
+      "kind": "sign",
+      "title": "A query using every allowed character class",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00.000Z&ref=abc_DEF-123.x",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00.000Z&ref=abc_DEF-123.x",
+      "path_with_query": "/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00.000Z&ref=abc_DEF-123.x",
+      "ts": 1762848000,
+      "nonce": "O6p7Q8r9S0t1U2v3W4x5Yz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/moderation?event=testconf-2099&since=2026-11-10T08:00:00.000Z&ref=abc_DEF-123.x\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1762848000\nO6p7Q8r9S0t1U2v3W4x5Yz\n",
+      "sig": "8d642c351985273bb9dd477d94e123a0622ba6cd99840867dabc9e6d458f1d39",
+      "header": "v1 1762848000 O6p7Q8r9S0t1U2v3W4x5Yz e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 8d642c351985273bb9dd477d94e123a0622ba6cd99840867dabc9e6d458f1d39"
+    },
+    {
+      "id": "get-ts-small",
+      "kind": "sign",
+      "title": "A one-digit timestamp (the header allows 1 to 12 digits)",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "GET",
+      "path": "/admin/stats?event=testconf-2099",
+      "base": "https://caddie.example",
+      "body": null,
+      "url": "https://caddie.example/admin/stats?event=testconf-2099",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "ts": 7,
+      "nonce": "Y7z8A9b0C1d2E3f4G5h6Ij",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "caddie-admin-v1\nGET\n/admin/stats?event=testconf-2099\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n7\nY7z8A9b0C1d2E3f4G5h6Ij\n",
+      "sig": "6f73d420cae50620621f47f38e0b0f68092bbfb4197deb796f8d8ef7f5cae27e",
+      "header": "v1 7 Y7z8A9b0C1d2E3f4G5h6Ij e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 6f73d420cae50620621f47f38e0b0f68092bbfb4197deb796f8d8ef7f5cae27e"
+    },
+    {
+      "id": "post-unretire-flag",
+      "kind": "sign",
+      "title": "PUT /admin/conferences with \"unretire\": true in the body (conferences unretire on tier 2): a body flag",
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "key_name": "key1",
+      "method": "PUT",
+      "path": "/admin/conferences",
+      "base": "https://caddie.example",
+      "body": "{\"conferences\":[{\"slug\":\"testconf-2099\"}],\"unretire\":true}",
+      "url": "https://caddie.example/admin/conferences",
+      "path_with_query": "/admin/conferences",
+      "ts": 1762848000,
+      "nonce": "I8j9K0l1M2n3O4p5Q6r7St",
+      "body_sha256": "b3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69",
+      "canonical": "caddie-admin-v1\nPUT\n/admin/conferences\nb3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69\n1762848000\nI8j9K0l1M2n3O4p5Q6r7St\n",
+      "sig": "33134beb5e032064755781b22d7b1e90759f7dc56ce5f9563abb4a6ae6504a11",
+      "header": "v1 1762848000 I8j9K0l1M2n3O4p5Q6r7St b3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69 33134beb5e032064755781b22d7b1e90759f7dc56ce5f9563abb4a6ae6504a11"
+    },
+    {
+      "id": "v-ok",
+      "kind": "verify",
+      "title": "A positive case verifies with key1",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": true,
+        "body_sha256": "ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866"
+      }
+    },
+    {
+      "id": "v-second-key-accepted",
+      "kind": "verify",
+      "title": "The second key is accepted when the Worker holds both (rotation overlap)",
+      "header": "v1 1762848000 W2x3Y4z5A6b7C8d9E0f1Gh 65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983 d295ae7daa27f518aaad5d451dbd78589584fa129a0495b3f135639f918dbcad",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": true,
+        "body_sha256": "65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983"
+      }
+    },
+    {
+      "id": "v-second-key-only",
+      "kind": "verify",
+      "title": "A header signed with key2 verifies when only key2 is held (after the rotation)",
+      "header": "v1 1762848000 W2x3Y4z5A6b7C8d9E0f1Gh 65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983 d295ae7daa27f518aaad5d451dbd78589584fa129a0495b3f135639f918dbcad",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": true,
+        "body_sha256": "65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983"
+      }
+    },
+    {
+      "id": "v-second-key-missing",
+      "kind": "verify",
+      "title": "A header signed with key2 fails when only key1 is held: signature",
+      "header": "v1 1762848000 W2x3Y4z5A6b7C8d9E0f1Gh 65687ac77f19832759a45d7e9a93df54a38404282e5d9e7a7649f0c2a3301983 d295ae7daa27f518aaad5d451dbd78589584fa129a0495b3f135639f918dbcad",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-wrong-key",
+      "kind": "verify",
+      "title": "A wrong key: signature",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "00000000000000000000000000000000000000000000000000000000000000ff"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-key-untrimmed",
+      "kind": "verify",
+      "title": "The Worker trims its secret: a padded key1 verifies key1 headers",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  "
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": true,
+        "body_sha256": "ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866"
+      }
+    },
+    {
+      "id": "v-tampered-path",
+      "kind": "verify",
+      "title": "A changed path: signature",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=other-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-tampered-method",
+      "kind": "verify",
+      "title": "A changed method: signature",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "PUT",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-tampered-body-hash",
+      "kind": "verify",
+      "title": "The one-byte-different body hash under the original signature: signature",
+      "header": "v1 1762848000 Jq2FZrk0Vwhoqk5B1gUwPg 7140533e889ebf97d564f89825729305559995cf343828471f5b0654deea38d9 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-tampered-ts",
+      "kind": "verify",
+      "title": "A changed timestamp: signature",
+      "header": "v1 1762848001 Jq2FZrk0Vwhoqk5B1gUwPg ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-tampered-nonce",
+      "kind": "verify",
+      "title": "A changed nonce: signature",
+      "header": "v1 1762848000 BBBBBBBBBBBBBBBBBBBBBB ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 df50df4e8dfc06b9c4b1102b941b225a25d0a06738cf521fd9d9870e280ccfae",
+      "method": "POST",
+      "path_with_query": "/admin/moderation?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-get-with-body-hash",
+      "kind": "verify",
+      "title": "A GET whose header carries a non-empty body hash: refused before any HMAC",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "bodyless_body_hash"
+      }
+    },
+    {
+      "id": "v-delete-with-body-hash",
+      "kind": "verify",
+      "title": "A DELETE whose header carries a non-empty body hash: refused before any HMAC",
+      "header": "v1 1762848000 Z0rQ7jN3mK9pX2cV5bH8fA ba5a2f12560fc7a9cac1ff212193e7de744965a1584359937aa41890795d3866 4e29ef3178bd8f8bc7819345a6073c556b6df7898c4f43eada2843d3e3855b5f",
+      "method": "DELETE",
+      "path_with_query": "/admin/test/profile?event=testconf-2099&profile_id=Jq2FZrk0Vwhoqk5B1gUwPg",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "bodyless_body_hash"
+      }
+    },
+    {
+      "id": "v-skew-plus-300",
+      "kind": "verify",
+      "title": "now = ts + 300: inside the window",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848300,
+      "expect": {
+        "ok": true,
+        "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "id": "v-skew-plus-301",
+      "kind": "verify",
+      "title": "now = ts + 301: skew",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848301,
+      "expect": {
+        "ok": false,
+        "reason": "skew"
+      }
+    },
+    {
+      "id": "v-skew-minus-300",
+      "kind": "verify",
+      "title": "now = ts - 300 (a client clock ahead): inside the window",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762847700,
+      "expect": {
+        "ok": true,
+        "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "id": "v-skew-minus-301",
+      "kind": "verify",
+      "title": "now = ts - 301: skew",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762847699,
+      "expect": {
+        "ok": false,
+        "reason": "skew"
+      }
+    },
+    {
+      "id": "v-skew-after-signature",
+      "kind": "verify",
+      "title": "A wrong key with a stale timestamp fails on the signature, never on the skew: a non-holder sees only 404",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "00000000000000000000000000000000000000000000000000000000000000ff"
+      ],
+      "now": 1762948000,
+      "expect": {
+        "ok": false,
+        "reason": "signature"
+      }
+    },
+    {
+      "id": "v-no-key",
+      "kind": "verify",
+      "title": "No usable key (missing or shorter than 32 after trimming): no_key",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "short",
+        ""
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "no_key"
+      }
+    },
+    {
+      "id": "v-malformed-missing",
+      "kind": "verify",
+      "title": "No header: malformed",
+      "header": null,
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-empty",
+      "kind": "verify",
+      "title": "An empty header: malformed",
+      "header": "",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-version",
+      "kind": "verify",
+      "title": "Version v2: malformed",
+      "header": "v2 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-bearer",
+      "kind": "verify",
+      "title": "The old bearer form: malformed",
+      "header": "Bearer 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-nonce-21",
+      "kind": "verify",
+      "title": "A 21-character nonce: malformed",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-nonce-padded",
+      "kind": "verify",
+      "title": "A nonce with base64 padding: malformed",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAA== e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-sig-63",
+      "kind": "verify",
+      "title": "A 63-character signature: malformed",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a7",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-sig-uppercase",
+      "kind": "verify",
+      "title": "An uppercase hex signature: malformed (hex is lowercase)",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 D441629BB2E5018CA1EA989AD702003734D6A3D02801EAC96655F44235198A70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-double-space",
+      "kind": "verify",
+      "title": "Two spaces between fields: malformed",
+      "header": "v1  1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-trailing-newline",
+      "kind": "verify",
+      "title": "A trailing newline: malformed",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70\n",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-leading-space",
+      "kind": "verify",
+      "title": "A leading space: malformed",
+      "header": " v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-ts-13-digits",
+      "kind": "verify",
+      "title": "A 13-digit timestamp (milliseconds by mistake): malformed",
+      "header": "v1 1762848000000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-ts-negative",
+      "kind": "verify",
+      "title": "A negative timestamp: malformed",
+      "header": "v1 -1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "v-malformed-extra-field",
+      "kind": "verify",
+      "title": "A fifth field: malformed",
+      "header": "v1 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 d441629bb2e5018ca1ea989ad702003734d6a3d02801eac96655f44235198a70 extra",
+      "method": "GET",
+      "path_with_query": "/admin/stats?event=testconf-2099",
+      "keys": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ],
+      "now": 1762848000,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "id": "reject-query-percent",
+      "kind": "reject",
+      "title": "q=a%20b: \"%\" is outside the query charset",
+      "note": "Free text goes under q64, base64url-encoded (see get-q64).",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/people/search?event=testconf-2099&q=a%20b"
+      },
+      "reject": "query_charset"
+    },
+    {
+      "id": "reject-query-space",
+      "kind": "reject",
+      "title": "q=a b: a space (which new URL would encode as %20) is outside the charset",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/people/search?event=testconf-2099&q=a b"
+      },
+      "reject": "query_charset"
+    },
+    {
+      "id": "reject-query-plus",
+      "kind": "reject",
+      "title": "q=a+b: \"+\" is outside the charset",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/people/search?event=testconf-2099&q=a+b"
+      },
+      "reject": "query_charset"
+    },
+    {
+      "id": "reject-query-slash",
+      "kind": "reject",
+      "title": "A \"/\" in the query is outside the charset",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats?event=testconf-2099&path=a/b"
+      },
+      "reject": "query_charset"
+    },
+    {
+      "id": "reject-query-non-ascii",
+      "kind": "reject",
+      "title": "Non-ASCII in the query is outside the charset",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/people/search?event=testconf-2099&q=Zoë"
+      },
+      "reject": "query_charset"
+    },
+    {
+      "id": "reject-get-with-body",
+      "kind": "reject",
+      "title": "A GET with a body",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": "{}",
+        "method": "GET",
+        "path": "/admin/stats?event=testconf-2099"
+      },
+      "reject": "body_on_bodyless_method"
+    },
+    {
+      "id": "reject-delete-with-body",
+      "kind": "reject",
+      "title": "A DELETE with a body",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": "{\"profile_id\":\"x\"}",
+        "method": "DELETE",
+        "path": "/admin/test/profile?event=testconf-2099"
+      },
+      "reject": "body_on_bodyless_method"
+    },
+    {
+      "id": "reject-key-short",
+      "kind": "reject",
+      "title": "A key shorter than 32 characters",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "too-short",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats"
+      },
+      "reject": "key_too_short"
+    },
+    {
+      "id": "reject-key-whitespace",
+      "kind": "reject",
+      "title": "A key that is whitespace only",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "   \n",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats"
+      },
+      "reject": "key_too_short"
+    },
+    {
+      "id": "reject-key-missing",
+      "kind": "reject",
+      "title": "No key",
+      "input": {
+        "base": "https://caddie.example",
+        "key": null,
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats"
+      },
+      "reject": "key_too_short"
+    },
+    {
+      "id": "reject-body-object",
+      "kind": "reject",
+      "title": "An unserialised object as the body",
+      "note": "The caller serialises, so the hash covers the exact bytes sent.",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": {
+          "conferences": []
+        },
+        "method": "POST",
+        "path": "/admin/conferences"
+      },
+      "reject": "body_type"
+    },
+    {
+      "id": "reject-no-method",
+      "kind": "reject",
+      "title": "No method",
+      "input": {
+        "base": "https://caddie.example",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "",
+        "path": "/admin/stats"
+      },
+      "reject": "method"
+    }
+  ]
+}
