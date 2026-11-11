@@ -26,6 +26,8 @@ for (const k of ['APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'VAPID_PUBLIC_KEY', 'VAPID_
 
 const { handlePeopleApi } = await import('../server/people.mjs');
 const { nudgeAfterPresence } = await import('../server/nudge.mjs');
+// The pause between the two pushes of a pair, which these tests do not wait for.
+const NO_PAUSE = { pause: async () => {} };
 const { handlePushApi, registrationId } = await import('../server/push.mjs');
 const { NATIVE_PUSH, AUTH_FAILURES_MAX } = await import('../server/native-push.mjs');
 const { currentCapabilities, handleCapabilities } = await import('../server/capabilities.mjs');
@@ -83,7 +85,7 @@ async function quietNudge(me) {
   const error = console.error;
   console.error = (...args) => lines.push(args.join(' '));
   try {
-    await nudgeAfterPresence(me, CONF);
+    await nudgeAfterPresence(me, CONF, NO_PAUSE);
   } finally {
     console.error = error;
   }

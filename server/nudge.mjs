@@ -23,6 +23,11 @@
 // - The channels share both limits. A receiver is anyone with a Web Push subscription or a native
 //   registration on a channel this server sends on, and one nudge to a receiver is one push to
 //   each of their subscriptions and registrations, counted once against the hourly limit.
+// - When both people of a pair receive the nudge, the pushes to the second person wait a random
+//   0 to 3 seconds after those to the first (pairDelayMs), on every channel, so two phones side by
+//   side never light up at the same moment and point the two people at each other. The pause is
+//   part of this background work, never of the presence write's answer. The writer receives at
+//   most 3 nudges an hour, so one run pauses at most 3 times, 9 seconds in all.
 // - The push names nobody. The Web Push one, which is end-to-end encrypted to the browser, has the
 //   title "Conference Caddie", the sentence above with the other person's matched passage (<mark>
 //   stripped, about 80 characters, else their first speak topic) and the zone as its body, and the
@@ -37,6 +42,7 @@
 //   registration that APNs or FCM reports gone (native-push.mjs says when), but only while it is
 //   unchanged since it was read: a token the device rotated to in the meantime is kept.
 
+import crypto from 'node:crypto';
 import {
   people, idx, NUDGES_INDEX, UpstreamError,
   peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf, SEMANTIC_FLOORS,
@@ -50,6 +56,8 @@ const PUSHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
 const TTL_SECONDS = 600;
 const TITLE = 'Conference Caddie';
+// The longest pause between the pushes to the two people of a pair.
+export const PAIR_JITTER_MAX_MS = 3000;
 
 const iso = (ms) => new Date(ms).toISOString();
 
@@ -154,9 +162,16 @@ async function pushTo(send, subs, payload) {
   return gone;
 }
 
+/** A random whole number of milliseconds from 0 to PAIR_JITTER_MAX_MS, each value as likely. */
+export const pairDelayMs = () => crypto.randomInt(0, PAIR_JITTER_MAX_MS + 1);
+const pairPause = () => new Promise((resolve) => {
+  setTimeout(resolve, pairDelayMs());
+});
+
 // Runs the rule for one person whose presence (me.presence_zone, me.presence_until) was just
-// written. Resolves when done; never rejects.
-export async function nudgeAfterPresence(me, conf) {
+// written. Resolves when done; never rejects. pause is what waits between the pushes to the two
+// people of a pair: a random pause of pairDelayMs, unless a test passes another.
+export async function nudgeAfterPresence(me, conf, { pause = pairPause } = {}) {
   try {
     const zone = me.presence_zone;
     if (!zone || !isAround(me)) return;
@@ -216,12 +231,11 @@ export async function nudgeAfterPresence(me, conf) {
       }, { okStatuses: [409] });
       if (status === 409) continue;
       for (const id of receivers) counts.set(id, (counts.get(id) ?? 0) + 1);
-      if (receivers.includes(me.profile_id)) {
-        drop(await pushTo(send, subsOf(me.profile_id), { title: TITLE, body: body(theirPassage, zone), data: { url } }));
-      }
-      if (receivers.includes(them.profile_id)) {
-        drop(await pushTo(send, subsOf(them.profile_id), { title: TITLE, body: body(myPassage, zone), data: { url } }));
-      }
+      const toMe = receivers.includes(me.profile_id);
+      const toThem = receivers.includes(them.profile_id);
+      if (toMe) drop(await pushTo(send, subsOf(me.profile_id), { title: TITLE, body: body(theirPassage, zone), data: { url } }));
+      if (toMe && toThem) await pause();
+      if (toThem) drop(await pushTo(send, subsOf(them.profile_id), { title: TITLE, body: body(myPassage, zone), data: { url } }));
     }
   } catch (err) {
     console.error(`Nudge after presence failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
