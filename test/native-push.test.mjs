@@ -12,6 +12,7 @@ import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http2 from 'node:http2';
+import net from 'node:net';
 
 const SETTINGS = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY_P8', 'APNS_BUNDLE_ID', 'FCM_PROJECT_ID', 'PUSH_TRANSPORT', 'PUSH_STUB_URL'];
 for (const k of SETTINGS) delete process.env[k];
@@ -648,10 +649,29 @@ describe('the HTTP/2 transport', () => {
   const requests = [];
   let port;
   server.on('session', (s) => serverSessions.push(s));
+  // /goaway/{name}: the first time, held until two are in flight on one session; then the server
+  // sends GOAWAY with the first one's stream id as the last it will process, and answers that one
+  // a moment later on the closing session. Any later time: answered at once.
+  const goawaySeen = new Set();
+  const goawayHeld = [];
   server.on('stream', (stream, headers) => {
     requests.push(headers);
     const path = headers[':path'];
     if (path.startsWith('/slow')) return; // never answers
+    if (path.startsWith('/goaway/') && !goawaySeen.has(path)) {
+      goawaySeen.add(path);
+      stream.on('error', () => undefined); // the stream above the last id is refused
+      goawayHeld.push(stream);
+      if (goawayHeld.length === 2) {
+        const [first] = goawayHeld;
+        first.session.goaway(http2.constants.NGHTTP2_NO_ERROR, first.id);
+        setTimeout(() => {
+          first.respond({ ':status': 200 });
+          first.end();
+        }, 150);
+      }
+      return;
+    }
     let body = '';
     stream.on('data', (c) => {
       body += c;
@@ -695,6 +715,61 @@ describe('the HTTP/2 transport', () => {
       assert.equal(transport.sessions.size, 0, 'the timed-out session is dropped');
       assert.equal((await transport(origin, { path: '/3/device/dd', headers: {}, body: '{}' })).status, 200);
       assert.equal(serverSessions.length, 3, 'the next request opened a new session');
+    } finally {
+      transport.close();
+    }
+  });
+
+  test('GOAWAY with pushes in flight: the one above the last stream id is rejected at once and sent again on a fresh session', async () => {
+    const origin = `http://127.0.0.1:${port}`;
+    const transport = http2Transport({ timeoutMs: 5000 });
+    const sessionsBefore = serverSessions.length;
+    const done = {};
+    const t0 = Date.now();
+    try {
+      const a = transport(origin, { path: '/goaway/a', headers: {}, body: '{}' }).then((r) => {
+        done.a = Date.now() - t0;
+        return r;
+      });
+      const b = transport(origin, { path: '/goaway/b', headers: {}, body: '{}' }).then((r) => {
+        done.b = Date.now() - t0;
+        return r;
+      });
+      const [ra, rb] = await Promise.all([a, b]);
+      assert.deepEqual([ra.status, rb.status], [200, 200], 'both pushes arrive');
+      assert.ok(done.b < done.a, 'the refused push was sent again before the server even answered the other one');
+      assert.ok(done.b < 1000, `rejected at once, not after the 5 s timeout (${done.b} ms)`);
+      assert.equal(serverSessions.length, sessionsBefore + 2, 'the retry opened a fresh session');
+      assert.equal(requests.filter((r) => r[':path'] === '/goaway/b').length, 2, 'b was sent twice: once refused, once answered');
+      assert.equal(requests.filter((r) => r[':path'] === '/goaway/a').length, 1, 'a finished on the closing session, without a retry');
+    } finally {
+      transport.close();
+    }
+  });
+
+  test('a refused connection fails at once after one retry on a fresh connection, and the next push connects again', async () => {
+    // A port from 8702 to 8709 that nothing listens on: taken, then released.
+    const probe = net.createServer();
+    const free = await listen(probe);
+    await new Promise((resolve) => probe.close(resolve));
+    const origin = `http://127.0.0.1:${free}`;
+    let connects = 0;
+    const transport = http2Transport({ timeoutMs: 5000, connect: (o) => {
+      connects++;
+      return http2.connect(o);
+    } });
+    try {
+      const t0 = Date.now();
+      await assert.rejects(transport(origin, { path: '/3/device/aa', headers: {}, body: '{}' }), { code: 'ECONNREFUSED' });
+      assert.ok(Date.now() - t0 < 1000, 'not after the timeout');
+      assert.equal(connects, 2, 'one retry, on a new connection');
+      assert.equal(transport.sessions.size, 0);
+      const h = harness();
+      const push = createNativePush(APNS_ENV, { apnsTransport: (o, req) => transport(origin, req), now: h.now, log: h.log });
+      assert.equal(await push.send(reg()), 'failed');
+      assert.equal(connects, 4);
+      assert.deepEqual(h.lines, ['Native push failed: apns ECONNREFUSED']);
+      assertClean(h.lines);
     } finally {
       transport.close();
     }

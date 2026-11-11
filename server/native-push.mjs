@@ -158,15 +158,36 @@ export function fcmConfigFrom(env) {
 // Transports.
 
 const timeoutError = () => Object.assign(new Error('timeout'), { name: 'TimeoutError' });
+const codeError = (code) => Object.assign(new Error(code), { code });
+
+// Errors that say the connection failed, not that APNs judged the push: the push is tried once
+// more on a fresh session. A push that did reach Apple and is sent again shows once, because both
+// carry the same apns-collapse-id.
+const CONNECTION_ERRORS = new Set(['GOAWAY', 'REFUSED_STREAM', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ERR_HTTP2_STREAM_CANCEL', 'ERR_HTTP2_GOAWAY_SESSION', 'ERR_HTTP2_INVALID_SESSION']);
+
+// The error a failed stream is reported with: node names a stream cancelled by a failed connection
+// ERR_HTTP2_STREAM_CANCEL with the connection's error as its cause, and a stream the server
+// refused ERR_HTTP2_STREAM_ERROR with the RST_STREAM code on the stream.
+function streamError(err, stream) {
+  if (err?.code === 'ERR_HTTP2_STREAM_CANCEL' && typeof err.cause?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(err.cause.code)) return codeError(err.cause.code);
+  if (err?.code === 'ERR_HTTP2_STREAM_ERROR' && stream?.rstCode === http2.constants.NGHTTP2_REFUSED_STREAM) return codeError('REFUSED_STREAM');
+  return err;
+}
 
 /**
  * The APNs transport over node:http2: (origin, { path, headers, body }) resolves to
  * { status, body }. One session per origin is kept and reused for every push, as Apple asks. A
  * session that receives GOAWAY, closes, fails, times out a request or stays idle is dropped,
- * and the next push opens a new one. Sessions are unref'd, so they never keep the process alive.
+ * and the next push opens a new one. On GOAWAY every push in flight on a stream above the last
+ * stream id the server will process is rejected at once, while those at or below it finish on
+ * the closing session. A push that fails with a connection error (CONNECTION_ERRORS) is sent once
+ * more on a fresh session; a timeout is not, because the time is spent. Sessions are unref'd, so
+ * they never keep the process alive.
  */
 export function http2Transport({ timeoutMs = REQUEST_TIMEOUT_MS, idleMs = SESSION_IDLE_MS, connect = http2.connect } = {}) {
   const sessions = new Map();
+  // The pushes in flight on each session: Map stream -> fail(error).
+  const inFlight = new WeakMap();
   const drop = (origin, session) => {
     if (sessions.get(origin) === session) sessions.delete(origin);
   };
@@ -175,9 +196,13 @@ export function http2Transport({ timeoutMs = REQUEST_TIMEOUT_MS, idleMs = SESSIO
     if (open && !open.closed && !open.destroyed) return open;
     const session = connect(origin);
     sessions.set(origin, session);
+    inFlight.set(session, new Map());
     session.on('error', () => drop(origin, session));
-    session.on('goaway', () => {
+    session.on('goaway', (code, lastStreamID) => {
       drop(origin, session);
+      for (const [stream, fail] of inFlight.get(session)) {
+        if (stream.id === undefined || stream.id > lastStreamID) fail(codeError('GOAWAY'));
+      }
       session.close();
     });
     session.on('close', () => drop(origin, session));
@@ -188,7 +213,7 @@ export function http2Transport({ timeoutMs = REQUEST_TIMEOUT_MS, idleMs = SESSIO
     session.unref();
     return session;
   }
-  const request = (origin, { path, headers, body }) => new Promise((resolve, reject) => {
+  const once = (origin, { path, headers, body }) => new Promise((resolve, reject) => {
     let session;
     let stream;
     try {
@@ -197,11 +222,13 @@ export function http2Transport({ timeoutMs = REQUEST_TIMEOUT_MS, idleMs = SESSIO
     } catch (err) {
       if (session) {
         drop(origin, session);
-        session.destroy();
+        // A session that received GOAWAY is closing and still finishing its own streams.
+        if (err?.code !== 'ERR_HTTP2_GOAWAY_SESSION') session.destroy();
       }
       reject(err);
       return;
     }
+    const streams = inFlight.get(session);
     let status = 0;
     let size = 0;
     const chunks = [];
@@ -210,8 +237,17 @@ export function http2Transport({ timeoutMs = REQUEST_TIMEOUT_MS, idleMs = SESSIO
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      streams.delete(stream);
       fn(value);
     };
+    const fail = (err) => {
+      const error = streamError(err, stream);
+      // A connection error takes the session with it: the retry opens a new one.
+      if (CONNECTION_ERRORS.has(error?.code)) drop(origin, session);
+      if (error?.code === 'GOAWAY' && !stream.closed) stream.close(http2.constants.NGHTTP2_REFUSED_STREAM);
+      settle(reject, error);
+    };
+    streams.set(stream, fail);
     // A push that gets no answer in time points at a dead connection: the session is dropped.
     const timer = setTimeout(() => {
       settle(reject, timeoutError());
@@ -226,10 +262,18 @@ export function http2Transport({ timeoutMs = REQUEST_TIMEOUT_MS, idleMs = SESSIO
       size += chunk.length;
     });
     stream.on('end', () => settle(resolve, { status, body: Buffer.concat(chunks).toString('utf8').slice(0, BODY_MAX) }));
-    stream.on('error', (err) => settle(reject, err));
-    stream.on('close', () => settle(reject, Object.assign(new Error('stream closed'), { code: 'ERR_STREAM_CLOSED' })));
+    stream.on('error', fail);
+    stream.on('close', () => settle(reject, codeError('ERR_STREAM_CLOSED')));
     stream.end(body);
   });
+  const request = async (origin, req) => {
+    try {
+      return await once(origin, req);
+    } catch (err) {
+      if (!CONNECTION_ERRORS.has(err?.code)) throw err;
+      return once(origin, req);
+    }
+  };
   request.close = () => {
     for (const s of sessions.values()) s.close();
     sessions.clear();
