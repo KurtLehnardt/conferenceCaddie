@@ -249,3 +249,40 @@ test('signed mode refuses a token shorter than 32 characters before any request'
     server.close();
   }
 });
+
+// SEC: an admin request never follows a redirect. The stub answers every /admin/ request with a 302
+// to a second loopback server (another origin); a followed redirect would carry X-Caddie-Admin and
+// the signed body there. The second server must never be called, the check must FAIL naming 302, and
+// the 3xx must never be retried (no NOTE line, and no second request for the same signed call).
+for (const [mode, ok] of [['signed', signedOk], ['bearer', bearerOk]]) {
+  test(`a 302 from the API on an admin request is a FAIL naming 302, never followed or retried (${mode})`, async () => {
+    const other = await stubWorker({ authOk: () => true });
+    const { server, requests, port } = await stubWorker({ authOk: ok });
+    const base = server.listeners('request')[0];
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      if (req.url.startsWith('/admin/') && (req.headers['x-caddie-admin'] || req.headers.authorization) && !req.headers.origin) {
+        requests.push({ method: req.method, path: req.url, signed: req.headers['x-caddie-admin'] ?? null, authorization: req.headers.authorization ?? null, origin: null, redirected: true });
+        res.writeHead(302, { location: `http://127.0.0.1:${other.port}${req.url}` });
+        return res.end('moved');
+      }
+      return base(req, res);
+    });
+    try {
+      const run = await runSmoke(port, { SMOKE_ADMIN_AUTH: mode });
+      assert.equal(other.requests.length, 0, `the redirect target was called: ${JSON.stringify(other.requests.map((r) => r.path))}`);
+      const fails = run.lines.filter((l) => l.startsWith('FAIL ') && /\b302\b/.test(l));
+      assert.ok(fails.length > 0, 'a FAIL line names 302');
+      assert.ok(run.lines.some((l) => l.startsWith('FAIL ') && l.includes('answered 302')), 'admin() fails naming 302');
+      assert.ok(!run.lines.some((l) => l.startsWith('NOTE ') && l.includes('(admin)')), 'no admin retry NOTE');
+      const redirected = requests.filter((r) => r.redirected && r.origin === null);
+      const nonces = redirected.map((r) => r.signed ?? r.authorization);
+      assert.ok(redirected.length > 0);
+      if (mode === 'signed') assert.equal(new Set(nonces).size, nonces.length, 'no signed header was sent twice');
+      assert.ok(!run.stdout.includes(TOKEN));
+    } finally {
+      server.close();
+      other.server.close();
+    }
+  });
+}

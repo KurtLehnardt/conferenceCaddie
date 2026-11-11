@@ -438,6 +438,7 @@ async function readBackShared(device, event, requested, before, label) {
 // upserts, the fixture delete and the unhide are no-ops the second time), so that is safe. Flags
 // for a route go in the JSON body, never in the query string, so the body hash covers them.
 // Nothing here prints the token, a request body or a response body.
+class AdminRedirectError extends Error {}
 async function admin(method, path, body) {
   const serialised = body === undefined ? undefined : JSON.stringify(body);
   let lastError;
@@ -449,8 +450,15 @@ async function admin(method, path, body) {
         method,
         headers,
         body: serialised,
+        redirect: 'manual',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      // A redirect is never followed: it would carry the admin credentials (and a signed body) to
+      // wherever the Location points. It is a failure, not a network error, so it is never retried.
+      if (res.status >= 300 && res.status < 400) {
+        await res.body?.cancel();
+        throw new AdminRedirectError(`${method} ${path.split('?')[0]} (admin) answered ${res.status}, a redirect; admin requests never follow redirects`);
+      }
       const text = await res.text();
       if (res.status >= 500 && attempt === 0) {
         retried++;
@@ -468,7 +476,7 @@ async function admin(method, path, body) {
       return { status: res.status, json, headers: res.headers };
     } catch (err) {
       // A request the signer refuses is a bug in this script, not a network failure: no retry.
-      if (err instanceof UsageError) throw err;
+      if (err instanceof UsageError || err instanceof AdminRedirectError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -818,7 +826,12 @@ if (!IS_WORKER) {
 } else {
   await check('adm1: the admin routes answer 404 without a valid token and send no CORS headers', async () => {
     const probe = async (label, headers) => {
-      const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      // Never follow a redirect with admin headers on it (see admin()); the probe fails naming the status.
+      if (res.status >= 300 && res.status < 400) {
+        await res.body?.cancel();
+        return [`${label} gave ${res.status}, a redirect that was not followed`];
+      }
       const text = await res.text();
       otherResponses.push({ label: 'admin-probe', path: '/admin/stats', text, headersText: headerText(res.headers) });
       const bad = [];

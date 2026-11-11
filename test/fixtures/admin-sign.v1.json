@@ -20,7 +20,7 @@
     "key2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
   },
   "verify_reasons": {
-    "_note": "The verifier checks in this order: malformed, bodyless_body_hash, no_key, signature, skew, and reports the first that applies. When several reasons apply, any one of those applying reasons is acceptable; all map to 404, except skew, which is 401 admin_skew and can only follow a valid signature.",
+    "_note": "The reference verifier checks in this order: malformed, bodyless_body_hash, no_key, signature, skew, and reports the first that applies. A verifier may check no_key before malformed (the Worker does). When several reasons apply, any one of those applying reasons is acceptable; all map to 404, except skew, which is 401 admin_skew and can only follow a valid signature.",
     "malformed": "the header is absent or does not match header_re (Worker: 404)",
     "bodyless_body_hash": "GET, HEAD or DELETE with a bodySha256 other than empty_body_sha256 (Worker: 404)",
     "no_key": "the Worker holds no usable key: ADMIN_TOKEN missing or shorter than 32 after trimming (Worker: 404)",
