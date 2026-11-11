@@ -61,3 +61,12 @@ test('a terms aggregation gives each bucket its own top_hits: sorted, sized, wit
   const one = (await call(cluster, 'POST', `/${INDEX.push}/_search`, JSON.stringify({ size: 0, aggs: { people: { terms: { field: 'profile_id', size: 1 } } } }))).json;
   assert.deepEqual(one.aggregations.people.buckets, [{ key: 'a', doc_count: 3 }], 'the terms size cuts the buckets, the biggest first');
 });
+
+test('top_hits with from + size over index.max_inner_result_window (100) is refused, as Elasticsearch does', async () => {
+  const cluster = new FakeES();
+  cluster.put(INDEX.push, 'a1', { profile_id: 'a' });
+  const search = (top) => call(cluster, 'POST', `/${INDEX.push}/_search`, JSON.stringify({ size: 0, query: { match_all: {} }, aggs: { people: { terms: { field: 'profile_id', size: 5 }, aggs: { newest: { top_hits: top } } } } }));
+  assert.equal((await search({ size: 100 })).status, 200);
+  await assert.rejects(() => search({ size: 101 }), /max_inner_result_window/);
+  await assert.rejects(() => search({ from: 90, size: 11 }), /max_inner_result_window/);
+});

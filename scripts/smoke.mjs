@@ -1637,37 +1637,35 @@ try {
     report(ok, 'q3: presence needs a visible profile', `no profile ${none.status} ${none.json.error}, circle-only ${circleOnly.status} ${circleOnly.json.error}, unknown zone ${badZone.status}`);
   });
 
-  // The Worker accepts a push subscription only on a known browser push service host, so a
-  // profile can never make it send signed requests to a host of its choosing. The accepted
+  // Both backends accept a push subscription only on a known browser push service host, so a
+  // profile can never make them send signed requests to a host of its choosing. The accepted
   // subscription is removed again at once.
-  if (IS_WORKER) {
-    await check('push1: a push subscription must point at a known push service', async () => {
-      const P = newDevice();
-      // A visible profile with no words of the other checks, deleted again below so it never shows up in them.
-      const made = await putProfile(P, PRIMARY, 'P', { about: 'Push subscription check.' }, { open: true });
-      if (made.status !== 200) throw new Error(`the push test profile gave ${made.status}`);
-      const ecdh = crypto.createECDH('prime256v1');
-      ecdh.generateKeys();
-      const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
-      const sub = (endpoint) => api('PUT', '/api/push/subscription', { event: PRIMARY, subscription: { endpoint, keys } }, { device: P, label: 'P-push' });
-      const problems = [];
-      for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x', 'https://x.jmt17.google.com/fcm/send/x', 'https://jmt17.google.com.evil.com/fcm/send/x', 'https://jmt17.google.com:8443/fcm/send/x']) {
-        const r = await sub(endpoint);
-        if (r.status !== 400) problems.push(`${new URL(endpoint).host} gave ${r.status}`);
-      }
-      // fcm.googleapis.com is Chrome Stable; jmt17.google.com is Chrome Beta, Dev, Canary and Chromium.
-      for (const host of ['fcm.googleapis.com', 'jmt17.google.com']) {
-        const good = `https://${host}/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
-        const ok = await sub(good);
-        if (ok.status !== 200) problems.push(`${host} gave ${ok.status}`);
-        const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
-        if (del.status !== 200) problems.push(`delete of ${host} gave ${del.status}`);
-      }
-      const gone = await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: P, label: 'P-delete' });
-      if (gone.status !== 200) problems.push(`profile delete gave ${gone.status}`);
-      report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals, subdomain and look-alike hosts and other ports refused; fcm.googleapis.com and jmt17.google.com accepted and removed');
-    });
-  }
+  await check('push1: a push subscription must point at a known push service', async () => {
+    const P = newDevice();
+    // A visible profile with no words of the other checks, deleted again below so it never shows up in them.
+    const made = await putProfile(P, PRIMARY, 'P', { about: 'Push subscription check.' }, { open: true });
+    if (made.status !== 200) throw new Error(`the push test profile gave ${made.status}`);
+    const ecdh = crypto.createECDH('prime256v1');
+    ecdh.generateKeys();
+    const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
+    const sub = (endpoint) => api('PUT', '/api/push/subscription', { event: PRIMARY, subscription: { endpoint, keys } }, { device: P, label: 'P-push' });
+    const problems = [];
+    for (const endpoint of ['https://example.com/not-a-push-service', 'https://192.0.2.10/push', 'https://fcm.googleapis.com:8443/fcm/send/x', 'https://x.jmt17.google.com/fcm/send/x', 'https://jmt17.google.com.evil.com/fcm/send/x', 'https://jmt17.google.com:8443/fcm/send/x']) {
+      const r = await sub(endpoint);
+      if (r.status !== 400) problems.push(`${new URL(endpoint).host} gave ${r.status}`);
+    }
+    // fcm.googleapis.com is Chrome Stable; jmt17.google.com is Chrome Beta, Dev, Canary and Chromium.
+    for (const host of ['fcm.googleapis.com', 'jmt17.google.com']) {
+      const good = `https://${host}/fcm/send/smoke-${crypto.randomBytes(12).toString('base64url')}`;
+      const ok = await sub(good);
+      if (ok.status !== 200) problems.push(`${host} gave ${ok.status}`);
+      const del = await api('DELETE', '/api/push/subscription', { event: PRIMARY, endpoint: good }, { device: P, label: 'P-push-delete' });
+      if (del.status !== 200) problems.push(`delete of ${host} gave ${del.status}`);
+    }
+    const gone = await api('DELETE', `/api/people/profile?event=${encodeURIComponent(PRIMARY)}`, undefined, { device: P, label: 'P-delete' });
+    if (gone.status !== 200) problems.push(`profile delete gave ${gone.status}`);
+    report(problems.length === 0, 'push1: a push subscription must point at a known push service', problems.length ? problems.join('; ') : 'other hosts, IP literals, subdomain and look-alike hosts and other ports refused; fcm.googleapis.com and jmt17.google.com accepted and removed');
+  });
 
   await check('q4: a listed word is rejected', async () => {
     if (!WORDLIST.length) throw new Error('config/moderation-words.json has no words');
