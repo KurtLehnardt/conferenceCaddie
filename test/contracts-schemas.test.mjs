@@ -94,7 +94,7 @@ test('live topic snapshots match the snapshot schema and the topics API rules', 
     const snap = readJson(FIX, 'topics-live', f);
     assertValid(check(snap, { closed: true }), f);
     assert.equal(`${snap.event}.json`, f);
-    // Taken on 2026-11-10; a snapshot refreshed for newer data says when (KubeCon NA on 2026-11-11).
+    // Taken on 2026-11-10; a snapshot refreshed for newer data says when.
     assert.equal(snap.snapshot.taken_on, snap.snapshot.fetched_at.slice(0, 10), `${f} taken_on`);
     assert.ok(snap.snapshot.taken_on >= '2026-11-10', `${f} taken_on`);
     assert.equal(snap.snapshot.source, `GET ${SNAPSHOT_HOST}/api/topics?event=${snap.event}`, `${f} source`);
