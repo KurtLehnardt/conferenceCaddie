@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -216,6 +217,7 @@ internal fun TalkResult(
     rank: (@Composable () -> Unit)? = null,
 ) {
     val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
+    val passage = if (showEvidence) remember(talk.talkId, searchText) { Evidence.forTalk(talk, searchText) } else null
     TalkCard(
         title = talk.title,
         whenText = whenText(talk, bundle.conference),
@@ -223,7 +225,7 @@ internal fun TalkResult(
         speakers = talk.speakers.joinToString(", ").takeIf { it.isNotEmpty() },
         room = talk.room,
         tags = talkTags(talk),
-        evidence = if (showEvidence) highlight(Evidence.forTalk(talk, searchText), terms) else null,
+        evidence = passage?.let { highlight(it, terms) },
         interested = interested,
         onToggleInterested = { onToggleInterested(talk) },
         ended = TalkTime.hasEnded(talk, nowMs),

@@ -144,7 +144,8 @@ kotlin {
  * Fails when the merged manifest of a variant brings back what ONNX Runtime's AAR adds and
  * src/main/AndroidManifest.xml removes: the telemetry initializer (a content provider that starts
  * with the app and uploads to Microsoft) and the ACCESS_NETWORK_STATE permission. A new ONNX Runtime
- * version could rename either, so any provider of ONNX Runtime fails too. Runs with every assemble.
+ * version could rename the provider or add another component, so any provider, receiver, service or
+ * activity of ONNX Runtime fails too. Runs with every assemble.
  */
 abstract class CheckOnnxRuntimeManifest : DefaultTask() {
     @get:InputFile
@@ -165,7 +166,9 @@ abstract class CheckOnnxRuntimeManifest : DefaultTask() {
         fun names(tag: String) = doc.getElementsByTagName(tag).let { list ->
             (0 until list.length).map { (list.item(it) as org.w3c.dom.Element).getAttributeNS(android, "name") }
         }
-        val problems = names("provider").filter { it.startsWith("ai.onnxruntime.") }.map { "the provider $it" } +
+        val components = listOf("provider", "receiver", "service", "activity")
+            .flatMap { tag -> names(tag).filter { it.startsWith("ai.onnxruntime.") }.map { "the $tag $it" } }
+        val problems = components +
             names("uses-permission").filter { it == "android.permission.ACCESS_NETWORK_STATE" }.map { "the permission $it" }
         if (problems.isNotEmpty()) {
             throw GradleException(
@@ -173,7 +176,7 @@ abstract class CheckOnnxRuntimeManifest : DefaultTask() {
                     "must not have. Remove each in src/main/AndroidManifest.xml with tools:node=\"remove\".",
             )
         }
-        report.get().asFile.writeText("No ONNX Runtime provider and no ACCESS_NETWORK_STATE in ${manifest.get().asFile.name}.\n")
+        report.get().asFile.writeText("No ONNX Runtime component and no ACCESS_NETWORK_STATE in ${manifest.get().asFile.name}.\n")
     }
 }
 
@@ -182,7 +185,7 @@ androidComponents {
         val name = variant.name.replaceFirstChar { it.uppercase() }
         val check = tasks.register<CheckOnnxRuntimeManifest>("check${name}OnnxRuntimeManifest") {
             group = "verification"
-            description = "Checks that the ${variant.name} manifest has no ONNX Runtime telemetry provider and no ACCESS_NETWORK_STATE."
+            description = "Checks that the ${variant.name} manifest has no ONNX Runtime component and no ACCESS_NETWORK_STATE."
             manifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
             report.set(layout.buildDirectory.file("reports/onnxruntime-manifest/${variant.name}.txt"))
         }

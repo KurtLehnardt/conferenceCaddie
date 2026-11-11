@@ -93,7 +93,9 @@ installs the release build of the device's ABI (signed with the debug key when n
 set), checks the installed package for ONNX Runtime's telemetry provider and the network-state
 permission, starts it, opens Settings, and searches for letters that are in no talk, which only the
 query model can answer, so the model must load and run under R8. The search uses the official server
-and the published bundles, so the device needs a connection. CI runs it on the emulator.
+and the published bundles, so the device needs a connection; that step is tried twice, and on a pull
+request whose runner cannot reach the server or the bundles it is skipped with a warning. CI runs it
+on the emulator.
 
 The native app uses the same application id as the Capacitor app, `app.conferencecaddie`. A phone
 cannot have both installed at once. Installing a debug build over a release build, or the other way
@@ -438,10 +440,12 @@ xcrun simctl openurl booted "caddie://connect?url=https%3A%2F%2Fkurtlehnardt.git
   adds. `openEncoder` is the only code that may call ONNX Runtime (`scripts/check-onnxruntime-entry.sh`
   fails on any other use), the `check<Variant>OnnxRuntimeManifest` task fails a build whose merged
   manifest has the provider or the permission, and the release smoke test checks the installed
-  package. Keep all of this when ONNX Runtime is updated.
+  package. `openEncoder` also refuses to start ONNX Runtime unless the variable is set. Keep all of
+  this when ONNX Runtime is updated.
 - **The model loads when it is needed.** The core loads the model on the first text search (or For
-  you with learn text), tries again after a failure once a pause has passed, and closes it when the
-  system asks for memory; the next text search loads it again.
+  you with learn text) whose embedding is not cached, tries again after a failure once a pause has
+  passed, and closes it when the system asks for memory (a load still running is closed when it
+  ends); the next such search loads it again.
 - **The smoke checks.** `TalkSmokeTest` runs the talk checks of `scripts/smoke.mjs` against the shared
   search, For you and topic lists with the real model, over bundles built from `main`'s data, and
   prints a PASS, FAIL or N/A line per check (the report is also written to

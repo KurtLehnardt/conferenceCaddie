@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -121,13 +122,13 @@ fun CaddieApp(
     } else {
         remember(core) { SearchModel(scope) { core.search(it) } }
     }
-    remember(search, scope) { search.attach(scope) }
+    SideEffect { search.attach(scope) }
     val schedule = if (owner != null) {
         viewModel(viewModelStoreOwner = owner, key = "schedule") { ScheduleViewModel(scope) { core.search(it) } }.model
     } else {
         remember(core) { ScheduleModel(scope) { core.search(it) } }
     }
-    remember(schedule, scope) { schedule.attach(scope) }
+    SideEffect { schedule.attach(scope) }
     var searchView by rememberSaveable { mutableStateOf(SearchView.Search) }
     // My schedule's List or Day choice is kept on this device, as the web keeps it in local storage;
     // the Day view's day belongs to its conference.
@@ -143,7 +144,7 @@ fun CaddieApp(
     } else {
         remember(core) { ImportModel(scope) { core.importSchedule(it) } }
     }
-    remember(importer, scope) { importer.attach(scope) }
+    SideEffect { importer.attach(scope) }
     var importOpen by rememberSaveable { mutableStateOf(false) }
     // A file opened in the app before its conference's schedule is ready waits for it.
     var pendingFile by remember { mutableStateOf<PickedFile?>(null) }
@@ -172,10 +173,13 @@ fun CaddieApp(
         core.refresh()
         onPauseOrDispose { }
     }
-    // The model loads once per process, in the background; searches run again once it is ready, so
-    // the meaning-based list joins what is on screen.
+    // The core loads the model in the background when a search first needs it; the search runs again
+    // once the model is ready, so the meaning-based list joins what is on screen, or once it failed,
+    // so the results say they are keyword matches.
     LaunchedEffect(core) { if (embedder != null) core.useEmbedder(embedder) }
-    LaunchedEffect(state.semantic) { if (state.semantic == SemanticState.Ready) search.submit() }
+    LaunchedEffect(state.semantic) {
+        if (state.semantic == SemanticState.Ready || state.semantic == SemanticState.Unavailable) search.submit()
+    }
     // The theme choice is kept on this device, as the web keeps it in local storage; a debug
     // launch option wins for that run.
     LaunchedEffect(core) {
@@ -218,7 +222,12 @@ fun CaddieApp(
     LaunchedEffect(talkLaunch.link) { talkLaunch.link?.let { IncomingHandoff.offerLink(it) } }
     // For you asks again whenever what it depends on changes, and every minute, as talks end, but
     // only while it is on screen (the effect lives in its tab); coming back to it catches up.
-    val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, state.semantic, nowMs / 60_000)
+    // A model given back for memory (Ready to Idle) changes nothing For you shows, so it does not ask
+    // again then. Idle before the model was ever ready is another matter: the first Ready must refresh.
+    var modelWasReady by remember { mutableStateOf(false) }
+    LaunchedEffect(state.semantic) { if (state.semantic == SemanticState.Ready) modelWasReady = true }
+    val forYouSemantic = if (state.semantic == SemanticState.Idle && modelWasReady) SemanticState.Ready else state.semantic
+    val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, forYouSemantic, nowMs / 60_000)
 
     // The person is told once when the stored data could not be opened.
     LaunchedEffect(state.storageReset) {

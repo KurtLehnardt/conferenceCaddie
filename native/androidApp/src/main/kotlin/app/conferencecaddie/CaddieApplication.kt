@@ -8,9 +8,11 @@ import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
 class CaddieApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        // ONNX Runtime reads ORT_DISABLE_TELEMETRY when it starts. Setting it here, on the main
-        // thread before any other code of the app runs, means no thread is reading the environment
-        // while it changes, and it is set before the query model can be loaded.
+        // ONNX Runtime reads ORT_DISABLE_TELEMETRY when it starts. Android runs the app's content
+        // providers before this (AndroidX Startup and Compose resources; none loads ONNX Runtime,
+        // whose own provider the manifest removes) and creates the activity after it, so this sets
+        // the variable on the main thread before the core starts any thread and before the query
+        // model can be loaded. openEncoder refuses to start ONNX Runtime without it.
         OnnxRuntimeTelemetry.disableForProcess()
     }
 

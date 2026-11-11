@@ -69,9 +69,11 @@ fun TopicPickerSheet(
     // The chosen topics, in order. The sheet keeps its own list and saves the whole of it on every
     // tap, so a tap never starts from [selected] while the save of the one before is still on its
     // way, which would drop that one.
-    val current = remember { mutableStateListOf<String>().apply { addAll(selected) } }
+    // Both start again from [selected] if the sheet shows another conference.
+    val slug = bundle.conference.slug
+    val current = remember(slug) { mutableStateListOf<String>().apply { addAll(selected) } }
     // The pinned row in display order, ghosts (just removed) included.
-    val pinned = remember { mutableStateListOf<String>().apply { addAll(selected) } }
+    val pinned = remember(slug) { mutableStateListOf<String>().apply { addAll(selected) } }
     var ghostTick by remember { mutableStateOf(0) }
     val chosen = current.toSet()
     val full = current.size >= Strings.Topics.MAX

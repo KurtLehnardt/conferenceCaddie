@@ -25,12 +25,27 @@ internal interface EncoderSession {
  * or its C API (`OrtGetApiBase`), so every session gets the settings below, and CI fails on any
  * other use (native/scripts/check-onnxruntime-entry.sh). Each implementation turns the
  * environment's telemetry events off and does not let idle intra-op threads spin. The process must
- * have called [OnnxRuntimeTelemetry.disableForProcess] before, which the apps do at start.
+ * have called [OnnxRuntimeTelemetry.disableForProcess] before, which the apps do at start; each
+ * implementation refuses to start ONNX Runtime otherwise ([requireOnnxRuntimeTelemetryDisabled]).
  */
 internal expect fun openEncoder(model: ByteArray, threads: Int): EncoderSession
 
 /** Sets ORT_DISABLE_TELEMETRY in the process environment. */
 internal expect fun disableOnnxRuntimeTelemetryByEnvironment()
+
+/** Whether the process environment holds ORT_DISABLE_TELEMETRY=1 now. */
+internal expect fun onnxRuntimeTelemetryDisabled(): Boolean
+
+/**
+ * Throws unless ORT_DISABLE_TELEMETRY=1 is set, so that a host which forgot
+ * [OnnxRuntimeTelemetry.disableForProcess] gets no ONNX Runtime at all rather than one that sends
+ * telemetry. Each [openEncoder] calls it before ONNX Runtime starts.
+ */
+internal fun requireOnnxRuntimeTelemetryDisabled() {
+    check(onnxRuntimeTelemetryDisabled()) {
+        "ONNX Runtime is not started without ORT_DISABLE_TELEMETRY=1; call OnnxRuntimeTelemetry.disableForProcess() at start."
+    }
+}
 
 internal const val ORT_DISABLE_TELEMETRY = "ORT_DISABLE_TELEMETRY"
 
