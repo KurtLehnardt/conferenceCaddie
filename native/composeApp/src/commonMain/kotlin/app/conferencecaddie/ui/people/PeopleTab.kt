@@ -260,10 +260,14 @@ fun rememberPeopleUi(
     }
 
     // Work the controller did by itself (an automatic share as talks are marked) reports here, as
-    // the web's toast does, with "Open profile" when the message is about the profile.
+    // the web's toast does, with "Open profile" when the controller says the fix is on the profile.
     LaunchedEffect(state.notice) {
         val notice = state.notice ?: return@LaunchedEffect
-        if (notice.contains("profile")) toast(notice, PeopleCommonStrings.OPEN_PROFILE, host::openProfile) else toast(notice, null, null)
+        if (notice.opensProfile) {
+            toast(notice.message, PeopleCommonStrings.OPEN_PROFILE, host::openProfile)
+        } else {
+            toast(notice.message, null, null)
+        }
         controller.clearNotice()
     }
 

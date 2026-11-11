@@ -102,7 +102,7 @@ fun PeopleIMet(state: PeopleUiState, host: PeopleHost) {
                     }
                     CaddieButton(
                         ProfileStrings.REMOVE,
-                        { scope.launch { host.controller.removeMet(i) } },
+                        { scope.launch { host.controller.removeMet(m) } },
                         Modifier.stretchedLeft(12).testTag("met-remove-$i"),
                         variant = ButtonVariant.Text,
                         small = true,
