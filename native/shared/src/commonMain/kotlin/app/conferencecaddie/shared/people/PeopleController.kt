@@ -755,6 +755,10 @@ class PeopleController(
         override fun topicIds(slug: String): Set<String>? =
             context?.bundle?.takeIf { it.conference.slug == slug }?.topics?.map { it.topicId }?.toSet()
 
+        override fun selectedSlug(): String? = context?.takeIf { it.backend == backend }?.conference?.slug
+
+        override fun listedConferences(): List<ConferenceInfo>? = context?.takeIf { it.backend == backend }?.listed?.takeIf { it.isNotEmpty() }
+
         override suspend fun presenceEndedOnServer(slug: String) = presenceRuntime.presenceEndedOnServer(slug)
 
         override suspend fun stopRuntime(slug: String?) {
@@ -864,6 +868,7 @@ class PeopleController(
                 s.hasDevice = s.credentials.get() != null
                 s.sync.livePresence = { slug -> s.presenceRuntime.get(slug).on }
                 session = s
+                s.sync.reconcileCredential()?.let { setNotice(it) }
                 s.sync.startDeleteRetries()
             }
         }

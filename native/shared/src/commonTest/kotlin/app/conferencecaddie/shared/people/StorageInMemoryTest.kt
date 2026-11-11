@@ -65,15 +65,16 @@ class StorageInMemoryTest {
         assertFalse(inMemory.state.value.deletes.unfinished, "nothing is marked that would be lost at the next start")
         inMemory.close()
 
-        // Why: the same empty records, taken as the truth, would have nothing to delete and would
-        // forget the key, leaving the profile on the server with no way to delete it from here.
+        // The same empty records in a stored database (lost to a reset, say) name no conference, but
+        // with the key at hand the delete still reaches the running conferences of the list, and
+        // the key goes only once the server confirmed.
         val trusting = PeopleController(MapKeyValue(), h.http, PeopleServices(h.secure), backgroundScope, allowLocalHttp = false, clock = h.clock, timeZone = TimeZone.UTC)
         trusting.updateContext(h.context())
         runCurrent()
         assertTrue(trusting.deleteMyProfile().done)
         runCurrent()
+        assertEquals(listOf("event=$FIXTURE_SLUG"), h.sent("DELETE", "/api/people/profile").map { it.query })
         assertNull(h.secure.get(credentialKey))
-        assertTrue(h.sent("DELETE", "/api/people/profile").isEmpty())
         trusting.close()
     }
 }

@@ -168,6 +168,11 @@ data class DeleteRetry(
     val last: DeleteFailure? = null,
     /** Epoch milliseconds the delete was first asked for. */
     val since: Long = 0,
+    /**
+     * "Delete my profile" only: true once a pass has marked every conference of the backend's list
+     * that had not ended, so later passes send only to those still unconfirmed.
+     */
+    @SerialName("list_reached") val listReached: Boolean = false,
 )
 
 /** Everything the device keeps for one conference of one backend, stored as one JSON value. */

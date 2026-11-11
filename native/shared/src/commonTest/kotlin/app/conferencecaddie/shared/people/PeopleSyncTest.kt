@@ -246,9 +246,10 @@ class PeopleSyncTest {
         assertFalse(h.state.deletes.unfinished)
         assertEquals(listOf("Bo"), h.state.met.map { it.displayName }, "People I met stays")
 
+        // Without a key, this phone deletes nothing on the server and says so.
         val done = h.controller.deleteMyProfile()
         assertTrue(done.done)
-        assertEquals("Your profile was deleted from this phone and from our server.", done.message)
+        assertEquals("Your profile was deleted from this phone.", done.message)
     }
 
     @Test
