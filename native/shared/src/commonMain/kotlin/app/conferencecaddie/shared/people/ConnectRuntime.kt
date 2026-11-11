@@ -92,7 +92,24 @@ internal class ConnectRuntime(
 
     fun rememberPerson(p: Person) {
         seen[p.ref] = SeenPerson(p.displayName, p.about, p.opener?.ifEmpty { null }, p.reasons)
+        // The latest card of each person, the newest [KNOWN_PEOPLE] kept, in an immutable map that
+        // any thread may read ([knownPerson]).
+        val next = LinkedHashMap(known)
+        next.remove(p.ref)
+        next[p.ref] = p
+        while (next.size > KNOWN_PEOPLE) next.remove(next.keys.first())
+        known = next
     }
+
+    @kotlin.concurrent.Volatile
+    private var known: Map<String, Person> = emptyMap()
+
+    /**
+     * The person with [ref] as this device last saw them (Around, a search, a talk circle) while the
+     * app has run, or null. Safe to call from any thread: the screens use it to find the person a
+     * sheet was open for again after the activity was re-created.
+     */
+    fun knownPerson(ref: String): Person? = known[ref]
 
     private fun rememberIncoming(r: MeetView) {
         val from = r.from ?: return
@@ -446,6 +463,9 @@ internal class ConnectRuntime(
     }
 
     companion object {
+        /** How many people [knownPerson] keeps: a few pages of results. */
+        const val KNOWN_PEOPLE = 300
+
         /** The inbox poll at pace 1; the real wait is stretched by the pace the API reports. */
         const val INBOX_POLL_MS = 45_000L
 

@@ -466,4 +466,25 @@ class PeopleControllerTest {
         assertTrue(notice.opensProfile, notice.message)
         assertFalse(notice.message.contains("profile"))
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // People seen
+
+    @Test
+    fun aPersonSeenInASearchIsKnownByRefFromAnyThread() = runTest {
+        val h = PeopleHarness(this)
+        val c = h.controller
+        h.start()
+        h.visible()
+        assertNull(c.knownPerson("3f2a9c0d1e4b5a68"))
+        h.server.matches = {
+            FakeApiHttp.json(
+                200,
+                """{"results":[{"ref":"3f2a9c0d1e4b5a68","display_name":"Ana","about":"SRE","reasons":[],"around":false}],"from":0,"size":20,"has_more":false}""",
+            )
+        }
+        assertTrue(c.searchPeople("kubernetes", around = false) is ApiResult.Ok)
+        assertEquals("Ana", c.knownPerson("3f2a9c0d1e4b5a68")?.displayName)
+        assertNull(c.knownPerson("9b1c7e5d3a2f4c60"))
+    }
 }
