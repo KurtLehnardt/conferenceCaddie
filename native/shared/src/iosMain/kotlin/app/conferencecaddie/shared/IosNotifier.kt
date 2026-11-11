@@ -11,8 +11,9 @@ import platform.UserNotifications.UNUserNotificationCenter
 
 /**
  * [Notifier] on the UserNotifications framework. A notification carries its deep link in its
- * `userInfo` under [DEEP_LINK_KEY]; the app delegate (iOSApp.swift) hands a tapped one to
- * [IosNotificationTaps]. Asking needs no usage string on iOS.
+ * `userInfo` under [DEEP_LINK_KEY]; for a tapped one, the app delegate (iOSApp.swift) reads the
+ * link with [IosNotificationTaps] and hands it to the app's link router. Asking needs no usage
+ * string on iOS.
  */
 class IosNotifier : Notifier {
     private val center get() = UNUserNotificationCenter.currentNotificationCenter()
@@ -47,16 +48,18 @@ class IosNotifier : Notifier {
 }
 
 /**
- * Called by the app delegate when a notification is tapped, a local one ([IosNotifier]) or a remote
- * one (APNs, whose top-level `deepLink` arrives in the same `userInfo`). Only the app itself and the
- * backend that holds its APNs key can post either, so no other app can hand a link over this way;
- * the link must still be one of the exact links the app's notifications carry
- * ([isNotificationDeepLink]), as on Android.
+ * The link of a tapped notification, a local one ([IosNotifier]) or a remote one (APNs, whose
+ * top-level `deepLink` arrives in the same `userInfo`). Only the app itself and the backend that
+ * holds its APNs key can post either, so no other app can hand a link over this way; the link must
+ * still be one of the exact links the app's notifications carry ([isNotificationDeepLink]), as on
+ * Android. The app delegate (iOSApp.swift) passes a tap's `userInfo` to composeApp's
+ * `openNotificationTap`, which hands the link to the app's link router like any other `caddie://`
+ * link.
  */
 object IosNotificationTaps {
-    /** Hands the app's own deep link in [userInfo], if any, to [NotificationTaps]. */
-    fun didReceive(userInfo: Map<Any?, *>) {
-        val link = userInfo[IosNotifier.DEEP_LINK_KEY] as? String ?: return
-        if (isNotificationDeepLink(link)) NotificationTaps.deliver(link)
+    /** The app's own deep link in [userInfo], or null when it carries none. */
+    fun deepLink(userInfo: Map<Any?, *>): String? {
+        val link = userInfo[IosNotifier.DEEP_LINK_KEY] as? String ?: return null
+        return link.takeIf { isNotificationDeepLink(it) }
     }
 }

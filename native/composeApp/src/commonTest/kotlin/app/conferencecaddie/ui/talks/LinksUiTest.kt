@@ -11,10 +11,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.BackendUrl
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.core.CaddieCore
 import app.conferencecaddie.shared.db.CaddieDatabase
+import app.conferencecaddie.ui.ShellRequest
 import app.conferencecaddie.ui.platform.IncomingHandoff
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.shell.Tab
@@ -35,10 +37,10 @@ import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.files.SystemTemporaryDirectory
 
-// caddie:// links from the platforms (Android's intents, iOS's onOpenURL) through the hand-off: a
-// conference link opens its conference, tab, view and day as the web's routes do; a connect link
-// only ever asks, naming the server; anything else is dropped. On the iOS simulator and an Android
-// emulator.
+// caddie:// links from the platforms (Android's intents and notification taps, iOS's onOpenURL and
+// notification taps) through the hand-off: a conference link opens its conference, tab, view and
+// day as the web's routes do, a people link the People tab with its route; a connect link only ever
+// asks, naming the server; anything else is dropped. On the iOS simulator and an Android emulator.
 @OptIn(ExperimentalTestApi::class)
 class LinksUiTest {
     private val backend = TestBackend().also { it.publish(listOf(it.alpha, it.beta, it.gamma)) }
@@ -120,6 +122,37 @@ class LinksUiTest {
         onNode(hasText(Strings.Common.CANCEL) and hasAnyAncestor(hasTestTag("connect-confirmation"))).performClick()
         waitUntil(timeoutMillis = 20_000) { onAllNodes(hasTestTag("connect-confirmation")).fetchSemanticsNodes().isEmpty() }
         assertEquals(backend.base, core.state.value.backend.base)
+    }
+
+    @Test
+    fun aPeopleLinkAsksForThePeopleTabWithItsRoute() {
+        fun request(url: String) = shellRequestFor(AppLink.parse(url) as AppLink.Open, 7)
+        assertEquals(ShellRequest(7, Tab.People, people = AppLink.PeopleRoute.Inbox), request("caddie://inbox"))
+        assertEquals(ShellRequest(7, Tab.People, people = AppLink.PeopleRoute.Home(aroundNow = true)), request("caddie://people?around=1"))
+        assertEquals(ShellRequest(7, Tab.People, people = AppLink.PeopleRoute.Meet("abc")), request("caddie://meet/abc"))
+        assertEquals(ShellRequest(7, Tab.People, people = AppLink.PeopleRoute.Profile), request("caddie://e/$alpha#/profile"))
+        assertEquals(ShellRequest(7, Tab.People, people = AppLink.PeopleRoute.Here("Room 1")), request("caddie://e#/here/Room%201"))
+        assertEquals(ShellRequest(7, Tab.People), request("caddie://e#/meet/not.an.id"))
+        // The other tabs are as they were.
+        assertEquals(ShellRequest(7, Tab.Search), request("caddie://e/$alpha#/search?view=schedule"))
+        assertEquals(ShellRequest(7, settings = true), request("caddie://e/$alpha#/settings"))
+        assertEquals(ShellRequest(7), request("caddie://e/$alpha"))
+        // A route never comes without the People tab.
+        assertEquals(ShellRequest(7, Tab.Search), shellRequestFor(AppLink.Open(null, AppLink.Tab.Search, null, null, AppLink.PeopleRoute.Inbox), 7))
+    }
+
+    @Test
+    fun aPeopleLinkIsTakenWhereNoPeopleFeaturesAreServed() = runComposeUiTest {
+        start()
+        // A notification's link stays on the conference that is open, with nothing to say.
+        offerAndWait("caddie://inbox")
+        offerAndWait("caddie://meet/QEFCQ0RFRkdISUpLTE1OTw")
+        assertEquals(alpha, core.state.value.selectedSlug)
+        onNodeWithText(Strings.Blockers.NOT_AVAILABLE_HERE).assertDoesNotExist()
+        // A web route's conference is selected first, as for any tab.
+        IncomingHandoff.offerLink("caddie://e/$gamma#/meet/QEFCQ0RFRkdISUpLTE1OTw")
+        waitUntil(timeoutMillis = 20_000) { core.state.value.selectedSlug == gamma }
+        assertNull(IncomingHandoff.latest.value, "the link was not taken")
     }
 
     private fun ComposeUiTest.offerAndWait(url: String) {

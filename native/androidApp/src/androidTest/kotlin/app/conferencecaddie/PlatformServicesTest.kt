@@ -19,17 +19,13 @@ import androidx.test.runner.lifecycle.Stage
 import app.conferencecaddie.shared.AndroidLocationProvider
 import app.conferencecaddie.shared.AndroidNotifier
 import app.conferencecaddie.shared.LocationAccess
-import app.conferencecaddie.shared.NotificationTaps
+import app.conferencecaddie.ui.platform.IncomingHandoff
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onSubscription
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -56,9 +52,7 @@ class PlatformServicesTest {
         for (p in permissions) instrumentation.uiAutomation.grantRuntimePermission(context.packageName, p)
     }
 
-    // Every link MainActivity hands to NotificationTaps during the test. The replay cache cannot
-    // tell: the app clears it as soon as it has routed a tap, which it does at once when the backend
-    // it reaches offers people features.
+    // Every link MainActivity hands to the app's link hand-off during the test (IncomingLinks).
     private val taps = CopyOnWriteArrayList<String>()
     private var tapWatch: Job? = null
 
@@ -71,12 +65,7 @@ class PlatformServicesTest {
 
     @Before
     fun setUp() {
-        NotificationTaps.handled()
-        val watching = CompletableDeferred<Unit>()
-        tapWatch = CoroutineScope(Dispatchers.Default).launch {
-            NotificationTaps.taps.onSubscription { watching.complete(Unit) }.collect { taps += it }
-        }
-        runBlocking { withTimeout(5_000) { watching.await() } }
+        tapWatch = IncomingLinks.watch(taps)
     }
 
     @After
@@ -130,6 +119,9 @@ class PlatformServicesTest {
         ActivityScenario.launch<MainActivity>(intent).use {
             waitFor { lastTap() != null }
             assertEquals("caddie://inbox", lastTap())
+            // The app's link router takes it, as it takes any caddie:// link.
+            waitFor { IncomingHandoff.latest.value == null }
+            assertNull(IncomingHandoff.latest.value)
         }
     }
 

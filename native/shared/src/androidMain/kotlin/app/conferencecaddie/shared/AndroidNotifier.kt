@@ -17,7 +17,8 @@ import java.security.MessageDigest
 /**
  * [Notifier] on Android's own notification APIs. Notifications go to one channel, "Nudges" (the
  * web's word for them), and a tap opens the app's launcher activity with the deep link as the extra
- * [EXTRA_DEEP_LINK]; the activity hands it to [NotificationTaps] (see [tappedDeepLink]).
+ * [EXTRA_DEEP_LINK]; the activity hands it to the app's link router like any other `caddie://`
+ * link (see [tappedDeepLink]).
  *
  * The launcher activity is exported, so any installed app can start it with any extras. A tap's
  * intent therefore also carries [EXTRA_TAP_KEY], a random key made once per install and kept in the
