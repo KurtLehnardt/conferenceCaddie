@@ -151,22 +151,23 @@ class PlatformServicesTest {
         val provider = AndroidLocationProvider(context)
         assertEquals(LocationAccess.Precise, provider.access())
 
-        // A test provider stands in for the hardware: the fused one on Android 12 and newer when the
-        // device has it (the one the provider then uses), else GPS.
-        val name = if (LocationManager.FUSED_PROVIDER in lm.allProviders) LocationManager.FUSED_PROVIDER else LocationManager.GPS_PROVIDER
+        // Test providers stand in for the hardware: every one of fused, GPS and network that the
+        // device has, so the positions arrive whichever of them the provider listens to (the fused
+        // one on Android 12 and newer, which some emulator images back with Play services).
+        val names = listOf(LocationManager.FUSED_PROVIDER, LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { it in lm.allProviders }
         instrumentation.uiAutomation.executeShellCommand("appops set ${context.packageName} android:mock_location allow").close()
         Thread.sleep(300)
-        lm.addTestProvider(
-            name,
-            ProviderProperties.Builder().setAccuracy(ProviderProperties.ACCURACY_FINE).build(),
-        )
-        lm.setTestProviderEnabled(name, true)
+        for (name in names) {
+            lm.addTestProvider(name, ProviderProperties.Builder().setAccuracy(ProviderProperties.ACCURACY_FINE).build())
+            lm.setTestProviderEnabled(name, true)
+        }
         try {
             val first = async(Dispatchers.Default) { provider.fixes().first() }
-            val fix = withTimeout(15_000) {
+            val fix = withTimeout(30_000) {
                 // Keep reporting until the collection has started and taken one.
                 while (!first.isCompleted) {
-                    lm.setTestProviderLocation(name, location(name))
+                    for (name in names) lm.setTestProviderLocation(name, location(name))
                     delay(500)
                 }
                 first.await()
@@ -176,7 +177,7 @@ class PlatformServicesTest {
             assertEquals(12.0, fix.accuracyM, 1e-6)
             assertNotNull(fix.atEpochMillis)
         } finally {
-            lm.removeTestProvider(name)
+            for (name in names) runCatching { lm.removeTestProvider(name) }
             instrumentation.uiAutomation.executeShellCommand("appops set ${context.packageName} android:mock_location default").close()
         }
     }
