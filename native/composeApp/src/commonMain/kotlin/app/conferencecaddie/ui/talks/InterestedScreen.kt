@@ -144,9 +144,9 @@ fun InterestedScreen(
 }
 
 /**
- * The marked talks My schedule lists, in start order: each from the bundle while it holds the talk,
- * else from the copy kept when it was marked.
+ * The marked talks My schedule lists, in start order and, at the same start, in the order they were
+ * marked, as the web's stable sort of its list leaves them: each from the bundle while it holds the
+ * talk, else from the copy kept when it was marked.
  */
 internal fun interestedTalks(bundle: TalkBundle, interested: List<String>, snapshots: Map<String, InterestedTalk>): List<Talk> =
-    interested.mapNotNull { bundle.talksById[it] ?: snapshots[it]?.toTalk() }
-        .sortedWith(compareBy<Talk> { it.startEpochMs }.thenBy { it.talkId })
+    interested.mapNotNull { bundle.talksById[it] ?: snapshots[it]?.toTalk() }.sortedBy { it.startEpochMs }

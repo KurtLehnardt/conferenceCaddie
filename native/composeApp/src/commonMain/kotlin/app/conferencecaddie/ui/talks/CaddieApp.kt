@@ -200,6 +200,18 @@ fun CaddieApp(
         talkLaunch.learnText?.let { core.setLearnText(it) }
         if (talkLaunch.sheet == "filters") search.sheet = ""
         if (talkLaunch.sheet == "topics") pickerOpen = true
+        if (talkLaunch.sheet == "import") {
+            importer.reset()
+            importOpen = true
+        }
+        if (talkLaunch.sheet == "clear") clearOpen = true
+        talkLaunch.importText?.let { text ->
+            importer.reset()
+            importer.pasteOpen = true
+            importer.pasteText = text
+            importOpen = true
+            importer.runText(state.interested.toSet())
+        }
         talkLaunch.talk?.let { openTalk = it }
     }
     // caddie.link hands a link over as the platform would, so the routing can be tried without one.
@@ -409,6 +421,7 @@ fun CaddieApp(
                 if (tab == Tab.Interested && ready != null) {
                     OverflowMenu(
                         label = Strings.AppBar.INTERESTED_OPTIONS,
+                        startOpen = talkLaunch.sheet == "menu",
                         items = listOf(
                             MenuItem(
                                 Strings.Share.SHARE_LIST,
@@ -532,11 +545,11 @@ private const val MY_SCHEDULE_VIEW = "myschedule.view.v1"
 
 /**
  * My schedule as text for the share sheet (native only; the web has no share of the list): the
- * talks by day in the conference's local time, each with its room and official link, and the time
- * zone they are written in.
+ * talks by day in the conference's local time (in marking order at the same start, as My schedule
+ * lists them), each with its room and official link, and the time zone they are written in.
  */
 internal fun shareText(conference: Conference, talks: List<Talk>): String {
-    val sorted = talks.sortedWith(compareBy<Talk> { it.startEpochMs }.thenBy { it.talkId })
+    val sorted = talks.sortedBy { it.startEpochMs }
     if (sorted.isEmpty()) return Strings.Share.subject(conference.name)
     return buildString {
         append(Strings.Share.subject(conference.name)).append('\n')
@@ -554,11 +567,13 @@ internal fun shareText(conference: Conference, talks: List<Talk>): String {
 }
 
 /**
- * Debug launch options of the talk screens: `caddie.sheet filters` opens the Filters sheet and
- * `caddie.sheet topics` the topic picker, `caddie.talk <talk id>` opens a talk, `caddie.mark
+ * Debug launch options of the talk screens: `caddie.sheet filters` opens the Filters sheet,
+ * `caddie.sheet topics` the topic picker, `caddie.sheet import` Import my schedule, `caddie.sheet
+ * menu` the Interested options and `caddie.sheet clear` the Clear list question, `caddie.talk <talk id>` opens a talk, `caddie.mark
  * <id>,<id>` marks talks, `caddie.learn <topic id>,<topic id>` and `caddie.learnText <text>` set
  * what For you suggests from, and `caddie.rank first` (or a talk id) opens that search result's Why
- * this rank, and `caddie.link <caddie:// link>` hands a link over as the platform would. Release
+ * this rank, `caddie.link <caddie:// link>` hands a link over as the platform would, and
+ * `caddie.importText <text>` imports the text as if pasted (`\n` for a new line). Release
  * hosts never pass them.
  */
 data class TalkLaunch(
@@ -569,6 +584,7 @@ data class TalkLaunch(
     val learnText: String? = null,
     val rank: String? = null,
     val link: String? = null,
+    val importText: String? = null,
 ) {
     companion object {
         fun from(get: (String) -> String?) = TalkLaunch(
@@ -579,6 +595,7 @@ data class TalkLaunch(
             learnText = get("caddie.learnText"),
             rank = get("caddie.rank"),
             link = get("caddie.link"),
+            importText = get("caddie.importText")?.replace("\\n", "\n"),
         )
 
         private fun list(value: String?) = value?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }

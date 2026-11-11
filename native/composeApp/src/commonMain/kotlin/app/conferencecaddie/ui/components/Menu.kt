@@ -38,11 +38,12 @@ data class MenuItem(
  * The web's OverflowMenu (web/src/components/common.tsx): a vertical-dots icon button in the app bar,
  * named [label], that opens a small menu anchored to its right (.menu and .menu-item: a raised card
  * at least 200 dp wide with 44 dp rows, the destructive ones in the danger colour). Choosing an item
- * closes the menu first, as the web's does.
+ * closes the menu first, as the web's does. [startOpen] opens it at once (a debug launch option, for
+ * screenshots).
  */
 @Composable
-fun OverflowMenu(items: List<MenuItem>, label: String, modifier: Modifier = Modifier) {
-    var open by rememberSaveable { mutableStateOf(false) }
+fun OverflowMenu(items: List<MenuItem>, label: String, modifier: Modifier = Modifier, startOpen: Boolean = false) {
+    var open by rememberSaveable { mutableStateOf(startOpen) }
     val c = Caddie.colors
     Box(modifier) {
         CaddieIconButton(LucideIcon.EllipsisVertical, label, { open = !open }, iconSize = 22.dp, modifier = Modifier.testTag("overflow-menu"))

@@ -56,7 +56,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.ViewModel
 import app.conferencecaddie.shared.bundle.Conference
 import app.conferencecaddie.shared.bundle.Talk
@@ -70,6 +69,8 @@ import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieIconButton
 import app.conferencecaddie.ui.components.LucideImage
+import app.conferencecaddie.ui.components.FullScreenDialogBars
+import app.conferencecaddie.ui.components.fullScreenDialogProperties
 import app.conferencecaddie.ui.components.Pill
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.platform.PickedFile
@@ -240,10 +241,16 @@ fun ImportSheet(
         model.cancel()
         onClose()
     }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    // The sheet reaches under the system bars on a phone, as the web's full-screen sheet does, and
+    // keeps its own content clear of them.
+    Dialog(
+        onDismissRequest = close,
+        properties = fullScreenDialogProperties(Caddie.colors.scrim),
+    ) {
         BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             val wide = maxWidth >= Caddie.dimens.wideLayoutMinWidth
             val c = Caddie.colors
+            FullScreenDialogBars(c.isDark)
             val shape = RoundedCornerShape(if (wide) Caddie.dimens.dialogRadius else 0.dp)
             Column(
                 (if (wide) Modifier.widthIn(max = 560.dp).fillMaxWidth().heightIn(min = minOf(560.dp, maxHeight * 0.8f), max = maxHeight * 0.8f).shadow(8.dp, shape, ambientColor = c.shadowLg, spotColor = c.shadowLg) else Modifier.fillMaxSize())
