@@ -86,13 +86,20 @@ class FakePeopleServerTest {
         val keyValue = InMemoryPeopleKeyValue()
     }
 
+    /**
+     * A controller at the Alpha conference. The backend's conference list names it too, as a core's
+     * would: "Delete my profile" reaches every conference of the list that has not ended, and stays
+     * unfinished while the list is not known.
+     */
     private suspend fun TestScope.rig(): Rig = Rig(this, virtualClock()).also {
+        val alpha = ConferenceInfo(slug, "Alpha Conference", "UTC")
         it.controller.updateContext(
             PeopleContext(
                 backend = testBackendUrl(),
                 capabilities = peopleOn.forThisApp(),
-                conference = ConferenceInfo(slug, "Alpha Conference", "UTC"),
+                conference = alpha,
                 bundle = null,
+                listed = listOf(alpha),
             ),
         )
         runCurrent()
