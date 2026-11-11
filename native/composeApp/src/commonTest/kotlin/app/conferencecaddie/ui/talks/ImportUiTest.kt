@@ -129,7 +129,8 @@ class ImportUiTest {
         onNodeWithTag("import-paste-toggle").performClick()
         waitFor(tag = "import-find").assertIsNotEnabled()
         onNodeWithTag("import-paste").performTextReplacement(schedule)
-        onNodeWithTag("import-find").assertIsEnabled().performClick()
+        // The keyboard can cover the button on a short screen; bring it into view first.
+        onNodeWithTag("import-find").performScrollTo().assertIsEnabled().performClick()
 
         // Two exact titles ticked, the similar title left for the person to check.
         waitFor(tag = "import-review")
@@ -212,7 +213,7 @@ class ImportUiTest {
         openImport()
         onNodeWithTag("import-paste-toggle").performClick()
         onNodeWithTag("import-paste").performTextReplacement("Rust for embedded devices\n\nWriting drivers in safe Rust\n")
-        onNodeWithTag("import-find").performClick()
+        onNodeWithTag("import-find").performScrollTo().performClick()
         waitFor(tag = "import-review")
         assertEquals(Strings.Import.noneFound("Alpha Conference") + Strings.Import.unmatched(2), summary())
         waitFor(tag = "import-switch").performClick()
