@@ -1,10 +1,10 @@
 {
   "snapshot": {
-    "taken_on": "2026-11-10",
-    "fetched_at": "2026-11-10T08:51:32Z",
+    "taken_on": "2026-11-11",
+    "fetched_at": "2026-11-11T16:28:47Z",
     "source": "GET https://conference-caddie-265846417372.us-west1.run.app/api/topics?event=kubecon-cloudnativecon-north-america-2026",
     "status": 200,
-    "note": "Public data from the live tier 3 service, captured once for the Phase 1 topics port: the Node topics builder is diffed against these lists before Elasticsearch is decommissioned. A snapshot, not a contract: it is never refreshed automatically."
+    "note": "Public data from the live tier 3 service, taken again on 2026-11-11 after the KubeCon North America 2026 data of 2026-11-11 (484 talks, after the cancelled-session drop) was ingested there; the drop left singular \"pipeline\" at 2 titles, below the 3-talk minimum, so the \"pipelines\" to \"pipeline\" merge lost its target and topic pipeline (7) became pipelines (4); the first snapshot was taken on 2026-11-10. The Node topics builder is diffed against these lists before Elasticsearch is decommissioned. A snapshot, not a contract: it is never refreshed automatically."
   },
   "event": "kubecon-cloudnativecon-north-america-2026",
   "topics": [
@@ -29,14 +29,14 @@
       "talk_count": 32
     },
     {
-      "topic_id": "cloud-native",
-      "label": "Cloud Native",
-      "talk_count": 28
-    },
-    {
       "topic_id": "gpu",
       "label": "GPU",
       "talk_count": 28
+    },
+    {
+      "topic_id": "cloud-native",
+      "label": "Cloud Native",
+      "talk_count": 27
     },
     {
       "topic_id": "platform",
@@ -119,6 +119,11 @@
       "talk_count": 9
     },
     {
+      "topic_id": "dra",
+      "label": "DRA",
+      "talk_count": 8
+    },
+    {
       "topic_id": "istio",
       "label": "Istio",
       "talk_count": 8
@@ -134,18 +139,8 @@
       "talk_count": 8
     },
     {
-      "topic_id": "operator",
-      "label": "Operator",
-      "talk_count": 8
-    },
-    {
       "topic_id": "container",
       "label": "Container",
-      "talk_count": 7
-    },
-    {
-      "topic_id": "dra",
-      "label": "DRA",
       "talk_count": 7
     },
     {
@@ -169,8 +164,8 @@
       "talk_count": 7
     },
     {
-      "topic_id": "pipeline",
-      "label": "Pipeline",
+      "topic_id": "operator",
+      "label": "Operator",
       "talk_count": 7
     },
     {
@@ -214,6 +209,11 @@
       "talk_count": 6
     },
     {
+      "topic_id": "orchestration",
+      "label": "Orchestration",
+      "talk_count": 6
+    },
+    {
       "topic_id": "platform-engineering",
       "label": "Platform Engineering",
       "talk_count": 6
@@ -234,13 +234,13 @@
       "talk_count": 5
     },
     {
-      "topic_id": "network",
-      "label": "Network",
+      "topic_id": "kubevirt",
+      "label": "KubeVirt",
       "talk_count": 5
     },
     {
-      "topic_id": "orchestration",
-      "label": "Orchestration",
+      "topic_id": "network",
+      "label": "Network",
       "talk_count": 5
     },
     {
@@ -299,13 +299,13 @@
       "talk_count": 4
     },
     {
-      "topic_id": "kubevirt",
-      "label": "KubeVirt",
+      "topic_id": "performance",
+      "label": "Performance",
       "talk_count": 4
     },
     {
-      "topic_id": "performance",
-      "label": "Performance",
+      "topic_id": "pipelines",
+      "label": "Pipelines",
       "talk_count": 4
     },
     {
