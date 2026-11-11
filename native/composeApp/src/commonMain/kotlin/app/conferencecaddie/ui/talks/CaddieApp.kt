@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -48,6 +49,7 @@ import app.conferencecaddie.shared.core.ConferencesState
 import app.conferencecaddie.shared.core.CoreState
 import app.conferencecaddie.shared.core.Defaults
 import app.conferencecaddie.shared.core.SemanticState
+import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.ui.App
 import app.conferencecaddie.ui.ShellRequest
 import app.conferencecaddie.ui.components.ConfirmDialog
@@ -62,6 +64,9 @@ import app.conferencecaddie.ui.components.StateAction
 import app.conferencecaddie.ui.components.StateView
 import app.conferencecaddie.ui.components.ToastData
 import app.conferencecaddie.ui.icons.LucideIcon
+import app.conferencecaddie.ui.people.PeopleLaunch
+import app.conferencecaddie.ui.people.PeopleTalks
+import app.conferencecaddie.ui.people.rememberPeopleUi
 import app.conferencecaddie.ui.shell.DebugLaunch
 import app.conferencecaddie.ui.shell.ServerStatus
 import app.conferencecaddie.ui.shell.ShellActions
@@ -70,6 +75,7 @@ import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.shell.TabContent
 import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.shell.pendingAfterSwitch
+import app.conferencecaddie.ui.shell.rememberShellNavigation
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.CaddieTheme
@@ -80,8 +86,10 @@ import kotlinx.coroutines.delay
 
 /**
  * The app on both platforms: the shell (header, switcher, tab bar, Settings) drawn from the shared
- * core's state, with the talk screens in its For you, Search and Interested tabs. People appears only
- * when the backend serves people features (phase 3).
+ * core's state, with the talk screens in its For you, Search and Interested tabs. [people] brings the
+ * people screens (ui/people, phase 3): the People tab, Profile, Requests and Meet up, the people
+ * groups of Settings and the people controls of the talk screens, shown only when the backend serves
+ * people features; null leaves them out.
  *
  * [embedder] loads the query embedder; the hosts pass [EmbeddingModel.load], the shipped model. Search
  * and For you use keywords alone until it is loaded, for good if it returns null or fails, and
@@ -95,8 +103,8 @@ import kotlinx.coroutines.delay
  * ([IncomingHandoff]) are routed here: a `caddie://connect` link (or the QR code that holds one)
  * asks the shell's confirmation that names the server, a `caddie://e/...` link opens a conference's
  * tab, view and day as the web's routes do, a people route (`#/inbox`, `#/meet/<id>`, a tapped
- * notification's `caddie://inbox` and the like) opens the People tab with the route in the shell's
- * request, and a schedule file opens Import my schedule.
+ * notification's `caddie://inbox` and the like) goes in the shell's request to the People layer,
+ * which opens its page once people features are on, and a schedule file opens Import my schedule.
  */
 @Composable
 fun CaddieApp(
@@ -107,6 +115,7 @@ fun CaddieApp(
     initialQuery: String? = null,
     talkLaunch: TalkLaunch = TalkLaunch(),
     embedder: (suspend () -> Embedder?)? = null,
+    people: PeopleController? = null,
     platform: PlatformActions = PlatformActions.None,
 ) {
     val state by core.state.collectAsState()
@@ -154,6 +163,8 @@ fun CaddieApp(
     var importSlug by remember { mutableStateOf<String?>(null) }
     var pendingOpen by remember { mutableStateOf<AppLink.Open?>(null) }
     val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
+    // The People home's For you row asks for its own few suggestions, as the web's row does.
+    val forYouRow = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.ROW_SIZE) } }
     var pickerOpen by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val openUrl: (String) -> Unit = { url -> if (isWebLink(url)) runCatching { uriHandler.openUri(url) } }
@@ -162,8 +173,12 @@ fun CaddieApp(
     val onConnectHandled = { pendingConnect = null }
     var openTalk by rememberSaveable { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<ToastData?>(null) }
-    // What the toast's Undo does.
-    var undo by remember { mutableStateOf<(() -> Unit)?>(null) }
+    // What the toast's button does (Undo), for the toast showing.
+    var toastAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val showToast: (String, String?, (() -> Unit)?) -> Unit = { message, label, action ->
+        toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = message, actionLabel = label)
+        toastAction = action
+    }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
     val nowMs by produceState(Clock.System.now().toEpochMilliseconds()) {
         while (true) {
@@ -172,9 +187,10 @@ fun CaddieApp(
         }
     }
 
-    LifecycleResumeEffect(core) {
+    LifecycleResumeEffect(core, people) {
         core.refresh()
-        onPauseOrDispose { }
+        people?.setForeground(true)
+        onPauseOrDispose { people?.setForeground(false) }
     }
     // The core loads the model in the background when a search first needs it; the search runs again
     // once the model is ready, so the meaning-based list joins what is on screen, or once it failed,
@@ -236,25 +252,17 @@ fun CaddieApp(
     LaunchedEffect(state.storageReset) {
         if (state.storageReset) {
             val message = if (state.storageInMemory) TalkStrings.STORAGE_IN_MEMORY else TalkStrings.STORAGE_RESET
-            toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = message)
+            showToast(message, null, null)
             core.dismissStorageReset()
         }
     }
 
     val interestedIds = state.interested.toSet()
     val interestedTalks = state.interestedTalks()
-    val showToast: (String, (() -> Unit)?) -> Unit = { message, onUndo ->
-        undo = onUndo
-        toast = ToastData(
-            id = Clock.System.now().toEpochMilliseconds(),
-            message = message,
-            actionLabel = if (onUndo != null) Strings.Toasts.UNDO else null,
-        )
-    }
     val toggle: (Talk) -> Unit = { talk ->
         val on = talk.talkId !in interestedIds
         core.setInterested(talk, on)
-        showToast(if (on) Strings.Toasts.ADDED else Strings.Toasts.REMOVED) { core.setInterested(talk, !on) }
+        showToast(if (on) Strings.Toasts.ADDED else Strings.Toasts.REMOVED, Strings.Toasts.UNDO) { core.setInterested(talk, !on) }
     }
 
     // Links and files from the platform, each handled once, in the order they came.
@@ -312,7 +320,7 @@ fun CaddieApp(
                 else -> Unit
             }
             pendingOpen = null
-            showToast(Strings.Blockers.NOT_AVAILABLE_HERE, null)
+            showToast(Strings.Blockers.NOT_AVAILABLE_HERE, null, null)
             return@LaunchedEffect
         }
         pendingOpen = null
@@ -336,9 +344,46 @@ fun CaddieApp(
         shellRequest = shellRequestFor(link, ++requestIds.last)
     }
 
+    val navigation = rememberShellNavigation(launch.tab ?: if (initialQuery != null) Tab.Search else null)
+    val shell = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast)
+        .copy(importNote = if (ready == null) Strings.Settings.IMPORT_NEEDS_CONFERENCE else null)
+    // The People home's For you row: like the For you tab, it asks again only while it is on screen.
+    // One lambda for as long as a conference is ready, reading the latest inputs itself, so the
+    // people inputs it travels in (PeopleTalks) stay equal between compositions that change nothing.
+    val latestForYouInputs by rememberUpdatedState(forYouInputs)
+    val latestSlug by rememberUpdatedState(state.selectedSlug)
+    val peopleForYouRow: (@Composable () -> Unit)? = remember(ready != null, forYouRow, navigation) {
+        if (ready != null) {
+            {
+                val inputs = latestForYouInputs
+                LaunchedEffect(inputs) { forYouRow.refresh(latestSlug, inputs) }
+                ForYouRow(
+                    model = forYouRow,
+                    onOpenTalk = { openTalk = it.talkId },
+                    onSeeAll = { navigation.selectTab(Tab.ForYou) },
+                    onPickTopics = { pickerOpen = true },
+                )
+            }
+        } else {
+            null
+        }
+    }
+    // The people screens (ui/people/PeopleTab.kt); null without a controller.
+    val peopleUi = rememberPeopleUi(
+        controller = people,
+        navigation = navigation,
+        talks = PeopleTalks(ready?.bundle, state.interested, nowMs, forYouRow = peopleForYouRow),
+        online = shell.online,
+        searchable = shell.selectedConference?.searchable == true,
+        launch = PeopleLaunch.parse(launch.people),
+        showToast = showToast,
+        openTalk = { openTalk = it },
+        openUrl = openUrl,
+        request = shellRequest,
+    )
+
     App(
-        state = shellState(state, interestedTalks.size, theme, cacheBytes, isDebugBuild, appVersion, pendingConnect, toast)
-            .copy(importNote = if (ready == null) Strings.Settings.IMPORT_NEEDS_CONFERENCE else null),
+        state = peopleUi?.shellState(shell) ?: shell,
         actions = ShellActions(
             onSelectConference = core::selectConference,
             onRetryConferences = { core.refresh(force = true) },
@@ -368,8 +413,8 @@ fun CaddieApp(
             },
             onDismissToast = { toast = null },
             onToastAction = {
-                undo?.invoke()
-                undo = null
+                toastAction?.invoke()
+                toastAction = null
                 toast = null
             },
             onOpenUrl = openUrl,
@@ -392,6 +437,8 @@ fun CaddieApp(
                         onOpenTalk = { openTalk = it.talkId },
                         onOpenUrl = openUrl,
                         onPickTopics = { pickerOpen = true },
+                        peopleControls = peopleUi?.talkControls,
+                        prefetchCounts = peopleUi?.prefetchCounts,
                     )
                 }
             },
@@ -401,7 +448,12 @@ fun CaddieApp(
                         view = searchView,
                         onView = { searchView = it },
                         search = {
-                            SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl, openRank = talkLaunch.rank)
+                            SearchScreen(
+                                search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl,
+                                openRank = talkLaunch.rank,
+                                peopleControls = peopleUi?.talkControls,
+                                prefetchCounts = peopleUi?.prefetchCounts,
+                            )
                         },
                         schedule = {
                             ScheduleScreen(schedule, r.bundle, interestedIds, nowMs, toggle) { openTalk = it.talkId }
@@ -413,6 +465,9 @@ fun CaddieApp(
                 BundleGate(state, core) { r ->
                     InterestedScreen(
                         r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl, state.interestedSnapshots,
+                        shareAll = peopleUi?.shareAll,
+                        peopleControls = peopleUi?.talkControls,
+                        prefetchCounts = peopleUi?.prefetchCounts,
                         view = myView,
                         onView = {
                             myView = it
@@ -427,6 +482,8 @@ fun CaddieApp(
                 }
             },
             appBarActions = { tab ->
+                // Requests on the People tab (null without people features).
+                peopleUi?.appBarActions?.invoke(tab)
                 // web app.tsx: the Interested tab's options, while a schedule is open.
                 if (tab == Tab.Interested && ready != null) {
                     OverflowMenu(
@@ -456,8 +513,11 @@ fun CaddieApp(
                     )
                 }
             },
+            people = peopleUi?.tab,
+            peoplePage = peopleUi?.page,
+            settingsPeople = peopleUi?.settings,
         ),
-        initialTab = launch.tab ?: if (initialQuery != null) Tab.Search else null,
+        navigation = navigation,
         request = shellRequest,
     )
 
@@ -506,7 +566,7 @@ fun CaddieApp(
                     clearOpen = false
                     val before = interestedTalks
                     core.setInterested(before, false)
-                    showToast(Strings.Toasts.CLEARED) { core.setInterested(before, true) }
+                    showToast(Strings.Toasts.CLEARED, Strings.Toasts.UNDO) { core.setInterested(before, true) }
                 },
                 onDismiss = { clearOpen = false },
                 testTag = "clear-dialog",
@@ -543,9 +603,12 @@ fun CaddieApp(
                 onOpenTalk = { openTalk = it.talkId },
                 onOpenUrl = openUrl,
                 onClose = { openTalk = null },
+                peopleControls = peopleUi?.talkControls,
             )
         }
     }
+    // The people sheets (Ask to talk shop, Report, the block confirmation) sit outside App() too.
+    if (peopleUi?.hasSheet == true) CaddieTheme(theme) { peopleUi.Sheets() }
 }
 
 private const val THEME = "theme"
@@ -724,6 +787,8 @@ private fun shellState(
         (s.bundle as? BundleState.Ready)?.offline == true || s.capabilities == CapabilitiesState.Unreachable
     return ShellState(
         capabilities = caps?.forThisApp ?: Capabilities.None,
+        // Only a first start waits for them: a later one shows the stored capabilities at once.
+        tabsKnown = s.capabilities != CapabilitiesState.Loading,
         conferences = conferences,
         conferencesError = when (val c = s.conferences) {
             is ConferencesState.Failed -> when (c.reason) {
