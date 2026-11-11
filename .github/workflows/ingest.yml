@@ -37,6 +37,11 @@ on:
         type: boolean
         required: false
         default: false
+      allow_shrink:
+        description: 'Let the Worker delete more than 10 talks and more than 10% of a conference (it refuses otherwise, so a short feed cannot erase people sharing for those talks).'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -54,6 +59,7 @@ jobs:
     env:
       EVENTS: ${{ inputs.events }}
       REBUILD_TOPICS: ${{ inputs.rebuild_topics }}
+      ALLOW_SHRINK: ${{ inputs.allow_shrink }}
       ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
     steps:
@@ -101,6 +107,7 @@ jobs:
           set -u
           args=(--events-from "$RUNNER_TEMP/ingest-report.json")
           if [ "$REBUILD_TOPICS" = "true" ]; then args+=(--rebuild-topics); fi
+          if [ "$ALLOW_SHRINK" = "true" ]; then args+=(--allow-shrink); fi
           status=0
           node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --report "$RUNNER_TEMP/push-report.json" "${args[@]}" || status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"

@@ -10,7 +10,7 @@
         "body": {
           "event": "kubecon-cloudnativecon-north-america-2026",
           "subscription": {
-            "endpoint": "https://push.example.org/send/fake-endpoint",
+            "endpoint": "https://fcm.googleapis.com/fcm/send/fake-endpoint",
             "keys": {
               "p256dh": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_QEFCQ0RFRkdISUpLTE1OT1A",
               "auth": "MDEyMzQ1Njc4OTo7PD0-Pw"

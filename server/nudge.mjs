@@ -56,6 +56,12 @@ const PUSHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
 const TTL_SECONDS = 600;
 const TITLE = 'Conference Caddie';
+// How long one Web Push request's socket may stay idle before the request is abandoned: web-push's
+// timeout option, which it passes to https.request. The Worker's PUSH_TIMEOUT_MS is the same
+// number but a total timeout (AbortSignal.timeout), so a push service that keeps sending a byte
+// now and then can hold a request here longer. https.request never follows a redirect, so the
+// signed request cannot be forwarded to a host that is not on the push service list either.
+export const PUSH_TIMEOUT_MS = 10_000;
 // The longest pause between the pushes to the two people of a pair.
 export const PAIR_JITTER_MAX_MS = 3000;
 
@@ -68,7 +74,8 @@ const iso = (ms) => new Date(ms).toISOString();
 
 let transportPromise = null;
 
-async function loadTransport() {
+// Exported for test/push-endpoint-allowlist.test.mjs, which runs it with https.request stubbed.
+export async function loadTransport() {
   if (process.env.PUSH_TRANSPORT === 'stub') {
     const url = process.env.PUSH_STUB_URL;
     if (!url) throw new Error('PUSH_STUB_URL is not set');
@@ -87,8 +94,11 @@ async function loadTransport() {
   const mod = await import('web-push');
   const webpush = mod.default ?? mod;
   const vapidDetails = { subject, publicKey, privateKey };
-  return (subscription, payload, options) => webpush.sendNotification(subscription, payload, { ...options, vapidDetails });
+  return (subscription, payload, options) => webpush.sendNotification(subscription, payload, webPushOptions(options, vapidDetails));
 }
+
+// The options of one web-push send: the caller's (TTL, urgency), the VAPID details and the timeout.
+const webPushOptions = (options, vapidDetails) => ({ ...options, vapidDetails, timeout: PUSH_TIMEOUT_MS });
 
 function transport() {
   if (!transportPromise) {
@@ -199,9 +209,10 @@ export async function nudgeAfterPresence(me, conf, { pause = pairPause } = {}) {
     const url = `/e/${encodeURIComponent(conf.slug)}#/people?around=1`;
     // What the other person hears about me: my own words, the same fallback evidenceFor uses.
     const myPassage = passageOf(me.expertise || me.about || null, me, topics.labels);
-    // Only the subscriptions and registrations of a channel this server sends on.
+    // Only the subscriptions and registrations of a channel this server sends on, chosen before
+    // pushTargetsFor's cut to ten per receiver, so a target on a channel that is off takes no place.
     const usable = (s) => (s.native ? NATIVE_PUSH[s.native.platform] === true : Boolean(send));
-    let subs = (await pushTargetsFor(conf.slug, [me.profile_id, ...hits.map((h) => h._source.profile_id)])).filter(usable);
+    let subs = await pushTargetsFor(conf.slug, [me.profile_id, ...hits.map((h) => h._source.profile_id)], { usable });
     const subsOf = (id) => subs.filter((s) => s.profile_id === id);
     const drop = (gone) => {
       if (gone.length) subs = subs.filter((s) => !gone.includes(s.id));
