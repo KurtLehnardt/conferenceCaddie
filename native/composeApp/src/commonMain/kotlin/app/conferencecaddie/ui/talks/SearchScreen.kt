@@ -47,7 +47,9 @@ import app.conferencecaddie.ui.theme.Caddie
 /**
  * The Search tab's Search view (web/src/components/search.tsx): the search field, the "Did you
  * mean" suggestions, the chip row of filters and time phrases, the results count and the talk
- * cards. Everything runs on the device over the conference's bundle.
+ * cards. Everything runs on the device over the conference's bundle. [peopleControls] draws a
+ * talk's people controls in its card, as every web talk card carries TalkPeopleControls; null
+ * leaves them out.
  */
 @Composable
 fun SearchScreen(
@@ -59,6 +61,8 @@ fun SearchScreen(
     onOpenTalk: (Talk) -> Unit,
     onOpenUrl: (String) -> Unit,
     openRank: String? = null,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
+    prefetchCounts: ((List<String>) -> Unit)? = null,
 ) {
     val result = model.result
     val conference = bundle.conference
@@ -79,6 +83,9 @@ fun SearchScreen(
             listState.scrollToItem(headers + at, scrollOffset = RANK_SCROLL_PX)
         }
     }
+    // One counts request for the result set, so the cards below read the controller's cache.
+    val resultIds = remember(result?.talks) { result?.talks?.map { it.talkId }.orEmpty() }
+    LaunchedEffect(prefetchCounts, resultIds) { if (resultIds.isNotEmpty()) prefetchCounts?.invoke(resultIds) }
     Column(Modifier.fillMaxSize().testTag("search-screen")) {
         SearchField(
             value = model.input,
@@ -178,6 +185,7 @@ fun SearchScreen(
                             TalkResult(
                                 talk, bundle, terms, talk.talkId in interested, nowMs, onToggleInterested, onOpenTalk, onOpenUrl,
                                 searchText = result.searchText,
+                                peopleControls = peopleControls,
                                 rank = if (browse) {
                                     null
                                 } else {
@@ -215,6 +223,7 @@ internal fun TalkResult(
     showEvidence: Boolean = true,
     searchText: String = "",
     rank: (@Composable () -> Unit)? = null,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
 ) {
     val related = bundle.related[talk.talkId].orEmpty().mapNotNull { bundle.talksById[it] }
     // Keyed on the talk itself, so a newer bundle that edits a talk's abstract changes its passage too.
@@ -234,16 +243,23 @@ internal fun TalkResult(
         links = cardLinks(talk),
         onOpenLink = onOpenUrl,
         onClick = { onOpenTalk(talk) },
-        // Under the actions, as on the web: the ranking drawer of a text search, then related talks.
+        // Under the actions, as on the web: the ranking drawer of a text search, the web's
+        // TalkPeopleControls, then related talks.
+        // The web (talk.tsx) and TalkSheet show the people controls for every kind; the ranking
+        // drawer and related talks stay with kind "talk" and the ranked results.
         extra = when {
             talk.kind == "talk" -> {
                 {
                     rank?.invoke()
+                    peopleControls?.invoke(talk)
                     RelatedTalks(talk.talkId, related, bundle.conference, onOpenTalk, onOpenUrl = onOpenUrl)
                 }
             }
-            rank != null -> {
-                { rank() }
+            rank != null || peopleControls != null -> {
+                {
+                    rank?.invoke()
+                    peopleControls?.invoke(talk)
+                }
             }
             else -> null
         },

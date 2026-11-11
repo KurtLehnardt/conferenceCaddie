@@ -2,6 +2,7 @@ package app.conferencecaddie.ui.shell
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -47,14 +48,16 @@ import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.ThemePreference
 
 /**
- * Settings (web/src/components/settings.tsx): Appearance and About as on the web, plus the native
- * apps' Server group (the backend URL, its status and what it offers) and Storage group (saved
- * schedules). A server typed here is checked by BackendUrl and then handed to [onServerTyped], which
- * shows the same confirmation a link gets.
+ * Settings (web/src/components/settings.tsx): You, the people groups, Appearance and About as on
+ * the web, plus the native apps' Server group (the backend URL, its status and what it offers) and
+ * Storage group (saved schedules). A server typed here is checked by BackendUrl and then handed to
+ * [onServerTyped], which shows the same confirmation a link gets.
  *
- * You holds the web's "Import my schedule" row when [ShellActions.onImport] is set; it is disabled,
- * with [ShellState.importNote] as its hint, while no conference is open. Phase 3's Profile row joins
- * the same group.
+ * You holds, in the web's order, the Profile row, which [onOpenProfile] opens (left out without
+ * people features), and the "Import my schedule" row when [ShellActions.onImport] is set; that row
+ * is disabled, with [ShellState.importNote] as its hint, while no conference is open. Without either
+ * row the group is left out. [people] draws the people groups between You and Appearance, in the
+ * web's order.
  */
 @Composable
 fun SettingsScreen(
@@ -62,6 +65,8 @@ fun SettingsScreen(
     actions: ShellActions,
     onOpenUrl: (String) -> Unit,
     onServerTyped: (String) -> Unit,
+    onOpenProfile: (() -> Unit)? = null,
+    people: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     var licensesOpen by rememberSaveable { mutableStateOf(false) }
     var clearOpen by rememberSaveable { mutableStateOf(false) }
@@ -77,19 +82,32 @@ fun SettingsScreen(
             .testTag("settings-screen"),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        actions.onImport?.let { onImport ->
+        val onImport = actions.onImport
+        if (onOpenProfile != null || onImport != null) {
             SettingsGroup(Strings.Settings.YOU, Modifier.testTag("settings-you")) {
-                SettingsNavRow(
-                    icon = LucideIcon.FileUp,
-                    label = Strings.Settings.IMPORT,
-                    hint = state.importNote ?: Strings.Settings.IMPORT_HINT,
-                    onClick = onImport,
-                    first = true,
-                    enabled = state.importNote == null,
-                    modifier = Modifier.testTag("settings-import"),
-                )
+                if (onOpenProfile != null) {
+                    SettingsNavRow(
+                        icon = LucideIcon.UserRound,
+                        label = Strings.Settings.PROFILE,
+                        hint = state.profileName.ifBlank { Strings.Settings.SET_UP_PROFILE },
+                        onClick = onOpenProfile,
+                        first = true,
+                    )
+                }
+                if (onImport != null) {
+                    SettingsNavRow(
+                        icon = LucideIcon.FileUp,
+                        label = Strings.Settings.IMPORT,
+                        hint = state.importNote ?: Strings.Settings.IMPORT_HINT,
+                        onClick = onImport,
+                        first = onOpenProfile == null,
+                        enabled = state.importNote == null,
+                        modifier = Modifier.testTag("settings-import"),
+                    )
+                }
             }
         }
+        people?.invoke(this)
 
         SettingsGroup(Strings.Settings.APPEARANCE) {
             SettingsRow(first = true) {

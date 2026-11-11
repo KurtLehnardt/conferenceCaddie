@@ -3,6 +3,7 @@ package app.conferencecaddie.ui
 import androidx.compose.ui.uikit.OnFocusBehavior
 import androidx.compose.ui.window.ComposeUIViewController
 import app.conferencecaddie.shared.BackendUrl
+import app.conferencecaddie.shared.IosPeopleServices
 import app.conferencecaddie.shared.IosSelfTest
 import app.conferencecaddie.shared.core.IosCore
 import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
@@ -48,6 +49,10 @@ fun MainViewController(): UIViewController {
         }
     }
     val version = NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: ""
+    // The people features, next to the core, with the platform services: the Keychain, location,
+    // notifications and APNs registration. Created on the main thread by the first call only (a
+    // second call reuses the controller and makes no second set), never in tests.
+    val people = IosCore.people({ IosPeopleServices.create() }, allowLocalHttp = isDebugBuild)
     return ComposeUIViewController(
         configure = {
             // The screens keep their fields above the keyboard themselves (imePadding), as on
@@ -63,6 +68,7 @@ fun MainViewController(): UIViewController {
             initialQuery = query,
             talkLaunch = talkLaunch,
             embedder = { EmbeddingModel.load() },
+            people = people,
             platform = IosPlatformActions,
         )
     }.also { HostController.current = it }

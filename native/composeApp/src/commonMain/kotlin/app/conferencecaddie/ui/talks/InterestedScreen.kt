@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -43,8 +44,10 @@ enum class MyScheduleView { List, Day }
  * marked ([snapshots]), as the web keeps its copies in local storage.
  *
  * [shareAll] draws the web's ShareAllControls under the title, given the ids of the talks listed;
- * null leaves it out. It is not drawn for an empty list. [view] and [day] are the List or Day choice
- * and the Day view's day (null for today while the conference runs, else the first day).
+ * null leaves it out. It is not drawn for an empty list. [peopleControls] draws a talk's people
+ * controls (who wants to talk about it, sharing for it) in its card in the List view, as the web's
+ * cards do; the Day view's timeline has none, as on the web. [view] and [day] are the List or Day
+ * choice and the Day view's day (null for today while the conference runs, else the first day).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -57,12 +60,17 @@ fun InterestedScreen(
     onOpenUrl: (String) -> Unit,
     snapshots: Map<String, InterestedTalk> = emptyMap(),
     shareAll: (@Composable (talkIds: List<String>) -> Unit)? = null,
+    peopleControls: (@Composable (Talk) -> Unit)? = null,
+    prefetchCounts: ((List<String>) -> Unit)? = null,
     view: MyScheduleView = MyScheduleView.List,
     onView: (MyScheduleView) -> Unit = {},
     day: String? = null,
     onDay: (String) -> Unit = {},
 ) {
     val talks = interestedTalks(bundle, interested, snapshots)
+    // One counts request for the whole schedule, so the cards below read the controller's cache.
+    val talkIds = talks.map { it.talkId }
+    LaunchedEffect(prefetchCounts, talkIds) { if (talkIds.isNotEmpty()) prefetchCounts?.invoke(talkIds) }
     if (talks.isEmpty()) {
         InterestedPlaceholder()
         return
@@ -133,7 +141,7 @@ fun InterestedScreen(
                 items(list, key = { it.talkId }) { talk ->
                     // As on the web, My schedule's cards carry no matched passage.
                     Box(Modifier.padding(bottom = 12.dp)) {
-                        TalkResult(talk, bundle, emptyList(), true, nowMs, onToggleInterested, onOpenTalk, onOpenUrl, showEvidence = false)
+                        TalkResult(talk, bundle, emptyList(), true, nowMs, onToggleInterested, onOpenTalk, onOpenUrl, showEvidence = false, peopleControls = peopleControls)
                     }
                 }
                 item("day-end-$d") { Box(Modifier.padding(bottom = 4.dp)) }

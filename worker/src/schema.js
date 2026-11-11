@@ -17,7 +17,7 @@
 // the totals older versions kept in meta.usage) when each instance's meter starts, outside
 // SCHEMA_VERSION, so the meter's storage stays in one file with the code that writes it.
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const V1 = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -191,6 +191,17 @@ CREATE TABLE IF NOT EXISTS ble_caps (
 CREATE INDEX IF NOT EXISTS ble_caps_profile ON ble_caps(profile_id, at_ms);
 `;
 
+// Version 3 (signed admin requests, 2026-11-11): admin_nonces, the nonce of every /admin/*
+// request this object has served, with its signed timestamp (ts_ms = ts * 1000, not the object's
+// clock). A nonce seen before is a replay and answers 401 admin_replay before any handler runs;
+// rows older than 15 minutes are dropped on every insert (lib/admin-auth.js consumeAdminNonce),
+// through the index on ts_ms, so the prune reads only the expired rows. The DirectoryDO keeps its
+// own table (DIRECTORY_V1); nonces are per object, never shared.
+const ADMIN_NONCES = `
+CREATE TABLE IF NOT EXISTS admin_nonces (nonce TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS admin_nonces_ts ON admin_nonces (ts_ms);
+`;
+
 // Adds a column unless the table already has it, so a run interrupted after the ALTER is repaired
 // by the next one (ALTER TABLE ADD COLUMN itself is not idempotent).
 function addColumn(sql, table, column, type) {
@@ -204,15 +215,21 @@ export function migrate(sql) {
   sql.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
   const row = sql.exec("SELECT v FROM meta WHERE k = 'schema_version'").toArray()[0];
   const current = row ? Number(row.v) : 0;
-  if (current >= SCHEMA_VERSION) return;
-  if (current < 1) sql.exec(V1);
-  for (const [table, column, type] of V2_COLUMNS) addColumn(sql, table, column, type);
-  sql.exec(V2);
-  sql.exec("INSERT INTO meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(SCHEMA_VERSION));
+  if (current < SCHEMA_VERSION) {
+    if (current < 1) sql.exec(V1);
+    for (const [table, column, type] of V2_COLUMNS) addColumn(sql, table, column, type);
+    sql.exec(V2);
+    sql.exec("INSERT INTO meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(SCHEMA_VERSION));
+  }
+  // Version 3's admin_nonces and its index, on every start and outside the version gate, as the
+  // DirectoryDO does: an object that reached version 3 without the index (or the table) gets it
+  // now. Both statements are idempotent.
+  sql.exec(ADMIN_NONCES);
 }
 
-// The DirectoryDO schema: the conference list, and a small key-value table for the cron's
-// cross-conference usage totals.
+// The DirectoryDO schema: the conference list, a small key-value table for the cron's
+// cross-conference usage totals, and the nonces of the admin requests it serves (as in a
+// ConferenceDO, version 3). Every statement is idempotent and runs at each start.
 const DIRECTORY_V1 = `
 CREATE TABLE IF NOT EXISTS conferences (
   slug TEXT PRIMARY KEY,
@@ -223,6 +240,7 @@ CREATE TABLE IF NOT EXISTS conferences (
   updated_at_ms INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+${ADMIN_NONCES}
 `;
 
 // has_object: the conference's ConferenceDO has been given its document (it was searchable once),

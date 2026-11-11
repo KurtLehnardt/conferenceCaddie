@@ -26,6 +26,16 @@ object Strings {
     object AppBar {
         const val SETTINGS = "Settings"
         const val BACK = "Back"
+        /** Profile's labelled Back: the visible word and the button's name. */
+        const val BACK_SETTINGS_LABEL = "Settings"
+        const val BACK_TO_SETTINGS = "Back to Settings"
+        /** The titles of the people screens over the tabs (#/profile, #/inbox, #/meet/{id}). */
+        const val PROFILE = "Profile"
+        const val REQUESTS = "Requests"
+        const val MEET_UP = "Meet up"
+
+        /** The Requests button's name on the People tab, with the number of new asks. */
+        fun requests(n: Int) = if (n > 0) "Requests, $n new" else "Requests"
         const val CHOOSE_CONFERENCE = "Choose a conference"
         const val CHANGE_CONFERENCE = ", change conference"
         const val OFFLINE = "Offline"
@@ -296,6 +306,11 @@ object Strings {
         const val WHY_LABEL = "You want to learn:"
         const val INTERESTED_ON = "Interested"
         const val DEGRADED = "Meaning-based matching is paused right now; these are keyword matches."
+
+        /** ForYouRow on the People home: its title, the link to the For you tab and a card's reason. */
+        const val ROW_TITLE = "For you"
+        const val SEE_ALL = "See all"
+        fun rowWhy(learn: List<String>) = "Learn: ${learn.joinToString(", ")}"
 
         /** Native only: For you also suggests talks like the ones marked, so the lede says so. */
         const val LEDE_NATIVE = "Talks picked from what you want to learn and the talks you marked. Ended talks and talks you marked are left out."

@@ -10,7 +10,8 @@ import { join } from 'node:path';
 
 const REASONS = ['spam', 'harassment', 'impersonation', 'off-topic', 'other'];
 const MODES = ['dry-run', 'run'];
-const RESULTS = ['ok', 'failed', 'not_found', 'unsupported', 'refused'];
+// 'warned': the command did its work but reported warnings (counts.warnings says how many).
+const RESULTS = ['ok', 'warned', 'failed', 'not_found', 'unsupported', 'refused'];
 const FLAGS = ['text', 'contact', 'include-hidden', 'show-content', 'all', 'allow-shrink', 'purge-local'];
 const BACKEND_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 const COMMAND_RE = /^[a-z-]{1,30} [a-z-]{1,30}$/;
