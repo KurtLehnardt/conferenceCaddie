@@ -28,9 +28,20 @@ object CaddiePeople {
         instance ?: run {
             val app = context.applicationContext
             val controller = AndroidCore.people(app, AndroidPeopleServices.create(app, R.drawable.ic_stat_caddie), allowLocalHttp(app))
-            BackgroundNudgeScheduler(app, controller.state, CoroutineScope(SupervisorJob() + Dispatchers.Default)).start()
+            scheduler = BackgroundNudgeScheduler(app, controller.state, CoroutineScope(SupervisorJob() + Dispatchers.Default)).also { it.start() }
             instance = controller
             controller
         }
+    }
+
+    @Volatile private var scheduler: BackgroundNudgeScheduler? = null
+
+    /**
+     * Checks again whether the background nudge job is wanted, when the app comes back to the
+     * foreground: the system's notification switch may have changed while it was away, which no
+     * people state shows. Does nothing before the controller exists.
+     */
+    fun recheckBackgroundNudges() {
+        scheduler?.recheck()
     }
 }
