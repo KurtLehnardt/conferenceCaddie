@@ -32,7 +32,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.BackendUrl
+import app.conferencecaddie.shared.ConnectLink
+import app.conferencecaddie.shared.bundle.Conference
+import app.conferencecaddie.shared.bundle.TalkTime
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.Embedder
 import app.conferencecaddie.shared.bundle.Talk
@@ -44,6 +48,13 @@ import app.conferencecaddie.shared.core.CoreState
 import app.conferencecaddie.shared.core.Defaults
 import app.conferencecaddie.shared.core.SemanticState
 import app.conferencecaddie.ui.App
+import app.conferencecaddie.ui.ShellRequest
+import app.conferencecaddie.ui.components.ConfirmDialog
+import app.conferencecaddie.ui.components.MenuItem
+import app.conferencecaddie.ui.components.OverflowMenu
+import app.conferencecaddie.ui.platform.Incoming
+import app.conferencecaddie.ui.platform.IncomingHandoff
+import app.conferencecaddie.ui.platform.PlatformActions
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.SkeletonCard
 import app.conferencecaddie.ui.components.StateAction
@@ -79,8 +90,10 @@ import kotlinx.coroutines.delay
  * [initialQuery] types a search, which opens the Search tab, and [talkLaunch] opens a sheet or
  * marks talks, so screenshots can be taken without tapping.
  *
- * TODO(phase 3): route `caddie://connect` links and QR codes from the platforms into
- * `pendingConnect`, which already shows the confirmation that names the base.
+ * [platform] is the system's file picker and share sheet. Links and files the platform hands over
+ * ([IncomingHandoff]) are routed here: a `caddie://connect` link (or the QR code that holds one)
+ * asks the shell's confirmation that names the server, a `caddie://e/...` link opens a conference's
+ * tab, view and day as the web's routes do, and a schedule file opens Import my schedule.
  */
 @Composable
 fun CaddieApp(
@@ -91,6 +104,7 @@ fun CaddieApp(
     initialQuery: String? = null,
     talkLaunch: TalkLaunch = TalkLaunch(),
     embedder: (suspend () -> Embedder?)? = null,
+    platform: PlatformActions = PlatformActions.None,
 ) {
     val state by core.state.collectAsState()
     // The screens' models run in this scope. The core searches and works out For you off the main
@@ -107,6 +121,21 @@ fun CaddieApp(
         remember(core) { SearchModel(scope) { core.search(it) } }
     }
     remember(search, scope) { search.attach(scope) }
+    val schedule = if (owner != null) {
+        viewModel(viewModelStoreOwner = owner, key = "schedule") { ScheduleViewModel(scope) { core.search(it) } }.model
+    } else {
+        remember(core) { ScheduleModel(scope) { core.search(it) } }
+    }
+    remember(schedule, scope) { schedule.attach(scope) }
+    var searchView by rememberSaveable { mutableStateOf(SearchView.Search) }
+    // My schedule's List or Day choice is kept on this device, as the web keeps it in local storage;
+    // the Day view's day belongs to its conference.
+    var myView by remember { mutableStateOf(MyScheduleView.List) }
+    var myDay by rememberSaveable { mutableStateOf<String?>(null) }
+    var myDaySlug by rememberSaveable { mutableStateOf<String?>(null) }
+    var clearOpen by rememberSaveable { mutableStateOf(false) }
+    var shellRequest by remember { mutableStateOf<ShellRequest?>(null) }
+    var pendingOpen by remember { mutableStateOf<AppLink.Open?>(null) }
     val forYou = remember(core) { ForYouModel(scope) { core.forYou(ForYouModel.SIZE) } }
     var pickerOpen by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
@@ -116,7 +145,8 @@ fun CaddieApp(
     val onConnectHandled = { pendingConnect = null }
     var openTalk by rememberSaveable { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<ToastData?>(null) }
-    var undo by remember { mutableStateOf<Pair<Talk, Boolean>?>(null) }
+    // What the toast's Undo does.
+    var undo by remember { mutableStateOf<(() -> Unit)?>(null) }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
     val nowMs by produceState(Clock.System.now().toEpochMilliseconds()) {
         while (true) {
@@ -139,10 +169,12 @@ fun CaddieApp(
         if (launch.theme == null) {
             core.uiSetting(THEME)?.let { saved -> ThemePreference.entries.firstOrNull { it.name == saved } }?.let { theme = it }
         }
+        if (core.uiSetting(MY_SCHEDULE_VIEW) == "day") myView = MyScheduleView.Day
     }
     val ready = state.bundle as? BundleState.Ready
     LaunchedEffect(state.selectedSlug, ready?.bundle?.contentHash) {
         search.onConference(state.selectedSlug, ready?.bundle?.contentHash)
+        schedule.onConference(state.selectedSlug)
         cacheBytes = runCatching { core.cacheSizeBytes() }.getOrNull()
     }
     LaunchedEffect(initialQuery, ready != null) {
@@ -157,6 +189,8 @@ fun CaddieApp(
         if (talkLaunch.sheet == "topics") pickerOpen = true
         talkLaunch.talk?.let { openTalk = it }
     }
+    // caddie.link hands a link over as the platform would, so the routing can be tried without one.
+    LaunchedEffect(talkLaunch.link) { talkLaunch.link?.let { IncomingHandoff.offerLink(it) } }
     // For you asks again whenever what it depends on changes, and every minute, as talks end, but
     // only while it is on screen (the effect lives in its tab); coming back to it catches up.
     val forYouInputs = listOf(ready?.bundle?.contentHash, state.learn, state.interested, state.semantic, nowMs / 60_000)
@@ -172,14 +206,83 @@ fun CaddieApp(
 
     val interestedIds = state.interested.toSet()
     val interestedTalks = state.interestedTalks()
+    val showToast: (String, (() -> Unit)?) -> Unit = { message, onUndo ->
+        undo = onUndo
+        toast = ToastData(
+            id = Clock.System.now().toEpochMilliseconds(),
+            message = message,
+            actionLabel = if (onUndo != null) Strings.Toasts.UNDO else null,
+        )
+    }
     val toggle: (Talk) -> Unit = { talk ->
         val on = talk.talkId !in interestedIds
         core.setInterested(talk, on)
-        undo = talk to !on
-        toast = ToastData(
+        showToast(if (on) Strings.Toasts.ADDED else Strings.Toasts.REMOVED) { core.setInterested(talk, !on) }
+    }
+
+    // Links and files from the platform, each handled once, in the order they came.
+    val incoming by IncomingHandoff.latest.collectAsState()
+    LaunchedEffect(incoming) {
+        val item = incoming ?: return@LaunchedEffect
+        IncomingHandoff.take(item)
+        when (item) {
+            is Incoming.Link -> when (val link = AppLink.parse(item.url)) {
+                // A connect link only ever asks; a refused one (not https, credentials, a query) is
+                // dropped without a word, as the web drops it.
+                is AppLink.Connect -> (link.link as? ConnectLink.Confirm)?.let { pendingConnect = it.backend.base }
+                is AppLink.Open -> pendingOpen = link
+                null -> Unit
+            }
+            is Incoming.File -> Unit
+        }
+    }
+    // A conference link waits for the conference list, selects its conference if the backend lists
+    // it, then shows its tab, view and day.
+    val conferenceList = state.conferences
+    LaunchedEffect(pendingOpen, conferenceList, state.selectedSlug) {
+        val link = pendingOpen ?: return@LaunchedEffect
+        val slug = link.slug
+        if (slug != null && slug != state.selectedSlug) {
+            when (conferenceList) {
+                ConferencesState.Loading -> return@LaunchedEffect
+                is ConferencesState.Ready -> if (conferenceList.conferences.any { it.conference.slug == slug }) {
+                    core.selectConference(slug)
+                    return@LaunchedEffect
+                }
+                else -> Unit
+            }
+            pendingOpen = null
+            showToast(Strings.Blockers.NOT_AVAILABLE_HERE, null)
+            return@LaunchedEffect
+        }
+        pendingOpen = null
+        val on = state.selectedSlug
+        when (link.tab) {
+            AppLink.Tab.Search -> {
+                schedule.onConference(on)
+                if (link.view == AppLink.View.Schedule || (link.view == null && link.day != null)) searchView = SearchView.Schedule
+                if (link.view == AppLink.View.Search) searchView = SearchView.Search
+                link.day?.let { schedule.day = it }
+            }
+            AppLink.Tab.Interested -> {
+                link.view?.let { myView = if (it == AppLink.View.Day) MyScheduleView.Day else MyScheduleView.List }
+                link.day?.let {
+                    myDay = it
+                    myDaySlug = on
+                }
+            }
+            else -> Unit
+        }
+        shellRequest = ShellRequest(
             id = Clock.System.now().toEpochMilliseconds(),
-            message = if (on) Strings.Toasts.ADDED else Strings.Toasts.REMOVED,
-            actionLabel = Strings.Toasts.UNDO,
+            tab = when (link.tab) {
+                AppLink.Tab.People -> Tab.People
+                AppLink.Tab.ForYou -> Tab.ForYou
+                AppLink.Tab.Search -> Tab.Search
+                AppLink.Tab.Interested -> Tab.Interested
+                AppLink.Tab.Settings, null -> null
+            },
+            settings = link.tab == AppLink.Tab.Settings,
         )
     }
 
@@ -214,7 +317,7 @@ fun CaddieApp(
             },
             onDismissToast = { toast = null },
             onToastAction = {
-                undo?.let { (talk, on) -> core.setInterested(talk, on) }
+                undo?.invoke()
                 undo = null
                 toast = null
             },
@@ -238,17 +341,87 @@ fun CaddieApp(
             },
             search = {
                 BundleGate(state, core) { r ->
-                    SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl, openRank = talkLaunch.rank)
+                    SearchTab(
+                        view = searchView,
+                        onView = { searchView = it },
+                        search = {
+                            SearchScreen(search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl, openRank = talkLaunch.rank)
+                        },
+                        schedule = {
+                            ScheduleScreen(schedule, r.bundle, interestedIds, nowMs, toggle) { openTalk = it.talkId }
+                        },
+                    )
                 }
             },
             interested = {
                 BundleGate(state, core) { r ->
-                    InterestedScreen(r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl, state.interestedSnapshots)
+                    InterestedScreen(
+                        r.bundle, state.interested, nowMs, toggle, { openTalk = it.talkId }, openUrl, state.interestedSnapshots,
+                        view = myView,
+                        onView = {
+                            myView = it
+                            core.setUiSetting(MY_SCHEDULE_VIEW, if (it == MyScheduleView.Day) "day" else "list")
+                        },
+                        day = myDay.takeIf { myDaySlug == state.selectedSlug },
+                        onDay = {
+                            myDay = it
+                            myDaySlug = state.selectedSlug
+                        },
+                    )
+                }
+            },
+            appBarActions = { tab ->
+                // web app.tsx: the Interested tab's options, while a schedule is open.
+                if (tab == Tab.Interested && ready != null) {
+                    OverflowMenu(
+                        label = Strings.AppBar.INTERESTED_OPTIONS,
+                        items = listOf(
+                            MenuItem(
+                                Strings.Share.SHARE_LIST,
+                                onSelect = {
+                                    val conference = ready.bundle.conference
+                                    platform.shareText(shareText(conference, interestedTalks), Strings.Share.subject(conference.name))
+                                },
+                                enabled = interestedTalks.isNotEmpty(),
+                                testTag = "menu-share",
+                            ),
+                            MenuItem(
+                                Strings.AppBar.CLEAR_LIST,
+                                onSelect = {
+                                    toast = null
+                                    clearOpen = true
+                                },
+                                destructive = true,
+                                enabled = interestedTalks.isNotEmpty(),
+                                testTag = "menu-clear",
+                            ),
+                        ),
+                    )
                 }
             },
         ),
         initialTab = launch.tab ?: if (initialQuery != null) Tab.Search else null,
+        request = shellRequest,
     )
+
+    if (clearOpen) {
+        val n = interestedTalks.size
+        CaddieTheme(theme) {
+            ConfirmDialog(
+                title = Strings.Interested.CLEAR_TITLE,
+                body = Strings.Interested.clearBody(n),
+                confirmLabel = Strings.Interested.CLEAR,
+                onConfirm = {
+                    clearOpen = false
+                    val before = interestedTalks
+                    core.setInterested(before, false)
+                    showToast(Strings.Toasts.CLEARED) { core.setInterested(before, true) }
+                },
+                onDismiss = { clearOpen = false },
+                testTag = "clear-dialog",
+            )
+        }
+    }
 
     if (pickerOpen && ready != null) {
         CaddieTheme(theme) {
@@ -286,12 +459,39 @@ fun CaddieApp(
 
 private const val THEME = "theme"
 
+/** The List or Day choice of My schedule (the web's caddie.myschedule.view.v1). */
+private const val MY_SCHEDULE_VIEW = "myschedule.view.v1"
+
+/**
+ * My schedule as text for the share sheet (native only; the web has no share of the list): the
+ * talks by day in the conference's local time, each with its room and official link, and the time
+ * zone they are written in.
+ */
+internal fun shareText(conference: Conference, talks: List<Talk>): String {
+    val sorted = talks.sortedWith(compareBy<Talk> { it.startEpochMs }.thenBy { it.talkId })
+    if (sorted.isEmpty()) return Strings.Share.subject(conference.name)
+    return buildString {
+        append(Strings.Share.subject(conference.name)).append('\n')
+        sorted.groupBy { it.day }.forEach { (day, list) ->
+            append('\n').append(TalkTime.dayLong(day)).append('\n')
+            list.forEach { t ->
+                append(TalkTime.timeRange(t.startMinutes, t.endMinutes)).append("  ").append(t.title).append('\n')
+                val meta = listOfNotNull(t.speakers.joinToString(", ").takeIf { it.isNotEmpty() }, t.room?.takeIf { it.isNotEmpty() })
+                if (meta.isNotEmpty()) append("  ").append(meta.joinToString(" · ")).append('\n')
+                t.url?.takeIf { isWebLink(it) }?.let { append("  ").append(it).append('\n') }
+            }
+        }
+        append('\n').append(Strings.Share.footer(TalkTime.zoneLabel(conference.timeZone, sorted.first().start)))
+    }
+}
+
 /**
  * Debug launch options of the talk screens: `caddie.sheet filters` opens the Filters sheet and
  * `caddie.sheet topics` the topic picker, `caddie.talk <talk id>` opens a talk, `caddie.mark
  * <id>,<id>` marks talks, `caddie.learn <topic id>,<topic id>` and `caddie.learnText <text>` set
  * what For you suggests from, and `caddie.rank first` (or a talk id) opens that search result's Why
- * this rank. Release hosts never pass them.
+ * this rank, and `caddie.link <caddie:// link>` hands a link over as the platform would. Release
+ * hosts never pass them.
  */
 data class TalkLaunch(
     val sheet: String? = null,
@@ -300,6 +500,7 @@ data class TalkLaunch(
     val learn: List<String>? = null,
     val learnText: String? = null,
     val rank: String? = null,
+    val link: String? = null,
 ) {
     companion object {
         fun from(get: (String) -> String?) = TalkLaunch(
@@ -309,6 +510,7 @@ data class TalkLaunch(
             learn = list(get("caddie.learn")),
             learnText = get("caddie.learnText"),
             rank = get("caddie.rank"),
+            link = get("caddie.link"),
         )
 
         private fun list(value: String?) = value?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
@@ -439,3 +641,6 @@ private fun shellState(
         isDebugBuild = isDebugBuild,
     )
 }
+
+// TEMP(2c): replaced by CaddieCore.setInterested(List<Talk>, Boolean) from the import branch.
+private fun CaddieCore.setInterested(talks: List<Talk>, on: Boolean) = talks.forEach { setInterested(it, on) }

@@ -33,13 +33,38 @@
             android:name="ai.onnxruntime.TelemetryInitializer"
             android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
             tools:node="remove" />
+        <!-- singleTask: a caddie:// link or a schedule file opened while the app runs reaches the
+             running screen (onNewIntent) instead of starting a second one in another app's task. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- caddie://connect?url=... (an operator's server link or QR code, which the app only
+                 ever offers to switch to after the person confirms) and caddie://e/<slug>#/<tab>,
+                 the web's routes. No https App Links: see DECISIONS.md, phase 2c. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="caddie" android:host="connect" />
+                <data android:scheme="caddie" android:host="e" />
+            </intent-filter>
+            <!-- "Open with" and "Share" for calendar and spreadsheet exports: the file opens Import
+                 my schedule. Only content: addresses are read (MainActivity.handOff). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/calendar" />
+                <data android:mimeType="text/x-vcalendar" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="text/tab-separated-values" />
             </intent-filter>
         </activity>
     </application>

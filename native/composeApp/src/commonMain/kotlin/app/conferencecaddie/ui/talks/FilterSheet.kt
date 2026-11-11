@@ -28,6 +28,7 @@ import app.conferencecaddie.ui.strings.Strings
  * The Filters sheet (web FilterSheet): Day, Time, Track, Level, each tag group, Slides, Sponsor
  * content and Events and showcases, with counts that already reflect the other filters, and a
  * footer with "Clear all" and "Show 12 talks". Values with no talks are hidden unless selected.
+ * With [schedule] (the full schedule, which has its own day chips) Day and Time are left out.
  */
 @Composable
 fun FilterSheet(
@@ -37,6 +38,7 @@ fun FilterSheet(
     result: SearchResult?,
     onChange: (SearchRequest) -> Unit,
     onClose: () -> Unit,
+    schedule: Boolean = false,
 ) {
     val f = filters
     val facets = result?.facets
@@ -57,23 +59,25 @@ fun FilterSheet(
             )
         },
     ) {
-        Section(Strings.FilterSheet.DAY) {
-            OptionRow(Strings.FilterSheet.ANY_DAY, f.day == null, { onChange(f.copy(day = null)) }, radio = true)
-            visible(facets?.day.orEmpty(), listOfNotNull(f.day)).forEach { d ->
-                OptionRow(TalkTime.day(d.value), f.day == d.value, { onChange(f.copy(day = d.value)) }, count = d.count, radio = true)
+        if (!schedule) {
+            Section(Strings.FilterSheet.DAY) {
+                OptionRow(Strings.FilterSheet.ANY_DAY, f.day == null, { onChange(f.copy(day = null)) }, radio = true)
+                visible(facets?.day.orEmpty(), listOfNotNull(f.day)).forEach { d ->
+                    OptionRow(TalkTime.day(d.value), f.day == d.value, { onChange(f.copy(day = d.value)) }, count = d.count, radio = true)
+                }
             }
-        }
-        Section(Strings.FilterSheet.TIME) {
-            Segmented(
-                options = listOf(
-                    SegmentOption(TimeValue.Any, Strings.FilterSheet.ANY_TIME),
-                    SegmentOption(TimeValue.Morning, Strings.Chips.MORNING),
-                    SegmentOption(TimeValue.Afternoon, Strings.Chips.AFTERNOON),
-                ),
-                value = timeValue(f),
-                onChange = { onChange(withTime(f, it)) },
-                label = Strings.FilterSheet.TIME_OF_DAY,
-            )
+            Section(Strings.FilterSheet.TIME) {
+                Segmented(
+                    options = listOf(
+                        SegmentOption(TimeValue.Any, Strings.FilterSheet.ANY_TIME),
+                        SegmentOption(TimeValue.Morning, Strings.Chips.MORNING),
+                        SegmentOption(TimeValue.Afternoon, Strings.Chips.AFTERNOON),
+                    ),
+                    value = timeValue(f),
+                    onChange = { onChange(withTime(f, it)) },
+                    label = Strings.FilterSheet.TIME_OF_DAY,
+                )
+            }
         }
         Section(Strings.FilterSheet.TRACK) {
             val tracks = visible(facets?.track.orEmpty(), f.tracks.toList())

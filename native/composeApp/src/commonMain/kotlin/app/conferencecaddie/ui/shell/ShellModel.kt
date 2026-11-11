@@ -90,7 +90,7 @@ class ShellActions(
  * The content of each tab, supplied by the caller. A null slot shows the shell's placeholder for
  * that tab. Slots are drawn only while a searchable conference is selected; otherwise the shell
  * shows the web's blocker states (loading, error, not available). [appBarActions] adds buttons on
- * the right of the app bar for the given tab, before the offline badge and the gear.
+ * the right of the app bar of a tab screen, after the offline badge and before the gear.
  */
 class TabContent(
     val people: (@Composable () -> Unit)? = null,
