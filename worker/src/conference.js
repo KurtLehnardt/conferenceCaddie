@@ -9,22 +9,17 @@ import { migrate } from './schema.js';
 import { Store } from './store.js';
 import apiRoutes from './routes.js';
 import adminRoutes from './admin.js';
-import { HttpError, json, readJson, isDailyLimitError, dailyLimitResponse, secondsUntilUtcMidnight } from './lib/http.js';
+import { HttpError, json, readJson, isDailyLimitError, dailyLimitResponse } from './lib/http.js';
 import { newEmbedState } from './lib/embed.js';
-import { visibleUntilMs, utcDay } from './lib/time.js';
+import { visibleUntilMs } from './lib/time.js';
+import { Meter, FLUSH_INTERVAL_MS } from './lib/meter.js';
 
-// The meter is written to meta.usage after FLUSH_EVERY requests or FLUSH_INTERVAL_MS, whichever
-// comes first, and after the first request of a new instance. The object can be evicted from
-// memory at any time, and whatever it counted since its last write is lost then, so the
-// interval bounds that loss to a few seconds of traffic. One write per interval costs up to
-// 5,760 written rows a day for each object that is busy all day, so the total grows with the
-// number of searchable conferences (about 23,000 a day for four).
-const FLUSH_EVERY = 100;
-const FLUSH_INTERVAL_MS = 15_000;
-const WINDOW_MIN = 10;
+// The daily usage meter (src/lib/meter.js) adds its deltas to the day's stored totals after the
+// first request of a new instance, then after 100 requests or 15 seconds, whichever comes first,
+// and on an idle timer once 15 seconds have passed with counts unwritten. One write per interval
+// costs up to 5,760 written rows a day for each object that is busy all day, so the total grows
+// with the number of searchable conferences (about 23,000 a day for four).
 const BUCKET_SWEEP_EVERY = 1000;
-const num = (v, d) => (Number.isFinite(Number(v)) && v !== undefined && v !== '' ? Number(v) : d);
-const zero = (day) => ({ day, requests: 0, rows_read: 0, rows_written: 0 });
 // The routes an object serves while its conference is not searchable: an owner's deletes and the
 // list of their own blocks, so nobody is locked out of deleting their data (the Worker forwards
 // these for any conference whose object exists).
@@ -34,108 +29,6 @@ const OWNER_ROUTES = new Set([
 // The tables whose rows the cron still has to purge; while any holds a row, the directory keeps
 // the conference among the cron targets.
 const HELD_TABLES = ['people', 'presence', 'blocks', 'meets', 'push_subs', 'nudges', 'nudge_sends', 'ble_caps'];
-
-// The daily meter of section 1.14: API requests served, and SQLite rows read and written, per UTC
-// day, plus the other conferences' totals from the last cron call.
-class Meter {
-  constructor(owner) {
-    this.owner = owner;
-    const day = utcDay(Date.now());
-    let usage = null;
-    try {
-      usage = JSON.parse(owner.state.storage.sql.exec("SELECT v FROM meta WHERE k = 'usage'").toArray()[0]?.v ?? 'null');
-    } catch {
-      usage = null;
-    }
-    this.usage = usage && usage.day === day ? { ...zero(day), ...usage } : zero(day);
-    this.others = zero(day);
-    this.othersGrowth = 0; // growth of others.requests between the last two cron calls
-    this.minutes = new Map(); // minute index -> requests
-    this.sinceFlush = 0;
-    // 0, so a fresh instance writes after its first request: instances can live well under
-    // FLUSH_INTERVAL_MS, and their counts would otherwise never reach meta.usage.
-    this.flushedAt = 0;
-  }
-
-  #roll(now) {
-    const day = utcDay(now);
-    if (this.usage.day !== day) this.usage = zero(day);
-    if (this.others.day !== day) {
-      this.others = zero(day);
-      this.othersGrowth = 0;
-    }
-  }
-
-  countRequest(now) {
-    this.#roll(now);
-    this.usage.requests += 1;
-    const m = Math.floor(now / 60_000);
-    this.minutes.set(m, (this.minutes.get(m) ?? 0) + 1);
-    for (const k of this.minutes.keys()) if (k <= m - WINDOW_MIN) this.minutes.delete(k);
-    this.sinceFlush += 1;
-  }
-
-  // Writes the totals when enough requests or enough time have gone by since the last write.
-  // Called after each response is built, once its rows are counted.
-  maybeFlush(now = Date.now()) {
-    if (this.sinceFlush >= FLUSH_EVERY || (this.sinceFlush > 0 && now - this.flushedAt >= FLUSH_INTERVAL_MS)) this.flush(now);
-  }
-
-  addRows(read, written) {
-    this.#roll(Date.now());
-    this.usage.rows_read += read;
-    this.usage.rows_written += written;
-  }
-
-  // Writes the day's totals to meta.usage (one written row).
-  // The counters that schedule the next write are reset only after this write succeeds, so a
-  // failed write is retried on the next request.
-  flush(now = Date.now()) {
-    this.owner.exec("INSERT INTO meta (k, v) VALUES ('usage', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(this.usage));
-    this.sinceFlush = 0;
-    this.flushedAt = now;
-  }
-
-  setOthers(day, others) {
-    const now = Date.now();
-    this.#roll(now);
-    if (day !== this.usage.day || !others) return;
-    const next = { day, requests: num(others.requests, 0), rows_read: num(others.rows_read, 0), rows_written: num(others.rows_written, 0) };
-    this.othersGrowth = Math.max(0, next.requests - this.others.requests);
-    this.others = next;
-  }
-
-  global() {
-    this.#roll(Date.now());
-    return {
-      requests: this.usage.requests + this.others.requests,
-      rows_read: this.usage.rows_read + this.others.rows_read,
-      rows_written: this.usage.rows_written + this.others.rows_written,
-    };
-  }
-
-  // The request pace clients multiply their poll intervals by: 1 (normal) to 10 (slowest).
-  pace(now = Date.now()) {
-    const env = this.owner.env;
-    const budget = num(env.DAILY_REQUEST_BUDGET, 70_000);
-    const left = budget - this.global().requests;
-    if (left < 0.02 * budget) return 10;
-    let recent = 0;
-    const m = Math.floor(now / 60_000);
-    for (const [k, n] of this.minutes) if (k > m - WINDOW_MIN) recent += n;
-    const projected = ((recent + this.othersGrowth) * secondsUntilUtcMidnight(now)) / 600;
-    const pace = Math.min(10, Math.max(1, projected / Math.max(left, 1)));
-    return Math.round(pace * 10) / 10;
-  }
-
-  lexicalAllowed() {
-    return this.global().rows_read < num(this.owner.env.ROWS_READ_SOFT_CAP, 3_500_000);
-  }
-
-  writesAllowed() {
-    return this.global().rows_written < num(this.owner.env.ROWS_WRITTEN_SOFT_CAP, 85_000);
-  }
-}
 
 function matchRoute(routes, method, path) {
   const allowed = new Set();
@@ -176,11 +69,17 @@ export class ConferenceDO extends DurableObject {
     this.conf = null;
     this.slug = null;
     this.store = new Store(this);
+    this.idleTimer = null;
     state.blockConcurrencyWhile(async () => {
       migrate(state.storage.sql);
       this.#loadConf();
-      this.meter = new Meter(this);
+      this.meter = this.#newMeter();
     });
+  }
+
+  // The meter's own writes are unmetered calls that count their cost themselves (lib/meter.js).
+  #newMeter() {
+    return new Meter({ sql: (q, ...b) => this.state.storage.sql.exec(q, ...b), exec: (q, ...b) => this.exec(q, ...b), env: this.env });
   }
 
   // The metered SQL: the same signature as storage.sql.exec. Every cursor is remembered so its
@@ -200,6 +99,30 @@ export class ConferenceDO extends DurableObject {
     }
     this.cursors = [];
     if (read || written) this.meter.addRows(read, written);
+  }
+
+  // Writes the meter's deltas once they are due by time and no request has come along to write
+  // them, so an idle instance does not hold its counts until it is evicted. It is a timer rather
+  // than an alarm because each alarm is billed as a Durable Object request and each setAlarm as a
+  // written row. It writes on the same cadence as the requests do (at most once per 15 seconds),
+  // so it adds no writes, and an eviction before it fires loses the deltas, as before.
+  #armIdleFlush(delay = this.meter.dueIn()) {
+    if (this.idleTimer || !this.meter.needsFlush()) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      let retry;
+      if (this.meter.needsFlush() && this.meter.dueIn() === 0) {
+        try {
+          this.meter.flush();
+        } catch (err) {
+          // Tried again a full interval later, not in a tight loop.
+          console.error(`meter flush failed: ${err?.name ?? 'Error'}`);
+          retry = FLUSH_INTERVAL_MS;
+        }
+        this.#drain();
+      }
+      this.#armIdleFlush(retry);
+    }, Math.max(1000, delay));
   }
 
   #loadConf() {
@@ -253,8 +176,11 @@ export class ConferenceDO extends DurableObject {
     throw new HttpError(429, { error: 'Too many requests' }, { 'Retry-After': String(retry) });
   }
 
+  // The day's usage as GET /admin/stats reports it: the request's rows so far are counted, and the
+  // meter writes its deltas before it reads, so the reading is a stored total (lib/meter.js).
   usage() {
-    return { ...this.meter.usage, pace: this.meter.pace() };
+    this.#drain();
+    return { ...this.meter.report(), pace: this.meter.pace() };
   }
 
   #ctx(request, now) {
@@ -274,12 +200,20 @@ export class ConferenceDO extends DurableObject {
       waitUntil: (promise) => {
         const p = Promise.resolve(promise)
           .catch((err) => console.error(`background work failed: ${err?.name ?? 'Error'}`))
-          .finally(() => this.#drain());
+          .finally(() => {
+            this.#drain();
+            this.#armIdleFlush();
+          });
         if (typeof this.state.waitUntil === 'function') this.state.waitUntil(p);
       },
       meter: { lexicalAllowed: () => meter.lexicalAllowed(), writesAllowed: () => meter.writesAllowed(), pace: meter.pace(now) },
       embedState: this.embedState,
       usage: () => this.usage(),
+      // For the smoke's meter check: replaces the meter as a new instance of the object would
+      // start, from the stored totals, and drops whatever the old meter had not written yet.
+      restartMeter: () => {
+        this.meter = this.#newMeter();
+      },
     };
   }
 
@@ -337,6 +271,7 @@ export class ConferenceDO extends DurableObject {
       // request tries the write again.
       console.error(`meter flush failed: ${err?.name ?? 'Error'}`);
     }
+    this.#armIdleFlush();
     const out = new Response(request.method === 'HEAD' ? null : res.body, res);
     out.headers.set('X-Caddie-Pace', String(this.meter.pace()));
     return out;
@@ -362,13 +297,12 @@ export class ConferenceDO extends DurableObject {
         console.error(`embedding retry failed: ${err?.name ?? 'Error'}`);
       }
       this.meter.setOthers(body.day, body.others);
-      this.#drain();
-      this.meter.flush();
-      this.#drain();
       // One row read per table (EXISTS), not a count, so the check stays cheap every 10 minutes.
       const holds = HELD_TABLES.some((t) => this.exec(`SELECT EXISTS (SELECT 1 FROM ${t}) AS x`).one().x === 1) ? 1 : 0;
+      this.meter.sweep(ctx.now);
       this.#drain();
-      const { day, requests, rows_read, rows_written } = this.meter.usage;
+      // Last, so the totals include this call's rows and the write itself.
+      const { day, requests, rows_read, rows_written } = this.meter.report();
       return json(200, { day, requests, rows_read, rows_written, purged: purged.people, embedded: embedded.embedded, holds });
     }
     return json(404, { error: 'Not found' });
