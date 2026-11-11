@@ -6,6 +6,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { migrateDirectory } from './schema.js';
 import { HttpError, bad, json, readJson, isPlainObject, SLUG_RE } from './lib/http.js';
+import { consumeAdminNonce } from './lib/admin-auth.js';
 import { utcDay } from './lib/time.js';
 
 const CONFERENCES_PER_MIN = 120;
@@ -102,6 +103,13 @@ export class DirectoryDO extends DurableObject {
             slug: r.slug, status: r.status, route_prefix: r.route_prefix, has_object: r.has_object, end_date: r.doc.end_date ?? null, time_zone: r.doc.time_zone ?? null,
           })),
         });
+      }
+      // An admin request's nonce is recorded before its handler runs, as in a ConferenceDO (W2):
+      // the Worker forwards it only after verifying the signature, and strips any client copy.
+      if (path.startsWith('/admin/')) {
+        const nonce = consumeAdminNonce((q, ...b) => this.sql.exec(q, ...b), request.headers, Date.now());
+        if (nonce === 'missing') return json(404, { error: 'Not found' });
+        if (nonce === 'replay') return json(401, { error: 'admin_replay' });
       }
       if (path === '/admin/conferences' && request.method === 'PUT') return await this.#upsert(request);
       if (path === '/internal/cron-targets') return this.#cronTargets();

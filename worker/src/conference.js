@@ -2,7 +2,8 @@
 // 1.10 and 1.14). It holds the conference's talks, vectors, topics, facets, people and every
 // connection between them, and serves the API routes of the four handler modules, the admin
 // routes and the cron call. It is reachable only through the Worker, which forwards a fresh
-// header set (Content-Type, X-Caddie-Device, X-Caddie-IP, X-Caddie-Slug), so those are trusted.
+// header set (Content-Type, X-Caddie-Device, X-Caddie-IP, X-Caddie-Slug, and on an admin request
+// X-Caddie-Admin-Nonce and X-Caddie-Admin-Ts from the verified signature), so those are trusted.
 
 import { DurableObject } from 'cloudflare:workers';
 import { migrate } from './schema.js';
@@ -10,6 +11,7 @@ import { Store } from './store.js';
 import apiRoutes from './routes.js';
 import adminRoutes from './admin.js';
 import { HttpError, json, readJson, isDailyLimitError, dailyLimitResponse } from './lib/http.js';
+import { consumeAdminNonce } from './lib/admin-auth.js';
 import { newEmbedState } from './lib/embed.js';
 import { visibleUntilMs } from './lib/time.js';
 import { Meter } from './lib/meter.js';
@@ -216,7 +218,16 @@ export class ConferenceDO extends DurableObject {
     const { route, params, allowed } = matchRoute(admin ? adminRoutes : apiRoutes, request.method, path);
     let res;
     try {
-      if (!route) {
+      // An admin request's nonce is recorded before anything else runs (W2). The Worker forwards
+      // it only after verifying the signature, and no internal caller uses an /admin/* path (the
+      // cron and the directory fan-out use /internal/*), so a request without it is not one the
+      // Worker sent: 404. A nonce seen before is a replay: 401, and no handler runs.
+      const nonce = admin ? consumeAdminNonce((q, ...b) => this.exec(q, ...b), request.headers, now) : 'ok';
+      if (nonce === 'missing') {
+        res = json(404, { error: 'Not found' });
+      } else if (nonce === 'replay') {
+        res = json(401, { error: 'admin_replay' });
+      } else if (!route) {
         res = allowed.size
           ? json(405, { error: 'Method not allowed' }, { Allow: [...allowed].join(', ') })
           : json(404, { error: 'Not found' });

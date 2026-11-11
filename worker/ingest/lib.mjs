@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contentHash } from '../../scripts/lib/hash.mjs';
+import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -153,25 +154,48 @@ export class AdminError extends Error {
   }
 }
 
-// Returns a function admin(method, path, body) that resolves to the parsed JSON body. It retries
-// network failures, 429 and 5xx up to `retries` times (honouring Retry-After), and stops at once on
-// a 503 daily_limit, because retrying cannot help before the quota resets. Any other status
-// throws an AdminError that carries the status.
-export function adminClient(api, token, { retries = 3, timeoutMs = 60_000 } = {}) {
+// The optional Cloudflare Access service token: both CF_ACCESS_CLIENT_ID and
+// CF_ACCESS_CLIENT_SECRET set, or nothing. It is an extra layer in front of the Worker; the
+// signature is the check the Worker itself makes.
+function accessHeaders(env) {
+  const id = (env.CF_ACCESS_CLIENT_ID || '').trim();
+  const secret = (env.CF_ACCESS_CLIENT_SECRET || '').trim();
+  return id && secret ? { 'CF-Access-Client-Id': id, 'CF-Access-Client-Secret': secret } : {};
+}
+
+// Returns a function admin(method, path, body) that resolves to the parsed JSON body. Every
+// request is signed with the admin token (X-Caddie-Admin, scripts/lib/admin-sign.mjs), which never
+// leaves this process; no Authorization header is sent. It retries network failures, 429 and 5xx
+// up to `retries` times (honouring Retry-After), signing each attempt afresh: a nonce is
+// single-use on the Worker and the timestamp must be within five minutes of its clock, so a retry
+// is a new request, which every admin route handles idempotently. It stops at once on a 503
+// daily_limit, because retrying cannot help before the quota resets. Any other status throws an
+// AdminError that carries the status. `api` must be an origin (the admin routes live at its root);
+// a path or query outside the signer's charset is a UsageError before anything is sent.
+export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env = process.env } = {}) {
+  const access = accessHeaders(env);
   return async function admin(method, path, body) {
     const where = `${method} ${path.split('?')[0]}`;
+    const payload = body === undefined ? undefined : JSON.stringify(body);
     let lastError = 'no attempt';
     for (let attempt = 0; attempt <= retries; attempt++) {
+      let signed;
+      try {
+        signed = signAdminRequest({ method, path, base: api, body: payload, key: token });
+      } catch (e) {
+        throw new UsageError(`${where}: ${e.message}`);
+      }
       let res;
       let text = '';
       try {
-        res = await fetch(api + path, {
+        res = await fetch(signed.url, {
           method,
           headers: {
-            Authorization: `Bearer ${token}`,
-            ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+            [HEADER_NAME]: signed.header,
+            ...access,
+            ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
           },
-          body: body === undefined ? undefined : JSON.stringify(body),
+          body: payload,
           signal: AbortSignal.timeout(timeoutMs),
         });
         text = await res.text();

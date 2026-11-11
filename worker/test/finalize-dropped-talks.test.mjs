@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as nodeModule from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 // crypto.subtle.timingSafeEqual is a Workers extension that Node does not have.
 if (typeof crypto.subtle.timingSafeEqual !== 'function') {
@@ -65,9 +65,15 @@ const SLUG = 'caddie-fixture-2099';
 const T = (n) => `${SLUG}:${n}`;
 let ipCounter = 0;
 
+// An admin request carries the nonce and timestamp the Worker forwards from a verified signature;
+// the object refuses an /admin/* request without them (404) and a nonce it has seen (401).
 function request(method, path, body, { device } = {}) {
   const headers = { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-ip': `192.0.2.${(ipCounter++ % 200) + 1}` };
   if (device) headers['x-caddie-device'] = `${device.id}.${device.secret}`;
+  if (path.startsWith('/admin/')) {
+    headers['x-caddie-admin-nonce'] = randomBytes(16).toString('base64url');
+    headers['x-caddie-admin-ts'] = String(Math.floor(Date.now() / 1000));
+  }
   return new Request(`https://do.internal${path}?event=${SLUG}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
 }
 

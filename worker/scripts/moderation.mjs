@@ -19,13 +19,16 @@
 // Env: CADDIE_API_BASE (the Worker URL, when --api is not given); ADMIN_TOKEN, or ADMIN_TOKEN_FILE
 //      (default ~/.config/conference-caddie/admin-token, written by setup-secrets.mjs).
 //
-// The admin token is sent only in the Authorization header and is never printed. The Worker never
-// returns profile ids or reporter ids from these routes, and this script prints neither.
+// The admin token never leaves this machine and is never printed: each request carries an
+// X-Caddie-Admin signature made with it (scripts/lib/admin-sign.mjs), and no Authorization header.
+// The API base must be the Worker's origin, with no path. The Worker never returns profile ids or
+// reporter ids from these routes, and this script prints neither.
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const REF_RE = /^[0-9a-f]{16}$/;
@@ -114,17 +117,27 @@ function parseTarget(value) {
 
 const redact = (text) => String(text ?? '').split(token).join('[ADMIN_TOKEN]');
 
-async function admin(method, path, body) {
-  const url = `${base}/admin/moderation?${new URLSearchParams(path)}`;
+// query is a plain object of parameters. Its values are a slug or an ISO instant, which the
+// signer's query charset allows as they are, so they are joined without percent-encoding (the
+// signer refuses a "%"); anything else is a usage error before a request is made.
+async function admin(method, query, body) {
+  const path = `/admin/moderation?${Object.entries(query).map(([k, v]) => `${k}=${v}`).join('&')}`;
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  let signed;
+  try {
+    signed = signAdminRequest({ method, path, base, body: payload, key: token });
+  } catch (err) {
+    usage(err.message);
+  }
   let res;
   try {
-    res = await fetch(url, {
+    res = await fetch(signed.url, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        [HEADER_NAME]: signed.header,
+        ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: payload,
       signal: AbortSignal.timeout(30_000),
     });
   } catch (err) {
@@ -134,7 +147,11 @@ async function admin(method, path, body) {
   }
   const json = await res.json().catch(() => ({}));
   if (res.status === 404) {
-    console.error(`The Worker answered 404 to ${method} /admin/moderation. Either the admin token is wrong or not set on the Worker (admin routes answer 404 then), or the conference ${slug} is unknown there.`);
+    console.error(`The Worker answered 404 to ${method} /admin/moderation. Either the admin token is wrong or not set on the Worker (admin routes answer 404 then; after ten wrong signatures from one address in a minute they answer 404 to every request from it for up to a minute), or the conference ${slug} is unknown there.`);
+    process.exit(1);
+  }
+  if (res.status === 401 && json?.error === 'admin_skew') {
+    console.error("The Worker refused the request's timestamp: this machine's clock differs from the Worker's by more than five minutes.");
     process.exit(1);
   }
   if (!res.ok) {
