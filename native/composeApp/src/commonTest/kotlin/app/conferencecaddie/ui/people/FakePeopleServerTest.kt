@@ -34,6 +34,7 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -488,5 +489,27 @@ class FakePeopleServerTest {
             SystemFileSystem.delete(root, mustExist = false)
             database.closeWhenIdle()
         }
+    }
+
+    @Test
+    fun aHeldRequestAppliesOnlyWhenReleasedAndOnlyTheNextOneIsHeld() = runTest {
+        val r = rig()
+        makeVisible(r)
+        val hold = r.server.hold("PUT", "/api/presence")
+        val first = async { r.controller.turnOnPresence("Hallway", "") }
+        runCurrent()
+        assertTrue(hold.hasArrived)
+        assertEquals(1, r.server.requests("PUT", "/api/presence").size, "the held request is recorded")
+        assertNull(r.me.zone, "the held request is not applied yet")
+        assertFalse(first.isCompleted)
+
+        hold.release()
+        runCurrent()
+        assertNull(first.await())
+        assertEquals("Hallway", r.me.zone)
+
+        // Only the first matching request was held.
+        assertNull(r.controller.turnOnPresence("Outside", ""))
+        assertEquals("Outside", r.me.zone)
     }
 }
