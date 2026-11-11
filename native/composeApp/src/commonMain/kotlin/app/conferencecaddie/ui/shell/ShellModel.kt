@@ -61,6 +61,8 @@ data class ShellState(
     val pendingConnect: String? = null,
     val toast: ToastData? = null,
     val isDebugBuild: Boolean = false,
+    /** Why Import my schedule cannot open now (no conference is open), shown in place of its hint. */
+    val importNote: String? = null,
 ) {
     val selectedConference: ConferenceItem? get() = conferences?.firstOrNull { it.id == selectedConferenceId }
 }
@@ -84,13 +86,15 @@ class ShellActions(
     val onToastAction: () -> Unit = {},
     /** Opens an http(s) link in the browser; the shell never passes any other scheme. */
     val onOpenUrl: ((String) -> Unit)? = null,
+    /** Opens Import my schedule; null leaves its row out of Settings. */
+    val onImport: (() -> Unit)? = null,
 )
 
 /**
  * The content of each tab, supplied by the caller. A null slot shows the shell's placeholder for
  * that tab. Slots are drawn only while a searchable conference is selected; otherwise the shell
  * shows the web's blocker states (loading, error, not available). [appBarActions] adds buttons on
- * the right of the app bar for the given tab, before the offline badge and the gear.
+ * the right of the app bar of a tab screen, after the offline badge and before the gear.
  */
 class TabContent(
     val people: (@Composable () -> Unit)? = null,

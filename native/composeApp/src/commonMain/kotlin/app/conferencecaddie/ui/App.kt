@@ -94,7 +94,9 @@ fun visibleTabs(peopleEnabled: Boolean): List<Tab> = Tab.entries.filter { it != 
  * keyboard.
  *
  * The caller owns the data ([state]) and answers [actions]; [content] supplies each tab's screen.
- * [initialTab] opens another tab than the first one, if the backend offers it.
+ * [initialTab] opens another tab than the first one, if the backend offers it. [request] moves the
+ * shell from outside, once per request: to a tab or Settings (a `caddie://` link), or to the
+ * conference switcher (Import my schedule's "Switch conference").
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -103,18 +105,30 @@ fun App(
     actions: ShellActions = ShellActions(),
     content: TabContent = TabContent(),
     initialTab: Tab? = null,
+    request: ShellRequest? = null,
 ) {
     val tabs = visibleTabs(state.capabilities.people.enabled)
-    // Tier 1 has no People tab and opens on For you.
-    var selected by rememberSaveable { mutableStateOf(initialTab?.takeIf { it in tabs } ?: tabs.first()) }
+    // The tab asked for (a tap, a link or a launch option), or null for the backend's first tab:
+    // People where people features are served, else For you, as on the web. The choice is not made
+    // before the capabilities arrive: on a first start the tabs appear only then, and an untouched
+    // shell follows them to People, while a tab the person picked stays picked. A tab the backend
+    // does not offer shows the first tab until it is offered again.
+    var chosen by rememberSaveable { mutableStateOf(initialTab) }
+    val selected = chosen?.takeIf { it in tabs } ?: tabs.first()
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var switcherOpen by rememberSaveable { mutableStateOf(false) }
     // A server typed in Settings waits here for the same confirmation a link gets.
     var typedServer by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // If People disappears while selected (the backend changed), fall back to the first tab.
-    LaunchedEffect(tabs) {
-        if (selected !in tabs) selected = tabs.first()
+    // A link's tab leaves Settings and shows the tab, as a tap on it would.
+    LaunchedEffect(request) {
+        val r = request ?: return@LaunchedEffect
+        if (r.tab != null) {
+            settingsOpen = false
+            chosen = r.tab
+        }
+        if (r.settings) settingsOpen = true
+        switcherOpen = r.switcher
     }
 
     val uriHandler = LocalUriHandler.current
@@ -125,7 +139,7 @@ fun App(
         object : ShellNavigator {
             override fun selectTab(tab: Tab) {
                 settingsOpen = false
-                selected = tab
+                chosen = tab
             }
 
             override fun openSettings() {
@@ -151,7 +165,7 @@ fun App(
                 val navSelected = if (settingsOpen) null else selected
                 val onNavSelect: (Tab) -> Unit = {
                     settingsOpen = false
-                    selected = it
+                    chosen = it
                 }
                 // The tab bar's height, so the keyboard inset below the content does not count it twice.
                 var navBarHeight by remember { mutableStateOf(0.dp) }
@@ -261,6 +275,13 @@ fun App(
     }
 }
 
+/**
+ * A move of the shell asked from outside it: show [tab] (leaving Settings), open [settings], or open
+ * the conference [switcher]. [id] tells two equal requests apart, so a second link to the tab the
+ * person has since left shows it again.
+ */
+data class ShellRequest(val id: Long, val tab: Tab? = null, val settings: Boolean = false, val switcher: Boolean = false)
+
 /** A server waiting for confirmation, and whether it came from a link (else from Settings). */
 private data class PendingServer(val base: String, val fromLink: Boolean)
 
@@ -295,8 +316,9 @@ private fun ShellAppBar(
             null
         },
         actions = {
-            if (!settingsOpen) content.appBarActions?.invoke(selected)
+            // The web's order: the Offline badge, the tab's own actions, then the gear.
             if (!state.online) OfflineBadge()
+            if (!settingsOpen) content.appBarActions?.invoke(selected)
             if (!settingsOpen) CaddieIconButton(LucideIcon.Settings, Strings.AppBar.SETTINGS, onOpenSettings)
         },
     )

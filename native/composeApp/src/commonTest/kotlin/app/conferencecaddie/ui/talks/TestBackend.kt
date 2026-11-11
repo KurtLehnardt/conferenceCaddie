@@ -96,6 +96,24 @@ class TestBackend : Http {
         listOf(TestTalk("1", "talk", "Rust for embedded devices", "Bare-metal Rust.", listOf("Ferris Crab" to null), "2099-04-07", 600, 645, "Rust", "Room 1")),
     )
 
+    /**
+     * Two days for the schedule views (phase 2c), not listed unless a test publishes it: talks that
+     * overlap on the first day, an event, and two talks on the second day.
+     */
+    val gamma = TestConference(
+        "gamma-summit-2099",
+        "Gamma Summit",
+        "2099-05-05",
+        listOf(
+            TestTalk("1", "talk", "Opening keynote on platform engineering", "Why platforms.", listOf("Pat Keynote" to null), "2099-05-05", 540, 570, "Keynotes", "Main Hall"),
+            TestTalk("2", "talk", "Service mesh in practice", "Sidecars and ambient.", listOf("Sam Mesh" to null), "2099-05-05", 540, 580, "Networking", "Room 2"),
+            TestTalk("3", "talk", "Observability with OpenTelemetry", "Traces, metrics, logs.", listOf("Olly Tel" to null), "2099-05-05", 600, 630, "Observability", "Room 1"),
+            TestTalk("4", "ambient", "Sponsor showcase", "Meet the sponsors.", emptyList(), "2099-05-05", 720, 780, "Expo", "Expo Hall"),
+            TestTalk("5", "talk", "Securing the software supply chain", "Signatures and provenance.", listOf("Sig Store" to null), "2099-05-06", 570, 600, "Security", "Room 1"),
+            TestTalk("6", "talk", "GitOps at scale", "Fleets of clusters.", listOf("Flux Argo" to null), "2099-05-06", 570, 615, "Delivery", "Room 2"),
+        ),
+    )
+
     init {
         publish(listOf(alpha, beta))
     }
