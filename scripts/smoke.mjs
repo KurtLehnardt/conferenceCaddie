@@ -34,9 +34,10 @@
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
-//   SMOKE_BLE=1          run the Bluetooth resolution checks (ble2) against a remote API. They put test
-//                        profiles with a specific match around, so they run by default only against a
-//                        local API (localhost or 127.0.0.1), never next to real attendees.
+//   SMOKE_BLE=1          run the Bluetooth resolution checks (ble2, ble3) against a remote API, Worker or
+//                        Cloud Run. They put test profiles with a specific match around, so they run by
+//                        default only against a local API (localhost or 127.0.0.1), never next to real
+//                        attendees. ble1 and cap3 are safe anywhere and always run.
 //   SMOKE_UNAVAILABLE=<slug>  with an admin token and a local API: flip that conference to unavailable
 //                        for check unav1 (an owner can still delete) and restore it. Never against a
 //                        deployed Worker, because the conference would vanish from the app meanwhile.
@@ -478,11 +479,37 @@ await check('conf: GET /api/conferences lists the conferences', async () => {
 });
 const confBySlug = new Map(conferences.map((c) => [c.slug, c]));
 
-// The Worker's capabilities document (docs/contracts/capabilities.md), validated as a producer's,
-// in closed mode. Later checks read ble.mode from it.
+// The capabilities document of the Worker (cap1) or of the tier 3 server (cap3), validated as a
+// producer's (docs/contracts/capabilities.md), in closed mode. Later checks read ble.mode from it.
 let capsDoc = null;
 if (!IS_WORKER) {
   skip('cap1: GET /api/capabilities serves a valid tier 2 document', NOT_WORKER_WHY_EARLY);
+  // The tier 3 server (Cloud Run) serves the same document with tier 'paid'. Push flags are checked
+  // for the schema only, because they change when native push is switched on.
+  await check('cap3: GET /api/capabilities serves a valid tier 3 document', async () => {
+    const res = await fetch(`${API_BASE}/api/capabilities`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    const text = await res.text();
+    otherResponses.push({ label: 'capabilities', path: '/api/capabilities', text, headersText: headerText(res.headers) });
+    const problems = [];
+    if (res.status !== 200) throw new Error(`status ${res.status}`);
+    capsDoc = JSON.parse(text);
+    const v = validator('capabilities.v1')(capsDoc, { closed: true });
+    if (!v.valid) problems.push(`schema: ${v.errors.slice(0, 3).map((e) => `${e.path} ${e.message}`).join('; ')}`);
+    if (capsDoc.tier !== 'paid') problems.push(`tier ${capsDoc.tier}`);
+    const cc = res.headers.get('cache-control') ?? '';
+    if (!/public/.test(cc) || !/max-age=300/.test(cc)) problems.push(`Cache-Control ${cc}`);
+    if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
+    if (capsDoc.people?.enabled !== true || capsDoc.people?.reports !== true) problems.push(`people.enabled ${capsDoc.people?.enabled}, people.reports ${capsDoc.people?.reports}`);
+    const ble = capsDoc.ble ?? {};
+    if (!['derived-v1', 'server-rotate'].includes(ble.mode)) problems.push(`ble.mode ${ble.mode}`);
+    if (ble.mode === 'derived-v1') {
+      if (ble.window_s !== 600) problems.push(`window_s ${ble.window_s}`);
+      if (ble.sightings_min_interval_s !== 10) problems.push(`sightings_min_interval_s ${ble.sightings_min_interval_s}`);
+      if (ble.colocation_required !== true) problems.push(`colocation_required ${ble.colocation_required}`);
+      if (ble.service_uuid !== 'e52c391c-b926-4856-9a38-d46c3c10c733') problems.push(`service_uuid ${ble.service_uuid}`);
+    }
+    report(problems.length === 0, 'cap3: GET /api/capabilities serves a valid tier 3 document', problems.length ? problems.join('; ') : `closed-mode valid, tier paid, ble.mode ${ble.mode}, people.semantic ${capsDoc.people?.semantic}`);
+  });
 } else {
   await check('cap1: GET /api/capabilities serves a valid tier 2 document', async () => {
     const res = await fetch(`${API_BASE}/api/capabilities`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
@@ -1982,7 +2009,7 @@ try {
   // Bluetooth. ble1 needs no match: a profile with only the common topic, so it is safe anywhere.
   const tokenOf = (keyText, dw = 0) => encodeToken(deriveToken(decodeKey(keyText), windowOf(Date.now() / 1000) + BigInt(dw)));
   await check('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', async () => {
-    if (!IS_WORKER || !capsDoc) {
+    if (!capsDoc) {
       skip('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', 'no capabilities document');
       return;
     }
@@ -2008,7 +2035,7 @@ try {
   });
 
   await check('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', async () => {
-    if (!IS_WORKER || !capsDoc || capsDoc.ble?.mode === 'none') {
+    if (!capsDoc || capsDoc.ble?.mode === 'none') {
       skip('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', 'no Bluetooth on this backend');
       return;
     }
@@ -2030,7 +2057,17 @@ try {
       const p = await api('PUT', '/api/presence', { event: PRIMARY, zone: i === 11 ? ZONE_F : ZONE_A, spot: '', ble: true }, { device: d, label: `BN${i}-presence` });
       tokens.push(derived ? tokenOf(p.json.ble_key) : p.json.ble?.token);
     }
-    const near = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: -50 })) }, { device: BR, label: 'BR-sightings' });
+    const report11 = () => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: -50 })) }, { device: BR, label: 'BR-sightings' });
+    let near = await report11();
+    // The server rebuilds its token table on an unknown token only when the cached table is older
+    // than 30 seconds, and an earlier check (ble1) may have built it moments ago. An empty answer
+    // therefore asks again, every 5 s up to 45 s; an empty answer that is final still fails below.
+    if (derived) {
+      for (let waited = 0; (near.json.nearby ?? []).length === 0 && waited < 45_000; waited += 5000) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        near = await report11();
+      }
+    }
     const far = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: -40 }] }, { device: BR, label: 'BR-sightings' });
     for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble2-presence' });
     const nearby = near.json.nearby ?? [];
@@ -2040,6 +2077,79 @@ try {
     if (nearby.some((p) => p.zone !== ZONE_A)) problems.push('a same-zone person came without the zone');
     if ((far.json.nearby ?? []).length !== 0) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
     report(problems.length === 0, 'ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', problems.length ? problems.join('; ') : `${capsDoc.ble.mode}: 10 of 11 co-located matches, zone shown, another zone resolves nobody`);
+  });
+
+  // ble3: windows and re-keying, end to end (derived-v1 only). The server resolves a token of the
+  // window before, the current one and the next, and none further off; a presence write without ble
+  // keeps the session; one with ble:true mints a new key, and the old key's tokens stop resolving.
+  const BLE3 = 'ble3: derived tokens resolve in windows w-1, w and w+1 only, and a re-key replaces the key';
+  await check(BLE3, async () => {
+    if (!capsDoc || capsDoc.ble?.mode !== 'derived-v1') {
+      skip(BLE3, capsDoc ? `ble.mode is ${capsDoc.ble?.mode}, not derived-v1` : 'no capabilities document');
+      return;
+    }
+    if (!LOCAL_API && process.env.SMOKE_BLE !== '1') {
+      skip(BLE3, 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
+      return;
+    }
+    const word = `zqvbtt${runTag}`;
+    const R3 = newDevice();
+    const T3 = newDevice();
+    const around = [R3, T3];
+    const problems = [];
+    try {
+      await putProfile(R3, PRIMARY, 'BQ', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+      await putProfile(T3, PRIMARY, 'BU', { expertise: `tuned ${word} glimmering quabbit rigs` }, { open: true });
+      await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: R3, label: 'BQ-presence' });
+      const first = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: T3, label: 'BU-presence' });
+      const keyOld = first.json.ble_key;
+      if (first.status !== 200 || !keyOld) {
+        problems.push(`the first presence write gave ${first.status} without a key`);
+        return;
+      }
+      const who = (token) => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token, rssi: -50 }] }, { device: R3, label: 'BQ-sightings' })
+        .then((r) => (r.json.nearby ?? []).map((p) => p.display_name));
+      const target = testName('BU');
+      // The server rebuilds its token table on an unknown token only when the cached table is older
+      // than 30 seconds, so a token minted a moment ago can stay unknown for up to that long. A
+      // check that expects a person therefore polls (every 5 s, up to 45 s); one that expects nobody
+      // asks once. The api helper waits out the per-device sightings limit.
+      const resolvesT = async (token) => {
+        const until = Date.now() + 45_000;
+        for (;;) {
+          if ((await who(token)).includes(target)) return true;
+          if (Date.now() >= until) return false;
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+        }
+      };
+      // (a) windows w-1, w, w+1 resolve the target; w-2 and w+2 resolve nobody.
+      for (const dw of [0, -1, 1]) if (!(await resolvesT(tokenOf(keyOld, dw)))) problems.push(`the token of window ${dw >= 0 ? '+' : ''}${dw} did not resolve`);
+      for (const dw of [-2, 2]) {
+        const got = await who(tokenOf(keyOld, dw));
+        if (got.length !== 0) problems.push(`the token of window ${dw >= 0 ? '+' : ''}${dw} resolved ${got.length} people`);
+      }
+      // (b) a presence write without ble keeps the session: no key in the answer, same token works.
+      const quiet = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: T3, label: 'BU-presence' });
+      if (quiet.status !== 200 || quiet.json.ble_key) problems.push(`a presence write without ble gave ${quiet.status}${quiet.json.ble_key ? ' and a key' : ''}`);
+      if (!(await who(tokenOf(keyOld))).includes(target)) problems.push('after a presence write without ble the current token no longer resolves');
+      // (c) re-key: a new key and key id, the sightings answer names the new id, the old key's token
+      // resolves nobody and the new key's token resolves the target.
+      const second = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: T3, label: 'BU-presence' });
+      const keyNew = second.json.ble_key;
+      if (second.status !== 200 || !keyNew) {
+        problems.push(`the re-key gave ${second.status} without a key`);
+        return;
+      }
+      if (keyNew === keyOld || second.json.ble_key_id === first.json.ble_key_id) problems.push('the re-key returned the old key or key id');
+      const own = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: crypto.randomBytes(16).toString('base64url'), rssi: -50 }] }, { device: T3, label: 'BU-sightings' });
+      if (own.json.ble_key_id !== second.json.ble_key_id) problems.push('the target\'s sightings answer does not name the new key id');
+      const oldNow = await who(tokenOf(keyOld));
+      if (oldNow.length !== 0) problems.push(`the old key's token resolved ${oldNow.length} people after the re-key`);
+      if (!(await resolvesT(tokenOf(keyNew)))) problems.push('the new key\'s token did not resolve within 45 s');
+    } finally {
+      for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble3-presence' }).catch(() => {});
+    }
+    report(problems.length === 0, BLE3, problems.length ? problems.join('; ') : 'w-1, w and w+1 resolve, w-2 and w+2 do not; a presence write without ble keeps the key; a re-key gives a new key and id, the old key resolves nobody and the new one resolves');
   });
 
   await check('unav1: an owner can delete while the conference is unavailable', async () => {
