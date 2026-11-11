@@ -36,7 +36,7 @@
 # built on (ui-backhandler 1.12.2 depends on 1.1.0). The iOS UI tests use it directly, to send the
 # system Back through the dispatcher that the iOS edge swipe also uses.
 [versions]
-agp = "9.3.3"
+agp = "9.5.1"
 android-compileSdk = "37"
 android-minSdk = "26"
 android-targetSdk = "36"
