@@ -103,5 +103,26 @@ test('every other check stays: another conference, malformed ids, too many, unkn
   const thief = { profileId: owner.profileId, secret: newDevice().secret };
   const r = await put(thief, { shared: [GONE] });
   assert.deepEqual([r.status, r.body], [403, { error: 'forbidden' }]);
+  // Not open to meet with only unknown talks is a delete, which needs the owner's secret as well.
+  const del = await put(thief, { open: false, shared: [GONE] });
+  assert.deepEqual([del.status, del.body], [403, { error: 'forbidden' }]);
+  assert.equal(c.calls('hide').length, 0);
   assert.deepEqual(c.source(INDEX.people, personId(owner.profileId)).shared_talk_ids, [T1]);
+});
+
+test('a write retried after a conflict reads the talks again, so a talk the ingest just took out stays out', async () => {
+  const c = cluster();
+  const d = newDevice();
+  const id = personId(d.profileId);
+  assert.equal((await put(d, { shared: [T1, T2] })).status, 200);
+  // The ingest deletes T2 and takes it out of this profile between the write's checks and its write.
+  c.before('update', 1, (cl) => {
+    cl.docs(INDEX.talks).delete(T2);
+    cl.patch(INDEX.people, id, { shared_talk_ids: [T1] });
+  });
+  const r = await put(d, { shared: [T1, T2] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(c.calls('update').length, 2, 'one conflict, one retry');
+  assert.deepEqual(r.body.shared_talk_ids, [T1]);
+  assert.deepEqual(c.source(INDEX.people, id).shared_talk_ids, [T1]);
 });

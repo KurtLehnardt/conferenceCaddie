@@ -18,7 +18,7 @@
 // without the previous directories could break clients mid-download.
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readConferenceIndex } from '../contracts/js/bundle.mjs';
@@ -87,7 +87,8 @@ async function main() {
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Run as a script (also through a symlink), not when a test imports it.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().then(
     (code) => { process.exitCode = code; },
     (err) => {

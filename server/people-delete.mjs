@@ -140,10 +140,20 @@ export function createProfileDelete({ people, bulkOne, deleteDoc, withPreference
   // answers 200, because trying again would find no profile and change nothing. A write that lands
   // even later stays: the purge removes such a meet once it runs out, and a push subscription, a
   // nudge record or a block once the conference ends.
-  async function deleteProfileAndConnections(eventId, profileId) {
+  // guard ({ seqNo, primaryTerm } of the caller's own read) is for a delete the owner did not ask
+  // for: the ingest's cleanup of a profile left with neither choice after a talk was deleted
+  // (scripts/lib/dropped-talks.mjs). The hide is then a compare-and-write instead of
+  // retry_on_conflict (Elasticsearch takes one or the other), so any write since that read, such as
+  // the owner making the profile visible again, answers 409 and the profile is kept with
+  // everything it has. Returns 'gone' on a 404, 'kept' on that 409 and 'deleted' otherwise.
+  async function deleteProfileAndConnections(eventId, profileId, { guard = null } = {}) {
     const id = docId(eventId, profileId);
-    const status = await bulk({ update: { _id: id, retry_on_conflict: HIDE_RETRIES } }, { doc: HIDE_FOR_DELETE });
-    if (status === 404) return;
+    const action = guard
+      ? { update: { _id: id, if_seq_no: guard.seqNo, if_primary_term: guard.primaryTerm } }
+      : { update: { _id: id, retry_on_conflict: HIDE_RETRIES } };
+    const status = await bulk(action, { doc: HIDE_FOR_DELETE });
+    if (status === 404) return 'gone';
+    if (guard && status === 409) return 'kept';
     if (status < 200 || status > 299) throw new Failure(`bulk item status ${status}`);
     await deleteConnections(eventId, profileId);
     await removeDoc(id);
@@ -152,6 +162,7 @@ export function createProfileDelete({ people, bulkOne, deleteDoc, withPreference
     } catch (err) {
       log(`Deleting a deleted profile's connections again failed: ${errorText(err)}`);
     }
+    return 'deleted';
   }
 
   return { deleteWhere, deleteMeetsPushAndNudges, deleteOwnBlocks, deleteConnections, deleteProfileAndConnections };

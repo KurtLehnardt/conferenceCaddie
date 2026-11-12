@@ -41,7 +41,7 @@ test('the shrink rule is the Worker finalize rule: more than 10 and more than 10
   assert.ok(shrinkRefusal(11, 109));
   assert.equal(shrinkRefusal(50, 600), null);
   assert.ok(shrinkRefusal(600, 600), 'a feed that came back empty');
-  assert.match(shrinkRefusal(11, 109), /would delete 11 of the 109 stored talks, more than 10 and more than 10%/);
+  assert.match(shrinkRefusal(11, 109), /would delete 11 of 109 talks, more than 10 and more than 10%/);
 });
 
 test('the people transport throws PeopleError without a key or a document id, and honours okStatuses', async () => {
@@ -76,6 +76,25 @@ test('a profile its owner makes visible again before the delete is kept', async 
   assert.equal(s.cluster.calls('hide').length, 0, 'the delete never starts');
 });
 
+test('a profile its owner makes visible between the read and the hide is kept: the hide is guarded by that read', async () => {
+  const s = setup({ open_to_meet: false, shared_talk_ids: [GONE] });
+  const [id] = s.ids;
+  const profileId = id.slice(EVENT.length + 1);
+  s.cluster.put(INDEX.meets, 'meet-own', { event_id: EVENT, meet_id: 'meet-own', participants: [profileId, 'other1'], expires_at: FUTURE });
+  s.cluster.put(INDEX.blocks, 'block-own', { event_id: EVENT, blocker_id: profileId, blocked_id: 'other1', expires_at: FUTURE });
+  s.cluster.before('hide', 1, (c) => c.patch(INDEX.people, id, { open_to_meet: true }));
+  const r = await s.run();
+  assert.deepEqual(r, { unshared: 1, profilesDeleted: 0, failed: 0 });
+  const doc = s.cluster.source(INDEX.people, id);
+  assert.deepEqual([doc.open_to_meet, doc.shared_talk_ids], [true, []], 'the owner\'s write stands');
+  assert.deepEqual(s.cluster.ids(INDEX.meets), ['meet-own']);
+  assert.deepEqual(s.cluster.ids(INDEX.blocks), ['block-own']);
+  const [hide] = s.cluster.calls('hide');
+  const action = JSON.parse(hide.body.split('\n')[0]).update;
+  assert.equal(typeof action.if_seq_no, 'number');
+  assert.equal(action.retry_on_conflict, undefined);
+});
+
 test('a profile deleted meanwhile is skipped without a failure', async () => {
   const s = setup({ open_to_meet: false, shared_talk_ids: [GONE] });
   const [id] = s.ids;
@@ -90,6 +109,14 @@ test('one profile that fails is counted and logged without its id; the others ar
   assert.deepEqual(r, { unshared: 1, profilesDeleted: 0, failed: 1 });
   assert.deepEqual(s.lines, ['A profile that shared for a deleted talk could not be updated: bulk item status 503']);
   assert.equal(s.ids.filter((id) => s.cluster.source(INDEX.people, id).shared_talk_ids.includes(GONE)).length, 1);
+});
+
+test('five profiles failing in a row stop the cleanup instead of waiting on every one', async () => {
+  const s = setup(...Array.from({ length: 7 }, () => ({ open_to_meet: true, shared_talk_ids: [GONE] })));
+  for (let n = 1; n <= 5; n++) s.cluster.fail({ tag: 'update', nth: n, how: 'item503' });
+  await assert.rejects(s.run(), (err) => err instanceof PeopleError && err.message === 'stopped after 5 profiles in a row failed');
+  assert.equal(s.cluster.calls('update').length, 5);
+  assert.equal(s.lines.length, 5);
 });
 
 test('a profile that keeps conflicting gives up after three attempts', async () => {

@@ -10,8 +10,8 @@
 //   --dry-run                   fetch, build and write files; index nothing
 //   --no-fetch                  build from the committed data/raw files; no network call at all
 //   --skip-topics               do not run scripts/topics.mjs after an event is indexed
-//   --allow-shrink              let a conference lose more than 10 talks and more than 10% of its stored
-//                               talks in one run; without it such a run is refused for that conference
+//   --allow-shrink              let a conference lose more than 10 talks and more than 10% of its talks
+//                               in one run; without it such a run is refused for that conference
 //                               (the shrink guard, below) and a dry run reports that it would be
 //   --report <file>             write { "processed": [slugs] } when the run ends: the conferences whose
 //                               data/{slug}/conference.json this run wrote. Ended events drop off the
@@ -27,9 +27,11 @@
 // Deleted talks, as the Worker's finalize handles them (worker/src/admin.js finalizeTalks; the
 // details are in scripts/lib/dropped-talks.mjs):
 // - The shrink guard. When the plan for a conference would delete more than 10 talks and more than
-//   10% of its stored talks, the run writes nothing for that conference (no talk file, no index
-//   write, no people change, no conference document) unless --allow-shrink is passed. It is checked
-//   in the plan phase, before any write; a dry run that can read the index reports it.
+//   10% of its talks (stored plus new, as the Worker counts), the run writes nothing for that
+//   conference (no talk file, no index write, no people change, no conference document) unless
+//   --allow-shrink is passed. It is checked in the plan phase, before any of those writes; a dry
+//   run that can read the index reports it. A fetching run has saved the raw downloads by then, as
+//   the record of what was fetched; a --no-fetch run from them is refused the same way.
 // - People. After the deletes, every talk the index no longer holds leaves the shared_talk_ids of
 //   the profiles at that conference, and a profile then neither open to meet nor sharing for any
 //   talk is deleted with its meets, push registrations, nudge records and blocks
@@ -283,8 +285,9 @@ async function processEvent(ev) {
   const plan = existing === null ? null : planOps(built.docs, existing);
 
   // The shrink guard, before anything is written for this conference. A refused run leaves the
-  // talk file, the index, the people and the conference document as they were.
-  const shrink = plan ? shrinkRefusal(plan.counts.deleted, existing.size) : null;
+  // talk file, the index, the people and the conference document as they were. The total is the
+  // stored talks plus the new ones, as the Worker counts after its upsert.
+  const shrink = plan ? shrinkRefusal(plan.counts.deleted, existing.size + plan.counts.new) : null;
   const refused = Boolean(shrink) && !opts.allowShrink;
   if (refused && !opts.dryRun) {
     lines.push(`  refused by the shrink guard: ${shrink}. Nothing was written for this conference; re-run with --allow-shrink if the schedule really shrank.`);
@@ -342,8 +345,11 @@ async function absentTalks(index, ids) {
 // The people who shared for a talk this run deleted (scripts/lib/dropped-talks.mjs): the talk
 // leaves their shared_talk_ids, and a profile left with neither choice is deleted. Runs with the
 // people key (ES_PEOPLE_API_KEY) when it is set, else the ingest key. Returns true when anything
-// failed; the talks stay deleted either way, and a profile still naming a deleted talk drops it at
-// its owner's next profile write (server/people.mjs checkSharedTalks).
+// failed. The talks stay deleted either way, so a later run does not retry the cleanup: a profile
+// still naming a deleted talk drops it at its owner's next profile write (server/people.mjs
+// checkSharedTalks), no circle opens for a talk that is gone, and the purge removes the profile
+// when the conference ends.
+const NOT_RETRIED = 'a later run does not retry this; those profiles drop the talks at their next write';
 async function unshareDeletedTalks(slug, plan, lines) {
   const deleted = plan.ops.filter((o) => o.action === 'delete').map((o) => o.id);
   if (!deleted.length) return false;
@@ -357,10 +363,10 @@ async function unshareDeletedTalks(slug, plan, lines) {
     const people = peopleTransport((method, path, body, o) => es(method, path, body, { ...o, key: process.env.ES_PEOPLE_API_KEY || undefined }));
     const cleanup = createDeletedTalkCleanup({ people, indices: indicesFrom(process.env), log });
     const r = await cleanup.unshareDeletedTalks(slug, gone);
-    log(`${r.unshared} profile${r.unshared === 1 ? '' : 's'} stopped sharing for the ${gone.length} deleted talk${gone.length === 1 ? '' : 's'}; ${r.profilesDeleted} deleted, left neither open to meet nor sharing${r.failed ? `; ${r.failed} failed` : ''}`);
+    log(`${r.unshared} profile${r.unshared === 1 ? '' : 's'} stopped sharing for the ${gone.length} deleted talk${gone.length === 1 ? '' : 's'}; ${r.profilesDeleted} deleted, left neither open to meet nor sharing${r.failed ? `; ${r.failed} failed (${NOT_RETRIED})` : ''}`);
     return r.failed > 0;
   } catch (e) {
-    log(`taking the deleted talks out of people's shared talks failed: ${e.message}`);
+    log(`taking the deleted talks out of people's shared talks failed: ${e.message} (${NOT_RETRIED})`);
     return true;
   }
 }

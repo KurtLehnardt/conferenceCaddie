@@ -3,10 +3,11 @@
 //
 // - The shrink guard. People's sharing is not restored when a deleted talk comes back, so a run
 //   that would delete more than MAX_DELETE talks and more than MAX_DELETE_SHARE of a conference's
-//   stored talks is refused unless the operator passes --allow-shrink (the Worker's
-//   FINALIZE_MAX_DELETE and FINALIZE_MAX_DELETE_SHARE, and its allow_shrink). A feed that came
-//   back short for a moment (a Sessionize outage, a wrong group filter) then leaves the talks and
-//   the people as they were.
+//   talks is refused unless the operator passes --allow-shrink (the Worker's FINALIZE_MAX_DELETE
+//   and FINALIZE_MAX_DELETE_SHARE, and its allow_shrink). The Worker counts after its upsert, so
+//   its total is the stored talks plus the new ones; the ingest passes the same number. A feed
+//   that came back short for a moment (a Sessionize outage, a wrong group filter) then leaves the
+//   talks and the people as they were.
 // - The people who shared for a deleted talk (a cancelled session, a takedown, a talk that left the
 //   feed). The talk leaves every profile's shared_talk_ids at that conference, so no circle is left
 //   for a talk that no longer exists, and a profile that is then neither open to meet nor sharing
@@ -32,12 +33,13 @@ export const MAX_DELETE = 10;
 export const MAX_DELETE_SHARE = 0.1;
 
 /**
- * Why deleting `stale` of a conference's `all` stored talks needs --allow-shrink, or null when it
- * does not. The Worker's rule: stale > FINALIZE_MAX_DELETE && stale > all * FINALIZE_MAX_DELETE_SHARE.
+ * Why deleting `stale` of a conference's `all` talks (the stored ones plus the ones this run adds,
+ * as the Worker counts them) needs --allow-shrink, or null when it does not. The Worker's rule:
+ * stale > FINALIZE_MAX_DELETE && stale > all * FINALIZE_MAX_DELETE_SHARE.
  */
 export function shrinkRefusal(stale, all) {
   if (stale > MAX_DELETE && stale > all * MAX_DELETE_SHARE) {
-    return `the run would delete ${stale} of the ${all} stored talks, more than ${MAX_DELETE} and more than ${MAX_DELETE_SHARE * 100}%`;
+    return `the run would delete ${stale} of ${all} talks, more than ${MAX_DELETE} and more than ${MAX_DELETE_SHARE * 100}%`;
   }
   return null;
 }
@@ -75,6 +77,9 @@ export function peopleTransport(request) {
 
 const PAGE = 500;
 const MAX_PAGES = 200;
+// Failures in a row after which the cleanup stops instead of trying every remaining profile, each
+// up to the request timeout, against a cluster that is not answering.
+const MAX_FAILURES_IN_A_ROW = 5;
 // A guarded write that meets a concurrent one (a presence write, a profile write) reads the
 // profile again and tries again, at most this many times in all.
 const UNSHARE_ATTEMPTS = 3;
@@ -134,12 +139,13 @@ export function createDeletedTalkCleanup({ people, indices, log = (message) => c
     // Neither open to meet nor sharing for any talk now: the profile goes, as a profile write with
     // both choices off deletes it. The unshare above left exactly the state of a pending delete
     // (open_to_meet false, no shared_talk_ids), which every route and the export already treat as
-    // gone and the hourly purge would finish. A realtime read first: a profile its owner made
-    // visible or shared again in the meantime is kept.
+    // gone and the hourly purge would finish. A realtime read first, and the delete's hide is
+    // guarded by that read: a profile its owner made visible or shared again in the meantime, even
+    // in the moment between the read and the hide, is kept with everything it has.
     const now = await readProfile(hit._id);
     if (!now || !isPendingDelete(now.source)) return 'unshared';
-    await profileDelete.deleteProfileAndConnections(slug, profileId);
-    return 'deleted';
+    const deleted = await profileDelete.deleteProfileAndConnections(slug, profileId, { guard: { seqNo: now.seqNo, primaryTerm: now.primaryTerm } });
+    return deleted === 'deleted' ? 'deleted' : 'unshared';
   }
 
   /**
@@ -147,7 +153,8 @@ export function createDeletedTalkCleanup({ people, indices, log = (message) => c
    * profile of that conference that shares for one of them, and deletes the profiles left with
    * neither choice. Returns { unshared, profilesDeleted, failed }: profiles that stopped sharing for
    * a deleted talk (the deleted ones among them), profiles deleted, and profiles whose cleanup
-   * failed (each logged). Throws PeopleError when the people search itself fails.
+   * failed (each logged). Throws PeopleError when the people search itself fails, or after
+   * MAX_FAILURES_IN_A_ROW profiles in a row failed.
    */
   async function unshareDeletedTalks(slug, talkIds) {
     const result = { unshared: 0, profilesDeleted: 0, failed: 0 };
@@ -155,6 +162,7 @@ export function createDeletedTalkCleanup({ people, indices, log = (message) => c
     if (!ids.length) return result;
     const gone = new Set(ids);
     let after;
+    let inARow = 0;
     for (let page = 0; page < MAX_PAGES; page++) {
       const body = {
         size: PAGE,
@@ -169,11 +177,13 @@ export function createDeletedTalkCleanup({ people, indices, log = (message) => c
       for (const hit of hits) {
         try {
           const outcome = await cleanOne(slug, hit, gone);
+          inARow = 0;
           if (outcome === 'unshared' || outcome === 'deleted') result.unshared++;
           if (outcome === 'deleted') result.profilesDeleted++;
         } catch (err) {
           result.failed++;
           log(`A profile that shared for a deleted talk could not be updated: ${errorText(err)}`);
+          if (++inARow >= MAX_FAILURES_IN_A_ROW) throw new PeopleError(`stopped after ${inARow} profiles in a row failed`);
         }
       }
       if (hits.length < PAGE) return result;

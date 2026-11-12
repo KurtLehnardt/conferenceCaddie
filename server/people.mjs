@@ -1363,9 +1363,12 @@ async function putProfile(req, res) {
   const id = docId(conf.slug, device.profileId);
   // Before the both-off check, as on the Worker: a write whose every shared talk left the schedule
   // and that is not open to meet deletes the profile.
-  const shared = await checkSharedTalks(conf.slug, requested);
+  let shared = await checkSharedTalks(conf.slug, requested);
 
   for (let attempt = 1; ; attempt++) {
+    // A retry after a conflict reads the talks again: the write that won may be the ingest taking a
+    // deleted talk out of this profile (scripts/lib/dropped-talks.mjs), which must not come back.
+    if (attempt > 1) shared = await checkSharedTalks(conf.slug, requested);
     const own = await ownDoc(conf.slug, device.profileId);
     const profile = { ...input };
     if (own.found && !secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
