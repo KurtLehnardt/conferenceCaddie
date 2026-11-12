@@ -15,16 +15,19 @@
 #   triage N     After attempt N failed, decides whether it is retried (step output `retry`) and
 #                says why in the log, as an annotation and in the job summary.
 #   cleanup      Before the retry's emulator starts: stops what is left of the first emulator.
+#   discard-avd  After the step that makes the snapshot failed: stops its emulator and deletes the
+#                AVD, so attempt 1 creates it again with the same settings and cold-boots it.
 #
 # Only an infrastructure failure is retried, once:
 #   - the emulator step failed before the tests started (the SDK setup, or the emulator did not
-#     boot);
+#     boot), including the step that makes the snapshot, which is then neither saved nor used;
 #   - the emulator booted but did not answer adb and its package manager within 120 seconds;
 #   - Gradle failed, its output has adb's AdbCommandRejectedException "device offline" or "closed"
 #     or the emulator process had died, and no test failed.
-# "No test failed" means no failure or error in the JUnit XML, no "(N failed)" above 0, no line
-# with FAILED other than Gradle's own task and build lines, and no "Process crashed" in Gradle's
-# output. A failing test is never retried, even when an infrastructure error came with it. A
+# "No test failed" means no failure or error in the JUnit XML, no "(N failed)" above 0, no
+# "There was/were N failure(s)" above 0, no line with FAILED other than Gradle's own task and build
+# lines, and no "Process crashed", "Instrumentation run failed" or "Test run failed to complete" in
+# Gradle's output. A failing test is never retried, even when an infrastructure error came with it. A
 # failure of the release smoke test is never retried. The retry runs every test and the smoke test
 # again, on a cold-booted emulator with wiped data.
 set -euo pipefail
@@ -39,6 +42,8 @@ SYSTEM_IMAGE="system-images;android-$API;$TARGET;$ARCH"
 TRIES=3
 HEALTH_SECONDS=120
 SERIAL="${ANDROID_SERIAL:-emulator-5554}"
+# The action's default AVD name, which the emulator steps keep.
+AVD_NAME="test"
 TMP_ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 # The emulator's QEMU process (qemu-system-x86_64, or its -headless variant).
 EMULATOR_PROCESS='qemu-system-'
@@ -67,11 +72,15 @@ check_attempt() {
 
 # --- install -------------------------------------------------------------------------------------
 
+# The sdkmanager the emulator action runs (it puts cmdline-tools/latest first on the PATH), so both
+# agree on what is up to date.
 sdkmanager_bin() {
-  if command -v sdkmanager > /dev/null 2>&1; then
-    command -v sdkmanager
+  local latest
+  latest="$(sdk_root)/cmdline-tools/latest/bin/sdkmanager"
+  if [ -x "$latest" ]; then
+    printf '%s' "$latest"
   else
-    printf '%s/cmdline-tools/latest/bin/sdkmanager' "$(sdk_root)"
+    command -v sdkmanager
   fi
 }
 
@@ -237,14 +246,18 @@ cmd_run() {
 
 # How many signs of a failed test attempt N's results and Gradle output hold (0 when none).
 count_failed_test_signs() {
-  local dir=$1 esc plain xml marked counted crashed
+  local dir=$1 esc plain xml marked counted summed crashed
   esc=$(printf '\033')
   plain=$(sed "s/${esc}\[[0-9;]*m//g" "$dir/gradle.log" 2> /dev/null || true)
   xml=$(find "$dir" -type f -name 'TEST-*.xml' -exec cat {} + 2> /dev/null | grep -oE '<(failure|error)[[:space:]/>]' | wc -l | tr -d ' ' || true)
   marked=$(grep -E 'FAILED' <<< "$plain" | grep -cvE '^> Task [^ ]+ FAILED[[:space:]]*$|^BUILD FAILED' || true)
   counted=$(grep -oE '\([0-9]+ failed\)' <<< "$plain" | tr -dc '0-9\n' | sort -n | tail -n 1 || true)
-  crashed=$(grep -c 'Process crashed' <<< "$plain" || true)
-  echo $((${xml:-0} + ${marked:-0} + ${counted:-0} + ${crashed:-0}))
+  # "Tests on <device> failed: There was 1 failure(s)." Not "There were failing tests", which Gradle
+  # also prints when only the device failed.
+  summed=$(grep -cE 'There (was|were) [1-9][0-9]* failure' <<< "$plain" || true)
+  # The app or its instrumentation stopped: a crash, or an exception before any test ran.
+  crashed=$(grep -cE 'Process crashed|Instrumentation run failed|Test run failed to complete' <<< "$plain" || true)
+  echo $((${xml:-0} + ${marked:-0} + ${counted:-0} + ${summed:-0} + ${crashed:-0}))
 }
 
 # Prints "retry: <reason>" or "final: <reason>". Anything it cannot tell is final.
@@ -263,7 +276,11 @@ classify() {
     return
   fi
   if [ "$(cat "$dir/gradle.exit")" = 0 ]; then
-    echo "final: the UI tests passed and the release smoke test failed, which is never retried"
+    if [ -f "$dir/smoke.exit" ]; then
+      echo "final: the UI tests passed and the release smoke test failed, which is never retried"
+    else
+      echo "final: the UI tests passed and the release smoke test's result was not recorded"
+    fi
     return
   fi
   failed=$(count_failed_test_signs "$dir" || true)
@@ -315,19 +332,32 @@ cmd_triage() {
 
 # --- cleanup -------------------------------------------------------------------------------------
 
-cmd_cleanup() {
+avd_home() { printf '%s' "${ANDROID_AVD_HOME:-$HOME/.android/avd}"; }
+
+stop_emulator() {
   local deadline=$((SECONDS + 30))
-  # The first emulator step asked its emulator to quit (adb emu kill), which a hung emulator ignores.
+  # The emulator step asked its emulator to quit (adb emu kill), which a hung emulator ignores.
   while emulator_alive && [ "$SECONDS" -lt "$deadline" ]; do sleep 2; done
   if emulator_alive; then
-    echo "The first emulator is still running; killing it."
+    echo "The previous emulator is still running; killing it."
     pkill -9 -f "$EMULATOR_PROCESS" || true
     sleep 2
   fi
   # A killed emulator leaves its locks, which stop the same AVD from starting again.
-  rm -rf "${ANDROID_AVD_HOME:-$HOME/.android/avd}"/*.avd/*.lock
+  rm -rf "$(avd_home)"/*.avd/*.lock
   timeout 20 adb kill-server || true
+}
+
+cmd_cleanup() {
+  stop_emulator
   echo "What was left of the first emulator is stopped."
+}
+
+cmd_discard_avd() {
+  stop_emulator
+  rm -rf "$(avd_home)/$AVD_NAME.avd" "$(avd_home)/$AVD_NAME.ini"
+  echo "::warning title=Emulator snapshot not made::The emulator that makes the snapshot failed, so the snapshot is neither saved nor used. Attempt 1 creates the AVD again and cold-boots it."
+  summary "- The emulator that makes the snapshot failed; the snapshot was neither saved nor used, and attempt 1 cold-booted a new AVD with the same settings."
 }
 
 case "${1:-}" in
@@ -336,8 +366,9 @@ case "${1:-}" in
   run) cmd_run "${2:-}" ;;
   triage) cmd_triage "${2:-}" ;;
   cleanup) cmd_cleanup ;;
+  discard-avd) cmd_discard_avd ;;
   *)
-    echo "Usage: $0 cache-name|install|run N|triage N|cleanup" >&2
+    echo "Usage: $0 cache-name|install|run N|triage N|cleanup|discard-avd" >&2
     exit 2
     ;;
 esac

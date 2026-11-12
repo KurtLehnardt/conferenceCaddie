@@ -328,8 +328,8 @@ jobs:
         run: ./gradlew :composeApp:assembleAndroidDeviceTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease
 
       # The system image (about 1 GB) is cached by package and revision, so most runs download
-      # nothing: the newest revision saved is restored, and the next step updates it when a newer
-      # one has been published. Pull requests only read the cache; main writes it.
+      # nothing: the most recently saved revision is restored, and the next step updates it when a
+      # newer one has been published. Pull requests only read the cache; main writes it.
       - name: Name the system image cache
         id: sysimg_name
         run: bash scripts/emulator-ci.sh cache-name
@@ -374,8 +374,13 @@ jobs:
             ~/.android/adb*
           key: ${{ steps.avd_key.outputs.key }}
 
+      # If this emulator fails (it did not boot), the next step deletes the AVD: nothing is saved,
+      # attempt 1 creates the AVD again with the same settings and cold-boots it, and the
+      # infrastructure retry below covers attempt 1.
       - name: Create the emulator snapshot
+        id: avd_create
         if: steps.avd.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
@@ -387,8 +392,12 @@ jobs:
           working-directory: native
           script: echo "The emulator snapshot is ready."
 
+      - name: Discard the AVD whose snapshot failed
+        if: steps.avd_create.outcome == 'failure'
+        run: bash scripts/emulator-ci.sh discard-avd
+
       - name: Save the emulator snapshot
-        if: github.ref == 'refs/heads/main' && steps.avd.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.avd.outputs.cache-hit != 'true' && steps.avd_create.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -447,8 +456,10 @@ jobs:
           pre-emulator-launch-script: bash scripts/emulator-ci.sh cleanup
           script: bash scripts/emulator-ci.sh run 2
 
+      # Diagnostics only: an upload that fails does not fail the job.
       - name: Keep attempt 1's logs and reports
         if: ${{ !cancelled() && steps.emu1.outcome == 'failure' }}
+        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-android-emulator-attempt-1
