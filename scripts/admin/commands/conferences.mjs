@@ -73,7 +73,7 @@ function readConference(root, slug) {
 
 const COMMIT_NOTE = (files) => `commit ${files.join(' and ')}`;
 
-export function withConferenceFiles(adapter, { root, now = () => new Date() } = {}) {
+export function withConferenceFiles(adapter, { root, now = () => new Date(), tier = 3 } = {}) {
   const rel = (path) => relative(root, path);
   const files = (slug) => [rel(confPath(root, slug)), OPERATOR_FILE];
 
@@ -175,16 +175,28 @@ export function withConferenceFiles(adapter, { root, now = () => new Date() } = 
       return { ...backend, items, files: touched, summary: `${backend.summary}; retired ${slug}${purge.length ? `; deleted ${purge.join(', ')}` : ''}; ${followUps}` };
     },
 
+    // On tier 3 the operator file is the only record of a removal, so an unretire needs its entry.
+    // On tier 2 the Worker holds the retired state too (a tombstone, or a wiped object after a
+    // removal that an unretire overtook or an unretire whose fan-out failed), and the documented
+    // repair is to run the unretire again; so it is sent without a local entry too, but then only
+    // with the local conference document (the slug alone would be stored as an unavailable
+    // conference), and the tier 2 adapter refuses a slug the Worker lists with another status.
+    // The local entry is dropped when there is one.
     async unretireConference({ event, slug, mode }) {
       const operator = readOperatorFile(root);
-      if (!operator.removed[slug]) throw new NotFoundError(`${slug} is not removed (no entry in ${OPERATOR_FILE})`);
+      const recorded = !!operator.removed[slug];
+      if (!recorded && tier !== 2) throw new NotFoundError(`${slug} is not removed (no entry in ${OPERATOR_FILE})`);
       const local = readConference(root, slug);
+      if (!recorded && !local) throw new NotFoundError(`${slug} has no removed entry in ${OPERATOR_FILE} and no ${rel(confPath(root, slug))}; check the slug`);
       const backend = await adapter.unretireConference({ event, slug, mode, doc: local ?? { slug } });
-      const items = [...(backend.items ?? []), { file: OPERATOR_FILE, removed: null }];
-      if (mode === 'dry-run') return { ...backend, items, summary: `${backend.summary}; would drop the removed entry of ${OPERATOR_FILE}` };
-      delete operator.removed[slug];
-      writeJson(join(root, OPERATOR_FILE), operator);
-      return { ...backend, items, files: [OPERATOR_FILE], summary: `${backend.summary}; ${COMMIT_NOTE([OPERATOR_FILE])}; run conferences refresh --event ${slug} next` };
+      const items = [...(backend.items ?? []), { file: OPERATOR_FILE, removed: null, recorded }];
+      const fileNote = recorded ? `drop the removed entry of ${OPERATOR_FILE}` : `${OPERATOR_FILE} has no removed entry for ${slug}, so it is left as it is`;
+      if (mode === 'dry-run') return { ...backend, items, summary: `${backend.summary}; would ${recorded ? fileNote : `send it anyway (${fileNote})`}` };
+      if (recorded) {
+        delete operator.removed[slug];
+        writeJson(join(root, OPERATOR_FILE), operator);
+      }
+      return { ...backend, items, files: recorded ? [OPERATOR_FILE] : [], summary: `${backend.summary}; ${recorded ? COMMIT_NOTE([OPERATOR_FILE]) : fileNote}; run conferences refresh --event ${slug} next` };
     },
   };
 }
