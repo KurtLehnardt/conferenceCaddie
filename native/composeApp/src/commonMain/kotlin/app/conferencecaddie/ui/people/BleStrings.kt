@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui.people
 
 import app.conferencecaddie.shared.ble.BlePermissionKind
+import app.conferencecaddie.shared.people.PeopleText
 
 /**
  * The copy of "Find people near me by Bluetooth" (web BleControls.tsx), word for word. The label,
@@ -49,6 +50,15 @@ object BleStrings {
      * other (docs/NATIVE_PLAN.md 5.1 and 8.2), so the hint says so instead of promising more.
      */
     const val IOS_CAVEAT = "Other iPhones may find you only while one of you has Caddie open."
+
+    /** The setup panel's explanation as a region (BleControls.tsx: role="region" aria-label). */
+    const val NOTICE_LABEL = "About finding people by Bluetooth"
+
+    /**
+     * What a screen reader says for the switch: the label, then the line under it ([hint]), as the
+     * web's aria-describedby="pp-ble-hint" has it read.
+     */
+    fun switchDescription(hint: String): String = "${PeopleText.BLE_LABEL}. $hint"
 
     /** Native: the heading of the Settings group that holds the same switch. */
     const val SETTINGS_GROUP = "Bluetooth"

@@ -90,6 +90,9 @@ class BleUiTest {
 
     private val politeLiveRegion = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
 
+    /** The switch is read with the line under it ([hint]), as the web's aria-describedby="pp-ble-hint". */
+    private fun describedBy(hint: String) = SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf(BleStrings.switchDescription(hint)))
+
     /** Opens the setup panel from the switch and taps Turn on. */
     private fun ComposeUiTest.turnOnThroughTheNotice() {
         onNodeWithTag("ble-switch").performScrollTo().assertIsOff().performClick()
@@ -123,7 +126,7 @@ class BleUiTest {
         val state = bleState(BleView(available = true), presenceOn = false)
         u3Show(rig) { PeopleScreenColumn { PresenceControls(state, rig.host) } }
         onNodeWithTag("ble-card").assertIsDisplayed()
-        onNodeWithTag("ble-switch").assertIsNotEnabled().assertIsOff()
+        onNodeWithTag("ble-switch").assertIsNotEnabled().assertIsOff().assert(describedBy(PeopleText.BLE_NEEDS_PRESENCE))
         onNodeWithTag("ble-hint").assertTextEquals(PeopleText.BLE_NEEDS_PRESENCE)
     }
 
@@ -139,7 +142,9 @@ class BleUiTest {
             .assertIsOff()
             .assert(hasText(PeopleText.BLE_LABEL))
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+            .assert(describedBy(BleStrings.HINT_OFF))
             .assertHeightIsAtLeast(44.dp)
+        assertEquals("Find people near me by Bluetooth. Only people who also turned this on can be found.", BleStrings.switchDescription(BleStrings.HINT_OFF))
         onNodeWithTag("ble-hint").assertTextEquals(BleStrings.HINT_OFF)
         onNodeWithTag("ble-setup").assertDoesNotExist()
         onNodeWithTag("ble-open-settings").assertDoesNotExist()
@@ -158,6 +163,8 @@ class BleUiTest {
             // The switch shows on while the panel asks.
             onNodeWithTag("ble-switch").assertIsOn()
             onNode(hasText(PeopleText.BLE_NOTICE) and hasAnyAncestor(hasTestTag("ble-notice"))).assertIsDisplayed()
+            // The web's role="region" aria-label="About finding people by Bluetooth".
+            onNodeWithTag("ble-notice").assert(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "About finding people by Bluetooth"))
             onNode(hasText(BleStrings.permissionLine(k)) and hasAnyAncestor(hasTestTag("ble-notice"))).assertIsDisplayed()
             for (other in BlePermissionKind.entries - k) assertTrue(u3NoText(BleStrings.permissionLine(other)), "$k shows the line of $other")
             onNodeWithTag("ble-turn-on").assertTextEquals(BleStrings.TURN_ON).assertIsEnabled()
@@ -174,7 +181,7 @@ class BleUiTest {
         val rig = rig()
         var ble by mutableStateOf(BleView(available = true, on = true, noticeSeen = true))
         u3Show(rig) { PeopleScreenColumn { BleControls(bleState(ble), rig.host, BleVariant.Card) } }
-        onNodeWithTag("ble-switch").assertIsOn().assertIsEnabled()
+        onNodeWithTag("ble-switch").assertIsOn().assertIsEnabled().assert(describedBy(BleStrings.HINT_ON))
         onNodeWithTag("ble-hint").assertTextEquals(BleStrings.HINT_ON)
         onNodeWithTag("ble-ios-caveat").assertDoesNotExist()
         onNodeWithTag("ble-notifications").assertDoesNotExist()
@@ -212,6 +219,7 @@ class BleUiTest {
             ble = BleView(available = true, noticeSeen = true, problem = problem, message = PeopleText.bleProblemMessage(problem))
             waitForIdle()
             onNodeWithTag("ble-hint").assertTextEquals(words).assert(politeLiveRegion)
+            onNodeWithTag("ble-switch").assert(describedBy(words))
             if (settings) onNodeWithTag("ble-open-settings").assertIsDisplayed() else onNodeWithTag("ble-open-settings").assertDoesNotExist()
             // A problem leaves the switch off and usable, to try again.
             onNodeWithTag("ble-switch").assertIsOff().assertIsEnabled()

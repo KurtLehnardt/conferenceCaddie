@@ -15,7 +15,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -59,7 +61,9 @@ enum class BleVariant {
  *
  * Under the switch, the web's line: "Turn on being around first." while presence is off, the
  * listening line while it runs, "Only people who also turned this on can be found." otherwise, or
- * the runtime's words for `state.ble.problem` in the error style. A refused permission and refused
+ * the runtime's words for `state.ble.problem` in the error style. A screen reader hears that line
+ * with the switch, as the web's aria-describedby gives it, and the setup panel's explanation is a
+ * pane named "About finding people by Bluetooth" (the web's region). A refused permission and refused
  * notifications offer the system settings ([PeopleHost.openAppSettings]); on an iPhone a line says
  * that other iPhones may find it only while one of them has the app open. The runtime's own
  * messages (Bluetooth switched off, a radio that could not send) reach the person as toasts through
@@ -101,6 +105,7 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
 
     val c = Caddie.colors
     val labelColor = if (presenceOn) c.text else c.text2
+    val hint = bleHint(ble, presenceOn)
     Column(modifier.fillMaxWidth().testTag(if (settings) "ble-settings" else "ble-card")) {
         if (!settings) Hairline()
         // .pp-ble: 8 dp under the hairline, its parts 6 dp apart. In Settings the switch row has its
@@ -118,7 +123,11 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
                 variant = if (settings) SwitchRowVariant.Settings else SwitchRowVariant.Presence,
                 enabled = !starting && presenceOn,
                 leading = if (settings) null else { { LucideImage(LucideIcon.Bluetooth, null, size = 16.dp, tint = labelColor) } },
-                rowModifier = Modifier.testTag("ble-switch").semantics { if (starting) stateDescription = BleStrings.STARTING },
+                rowModifier = Modifier.testTag("ble-switch").semantics {
+                    // The web's aria-describedby="pp-ble-hint": the line under the switch is read with it.
+                    contentDescription = BleStrings.switchDescription(hint.text)
+                    if (starting) stateDescription = BleStrings.STARTING
+                },
                 leadingGap = 8.dp,
                 labelColor = labelColor,
             )
@@ -131,11 +140,11 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
                     onNotNow = { panel = false },
                 )
             }
-            if (!settings) BleLines(ble, presenceOn, host, settings = false)
+            if (!settings) BleLines(ble, hint, host, settings = false)
         }
         if (settings) {
             SettingsRow {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { BleLines(ble, presenceOn, host, settings = true) }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { BleLines(ble, hint, host, settings = true) }
             }
         }
     }
@@ -145,7 +154,8 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
 @Composable
 private fun BleSetup(kind: BlePermissionKind, starting: Boolean, modifier: Modifier, onTurnOn: () -> Unit, onNotNow: () -> Unit) {
     Column(modifier.fillMaxWidth().testTag("ble-setup"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        PeopleNotice(Modifier.testTag("ble-notice")) {
+        // The web's role="region" with its aria-label.
+        PeopleNotice(Modifier.testTag("ble-notice").semantics { paneTitle = BleStrings.NOTICE_LABEL }) {
             Text(PeopleText.BLE_NOTICE)
             Text(BleStrings.permissionLine(kind))
         }
@@ -162,25 +172,30 @@ private fun BleSetup(kind: BlePermissionKind, starting: Boolean, modifier: Modif
     }
 }
 
-/**
- * The lines under the switch: #pp-ble-hint (the hint, or a problem in the error style), then, while
- * it runs, the iPhone caveat and the notifications line, and "Open settings" where the system
- * settings can help.
- */
-@Composable
-private fun BleLines(ble: BleView, presenceOn: Boolean, host: PeopleHost, settings: Boolean) {
+/** #pp-ble-hint: the runtime's words for [problem] (shown in the error style), or the hint for the state. */
+private class BleHint(val text: String, val problem: BleProblem?)
+
+private fun bleHint(ble: BleView, presenceOn: Boolean): BleHint {
     // A presence problem left from an earlier attempt says nothing once presence is back on.
     val problem = ble.problem?.takeUnless { it == BleProblem.NeedsPresence && presenceOn }
-    if (problem != null) {
-        BleLine(ble.message ?: PeopleText.bleProblemMessage(problem, ble.permission), error = true, settings, Modifier.testTag("ble-hint"))
-    } else {
-        val hint = when {
-            !presenceOn -> PeopleText.BLE_NEEDS_PRESENCE
-            ble.on -> BleStrings.HINT_ON
-            else -> BleStrings.HINT_OFF
-        }
-        BleLine(hint, error = false, settings, Modifier.testTag("ble-hint"))
+    if (problem != null) return BleHint(ble.message ?: PeopleText.bleProblemMessage(problem, ble.permission), problem)
+    val text = when {
+        !presenceOn -> PeopleText.BLE_NEEDS_PRESENCE
+        ble.on -> BleStrings.HINT_ON
+        else -> BleStrings.HINT_OFF
     }
+    return BleHint(text, null)
+}
+
+/**
+ * The lines under the switch: #pp-ble-hint ([hint], a problem in the error style), then, while it
+ * runs, the iPhone caveat and the notifications line, and "Open settings" where the system settings
+ * can help.
+ */
+@Composable
+private fun BleLines(ble: BleView, hint: BleHint, host: PeopleHost, settings: Boolean) {
+    val problem = hint.problem
+    BleLine(hint.text, error = problem != null, settings, Modifier.testTag("ble-hint"))
     // The permission kind is Bluetooth only on iOS.
     if (ble.on && ble.permission == BlePermissionKind.Bluetooth) BleLine(BleStrings.IOS_CAVEAT, error = false, settings, Modifier.testTag("ble-ios-caveat"))
     val notificationsOff = ble.on && !ble.notificationsAllowed
