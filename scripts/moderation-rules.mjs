@@ -3,7 +3,7 @@
 //   node scripts/moderation-rules.mjs --reload-rules [--index caddie-people-rules]
 //   node scripts/moderation-rules.mjs --test "<text>" [--index caddie-people-rules]
 //
-// Env: ES_URL (default: the Elastic Cloud deployment). --reload-rules needs ELASTISEARCH_API_KEY
+// Env: ES_URL (required, no default). --reload-rules needs ELASTISEARCH_API_KEY
 // (the admin key) and refuses to run without it; --test uses ES_PEOPLE_API_KEY or
 // ELASTISEARCH_API_KEY. MODERATION_WORDS_FILE overrides the wordlist path (the tests use it).
 //
@@ -34,7 +34,7 @@ import crypto from 'node:crypto';
 const WORDS_FILE = process.env.MODERATION_WORDS_FILE || new URL('../config/moderation-words.json', import.meta.url);
 // What messages call the wordlist: the repository path, or the override's path when it is set.
 const WORDS_LABEL = process.env.MODERATION_WORDS_FILE || 'config/moderation-words.json';
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const args = process.argv.slice(2);
 const opt = (name) => {
   const i = args.indexOf(name);
@@ -70,7 +70,7 @@ if (reload === (testText !== undefined)) {
 }
 
 async function es(method, path, body, ndjson = false) {
-  const res = await fetch(ES_URL + path, {
+  const res = await fetch(esUrlOrExit() + path, {
     method,
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json' },
     body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),

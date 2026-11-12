@@ -35,10 +35,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { visibleUntil, textHash } from '../server/people.mjs';
-import { newDevice, hashSecret, refFor } from '../server/device.mjs';
+import { esUrlOrExit } from './lib/es-url.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+// Before the server modules below, which refuse to load without ES_URL: print "Set ES_URL.", not a stack.
+esUrlOrExit();
+const { visibleUntil, textHash } = await import('../server/people.mjs');
+const { newDevice, hashSecret, refFor } = await import('../server/device.mjs');
 const ADMIN_KEY = process.env.ELASTISEARCH_API_KEY;
 const WRITE_KEY = process.env.ES_PEOPLE_API_KEY || ADMIN_KEY;
 const READ_KEY = process.env.ES_API_KEY || process.env.ELASTISEARCH_API_KEY;
@@ -82,7 +84,7 @@ if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug) || !(limit > 0) || (label 
 
 async function es(key, method, p, body, ndjson = false) {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(ES_URL + p, {
+    const res = await fetch(esUrlOrExit() + p, {
       method,
       headers: { Authorization: `ApiKey ${key}`, 'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json' },
       body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),

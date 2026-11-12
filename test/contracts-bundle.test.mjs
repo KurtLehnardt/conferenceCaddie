@@ -326,7 +326,8 @@ test('links are http(s) only', () => {
 });
 
 test('normalizeKey matches the server and facets match scripts/build-facets.mjs rules', async () => {
-  // server/facets.mjs imports the search module, which needs no network to load.
+  // server/facets.mjs imports the search module, which needs no network to load but needs ES_URL set.
+  process.env.ES_URL ||= 'https://es.invalid:443';
   const { normalizeKey: serverKey } = await import('../server/facets.mjs');
   for (const s of ['Hall A | Room 1', '🔐 Security', 'Café Ünïcode', 'Salt Palace | Level 1 | Hall DE', '  Mixed   CASE ']) {
     assert.equal(normalizeKey(s), serverKey(s), s);
