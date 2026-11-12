@@ -453,7 +453,7 @@ export function buildFixture() {
     min_key_length: 32,
     keys: { key1: KEY1, key2: KEY2 },
     origins: { custom_domain: PROD, workers_dev: WORKERS_DEV, other_deployment: STAGING },
-    default_sign_version: 1,
+    default_sign_version: 2,
     default_allowed_versions: [1],
     verify_reasons: {
       _note: 'The reference verifier first checks its own settings (see the reject cases with call "verify"), then the header in this order: malformed, bodyless_body_hash, no_key, signature, skew, and reports the first that applies. A verifier may check no_key before malformed (the Worker does). When several reasons apply, any one of those applying reasons is acceptable; all map to 404, except skew, which is 401 admin_skew and can only follow a valid signature.',

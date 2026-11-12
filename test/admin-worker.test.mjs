@@ -587,6 +587,8 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
       assert.equal(r.code, 0, `${JSON.stringify(env)}: ${r.stderr}`);
       const [call] = admins(r.requests);
       assert.equal(call.version, version, JSON.stringify(env));
+      // The rollback is never silent: one warning under "1", none otherwise.
+      assert.equal(r.stderr.split('\n').filter((l) => l.startsWith('caddie-admin: warning: CADDIE_ADMIN_SIG_VERSION=1: ')).length, version === 1 ? 1 : 0, r.stderr);
       assert.ok(call.headers['x-caddie-admin'].startsWith(`v${version} `));
       if (version === 2) {
         assert.equal(verify(call, [2], [stub.url]).origin, stub.url);

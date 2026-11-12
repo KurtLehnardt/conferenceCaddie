@@ -6,7 +6,8 @@
 // string in this file rather than through the module, so the fixture and the module check each
 // other. Every "verify" vector runs through the module's verifier and through a WebCrypto port
 // written here the way the Worker's is, and every "reject" vector must throw a UsageError with
-// the named code before anything would be sent.
+// the named code before anything would be sent. Every call to signAdminRequest names version: 1,
+// because the default is v2 from step (c) of the migration (DECISIONS.md, "Admin signature v2").
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -124,7 +125,7 @@ describe('sign cases: every vector recomputed from scratch', () => {
       assert.equal(c.sig, crypto.createHmac('sha256', Buffer.from(c.key.trim(), 'utf8')).update(canonical(c), 'utf8').digest('hex'));
       assert.equal(c.sig, await webCryptoHmacHex(c.key, canonical(c)));
       // The module reproduces the vector exactly, and verifies it.
-      const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, body: c.body, key: c.key, now: c.ts * 1000, nonce: c.nonce });
+      const r = signAdminRequest({ version: 1, method: c.method, path: c.path, base: c.base, body: c.body, key: c.key, now: c.ts * 1000, nonce: c.nonce });
       assert.equal(r.header, c.header);
       assert.equal(r.url, c.url);
       assert.equal(r.pathWithQuery, c.path_with_query);
@@ -167,7 +168,7 @@ describe('sign cases: every vector recomputed from scratch', () => {
     // The same flag in the query is refused outright: the charset has no room for it to hide, and
     // even allow_shrink=1 (which would pass the charset) would sit outside the body hash, so the
     // CLI and the smoke put every flag in the body.
-    assert.throws(() => signAdminRequest({ method: 'PUT', path: '/admin/conferences?allow_shrink=true&x=a b', base: a.base, body: a.body, key: a.key }), (e) => e instanceof UsageError && e.code === 'query_charset');
+    assert.throws(() => signAdminRequest({ version: 1, method: 'PUT', path: '/admin/conferences?allow_shrink=true&x=a b', base: a.base, body: a.body, key: a.key }), (e) => e instanceof UsageError && e.code === 'query_charset');
   });
 
   test('SEC-7: the key is trimmed, so a padded key signs exactly as the bare key', () => {
@@ -176,40 +177,40 @@ describe('sign cases: every vector recomputed from scratch', () => {
     assert.notEqual(padded.key, bare.key);
     assert.equal(padded.key.trim(), bare.key);
     assert.equal(padded.header, bare.header);
-    const r = signAdminRequest({ method: 'GET', path: bare.path, base: bare.base, key: `\r\n  ${bare.key} \t`, now: bare.ts * 1000, nonce: bare.nonce });
+    const r = signAdminRequest({ version: 1, method: 'GET', path: bare.path, base: bare.base, key: `\r\n  ${bare.key} \t`, now: bare.ts * 1000, nonce: bare.nonce });
     assert.equal(r.header, bare.header);
   });
 
   test('the second key signs a different signature for the same request', () => {
     const c = byId['post-second-key'];
-    const withKey1 = signAdminRequest({ method: c.method, path: c.path, base: c.base, body: c.body, key: fixture.keys.key1, now: c.ts * 1000, nonce: c.nonce });
+    const withKey1 = signAdminRequest({ version: 1, method: c.method, path: c.path, base: c.base, body: c.body, key: fixture.keys.key1, now: c.ts * 1000, nonce: c.nonce });
     assert.notEqual(withKey1.header, c.header);
     assert.equal(withKey1.header.split(' ').slice(0, 4).join(' '), c.header.split(' ').slice(0, 4).join(' '));
   });
 
   test('SEC-16: GET, HEAD and DELETE always carry the empty-body hash', () => {
     for (const method of ['GET', 'HEAD', 'DELETE']) {
-      const r = signAdminRequest({ method, path: '/admin/stats?event=testconf-2099', base: 'https://caddie.example', key: fixture.keys.key1 });
+      const r = signAdminRequest({ version: 1, method, path: '/admin/stats?event=testconf-2099', base: 'https://caddie.example', key: fixture.keys.key1 });
       assert.equal(r.bodySha256, EMPTY_BODY_SHA256);
       assert.equal(parseAdminHeader(r.header).bodySha256, EMPTY_BODY_SHA256);
       for (const body of ['{}', 'x', new Uint8Array([1])]) {
-        assert.throws(() => signAdminRequest({ method, path: '/admin/stats', base: 'https://caddie.example', body, key: fixture.keys.key1 }), (e) => e instanceof UsageError && e.code === 'body_on_bodyless_method');
+        assert.throws(() => signAdminRequest({ version: 1, method, path: '/admin/stats', base: 'https://caddie.example', body, key: fixture.keys.key1 }), (e) => e instanceof UsageError && e.code === 'body_on_bodyless_method');
       }
       // An empty string is the empty body.
-      assert.equal(signAdminRequest({ method, path: '/admin/stats', base: 'https://caddie.example', body: '', key: fixture.keys.key1 }).bodySha256, EMPTY_BODY_SHA256);
+      assert.equal(signAdminRequest({ version: 1, method, path: '/admin/stats', base: 'https://caddie.example', body: '', key: fixture.keys.key1 }).bodySha256, EMPTY_BODY_SHA256);
     }
   });
 
   test('a body given as bytes hashes the same as the string it encodes', () => {
     const c = byId['post-non-ascii'];
-    const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, body: new TextEncoder().encode(c.body), key: c.key, now: c.ts * 1000, nonce: c.nonce });
+    const r = signAdminRequest({ version: 1, method: c.method, path: c.path, base: c.base, body: new TextEncoder().encode(c.body), key: c.key, now: c.ts * 1000, nonce: c.nonce });
     assert.equal(r.header, c.header);
   });
 
   test('a fresh signature has a fresh nonce and the current time', () => {
     const before = Math.floor(Date.now() / 1000);
-    const a = signAdminRequest({ method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: fixture.keys.key1 });
-    const b = signAdminRequest({ method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: fixture.keys.key1 });
+    const a = signAdminRequest({ version: 1, method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: fixture.keys.key1 });
+    const b = signAdminRequest({ version: 1, method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: fixture.keys.key1 });
     assert.notEqual(a.nonce, b.nonce);
     assert.ok(a.ts >= before && a.ts <= before + 2);
     assert.equal(verifyAdminSignature({ headerValue: a.header, method: 'GET', pathWithQuery: '/admin/stats', keys: [fixture.keys.key1] }).ok, true);
@@ -266,7 +267,7 @@ describe('reject cases: the signer refuses before anything is sent', () => {
   for (const c of rejectCases) {
     test(`${c.id}: ${c.title}`, () => {
       assert.throws(
-        () => signAdminRequest({ ...c.input }),
+        () => signAdminRequest({ version: 1, ...c.input }),
         (e) => e instanceof UsageError && e.code === c.reject && e.exitCode === 2,
       );
     });
@@ -316,12 +317,12 @@ describe('reject cases: the signer refuses before anything is sent', () => {
       seen.add(n);
     }
     assert.equal(seen.size, 2000);
-    assert.throws(() => signAdminRequest({ method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: fixture.keys.key1, nonce: 'short' }), (e) => e.code === 'nonce');
+    assert.throws(() => signAdminRequest({ version: 1, method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: fixture.keys.key1, nonce: 'short' }), (e) => e.code === 'nonce');
   });
 
   test('the signer never puts the key in the header, the URL or the canonical string', () => {
     const c = byId['post-moderation'];
-    const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, body: c.body, key: c.key, now: c.ts * 1000, nonce: c.nonce });
+    const r = signAdminRequest({ version: 1, method: c.method, path: c.path, base: c.base, body: c.body, key: c.key, now: c.ts * 1000, nonce: c.nonce });
     for (const text of [r.header, r.url, r.canonical, r.pathWithQuery]) assert.ok(!text.includes(c.key.trim()));
   });
 });

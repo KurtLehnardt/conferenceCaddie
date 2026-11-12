@@ -235,6 +235,22 @@ export function workerOrigin(backend) {
   return origin;
 }
 
+// The signature version from env: CADDIE_ADMIN_SIG_VERSION unset or empty means 2, exactly "1" or
+// "2" means that version (1 is the rollback until step d of the migration), anything else is a
+// usage error (exit 2) before any request. The message names the variable, never its value.
+export function workerSignVersion(env) {
+  try {
+    return signVersionFromEnv(env);
+  } catch (err) {
+    if (err?.code === 'version') throw new UsageError('CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set (unset or empty means 2)');
+    throw err;
+  }
+}
+
+// What the CLI prints on stderr, once, when the version is 1: the rollback must not become the
+// normal state, because a v1 signature is not bound to a host.
+export const V1_ROLLBACK_WARNING = 'CADDIE_ADMIN_SIG_VERSION=1: admin requests are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over';
+
 // The search text as the Worker reads it: base64url without padding of at most 200 bytes of UTF-8.
 export function q64Of(text) {
   const bytes = Buffer.from(String(text), 'utf8');
@@ -257,16 +273,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
   if (typeof credential !== 'string' || !credential) throw new AdminError('no credential for the Worker backend');
   const api = workerOrigin(backend);
   const access = accessHeaders(env);
-  // The signature version: CADDIE_ADMIN_SIG_VERSION unset or empty means 2, exactly "1" or "2"
-  // means that version (1 is the rollback until step d of the migration), anything else is a usage
-  // error (exit 2) before any request. Read once, from the injected env.
-  let version;
-  try {
-    version = signVersionFromEnv(env);
-  } catch (err) {
-    if (err?.code === 'version') throw new UsageError('CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set (unset or empty means 2)');
-    throw err;
-  }
+  const version = workerSignVersion(env);
 
   // ---- transport ----
 

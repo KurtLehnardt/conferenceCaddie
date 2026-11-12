@@ -293,8 +293,9 @@ test('the setup guides keep the flags and variables of the scripts they describe
   for (const needle of ['--rotate-admin-token', '--only-missing', '--dry-run', '--subdomain-only', 'CADDIE_ADMIN_SIG_VERSION=1']) {
     assert.ok(tier2.includes(needle), `TIER2_CLOUDFLARE.md lost ${needle}`);
   }
-  // Bearer mode is gone from the smoke, so the guide must not offer it, nor SMOKE_ADMIN_AUTH at all.
+  // Bearer mode is gone from the smoke, so no guide may offer it, nor SMOKE_ADMIN_AUTH at all.
   assert.ok(!tier2.includes('SMOKE_ADMIN_AUTH'), 'TIER2_CLOUDFLARE.md still sets SMOKE_ADMIN_AUTH');
+  assert.ok(!read('docs/FREE_HOSTING.md').includes('SMOKE_ADMIN_AUTH'), 'FREE_HOSTING.md still sets SMOKE_ADMIN_AUTH');
   const setup = read('worker/scripts/setup-secrets.mjs');
   for (const flag of ['--rotate-admin-token', '--only-missing', '--dry-run', '--replace-next']) assert.ok(setup.includes(flag), `setup-secrets.mjs has no ${flag}`);
   assert.ok(read('worker/scripts/deploy.sh').includes('--subdomain-only'));

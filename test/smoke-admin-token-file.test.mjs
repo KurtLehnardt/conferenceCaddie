@@ -122,6 +122,13 @@ describe('resolveAdminTokenFile', () => {
       assert.equal(resolveAdminTokenFile(env, { home }).file, null, 'no origin given: not read');
       put(join(oldDir, 'config.json'), '{ not json');
       assert.equal(resolveAdminTokenFile(env, { home, apiOrigin: 'https://prod.example.test' }).file, null, 'an unreadable old config.json fails closed');
+      // An old config.json whose stat fails (here a symlink loop) cannot be checked: not read, and
+      // the note says it cannot be checked rather than that it does not list the origin.
+      rmSync(join(oldDir, 'config.json'));
+      symlinkSync(join(oldDir, 'config.json'), join(oldDir, 'config.json'));
+      const unchecked = resolveAdminTokenFile(env, { home, apiOrigin: 'https://prod.example.test' });
+      assert.equal(unchecked.file, null);
+      assert.equal(unchecked.note, `NOTE admin token: ${join(xdg, 'conference-caddie', 'admin-token')} does not exist, and the old path ${join(oldDir, 'admin-token')} is not read, because ${join(oldDir, 'config.json')} cannot be checked for https://prod.example.test; set ADMIN_TOKEN_FILE to run with a token`);
       rmSync(join(oldDir, 'config.json'));
       assert.equal(resolveAdminTokenFile(env, { home, apiOrigin: 'https://fork.example.test' }).file, join(oldDir, 'admin-token'), 'no old config.json: the token-only old dir that setup-secrets.mjs writes');
     } finally {
@@ -173,7 +180,7 @@ describe('resolveAdminTokenFile', () => {
     }
   });
 
-  test('a path whose stat fails for another reason than "missing" is returned, so the read fails and names it', { skip: asRoot ? 'root can search any directory' : false }, () => {
+  test('a config dir path whose stat fails is returned, so the read fails and names it; an old path that cannot be checked is not read', { skip: asRoot ? 'root can search any directory' : false }, () => {
     const home = tempHome();
     const legacyDir = join(home, '.config', 'conference-caddie');
     const xdg = join(home, 'xdg');
@@ -188,11 +195,12 @@ describe('resolveAdminTokenFile', () => {
       assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: join(curDir, 'admin-token'), note: null });
       chmodSync(curDir, 0o700);
       locked.pop();
-      // c. the old dir cannot be searched and the config dir has no file: the old path, no note.
+      // c. the old dir cannot be searched and the config dir has no file: nothing is read (the
+      // fallback fails closed, as in the Worker scripts' module), and the note says why.
       rmSync(join(curDir, 'admin-token'));
       chmodSync(legacyDir, 0o000);
       locked.push(legacyDir);
-      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: join(legacyDir, 'admin-token'), note: null });
+      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: null, note: `NOTE admin token: ${join(curDir, 'admin-token')} does not exist, and the old path ${join(legacyDir, 'admin-token')} is not read, because it cannot be checked (a directory on its path cannot be searched); set ADMIN_TOKEN_FILE to run with a token` });
       // b. the old dir cannot be searched and the config dir file is fine: that file, no note.
       put(join(curDir, 'admin-token'));
       assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: join(curDir, 'admin-token'), note: null });
@@ -355,6 +363,22 @@ describe('adminTokenPaths', () => {
     put(join(xdg, 'conference-caddie', 'admin-token'));
     assert.equal(adminTokenPaths({ XDG_CONFIG_HOME: xdg }, home).legacy, null, 'symlinked ~/.config, file present');
   }));
+
+  // With no variable set the path is the old place itself. When ~/.config cannot be searched
+  // sameFile cannot prove that, so two equal path strings must count as one path on their own.
+  test('no variable set and ~/.config cannot be searched: no old place, never the path itself', { skip: asRoot ? 'root can search any directory' : false }, () => withHome((home) => {
+    const dotConfig = join(home, '.config');
+    put(join(dotConfig, 'conference-caddie', 'admin-token'));
+    chmodSync(dotConfig, 0o000);
+    try {
+      const old = join(dotConfig, 'conference-caddie', 'admin-token');
+      assert.equal(sameFile(old, old), false, 'sameFile cannot prove it');
+      assert.deepEqual(adminTokenPaths({}, home), { path: old, legacy: null, explicit: false });
+      assert.deepEqual(resolveAdminTokenFile({}, { home, apiOrigin: 'https://prod.example.test' }), { file: old, note: null }, 'the one path, so the read fails and names it');
+    } finally {
+      chmodSync(dotConfig, 0o700);
+    }
+  }));
 });
 
 describe('shellPath', () => {
@@ -507,7 +531,7 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
     }
   });
 
-  test('the old dir cannot be searched and the config dir has no file: the run fails naming the old path', { skip: asRoot ? 'root can search any directory' : false }, async () => {
+  test('the old dir cannot be searched and the config dir has no file: the old path is not read, and a note says it cannot be checked', { skip: asRoot ? 'root can search any directory' : false }, async () => {
     const home = tempHome();
     const legacyDir = join(home, '.config', 'conference-caddie');
     try {
@@ -515,10 +539,11 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
       writeConfig(join(xdg, 'conference-caddie'));
       put(join(legacyDir, 'admin-token'));
       chmodSync(legacyDir, 0o000);
-      const r = await smoke({ HOME: home, XDG_CONFIG_HOME: xdg });
+      const r = await smoke({ HOME: home, XDG_CONFIG_HOME: xdg, SMOKE_TALKS: 'bogus' });
       assert.equal(r.code, 1, r.stdout);
-      assert.ok(r.stdout.includes(`FAIL config: credential file ${join(legacyDir, 'admin-token')} cannot be reached: a directory on its path cannot be searched by this user`), r.stdout);
-      assert.deepEqual(noteLines(r.stdout), []);
+      assert.ok(r.stdout.includes('FAIL config: SMOKE_TALKS must be bundle or data'), `no token was read, so the run reached the next check\n${r.stdout}`);
+      assert.ok(!r.stdout.includes(SHORT_FAIL), r.stdout);
+      assert.deepEqual(noteLines(r.stdout), [`NOTE admin token: ${join(xdg, 'conference-caddie', 'admin-token')} does not exist, and the old path ${join(legacyDir, 'admin-token')} is not read, because it cannot be checked (a directory on its path cannot be searched); set ADMIN_TOKEN_FILE to run with a token`]);
     } finally {
       chmodSync(legacyDir, 0o700);
       rmSync(home, { recursive: true, force: true });
@@ -607,6 +632,7 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
       chmodSync(loose, 0o644);
       const READ = `FAIL config: credential file ${loose} has mode 0644`;
       const NOT_READ = 'FAIL config: SMOKE_TALKS must be bundle or data';
+      const TYPED_FAIL = "must be the Worker's origin as plain ASCII";
       const cases = [
         [{}, READ],
         [{ SMOKE_API: '' }, READ, 'same origin without SMOKE_API: the configured Worker'],
@@ -622,9 +648,10 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
         [{ BASE_URL: 'http://127.0.0.1:9' }, NOT_READ, 'a loopback API not in config.json'],
         [{ SMOKE_API: 'cloudrun' }, NOT_READ],
         [{ SMOKE_ADMIN_AUTH: 'bearer' }, 'FAIL config: SMOKE_ADMIN_AUTH=bearer was removed', 'bearer mode is gone, refused before any token is read'],
-        [{ BASE_URL: WORKER.replace('caddie-smoke.', 'caddie-smoke\uff0e') }, NOT_READ, 'a full-width dot the URL parser maps to the configured origin'],
-        [{ BASE_URL: WORKER.replace('https://', 'https://user@') }, NOT_READ, 'a user name the origin drops'],
-        [{ API_BASE: WORKER.replace('caddie-smoke.', 'caddie-smoke\uff0e') }, NOT_READ, 'the same for API_BASE'],
+        [{ BASE_URL: WORKER.replace('caddie-smoke.', 'caddie-smoke\uff0e') }, TYPED_FAIL, 'a full-width dot the URL parser maps to the configured origin: not read, and refused against the Worker'],
+        [{ BASE_URL: WORKER.replace('https://', 'https://user@') }, TYPED_FAIL, 'a user name the origin drops'],
+        [{ API_BASE: WORKER.replace('caddie-smoke.', 'caddie-smoke\uff0e') }, TYPED_FAIL, 'the same for API_BASE'],
+        [{ BASE_URL: WORKER.replace('caddie-smoke.', 'caddie-smoke\uff0e'), SMOKE_API: 'cloudrun' }, NOT_READ, 'against Cloud Run nothing is signed, so the typed check does not apply'],
         [{ BASE_URL: 'https://wide.example.test' }, NOT_READ, 'a config.json api with a full-width dot is no Worker origin'],
         [{ ADMIN_TOKEN: FAKE }, SHORT_FAIL, 'ADMIN_TOKEN first'],
         [{ ADMIN_TOKEN_FILE: join(home, 'missing') }, `FAIL config: no credential: set ADMIN_TOKEN, or put it in ${join(home, 'missing')}`, 'then ADMIN_TOKEN_FILE'],

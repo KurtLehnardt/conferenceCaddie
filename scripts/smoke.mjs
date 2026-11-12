@@ -45,13 +45,15 @@
 //                        request that reaches another host cannot be replayed to the real Worker. A v1
 //                        signature does not cover the host: whatever answers at API_BASE can replay it
 //                        to the real Worker within its five-minute window, while that nonce is unused
-//                        there. Point API_BASE only at the Worker the token belongs to. With a token,
-//                        API_BASE as typed (when it is unset, the scheme and host of BASE_URL as typed)
-//                        must pass canonicalOrigin of scripts/lib/admin-origin.mjs before any URL
-//                        parsing: plain ASCII, http:// or https://, a host and a port only, no user
-//                        name, "%" or backslash, an internationalised host in its punycode (xn--) form.
-//                        Anything else, such as a full-width character the URL parser would map to
-//                        another host, is a FAIL config before any request.
+//                        there. Point API_BASE only at the Worker the token belongs to. Whenever the
+//                        run signs admin calls (with a token, or against the Worker, where adm1 signs
+//                        a probe with a random key), API_BASE as typed (when it is unset, the scheme
+//                        and host of BASE_URL as typed; trailing "/" dropped, surrounding whitespace
+//                        trimmed) must pass canonicalOrigin of scripts/lib/admin-origin.mjs before any
+//                        URL parsing: plain ASCII, http:// or https://, a host and a port only, no
+//                        user name, "%" or backslash, an internationalised host in its punycode (xn--)
+//                        form. Anything else, such as a full-width character the URL parser would map
+//                        to another host, is a FAIL config before any request.
 //   SMOKE_ADMIN_AUTH     signed, or unset: every admin call carries the X-Caddie-Admin header of
 //                        scripts/lib/admin-sign.mjs, built afresh with a new nonce and timestamp on each
 //                        attempt, and no Authorization header. Bearer mode (SMOKE_ADMIN_AUTH=bearer,
@@ -71,7 +73,9 @@
 //                        bound to API_BASE's origin; exactly "1" signs v1, the temporary rollback until
 //                        step d of the migration (DECISIONS.md, "Admin signature v2") removes v1 from
 //                        the Worker; exactly "2" means 2. Any other value is a FAIL config with exit
-//                        code 2 before any request, never a silent default.
+//                        code 2 before any request, never a silent default. Under "1" a run that signs
+//                        prints one NOTE saying that v1 is not bound to a host and to unset the
+//                        variable once the rollback is over.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -267,13 +271,9 @@ function readAdminToken() {
 const ADMIN_TOKEN = readAdminToken();
 
 // The signature needs a key of at least 32 characters, which the Worker requires of ADMIN_TOKEN
-// anyway, and an API_BASE that canonicalOrigin accepts as typed.
+// anyway.
 if (ADMIN_TOKEN && ADMIN_TOKEN.length < 32) {
   console.log('FAIL config: the admin token must have at least 32 characters to sign with');
-  process.exit(1);
-}
-if (ADMIN_TOKEN && API_ORIGIN_TYPED !== API_ORIGIN) {
-  console.log(`FAIL config: ${process.env.API_BASE ? 'API_BASE' : 'the origin of BASE_URL'} must be the Worker's origin as plain ASCII (http:// or https://, a host and a port only, no user name, "%" or backslash; an internationalised host in its punycode xn-- form) to sign admin calls with the token`);
   process.exit(1);
 }
 // The auth headers of one admin attempt. A signed header carries a fresh nonce and timestamp
@@ -294,6 +294,18 @@ function adminAuth(method, path, body, key = ADMIN_TOKEN) {
 // checks, the admin fixtures and text-only imports; Cloud Run serves everything from one origin and
 // keeps the Elasticsearch helpers.
 const IS_WORKER = API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API || Boolean(ADMIN_TOKEN);
+// The run signs admin calls whenever it holds a token, and against the Worker even without one
+// (adm1 signs a probe with a random key). Then API_BASE as typed (API_BASE_TYPED above) must pass
+// canonicalOrigin, or the run is a config FAIL before any request; the value is never printed.
+const SIGNS_ADMIN = IS_WORKER || Boolean(ADMIN_TOKEN);
+if (SIGNS_ADMIN && API_ORIGIN_TYPED !== API_ORIGIN) {
+  console.log(`FAIL config: ${process.env.API_BASE ? 'API_BASE' : 'the origin of BASE_URL'} must be the Worker's origin as plain ASCII (http:// or https://, a host and a port only, no user name, "%" or backslash; an internationalised host in its punycode xn-- form) to sign admin calls`);
+  process.exit(1);
+}
+// The rollback to v1 (CADDIE_ADMIN_SIG_VERSION=1, until step d) is never silent.
+if (SIGNS_ADMIN && SIGN_VERSION === 1) {
+  console.log('NOTE CADDIE_ADMIN_SIG_VERSION=1: the admin calls are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over');
+}
 // A browser sends its Origin on every call to a Worker on another origin, and on every same-origin
 // POST, PUT and DELETE, so the run sends it on every call to the Worker. Against Cloud Run no Origin
 // is sent, as before.
@@ -2631,9 +2643,10 @@ try {
   });
 
   // until: 'keep' (people.presence_keep_until): a write while presence is on keeps its end, and a
-  // keep with no live presence is refused. Tier 3 advertises it; the Worker is skipped until it
-  // does. One test profile with only the common topic, so it is safe anywhere; deleted at the end
-  // with the others, and its presence is ended here.
+  // keep with no live presence is refused. Tier 3 advertises it (#84) and so does the Worker (#96);
+  // a backend that does not, such as a Worker from before #96, is skipped. One test profile with
+  // only the common topic, so it is safe anywhere; deleted at the end with the others, and its
+  // presence is ended here.
   const KEEP1 = "keep1: until 'keep' with ble:false keeps presence_until";
   const KEEP2 = "keep2: until 'keep' after DELETE /api/presence answers 400 presence_not_active";
   // By the consumer rules (docs/contracts/capabilities.md): the flag counts only with people
@@ -2641,7 +2654,7 @@ try {
   const keepOffered = capsDoc ? effectiveCapabilities(capsDoc).people.presence_keep_until : false;
   if (!keepOffered) {
     const why = !capsDoc ? 'no capabilities document'
-      : IS_WORKER ? 'the Worker does not advertise people.presence_keep_until yet'
+      : IS_WORKER ? 'this Worker does not advertise people.presence_keep_until (a Worker from before #96)'
         : 'this backend does not advertise people.presence_keep_until';
     skip(KEEP1, why);
     skip(KEEP2, why);

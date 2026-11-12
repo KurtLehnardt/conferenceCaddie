@@ -37,7 +37,7 @@
     "workers_dev": "https://conference-caddie.testconf.workers.dev",
     "other_deployment": "https://caddie-staging.example"
   },
-  "default_sign_version": 1,
+  "default_sign_version": 2,
   "default_allowed_versions": [
     1
   ],

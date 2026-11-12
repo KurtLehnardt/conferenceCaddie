@@ -172,7 +172,7 @@ CADDIE_ADMIN_SIG_VERSION=1 caddie-admin stats counts --event <slug>
 BASE_URL="$CADDIE_APP_URL" SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token CADDIE_ADMIN_SIG_VERSION=1 node scripts/smoke.mjs
 ```
 
-Unset or empty means version 2, and `2` means version 2. Any other value is refused with exit code 2 before anything is sent, never read as a default.
+Unset or empty means version 2, and `2` means version 2. Any other value is refused with exit code 2 before anything is sent, never read as a default. While the variable is `1`, `caddie-admin` prints one warning on stderr and the smoke one `NOTE` line, saying that version 1 is not bound to a host; unset the variable as soon as the rollback is over. The CI ingest has its own switch, the repository variable `CADDIE_ADMIN_SIG_VERSION` ([step 5](#5-repository-variables-the-ingest-secret-and-the-first-conference)); `worker/README.md`, "Signature v2", describes the ingest side.
 
 This is the whole admin surface of the Worker. There is no web admin page and no other credential. The CLI is the only intended client.
 
@@ -225,7 +225,7 @@ When you remove a conference with the operator command line, the Worker keeps a 
 
 ## Rolling back
 
-A Worker from before version 2 of the signature reads only version 1: set `CADDIE_ADMIN_SIG_VERSION=1` for `caddie-admin` and the smoke ([above](#version-1-the-temporary-rollback)) until the Worker is current again. A Worker from before signed admin requests reads only the bearer, and current clients send only the signature, so rolling the Worker back that far also means rolling the clients back; `worker/README.md`, "Admin requests", describes it. The smoke of this version has no bearer mode, so run the smoke from the commit you roll back to. In normal operation you never need this.
+A Worker from before version 2 of the signature reads only version 1: set `CADDIE_ADMIN_SIG_VERSION=1` for `caddie-admin` and the smoke ([above](#version-1-the-temporary-rollback)), and the repository variable of the same name for the CI ingest ([step 5](#5-repository-variables-the-ingest-secret-and-the-first-conference)), until the Worker is current again; then unset both. A Worker from before signed admin requests reads only the bearer, and current clients send only the signature, so rolling the Worker back that far also means rolling the clients back; `worker/README.md`, "Admin requests", describes it. The smoke of this version has no bearer mode, so run the smoke from the commit you roll back to. In normal operation you never need this.
 
 ## Next
 

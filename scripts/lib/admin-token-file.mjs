@@ -86,8 +86,10 @@ export function legacyAdminTokenFile(home = homedir()) {
  *   as unset.
  * - legacy: the old ~/.config/conference-caddie/admin-token when it may be a stray copy of this
  *   setup's token: ADMIN_TOKEN_FILE and CADDIE_ADMIN_HOME are unset (a CADDIE_ADMIN_HOME is a
- *   separate setup, a fork's for example, whose token is never the old file) and sameFile(path,
- *   old) is false. Otherwise null. Because sameFile's false means "not proven the same", a
+ *   separate setup, a fork's for example, whose token is never the old file), the two paths are
+ *   different strings, and sameFile(path, old) is false. Otherwise null. Two equal path strings
+ *   are one path even when sameFile cannot stat them (~/.config cannot be searched), so an
+ *   operator with no variable set never has an old place. Because sameFile's false means "not proven the same", a
  *   non-null legacy can still be the same file in rare cases (an unsearchable directory, a case
  *   difference on macOS).
  * - explicit: whether ADMIN_TOKEN_FILE was set (non-empty).
@@ -100,7 +102,7 @@ export function adminTokenPaths(env = process.env, home = homedir()) {
   const explicit = Boolean(env.ADMIN_TOKEN_FILE);
   const path = explicit ? resolve(env.ADMIN_TOKEN_FILE) : resolve(configDir(env, home), 'admin-token');
   const old = legacyAdminTokenFile(home);
-  const legacy = !explicit && !env.CADDIE_ADMIN_HOME && !sameFile(path, old) ? old : null;
+  const legacy = !explicit && !env.CADDIE_ADMIN_HOME && old !== path && !sameFile(path, old) ? old : null;
   return { path, legacy, explicit };
 }
 
@@ -144,8 +146,11 @@ function look(path) {
 // <config dir>/admin-token; when that does not exist, the old ~/.config/conference-caddie/admin-token,
 // but only where adminTokenPaths offers it (never with CADDIE_ADMIN_HOME set) and, when the old
 // directory has its own config.json, only if that file also lists apiOrigin as a tier 2 api, so one
-// setup's config never sends another setup's token. A path whose stat fails for another reason than
-// "missing" is returned as it is, so the read fails and names it. Returns { file, note }: file is
+// setup's config never sends another setup's token. A config-dir path whose stat fails for another
+// reason than "missing" is returned as it is, so the read fails and names it. The fallback fails
+// closed, as the Worker scripts' module (worker/ingest/admin-token-file.mjs) does: an old path that
+// cannot be checked (a directory on its path cannot be searched) or an old config.json that cannot
+// be checked is never read, and the note says so. Returns { file, note }: file is
 // null when there is nothing to read; note is one NOTE line (to print after a successful read when
 // file is set, at once when it is null) or null. No note suggests deleting a token file: the old
 // path is where worker/scripts/setup-secrets.mjs writes a rotated token.
@@ -163,13 +168,17 @@ export function resolveAdminTokenFile(env, { home = homedir(), apiOrigin } = {})
     const newer = a === b ? 'Both have the same modification time.' : `By modification time the newer is ${a > b ? path : legacy}.`;
     return { file: path, note: `NOTE admin token: read ${path}; the old path ${legacy} is a different file and is not read. Do not delete either until you know which one the Worker accepts: worker/scripts/setup-secrets.mjs writes ${legacy}. ${newer}` };
   }
-  // Not stat-able (its directory cannot be searched): the read fails the same way and names it.
-  if (old.error) return { file: legacy, note: null };
+  // Not stat-able (its directory cannot be searched): it cannot be checked, so it is not read.
+  if (old.error) return { file: null, note: `NOTE admin token: ${path} does not exist, and the old path ${legacy} is not read, because it cannot be checked (a directory on its path cannot be searched); set ADMIN_TOKEN_FILE to run with a token` };
   if (!old.stat) return { file: null, note: null };
   const oldDir = dirname(legacy);
-  const oldConfig = look(join(oldDir, 'config.json'));
-  if ((oldConfig.stat || oldConfig.error) && !configuredWorkerOrigins({ CADDIE_ADMIN_HOME: oldDir }).includes(apiOrigin)) {
-    return { file: null, note: `NOTE admin token: ${path} does not exist, and the old path ${legacy} is not read, because ${join(oldDir, 'config.json')} does not list ${apiOrigin} as a tier 2 api; set ADMIN_TOKEN_FILE to run with a token` };
+  const oldConfigPath = join(oldDir, 'config.json');
+  const oldConfig = look(oldConfigPath);
+  if (oldConfig.error) {
+    return { file: null, note: `NOTE admin token: ${path} does not exist, and the old path ${legacy} is not read, because ${oldConfigPath} cannot be checked for ${apiOrigin}; set ADMIN_TOKEN_FILE to run with a token` };
+  }
+  if (oldConfig.stat && !configuredWorkerOrigins({ CADDIE_ADMIN_HOME: oldDir }).includes(apiOrigin)) {
+    return { file: null, note: `NOTE admin token: ${path} does not exist, and the old path ${legacy} is not read, because ${oldConfigPath} does not list ${apiOrigin} as a tier 2 api; set ADMIN_TOKEN_FILE to run with a token` };
   }
   return { file: legacy, note: `NOTE admin token: ${path} does not exist, so the old path ${legacy} was read. Move it to ${path} and leave a symlink at the old path (ln -s ${shellPath(path, home)} ${shellPath(legacy, home)}), so caddie-admin and worker/scripts/setup-secrets.mjs use one file.` };
 }

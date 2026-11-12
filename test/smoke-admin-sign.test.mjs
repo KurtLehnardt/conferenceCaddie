@@ -197,7 +197,15 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     }
   });
 
-  test('CADDIE_ADMIN_SIG_VERSION=1 signs every admin call v1, the rollback until step d', () => {
+  test('CADDIE_ADMIN_SIG_VERSION=1 signs every admin call v1, the rollback until step d, and says so once', () => {
+    // The rollback is never silent: one NOTE that v1 is not bound to a host and that the variable
+    // must be unset afterwards. The default run prints none.
+    const notes = (run) => run.lines.filter((l) => l.startsWith('NOTE CADDIE_ADMIN_SIG_VERSION=1:'));
+    assert.equal(notes(v1).length, 1, v1.stdout);
+    assert.match(notes(v1)[0], /signed with v1, which is not bound to a host/);
+    assert.match(notes(v1)[0], /unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over/);
+    assert.ok(v1.lines.indexOf(notes(v1)[0]) < v1.lines.findIndex((l) => /^(PASS|FAIL|SKIP) /.test(l)), 'before the first check');
+    assert.equal(notes(v2).length, 0);
     const signed = v1.requests.filter((r) => r.signed !== null);
     assert.ok(signed.length >= 5);
     for (const r of signed) assert.equal(versionOf(r), 1, r.signed.split(' ')[0]);
@@ -298,15 +306,16 @@ test('CADDIE_ADMIN_SIG_VERSION other than unset, empty, "1" or "2" exits 2 befor
 });
 
 // The raw API base goes through canonicalOrigin before any URL parsing: a full-width digit or a
-// user name that new URL() would map or drop, landing on the stub's own origin, is refused with a
-// token before any request, so the token never signs for a host the operator did not type.
-test('with a token, an API_BASE or BASE_URL that canonicalOrigin refuses as typed is a config FAIL before any request', async () => {
+// user name that new URL() would map or drop, landing on the stub's own origin, is refused before
+// any request, with a token and against the Worker without one (adm1 signs a probe there), so
+// nothing is signed for a host the operator did not type.
+test('an API_BASE or BASE_URL that canonicalOrigin refuses as typed is a config FAIL before any request, with or without a token', async () => {
   const { server, requests, port } = await stubWorker({ authOk: signedOk });
   try {
     const wide = `http://\uff11\uff12\uff17.0.0.1:${port}`;
     const user = `http://smoke@127.0.0.1:${port}`;
     assert.equal(new URL(wide).origin, `http://127.0.0.1:${port}`, 'the URL parser maps it to the stub');
-    for (const env of [{ API_BASE: wide }, { API_BASE: user }, { BASE_URL: wide }, { BASE_URL: `${user}/app` }, { API_BASE: `http://127.0.0.%31:${port}` }]) {
+    for (const env of [{ API_BASE: wide }, { API_BASE: user }, { BASE_URL: wide }, { BASE_URL: `${user}/app` }, { API_BASE: `http://127.0.0.%31:${port}` }, { API_BASE: wide, ADMIN_TOKEN: '' }, { BASE_URL: wide, ADMIN_TOKEN: '' }]) {
       const run = await runSmoke(port, env);
       assert.equal(run.code, 1, JSON.stringify(env));
       assert.ok(run.lines.some((l) => l.startsWith('FAIL config: ') && l.includes("must be the Worker's origin as plain ASCII")), `${JSON.stringify(env)}\n${run.stdout}`);
