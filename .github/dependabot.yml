@@ -2,6 +2,9 @@
 # Actions are pinned to commit SHAs; Dependabot updates the SHA and the version comment together.
 # A Gradle update also needs native/gradle/verification-metadata.xml regenerated (see
 # native/README.md, "Dependency verification"), or the Native apps workflow fails on the pull request.
+# On Dependabot's pull requests, .github/workflows/dependabot-verification-metadata.yml regenerates it
+# on macOS and uploads the diff as an artifact. A maintainer reviews it and pushes it; the workflow
+# has a read-only token and no secrets, and pushes nothing.
 version: 2
 updates:
   - package-ecosystem: github-actions

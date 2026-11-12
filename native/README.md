@@ -857,6 +857,23 @@ included), regenerate it on a Mac, so the iOS artifacts are covered, and review 
 Then build the iOS app once with `xcodebuild` (see above), since Xcode's build phase resolves a few
 more artifacts; if it reports a missing checksum, add the task it names to the command.
 
+On a pull request that Dependabot opens, `.github/workflows/dependabot-verification-metadata.yml`
+runs this command on macOS, with Gradle's cache off so that parent POMs and BOMs are recorded too.
+The change to the file goes up as the artifact `verification-metadata-pr-<number>`, and the job
+summary lists the added components and the two commands that apply them to a checkout of the pull
+request's branch:
+
+```sh
+gh run download <run id> -R KurtLehnardt/conferenceCaddie -n verification-metadata-pr-<number> -D /tmp/vm
+git apply /tmp/vm/verification-metadata.diff
+```
+
+Review the result as above before you push it: check the new checksums (against Maven Central's
+own files, for example), remove the entries that only the replaced versions needed, and run a strict
+build. The workflow cannot push and has no secrets. Its token can only read the repository, and the
+trigger is `pull_request`, never `pull_request_target`. When the command fails, for example because
+an ONNX Runtime update has no pinned iOS archive yet, the summary says so and any diff is incomplete.
+
 `checkToolingFloors` resolves the tool classpaths that only Android Lint, the device tests and Swift
 export use, so their artifacts are covered too. Those classpaths get security floors from the root
 `build.gradle.kts`: a dependency of a build tool that Dependabot reports is raised there, never in the
