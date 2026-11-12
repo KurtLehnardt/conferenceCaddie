@@ -1051,7 +1051,7 @@ PR #83 holds the detail of each item: the full option mapping, the README change
 - **What it does not do.**
   - It records only what macOS resolves, so a Kotlin or AGP update still needs the Linux-only entries from the first failing CI run.
   - A checksum that matches the published file is only as trustworthy as the repository that serves it, the same trust-on-first-use as a local regeneration.
-  - It has not run yet. Its first run comes with the next Dependabot Gradle pull request, or with `@dependabot rebase` on one.
+  - It has run once, on #98 itself, from a temporary commit that removed two entries (run 43224717934). The regenerate job took 84 minutes on `macos-26` with Gradle's cache off, and the publish job took 8 seconds. The diff added back exactly those two entries, kotlinx-io-core-jvm 0.9.2 from Maven Central and androidx.activity 1.13.0 from Google's Maven repository, and all four of their checksums matched the published files. Its first run on a Dependabot pull request comes with the next Gradle update, or with `@dependabot rebase` on one.
 
 ## Native dependency updates from Dependabot (2026-11-12)
 
