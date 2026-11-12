@@ -1365,8 +1365,9 @@ class BleServiceLifecycleTest {
         }
 
         /**
-         * The longest the capabilities may take: discovery asks the backend up to twice, and its
-         * fallback up to twice more, each request with up to a minute before it times out.
+         * The longest the capabilities may take: five requests one after another, each with up to a
+         * minute before it times out. Discovery asks the backend for /api/capabilities and
+         * /capabilities.json, and /api/health after a legacy 404, then the fallback for its two.
          */
         private const val RESTORE_TIMEOUT_MS = 5 * KtorHttp.REQUEST_TIMEOUT_MS
 
