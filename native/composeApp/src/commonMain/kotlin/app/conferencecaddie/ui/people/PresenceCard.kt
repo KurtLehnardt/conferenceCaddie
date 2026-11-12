@@ -183,7 +183,7 @@ fun PresenceControls(
                 busy = false
             }
             // The web keeps the error for the closed panel, where it is never seen; here it is a toast.
-            host.showToast(err ?: ConnectStrings.EXTENDED)
+            if (err != null) host.showMessage(err) else host.showToast(ConnectStrings.EXTENDED)
         }
     }
 
@@ -204,7 +204,7 @@ fun PresenceControls(
             when (outcome) {
                 PositionOutcome.On -> if (on) host.showToast(ConnectStrings.USING_POSITION_TOAST)
                 PositionOutcome.Denied, PositionOutcome.Approximate ->
-                    if (shown.value) positionProblem = outcome else host.showToast(positionProblemText(outcome))
+                    if (shown.value) positionProblem = outcome else host.showPermissionProblem(positionProblemText(outcome))
                 PositionOutcome.Off, PositionOutcome.Unavailable -> Unit
             }
         }

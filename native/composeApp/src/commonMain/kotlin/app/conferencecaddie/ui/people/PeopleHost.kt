@@ -121,6 +121,12 @@ class PeopleHost(
     fun showMessage(message: String) =
         showToast(message, if (opensProfile(message)) PeopleToastAction(PeopleCommonStrings.OPEN_PROFILE, ::openProfile) else null)
 
+    /**
+     * A refused permission's words as a toast, with "Open settings" where this platform can open the
+     * app's page in the system settings, as a screen that shows the words itself offers it.
+     */
+    fun showPermissionProblem(message: String) =
+        showToast(message, if (canOpenAppSettings) PeopleToastAction(ConnectStrings.OPEN_SETTINGS, ::openAppSettings) else null)
 
     // ---------------------------------------------------------------------------------------------
     // Sheets and dialogs that more than one screen opens
@@ -277,7 +283,6 @@ class PeopleHostMemory {
                     (list[4] as List<*>?)?.let { q ->
                         m.request = PeopleRequest(q[0] as Boolean, q[1] as String?, q[2] as String?, q[3] as Long)
                     }
-
                 }
             },
         )

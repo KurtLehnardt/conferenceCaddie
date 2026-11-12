@@ -173,6 +173,8 @@ class PresenceActionsUiTest {
         leave()
         held.release()
         u3WaitForToast(rig, ConnectStrings.POSITION_DENIED)
+        // With the way to the system settings, as under the position step.
+        assertEquals(ConnectStrings.OPEN_SETTINGS, rig.toastActions.value.last())
     }
 
     /** A rig whose phone gets a push token (or none, as a refused permission), at a backend with FCM push. */
@@ -218,6 +220,8 @@ class PresenceActionsUiTest {
         leave()
         held.release()
         u3WaitForToast(rig, ConnectStrings.PUSH_DENIED)
+        // With the way to the system settings, as under the switch.
+        assertEquals(ConnectStrings.OPEN_SETTINGS, rig.toastActions.value.last())
     }
 
     // --- A setup panel closed while its card was away ----------------------------------------------

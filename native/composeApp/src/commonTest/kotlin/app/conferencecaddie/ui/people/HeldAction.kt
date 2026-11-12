@@ -20,12 +20,27 @@ internal class HeldAction(controller: PeopleController, until: () -> Boolean) {
     private val arrived = CompletableDeferred<Unit>()
     private val gate = CompletableDeferred<Unit>()
 
-    /** True once the action has reached the hold. */
-    val hasArrived: Boolean get() = arrived.isCompleted
+    @kotlin.concurrent.Volatile
+    private var failure: Throwable? = null
+
+    /** True once the action has reached the hold; throws what [until] threw, if it did. */
+    val hasArrived: Boolean
+        get() {
+            failure?.let { throw it }
+            return arrived.isCompleted
+        }
 
     init {
         controller.beforeActionReturns = {
-            if (until()) {
+            // A condition that fails ends the wait for the hold with its error, rather than a timeout.
+            val now = try {
+                until()
+            } catch (e: Throwable) {
+                controller.beforeActionReturns = {}
+                failure = e
+                false
+            }
+            if (now) {
                 controller.beforeActionReturns = {}
                 arrived.complete(Unit)
                 gate.await()
