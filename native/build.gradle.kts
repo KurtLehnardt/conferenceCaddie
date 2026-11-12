@@ -16,17 +16,20 @@ buildscript {
     dependencies {
         constraints {
             listOf(
-                "org.bouncycastle:bcprov-jdk18on:1.85" to
+                // 1.86 (2026-11-12) also fixes CVE-2026-17508, -18036, -18040, -71888, -71889, -71891 and
+                // -71892 in bcprov and bcpkix (Bouncy Castle's release notes). Their advisories are
+                // unreviewed and name no versions, so no Dependabot alert asks for 1.86.
+                "org.bouncycastle:bcprov-jdk18on:1.86" to
                     "GHSA-9pwp-9qqc-pr26, GHSA-qp49-qgx5-5m26, GHSA-574f-3g2m-x479, GHSA-p93r-85wp-75v3, GHSA-c3fc-8qff-9hwx",
                 // Bouncy Castle's jars are released together and must stay on one version, so bcpkix
                 // (first fixed in 1.84) and bcutil (no alert) follow bcprov.
-                "org.bouncycastle:bcpkix-jdk18on:1.85" to "GHSA-wg6q-6289-32hp; same release as bcprov",
-                "org.bouncycastle:bcutil-jdk18on:1.85" to "same release as bcprov",
-                "com.google.guava:guava:33.7.2-jre" to "GHSA-xxph-c9ww-hj94",
-                "io.opentelemetry:opentelemetry-api:1.67.0" to "GHSA-ccrj-gw8r-854m, GHSA-rcgg-9c38-7xpx",
-                "org.bitbucket.b_c:jose4j:0.9.6" to "GHSA-3677-xxcr-wjqv",
+                "org.bouncycastle:bcpkix-jdk18on:1.86" to "GHSA-wg6q-6289-32hp; same release as bcprov",
+                "org.bouncycastle:bcutil-jdk18on:1.86" to "same release as bcprov",
+                "com.google.guava:guava:33.8.0-jre" to "GHSA-xxph-c9ww-hj94",
+                "io.opentelemetry:opentelemetry-api:1.68.0" to "GHSA-ccrj-gw8r-854m, GHSA-rcgg-9c38-7xpx",
+                "org.bitbucket.b_c:jose4j:0.9.7" to "GHSA-3677-xxcr-wjqv",
                 "org.jdom:jdom2:2.0.6.1" to "GHSA-2363-cqg2-863c",
-                "org.apache.commons:commons-lang3:3.18.0" to "GHSA-j288-q9x7-2f5v",
+                "org.apache.commons:commons-lang3:3.21.0" to "GHSA-j288-q9x7-2f5v",
                 // First fixed in 4.5.13; 4.5.14 is the version the plugin classpath already has.
                 "org.apache.httpcomponents:httpclient:4.5.14" to "GHSA-7r82-7xv7-xcpj",
                 // Not a security floor. Guava 33.4.0 brought checker-qual 3.43.0; Guava 33.7.2 no longer
@@ -59,12 +62,13 @@ subprojects {
 // Test Platform that runs the emulator tests (unified-test-platform-*) and Swift export
 // (swiftExportClasspath, resolved through swiftExportClasspathResolvable), which this build does not
 // use but which the dependency graph still lists. Netty is only on the test platform's classpaths, and
-// its modules must move together, so its BOM raises all of them at once: 4.1.137.Final is the first
-// release without the open Netty alerts. The names are the plugins'; checkToolingFloors fails when one
-// of them is gone, so a rename cannot switch a floor off without notice.
+// its modules must move together, so its BOM raises all of them at once: 4.1.137.Final was the first
+// release without the Netty alerts of 2026-11-11, and 4.1.140.Final (2026-11-12) adds the fixes of
+// 4.1.138 to 4.1.140. The names are the plugins'; checkToolingFloors fails when one of them is gone,
+// so a rename cannot switch a floor off without notice.
 val toolingFloors = buildscript.configurations.getByName("classpath").dependencyConstraints
     .filter { it.reason.orEmpty().startsWith("tooling floor: ") }
-val nettyBom = "io.netty:netty-bom:4.1.137.Final"
+val nettyBom = "io.netty:netty-bom:4.1.140.Final"
 // Lowest allowed version per "group:name"; "group:*" covers every module of the group on the same major.
 val toolingFloorVersions = toolingFloors.associate { "${it.group}:${it.name}" to it.version!! } +
     ("io.netty:*" to nettyBom.substringAfterLast(':'))
