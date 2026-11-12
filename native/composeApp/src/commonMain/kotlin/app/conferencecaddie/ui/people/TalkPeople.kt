@@ -113,8 +113,8 @@ private fun TalkPeopleBody(
     // Sharing runs on the app's scope (PeopleHost.scope), not one of this card's own: the talk card
     // can be scrolled out of its list or the screen left while the write is under way, and a message
     // this card shows itself then goes in a toast. busy is set before the launch, so a second tap in
-    // the same frame starts nothing.
-    val shown = rememberInComposition()
+    // the same frame starts nothing. [shown] is true only while the body below is drawn.
+    val shown = remember(talkId) { InComposition() }
 
     // The count is cached by the controller for a minute and dropped when this device's share changes.
     LaunchedEffect(controller, talkId, shared, refresh) {
@@ -138,7 +138,7 @@ private fun TalkPeopleBody(
             }
             notice = false
             if (err != null) {
-                if (shown.value) message = err else host.showToast(err)
+                if (shown.value) message = err else host.showMessage(err)
             } else {
                 refresh++
                 if (!on) open = false
@@ -153,6 +153,7 @@ private fun TalkPeopleBody(
     val showToggle = interested || shared
     val n = count ?: 0
     if (!showToggle && n <= 0) return
+    shown.Track()
 
     val c = Caddie.colors
     Column(
@@ -348,7 +349,7 @@ fun ShareAllControls(talkIds: List<String>, state: PeopleUiState, host: PeopleHo
             }
             notice = null
             if (err != null) {
-                if (shown.value) message = err else host.showToast(err)
+                if (shown.value) message = err else host.showMessage(err)
             }
         }
     }

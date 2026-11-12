@@ -348,7 +348,7 @@ class U1ProfileUiTest {
 
         // Try again finishes the delete, which takes the banner away as it is published; the action
         // is held there, before it returns.
-        val held = HeldAction(f.controller)
+        val held = HeldAction(f.controller) { !f.controller.state.value.deletes.unfinished }
         onNodeWithTag("profile-try-again").performScrollTo().performClick()
         u1WaitOrDump("the delete to be held") { held.hasArrived }
         u1WaitGone(hasTestTag("profile-pending-delete"))

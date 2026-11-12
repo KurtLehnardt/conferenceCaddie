@@ -111,10 +111,12 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
     var deleting by remember { mutableStateOf(false) }
     var deleteMessage by remember { mutableStateOf<String?>(null) }
 
+    // The busy flags are set before the launch, so a second tap in the same frame starts nothing.
     fun toggleVisible(on: Boolean) {
+        if (visBusy) return
+        visBusy = true
+        visPending = on
         scope.launch {
-            visBusy = true
-            visPending = on
             editor.push()
             visMessage = controller.setOpenToMeet(on)
             visPending = null
@@ -124,9 +126,10 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
 
     // The device's data goes only once the server has confirmed the delete for every conference.
     fun removeEverything() {
+        if (deleting) return
+        deleting = true
+        deleteMessage = null
         scope.launch {
-            deleting = true
-            deleteMessage = null
             editor.push()
             val result = controller.deleteMyProfile()
             if (result.done) confirmDelete = false

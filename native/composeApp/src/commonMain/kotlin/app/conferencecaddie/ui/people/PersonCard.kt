@@ -377,7 +377,6 @@ private fun PersonAction(person: Person, state: PeopleUiState, host: PeopleHost)
                 Modifier.semantics { toggleableState = ToggleableState(watched) },
                 variant = if (watched) ButtonVariant.Tonal else ButtonVariant.Text,
                 small = true,
-                enabled = !toggling,
                 icon = if (watched) LucideIcon.BellOff else LucideIcon.Bell,
             )
             else -> Unit

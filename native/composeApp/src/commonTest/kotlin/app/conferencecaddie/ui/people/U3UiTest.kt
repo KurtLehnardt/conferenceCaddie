@@ -67,11 +67,18 @@ internal const val SLUG = "alpha-conf-2099"
 internal const val MY_LAT = 40.76879
 internal const val MY_LON = -111.89012
 
-/** A push registrar that hands out [token], or null as a refused permission does. */
+/** A push registrar that hands out [token], or null as a refused permission does; [registers] counts the asks. */
 internal class FakePushRegistrar(private val token: String?) : PushRegistrar {
     override val channel: String = "fcm"
 
-    override suspend fun register(): app.conferencecaddie.shared.PushToken? = token?.let { app.conferencecaddie.shared.PushToken("fcm", it) }
+    @kotlin.concurrent.Volatile
+    var registers = 0
+        private set
+
+    override suspend fun register(): app.conferencecaddie.shared.PushToken? {
+        registers++
+        return token?.let { app.conferencecaddie.shared.PushToken("fcm", it) }
+    }
 
     override suspend fun unregister() = Unit
 }

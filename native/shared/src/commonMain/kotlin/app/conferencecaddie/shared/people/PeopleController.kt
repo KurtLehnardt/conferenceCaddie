@@ -124,6 +124,7 @@ class PeopleController(
      * its caller hears back. A UI test sets it to hold an action at that moment, when the screens
      * already show the outcome (a row the answer removes is gone) and the caller is still waiting.
      */
+    @PeopleTestHook
     @kotlin.concurrent.Volatile
     var beforeActionReturns: suspend () -> Unit = {}
 
@@ -852,9 +853,11 @@ class PeopleController(
      */
     suspend fun retrySession(): Boolean = write(false) { session != null }
 
+    @OptIn(PeopleTestHook::class)
     private suspend fun <T> write(failed: T, block: suspend () -> T): T {
         if (currentCoroutineContext()[Owner]?.controller === this) return guarded(failed, block)
-        return scope.async { guarded(failed, block).also { beforeActionReturns() } }.await()
+        // A hook that fails is ignored: no action throws.
+        return scope.async { guarded(failed, block).also { orElse(Unit) { beforeActionReturns() } } }.await()
     }
 
     /** Runs a read on the serial dispatcher; it stops when its caller is cancelled. Failures as in [write]. */
@@ -1510,3 +1513,12 @@ class PeopleController(
         fun isHintMessage(message: String): Boolean = ProfileSync.isHintMessage(message)
     }
 }
+
+/**
+ * Marks what only tests may use: a hook that does nothing in the app ([PeopleController.beforeActionReturns]).
+ * Using it needs an explicit opt-in.
+ */
+@RequiresOptIn(message = "A test hook: it does nothing in the app, and only tests set it.", level = RequiresOptIn.Level.ERROR)
+@Retention(AnnotationRetention.BINARY)
+@Target(AnnotationTarget.PROPERTY)
+annotation class PeopleTestHook

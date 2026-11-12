@@ -5,14 +5,18 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import app.conferencecaddie.shared.people.PeopleController
+import app.conferencecaddie.shared.people.PeopleTestHook
 import kotlinx.coroutines.CompletableDeferred
 
 /**
- * The next action [controller] runs for a screen, held at [PeopleController.beforeActionReturns]:
- * it has published what it changed, so the screens already show it, and its caller is still
- * waiting until [release]. Only that one action is held.
+ * The next action [controller] runs for a screen once [until] is true, held at
+ * [PeopleController.beforeActionReturns]: it has published what it changed, so the screens already
+ * show it, and its caller is still waiting until [release]. [until] names the action by what it
+ * did (a request sent, the state it published), so a write some other part of the screen makes
+ * meanwhile passes through. Only that one action is held.
  */
-internal class HeldAction(controller: PeopleController) {
+@OptIn(PeopleTestHook::class)
+internal class HeldAction(controller: PeopleController, until: () -> Boolean) {
     private val arrived = CompletableDeferred<Unit>()
     private val gate = CompletableDeferred<Unit>()
 
@@ -21,9 +25,11 @@ internal class HeldAction(controller: PeopleController) {
 
     init {
         controller.beforeActionReturns = {
-            controller.beforeActionReturns = {}
-            arrived.complete(Unit)
-            gate.await()
+            if (until()) {
+                controller.beforeActionReturns = {}
+                arrived.complete(Unit)
+                gate.await()
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui.people
 
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasText
@@ -16,6 +17,7 @@ import app.conferencecaddie.shared.ble.BlePlatform
 import app.conferencecaddie.shared.ble.InMemoryBleKeyStore
 import app.conferencecaddie.shared.people.BleProblem
 import app.conferencecaddie.shared.people.PeopleError
+import app.conferencecaddie.shared.people.PositionChoice
 import app.conferencecaddie.shared.people.PresenceMode
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -45,7 +47,16 @@ class PresenceActionsUiTest {
     /** Whether the People home's presence parts are composed; the tests set it false to leave. */
     private val shown = mutableStateOf(true)
 
-    private fun ComposeUiTest.showHome(rig: U3Rig) = u3Show(rig) { state -> if (shown.value) U3PresenceHome(state, rig) }
+    // As the People home's list does for its items, what the card saves when it leaves comes back with it.
+    private fun ComposeUiTest.showHome(rig: U3Rig) = u3Show(rig) { state ->
+        val items = rememberSaveableStateHolder()
+        if (shown.value) items.SaveableStateProvider("top") { U3PresenceHome(state, rig) }
+    }
+
+    private fun ComposeUiTest.comeBack() {
+        shown.value = true
+        u3WaitForTag("presence-card")
+    }
 
     private fun ComposeUiTest.leave() {
         shown.value = false
@@ -86,7 +97,7 @@ class PresenceActionsUiTest {
         showHome(rig)
         stillInShows(rig)
 
-        val held = HeldAction(rig.controller)
+        val held = HeldAction(rig.controller) { rig.state.presence.zone == "Registration" }
         onNodeWithText("Registration").performClick()
         waitUntil(timeoutMillis = 20_000) { held.hasArrived }
         // The answer is published, so the row has gone while confirmZone has yet to return.
@@ -101,7 +112,8 @@ class PresenceActionsUiTest {
         presenceOn(rig)
         showHome(rig)
 
-        val held = HeldAction(rig.controller)
+        val before = rig.presencePuts()
+        val held = HeldAction(rig.controller) { rig.presencePuts() > before }
         onNodeWithTag("presence-extend").performClick()
         waitUntil(timeoutMillis = 20_000) { held.hasArrived }
         leave()
@@ -139,7 +151,7 @@ class PresenceActionsUiTest {
         showHome(rig)
         u3WaitForTag("position-step")
 
-        val held = HeldAction(rig.controller)
+        val held = HeldAction(rig.controller) { rig.state.presence.positionChoice == PositionChoice.Yes }
         onNodeWithText(ConnectStrings.USE_MY_POSITION).performClick()
         waitUntil(timeoutMillis = 20_000) { held.hasArrived }
         leave()
@@ -154,7 +166,7 @@ class PresenceActionsUiTest {
         showHome(rig)
         u3WaitForTag("position-step")
 
-        val held = HeldAction(rig.controller)
+        val held = HeldAction(rig.controller) { rig.state.presence.positionChoice == PositionChoice.No }
         onNodeWithText(ConnectStrings.USE_MY_POSITION).performClick()
         waitUntil(timeoutMillis = 20_000) { held.hasArrived }
         // Shown under the position step while the card shows; the card has gone, so it is a toast.
@@ -164,8 +176,8 @@ class PresenceActionsUiTest {
     }
 
     /** A rig whose phone gets a push token (or none, as a refused permission), at a backend with FCM push. */
-    private fun ComposeUiTest.pushRig(token: String? = "f".repeat(40), noticeSeen: Boolean = false): U3Rig {
-        val rig = U3Rig(push = FakePushRegistrar(token)).also { rigs += it }
+    private fun ComposeUiTest.pushRig(registrar: FakePushRegistrar = FakePushRegistrar("f".repeat(40)), noticeSeen: Boolean = false): U3Rig {
+        val rig = U3Rig(push = registrar).also { rigs += it }
         u3Await(rig) {
             rig.locked { pushPlatforms = setOf("fcm") }
             rig.controller.updateContext(rig.context(push = true))
@@ -194,17 +206,78 @@ class PresenceActionsUiTest {
 
     @Test
     fun refusedNotificationsAreToastedAfterTheCardHasLeft() = runComposeUiTest {
-        val rig = pushRig(token = null, noticeSeen = true)
+        val registrar = FakePushRegistrar(null)
+        val rig = pushRig(registrar, noticeSeen = true)
         showHome(rig)
         u3WaitForTag("push-card")
 
-        val held = HeldAction(rig.controller)
+        val held = HeldAction(rig.controller) { registrar.registers > 0 }
         onNodeWithTag("push-switch").performScrollTo().performClick()
         waitUntil(timeoutMillis = 20_000) { held.hasArrived }
         // Shown under the switch while the card shows; the card has gone, so it is a toast.
         leave()
         held.release()
         u3WaitForToast(rig, ConnectStrings.PUSH_DENIED)
+    }
+
+    // --- A setup panel closed while its card was away ----------------------------------------------
+    // The list keeps the card's saved state objects while it is away, so an action that finishes on
+    // the app's scope closes the panel the card comes back with. On the card's own scope it never
+    // could: that scope ends when the card leaves.
+
+    @Test
+    fun aTurnOnThatFinishesWhileTheCardIsAwayClosesItsPanel() = runComposeUiTest {
+        val rig = rig()
+        u3Await(rig) {
+            rig.controller.updateContext(rig.context())
+            rig.makeVisible()
+        }
+        showHome(rig)
+        onNode(isToggleable() and hasText(ConnectStrings.PRESENCE_LABEL)).performClick()
+        u3WaitForTag("presence-setup")
+
+        val hold = rig.server.hold("PUT", "/api/presence")
+        onNodeWithText(ConnectStrings.I_AM_AROUND).performClick()
+        waitUntil(timeoutMillis = 20_000) { hold.hasArrived }
+        leave()
+        hold.release()
+        waitUntil(timeoutMillis = 20_000) { rig.state.presence.on }
+        // Back with presence on: the panel that asked has closed.
+        comeBack()
+        u3WaitForTag("presence-on")
+        u3WaitForNoTag("presence-setup")
+    }
+
+    @Test
+    fun aBluetoothStartThatFinishesWhileTheCardIsAwayClosesItsPanel() = runComposeUiTest {
+        val prompt = CompletableDeferred<Unit>()
+        val radio = FakeUiBleRadio().apply {
+            access = BleAccess.NotAsked
+            this.prompt = prompt
+        }
+        val rig = bluetoothRig(radio)
+        showHome(rig)
+        onNodeWithTag("ble-switch").performScrollTo().performClick()
+        u3WaitForTag("ble-setup")
+        onNodeWithTag("ble-turn-on").performScrollTo().performClick()
+        waitUntil(timeoutMillis = 20_000) { radio.requests.value == 1 }
+        leave()
+        prompt.complete(Unit)
+        waitUntil(timeoutMillis = 20_000) { rig.state.ble.on }
+        comeBack()
+        u3WaitForTag("ble-card")
+        u3WaitForNoTag("ble-setup")
+    }
+
+    /** Me visible and around in the Hallway at a backend that offers derived-v1 Bluetooth, on a phone with [radio]. */
+    private fun ComposeUiTest.bluetoothRig(radio: FakeUiBleRadio): U3Rig {
+        val rig = U3Rig(ble = BlePlatform(radio, InMemoryBleKeyStore()), notifier = FakeNotifier()).also { rigs += it }
+        u3Await(rig) {
+            rig.controller.updateContext(rig.context(ble = true))
+            rig.makeVisible()
+            check(rig.controller.turnOnPresence("Hallway", "") == null)
+        }
+        return rig
     }
 
     // --- A double tap ------------------------------------------------------------------------------
@@ -290,12 +363,7 @@ class PresenceActionsUiTest {
             afterRequest = BleAccess.Denied
             this.prompt = prompt
         }
-        val rig = U3Rig(ble = BlePlatform(radio, InMemoryBleKeyStore()), notifier = FakeNotifier()).also { rigs += it }
-        u3Await(rig) {
-            rig.controller.updateContext(rig.context(ble = true))
-            rig.makeVisible()
-            check(rig.controller.turnOnPresence("Hallway", "") == null)
-        }
+        val rig = bluetoothRig(radio)
         showHome(rig)
         onNodeWithTag("ble-switch").performScrollTo().performClick()
         u3WaitForTag("ble-setup")

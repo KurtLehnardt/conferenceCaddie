@@ -408,6 +408,8 @@ class BleUiTest {
         onNodeWithTag("ble-hint").assertTextEquals(BleStrings.HINT_ON)
         radio.stopBySelf(BleStopReason.BluetoothOff)
         waitUntil(timeoutMillis = 20_000) { !rig.state.ble.on && rig.state.ble.problem == BleProblem.BluetoothOff }
+        // The notice is published just after the stop itself, so it is waited for too.
+        waitUntil(timeoutMillis = 20_000) { rig.state.notice != null }
         assertEquals(PeopleText.BLE_STOPPED_BLUETOOTH_OFF, rig.state.notice?.message)
         onNodeWithTag("ble-switch").assertIsOff()
         onNodeWithTag("ble-hint").assertTextEquals(PeopleText.BLE_BLUETOOTH_OFF)

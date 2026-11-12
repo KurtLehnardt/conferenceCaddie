@@ -151,7 +151,7 @@ fun PushControls(state: PeopleUiState, host: PeopleHost, variant: PushVariant, m
         when {
             shown.value -> panel = next
             next == PushPanel.Denied -> host.showToast(ConnectStrings.PUSH_DENIED)
-            next is PushPanel.Hint -> host.showToast(next.text)
+            next is PushPanel.Hint -> host.showMessage(next.text)
             else -> Unit
         }
     }

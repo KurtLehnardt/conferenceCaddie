@@ -155,7 +155,7 @@ fun PresenceControls(
                 busy = false
             }
             if (err != null) {
-                if (shown.value) error = err else host.showToast(err)
+                if (shown.value) error = err else host.showMessage(err)
             } else {
                 panel = false
                 unknownZone = false
@@ -466,7 +466,7 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
                 busy = false
             }
             if (err != null) {
-                host.showToast(err)
+                host.showMessage(err)
             } else {
                 picking = false
                 if (z != zone) host.showToast(ConnectStrings.nowIn(z))

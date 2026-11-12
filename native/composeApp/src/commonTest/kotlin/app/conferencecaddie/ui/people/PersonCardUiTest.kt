@@ -88,7 +88,7 @@ class PersonCardUiTest {
         u2WaitForTag("person-${cy.ref}")
         // The first toggle is held where it has changed the list and not yet returned, so it cannot
         // finish between the two taps of one frame.
-        val held = HeldAction(rig.controller)
+        val held = HeldAction(rig.controller) { rig.state.watch.isNotEmpty() }
         doubleTap(onNode(u2InCard(cy.ref, PeopleStrings.WATCH)))
         waitUntil(timeoutMillis = 20_000) { held.hasArrived }
         held.release()

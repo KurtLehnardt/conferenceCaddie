@@ -27,10 +27,11 @@ import kotlinx.coroutines.launch
  * take it as a parameter, next to the `PeopleUiState` they draw, and never reach for the app in any
  * other way:
  *
- * - [controller]: the people features. Its actions are suspend functions; call them from a
- *   `rememberCoroutineScope()` of the screen.
+ * - [controller]: the people features. Its actions are suspend functions. Call an action whose
+ *   answer must still be shown after its composable has left (a card in a list, a row the answer
+ *   removes) from [scope]; other actions can use a `rememberCoroutineScope()` of the screen.
  * - Moving around: [openProfile], [openInbox], [openMeet], [openPeople], [openSettings] and [back].
- * - The shell's one toast: [showToast].
+ * - The shell's one toast: [showToast], and [showMessage] for an action's message.
  * - The sheets and the dialog that more than one screen opens, drawn once by the People layer:
  *   [ask] (AskSheet), [report] (ReportSheet) and [confirmBlock] (the block confirmation, then the
  *   block, its toast and Undo).
@@ -48,8 +49,9 @@ class PeopleHost(
     private val navigator: ShellNavigator,
     /**
      * A scope that lives as long as the app's composition, for work that must finish after a screen
-     * leaves (`controller.setInboxVisible(false)` from a DisposableEffect). Everything else uses
-     * the screen's own `rememberCoroutineScope()`.
+     * leaves (`controller.setInboxVisible(false)` from a DisposableEffect), and for an action whose
+     * answer must still be shown after its card has left (scrolled out of a list, another tab), or
+     * after the answer itself removed it. Other actions use the screen's own `rememberCoroutineScope()`.
      */
     val scope: CoroutineScope,
     private val toast: (message: String, action: PeopleToastAction?) -> Unit,
@@ -111,6 +113,14 @@ class PeopleHost(
 
     /** Shows [message] in the shell's toast, with an optional action such as Undo. */
     fun showToast(message: String, action: PeopleToastAction? = null) = toast(message, action)
+
+    /**
+     * An action's message as a toast, with "Open profile" when the fix is on the profile screen
+     * ([opensProfile]), as a screen that shows the message itself offers it.
+     */
+    fun showMessage(message: String) =
+        showToast(message, if (opensProfile(message)) PeopleToastAction(PeopleCommonStrings.OPEN_PROFILE, ::openProfile) else null)
+
 
     // ---------------------------------------------------------------------------------------------
     // Sheets and dialogs that more than one screen opens
@@ -267,6 +277,7 @@ class PeopleHostMemory {
                     (list[4] as List<*>?)?.let { q ->
                         m.request = PeopleRequest(q[0] as Boolean, q[1] as String?, q[2] as String?, q[3] as Long)
                     }
+
                 }
             },
         )
@@ -397,11 +408,16 @@ internal class InComposition {
 
 /** An [InComposition] that is true from when this composable enters the composition until it leaves. */
 @Composable
-internal fun rememberInComposition(): InComposition {
-    val shown = remember { InComposition() }
-    DisposableEffect(shown) {
-        shown.value = true
-        onDispose { shown.value = false }
+internal fun rememberInComposition(): InComposition = remember { InComposition() }.also { it.Track() }
+
+/**
+ * Makes this [InComposition] true while the call is in the composition, for a composable that
+ * remembers it before an early return and is shown only after it.
+ */
+@Composable
+internal fun InComposition.Track() {
+    DisposableEffect(this) {
+        value = true
+        onDispose { value = false }
     }
-    return shown
 }
