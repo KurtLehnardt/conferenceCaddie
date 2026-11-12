@@ -76,6 +76,25 @@
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
+//   SMOKE_LIVE_CONFERENCE  the conference the clock-dependent checks run against: the parts of e2, n2
+//                        and p3 that need talks still to come, and r1, r3, r4, r6 and r8. For you and
+//                        Happening now only return talks whose end is after now, so these checks have
+//                        nothing to assert on a conference that is over. Unset, the run picks one when it
+//                        starts (scripts/lib/smoke-live-conference.mjs): the primary conference while it
+//                        has talks to come, else the first searchable conference of GET /api/conferences
+//                        whose expected talks (SMOKE_TALKS) have talks to come. "Talks to come" means a
+//                        talk that ends 15 minutes or more from now. A NOTE line names the conference
+//                        picked and why. When none has talks to come, those checks print SKIP with the
+//                        reason. Set, it must be a searchable conference (else FAIL live); when its talks
+//                        have all ended, those checks print SKIP. The content checks (a1-a5, t, p0, m1,
+//                        m2, v1, sch1 and the rest) always stay on the primary conference. The For-you
+//                        checks take their topics from the live conference's own topic list and For-you
+//                        answers, never from a list written for KubeCon; r3 and r6 keep their original
+//                        topics (Kubernetes left out, AI and agents asked for) wherever the live
+//                        conference lists them and they still share a talk to come. r7 stays on the
+//                        primary conference (its query and the passages it expects are KubeCon content)
+//                        and prints SKIP once the primary has no talks to come. A SKIP line always says
+//                        why; none of these checks passes without having asserted something.
 //   SMOKE_SKIP_BUNDLE=1  skip the bundle scan when the web app (SMOKE_DIST) has not been built.
 //   SMOKE_TALKS          bundle or data: where the checks that need a conference's own talks (d, e1,
 //                        e2, n1, n2, m2, x, o, sch1 and the import picks) take them from. bundle (the
@@ -128,7 +147,8 @@
 // real attendee of the live conference, and no nudge can pair one with a real attendee (see
 // SMOKE_SUBJECT below).
 //
-// Each check prints one PASS, FAIL or SKIP line. The script exits 1 if any check fails. A request
+// Each check prints one PASS, FAIL or SKIP line, and the last line counts them (a SKIP is never
+// counted as a PASS). The script exits 1 if any check fails. A request
 // that answers 5xx or fails on its first attempt is retried once, and prints a NOTE line either way;
 // with SMOKE_STRICT=1 those first-attempt failures also fail the run.
 
@@ -138,12 +158,14 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { SIG_VERSION_REMOVED_WARNING, canonicalOrigin, sigVersionSettingStale, signAdminRequest, UsageError } from './lib/admin-sign.mjs';
 import { DEFAULT_BUNDLE_BASE } from '../worker/src/capabilities.js';
-import { primaryOver, emptyWindowSkip } from './lib/smoke-primary-over.mjs';
+import { emptyWindowSkip } from './lib/smoke-primary-over.mjs';
+import { LIVE_MARGIN_MS, leaveOutCase, pickLiveConference, rankTopics, whyCases } from './lib/smoke-live-conference.mjs';
+import { SkipCheck, createReporter } from './lib/smoke-report.mjs';
 import { conferenceForWorker } from './lib/smoke-conference-doc.mjs';
 import { isLoopbackHost } from './lib/loopback-host.mjs';
 import { configuredWorkerOrigins, resolveAdminTokenFile } from './lib/admin-token-file.mjs';
 import { CREDENTIAL_SOURCES, readCredential } from './admin/credentials.mjs';
-import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
+import { MIN_UPCOMING, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { effectiveCapabilities } from '../contracts/js/capabilities.mjs';
 import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
@@ -153,6 +175,7 @@ const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const REQUEST_TIMEOUT_MS = 30000;
 const PRIMARY = process.env.SMOKE_CONFERENCE || process.env.CADDIE_SMOKE_CONFERENCE || 'kubecon-cloudnativecon-north-america-2026';
+const LIVE_OVERRIDE = (process.env.SMOKE_LIVE_CONFERENCE ?? '').trim();
 const EXTRA = (process.env.SMOKE_EXTRA ?? 'mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026').split(',').map((s) => s.trim()).filter(Boolean);
 // ES_URL has no default (a fork's key must not reach another cluster); read when a request needs it.
 const esUrl = () => {
@@ -377,10 +400,6 @@ const NON_TALK_QUERIES = ['lunch', 'coffee break', 'registration', 'opening rema
 // A talk that the seeded samples share for, used as the test circle.
 const CIRCLE_TALK_TITLE = 'From Bytes to Traces: A Deep Dive into OpenTelemetry eBPF Instrumentation Internals';
 
-// Topics a talk recommendations request asks for. That request stores nothing; no test profile
-// carries these topics.
-const LEARN = ['ebpf', 'gpu', 'llm'];
-
 // The test profiles run against the live conference, and the server nudges two people who are a
 // specific match and around in the same zone. So every test profile's words are synthetic: made-up
 // tokens with this run's tag, which no real attendee's text or search can share. No test profile
@@ -418,11 +437,9 @@ const BUNDLE_PATTERNS = ['ApiKey ', '.es.io', 'AIza', 'BEGIN PRIVATE KEY', 'MOCK
 // Wording that must never appear in a response the app generates.
 const SCHEDULING_WORDS = /clash|conflict|agenda/i;
 
-let failures = 0;
-function report(ok, name, detail = '') {
-  if (!ok) failures++;
-  console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`);
-}
+// PASS, FAIL and SKIP lines and their counts (scripts/lib/smoke-report.mjs). A SkipCheck thrown inside
+// check() prints SKIP, never PASS or FAIL.
+const { counts, report, skip, check, summary } = createReporter();
 // No credentialed request follows a redirect: one that carries a credential (the admin header, the device
 // header, an Elasticsearch ApiKey) would hand it to whatever host the Location names. A redirect is a
 // failure that names the status, and the retry loops rethrow it. 304 is not one.
@@ -433,20 +450,6 @@ async function failOnRedirect(res, what) {
   await res.body?.cancel();
   throw new RedirectError(`${what} answered ${res.status}, a redirect; credentialed requests never follow redirects`);
 }
-function skip(name, why) {
-  console.log(`SKIP ${name} (${why})`);
-}
-// Thrown inside a check that cannot run here (a gated fixture route): the check prints SKIP, not FAIL.
-class SkipCheck extends Error {}
-async function check(name, fn) {
-  try {
-    await fn();
-  } catch (err) {
-    if (err instanceof SkipCheck) skip(name, err.message);
-    else report(false, name, err.message);
-  }
-}
-
 // Every response seen, with a label naming who asked, for the leak checks at the end.
 const responses = [];
 // Page and admin responses, which the leak check scans for secret values only.
@@ -699,11 +702,12 @@ async function agePresence(device, who) {
   if (!res.ok || aged.errors) throw new Error(`aging ${who}'s presence gave ${res.status}`);
 }
 
-async function search(body) {
-  const r = await api('POST', '/api/search', { conference: PRIMARY, ...body });
+async function searchIn(conference, body) {
+  const r = await api('POST', '/api/search', { conference, ...body });
   if (r.status === 200) allResults.push(...(r.json.results ?? []));
   return r;
 }
+const search = (body) => searchIn(PRIMARY, body);
 
 // A conference's own items (every kind), from the published bundle or the committed data/
 // (SMOKE_TALKS). Bundle talks carry the fields the checks read (talk_id, kind, title, speakers, room,
@@ -722,7 +726,9 @@ const readNdjson = (slug) => {
 
 // Reads the published index and the bundle.json of each slug, checked against the index's size and
 // SHA-256. Returns the index (readConferenceIndex) or null when it cannot be read; failures per slug
-// are kept in bundleTalks and fail the checks that need them.
+// are kept in bundleTalks and fail the checks that need them. The index is fetched once per run, so a
+// later call (the live conference, when it is not the primary or an extra) reads the same index.
+let bundleIndex = null; // the promise of the parsed index
 async function loadBundleTalks(slugs) {
   const get = async (url) => {
     const res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
@@ -734,7 +740,8 @@ async function loadBundleTalks(slugs) {
   };
   let index;
   try {
-    index = readConferenceIndex(JSON.parse((await get(`${BUNDLE_BASE}conferences.json`)).toString('utf8')));
+    bundleIndex ??= get(`${BUNDLE_BASE}conferences.json`).then((bytes) => readConferenceIndex(JSON.parse(bytes.toString('utf8'))));
+    index = await bundleIndex;
     if (!index.ok) throw new Error(`the published conferences.json is not a usable index (${index.reason})`);
   } catch (err) {
     for (const slug of slugs) bundleTalks.set(slug, { error: err.message });
@@ -844,6 +851,65 @@ if (TALKS_FROM === 'data') {
     report(problems.length === 0, 'bun1: the published talk bundles list the Worker\'s searchable conferences with the same talk counts',
       problems.length ? `${problems.slice(0, 3).join('; ')}; the Worker and the bundles hold different schedules until an ingest run publishes both` : `${bundled.size} conferences`);
   });
+}
+
+// The live conference (SMOKE_LIVE_CONFERENCE above, scripts/lib/smoke-live-conference.mjs). For you and
+// Happening now only return talks whose end is after now, so the checks that need talks still to come
+// run against a conference that has some, picked here once; the content checks stay on PRIMARY.
+const LIVE_CHECKS = 'the For-you part of e2, the window part of n2, the talk part of p3, r1, r3, r4, r6 and r8';
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
+const loadExpectedTalks = async (slug) => {
+  if (!SLUG_RE.test(slug)) throw new Error('not a conference slug');
+  if (TALKS_FROM === 'data' && !existsSync(join(ROOT, 'data', slug, 'talks.ndjson'))) throw new Error(`data/${slug}/talks.ndjson is not committed`);
+  if (TALKS_FROM === 'bundle' && !bundleTalks.has(slug)) await loadBundleTalks([slug]);
+  return readNdjson(slug);
+};
+const LIVE = await pickLiveConference({ primary: PRIMARY, override: LIVE_OVERRIDE, conferences, loadTalks: loadExpectedTalks, nowMs: Date.now() });
+if (LIVE.error) report(false, 'live: SMOKE_LIVE_CONFERENCE names a searchable conference', LIVE.error);
+console.log(LIVE.slug
+  ? `NOTE live conference: ${LIVE.slug} (${LIVE.why}); ${LIVE_CHECKS} run against it`
+  : `NOTE live conference: none (${LIVE.why}); ${LIVE_CHECKS} print SKIP`);
+
+// The live conference's slug, or a SkipCheck naming why there is none (counted for the end-of-run NOTE).
+// `passed` names the part of the check that already passed.
+let noLiveSkips = 0;
+function requireLive(passed = '') {
+  if (LIVE.slug) return LIVE.slug;
+  noLiveSkips++;
+  throw new SkipCheck(`${passed}${LIVE.why}`);
+}
+
+// The live conference's topic list and the For-you answer for each of its first 12 topics (the probes
+// of scripts/lib/smoke-live-conference.mjs), read once, on first use. A talk counts only when it ends
+// LIVE_MARGIN_MS or more after the probes, so a topic chosen from them still has talks to come when the
+// check that chose it runs. On the primary conference this replaces r1's own 12 requests.
+let liveTopicsRead = null;
+function liveTopics() {
+  liveTopicsRead ??= (async () => {
+    const slug = LIVE.slug;
+    const listed = await api('GET', `/api/topics?event=${encodeURIComponent(slug)}&size=150`);
+    if (listed.status !== 200) throw new Error(`the topic list of ${slug} gave ${listed.status}`);
+    const topics = listed.json.topics ?? [];
+    const cutoff = Date.now() + LIVE_MARGIN_MS;
+    const probes = [];
+    for (const t of topics.slice(0, 12)) {
+      const r = await api('POST', '/api/recommendations', { event: slug, learn_topics: [t.topic_id], interested_talk_ids: [], size: 50 }, { label: 'recs' });
+      if (r.status !== 200) throw new Error(`For you on ${t.topic_id} of ${slug} gave ${r.status}`);
+      probes.push({ topic_id: t.topic_id, label: t.label, results: r.json.results ?? [] });
+    }
+    const ids = topics.map((t) => t.topic_id);
+    const ranked = rankTopics(probes, cutoff);
+    return { slug, ids, labelOf: new Map(topics.map((t) => [t.topic_id, t.label])), cutoff, ranked, rankedIds: ranked.map((t) => t.topic_id), leave: leaveOutCase(probes, cutoff, ids) };
+  })();
+  return liveTopicsRead;
+}
+// The live topics, or a SkipCheck when there is no live conference or none of its probed topics has a
+// talk to come.
+async function requireLiveTopics(passed = '') {
+  requireLive(passed);
+  const live = await liveTopics();
+  if (!live.rankedIds.length) throw new SkipCheck(`${passed}none of the first 12 topics of ${live.slug} has a talk that ends ${LIVE_MARGIN_MS / 60_000} minutes or more from now`);
+  return live;
 }
 
 // The capabilities document of the Worker (cap1) or of the tier 3 server (cap3), validated as a
@@ -1180,34 +1246,32 @@ await check('e1: include_events adds co-located events and showcases, and nothin
   report(problems.length === 0, 'e1: include_events adds co-located events and showcases, and nothing else', problems.length ? problems.join('; ') : `${shown.length} events in "${track}", ${off.json.total} results off and ${on.json.total} on`);
 });
 
-// Once the primary conference's last talk has ended, For you and Happening now (which the server filters
-// with end > now) have nothing to return for it, so the checks that need upcoming talks print SKIP
-// instead of failing on "no results" or passing vacuously.
-const PRIMARY_OVER_WHY = 'no talk of the primary conference is still to come (the server only suggests talks whose end is after now)';
+// r7 stays on the primary conference, because its query and the passages it expects are the primary's
+// content (the fallback of SMOKE_LIVE_CONFERENCE above). Once the primary has no talks to come For you
+// has nothing to return for it, so r7 prints SKIP instead of failing on "no results" or passing
+// vacuously. A primary whose talks could not be read runs the check: the smoke is not coupled to Pages.
 let primaryOverSkips = 0;
-function skipIfPrimaryOver(passed = '') {
-  let talks;
-  try {
-    talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
-  } catch {
-    return; // the talks could not be loaded (a bundle that is down): run the check, do not couple it to Pages
-  }
-  if (primaryOver(talks, Date.now())) {
-    primaryOverSkips++;
-    throw new SkipCheck(`${passed}${PRIMARY_OVER_WHY}`);
-  }
+function skipIfPrimaryOver() {
+  if (!LIVE.primary.known || LIVE.primary.toCome) return;
+  primaryOverSkips++;
+  throw new SkipCheck(`${LIVE.primary.why} (the server only suggests talks whose end is after now), and this check stays on the primary conference`);
 }
 
+// The For-you part runs on the live conference with two of its topics that have talks to come. It has
+// teeth only where the conference has co-located events or showcases (kind ambient) to keep out.
 await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
   const bad = await search({ query: 'kubernetes', filters: { include_events: 'yes' } });
   if (bad.status !== 400) throw new Error(`include_events: "yes" gave ${bad.status}, not 400`);
-  skipIfPrimaryOver('the boolean check passed (include_events "yes" gave 400); the For-you part: ');
-  const ambient = new Set(readNdjson(PRIMARY).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
-  const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['kubernetes', 'ebpf'], interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
+  const passed = 'the boolean check passed (include_events "yes" gave 400); the For-you part: ';
+  const live = await requireLiveTopics(passed);
+  const ambient = new Set(readNdjson(live.slug).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
+  if (!ambient.size) throw new SkipCheck(`${passed}${live.slug} has no co-located event or showcase for For you to keep out`);
+  const learn = live.rankedIds.slice(0, 2);
+  const recs = await api('POST', '/api/recommendations', { event: live.slug, learn_topics: learn, interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
   if (recs.status !== 200) throw new Error(`recommendations status ${recs.status}`);
   const list = recs.json.results ?? recs.json.talks ?? [];
   const leaked = list.filter((r) => ambient.has(r.talk_id ?? r.talk?.talk_id));
-  report(bad.status === 400 && leaked.length === 0 && list.length > 0, 'e2: include_events must be a boolean, and For you never holds an event', `status ${bad.status}, ${list.length} suggested talks, ${leaked.length} events among them`);
+  report(bad.status === 400 && leaked.length === 0 && list.length > 0, 'e2: include_events must be a boolean, and For you never holds an event', `status ${bad.status}; ${live.slug} on ${learn.join(', ')}: ${list.length} suggested talks, ${leaked.length} of its ${ambient.size} events among them`);
 });
 
 await check('f: an unknown filter value returns 400', async () => {
@@ -1303,18 +1367,19 @@ await check('n2: Happening now keeps only talks in progress or starting within 6
   const at = Date.now();
   const bad = await search({ query: '', filters: { happening_now: 'yes' } });
   if (bad.status !== 400) throw new Error(`happening_now: "yes" gave ${bad.status}, not 400`);
-  skipIfPrimaryOver('the boolean check passed (happening_now "yes" gave 400); the window part: ');
-  const r = await search({ query: '', size: 50, filters: { happening_now: true } });
-  const all = await search({ query: '', size: 1 });
+  // The window part runs on the live conference (SMOKE_LIVE_CONFERENCE above).
+  const slug = requireLive('the boolean check passed (happening_now "yes" gave 400); the window part: ');
+  const r = await searchIn(slug, { query: '', size: 50, filters: { happening_now: true } });
+  const all = await searchIn(slug, { query: '', size: 1 });
   if (r.status !== 200 || all.status !== 200) throw new Error(`status ${r.status} and ${all.status}`);
   const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
-  const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+  const talks = readNdjson(slug).filter((d) => d.kind === 'talk');
   const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
   // An empty window makes the bound vacuous. Skip only when the data agrees that none is in the window:
   // an empty answer where the data expects talks is the failure the check is for (total >= expected below).
-  if (emptyWindowSkip(r.json.total, expected)) throw new SkipCheck('the boolean check passed (400); no talk is in progress or starting within 60 minutes, so the window has nothing to check');
+  if (emptyWindowSkip(r.json.total, expected)) throw new SkipCheck(`the boolean check passed (400); no talk of ${slug} is in progress or starting within 60 minutes, so the window has nothing to check`);
   const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
-  report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
+  report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${slug}: ${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
 });
 
 await check('m2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', async () => {
@@ -1367,8 +1432,8 @@ await check('v2: a speaker name and a room are suggested as chips and filter the
 // ---------------------------------------------------------------------------------------------
 // The smaller events: own talks only, own categories, own time zone.
 
-const ownTalks = new Map(); // slug -> Set of kind:talk ids
-for (const slug of [PRIMARY, ...EXTRA]) {
+const ownTalks = new Map(); // slug -> Set of kind:talk ids, of the conferences checked and the live one
+for (const slug of new Set([PRIMARY, ...EXTRA, ...(LIVE.slug ? [LIVE.slug] : [])])) {
   try {
     ownTalks.set(slug, new Set(readNdjson(slug).filter((d) => d.kind === 'talk').map((d) => d.talk_id)));
   } catch {
@@ -1804,10 +1869,16 @@ try {
     report(rank !== -1 && rank < 5 && named, 'p2: wanting to learn something ranks a person who has worked on it near the top', rank === -1 ? 'not returned' : `rank ${rank + 1}, reason "${b.reasons[0]}"`);
   });
 
+  // The people part stays on the primary conference, where the test profiles are. The talk part runs on
+  // the live conference with up to three of its topics that have talks to come; the request stores nothing.
   await check('p3: a profile gets people suggestions, and chips alone get talk suggestions', async () => {
-    const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: LEARN, interests: '', interested_talk_ids: [] }, { label: 'recs' });
-    const ok = (matchesA?.length ?? 0) > 0 && recs.status === 200 && (recs.json.results ?? []).length > 0;
-    report(ok, 'p3: a profile gets people suggestions, and chips alone get talk suggestions', `${matchesA?.length ?? 0} people, ${(recs.json.results ?? []).length} talks`);
+    const people = matchesA?.length ?? 0;
+    if (!people) throw new Error('0 people: A got no people suggestions');
+    const live = await requireLiveTopics(`the people part passed (${people} people); the talk part: `);
+    const learn = live.rankedIds.slice(0, 3);
+    const recs = await api('POST', '/api/recommendations', { event: live.slug, learn_topics: learn, interests: '', interested_talk_ids: [] }, { label: 'recs' });
+    const talks = (recs.json.results ?? []).length;
+    report(recs.status === 200 && talks > 0, 'p3: a profile gets people suggestions, and chips alone get talk suggestions', `${people} people; ${live.slug} on ${learn.join(', ')}: status ${recs.status}, ${talks} talks`);
   });
 
   await check('p4: sharing for one talk does not put a profile in conference-wide matches', async () => {
@@ -2373,22 +2444,17 @@ try {
 
   await check('r1: For you puts talks with a wanted topic first and never an ended or marked one', async () => {
     const name = 'r1: For you puts talks with a wanted topic first and never an ended or marked one';
-    skipIfPrimaryOver();
-    // The topic is chosen now: the one with the most talks that have not ended (end after now, as the
-    // server decides it), and at least MIN_UPCOMING, because two are marked and one must remain.
-    const candidates = [];
-    for (const t of (topicsBySlug.get(PRIMARY) ?? []).slice(0, 12)) {
-      const r = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [t.topic_id], interested_talk_ids: [], size: 50 }, { label: 'recs' });
-      if (r.status !== 200) throw new Error(`status ${r.status}`);
-      candidates.push({ topic_id: t.topic_id, label: t.label, upcoming: countUpcoming(r.json.results ?? [], t.topic_id, Date.now()) });
-    }
-    const topic = pickUpcomingTopic(candidates);
-    if (!topic) throw new SkipCheck(`none of the first 12 topics has ${MIN_UPCOMING} or more talks that have not ended`);
-    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: [], size: 20 }, { label: 'recs' });
+    // On the live conference. The topic is chosen from its probes (liveTopics above): the one with the
+    // most talks to come, and at least MIN_UPCOMING, because two are marked and one must remain.
+    const live = await requireLiveTopics();
+    const slug = live.slug;
+    const topic = pickUpcomingTopic(live.ranked);
+    if (!topic) throw new SkipCheck(`none of the first 12 topics of ${slug} has ${MIN_UPCOMING} or more talks that end ${LIVE_MARGIN_MS / 60_000} minutes or more from now`);
+    const first = await api('POST', '/api/recommendations', { event: slug, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: [], size: 20 }, { label: 'recs' });
     if (first.status !== 200) throw new Error(`status ${first.status}`);
     const marked = (first.json.results ?? []).slice(0, 2).map((r) => r.talk_id);
-    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: marked, size: 50 }, { label: 'recs' });
-    const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const second = await api('POST', '/api/recommendations', { event: slug, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const chips = await api('POST', '/api/recommendations', { event: slug, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const results = second.json.results ?? [];
     const now = Date.now();
     const problems = [];
@@ -2400,32 +2466,38 @@ try {
     for (const r of [...results, ...chipResults]) {
       if (Date.parse(r.end) <= now) problems.push(`ended talk "${r.title}"`);
       if (marked.includes(r.talk_id)) problems.push(`marked talk "${r.title}"`);
-      if (!ownTalks.get(PRIMARY).has(r.talk_id)) problems.push(`foreign talk "${r.title}"`);
+      if (!ownTalks.get(slug).has(r.talk_id)) problems.push(`foreign talk "${r.title}"`);
     }
-    const empty = await api('POST', '/api/recommendations', { event: PRIMARY, interested_talk_ids: [] }, { label: 'recs' });
+    const empty = await api('POST', '/api/recommendations', { event: slug, interested_talk_ids: [] }, { label: 'recs' });
     if (!(empty.status === 200 && empty.json.needs_profile === true)) problems.push('an empty profile does not get needs_profile');
     const unique = [...new Set(problems)];
-    report(unique.length === 0, name, unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions on ${topic.label} (${topic.upcoming} upcoming), first "${results[0].title}"`);
+    report(unique.length === 0, name, unique.length ? unique.slice(0, 3).join('; ') : `${slug}: ${results.length} suggestions on ${topic.label} (${topic.upcoming} to come), first "${results[0].title}"`);
   });
 
   await check('r2: For you does not cross conferences', async () => {
     const problems = [];
+    let suggested = 0;
     for (const slug of EXTRA) {
       const topics = (topicsBySlug.get(slug) ?? []).slice(0, 3).map((t) => t.topic_id);
       const r = await api('POST', '/api/recommendations', { event: slug, learn_topics: topics, interests: 'agents and model training', interested_talk_ids: [], size: 50 }, { label: 'recs' });
       if (r.status !== 200) problems.push(`${slug} gave ${r.status}`);
+      suggested += (r.json.results ?? []).length;
       for (const t of r.json.results ?? []) if (!ownTalks.get(slug).has(t.talk_id)) problems.push(`${slug} got "${t.title}"`);
     }
-    report(problems.length === 0, 'r2: For you does not cross conferences', problems.length ? problems.slice(0, 3).join('; ') : `${EXTRA.length} conferences checked`);
+    // With no suggestion at all nothing could cross: For you only suggests talks still to come.
+    if (!problems.length && !suggested) throw new SkipCheck(EXTRA.length ? `no talk of ${EXTRA.join(' or ')} was suggested (For you only suggests talks still to come), so none could cross` : 'SMOKE_EXTRA names no conference');
+    report(problems.length === 0, 'r2: For you does not cross conferences', problems.length ? problems.slice(0, 3).join('; ') : `${EXTRA.length} conferences checked, ${suggested} suggestions`);
   });
 
   // For you is learn-only. The reasons on a suggestion must name only learn topics the request
   // sent. A user who removes Kubernetes from their profile must never be told a talk matched on
-  // it, and a topic the user can speak to is never a signal and never named.
+  // it, and a topic the user can speak to is never a signal and never named. r3, r4, r6 and r8 ask the
+  // live conference, with topics from its own probes (liveTopics above); r5 and r7 ask the primary.
   const labelOf = new Map((topicsBySlug.get(PRIMARY) ?? []).map((t) => [t.topic_id, t.label]));
-  const ask = (learn, speak = [], extra = {}) => api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: learn, speak_topics: speak, interests: '', expertise: '', interested_talk_ids: [], size: 50, ...extra }, { label: 'recs' });
-  const whyProblems = (results, learn) => {
-    const learnSet = new Set(learn.map((id) => labelOf.get(id)));
+  const askIn = (event, learn, speak = [], extra = {}) => api('POST', '/api/recommendations', { event, learn_topics: learn, speak_topics: speak, interests: '', expertise: '', interested_talk_ids: [], size: 50, ...extra }, { label: 'recs' });
+  const ask = (learn, speak, extra) => askIn(PRIMARY, learn, speak, extra);
+  const whyProblems = (results, learn, labels) => {
+    const learnSet = new Set(learn.map((id) => labels.get(id)));
     const out = [];
     for (const r of results) {
       const w = r.why ?? {};
@@ -2436,51 +2508,51 @@ try {
     return out;
   };
 
-  await check('r3: a request without kubernetes never names kubernetes in why', async () => {
-    if (!labelOf.has('kubernetes') || !labelOf.has('ai') || !labelOf.has('agents')) {
-      skip('r3: a request without kubernetes never names kubernetes in why', 'the conference has no kubernetes, ai or agents topic');
-      return;
-    }
-    const learn = ['ai', 'agents'];
-    const r = await ask(learn);
+  // The left-out topic and the learn topics come from the live conference's probes (leaveOutCase of
+  // scripts/lib/smoke-live-conference.mjs): Kubernetes left out and AI and agents asked for where those
+  // still share a talk to come, else its own topic with the most talks to come that shares one with
+  // others. So a suggestion carries the left-out topic, and the check has teeth.
+  const R3 = 'r3: a request without a topic never names that topic in why';
+  await check(R3, async () => {
+    const live = await requireLiveTopics();
+    if (!live.leave) throw new SkipCheck(`no talk of ${live.slug} that ends ${LIVE_MARGIN_MS / 60_000} minutes or more from now carries two of its first 12 topics, so no request can leave one out and still be suggested it`);
+    const { leftOut, learn } = live.leave;
+    const leftLabel = live.labelOf.get(leftOut) ?? leftOut;
+    const r = await askIn(live.slug, learn);
     if (r.status !== 200) throw new Error(`status ${r.status}`);
     const results = r.json.results ?? [];
-    const problems = whyProblems(results, learn);
+    const problems = whyProblems(results, learn, live.labelOf);
     for (const x of results) {
       const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? [])];
-      if (named.some((l) => /kubernetes/i.test(l))) problems.push(`"${x.title}" names Kubernetes`);
+      if (named.some((l) => l.toLowerCase() === leftLabel.toLowerCase())) problems.push(`"${x.title}" names ${leftLabel}`);
     }
-    // The check has teeth only when some returned talk really carries the kubernetes topic.
-    const carries = results.some((x) => (x.topics ?? []).some((t) => t.topic_id === 'kubernetes'));
-    if (!carries) problems.push('no returned talk carries the kubernetes topic, so the check proves nothing');
+    // The check has teeth only when some returned talk really carries the left-out topic.
+    const carries = results.some((x) => (x.topics ?? []).some((t) => t.topic_id === leftOut));
+    if (!carries) problems.push(`no returned talk carries the ${leftOut} topic, so the check proves nothing`);
     const unique = [...new Set(problems)];
-    report(unique.length === 0, 'r3: a request without kubernetes never names kubernetes in why', unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions, none name Kubernetes`);
+    report(unique.length === 0, R3, unique.length ? `${live.slug} without ${leftOut}: ${unique.slice(0, 3).join('; ')}` : `${live.slug}: ${results.length} suggestions for ${learn.join(' and ')}, some carrying ${leftOut}, none name ${leftLabel}`);
   });
 
+  // The requests come from the live conference's own topics (whyCases): r3's roles, two other topics
+  // with talks to come, and the first eight of its topic list.
   await check('r4: the topics in why are a subset of the learn topics sent, with no speak topics', async () => {
-    const have = (ids) => ids.filter((id) => labelOf.has(id));
-    const cases = [
-      [have(['ai', 'agents']), have(['kubernetes'])],
-      [have(['kubernetes']), have(['ai'])],
-      [have(['ebpf', 'gpu']), have(['llm', 'kubernetes'])],
-      [have(['kubernetes', 'ai']), have(['kubernetes'])],
-      [[...labelOf.keys()].slice(0, 5), [...labelOf.keys()].slice(3, 8)],
-    ].filter(([learn]) => learn.length > 0);
+    const live = await requireLiveTopics();
+    const cases = whyCases(live.rankedIds, live.ids, live.leave);
     const problems = [];
     let sawLearn = false;
     for (const [learn, speak] of cases) {
-      const r = await ask(learn, speak);
+      const r = await askIn(live.slug, learn, speak);
       if (r.status !== 200) {
         problems.push(`status ${r.status}`);
         continue;
       }
       const results = r.json.results ?? [];
-      problems.push(...whyProblems(results, learn));
+      problems.push(...whyProblems(results, learn, live.labelOf));
       if (results.some((x) => (x.why?.learn_topics ?? []).length > 0)) sawLearn = true;
     }
     if (!sawLearn) problems.push('no suggestion named a learn topic, so the check proves nothing');
     const unique = [...new Set(problems)];
-    report(unique.length === 0, 'r4: the topics in why are a subset of the learn topics sent, with no speak topics', unique.length ? unique.slice(0, 3).join('; ') : `${cases.length} requests checked`);
+    report(unique.length === 0, 'r4: the topics in why are a subset of the learn topics sent, with no speak topics', unique.length ? `${live.slug}: ${unique.slice(0, 3).join('; ')}` : `${live.slug}: ${cases.length} requests checked`);
   });
 
   await check('r5: a request with only speak_topics and expertise needs a profile and returns nothing', async () => {
@@ -2490,13 +2562,16 @@ try {
     report(ok, 'r5: a request with only speak_topics and expertise needs a profile and returns nothing', `status ${r.status}, needs_profile ${r.json.needs_profile}, ${(r.json.results ?? []).length} results`);
   });
 
+  // On the live conference: learn r3's first learn topic and speak its left-out one (on KubeCon, AI and
+  // Kubernetes), so the spoken topic is on talks that are suggested and could move them.
   await check('r6: speak topics change neither the ranking nor the reasons', async () => {
-    if (!labelOf.has('kubernetes') || !labelOf.has('ai')) {
-      skip('r6: speak topics change neither the ranking nor the reasons', 'the conference has no kubernetes or ai topic');
-      return;
-    }
-    const withSpeak = await ask(['ai'], ['kubernetes'], { expertise: 'Kubernetes operators and controllers', size: 10 });
-    const without = await ask(['ai'], [], { size: 10 });
+    const live = await requireLiveTopics();
+    const learn = live.leave?.learn[0] ?? live.rankedIds[0];
+    const speak = live.leave?.leftOut ?? live.ids.find((id) => id !== learn);
+    if (!speak) throw new SkipCheck(`${live.slug} lists one topic, so there is no other topic to speak`);
+    const speakLabel = live.labelOf.get(speak) ?? speak;
+    const withSpeak = await askIn(live.slug, [learn], [speak], { expertise: `${speakLabel} operators and controllers`, size: 10 });
+    const without = await askIn(live.slug, [learn], [], { size: 10 });
     if (withSpeak.status !== 200 || without.status !== 200) throw new Error(`status ${withSpeak.status}/${without.status}`);
     const a = (withSpeak.json.results ?? []).map((x) => x.talk_id);
     const b = (without.json.results ?? []).map((x) => x.talk_id);
@@ -2505,9 +2580,9 @@ try {
     if (JSON.stringify(a) !== JSON.stringify(b)) problems.push('the top results differ when speak_topics is sent');
     for (const x of withSpeak.json.results ?? []) {
       const named = [...(x.why?.topics ?? []), ...(x.why?.learn_topics ?? [])];
-      if (named.some((l) => /kubernetes/i.test(l)) || 'speak_topics' in (x.why ?? {})) problems.push(`"${x.title}" shows kubernetes in why`);
+      if (named.some((l) => l.toLowerCase() === speakLabel.toLowerCase()) || 'speak_topics' in (x.why ?? {})) problems.push(`"${x.title}" shows ${speak} in why`);
     }
-    report(problems.length === 0, 'r6: speak topics change neither the ranking nor the reasons', problems.length ? problems.slice(0, 3).join('; ') : `${a.length} results identical with and without speak_topics`);
+    report(problems.length === 0, 'r6: speak topics change neither the ranking nor the reasons', problems.length ? `${live.slug}, learn ${learn}, speak ${speak}: ${problems.slice(0, 3).join('; ')}` : `${live.slug}, learn ${learn}, speak ${speak}: ${a.length} results identical with and without speak_topics`);
   });
 
   await check('r7: the learn and problems text alone returns talks with a relevant passage', async () => {
@@ -2530,16 +2605,13 @@ try {
   // documents, so they break ties between equal scores differently. The server pins every search
   // for a conference to one copy (a preference), so the same request must always give the same
   // order. Many talks share a topic, so the tie is real for a single learn topic.
+  // On the live conference, with its topic that has the most talks to come (the most ties).
   await check('r8: the same For you request made five times returns the same talk order', async () => {
-    skipIfPrimaryOver();
-    const topic = labelOf.has('ai') ? 'ai' : [...labelOf.keys()][0];
-    if (!topic) {
-      skip('r8: the same For you request made five times returns the same talk order', 'the conference has no topics');
-      return;
-    }
+    const live = await requireLiveTopics();
+    const topic = live.rankedIds[0];
     const orders = [];
     for (let i = 0; i < 5; i++) {
-      const r = await ask([topic], [], { size: 10 });
+      const r = await askIn(live.slug, [topic], [], { size: 10 });
       if (r.status !== 200) throw new Error(`status ${r.status}`);
       orders.push((r.json.results ?? []).map((x) => x.talk_id));
     }
@@ -2547,7 +2619,7 @@ try {
     const problems = [];
     if (!orders[0].length) problems.push('no results');
     if (distinct.size !== 1) problems.push(`${distinct.size} different orders in 5 identical requests`);
-    report(problems.length === 0, 'r8: the same For you request made five times returns the same talk order', problems.length ? problems.join('; ') : `5 requests, one order of ${orders[0].length} talks for "${topic}"`);
+    report(problems.length === 0, 'r8: the same For you request made five times returns the same talk order', problems.length ? `${live.slug}: ${problems.join('; ')}` : `${live.slug}: 5 requests, one order of ${orders[0].length} talks for "${topic}"`);
   });
 
   await check('q8c: a block outlives the blocked profile: a re-created profile stays blocked, and the block can still be lifted', async () => {
@@ -3237,9 +3309,12 @@ if (!WORKER_SERVES_APP) {
   }
 }
 
-if (primaryOverSkips > 0) console.log(`NOTE ${primaryOverSkips} check${primaryOverSkips === 1 ? '' : 's'} skipped because every talk of the primary conference has ended; set SMOKE_CONFERENCE to a conference that is still running to run them`);
+if (noLiveSkips > 0) console.log(`NOTE ${noLiveSkips} check${noLiveSkips === 1 ? '' : 's'} skipped because ${LIVE.why}; set SMOKE_LIVE_CONFERENCE to a searchable conference with talks to come to run ${noLiveSkips === 1 ? 'it' : 'them'}`);
+else if (LIVE.slug && LIVE.slug !== PRIMARY) console.log(`NOTE ${LIVE_CHECKS} ran against ${LIVE.slug}, not the primary conference (${LIVE.why})`);
+if (primaryOverSkips > 0) console.log(`NOTE r7 stays on the primary conference (its query and the passages it expects are KubeCon content) and skipped because ${LIVE.primary.why}; set SMOKE_CONFERENCE to a conference that is still running to run it`);
 if (process.env.SMOKE_STRICT === '1') {
   report(retried === 0, 'strict: no request answered 5xx or failed on its first attempt', retried ? `${retried} did; see the NOTE lines above` : 'none needed a retry');
 }
 if (retried) console.log(`NOTE ${retried} request${retried === 1 ? '' : 's'} answered 5xx or failed on the first attempt and ${retried === 1 ? 'was' : 'were'} retried; see the NOTE lines above`);
-process.exit(failures ? 1 : 0);
+console.log(summary());
+process.exit(counts.fail ? 1 : 0);
