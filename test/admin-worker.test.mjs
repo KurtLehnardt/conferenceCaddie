@@ -5,7 +5,9 @@
 //
 // Run with `npm test`. Nothing here reaches the network: the CLI's fetch is the real one but the
 // api is a loopback server answering from memory; child processes (gh) are recorded by an injected
-// spawn and never started. The stand-in verifies every admin request's X-Caddie-Admin header with
+// spawn and never started. A few tests start real child processes instead, among them one transport
+// test that runs scripts/caddie-admin.mjs itself (process.execPath and PATH) against the same
+// loopback stand-in. The stand-in verifies every admin request's X-Caddie-Admin header with
 // verifyAdminSignature, checks the body hash, refuses a GET or DELETE with a body, refuses a nonce
 // it has seen, and records every request; a failed check fails the test. The token is a dummy
 // string that every run checks is absent from stdout, stderr, the audit file, every request URL,
@@ -700,7 +702,9 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
       if (argv.includes('--json')) {
         const parsed = lines.map((l) => JSON.parse(l));
         assert.deepEqual(parsed.filter((l) => l.warning === 'sig_version_removed'), [{ ok: true, warning: 'sig_version_removed', message: SIG_VERSION_REMOVED_WARNING }], label);
-        assert.equal(typeof JSON.parse(r.stdout), 'object', `${label}: stdout is one JSON object`);
+        const out = JSON.parse(r.stdout);
+        assert.equal(out?.ok, true, `${label}: stdout is one JSON object with ok true`);
+        assert.equal(out.command, `${argv[0]} ${argv[1]}`, `${label}: stdout names the command`);
       } else {
         assert.deepEqual(lines.filter((l) => l.includes(NAME)), [`caddie-admin: warning: ${SIG_VERSION_REMOVED_WARNING}`], label);
       }
