@@ -221,6 +221,13 @@ cmd_run() {
   set -e
   echo "$status" > "$dir/gradle.exit"
   if [ "$status" -ne 0 ]; then
+    # SCRATCH (reverted before merge): the emulator dies right after the failing test, so attempt 1
+    # also has an infrastructure signal.
+    if [ "$attempt" = 1 ]; then
+      echo "SCRATCH: killing the emulator process"
+      pkill -9 -f "$EMULATOR_PROCESS" || true
+      sleep 2
+    fi
     record_device "$dir"
     keep_results "$dir"
     return "$status"
