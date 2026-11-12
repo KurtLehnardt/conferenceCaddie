@@ -153,6 +153,14 @@ interface BleRadioEvents {
 
     /** The radio stopped by itself, for [reason]; [BleRadio.stop] does not call this. */
     fun onStopped(reason: BleStopReason)
+
+    /**
+     * The platform woke the app at (or after) the time [BleRadio.keepAwakeUntil] named: the runtime
+     * sends the report that is due now. A timer of the runtime alone may not fire while the phone
+     * sleeps (Android's monotonic clock stops in deep sleep). Called from any thread; does nothing by
+     * default.
+     */
+    fun onReportDue() {}
 }
 
 /**
