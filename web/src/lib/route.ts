@@ -88,20 +88,26 @@ export interface ProfileBack {
   href: string;
   /** True when the history entry behind this one is that screen, so Back can pop it. */
   pops: boolean;
-  label: 'People' | 'Settings';
+  /** The screen Back leads to, so the tab bar can mark the same tab that Back names. */
+  tab: 'people' | 'for-you' | 'settings';
+  label: 'People' | 'For you' | 'Settings';
 }
 
 /**
- * Back on the profile editor returns to the People screen when the profile was opened from there,
- * through the Profile button in its app bar or one of its prompts. Otherwise it goes to Settings, as
- * before: from the Settings row, from another screen, and after a reload or a deep link, when the
- * screen behind is not known. #/here/{zone} is never the screen Back leads to, because it turns
- * presence on.
+ * Back on the profile editor returns to the screen the profile was opened from when that is People
+ * (through the Profile button in its app bar or one of its prompts) or For you (through its "Pick
+ * topics" prompt), so picking topics leads straight back to the suggestions. When the screen behind is
+ * #/here/{zone}, Back links to #/people without popping, because popping to #/here/{zone} would turn
+ * presence on again. Otherwise it goes to Settings, as before: from the Settings row, from another
+ * screen, and after a reload or a deep link, when the screen behind is not known.
  */
 export function profileBack(prev: Route | null, slug: string | null): ProfileBack {
   const behind = prev && prev.slug === slug ? prev.tab : null;
-  if (behind === 'people') return { href: '#/people', pops: true, label: 'People' };
-  return { href: '#/settings', pops: behind === 'settings', label: 'Settings' };
+  if (prev && (behind === 'people' || behind === 'for-you')) {
+    return { href: tabHash(behind, prev.params), pops: true, tab: behind, label: behind === 'people' ? 'People' : 'For you' };
+  }
+  if (behind === 'here') return { href: '#/people', pops: false, tab: 'people', label: 'People' };
+  return { href: '#/settings', pops: behind === 'settings', tab: 'settings', label: 'Settings' };
 }
 
 /**

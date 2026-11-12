@@ -221,6 +221,16 @@ p {
   margin-left: auto;
 }
 
+/* On a phone narrower than 360px, the Offline badge, Requests, Profile and Settings together leave
+   the conference name only two or three letters. Requests steps aside while offline there, because
+   it opens a screen that needs a connection; Profile stays, because the profile editor works offline.
+   The request count still shows on the People tab. */
+@media (max-width: 359px) {
+  .offline-badge ~ .appbar-inbox {
+    display: none;
+  }
+}
+
 .appbar-title {
   min-width: 0;
 }

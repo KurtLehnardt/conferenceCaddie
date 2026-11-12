@@ -58,38 +58,54 @@ test('the people features export the button for the app shell', () => {
   assert.equal(typeof ProfileButton, 'function');
 });
 
-test('the app shell renders the button next to Requests, under the same condition', () => {
+test('the app shell renders the button once, next to Requests, under the same condition', () => {
   const app = readFileSync(new URL('../src/app.tsx', import.meta.url), 'utf8');
   assert.match(app, /const peopleActions = showsPeopleActions\(tab, !!searchable\);/);
-  const requests = app.indexOf('{isTabScreen && peopleActions && (\n        <a class="icon-btn appbar-inbox"');
-  const button = app.indexOf('{isTabScreen && peopleActions && <ProfileButton />}');
-  const settings = app.indexOf('<a class="icon-btn" href="#/settings" aria-label="Settings"');
+  assert.equal(app.split('<ProfileButton').length, 2, 'the shell renders the Profile button exactly once');
+  const requests = app.search(/\{(isTabScreen && )?peopleActions && \(\s*<a\s+class="icon-btn appbar-inbox"/);
+  const button = app.search(/\{(isTabScreen && )?peopleActions && <ProfileButton \/>\}/);
+  const settings = app.search(/<a\s+class="icon-btn"\s+href="#\/settings"\s+aria-label="Settings"/);
   assert.ok(requests > 0, 'Requests is shown under peopleActions');
   assert.ok(button > requests, 'the Profile button follows Requests');
   assert.ok(settings > button, 'the Settings gear stays last');
 });
 
-test('on a phone narrower than 360px, the button steps aside while the Offline badge shows', () => {
-  const css = readFileSync(new URL('../src/people/people.css', import.meta.url), 'utf8');
-  assert.match(css, /@media \(max-width: 359px\) \{\s*\.offline-badge ~ \.appbar-profile \{\s*display: none;/);
-  // The badge comes before the button in the app bar, so the sibling selector can reach it.
+test('on a phone narrower than 360px, Requests steps aside while the Offline badge shows, and Profile stays', () => {
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /@media \(max-width: 359px\) \{\s*\.offline-badge ~ \.appbar-inbox \{\s*display: none;/);
+  assert.doesNotMatch(css, /appbar-profile/);
+  // The badge comes before Requests in the app bar, so the sibling selector can reach it.
   const app = readFileSync(new URL('../src/app.tsx', import.meta.url), 'utf8');
-  assert.ok(app.indexOf('<OfflineBadge />') < app.indexOf('<ProfileButton />'));
+  const badge = app.indexOf('<OfflineBadge />');
+  assert.ok(badge > 0 && badge < app.search(/class="icon-btn appbar-inbox"/));
 });
 
-const route = (slug, tab) => ({ slug, tab, param: null, query: new URLSearchParams(), params: {} });
+const route = (slug, tab, params = {}) => ({ slug, tab, param: null, query: new URLSearchParams(), params });
 
 test('Back on the profile editor returns to People when it was opened from People', () => {
-  assert.deepEqual(profileBack(route('kc', 'people'), 'kc'), { href: '#/people', pops: true, label: 'People' });
+  assert.deepEqual(profileBack(route('kc', 'people'), 'kc'), { href: '#/people', pops: true, tab: 'people', label: 'People' });
+});
+
+test('Back on the profile editor returns to For you when it was opened from its Pick topics prompt', () => {
+  assert.deepEqual(profileBack(route('kc', 'for-you'), 'kc'), { href: '#/for-you', pops: true, tab: 'for-you', label: 'For you' });
+});
+
+test('Back on the profile editor links to People without popping when #/here/{zone} is behind it', () => {
+  // Popping to #/here/{zone} would turn presence on again.
+  assert.deepEqual(profileBack(route('kc', 'here'), 'kc'), { href: '#/people', pops: false, tab: 'people', label: 'People' });
 });
 
 test('Back on the profile editor goes to Settings otherwise, popping only when Settings is behind it', () => {
-  assert.deepEqual(profileBack(route('kc', 'settings'), 'kc'), { href: '#/settings', pops: true, label: 'Settings' });
+  assert.deepEqual(profileBack(route('kc', 'settings'), 'kc'), { href: '#/settings', pops: true, tab: 'settings', label: 'Settings' });
   // A reload or a deep link: the screen behind is not known.
-  assert.deepEqual(profileBack(null, 'kc'), { href: '#/settings', pops: false, label: 'Settings' });
-  // Another screen, or People of another conference: Back links to Settings, as before.
-  assert.deepEqual(profileBack(route('kc', 'for-you'), 'kc'), { href: '#/settings', pops: false, label: 'Settings' });
-  assert.deepEqual(profileBack(route('other', 'people'), 'kc'), { href: '#/settings', pops: false, label: 'Settings' });
-  // #/here/{zone} turns presence on, so Back never pops to it.
-  assert.deepEqual(profileBack(route('kc', 'here'), 'kc'), { href: '#/settings', pops: false, label: 'Settings' });
+  assert.deepEqual(profileBack(null, 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
+  // Another screen, or People or For you of another conference: Back links to Settings, as before.
+  assert.deepEqual(profileBack(route('kc', 'search'), 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
+  assert.deepEqual(profileBack(route('other', 'people'), 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
+  assert.deepEqual(profileBack(route('other', 'for-you'), 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
+});
+
+test('the app shell marks the tab that Back on the profile editor names', () => {
+  const app = readFileSync(new URL('../src/app.tsx', import.meta.url), 'utf8');
+  assert.match(app, /const navTab = [^;]*profileBackTo \? profileBackTo\.tab : tab;/);
 });
