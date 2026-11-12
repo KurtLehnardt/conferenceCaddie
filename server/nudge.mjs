@@ -53,7 +53,7 @@
 import crypto from 'node:crypto';
 import {
   people, idx, NUDGES_INDEX, UpstreamError,
-  peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAround, cellOf, SEMANTIC_FLOORS,
+  peopleQuery, rankPeople, isBroad, evidenceFor, cutText, unescapeHtml, topicsOf, blockedIds, isAroundAt, cellOf, SEMANTIC_FLOORS,
 } from './people.mjs';
 import { pushTargetsFor, deleteSubscriptionById, deleteRegistrationIfUnchanged } from './push.mjs';
 import { NATIVE_PUSH } from './native-push.mjs';
@@ -195,7 +195,7 @@ const pairPause = () => new Promise((resolve) => {
 export async function nudgeAfterPresence(me, conf, { pause = pairPause, now = () => Date.now(), nativePush = NATIVE_PUSH } = {}) {
   try {
     const zone = me.presence_zone;
-    if (!zone || !isAround(me, now())) return;
+    if (!zone || !isAroundAt(me, now())) return;
     if (me.hidden === true || me.sample === true) return;
     const send = await transport();
     if (!send && !nativePush.apns && !nativePush.fcm) return;
@@ -211,7 +211,7 @@ export async function nudgeAfterPresence(me, conf, { pause = pairPause, now = ()
     const { json, q } = ranked;
     const hits = (json.hits?.hits ?? []).filter((h) => {
       const s = h._source ?? {};
-      return s.profile_id && s.sample !== true && isAround(s, now()) && s.presence_zone === zone && !isBroad(h, q.legs, me, topics.common);
+      return s.profile_id && s.sample !== true && isAroundAt(s, now()) && s.presence_zone === zone && !isBroad(h, q.legs, me, topics.common);
     });
     if (!hits.length) return;
 
