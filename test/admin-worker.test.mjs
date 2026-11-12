@@ -5,7 +5,9 @@
 //
 // Run with `npm test`. Nothing here reaches the network: the CLI's fetch is the real one but the
 // api is a loopback server answering from memory; child processes (gh) are recorded by an injected
-// spawn and never started. The stand-in verifies every admin request's X-Caddie-Admin header with
+// spawn and never started. A few tests start real child processes instead, among them one transport
+// test that runs scripts/caddie-admin.mjs itself (process.execPath and PATH) against the same
+// loopback stand-in. The stand-in verifies every admin request's X-Caddie-Admin header with
 // verifyAdminSignature, checks the body hash, refuses a GET or DELETE with a body, refuses a nonce
 // it has seen, and records every request; a failed check fails the test. The token is a dummy
 // string that every run checks is absent from stdout, stderr, the audit file, every request URL,
@@ -50,6 +52,7 @@ import { BODYLESS_METHODS, HEADER_NAME, bodyMatches, signAdminRequest, verifyAdm
 import { main } from '../scripts/admin/cli.mjs';
 import { createWorkerAdapter, workerOrigin } from '../scripts/admin/backends/worker.mjs';
 import { shellPath } from '../scripts/lib/admin-token-file.mjs';
+import { SIG_VERSION_REMOVED_WARNING } from '../scripts/lib/admin-origin.mjs';
 
 const realFetch = globalThis.fetch;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -470,8 +473,6 @@ function auditLines() {
 // instead of starting them. Every run checks the token leaks nowhere and the stand-in saw no bad
 // request.
 async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false, fetch = realFetch, trackSend } = {}) {
-  // The version every verified admin request must carry: v2 unless CADDIE_ADMIN_SIG_VERSION is "1".
-  const signVersion = env.CADDIE_ADMIN_SIG_VERSION === '1' ? 1 : 2;
   const spawned = [];
   const spawn = (file, args, options) => {
     spawned.push({ file, args, options });
@@ -510,7 +511,10 @@ async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false, f
       assert.deepEqual(r.query, r.path === '/api/conferences' ? ['fresh'] : [], `${r.path} query`);
     } else {
       for (const key of r.query) assert.ok(ALLOWED_QUERY_KEYS.has(key), `query key ${key} on ${r.path} (CONF-13: flags travel in the body)`);
-      if (r.version !== null && r.version !== undefined) assert.equal(r.version, signVersion, `${r.method} ${r.path} is signed v${signVersion}`);
+      // Since step e every admin request is signed with v2, whatever the test's environment holds,
+      // and no header is ever v1, also one the stand-in could not verify.
+      if (r.version !== null && r.version !== undefined) assert.equal(r.version, 2, `${r.method} ${r.path} is signed v2`);
+      if (r.headers['x-caddie-admin'] !== undefined) assert.match(r.headers['x-caddie-admin'], /^v2 /, `${r.method} ${r.path} carries a v2 header`);
     }
   }
   if (!tolerateProblems) assert.deepEqual(stub.problems, [], 'the stand-in saw a bad admin request');
@@ -582,47 +586,130 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
     assert.match(admins(r.requests)[0].headers['x-caddie-admin'], /^v2 \d+ [A-Za-z0-9_-]{22} [0-9a-f]{64} [0-9a-f]{64}$/);
   });
 
-  // Step c of the migration (DECISIONS.md, "Admin signature v2"): v2 by default, bound to the
-  // configured api's origin; CADDIE_ADMIN_SIG_VERSION=1 is the client half of the rollback to v1,
-  // which a Worker accepts since step d only with ADMIN_SIG_MIN = "1"; empty counts as unset (GitHub
-  // Actions passes an undefined variable as "").
-  test('the signature is v2 by default, bound to the api origin; CADDIE_ADMIN_SIG_VERSION=1 signs v1 and "" means 2', async () => {
+  // Steps c and e of the migration (DECISIONS.md, "Admin signature v2"): always v2, bound to the
+  // configured api's origin. CADDIE_ADMIN_SIG_VERSION, the override step e removed, changes nothing:
+  // unset and empty print nothing, any other value one warning, and every request is v2.
+  test('the signature is v2, bound to the api origin, whatever CADDIE_ADMIN_SIG_VERSION holds; a non-empty value gets one warning', async () => {
     const verify = (call, allowedVersions, expectedOrigins) => verifyAdminSignature({ headerValue: call.headers['x-caddie-admin'], method: call.method, pathWithQuery: call.pathWithQuery, keys: [TOKEN], allowedVersions, expectedOrigins });
-    for (const [env, version] of [[{}, 2], [{ CADDIE_ADMIN_SIG_VERSION: '' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '2' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '1' }, 1]]) {
+    for (const [env, warned] of [[{}, false], [{ CADDIE_ADMIN_SIG_VERSION: '' }, false], [{ CADDIE_ADMIN_SIG_VERSION: '2' }, true], [{ CADDIE_ADMIN_SIG_VERSION: '1' }, true], [{ CADDIE_ADMIN_SIG_VERSION: '3' }, true], [{ CADDIE_ADMIN_SIG_VERSION: ' 2' }, true]]) {
       const r = await invoke(['stats', 'counts', '--event', EVENT], { env });
       assert.equal(r.code, 0, `${JSON.stringify(env)}: ${r.stderr}`);
       const [call] = admins(r.requests);
-      assert.equal(call.version, version, JSON.stringify(env));
-      // The rollback is never silent: one warning under "1", none otherwise.
-      assert.equal(r.stderr.split('\n').filter((l) => l.startsWith('caddie-admin: warning: CADDIE_ADMIN_SIG_VERSION=1: ')).length, version === 1 ? 1 : 0, r.stderr);
-      assert.ok(call.headers['x-caddie-admin'].startsWith(`v${version} `));
-      if (version === 2) {
-        assert.equal(verify(call, [2], [stub.url]).origin, stub.url);
-        // The same header for another origin is a plain signature failure, and a v1-only verifier
-        // reads it as malformed.
-        for (const origin of [stub.url.replace('127.0.0.1', 'localhost'), stub.url.replace('http:', 'https:'), 'https://conference-caddie.example']) {
-          assert.equal(verify(call, [2], [origin]).reason, 'signature', origin);
-        }
-        assert.equal(verify(call, [1]).reason, 'malformed');
-      } else {
-        assert.equal(verify(call, [1]).ok, true);
-        assert.equal(verify(call, [2], [stub.url]).reason, 'malformed', 'a v2-only Worker (step d) refuses it');
+      assert.equal(call.version, 2, JSON.stringify(env));
+      assert.equal(r.stderr.split('\n').filter((l) => l.startsWith('caddie-admin: warning: CADDIE_ADMIN_SIG_VERSION was removed in step e')).length, warned ? 1 : 0, r.stderr);
+      assert.ok(call.headers['x-caddie-admin'].startsWith('v2 '));
+      assert.equal(verify(call, [2], [stub.url]).origin, stub.url);
+      // The same header for another origin is a plain signature failure, and a v1-only verifier
+      // reads it as malformed.
+      for (const origin of [stub.url.replace('127.0.0.1', 'localhost'), stub.url.replace('http:', 'https:'), 'https://conference-caddie.example']) {
+        assert.equal(verify(call, [2], [origin]).reason, 'signature', origin);
       }
+      assert.equal(verify(call, [1]).reason, 'malformed');
     }
   });
 
-  test('a CADDIE_ADMIN_SIG_VERSION other than unset, empty, "1" or "2" is a usage error (exit 2) before any request', async () => {
-    for (const raw of ['3', ' 2', '02', 'v2', '1 ', 'true']) {
-      const r = await invoke(['stats', 'counts', '--event', EVENT], { env: { CADDIE_ADMIN_SIG_VERSION: raw } });
-      assert.equal(r.code, 2, JSON.stringify(raw));
-      assert.match(r.stderr, /CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set/);
-      assert.equal(r.requests.length, 0, JSON.stringify(raw));
-      const j = await invoke(['stats', 'counts', '--event', EVENT, '--json'], { env: { CADDIE_ADMIN_SIG_VERSION: raw } });
-      assert.equal(JSON.parse(j.stderr).error, 'usage');
+  test('the adapter reads no version from the env it is given: a retried request under CADDIE_ADMIN_SIG_VERSION=1 is v2 on every attempt', async () => {
+    // The first attempt reaches the stand-in and then breaks, so the retry is a second signed request.
+    const r = await invoke(['stats', 'counts', '--event', EVENT], { env: { CADDIE_ADMIN_SIG_VERSION: '1' }, fetch: flakyFetch(['ECONNRESET'], { after: true }) });
+    assert.equal(r.code, 0, r.stderr);
+    const calls = admins(r.requests);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls.map((c) => c.version), [2, 2]);
+    assert.notEqual(calls[0].headers['x-caddie-admin'], calls[1].headers['x-caddie-admin'], 'signed afresh');
+    // createWorkerAdapter itself never fails on the variable, whatever it holds.
+    for (const value of ['1', '3', 'fake-stale-sig-version']) {
+      assert.doesNotThrow(() => createWorkerAdapter({ name: 't2', tier: 2, api: stub.url }, { credential: TOKEN, env: { CADDIE_ADMIN_SIG_VERSION: value } }), value);
     }
-    // The adapter reads the env it is given, never process.env.
-    assert.throws(() => createWorkerAdapter({ name: 't2', tier: 2, api: stub.url }, { credential: TOKEN, env: { CADDIE_ADMIN_SIG_VERSION: '3' } }), (e) => e.exitCode === 2 && /CADDIE_ADMIN_SIG_VERSION/.test(e.message));
-    assert.doesNotThrow(() => createWorkerAdapter({ name: 't2', tier: 2, api: stub.url }, { credential: TOKEN, env: { CADDIE_ADMIN_SIG_VERSION: '1' } }));
+  });
+
+  // The real CLI hands main() process.env as its env (scripts/caddie-admin.mjs), so an adapter that
+  // read process.env directly would pass every test above. With "1" in process.env and an injected
+  // env that lacks the variable, every attempt is still v2, and nothing warns, because only the
+  // injected env is read.
+  test('the adapter reads nothing of CADDIE_ADMIN_SIG_VERSION from process.env: "1" there signs v2 on the first attempt and on a retry', async () => {
+    const NAME = 'CADDIE_ADMIN_SIG_VERSION';
+    const had = Object.prototype.hasOwnProperty.call(process.env, NAME);
+    const saved = process.env[NAME];
+    process.env[NAME] = '1';
+    try {
+      for (const fetch of [realFetch, flakyFetch(['ECONNRESET'], { after: true })]) {
+        const r = await invoke(['stats', 'counts', '--event', EVENT], { env: {}, fetch });
+        assert.equal(r.code, 0, r.stderr);
+        const calls = admins(r.requests);
+        assert.equal(calls.length, fetch === realFetch ? 1 : 2);
+        for (const call of calls) {
+          assert.equal(call.version, 2);
+          assert.ok(call.headers['x-caddie-admin'].startsWith('v2 '), call.headers['x-caddie-admin']);
+        }
+        assert.ok(!r.stderr.includes(NAME), r.stderr);
+      }
+    } finally {
+      if (had) process.env[NAME] = saved;
+      else delete process.env[NAME];
+    }
+  });
+
+  // Every test above injects env into main(), so none of them runs the CLI's own entry path. This
+  // one starts scripts/caddie-admin.mjs as a child process with CADDIE_ADMIN_SIG_VERSION=1 in its
+  // real process.env and the token in the default token file (CADDIE_ADMIN_HOME/admin-token, 0600),
+  // never in the environment, against the stand-in. One read (stats usage) and one write (attendees
+  // block) each run with and without --json: every admin header the stand-in receives is v2, the
+  // warning about the stale setting is on stderr exactly once (one JSON line with --json), and the
+  // token is in neither stdout nor stderr nor any request.
+  test('the CLI run as a process with CADDIE_ADMIN_SIG_VERSION=1 in its environment signs v2 for a read and a write and warns once', async () => {
+    const NAME = 'CADDIE_ADMIN_SIG_VERSION';
+    writeFileSync(join(home, 'admin-token'), `${TOKEN}\n`, { mode: 0o600 });
+    const env = { PATH: process.env.PATH, HOME: home, CADDIE_ADMIN_HOME: home, CADDIE_ADMIN_ROOT: root, [NAME]: '1' };
+    const run = (argv) => new Promise((resolvePromise, reject) => {
+      const child = spawn(process.execPath, [join(ROOT, 'scripts/caddie-admin.mjs'), ...argv], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (c) => { stdout += c; });
+      child.stderr.on('data', (c) => { stderr += c; });
+      child.on('error', reject);
+      child.on('close', (code) => resolvePromise({ code, stdout, stderr }));
+    });
+    const p = person('Process Blocked');
+    const commands = [
+      ['stats', 'usage'],
+      ['stats', 'usage', '--json'],
+      confirmed(['attendees', 'block', '--event', EVENT, p.ref, '--reason', 'spam'], p.ref),
+      confirmed(['attendees', 'block', '--event', EVENT, p.ref, '--reason', 'spam', '--json'], p.ref),
+    ];
+    for (const argv of commands) {
+      const before = stub.requests.length;
+      const r = await run(argv);
+      const label = argv.join(' ');
+      assert.equal(r.code, 0, `${label}: ${r.stderr}`);
+      for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr]]) assert.ok(!text.includes(TOKEN), `${label}: the token leaked into ${where}`);
+      const requests = stub.requests.slice(before);
+      assert.ok(!JSON.stringify(requests).includes(TOKEN), `${label}: the token leaked into a request`);
+      const calls = admins(requests);
+      assert.ok(calls.length >= 1, `${label}: no admin request reached the stand-in`);
+      if (argv[0] === 'attendees') assert.deepEqual(calls.map((c) => c.pathWithQuery), [`/admin/people/block?event=${EVENT}`], label);
+      for (const call of calls) {
+        assert.equal(typeof call.headers['x-caddie-admin'], 'string', `${label}: ${call.pathWithQuery} is signed`);
+        assert.ok(call.headers['x-caddie-admin'].startsWith('v2 '), `${label}: ${call.pathWithQuery} carries ${call.headers['x-caddie-admin'].split(' ')[0]}`);
+        assert.equal(call.version, 2, `${label}: ${call.pathWithQuery}`);
+      }
+      for (const call of requests) {
+        if (call.headers['x-caddie-admin'] !== undefined) assert.ok(call.headers['x-caddie-admin'].startsWith('v2 '), `${label}: ${call.pathWithQuery}`);
+      }
+      assert.deepEqual(stub.problems, [], `${label}: the stand-in saw a bad admin request`);
+      // The variable's name is in the warning once, and nowhere else on stderr.
+      assert.equal(r.stderr.split(NAME).length - 1, 1, `${label}: ${r.stderr}`);
+      const lines = r.stderr.split('\n').filter(Boolean);
+      if (argv.includes('--json')) {
+        const parsed = lines.map((l) => JSON.parse(l));
+        assert.deepEqual(parsed.filter((l) => l.warning === 'sig_version_removed'), [{ ok: true, warning: 'sig_version_removed', message: SIG_VERSION_REMOVED_WARNING }], label);
+        const out = JSON.parse(r.stdout);
+        assert.equal(out?.ok, true, `${label}: stdout is one JSON object with ok true`);
+        assert.equal(out.command, `${argv[0]} ${argv[1]}`, `${label}: stdout names the command`);
+      } else {
+        assert.deepEqual(lines.filter((l) => l.includes(NAME)), [`caddie-admin: warning: ${SIG_VERSION_REMOVED_WARNING}`], label);
+      }
+    }
+    assert.equal(p.hidden, true, 'the block reached the stand-in');
   });
 
   // The api as configured goes through canonicalOrigin before any URL parsing: each of these parses

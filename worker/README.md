@@ -339,10 +339,10 @@ to deploy while `ADMIN_TEST_ROUTES` is a secret of the Worker, and its message g
 `npx wrangler secret delete ADMIN_TEST_ROUTES` in `worker/`.
 
 The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
-redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like the Worker-side
-clients; `CADDIE_ADMIN_SIG_VERSION=1` makes it sign v1, for a Worker from before v2 or one rolled
-back with `ADMIN_SIG_MIN = "1"` (a current Worker refuses v1 by default since step d). Its bearer
-mode is gone, and a current Worker answers a bearer with 404.
+redirect: a 3xx is a FAIL. Since #93 it signs with signature v2, like the Worker-side clients, and
+since step e it cannot sign anything else: `CADDIE_ADMIN_SIG_VERSION` is ignored, with one `NOTE`
+when it is set to a non-empty value, so a Worker from before v2 must be deployed again before the
+smoke can pass. Its bearer mode is gone, and a current Worker answers a bearer with 404.
 
 The smoke's `keep1` and `keep2` run against the Worker too, where they printed SKIP before
 ([Presence modes](#presence-modes)).
@@ -473,7 +473,14 @@ The move to v2 is in five steps (DECISIONS.md, "Admin signature v2"), each deplo
 a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
 Worker refuses v1; e, the clients' switch `CADDIE_ADMIN_SIG_VERSION` is removed once the first
 weekly CI ingest under step d has passed. Deploying step b changed nothing for the clients, which
-then still signed v1.
+then still signed v1. Step e is done, and it did not wait for the weekly run: CI ingest run
+43301747743, dispatched by hand on 2026-11-12 from `main`, which runs the same push step with the
+same secrets, passed under step d, signing v2, and the switch is gone from the clients, the smoke
+and `.github/workflows/ingest.yml`. The first scheduled run under steps d and e is on Monday
+2026-11-16, and it is also the workflow's first scheduled run of any kind, since the workflow was
+added on 2026-11-10. If it fails, first look for a cause in the scheduled path (the event name,
+the empty `inputs` of a scheduled run, or a schedule that GitHub disabled). Only if it fails for a
+reason specific to v2 is the rollback to revert steps e and d (below).
 
 From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
 so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and
@@ -484,18 +491,13 @@ be the Worker's origin and nothing more: a plain `https://` URL (`http://` for `
 password, backslash, `%` or `,`, and an internationalised host in its punycode (`xn--`) form. A
 base the URL parser would otherwise map to another host, such as one with a full-width dot or a
 percent-encoded character, is refused as a usage error before any request is signed.
-`CADDIE_ADMIN_SIG_VERSION` is the rollback: set it to `1` in the environment of a local run, or
-set the repository variable of the same name to `1` for the CI ingest (`.github/workflows/ingest.yml`
-passes it to the push step), and the clients sign v1 again. Unset or empty means v2, and any other
-value is a usage error when the client is created, before anything is sent; `push-ingest.mjs`
-and `migrate-from-backup.mjs` check it before anything else, also in a dry run, and the
-workflow's first step refuses it without printing it. Since step d the Worker refuses v1, so this
-switch helps only together with the Worker's own rollback, an `ADMIN_SIG_MIN` of `"1"`, which
-belongs in `[vars]`, committed and deployed, and never in a secret (below). It stays in the clients
-and the workflow for one soak period, so that rolling back step d needs no change to the code, and
-step e removes it once the first weekly CI ingest under step d has passed. `scripts/moderation.mjs`
-(the deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
-`caddie-admin` command to use.
+Since step e the clients always sign v2: `adminClient` reads no version from its environment, and
+`CADDIE_ADMIN_SIG_VERSION` is ignored. When it is still set to a non-empty value, `push-ingest.mjs`
+and `migrate-from-backup.mjs` print one warning on stderr before anything else, also in a dry run,
+and `topics-local.mjs --api` does the same before its first admin request; each says that the
+setting was removed in step e and is ignored, never prints the value, and goes on signing v2.
+`scripts/moderation.mjs` (the deprecated wrapper in this directory) signs nothing and sends
+nothing; it only names the `caddie-admin` command to use.
 
 Step c covers every client: since #93 the `caddie-admin` CLI (`scripts/admin/`) and
 `scripts/smoke.mjs` sign v2 too. Step d changed the Worker's default minimum to `"2"`, after a
@@ -561,11 +563,15 @@ None of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES` may be among the
 remove it with `npx wrangler secret delete <name>`, and commit the value of `ADMIN_SIG_MIN` or
 `ADMIN_ORIGIN` in `[vars]` instead if one is needed.
 
-To roll back step d, commit `ADMIN_SIG_MIN = "1"` in `[vars]` of `worker/wrangler.toml` and deploy
-with `deploy.sh`; then a client that must sign v1 sets `CADDIE_ADMIN_SIG_VERSION=1` (for the CI
-ingest, the repository variable of that name). Removing a setting never reopens v1, because an
-absent `ADMIN_SIG_MIN` means `"2"`. To end the rollback, unset the variable, remove the line and
-deploy again.
+Since step e the rollback of step d is only this: commit `ADMIN_SIG_MIN = "1"` in `[vars]` of
+`worker/wrangler.toml` and deploy with `deploy.sh`, for a client run from a checkout before step e
+that still signs v1. The clients of this checkout sign v2 whatever the Worker accepts, so they need
+no change. Removing a setting never reopens v1, because an absent `ADMIN_SIG_MIN` means `"2"`. To
+end the rollback, remove the line and deploy again. If v2 itself breaks, the rollback is to revert
+steps e and d together: the revert of step e brings back the clients' switch
+`CADDIE_ADMIN_SIG_VERSION` and the workflow line that passes the repository variable, and the
+revert of step d makes the Worker accept v1 again; then set the switch to `1` where a client must
+sign v1.
 
 ### Rotating the admin token
 

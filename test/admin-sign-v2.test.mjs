@@ -24,8 +24,8 @@ import * as signModule from '../scripts/lib/admin-sign.mjs';
 import * as originModule from '../scripts/lib/admin-origin.mjs';
 import {
   BODYLESS_METHODS, DEFAULT_SIGN_VERSION, EMPTY_BODY_SHA256, HEADER_NAME, HEADER_RE, HEADER_RE_V2, MIN_KEY_LENGTH, NONCE_RE, PATH_RE, QUERY_RE, SKEW_SECONDS, UsageError, VERSION, VERSION_V2,
-  ORIGIN_ALLOW_RE, ORIGIN_CHARS_RE, ORIGIN_FORBIDDEN_RE, ORIGIN_PREFIX_RE, SIG_VERSION_ENV,
-  bodyMatches, canonicalOrigin, canonicalString, canonicalStringV2, parseAdminHeader, parseAdminOrigin, parseAdminSigMin, parseVersionedAdminHeader, signAdminRequest, signVersionFromEnv, verifyAdminSignature,
+  ORIGIN_ALLOW_RE, ORIGIN_CHARS_RE, ORIGIN_FORBIDDEN_RE, ORIGIN_PREFIX_RE, SIG_VERSION_ENV, SIG_VERSION_REMOVED_WARNING,
+  bodyMatches, canonicalOrigin, canonicalString, canonicalStringV2, parseAdminHeader, parseAdminOrigin, parseAdminSigMin, parseVersionedAdminHeader, sigVersionSettingStale, signAdminRequest, verifyAdminSignature,
 } from '../scripts/lib/admin-sign.mjs';
 import { FIXTURE_URL, buildFixture, serialise } from './fixtures/admin-sign.v2.gen.mjs';
 
@@ -158,11 +158,10 @@ describe('the v2 fixture file states the scheme the module implements', () => {
     assert.equal(HEADER_RE_V2.source.slice(3), HEADER_RE.source.slice(3));
     assert.equal(HEADER_RE_V2.source.slice(0, 3), '^v2');
     assert.equal(HEADER_RE.source.slice(0, 3), '^v1');
-    // From step (c) the signer signs v2 by default, as signVersionFromEnv() does with
-    // CADDIE_ADMIN_SIG_VERSION unset; the Node verifier still accepts v1 only unless told otherwise.
+    // From step (c) the signer signs v2 by default (since step e every client passes version 2
+    // itself); the Node verifier still accepts v1 only unless told otherwise.
     assert.equal(fixture.default_sign_version, 2);
     assert.equal(DEFAULT_SIGN_VERSION, 2);
-    assert.equal(signVersionFromEnv({}), DEFAULT_SIGN_VERSION);
     assert.deepEqual(fixture.default_allowed_versions, [1]);
   });
 
@@ -580,7 +579,7 @@ describe('scripts/lib/admin-origin.mjs: imports nothing, so the Worker can use i
 
   test('admin-sign.mjs re-exports every export of admin-origin.mjs, as the same objects', () => {
     const names = Object.keys(originModule).sort();
-    assert.deepEqual(names, ['ORIGIN_ALLOW_RE', 'ORIGIN_CHARS_RE', 'ORIGIN_FORBIDDEN_RE', 'ORIGIN_PREFIX_RE', 'SIG_VERSION_ENV', 'UsageError', 'canonicalOrigin', 'parseAdminOrigin', 'parseAdminSigMin', 'signVersionFromEnv']);
+    assert.deepEqual(names, ['ORIGIN_ALLOW_RE', 'ORIGIN_CHARS_RE', 'ORIGIN_FORBIDDEN_RE', 'ORIGIN_PREFIX_RE', 'SIG_VERSION_ENV', 'SIG_VERSION_REMOVED_WARNING', 'UsageError', 'canonicalOrigin', 'parseAdminOrigin', 'parseAdminSigMin', 'sigVersionSettingStale']);
     for (const name of names) assert.equal(signModule[name], originModule[name], name);
     // The signer's own UsageErrors are instances of the one class.
     assert.throws(() => signAdminRequest({ method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: 'short' }), (e) => e instanceof originModule.UsageError);
@@ -634,32 +633,22 @@ describe('worker_config_cases: the Worker reads ADMIN_ORIGIN and ADMIN_SIG_MIN e
   });
 });
 
-describe('signVersionFromEnv: the client override of the signed version (steps c to e)', () => {
-  test('unset or empty is 2; exactly "1" or "2" is that version', () => {
+describe('sigVersionSettingStale: the client override of the signed version, removed in step e', () => {
+  test('the override is gone: no export reads a version from the environment', () => {
+    assert.equal(signModule.signVersionFromEnv, undefined);
+    assert.equal(originModule.signVersionFromEnv, undefined);
     assert.equal(SIG_VERSION_ENV, 'CADDIE_ADMIN_SIG_VERSION');
-    assert.equal(signVersionFromEnv({}), 2);
-    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: undefined }), 2);
-    // GitHub Actions passes an undefined repository variable as the empty string.
-    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: '' }), 2);
-    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: '1' }), 1);
-    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: '2' }), 2);
-    assert.equal(signVersionFromEnv({ OTHER: '1' }), 2);
   });
 
-  test('anything else is a UsageError "version" (exit 2), never a silent default', () => {
-    for (const raw of [' 1', '1 ', '01', 'v1', 'v2', '3', '0', '2\n', 'one', ' ', 'true']) {
-      assert.throws(() => signVersionFromEnv({ [SIG_VERSION_ENV]: raw }), (e) => e instanceof UsageError && e.code === 'version' && e.exitCode === 2, JSON.stringify(raw));
-    }
-    for (const env of [undefined, null, 'CADDIE_ADMIN_SIG_VERSION=1']) assert.throws(() => signVersionFromEnv(env), TypeError);
+  test('a non-empty value is stale; unset, undefined and empty are not', () => {
+    for (const env of [{}, { [SIG_VERSION_ENV]: undefined }, { [SIG_VERSION_ENV]: '' }, { OTHER: '1' }]) assert.equal(sigVersionSettingStale(env), false, JSON.stringify(env));
+    // GitHub Actions passes an undefined repository variable as the empty string, so "" is unset.
+    for (const raw of ['1', '2', ' ', '3', 'v1', '0', '1 ', 'true']) assert.equal(sigVersionSettingStale({ [SIG_VERSION_ENV]: raw }), true, JSON.stringify(raw));
+    for (const env of [undefined, null, 'CADDIE_ADMIN_SIG_VERSION=1']) assert.throws(() => sigVersionSettingStale(env), TypeError);
   });
 
-  test('its result signs with signAdminRequest', () => {
-    const c = byId['get-stats'];
-    for (const [raw, version] of [['1', 1], ['2', 2], ['', 2]]) {
-      const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, key: c.key, now: c.ts * 1000, nonce: c.nonce, version: signVersionFromEnv({ [SIG_VERSION_ENV]: raw }) });
-      assert.equal(parseVersionedAdminHeader(r.header).version, version);
-      if (version === 2) assert.equal(r.header, c.header);
-    }
+  test('the warning says the setting was removed in step e and is ignored, and that v2 is signed', () => {
+    assert.match(SIG_VERSION_REMOVED_WARNING, /^CADDIE_ADMIN_SIG_VERSION was removed in step e of the admin signature migration \(DECISIONS\.md, "Admin signature v2"\) and is ignored: every admin request is signed with v2; unset it$/);
   });
 });
 

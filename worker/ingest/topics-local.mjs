@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { cmp, compareTopics, mergeTargets } from '../../scripts/lib/topics.mjs';
-import { ROOT, UsageError, adminClient, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson } from './lib.mjs';
+import { ROOT, UsageError, adminClient, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, warnRemovedSigVersion } from './lib.mjs';
 
 export const MIN_TALKS = 3;
 export const MAX_TOPICS = 150;
@@ -334,6 +334,9 @@ async function main() {
     // api is the canonical origin from normalizeApiBase, the same origin adminClient signs v2 for,
     // and readAdminToken checks a fallback to the old token file against that origin.
     const api = normalizeApiBase(args.api);
+    // The signature is always v2; a CADDIE_ADMIN_SIG_VERSION left over from the rollback switch
+    // that step e removed is ignored with one warning.
+    warnRemovedSigVersion();
     const token = readAdminToken({ apiOrigin: api });
     if (!token) throw new UsageError('--api needs ADMIN_TOKEN (or ADMIN_TOKEN_FILE).');
     admin = adminClient(api, token);

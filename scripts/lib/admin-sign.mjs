@@ -49,27 +49,27 @@
 // normalised the same way, and tries each. A signature made for any other origin fails as
 // "signature", with no reason of its own. Both sides read an origin value strictly
 // (canonicalOrigin): printable ASCII, a literal http:// or https:// prefix, nothing but a host and
-// a port. The origin rules, the Worker's ADMIN_ORIGIN and ADMIN_SIG_MIN readers and the client's
-// version override live in scripts/lib/admin-origin.mjs, which has no imports so the Worker can
-// use it as it is; this module re-exports them. The signer signs v2 unless asked for v1 (step c of
-// the migration), and the verifier accepts only v1 unless told otherwise; the migration is in
-// DECISIONS.md ("Admin signature v2").
+// a port. The origin rules, the Worker's ADMIN_ORIGIN and ADMIN_SIG_MIN readers and the check for
+// the removed client override CADDIE_ADMIN_SIG_VERSION live in scripts/lib/admin-origin.mjs, which
+// has no imports so the Worker can use it as it is; this module re-exports them. The signer signs
+// v2 unless asked for v1 (step c of the migration), and the verifier accepts only v1 unless told
+// otherwise; the migration is in DECISIONS.md ("Admin signature v2"). Since step e every client
+// signs v2 unconditionally; v1 stays here for the fixture vectors and the verifier tests, and for
+// the Worker, which still verifies v1 while its ADMIN_SIG_MIN is "1".
 
 import { createHash, createHmac, randomBytes, timingSafeEqual as nodeTimingSafeEqual } from 'node:crypto';
 import { UsageError, canonicalOrigin } from './admin-origin.mjs';
 
 export {
-  ORIGIN_ALLOW_RE, ORIGIN_CHARS_RE, ORIGIN_FORBIDDEN_RE, ORIGIN_PREFIX_RE, SIG_VERSION_ENV, UsageError,
-  canonicalOrigin, parseAdminOrigin, parseAdminSigMin, signVersionFromEnv,
+  ORIGIN_ALLOW_RE, ORIGIN_CHARS_RE, ORIGIN_FORBIDDEN_RE, ORIGIN_PREFIX_RE, SIG_VERSION_ENV, SIG_VERSION_REMOVED_WARNING, UsageError,
+  canonicalOrigin, parseAdminOrigin, parseAdminSigMin, sigVersionSettingStale,
 } from './admin-origin.mjs';
 
 export const VERSION = 'v1';
 export const VERSION_V2 = 'v2';
 // The version signAdminRequest() signs when the caller names none: 2 from step c of the migration
-// on, the same version signVersionFromEnv() returns when CADDIE_ADMIN_SIG_VERSION is unset or
-// empty. The clients still pass version: signVersionFromEnv(process.env) explicitly, so
-// CADDIE_ADMIN_SIG_VERSION=1 rolls them back to v1, which the Worker accepts since step d only
-// while its ADMIN_SIG_MIN is "1" (the rollback, which belongs in [vars] of worker/wrangler.toml).
+// on. Since step e every client passes version: 2 itself and reads no setting for it; only the
+// tests ask this module for v1, against the fixture vectors and the verifiers.
 export const DEFAULT_SIGN_VERSION = 2;
 export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 export const QUERY_RE = /^[A-Za-z0-9_.:=&,-]*$/;

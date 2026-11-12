@@ -1,16 +1,17 @@
 // Command tree, argument parsing, help, exit codes and the run loop of the caddie-admin CLI.
 // main() returns the exit code and never calls process.exit, so tests can call it in-process.
 //
-// Exit codes: 0 success, 1 backend or request failure, or finished with warnings (see stderr; audit
-// counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on
-// this tier.
+// Exit codes: 0 success, 1 backend or request failure, or finished with result warnings (see stderr;
+// audit counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported
+// on this tier. The warnings sig_version_removed and audit_not_written leave the exit code unchanged.
 
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
+import { SIG_VERSION_REMOVED_WARNING, sigVersionSettingStale } from '../lib/admin-origin.mjs';
 import { appendAudit } from './audit.mjs';
 import { createAdapter as defaultCreateAdapter } from './backends/index.mjs';
-import { V1_ROLLBACK_WARNING, workerOrigin, workerSignVersion } from './backends/worker.mjs';
+import { workerOrigin } from './backends/worker.mjs';
 import { configDir, loadConfig, selectBackend } from './config.mjs';
 import { resolveMode } from './confirm.mjs';
 import { CREDENTIAL_SOURCES, readCredential, redactor } from './credentials.mjs';
@@ -400,7 +401,7 @@ const GLOBAL_HELP = [
   '  --confirm <target>  with --yes, the exact target; replaces typing it, and is required off a terminal',
   '  --dry-run           preview only, even with --yes',
   '  -h, --help          this help',
-  'Exit codes: 0 ok, 1 backend failure, or finished with warnings (see stderr; audit counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on this tier.',
+  'Exit codes: 0 ok, 1 backend failure, or finished with result warnings (see stderr; audit counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on this tier.',
 ];
 
 function rootHelp() {
@@ -574,11 +575,13 @@ async function run(argv, ctx) {
 
   const config = loadConfig(env);
   const backend = selectBackend(config, values.backend);
-  // Tier 2: the api and the signature version are checked here, before the credential is read and
-  // before any confirmation is asked for, so a bad value is exit 2 with nothing read or prompted.
+  // Tier 2: the api is checked here, before the credential is read and before any confirmation is
+  // asked for, so a bad value is exit 2 with nothing read or prompted. Every request is signed with
+  // v2; a CADDIE_ADMIN_SIG_VERSION left over from the override that step e removed is ignored with
+  // one warning.
   if (backend.tier === 2) {
     workerOrigin(backend);
-    if (workerSignVersion(env) === 1) warn('sig_version_1', V1_ROLLBACK_WARNING);
+    if (sigVersionSettingStale(env)) warn('sig_version_removed', SIG_VERSION_REMOVED_WARNING);
   }
   const source = CREDENTIAL_SOURCES[backend.tier];
   const credential = readCredential({ env, ...source });

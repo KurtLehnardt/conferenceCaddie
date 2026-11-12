@@ -38,8 +38,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, adminSignVersion, chunk, drainPending, isSlug, normalizeApiBase,
-  parseArgs, readAdminToken, readNdjson, withTopics, withoutOperatorKeys,
+  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase,
+  parseArgs, readAdminToken, readNdjson, warnRemovedSigVersion, withTopics, withoutOperatorKeys,
 } from './lib.mjs';
 
 const TABLES = ['conferences', 'talks', 'topics', 'facets', 'people', 'reports', 'rules'];
@@ -276,15 +276,15 @@ export function summary({ retired, unavailable }) {
 // The whole run, from the command-line arguments to the exit code of the header, which it returns
 // instead of setting, so a test can check it. The admin client, the token reader and the output
 // can be replaced for a test; by default they are the real ones.
-export async function run(argv, { client = adminClient, readToken = readAdminToken, log = console.log, error = console.error } = {}) {
+export async function run(argv, { client = adminClient, readToken = readAdminToken, log = console.log, error = console.error, warn = console.warn } = {}) {
   try {
     const args = parseArgs(argv, { flags: ['dry-run', 'include-real'], values: ['backup', 'api', 'only'] });
     if (!args.backup) throw new UsageError('--backup <dir> is required.');
     const api = normalizeApiBase(args.api);
-    // CADDIE_ADMIN_SIG_VERSION is checked here, as push-ingest.mjs does, and not only when the admin
-    // client is created: a dry run creates no client, and a real run creates it only after the plan
-    // has been read and printed, so a bad value should stop every run before any of that.
-    if (adminSignVersion() === 1) error('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). The Worker refuses v1 since step d unless its ADMIN_SIG_MIN is "1" (the rollback of step d, which belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret); remove the setting once v2 works again.');
+    // A CADDIE_ADMIN_SIG_VERSION left over from the rollback switch that step e removed is ignored
+    // with one warning, here, as push-ingest.mjs does, before the backup is read: every admin
+    // request is signed with v2.
+    warnRemovedSigVersion({ warn });
     const backup = resolve(args.backup);
     if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
 
