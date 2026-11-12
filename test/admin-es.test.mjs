@@ -200,17 +200,18 @@ describe('ATT-1, ATT-2 attendees search', () => {
 });
 
 describe('ATT-3, ATT-4 attendees view', () => {
-  // A latitude no timestamp can hold, as in test/admin-worker.test.mjs: an ISO time has a "." only
-  // after its seconds (00 to 59), so "78.5" never appears in one, where "51.5" could.
+  // The same position sentinels as in test/admin-worker.test.mjs, which no timestamp can hold: an
+  // ISO time has a "." only after its seconds (00 to 59). This file pins the CLI's clock, so the
+  // earlier 51.5 never met one here, but the check should not depend on that.
   const SENTINELS = {
-    profile_id: 'SENTINEL-PROFILE-ID', secret_hash: 'SENTINEL-SECRET-HASH', presence_location: { lat: 78.5, lon: -0.1 }, presence_cell: 'SENTINEL-CELL',
+    profile_id: 'SENTINEL-PROFILE-ID', secret_hash: 'SENTINEL-SECRET-HASH', presence_location: { lat: 78.5, lon: -100.25 }, presence_cell: 'SENTINEL-CELL',
     ble_token: 'SENTINEL-BLE-TOKEN', presence_nonce: 'SENTINEL-NONCE', ble_master_id: 'SENTINEL-MASTER', about_semantic: 'SENTINEL-EMBEDDING',
     about: 'SENTINEL-ABOUT', interests: 'SENTINEL-INTERESTS', expertise: 'SENTINEL-EXPERTISE', contact_note: 'SENTINEL-CONTACT-NOTE', presence_spot: 'SENTINEL-SPOT',
     pending_about: 'SENTINEL-PENDING', linkedin_url: 'https://www.linkedin.com/in/SENTINEL-LINKEDIN',
   };
   const TEXT = ['SENTINEL-ABOUT', 'SENTINEL-INTERESTS', 'SENTINEL-EXPERTISE', 'SENTINEL-CONTACT-NOTE', 'SENTINEL-SPOT', 'SENTINEL-PENDING'];
   const CONTACT = ['SENTINEL-LINKEDIN'];
-  const NEVER = ['SENTINEL-PROFILE-ID', 'SENTINEL-SECRET-HASH', '78.5', 'SENTINEL-CELL', 'SENTINEL-BLE-TOKEN', 'SENTINEL-NONCE', 'SENTINEL-MASTER', 'SENTINEL-EMBEDDING', 'SENTINEL-REPORTER', 'SENTINEL-ENDPOINT', 'SENTINEL-PUSH-TOKEN'];
+  const NEVER = ['SENTINEL-PROFILE-ID', 'SENTINEL-SECRET-HASH', '78.5', '100.25', 'SENTINEL-CELL', 'SENTINEL-BLE-TOKEN', 'SENTINEL-NONCE', 'SENTINEL-MASTER', 'SENTINEL-EMBEDDING', 'SENTINEL-REPORTER', 'SENTINEL-ENDPOINT', 'SENTINEL-PUSH-TOKEN'];
 
   function seedViewed() {
     const device = newDevice();
