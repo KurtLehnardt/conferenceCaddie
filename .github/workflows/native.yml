@@ -474,8 +474,8 @@ jobs:
 
   # The device framework in Release, as an archive would build it. It is a compile check that takes
   # 30 to 45 minutes on a contended runner, so it runs here in parallel with "iOS simulator build"
-  # instead of inside it, where it pushed that job past its 60-minute limit. It only reads the caches
-  # (the simulator job writes them on main).
+  # instead of inside it, where it pushed that job past its 60-minute limit. It reads the Gradle and
+  # pinned-download caches without writing them; on main it saves Kotlin/Native under its own key.
   ios-device-link:
     name: iOS device Release link
     runs-on: macos-26
@@ -500,7 +500,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
+          key: konan-${{ runner.os }}-${{ runner.arch }}-device-${{ hashFiles('native/gradle/libs.versions.toml') }}
 
       - name: Show the Xcode version
         run: xcodebuild -version
@@ -514,8 +514,6 @@ jobs:
       - name: Link the Release framework for devices
         run: ./gradlew :composeApp:linkReleaseFrameworkIosArm64
 
-      # Mirrors the simulator job: on a cold Kotlin bump both jobs download Kotlin/Native, and
-      # whichever saves first wins; saving an existing key only warns.
       - name: Save Kotlin/Native
         if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -658,12 +656,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           cache-provider: basic
+          cache-read-only: true
 
       - name: Restore Kotlin/Native
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
+          key: konan-${{ runner.os }}-${{ runner.arch }}-device-${{ hashFiles('native/gradle/libs.versions.toml') }}
 
       # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
       # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
