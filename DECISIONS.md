@@ -1052,6 +1052,23 @@ PR #83 holds the detail of each item: the full option mapping, the README change
     - 1.31.1 adds only OpenVINO and WASM fixes.
   - Revisit when `pod-archive-onnxruntime-c-1.31.x.zip` exists.
 
+## Native build hardening (2026-11-12)
+
+- **A missing symbol fails the iOS link.**
+  - *What happened before.* Kotlin/Native's partial linkage lets a binary link even when a klib calls a function or a class that the dependency version on the classpath no longer has. The call becomes a throw of `IrLinkageError`, which happens only when that code runs, and by default the link prints nothing about it. A dependency update that drops a symbol Compose or Ktor calls would pass the build and every test that does not reach the call, then crash on a device.
+  - *The change.* `native/shared` and `native/composeApp` now pass `-Xpartial-linkage-loglevel=ERROR` to every binary of their iOS targets: the ComposeApp framework and the test executables. The link then fails and names the symbol.
+  - *How it was checked.* With the Kotlin/Native 2.4.21 compiler, a klib was built against a library's first version and linked against a second version that lacks the function it calls:
+    - With the default level, the link succeeded without a warning, and the call threw `kotlin.internal.IrLinkageError: Function 'greet' can not be called: No function found for symbol 'demo.lib/greet|greet(){}[0]'`.
+    - With `ERROR`, the link failed with the same message and "there are linkage errors reported by the partial linkage engine".
+    - Every link of this build passes at `ERROR`, so no symbol is missing today.
+- **Bouncy Castle 1.87 and Commons Lang 3.22.0.** These raise the floors of #95 again; both are build-tool classpaths only.
+  - *Bouncy Castle 1.87 (2026-11-11).* It fixes CVE-2026-103605, -103606 and -103610 to -103617 in bcprov and bcpkix, and -103607 and -103608 in bcpg, which this build does not use. No GitHub advisory or NVD record exists for them yet, so Dependabot has no alert for them; Bouncy Castle's release notes are the source.
+    - It removes seven nested EC provider classes (`KeyAgreementSpi$DHwith*CKDF` and `$DHwithSHA1KDF`, and `KeyFactorySpi$ECGOST3410` and `$ECGOST3410_2012`). The algorithm names those classes served stay registered. It also removes the xmss and lms code under `pqc`.
+    - No jar of the Android Gradle Plugin 9.3.3, Lint or the Unified Test Platform references a removed class.
+    - Its ASN.1 parsing is stricter, and BC's own PKCS12 keystore writes fewer PBE iterations. AGP signs with the debug keystores it creates itself.
+  - *Commons Lang 3.22.0.* It has no security fix, so the bump only keeps the floor current. It removes no class and keeps the Java 8 baseline. Its parent POMs move to commons-parent 107 and apache 40.
+  - *Verification metadata.* It was regenerated with the documented command. The new hashes match the files on Maven Central. The entries for Bouncy Castle 1.86, Commons Lang 3.21.0, commons-parent 105 and apache 39 are gone.
+
 ## Admin signature v2: the request is bound to its origin (step a of four) (2026-11-12)
 
 - **Why v2.** The v1 canonical string covers the method, the path and query, the body hash, the timestamp and the nonce, but not the host. A signed admin request that reaches another host (a typo in the base, a hostile mirror, a staging Worker that holds the same token) can be replayed to the production Worker within the 300-second window, and the nonce table does not help, because that replay is the nonce's first use there. v2 adds the target origin to what is signed. The earlier rule of one admin token per deployment stays.

@@ -367,6 +367,15 @@ kotlin {
             extraOpts("-libraryPath", onnxRuntimeAppleDir.get().dir(slice).asFile.absolutePath, "-staticLibrary", "libonnxruntime.a")
         }
     }
+    // Partial linkage: by default Kotlin/Native links a binary even when a klib calls a function or a
+    // class that the dependency version on the classpath no longer has. The link succeeds, and the call
+    // throws IrLinkageError only when it runs. At ERROR the link fails instead, so a dependency update
+    // that drops something another library calls stops the build, not the app (DECISIONS.md, "Native
+    // build hardening"). Partial linkage runs when a binary is linked (here the test executables), so
+    // the option is set on the binaries, which pass it to their link tasks.
+    targets.withType<KotlinNativeTarget>().configureEach {
+        binaries.configureEach { freeCompilerArgs += "-Xpartial-linkage-loglevel=ERROR" }
+    }
     iosArm64 { onnxRuntime("ios-arm64") }
     iosSimulatorArm64 {
         onnxRuntime("ios-simulator-arm64")

@@ -70,6 +70,9 @@ kotlin {
         iosArm64(),
         iosSimulatorArm64(),
     ).forEach { iosTarget ->
+        // A klib call to something its dependency no longer has fails the link of the framework and
+        // the test executables, instead of throwing IrLinkageError at run time (shared/build.gradle.kts).
+        iosTarget.binaries.configureEach { freeCompilerArgs += "-Xpartial-linkage-loglevel=ERROR" }
         iosTarget.binaries.framework {
             baseName = "ComposeApp"
             isStatic = true
