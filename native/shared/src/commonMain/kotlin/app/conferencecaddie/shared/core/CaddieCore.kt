@@ -640,8 +640,13 @@ class CaddieCore(
     /** A setting of the screens (such as the theme), kept on this device for every backend. */
     suspend fun uiSetting(name: String): String? = database.setting(KEY_UI + name)
 
-    fun setUiSetting(name: String, value: String?) {
-        scope.launch { database.setSetting(KEY_UI + name, value) }
+    /**
+     * Stores a setting of the screens, through the core's queue like every other call: two writes of
+     * one setting are stored in the order they were made, and [awaitIdle] returns only once the
+     * writes made before it are stored.
+     */
+    fun setUiSetting(name: String, value: String?) = command {
+        database.setSetting(KEY_UI + name, value)
     }
 
     /** Bytes of stored bundles. */

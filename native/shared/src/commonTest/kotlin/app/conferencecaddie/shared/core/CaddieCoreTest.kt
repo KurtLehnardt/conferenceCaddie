@@ -340,6 +340,23 @@ class CaddieCoreTest {
         assertEquals(2, count(caps))
     }
 
+    /**
+     * A setting of the screens goes through the core's queue like every other call: the writes of
+     * one setting are stored in the order they were made, and awaitIdle returns only once they are
+     * stored. The Capacitor migration's count of tries relies on it (CapacitorMigrationTest).
+     */
+    @Test
+    fun uiSettingsAreStoredInTheirOrderBeforeAwaitIdleReturns() = runTest {
+        val core = launch(online())
+        core.awaitIdle()
+        for (i in 1..20) core.setUiSetting("order", i.toString())
+        core.awaitIdle()
+        assertEquals("20", core.uiSetting("order"))
+        core.setUiSetting("order", null)
+        core.awaitIdle()
+        assertEquals(null, core.uiSetting("order"))
+    }
+
     @Test
     fun myScheduleShowsTheCopyOfATalkTheBundleDropped() {
         val bundle = TalkBundle.decode(Fixtures.HASH, Fixtures.files.getValue("bundle.json"))!!
