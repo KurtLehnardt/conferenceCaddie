@@ -104,6 +104,13 @@ test('a bad or missing value stops the script before any gcloud call', withSandb
     [{ CADDIE_BUNDLE_BASE: 'https://bundles.example.invalid/no-slash' }, /CADDIE_BUNDLE_BASE must be/],
     [{ CADDIE_BUNDLE_BASE: 'https://u:p@bundles.example.invalid/' }, /CADDIE_BUNDLE_BASE must be/],
     [{ CADDIE_BUNDLE_BASE: 'https://bundles.example.invalid/?q=1/' }, /CADDIE_BUNDLE_BASE must be/],
+    // A comma or = must not reach the comma-separated --set-env-vars list.
+    [{ CADDIE_BUNDLE_BASE: 'https://bundles.example.invalid/x,ES_URL=https://evil.invalid:443/' }, /CADDIE_BUNDLE_BASE must be/],
+    [{ CADDIE_BUNDLE_BASE: 'https://bundles.example.invalid/a=b/' }, /CADDIE_BUNDLE_BASE must be/],
+    [{ ES_URL: 'https://es.example.invalid:443,ES_INDEX=x' }, /ES_URL must be/],
+    [{ ES_URL: 'https://es.example.invalid:443/,X=1' }, /ES_URL must be/],
+    [{ GC_PROJECT: 'proj-test-12345,ES_URL=x' }, /GC_PROJECT must be/],
+    [{ GC_REGION: 'us-west1,X=1' }, /GC_REGION must be/],
   ];
   for (const [over, re] of bad) {
     const r = deploy(sb, { env: { ...GOOD, ...over } });
@@ -119,4 +126,32 @@ test('a bad or missing value stops the script before any gcloud call', withSandb
     assert.match(r.stderr, new RegExp(`Set ${missing}`), missing);
     assert.deepEqual(sb.calls(), [], missing);
   }
+}));
+
+test('a byte order mark, a blank before the =, an unset HOME and FCM_PROJECT_ID from the file', withSandbox((sb) => {
+  const base = `GC_PROJECT=proj-test-12345\nES_URL=${ES}\nCADDIE_BUNDLE_BASE=${BUNDLES}\n`;
+  // BOM on the first line.
+  let r = deploy(sb, { file: `\uFEFF${base}` });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.envVars, EXPECTED_ENV());
+  // A known key with a blank before the = is reported by key name only and not read.
+  fs.rmSync(path.join(sb.dir, 'gcloud.log'), { force: true });
+  r = deploy(sb, { file: `${base}GC_REGION =europe-west4\n` });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /Ignoring the line of GC_REGION .*no blanks are allowed before the =/);
+  assert.match(r.deployCall, /--region us-west1 /);
+  // FCM_PROJECT_ID from the file reaches the env only with NATIVE_PUSH_FCM=1, and is validated.
+  fs.rmSync(path.join(sb.dir, 'gcloud.log'), { force: true });
+  r = deploy(sb, { file: `${base}FCM_PROJECT_ID='fcm-proj-12345'\n`, env: { NATIVE_PUSH_FCM: '1' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.envVars.endsWith(',FCM_PROJECT_ID=fcm-proj-12345'), r.envVars);
+  r = deploy(sb, { file: `${base}FCM_PROJECT_ID=bad,ES_URL=x\n`, env: { NATIVE_PUSH_FCM: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /FCM_PROJECT_ID must be/);
+  // HOME unset and no override: a clear message, not an unbound-variable error.
+  const env = { PATH: `${sb.bin}:/usr/bin:/bin` };
+  const bare = spawnSync(BASH, ['scripts/deploy.sh'], { cwd: ROOT, encoding: 'utf8', env, timeout: 60_000 });
+  assert.equal(bare.status, 1);
+  assert.match(bare.stderr, /Set GC_PROJECT .*HOME is unset/);
+  assert.doesNotMatch(bare.stderr, /unbound variable/);
 }));

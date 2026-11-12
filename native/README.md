@@ -112,16 +112,27 @@ and words. Everything lives in `composeApp/src/commonMain/kotlin/app/conferencec
 |---|---|
 | `theme` | `CaddieTheme`: the web's design tokens from `web/src/styles.css` (`CaddieColors` for light and dark, `CaddieDimens`, `CaddieType`), provided as `Caddie.colors`, `Caddie.dimens` and `Caddie.type` and mapped onto Material 3. Dark mode follows the system unless the Theme setting says Light or Dark, as on the web. |
 | `icons` | `LucideIcon`: every lucide icon the web app uses, generated from the `lucide-preact` package by `composeApp/scripts/generate-lucide-icons.mjs`, drawn by `LucideIcon.vector()` with the web's stroke widths. |
-| `components` | The web's components: `AppBar`, `SwitcherButton`, `NavBar`, `CaddieButton`, `CaddieIconButton`, `CaddieChip` (toggle, dropdown and action chips), `FiltersChip`, `TimePhraseChip`, `SuggestionChip`, `ChipRow`, `SearchField`, `TalkCard`, `InterestedToggle`, `CaddieSheet`, `ConfirmDialog`, `Segmented`, `SwitchRow`, `OptionRow`, the settings rows, `StateView`, `ErrorBanner`, `Toast`, `OfflineBadge`, `NeedsConnection` and `SkeletonCard`. |
+| `components` | The web's components: `AppBar` (with `AppBarBack` and Profile's `AppBarLabeledBack`), `SwitcherButton`, `NavBar`, `CaddieButton`, `CaddieIconButton`, `CaddieChip` (toggle, dropdown and action chips), `FiltersChip`, `TimePhraseChip`, `SuggestionChip`, `ChipRow`, `SearchField`, `TalkCard`, `InterestedToggle`, `CaddieSheet`, `ConfirmDialog`, `Segmented`, `SwitchRow`, `OptionRow`, the settings rows, `StateView`, `ErrorBanner`, `Toast`, `OfflineBadge`, `NeedsConnection` and `SkeletonCard`. |
 | `strings` | `Strings`: the web's copy word for word, grouped by the web file it comes from. Copy that only the native apps need is marked "native only". |
 | `format` | `Format`: dates and times written as `web/src/lib/time.ts` writes them. |
-| `shell` | `App()`'s parts: `ShellState`, `ShellActions` and `TabContent`, the Settings screen, the conference switcher and the server confirmation. `StandaloneShell` runs the shell without a backend until the talk features replace it. |
+| `shell` | `App()`'s parts: `ShellState`, `ShellActions` and `TabContent`, `ShellNavigation` (the tab and the pages over it), the Settings screen, the conference switcher and the server confirmation. `StandaloneShell` runs the shell without a backend until the talk features replace it. |
+| `people` | The people screens on `PeopleController` (phase 3): the People tab, Profile, Requests, Meet up, the people groups of Settings, the talk circles, and their building blocks. See People screens below. |
 
 `App(state, actions, content)` is the web's shell: the conference switcher in the app bar, the
 Offline badge and the Settings gear on its right, and the tab bar People (only when the backend
-serves people features), For you, Search and Interested. Settings is a screen of its own with Back,
-as on the web. The caller owns the data (`ShellState`), answers `ShellActions`, and supplies each
-tab's screen through `TabContent`; tab content reaches the shell through `LocalShellNavigator`.
+serves people features), For you, Search and Interested. The caller owns the data (`ShellState`),
+answers `ShellActions`, and supplies each tab's screen through `TabContent`; tab content reaches the
+shell through `LocalShellNavigator`.
+
+Settings, Profile, Requests and Meet up are pages of their own over the tabs, with Back, as the
+web's non-tab routes are. `ShellNavigation` keeps them as a stack (`ShellPage.Settings` and
+`PeoplePage.Profile`, `PeoplePage.Inbox`, `PeoplePage.Meet(id)`): `openPage()` puts one on top or
+goes back to it when it is already open, `back()` leaves the top one (the system Back and the iOS
+edge swipe do this), and `selectTab()` leaves them all. The app bar's Back follows the web: Settings,
+Requests and Meet up lead to the tab screen, and Profile's labelled "‹ Settings" leads to Settings.
+Requests and Meet up keep People selected in the tab bar. A caller that moves around the shell from
+outside it (a notification tap) makes the navigation with `rememberShellNavigation()` and passes it
+to `App()`.
 
 In a window at least 768 dp wide (a tablet, or a phone in landscape) the shell takes the web's wide
 layout: the tabs move to a rail on the left with the app icon on top, the app bar and the screen stay
@@ -154,9 +165,10 @@ The app icons and the iOS launch image come from `web/public/icons` through
 
 Debug builds take launch options that open a screen directly, for screenshots and manual checks:
 `-caddie.tab Search`, `-caddie.open settings` (or `switcher`), `-caddie.theme dark`,
-`-caddie.connect https://example.org` and `-caddie.gallery 1` (the Search components drawn with the
-web's sample talk); the talk screens add theirs (Trying the talk features against local bundles),
-among them `-caddie.link <caddie:// link>`, which hands a link over as the platform would. On iOS they are launch arguments
+`-caddie.connect https://example.org`, `-caddie.gallery 1` (the Search components drawn with the
+web's sample talk) and `-caddie.people` (below); the talk screens add theirs (Trying the talk
+features against local bundles), among them `-caddie.link <caddie:// link>`, which hands a link
+over as the platform would. On iOS they are launch arguments
 (`xcrun simctl launch <device> app.conferencecaddie -caddie.tab Search`); on Android they are intent
 extras (`adb shell am start -n app.conferencecaddie/.MainActivity -e caddie.tab Search`). Release
 builds ignore them. `-caddie.connect` follows the rules of a `caddie://connect` link: the address is
@@ -164,6 +176,55 @@ normalised, and anything a link could not name (not https, credentials, a query)
 
 On iOS a Light or Dark Theme setting is applied to the app's window, so the status bar, the SwiftUI
 host and anything presented from it follow it too.
+
+### People screens
+
+`ui/people` draws the web's people screens (`web/src/people`) on the shared `PeopleController`:
+
+- `PeopleTab.kt` puts them in the shell. `rememberPeopleUi()` collects the controller's state and
+  gives `App()` the People tab, the people pages, the people groups of Settings and the Requests
+  button with its badge, and the talk screens their slots (`TalkSheet`'s `peopleControls`,
+  `InterestedScreen`'s `shareAll`). The People tab shows only when the backend's capabilities and
+  the controller both have people features on. Offline, the People tab, Requests and Meet up show
+  the web's NeedsConnection; Profile and Settings still work. It also shows the people route of
+  the shell's `ShellRequest` once people features are on: every `caddie://` link, a tapped
+  notification's (`caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`) included,
+  goes through `IncomingHandoff` and `AppLink` in `CaddieApp`, and a people route
+  (`AppLink.PeopleRoute`) opens People (with Around now), Requests, Meet up, Profile, or the
+  presence setup on a zone, which turns presence on only when the person taps "I'm around". It
+  shows the controller's notices as toasts, and draws the sheets several screens share (Ask to talk
+  shop, Report, the block confirmation) once.
+- Every screen takes the `PeopleUiState` it draws and a `PeopleHost`: the controller, moving
+  around (`openProfile()`, `openInbox()`, `openMeet(id)`, `openPeople(request)`, `back()`), the
+  shell's toast, those shared sheets, and opening talks and links. Nothing reaches the controller
+  through a CompositionLocal.
+- `PeopleComponents.kt` holds the building blocks with the web's sizes (people.css): `PeopleCard`,
+  `PeoplePrompt`, `PeopleNotice`, `PeopleBanner`, `PeopleTextField`, `PeopleSelect`, `RadioRow`,
+  `PeopleSwitchRow` (Settings, in-card and presence sizes), `BandPill`, `SamplePill`, `SampleNote`,
+  `AroundLine`, `PersonFrame`, `OpenerBox`, the headings, `ActionsRow`, `RefreshBar`,
+  `OverflowMenu`, and `EvidenceText`, which shows the server's evidence with its `<mark>`
+  highlights and treats nothing else as markup. Its header lists the web's computed-style quirks
+  that the screens keep, such as the danger-styled text buttons that render in the accent ink.
+  Its controls reserve the platform's touch target (`minimumInteractiveComponentSize()`) and grow
+  with large text, and `PeopleScreenColumn` ends above the keyboard (`imePadding()`), as Settings
+  does; a screen built on a `LazyColumn` adds `imePadding()` itself.
+- The people pages (Profile, Requests, Meet up) and the People tab draw in the shell's content
+  column, so in a wide window they sit in its centred 720 dp column next to the rail, with the same
+  insets as Settings.
+- Copy shared by several screens is in `PeopleCommonStrings`; each group of screens has its own
+  strings file, and the web's logic-file copy is the shared module's `PeopleText`.
+
+`-caddie.people` opens a people screen once people features are on: `home`, `around` (Around now
+on), `search:<text>`, `profile`, `inbox`, `meet:<id>` or `settings-people` (Settings, whose people
+groups follow You), for example
+`xcrun simctl launch <device> app.conferencecaddie -caddie.people search:kubernetes`.
+
+The parity screenshots of the people screens (`PeopleParityShots` in composeApp's common tests)
+draw every state with the web mock's people at 390 and 320 dp, light and dark, and save PNGs.
+Normal test runs skip them. On Android, pass the instrumentation argument `caddieParity=1`
+(optionally `caddieParityOnly=<state>,<state>`) and pull the PNGs from
+`/data/local/tmp/caddie-parity` with `adb pull`; on iOS, set `SIMCTL_CHILD_CADDIE_PARITY_DIR` to a folder on this Mac (and optionally
+`SIMCTL_CHILD_CADDIE_PARITY_ONLY`) for `:composeApp:iosSimulatorArm64Test`.
 
 ## Build and run on iOS
 
@@ -553,9 +614,9 @@ needs its own quotes inside `adb shell`, for example `-e caddie.query "'kubernet
 
 ## People features
 
-Phase 3 puts the people features of the web app (`web/src/people`) in `shared/people`. The screens,
-which arrive in the next part of phase 3, are built on `PeopleController` alone; its KDoc is the
-reference for them.
+Phase 3 puts the people features of the web app (`web/src/people`) in `shared/people`. The screens
+(`composeApp/.../ui/people`, under Design system) are built on `PeopleController` alone; its KDoc
+is the reference for them.
 
 | File | What it is |
 |---|---|
@@ -596,8 +657,9 @@ is deleted and checked to be gone at the end. Without `-Pcaddie.liveBase` the te
 The people features reach the phone through the interfaces in
 `shared/src/commonMain/.../PlatformServices.kt` and `Platform.kt`, passed in once as
 `PeopleServices`. Each platform has a factory. On Android the process's one controller, with its
-services, comes from `CaddiePeople.controller(context)` in `androidApp`, which the background
-nudge job uses too; the people screens arrive later in phase 3.
+services, comes from `CaddiePeople.controller(context)` in `androidApp`, which `MainActivity` and
+the background nudge job share; on iOS `MainViewController` calls the factory once at start-up to
+build the people controller.
 
 | | Android (`shared/src/androidMain`) | iOS (`shared/src/iosMain`) |
 |---|---|---|

@@ -1,5 +1,11 @@
 // Operator CLI for reports: what is hidden, what was reported, and undoing or confirming a hide.
 //
+// DEPRECATED: the caddie-admin CLI (scripts/caddie-admin.mjs, `caddie-admin moderation queue |
+// hide | unhide | delete | purge-reports`) serves the same actions on every backend tier with a
+// dry run, a typed confirmation and an audit log. This script keeps its flags, messages and key
+// policy for one release and is then removed. The actions themselves live in
+// scripts/admin/backends/es-moderation.mjs, which both run.
+//
 // Usage: node scripts/moderation.mjs --event <slug> <one action>
 //   --hidden                lists hidden profiles, spots and meets with report counts and reasons
 //   --since <iso>           lists the reports made since that instant
@@ -25,12 +31,12 @@
 // fields, so nothing is re-embedded.
 
 import { esUrlOrExit } from './lib/es-url.mjs';
+import { createModeration } from './admin/backends/es-moderation.mjs';
 const API_KEY = process.env.ELASTISEARCH_API_KEY || process.env.ES_PEOPLE_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
 const REPORTS_INDEX = process.env.ES_PEOPLE_REPORTS_INDEX || 'caddie-people-reports';
 const CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conferences';
-const PAGE = 1000;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const REF_RE = /^[0-9a-f]{16}$/;
 const MEET_ID_RE = /^[A-Za-z0-9_-]{22}$/;
@@ -116,247 +122,31 @@ async function es(method, path, body, { ndjson = false, okStatuses = [] } = {}) 
 }
 
 const idx = (name) => `/${encodeURIComponent(name)}`;
-const eventFilter = { term: { event_id: slug } };
 const quote = (s) => JSON.stringify(String(s ?? ''));
-
-// ---------------------------------------------------------------------------------------------
-// Lookups.
-
-// People documents of this conference by ref: Map ref -> { _id, display_name, ... }.
-async function peopleByRefs(refs) {
-  const wanted = [...new Set(refs)].filter(Boolean);
-  if (!wanted.length) return new Map();
-  const { json } = await es('POST', `${idx(PEOPLE_INDEX)}/_search`, {
-    size: wanted.length,
-    _source: ['ref', 'display_name', 'hidden', 'spot_hidden', 'presence_spot'],
-    query: { bool: { filter: [eventFilter, { terms: { ref: wanted } }] } },
-  });
-  const map = new Map();
-  for (const h of json.hits?.hits ?? []) if (h._source?.ref) map.set(h._source.ref, { _id: h._id, ...h._source });
-  return map;
-}
-
-// Display names of the people a meet is between, by profile id, without printing the ids.
-async function namesById(profileIds) {
-  const ids = [...new Set(profileIds)].filter(Boolean);
-  if (!ids.length) return new Map();
-  const { json } = await es('POST', `${idx(PEOPLE_INDEX)}/_mget`, {
-    ids: ids.map((id) => `${slug}:${id}`),
-    _source: ['profile_id', 'display_name', 'ref'],
-  });
-  const map = new Map();
-  for (const d of json.docs ?? []) if (d.found && d._source?.profile_id) map.set(d._source.profile_id, d._source);
-  return map;
-}
-
-// Report counts per target: Map "kind:id" -> { reporters, reasons: { reason: n } }. One report
-// document is one reporter, so the document count is the distinct reporter count.
-async function reportSummary() {
-  const { json } = await es('POST', `${idx(REPORTS_INDEX)}/_search?ignore_unavailable=true`, {
-    size: 0,
-    query: eventFilter,
-    aggs: {
-      targets: {
-        multi_terms: { terms: [{ field: 'target_kind' }, { field: 'target_id' }], size: PAGE },
-        aggs: { reasons: { terms: { field: 'reason', size: 10 } } },
-      },
-    },
-  });
-  const map = new Map();
-  for (const b of json.aggregations?.targets?.buckets ?? []) {
-    const [kind, id] = b.key;
-    map.set(`${kind}:${id}`, { reporters: b.doc_count, reasons: Object.fromEntries((b.reasons?.buckets ?? []).map((r) => [r.key, r.doc_count])) });
-  }
-  return map;
-}
-
-const reasonsText = (summary) => (summary ? Object.entries(summary.reasons).sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r} x${n}`).join(', ') : '');
-const countText = (summary) => `${summary?.reporters ?? 0} report${summary?.reporters === 1 ? '' : 's'}`;
 const personText = (p, ref) => `${quote(p?.display_name ?? '(profile deleted)')} ref ${ref}`;
+const print = (lines) => { for (const line of lines) console.log(line); };
 
-async function meetText(s) {
-  const names = await namesById(s.participants ?? []);
-  const who = (s.participants ?? []).map((p) => quote(names.get(p)?.display_name ?? '(profile deleted)')).join(' and ');
-  return `meet ${s.meet_id} between ${who}, state ${s.state ?? '?'}`;
-}
+const moderation = createModeration({ es, slug, indices: { people: PEOPLE_INDEX, meets: MEETS_INDEX, reports: REPORTS_INDEX, conferences: CONFERENCES_INDEX } });
 
-// ---------------------------------------------------------------------------------------------
-// Actions.
-
-async function listHidden() {
-  const summary = await reportSummary();
-  const peopleHits = await es('POST', `${idx(PEOPLE_INDEX)}/_search`, {
-    size: PAGE,
-    _source: ['ref', 'display_name', 'hidden', 'spot_hidden'],
-    sort: [{ 'display_name.keyword': 'asc' }],
-    query: { bool: { filter: [eventFilter], should: [{ term: { hidden: true } }, { term: { spot_hidden: true } }], minimum_should_match: 1 } },
-  });
-  const meetHits = await es('POST', `${idx(MEETS_INDEX)}/_search?ignore_unavailable=true`, {
-    size: PAGE,
-    sort: [{ created_at: 'desc' }],
-    query: { bool: { filter: [eventFilter, { term: { hidden: true } }] } },
-  });
-  let n = 0;
-  for (const h of peopleHits.json.hits?.hits ?? []) {
-    const s = h._source ?? {};
-    if (s.hidden === true) {
-      n += 1;
-      const sm = summary.get(`profile:${s.ref}`);
-      console.log(`profile  ${personText(s, s.ref)}  ${countText(sm)}${sm ? `: ${reasonsText(sm)}` : ''}`);
-    }
-    if (s.spot_hidden === true) {
-      n += 1;
-      const sm = summary.get(`spot:${s.ref}`);
-      console.log(`spot     ${personText(s, s.ref)}  ${countText(sm)}${sm ? `: ${reasonsText(sm)}` : ''}`);
-    }
-  }
-  for (const h of meetHits.json.hits?.hits ?? []) {
-    const s = h._source ?? {};
-    n += 1;
-    const sm = summary.get(`meet:${s.meet_id}`);
-    console.log(`meet     ${await meetText(s)}  ${countText(sm)}${sm ? `: ${reasonsText(sm)}` : ''}`);
-  }
-  console.log(n ? `${n} hidden target${n === 1 ? '' : 's'} at ${slug}.` : `Nothing is hidden at ${slug}.`);
-}
-
-async function listSince(iso) {
-  const sinceMs = Date.parse(iso);
-  if (!Number.isFinite(sinceMs)) usage('--since needs an ISO 8601 instant, for example 2026-11-10T08:00:00Z.');
-  const { json } = await es('POST', `${idx(REPORTS_INDEX)}/_search?ignore_unavailable=true`, {
-    size: PAGE,
-    _source: ['target_kind', 'target_id', 'reason', 'created_at'],
-    sort: [{ created_at: 'asc' }],
-    query: { bool: { filter: [eventFilter, { range: { created_at: { gte: new Date(sinceMs).toISOString() } } }] } },
-  });
-  const rows = (json.hits?.hits ?? []).map((h) => h._source ?? {});
-  const people = await peopleByRefs(rows.filter((r) => r.target_kind !== 'meet').map((r) => r.target_id));
-  const meetIds = [...new Set(rows.filter((r) => r.target_kind === 'meet').map((r) => r.target_id))];
-  const meets = new Map();
-  if (meetIds.length) {
-    const found = await es('POST', `${idx(MEETS_INDEX)}/_mget`, { ids: meetIds }, { okStatuses: [404] });
-    for (const d of found.json.docs ?? []) if (d.found) meets.set(d._id, d._source ?? {});
-  }
-  for (const r of rows) {
-    const target = r.target_kind === 'meet'
-      ? (meets.has(r.target_id) ? await meetText(meets.get(r.target_id)) : `meet ${r.target_id} (deleted)`)
-      : personText(people.get(r.target_id), r.target_id);
-    console.log(`${r.created_at}  ${String(r.target_kind).padEnd(7)}  ${String(r.reason).padEnd(10)}  ${target}`);
-  }
-  console.log(`${rows.length} report${rows.length === 1 ? '' : 's'} since ${new Date(sinceMs).toISOString()} at ${slug}${rows.length === PAGE ? ' (more exist; narrow --since)' : ''}.`);
-}
-
-// One Bulk partial update on a people document. Returns the item status.
-async function updatePerson(id, doc) {
-  const body = `${JSON.stringify({ update: { _id: id } })}\n${JSON.stringify({ doc })}\n`;
-  const { json } = await es('POST', `${idx(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, body, { ndjson: true });
-  return json.items?.[0]?.update?.status ?? 500;
-}
-
-async function deleteReports(kind, id) {
-  const { json } = await es('POST', `${idx(REPORTS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: { bool: { filter: [eventFilter, { term: { target_kind: kind } }, { term: { target_id: id } }] } },
-  });
-  return json.deleted ?? 0;
-}
-
-// The people document a profile or spot target names, or exit 1.
-async function requirePerson(ref) {
-  const p = (await peopleByRefs([ref])).get(ref);
-  if (!p) {
-    console.error(`No profile with ref ${ref} at ${slug}.`);
-    process.exit(1);
-  }
-  return p;
-}
-
-async function requireMeet(id) {
-  const { status, json } = await es('GET', `${idx(MEETS_INDEX)}/_doc/${encodeURIComponent(id)}`, undefined, { okStatuses: [404] });
-  if (status === 404 || !json.found || json._source?.event_id !== slug) {
-    console.error(`No meet ${id} at ${slug}.`);
-    process.exit(1);
-  }
-  return json._source;
-}
-
-async function unhideTarget({ kind, id }) {
-  if (kind === 'meet') {
-    const s = await requireMeet(id);
-    await es('POST', `${idx(MEETS_INDEX)}/_update/${encodeURIComponent(id)}?refresh=wait_for`, { doc: { hidden: false, hidden_owner_id: null } });
-    console.log(`Unhid ${await meetText(s)}.`);
-  } else {
-    const p = await requirePerson(id);
-    const status = await updatePerson(p._id, kind === 'profile' ? { hidden: false } : { spot_hidden: false });
-    if (status < 200 || status > 299) {
-      console.error(`Updating the profile failed with status ${status}.`);
-      process.exit(1);
-    }
-    console.log(`Unhid ${kind} of ${personText(p, id)}.${kind === 'spot' ? ' The spot line stays cleared until they set it again.' : ''}`);
-  }
-  const removed = await deleteReports(kind, id);
-  console.log(`Removed ${removed} report${removed === 1 ? '' : 's'}; it is hidden again after two new ones.`);
-}
-
-async function deleteTarget({ kind, id }) {
-  if (kind === 'meet') {
-    const s = await requireMeet(id);
-    await es('DELETE', `${idx(MEETS_INDEX)}/_doc/${encodeURIComponent(id)}?refresh=wait_for`);
-    console.log(`Deleted ${await meetText(s)}.`);
-    return;
-  }
-  const p = await requirePerson(id);
-  if (kind === 'spot') {
-    const status = await updatePerson(p._id, { presence_spot: null, spot_hidden: true });
-    if (status < 200 || status > 299) {
-      console.error(`Updating the profile failed with status ${status}.`);
-      process.exit(1);
-    }
-    console.log(`Cleared the spot line of ${personText(p, id)}; it stays hidden.`);
-    return;
-  }
+// Deletes a profile document only, as this script always did. The caddie-admin CLI runs the full
+// "Delete my profile" instead (server/people-delete.mjs), which also removes the person's meets,
+// push subscriptions, nudge records and the blocks they made.
+async function deleteProfileDocument(ref) {
+  const p = await moderation.requirePerson(ref);
   await es('DELETE', `${idx(PEOPLE_INDEX)}/_doc/${encodeURIComponent(p._id)}?refresh=wait_for`);
-  console.log(`Deleted the profile ${personText(p, id)}. Their device keeps its own data and can create a profile again; the reports stay until --purge.`);
+  console.log(`Deleted the profile ${personText(p, ref)}. Their device keeps its own data and can create a profile again; the reports stay until --purge.`);
 }
 
-// The offset of a time zone from UTC at an instant, in milliseconds, through Intl.
-function zoneOffsetMs(utcMs, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).formatToParts(new Date(utcMs));
-  const get = (type) => Number(parts.find((p) => p.type === type)?.value);
-  return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')) - utcMs;
+try {
+  if (action === 'hidden') print((await moderation.listHidden()).lines);
+  else if (action === 'since') print((await moderation.listSince(arg)).lines);
+  else if (action === 'unhide') print((await moderation.unhideTarget(parseTarget(arg))).lines);
+  else if (action === 'delete') {
+    const target = parseTarget(arg);
+    if (target.kind === 'profile') await deleteProfileDocument(target.id);
+    else print((await moderation.deleteTarget(target)).lines);
+  } else print((await moderation.purge()).lines);
+} catch (err) {
+  console.error(err?.message ?? String(err));
+  process.exit(err?.exitCode === 2 ? 2 : 1);
 }
-
-// 23:59:59 on the conference's last day in its time zone (UTC-12 when unknown), as the server
-// computes visible_until.
-function conferenceEndMs(endDate, timeZone) {
-  const [y, m, d] = String(endDate).split('-').map(Number);
-  const wall = Date.UTC(y, m - 1, d, 23, 59, 59);
-  if (!timeZone) return wall + 12 * 3600_000;
-  const t = wall - zoneOffsetMs(wall, timeZone);
-  return wall - zoneOffsetMs(t, timeZone);
-}
-
-async function purge() {
-  const { status, json } = await es('GET', `${idx(CONFERENCES_INDEX)}/_doc/${encodeURIComponent(slug)}?_source_includes=end_date,time_zone`, undefined, { okStatuses: [404] });
-  if (status === 404 || !json.found || !json._source?.end_date) {
-    console.error(`No conference ${slug} with an end date. --purge needs the admin key to read it.`);
-    process.exit(1);
-  }
-  const endMs = conferenceEndMs(json._source.end_date, json._source.time_zone);
-  const end = new Date(endMs).toISOString();
-  if (Date.now() <= endMs) {
-    console.log(`${slug} ends at ${end}; nothing is purged before that.`);
-    return;
-  }
-  const res = await es('POST', `${idx(REPORTS_INDEX)}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, {
-    query: { bool: { filter: [eventFilter, { range: { created_at: { lt: end } } }] } },
-  });
-  console.log(`Deleted ${res.json.deleted ?? 0} reports of ${slug} made before ${end}.`);
-}
-
-if (action === 'hidden') await listHidden();
-else if (action === 'since') await listSince(arg);
-else if (action === 'unhide') await unhideTarget(parseTarget(arg));
-else if (action === 'delete') await deleteTarget(parseTarget(arg));
-else await purge();

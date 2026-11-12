@@ -3,9 +3,11 @@
 //
 // Usage:
 //   node worker/ingest/push-ingest.mjs --api <base> [--event <slug> ... | --events-from <file>] [--dry-run]
-//                                      [--rebuild-topics] [--allow-shrink] [--report <file>]
+//                                      [--rebuild-topics] [--allow-shrink] [--allow-empty] [--report <file>]
 // --allow-shrink lets finalize delete more than 10 talks and more than 10% of a conference's talks,
 // which the Worker otherwise refuses (409) so a short feed cannot erase people's sharing.
+// --allow-empty lets a rebuilt topic list with no topics replace a stored one, which the Worker
+// (and resolveTopics, before any talk or topic is sent) otherwise refuses.
 // Env: ADMIN_TOKEN, or ADMIN_TOKEN_FILE naming a file that holds it (not needed with --dry-run).
 //
 // Steps:
@@ -18,7 +20,8 @@
 // 2. For each searchable event that has a talk file:
 //    a. topics: the list stored on the Worker is frozen (GET /admin/topics) and each talk's topics
 //       are recomputed against it, unless there is none yet or --rebuild-topics is given, when the
-//       list is built from the titles (topics-local.mjs);
+//       list is built from the titles (topics-local.mjs). A rebuilt list with no topics does not
+//       replace a stored one without --allow-empty;
 //    b. POST /admin/talks in batches of at most 50 talks, all with one generation (the run's
 //       timestamp). The Worker embeds only talks whose text changed;
 //    c. POST /admin/talks/finalize, which deletes the talks that an earlier generation left behind;
@@ -135,12 +138,14 @@ export function countsAfterTakedowns(counts, talks) {
 
 // Pushes one event from its prepared talks (workerTalks). Returns a one-line summary. Throws on the
 // first failure.
-export async function pushEvent(conf, prepared, { admin, dryRun, generation, rebuild, stop, allowShrink = false }) {
+export async function pushEvent(conf, prepared, { admin, dryRun, generation, rebuild, stop, allowShrink = false, allowEmpty = false }) {
   const slug = conf.slug;
   const { talks } = prepared;
   if (talks.length === 0) return `${slug}: skipped, the talk file is empty.`;
 
-  const topicResult = await resolveTopics(talks, { slug, admin, rebuild, stop });
+  const topicResult = await resolveTopics(talks, { slug, admin, rebuild, allowEmpty, stop });
+  // Say why a conference has no topics, so the reason reaches the log.
+  if (topicResult.topics.length === 0) for (const w of topicResult.warnings) console.warn(`${slug}: ${w}`);
   const payloadTalks = talks.map((t) => withTopics(t, topicResult.assignments.get(t.talk_id)));
   const facets = buildFacets(slug, talks);
   const batches = chunk(payloadTalks, TALK_BATCH);
@@ -157,7 +162,10 @@ export async function pushEvent(conf, prepared, { admin, dryRun, generation, reb
   }
   const pendingAfter = total.pending > 0 ? await drainPending(admin, slug) : 0;
   const fin = await admin('POST', `/admin/talks/finalize${eventQuery}`, allowShrink ? { generation, allow_shrink: true } : { generation });
-  const tp = await admin('PUT', `/admin/topics${eventQuery}`, { topics: topicResult.topics });
+  // allow_empty goes to the Worker only when this list is the empty one it is meant for, so an older
+  // Worker that rejects an unknown body key is never sent the flag needlessly.
+  const topicsBody = allowEmpty && topicResult.topics.length === 0 ? { topics: topicResult.topics, allow_empty: true } : { topics: topicResult.topics };
+  const tp = await admin('PUT', `/admin/topics${eventQuery}`, topicsBody);
   const fc = await admin('PUT', `/admin/facets${eventQuery}`, { facets });
   return `${head}; upserted ${total.upserted}, unchanged ${total.unchanged}, embedded ${total.embedded}, pending ${pendingAfter ?? '?'}; finalized ${fin.talks ?? '?'} talks, deleted ${fin.deleted ?? 0}, unshared ${fin.unshared ?? 0}; topics stored ${tp.topics ?? '?'}, facets stored ${fc.facets ?? '?'}.`;
 }
@@ -179,7 +187,7 @@ async function liveSearchable(api) {
 const report = { upserted: [], kept: [], pushed: [], failed: [], not_attempted: [] };
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink'], values: ['api', 'report', 'events-from'], multi: ['event'] });
+  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty'], values: ['api', 'report', 'events-from'], multi: ['event'] });
   reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
@@ -256,7 +264,7 @@ async function main() {
     try {
       const p = prepared.get(conf.slug);
       if (p.error) throw p.error;
-      console.log(await pushEvent(conf, p, { admin: softAdmin, dryRun, generation, rebuild: args['rebuild-topics'], stop, allowShrink: args['allow-shrink'] }));
+      console.log(await pushEvent(conf, p, { admin: softAdmin, dryRun, generation, rebuild: args['rebuild-topics'], stop, allowShrink: args['allow-shrink'], allowEmpty: args['allow-empty'] }));
       pushed++;
       if (!dryRun) report.pushed.push(conf.slug);
     } catch (e) {

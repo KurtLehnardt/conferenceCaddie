@@ -1,7 +1,10 @@
 name: Deploy the talk bundles to GitHub Pages
 
-# Builds https://kurtlehnardt.github.io/conferenceCaddie/ and publishes it with the official Pages
-# actions. The site holds only public talk data, never the web app:
+# Builds the GitHub Pages site of the repository it runs in, https://<owner>.github.io/<repository>/
+# (for KurtLehnardt/conferenceCaddie, https://kurtlehnardt.github.io/conferenceCaddie/; the first step
+# of the build job works the addresses out, and repository variables can override them), and
+# publishes it with the official Pages actions. The site holds only public talk data, never the web
+# app:
 # - the talk bundles of tier 1 (docs/BUNDLES.md, docs/contracts/talk-bundle.md): bundles/<slug>/<hash16>/
 #   {bundle.json, vectors.i8}, bundles/conferences.json (with a copy at conferences.json), the
 #   builder's bundles/build-info.json and bundles/sources.json, and the tier 1 capabilities.json,
@@ -34,10 +37,19 @@ name: Deploy the talk bundles to GitHub Pages
 # until the live files carry a Last-Modified at least that new (build-bundles.mjs --live-since).
 # Nothing here needs the Worker: the talk bundles are available to the native apps whether or not
 # the Worker has been deployed.
-# Repository variable (Settings, Secrets and variables, Actions, Variables), a public address and
-# not a secret:
+# Repository variables (Settings, Secrets and variables, Actions, Variables), public addresses and
+# not secrets:
 #   CADDIE_APP_URL   the app's address, the Worker's https address. The landing page links to it, or
 #                    says the app is not live yet while it is empty.
+# Optional overrides of the addresses the build publishes under (the first step of the build job
+# works them out from the repository this runs in, so a fork needs none of them):
+#   CADDIE_SITE_URL      the Pages site, https, ending in "/". Default: https://<owner, lowercased>.github.io/<repository>/
+#                        (a user site, a repository named <owner>.github.io, lives at the root: set
+#                        this to https://<owner>.github.io/).
+#   CADDIE_BUNDLE_BASE   where the talk bundles are served, https, ending in "/". Default: the site address
+#                        in effect plus bundles/.
+#   CADDIE_TAKEDOWN_URL  where a takedown request goes, an https address or a mailto: address.
+#                        Default: https://github.com/<owner>/<repository>/issues.
 #
 # Triggers: a push to main that changes the conference data or the bundle builder; a weekly
 # scheduled full rebuild that recomputes every vector it builds (--reuse-from none), so nothing that
@@ -86,10 +98,8 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# SITE_URL, BUNDLE_BASE and TAKEDOWN are not here: the build job works them out in its first step.
 env:
-  SITE_URL: https://kurtlehnardt.github.io/conferenceCaddie/
-  BUNDLE_BASE: https://kurtlehnardt.github.io/conferenceCaddie/bundles/
-  TAKEDOWN: https://github.com/KurtLehnardt/conferenceCaddie/issues
   PUBLISHER: Conference Caddie
 
 jobs:
@@ -108,6 +118,45 @@ jobs:
         with:
           ref: ${{ inputs.ingest_artifact && 'main' || '' }}
           persist-credentials: false
+
+      # The addresses this build publishes under, for the steps below as SITE_URL, BUNDLE_BASE and
+      # TAKEDOWN. They follow the repository the workflow runs in, so a fork or a renamed repository
+      # needs no edit here: SITE_URL is https://<owner lowercased>.github.io/<repository>/, BUNDLE_BASE
+      # that plus bundles/, TAKEDOWN https://github.com/<owner>/<repository>/issues. The repository
+      # variables CADDIE_SITE_URL, CADDIE_BUNDLE_BASE and CADDIE_TAKEDOWN_URL override each one when set
+      # (an unset or empty variable overrides nothing); BUNDLE_BASE is built from the SITE_URL in
+      # effect. For KurtLehnardt/conferenceCaddie the result is https://kurtlehnardt.github.io/conferenceCaddie/,
+      # https://kurtlehnardt.github.io/conferenceCaddie/bundles/ and
+      # https://github.com/KurtLehnardt/conferenceCaddie/issues, exactly what this file held before.
+      # Every expression goes through env, never into the script text. An address the scripts below
+      # would refuse fails here, naming the variable; its value is not echoed.
+      - name: Work out the site addresses
+        env:
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          SITE_URL_OVERRIDE: ${{ vars.CADDIE_SITE_URL }}
+          BUNDLE_BASE_OVERRIDE: ${{ vars.CADDIE_BUNDLE_BASE }}
+          TAKEDOWN_OVERRIDE: ${{ vars.CADDIE_TAKEDOWN_URL }}
+        run: |
+          set -euo pipefail
+          name="${REPOSITORY#*/}"
+          owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          site="${SITE_URL_OVERRIDE:-https://$owner.github.io/$name/}"
+          case "$site" in */) ;; *) site="$site/" ;; esac
+          bundles="${BUNDLE_BASE_OVERRIDE:-${site}bundles/}"
+          case "$bundles" in */) ;; *) bundles="$bundles/" ;; esac
+          takedown="${TAKEDOWN_OVERRIDE:-https://github.com/$REPOSITORY/issues}"
+          https_dir='^https://[^[:space:][:cntrl:]?#]+/$'
+          contact='^(https://|mailto:)[^[:space:][:cntrl:]]+$'
+          [[ "$site" =~ $https_dir ]] || { echo "::error::SITE_URL (the repository variable CADDIE_SITE_URL, or the address derived from the repository) must be an https address that ends in /."; exit 1; }
+          [[ "$bundles" =~ $https_dir ]] || { echo "::error::BUNDLE_BASE (the repository variable CADDIE_BUNDLE_BASE, or the site address plus bundles/) must be an https address that ends in /."; exit 1; }
+          [[ "$takedown" =~ $contact ]] || { echo "::error::TAKEDOWN (the repository variable CADDIE_TAKEDOWN_URL, or the repository's issues address) must be an https or mailto: address."; exit 1; }
+          {
+            echo "SITE_URL=$site"
+            echo "BUNDLE_BASE=$bundles"
+            echo "TAKEDOWN=$takedown"
+          } >> "$GITHUB_ENV"
+          echo "Site $site, bundles $bundles, takedown $takedown"
 
       # When the latest successful Pages deployment was created. Pages sets Last-Modified to the time it
       # deployed a file, and the build waits until the live index is at least that new (--live-since).

@@ -3,6 +3,7 @@ package app.conferencecaddie.ui.theme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
@@ -62,7 +63,62 @@ data class CaddieType(
     val note: TextStyle = style(13),
     /** .toast. */
     val toast: TextStyle = style(15),
-)
+    /** .appbar-back-labeled: the "‹ Settings" Back of Profile. */
+    val backLabel: TextStyle = style(17),
+    /** .pp-card-title and .pp-picker-title: a people card's heading. */
+    val peopleCardTitle: TextStyle = style(17, FontWeight.Bold),
+    /** .pp-section-title: a people screen's section heading, such as "People to meet". */
+    val peopleSectionTitle: TextStyle = style(20, FontWeight.Bold, 1.45f, (-0.01).em),
+    /** .pp-label and .pp-around: a field's label, and the accent "Around now" line. */
+    val peopleLabel: TextStyle = style(14, FontWeight.SemiBold),
+    /** .pp-notice-text: the fine print under a people prompt or setting. */
+    val peopleNote: TextStyle = style(13, lineHeight = 1.5f),
+    /** .pp-band: the proximity band on a person's card (line-height 18px). */
+    val peopleBand: TextStyle = style(12, FontWeight.SemiBold, 1.5f),
+    /** .pp-sample: the "Sample" pill, shown in capitals. */
+    val peopleSample: TextStyle = style(12, FontWeight.Bold, 1.45f, 0.03.em),
+) {
+    /**
+     * These styles with the web's line boxes: CSS puts half of a line's leading above it and half
+     * below, the first and last lines included, where Compose by default trims the leading above the
+     * first line and below the last. The people screens use it, so that their stacked texts are as
+     * far apart as on the web.
+     */
+    fun withCssLineBoxes(): CaddieType {
+        fun TextStyle.css() = copy(lineHeightStyle = CSS_LINE_BOXES)
+        return copy(
+            appBarTitle = appBarTitle.css(),
+            switcher = switcher.css(),
+            cardTitle = cardTitle.css(),
+            sectionHeading = sectionHeading.css(),
+            navLabel = navLabel.css(),
+            tag = tag.css(),
+            badge = badge.css(),
+            button = button.css(),
+            buttonSmall = buttonSmall.css(),
+            chip = chip.css(),
+            stateTitle = stateTitle.css(),
+            stateBody = stateBody.css(),
+            screenTitle = screenTitle.css(),
+            sheetTitle = sheetTitle.css(),
+            body = body.css(),
+            meta = meta.css(),
+            note = note.css(),
+            toast = toast.css(),
+            backLabel = backLabel.css(),
+            peopleCardTitle = peopleCardTitle.css(),
+            peopleSectionTitle = peopleSectionTitle.css(),
+            peopleLabel = peopleLabel.css(),
+            peopleNote = peopleNote.css(),
+            peopleBand = peopleBand.css(),
+            peopleSample = peopleSample.css(),
+        )
+    }
+
+    private companion object {
+        val CSS_LINE_BOXES = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+    }
+}
 
 /** Material's scale filled with the same sizes, for the Material components the apps use. */
 internal fun materialTypography(t: CaddieType) = Typography(

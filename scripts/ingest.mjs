@@ -15,6 +15,9 @@
 //                               upcoming list, so data/ also holds conferences this run did not touch;
 //                               ingest.yml pushes and publishes only the ones listed here.
 // Env: ES_URL, ES_API_KEY or ELASTISEARCH_API_KEY (needed only to index, or to show dry-run counts).
+//      CADDIE_DATA_DIR (optional) reads and writes the conferences and raw files there instead of data/.
+// Operator file: data/conference-operator.json (written by caddie-admin conferences hide/remove/unretire).
+// A removed slug is skipped; a hidden slug is written as unavailable (operator_hidden) and keeps its talks.
 //
 // Exit codes: 0 when every event ended searchable or unavailable for a non-error reason; 1 on a fatal
 // error; 2 when the run stopped at the embedding limit or an event ended partial_index or fetch_failed.
@@ -34,7 +37,9 @@ import { esUrl } from './lib/es-url.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // Where the conferences and raw downloads are read and written. CADDIE_DATA_DIR points a test at a
-// copy so it never touches the tracked data; the time zone tables always come from the repository.
+// copy so it never touches the tracked data; the time zone tables (data/windows-zones.json,
+// data/conference-overrides.json) and the topic fixups (data/topics/<slug>.json) always come from
+// the repository.
 const dataDir = process.env.CADDIE_DATA_DIR ? resolve(process.env.CADDIE_DATA_DIR) : join(root, 'data');
 
 class Fatal extends Error {}
@@ -119,6 +124,24 @@ function previousRawFetchedAt(slug, rawDir) {
   } catch {
     return null;
   }
+}
+
+// Reads the operator file: { hidden: { slug: { reason, since } }, removed: { slug: { since } } }. A missing
+// file is the empty state; an unreadable or misshapen one stops the run rather than guessing.
+function loadOperatorFile() {
+  const file = join(dataDir, 'conference-operator.json');
+  if (!existsSync(file)) return { hidden: {}, removed: {} };
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (e) {
+    fail(`conference-operator.json is not valid JSON: ${e.message}`);
+  }
+  const plain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (!plain(doc) || !plain(doc.hidden) || !plain(doc.removed)) {
+    fail('conference-operator.json must be an object with "hidden" and "removed" objects keyed by slug.');
+  }
+  return { hidden: doc.hidden, removed: doc.removed };
 }
 
 // Returns { conf, summary, stop } where stop is true when the embedding limit was hit.
@@ -360,6 +383,7 @@ async function main() {
     return 0;
   }
 
+  const operator = loadOperatorFile();
   let selected;
   if (mode[0] === '--event') {
     const known = new Set(events.map((e) => e.slug));
@@ -370,6 +394,11 @@ async function main() {
   } else {
     selected = events;
   }
+  selected = selected.filter((ev) => {
+    if (!Object.hasOwn(operator.removed, ev.slug)) return true;
+    console.log(`${ev.slug}  skipped: removed by the operator (data/conference-operator.json); run "caddie-admin conferences unretire --event ${ev.slug}" to bring it back`);
+    return false;
+  });
 
   const results = [];
   const missing = [];
@@ -377,6 +406,13 @@ async function main() {
   for (const ev of selected) {
     if (stopped) { missing.push(ev.slug); continue; }
     const r = await processEvent(ev);
+    // A hidden conference is written as unavailable only over a searchable result; a fetch or
+    // index failure keeps its own reason, which also decides the exit code.
+    if (Object.hasOwn(operator.hidden, ev.slug) && r.conf.status === 'searchable') {
+      r.conf.status = 'unavailable';
+      r.conf.status_reason = 'operator_hidden';
+      r.lines.push('  hidden by the operator (data/conference-operator.json)');
+    }
     await writeConference(r.conf);
     console.log(`${ev.slug}  ${ev.name}  ${ev.start_date}..${ev.end_date}  ${r.conf.time_zone ?? "no time zone"}`);
     for (const l of r.lines) console.log(l);

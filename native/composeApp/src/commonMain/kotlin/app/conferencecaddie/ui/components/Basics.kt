@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -26,6 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.Role
@@ -95,9 +100,11 @@ fun Modifier.caddieClickable(
 enum class ButtonVariant { Primary, Tonal, Text, Danger }
 
 /**
- * .btn: a pill button at least 44 dp tall (.btn-primary, -tonal, -text, -danger; .btn-small), with
- * an optional icon before the text, filled when [iconFilled] (the star of an "Interested" button).
- * Its touch target is at least the platform's minimum (48 dp on Android, 44 pt on iOS).
+ * .btn: a pill button at least 44 dp tall (.btn-primary, -tonal, -text, -danger; .btn-small). Its
+ * touch target is at least the platform's minimum (48 dp on Android, 44 pt on iOS). [icon] goes
+ * before the label, filled when [iconFilled] (the star of an "Interested" button), and
+ * [trailingIcon] after it (a chevron that opens or closes something), both [iconSize]: 18 dp, or
+ * 16 dp on a small button, as the web draws them.
  */
 @Composable
 fun CaddieButton(
@@ -109,7 +116,8 @@ fun CaddieButton(
     enabled: Boolean = true,
     icon: LucideIcon? = null,
     iconFilled: Boolean = false,
-    iconSize: Dp = 18.dp,
+    trailingIcon: LucideIcon? = null,
+    iconSize: Dp = if (small) 16.dp else 18.dp,
 ) {
     val c = Caddie.colors
     val (bg, fg) = when (variant) {
@@ -139,6 +147,7 @@ fun CaddieButton(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(vertical = 6.dp),
         )
+        if (trailingIcon != null) LucideImage(trailingIcon, null, size = iconSize, tint = fg)
     }
 }
 
@@ -166,24 +175,48 @@ fun CaddieIconButton(
     ) {
         LucideImage(icon, null, size = iconSize, tint = tint)
         if (badge > 0) {
-            Badge(badge, Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 2.dp))
+            // .appbar-inbox .nav-badge: 4 dp from the top and 24 dp from the left of the 44 dp
+            // button, growing to the right, with the surface-coloured ring.
+            Badge(badge, Modifier.align(Alignment.TopStart).offset(x = 24.dp, y = 4.dp), ring = Caddie.colors.surface)
         }
     }
 }
 
-/** .badge: a count in an accent pill; the parent element carries the count in its accessible name. */
+/** The text of a count badge: the number, or "99+" above 99, as on the web. */
+fun badgeText(count: Int): String = if (count > 99) "99+" else count.toString()
+
+/**
+ * .badge: a count in an accent pill; the parent element carries the count in its accessible name.
+ * [ring] draws the 2 dp ring of .nav-badge (box-shadow: 0 0 0 2px) around the pill, outside its
+ * bounds, so the badge stands out where it overlaps an icon.
+ */
 @Composable
-fun Badge(count: Int, modifier: Modifier = Modifier) {
+fun Badge(count: Int, modifier: Modifier = Modifier, ring: Color? = null) {
     val c = Caddie.colors
     Box(
         modifier
             .clearAndSetSemantics { }
             .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
             .widthIn(min = 18.dp)
+            .then(
+                if (ring != null) {
+                    Modifier.drawBehind {
+                        val r = 2.dp.toPx()
+                        drawRoundRect(
+                            color = ring,
+                            topLeft = Offset(-r, -r),
+                            size = Size(size.width + 2 * r, size.height + 2 * r),
+                            cornerRadius = CornerRadius(size.height / 2 + r),
+                        )
+                    }
+                } else {
+                    Modifier
+                },
+            )
             .background(c.accent, Pill)
             .padding(horizontal = 5.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(if (count > 99) "99+" else count.toString(), style = Caddie.type.badge, color = c.onAccent)
+        Text(badgeText(count), style = Caddie.type.badge, color = c.onAccent)
     }
 }

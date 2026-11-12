@@ -1,7 +1,8 @@
 // Builds the topic list of one conference from its talk titles and tags every talk with the
 // topics found in its title.
 //
-// Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name]
+// Usage: node scripts/topics.mjs --event <slug> [--dry-run] [--allow-empty] [--allow-shrink]
+//        [--talks-index name] [--topics-index name] [--work-index name]
 // Env:   ES_URL (required, no default), and an admin-capable key in ES_ADMIN_API_KEY,
 //        ELASTISEARCH_API_KEY or ES_API_KEY (the topics step writes, so the read-only key is not enough).
 //
@@ -13,16 +14,21 @@
 //    shingle filter fills the gap with a filler token and every token that contains the filler is dropped.
 // 2. A terms aggregation on that field counts talks per term (at least 3 talks, at most 150 topics).
 // 3. Term vector offsets give each term its most common original casing, and give each talk its terms.
-// 4. data/topics/{slug}.json can rename, merge (as aliases) or remove topics. It never adds one.
+// 4. data/topics/{slug}.json can rename, merge (as aliases) or remove topics. A merge never creates a target that occurs in no title (a target below three talks
+//    becomes a topic when its aliases bring it to three), and a fix-up never adds any other topic.
 //    Then a single word that nearly always appears inside a kept two-word topic is collapsed into
 //    it, so "cloud" and "native" do not sit beside "cloud native" (see COLLAPSE_COVERAGE).
 // 5. The conference's topic documents are replaced (only when they differ), and talks.topics is set
 //    with a Bulk API partial update that omits title and abstract, only where the value changed.
+// With --dry-run nothing is written to the topics or talks index: the topic list is printed as JSON
+// and the script stops. An empty result never replaces stored topics unless --allow-empty is passed, and a list that
+// drops more than 10 topics and 10% of the stored ones needs --allow-shrink (--allow-empty implies it). Only the temporary work index is created and deleted.
 // The work index is deleted at the end. Re-running with the same data changes nothing.
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { candidatesWithTargets, checkNotShrinking, checkWorkIndexCount } from './lib/topics-candidates.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 import { esUrlOrExit } from './lib/es-url.mjs';
@@ -40,13 +46,28 @@ const opt = (name) => {
   args.splice(i, 2);
   return v;
 };
+const flag = (name) => {
+  const i = args.indexOf(name);
+  if (i === -1) return false;
+  args.splice(i, 1);
+  return true;
+};
+const dryRun = flag('--dry-run');
+const allowEmpty = flag('--allow-empty');
+const allowShrink = flag('--allow-shrink');
 const slug = opt('--event');
 const talksIndex = opt('--talks-index') || 'caddie-talks';
 const topicsFlag = opt('--topics-index');
 const topicsIndex = topicsFlag || 'caddie-topics';
-const workIndex = opt('--work-index') || `caddie-topicwork-${slug}`;
+// Unique per run, so a dry run or a second run never deletes the work index of a run in progress.
+const workIndex = opt('--work-index') || `caddie-topicwork-${slug}-${process.pid}-${Date.now().toString(36)}`;
 if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug)) {
-  console.error('Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name]');
+  console.error('Usage: node scripts/topics.mjs --event <slug> [--talks-index name] [--topics-index name] [--work-index name] [--dry-run] [--allow-empty] [--allow-shrink]');
+  process.exit(1);
+}
+// createWorkIndex deletes this index first, so only a work index name is accepted.
+if (!/^caddie-topicwork-[a-z0-9._-]+$/.test(workIndex)) {
+  console.error('--work-index must start with caddie-topicwork- (the script deletes that index).');
   process.exit(1);
 }
 
@@ -215,28 +236,35 @@ async function main() {
   const talks = await loadTalks();
   if (talks.length === 0) throw new Error(`No kind:talk documents for conference ${slug} in ${talksIndex}. Ingest the conference first.`);
 
-  await ensureTopicsIndex();
-  await createWorkIndex(stopwords);
+  if (!dryRun) await ensureTopicsIndex();
   try {
+    await createWorkIndex(stopwords);
     // Work index: one document per talk, with the same _id as the talk.
     const lines = [];
     for (const t of talks) lines.push({ index: { _index: workIndex, _id: t.id } }, { title: t.title });
     await bulk(lines);
+    // The work index must hold exactly this conference's talks, or it was clobbered or never filled.
+    const counted = await es('GET', `/${workIndex}/_count`);
+    if (counted.status !== 200) fail('Counting the work index', counted);
+    checkWorkIndexCount(talks.length, counted.json.count);
 
     // Count talks per term with a terms aggregation on the analysed title.
-    const aliasTerms = Object.keys(fixups.merge).map((id) => id.replace(/-/g, ' '));
+    // Aliases and merge targets are counted even when they occur in fewer than three talks. A target
+    // that reaches three talks together with its aliases stays a candidate (mergeTargets, shared
+    // with the bundle builder).
+    const aliasTerms = [...new Set(Object.entries(fixups.merge).flatMap(([a, c]) => [a, c]).map((id) => id.replace(/-/g, ' ')))];
     const agg = await es('POST', `/${workIndex}/_search`, {
       size: 0,
       aggs: {
         terms: { terms: { field: 'title', size: CANDIDATES, min_doc_count: MIN_TALKS, order: [{ _count: 'desc' }, { _key: 'asc' }] } },
-        // Alias terms are counted even when they occur in fewer than three talks.
+        // Alias and target terms are counted even when they occur in fewer than three talks.
         ...(aliasTerms.length ? { alias_terms: { terms: { field: 'title', include: aliasTerms, size: aliasTerms.length, min_doc_count: 1 } } } : {}),
       },
     });
     if (agg.status !== 200) fail('Terms aggregation', agg);
-    const candidates = agg.json.aggregations.terms.buckets.map((b) => ({ term: b.key, count: b.doc_count }));
-    if (candidates.length === 0) throw new Error('No term occurs in at least three talk titles.');
-    const wanted = new Set(candidates.map((c) => c.term));
+    const termBuckets = agg.json.aggregations.terms.buckets;
+    const aliasBuckets = agg.json.aggregations.alias_terms?.buckets ?? [];
+    const wanted = new Set(termBuckets.map((b) => b.key));
     for (const t of aliasTerms) wanted.add(t);
 
     // Term vectors with offsets: the terms of each talk and the original text behind each term.
@@ -265,6 +293,10 @@ async function main() {
         talkTerms.set(doc._id, set);
       }
     }
+    // The regular candidates, then the merge targets below three talks on their own that reach three
+    // with their aliases (mergeTargets, as in scripts/lib/topics.mjs buildTopics). No candidate
+    // at all means no topics; checkNotWiping then refuses to replace a stored list with that.
+    const candidates = candidatesWithTargets({ termBuckets, aliasBuckets, talkTerms: talkTerms.values(), merge: fixups.merge });
     const labelOf = (term) => {
       const m = casings.get(term);
       if (!m) return term;
@@ -272,7 +304,8 @@ async function main() {
       return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || a[0].localeCompare(b[0]))[0][0];
     };
 
-    // Fix-ups. A fix-up never adds a topic: a merge needs its canonical topic to be a candidate.
+    // Fix-ups. A merge never creates a target that occurs in no title: the target must be a candidate,
+    // and a target below three talks is one when its aliases bring it to three.
     const topicIds = new Map(); // topic_id -> { term, label, aliases:Set<topic_id>, members:Set<term> }
     for (const c of candidates) {
       topicIds.set(idOf(c.term), { term: c.term, label: labelOf(c.term), aliases: new Set(), members: new Set([c.term]) });
@@ -322,7 +355,7 @@ async function main() {
         collapsed.push(`${t.term} (${covered}/${withWord})`);
       }
     }
-    if (collapsed.length) console.log(`Collapsed into two-word topics: ${collapsed.join(', ')}.`);
+    if (collapsed.length) (dryRun ? console.error : console.log)(`Collapsed into two-word topics: ${collapsed.join(', ')}.`);
 
     // Talk counts: the number of talks holding the topic term or one of its merged alias terms.
     const topics = [];
@@ -335,6 +368,19 @@ async function main() {
     topics.splice(MAX_TOPICS);
     topics.forEach((t, i) => { t.rank = i + 1; });
 
+    const stored = await es('POST', `/${topicsIndex}/_search`, {
+      size: 10000,
+      query: { term: { conference: slug } },
+      sort: [{ rank: 'asc' }],
+    });
+    // A dry run may run before the topics index exists: nothing is stored then.
+    const storedHits = stored.status === 404 && dryRun ? [] : stored.status === 200 ? stored.json.hits.hits : fail(`Reading ${topicsIndex}`, stored);
+    checkNotShrinking(topics.length, storedHits.length, { allowEmpty, allowShrink });
+    if (dryRun) {
+      console.log(JSON.stringify(topics.map((t) => ({ topic_id: t.topic_id, label: t.label, talk_count: t.talk_count, rank: t.rank, aliases: t.aliases.map((a) => a.replace(/-/g, ' ')) }))));
+      return;
+    }
+
     // Replace the conference's topic documents, but only when they differ from what is stored.
     const desired = topics.map((t) => ({
       conference: slug,
@@ -345,13 +391,7 @@ async function main() {
       talk_count: t.talk_count,
       rank: t.rank,
     }));
-    const stored = await es('POST', `/${topicsIndex}/_search`, {
-      size: 10000,
-      query: { term: { conference: slug } },
-      sort: [{ rank: 'asc' }],
-    });
-    if (stored.status !== 200) fail(`Reading ${topicsIndex}`, stored);
-    const same = JSON.stringify(stored.json.hits.hits.map((h) => h._source)) === JSON.stringify(desired.map((d) => d));
+    const same = JSON.stringify(storedHits.map((h) => h._source)) === JSON.stringify(desired.map((d) => d));
     let topicsWritten = 0;
     if (!same) {
       const del = await es('POST', `/${topicsIndex}/_delete_by_query?refresh=true&conflicts=proceed`, { query: { term: { conference: slug } } });
@@ -378,7 +418,7 @@ async function main() {
     console.log('Top 20 topics:');
     for (const t of topics.slice(0, 20)) console.log(`  ${String(t.talk_count).padStart(3)}  ${t.label}  (${t.topic_id})`);
   } finally {
-    await es('DELETE', `/${workIndex}`);
+    try { await es('DELETE', `/${workIndex}`); } catch { /* never replace the original error */ }
   }
 }
 

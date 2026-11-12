@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as nodeModule from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
+import { randomBytes } from 'node:crypto';
 
 const DURABLE_OBJECT_STUB = 'data:text/javascript,export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }';
 const hooks = typeof nodeModule.registerHooks === 'function';
@@ -66,9 +67,14 @@ function newObject() {
   return { obj, state, row };
 }
 
+// An admin request carries the nonce and timestamp the Worker forwards from a verified signature;
+// the object refuses an /admin/* request without them.
+const adminHeaders = (path) => (path.startsWith('/admin/')
+  ? { 'x-caddie-admin-nonce': randomBytes(16).toString('base64url'), 'x-caddie-admin-ts': String(Math.floor(Date.now() / 1000)) }
+  : {});
 const jsonRequest = (method, path, body) => new Request(`https://do.internal${path}`, {
   method,
-  headers: { 'content-type': 'application/json', 'x-caddie-slug': 'test-conf' },
+  headers: { 'content-type': 'application/json', 'x-caddie-slug': 'test-conf', ...adminHeaders(path) },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 

@@ -88,11 +88,12 @@ object IosCore {
     /**
      * The app's people features, created on first use on the main thread, next to the core (the same
      * HTTP client; the records in `people/people.db`, see [get]) and bound to its state. [services]
-     * are the platform's; they are used by the first call only, which every later call returns.
+     * makes the platform's services; it is called by the first call only, which every later call
+     * returns the controller of without making a second set.
      */
-    fun people(services: PeopleServices, allowLocalHttp: Boolean): PeopleController = peopleInstance ?: run {
+    fun people(services: () -> PeopleServices, allowLocalHttp: Boolean): PeopleController = peopleInstance ?: run {
         val core = get(allowLocalHttp)
-        PeopleController.create(PeopleDatabase.openLazily(peoplePath), http, services, scope, allowLocalHttp).also {
+        PeopleController.create(PeopleDatabase.openLazily(peoplePath), http, services(), scope, allowLocalHttp).also {
             it.bind(core.state)
             peopleInstance = it
         }

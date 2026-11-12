@@ -28,7 +28,18 @@
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
 //                        Check meter1 also uses POST /admin/test/meter-restart (a new usage meter).
 //                        The reports the run makes are removed at the end with POST /admin/moderation.
-//                        The token is only ever sent as an Authorization header to API_BASE.
+//                        The token is only ever used towards API_BASE: as the key of the X-Caddie-Admin
+//                        signature (SMOKE_ADMIN_AUTH=signed) or as a bearer (SMOKE_ADMIN_AUTH=bearer).
+//   SMOKE_ADMIN_AUTH     signed or bearer: how the admin calls authenticate. signed builds the
+//                        X-Caddie-Admin header of scripts/lib/admin-sign.mjs for every admin call, with a
+//                        fresh nonce and timestamp on each attempt, and sends no Authorization header;
+//                        bearer sends Authorization: Bearer <token>, the scheme of a Worker that has not
+//                        deployed the signed admin routes yet. Default bearer in this release; it flips to
+//                        signed once the Worker change is deployed, and the bearer path is then removed.
+//                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
+//                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
+//                        Worker) and the checks that need them (meter1, the expired profile, the aged
+//                        presence, unav1) print SKIP instead of FAIL.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -82,6 +93,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
@@ -131,6 +143,31 @@ function readAdminToken() {
   }
 }
 const ADMIN_TOKEN = readAdminToken();
+
+// How the admin calls authenticate (SMOKE_ADMIN_AUTH above). The signed scheme needs a key of at
+// least 32 characters, which the Worker requires of ADMIN_TOKEN anyway.
+const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'bearer').toLowerCase();
+if (!['signed', 'bearer'].includes(ADMIN_AUTH)) {
+  console.log('FAIL config: SMOKE_ADMIN_AUTH must be signed or bearer');
+  process.exit(1);
+}
+if (ADMIN_TOKEN && ADMIN_AUTH === 'signed' && ADMIN_TOKEN.length < 32) {
+  console.log('FAIL config: the admin token must have at least 32 characters to sign with (SMOKE_ADMIN_AUTH=signed)');
+  process.exit(1);
+}
+// The auth headers of one admin attempt. A signed header carries a fresh nonce and timestamp
+// each time it is built, so a retry never resends one. `key` is the real token unless a probe
+// deliberately signs with a wrong one.
+function adminAuthHeaders(method, path, body, key = ADMIN_TOKEN) {
+  return adminAuth(method, path, body, key).headers;
+}
+// The auth headers and the URL of one admin attempt. In signed mode the URL is the one the signer
+// canonicalised and signed, so what is sent is exactly what the signature covers.
+function adminAuth(method, path, body, key = ADMIN_TOKEN) {
+  if (ADMIN_AUTH === 'bearer') return { headers: { Authorization: `Bearer ${key}` }, url: `${API_BASE}${path}` };
+  const signed = signAdminRequest({ method, path, base: API_BASE, body, key });
+  return { headers: { 'X-Caddie-Admin': signed.header }, url: signed.url };
+}
 
 // Which API this is. The Worker needs the CORS checks, the admin fixtures and text-only imports;
 // Cloud Run serves everything from one origin and keeps the Elasticsearch helpers.
@@ -257,11 +294,14 @@ function report(ok, name, detail = '') {
 function skip(name, why) {
   console.log(`SKIP ${name} (${why})`);
 }
+// Thrown inside a check that cannot run here (a gated fixture route): the check prints SKIP, not FAIL.
+class SkipCheck extends Error {}
 async function check(name, fn) {
   try {
     await fn();
   } catch (err) {
-    report(false, name, err.message);
+    if (err instanceof SkipCheck) skip(name, err.message);
+    else report(false, name, err.message);
   }
 }
 
@@ -394,27 +434,75 @@ async function readBackShared(device, event, requested, before, label) {
   }
 }
 
-// The Worker's admin routes. The token goes only in the Authorization header, and no Origin header
-// is sent, because the Worker answers 404 to an admin request that carries one. Nothing here prints
-// the token, a request body or a response body.
+// The Worker's admin routes. The token goes only into the auth header (adminAuthHeaders), and no
+// Origin header is sent, because the Worker answers 404 to an admin request that carries one. Like
+// api(), a 5xx or a network failure is retried once with a NOTE line, and the retry builds its
+// headers afresh, so a signed attempt is never resent with the same nonce. A retry can repeat a
+// write whose answer was lost; every admin write the run makes is idempotent (the fixture profile
+// and the aged presence are upserts, a meter restart reads the stored totals, PUT /admin/conferences
+// upserts, the fixture delete and the unhide are no-ops the second time), so that is safe. Flags
+// for a route go in the JSON body, never in the query string, so the body hash covers them.
+// Nothing here prints the token, a request body or a response body.
 async function admin(method, path, body) {
-  const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  const text = await res.text();
-  let json = {};
-  try {
-    json = JSON.parse(text);
-  } catch {
-    /* keep {} */
+  const serialised = body === undefined ? undefined : JSON.stringify(body);
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { headers, url } = adminAuth(method, path, serialised);
+      if (serialised !== undefined) headers['Content-Type'] = 'application/json';
+      const res = await fetch(url, {
+        method,
+        headers,
+        body: serialised,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      const text = await res.text();
+      if (res.status >= 500 && attempt === 0) {
+        retried++;
+        console.log(`NOTE ${method} ${path.split('?')[0]} (admin) answered ${res.status} on the first attempt; retrying once`);
+        continue;
+      }
+      let json = {};
+      try {
+        json = JSON.parse(text);
+      } catch {
+        /* keep {} */
+      }
+      otherResponses.push({ label: 'admin', path: path.split('?')[0], text, headersText: headerText(res.headers) });
+      noteFixtureAnswer(path, res.status);
+      return { status: res.status, json, headers: res.headers };
+    } catch (err) {
+      // A request the signer refuses is a bug in this script, not a network failure: no retry.
+      if (err instanceof UsageError) throw err;
+      lastError = err;
+      if (attempt === 0) {
+        retried++;
+        console.log(`NOTE ${method} ${path.split('?')[0]} (admin) failed on the first attempt (${err.message}); retrying once`);
+      }
+    }
   }
-  otherResponses.push({ label: 'admin', path: path.split('?')[0], text, headersText: headerText(res.headers) });
-  return { status: res.status, json, headers: res.headers };
+  throw lastError;
+}
+
+// Whether the Worker serves its /admin/test/* fixtures. A deployed Worker has them gated off unless
+// ADMIN_TEST_ROUTES is "1" (then they answer 404 while the other admin routes work), and the checks
+// that need them print SKIP. Decided once, on the first fixture call that answers 404: when
+// GET /admin/stats answers 200 with the same credentials, the fixtures are gated; otherwise the
+// 404 is an auth or routing failure and the check fails as before.
+let fixturesGated = null;
+const FIXTURES_GATED_WHY = 'the Worker answers 404 to /admin/test/*: its fixtures are gated off; deploy it with ADMIN_TEST_ROUTES=1 to run this check';
+function noteFixtureAnswer(path, status) {
+  if (!path.startsWith('/admin/test/') || fixturesGated !== null) return;
+  if (status !== 404) fixturesGated = false;
+}
+async function fixture(method, path, body) {
+  const r = await admin(method, path, body);
+  if (r.status === 404 && fixturesGated === null) {
+    const stats = await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`);
+    fixturesGated = stats.status === 200;
+  }
+  if (r.status === 404 && fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+  return r;
 }
 
 // A page of the web app, relative to BASE_URL (which includes the base path).
@@ -430,7 +518,7 @@ async function staticPage(path) {
 // nothing is re-embedded). Both leave the profile's meets open, as lapsing does.
 async function agePresence(device, who) {
   if (WRITE_MODE === 'admin') {
-    const r = await admin('POST', `/admin/test/age-presence?event=${encodeURIComponent(PRIMARY)}`, { profile_id: device.profileId, until_ms: Date.now() - 60_000 });
+    const r = await fixture('POST', `/admin/test/age-presence?event=${encodeURIComponent(PRIMARY)}`, { profile_id: device.profileId, until_ms: Date.now() - 60_000 });
     if (r.status !== 200) throw new Error(`aging ${who}'s presence gave ${r.status}`);
     return;
   }
@@ -744,12 +832,15 @@ if (!IS_WORKER) {
       if (/"usage"|"talks"|"people"/.test(text)) bad.push(`${label} returned counts`);
       return bad;
     };
+    const probePath = `/admin/stats?event=${encodeURIComponent(PRIMARY)}`;
     const problems = [
       ...(await probe('no token', {})),
-      ...(await probe('a wrong token', { Authorization: `Bearer ${crypto.randomBytes(32).toString('hex')}` })),
+      ...(await probe('a wrong token', adminAuthHeaders('GET', probePath, undefined, crypto.randomBytes(32).toString('hex')))),
     ];
     // With the real token, an Origin header must still be refused, because a browser page must never reach admin.
-    if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { Authorization: `Bearer ${ADMIN_TOKEN}`, Origin: SMOKE_ORIGIN })));
+    // The probe is signed in signed mode on purpose: the Worker refuses the Origin header before it
+    // verifies anything, so a valid signature proves the refusal is the Origin rule and not the signature.
+    if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { ...adminAuthHeaders('GET', probePath, undefined), Origin: SMOKE_ORIGIN })));
     report(problems.length === 0, 'adm1: the admin routes answer 404 without a valid token and send no CORS headers', problems.length ? problems.join('; ') : `${ADMIN_TOKEN ? 3 : 2} requests, all 404 without CORS headers`);
   });
 }
@@ -767,7 +858,7 @@ if (IS_WORKER && ADMIN_TOKEN) {
     const name = 'meter1: the daily usage meter counts requests and never goes down across a new meter';
     const ev = encodeURIComponent(PRIMARY);
     const usage = async () => (await admin('GET', `/admin/stats?event=${ev}`)).json.usage ?? null;
-    const restart = async () => (await admin('POST', `/admin/test/meter-restart?event=${ev}`, {})).status;
+    const restart = async () => (await fixture('POST', `/admin/test/meter-restart?event=${ev}`, {})).status;
     const started = Date.now();
     const first = await restart();
     const before = await usage();
@@ -1416,16 +1507,18 @@ try {
   // straight to Elasticsearch on Cloud Run), because the API always sets visible_until to the end of
   // the conference.
   if (WRITE_MODE === 'admin') {
-    const r = await admin('POST', `/admin/test/profile?event=${encodeURIComponent(PRIMARY)}`, {
-      profile_id: expiredProfileId,
-      secret_hash: expiredSecretHash,
-      display_name: testName('Expired'),
-      visible_until_ms: Date.now() - 3600_000,
-      open_to_meet: true,
-      shared_talk_ids: [T],
+    await check('p1b: the expired test profile is written', async () => {
+      const r = await fixture('POST', `/admin/test/profile?event=${encodeURIComponent(PRIMARY)}`, {
+        profile_id: expiredProfileId,
+        secret_hash: expiredSecretHash,
+        display_name: testName('Expired'),
+        visible_until_ms: Date.now() - 3600_000,
+        open_to_meet: true,
+        shared_talk_ids: [T],
+      });
+      expiredWritten = r.status === 200;
+      if (!expiredWritten) report(false, 'p1b: the expired test profile is written', `status ${r.status}`);
     });
-    expiredWritten = r.status === 200;
-    if (!expiredWritten) report(false, 'p1b: the expired test profile is written', `status ${r.status}`);
   } else if (WRITE_MODE === 'es') {
     const res = await fetch(`${esUrl()}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'PUT',
@@ -1515,7 +1608,7 @@ try {
 
   await check('p7: expired profiles never appear', async () => {
     if (!expiredWritten) {
-      skip('p7: expired profiles never appear', NO_WRITE_WHY);
+      skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
       return;
     }
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
@@ -2298,6 +2391,8 @@ try {
       skip('unav1: an owner can delete while the conference is unavailable', 'needs SMOKE_UNAVAILABLE=<slug>, an admin token and a local API');
       return;
     }
+    // A Worker with its fixtures gated off is a deployed one, whose conferences must not be flipped.
+    if (fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
     const doc = JSON.parse(readFileSync(join(ROOT, 'data', slug, 'conference.json'), 'utf8'));
     const U = newDevice();
     await putProfile(U, slug, 'U', {}, { open: true });

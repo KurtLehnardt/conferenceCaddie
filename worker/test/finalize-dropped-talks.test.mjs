@@ -1,9 +1,10 @@
 // What happens to people when a re-ingest removes a talk they shared for (a cancelled session or a
 // takedown): POST /admin/talks/finalize removes the talk's shared_talks rows, so no circle is left
 // for it, and deletes a profile that is then neither open to meet nor sharing for any talk; a later
-// profile write that still names the talk drops it instead of failing. The object runs in Node on a
-// real SQLite database (node:sqlite) behind a small stand-in for state.storage, with fake embeddings
-// (EMBED_FAKE), as in conference-meter.test.mjs.
+// profile write that still names the talk drops it instead of failing. PUT /admin/topics likewise
+// never replaces a stored topic list with an empty one unless allow_empty is set. The object runs in
+// Node on a real SQLite database (node:sqlite) behind a small stand-in for state.storage, with fake
+// embeddings (EMBED_FAKE), as in conference-meter.test.mjs.
 //
 // module.registerHooks needs Node 22.15 or later; on older versions these tests are skipped.
 
@@ -13,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as nodeModule from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 // crypto.subtle.timingSafeEqual is a Workers extension that Node does not have.
 if (typeof crypto.subtle.timingSafeEqual !== 'function') {
@@ -65,9 +66,15 @@ const SLUG = 'caddie-fixture-2099';
 const T = (n) => `${SLUG}:${n}`;
 let ipCounter = 0;
 
+// An admin request carries the nonce and timestamp the Worker forwards from a verified signature;
+// the object refuses an /admin/* request without them (404) and a nonce it has seen (401).
 function request(method, path, body, { device } = {}) {
   const headers = { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-ip': `192.0.2.${(ipCounter++ % 200) + 1}` };
   if (device) headers['x-caddie-device'] = `${device.id}.${device.secret}`;
+  if (path.startsWith('/admin/')) {
+    headers['x-caddie-admin-nonce'] = randomBytes(16).toString('base64url');
+    headers['x-caddie-admin-ts'] = String(Math.floor(Date.now() / 1000));
+  }
   return new Request(`https://do.internal${path}?event=${SLUG}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
 }
 
@@ -192,4 +199,27 @@ test('a finalize that would delete many talks is refused unless allow_shrink is 
   assert.equal(allowed.status, 200);
   assert.equal(allowed.json.deleted, 15);
   assert.equal(allowed.json.profiles_deleted, 1);
+});
+
+test('PUT /admin/topics refuses to replace a stored list with an empty one unless allow_empty is set', { skip }, async () => {
+  const { obj } = await setup();
+  const topic = (id, rank) => ({ conference: SLUG, topic_id: id, label: id, label_exact: id, aliases: [], talk_count: 3, rank });
+  // Nothing stored yet: an empty list is accepted without the flag.
+  assert.deepEqual(await call(obj, 'PUT', '/admin/topics', { topics: [] }), { status: 200, json: { topics: 0 } });
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [topic('alpha', 1), topic('beta', 2)] })).status, 200);
+
+  const refused = await call(obj, 'PUT', '/admin/topics', { topics: [] });
+  assert.equal(refused.status, 409);
+  assert.match(refused.json.error, /replace the 2 stored topics with none; nothing was changed/);
+  // A list whose rows all belong to another conference counts as empty.
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [{ ...topic('gamma', 1), conference: 'other-2099' }] })).status, 409);
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [], allow_empty: 'yes' })).status, 400);
+  assert.deepEqual((await call(obj, 'GET', '/admin/topics')).json.topics.map((t) => t.topic_id), ['alpha', 'beta']);
+
+  // A non-empty replacement needs no flag, and allow_empty lets the empty list through.
+  assert.equal((await call(obj, 'PUT', '/admin/topics', { topics: [topic('beta', 1)] })).status, 200);
+  assert.deepEqual(await call(obj, 'PUT', '/admin/topics', { topics: [], allow_empty: true }), { status: 200, json: { topics: 0 } });
+  assert.deepEqual((await call(obj, 'GET', '/admin/topics')).json.topics, []);
+  // Applying it twice is the same as once.
+  assert.deepEqual(await call(obj, 'PUT', '/admin/topics', { topics: [], allow_empty: true }), { status: 200, json: { topics: 0 } });
 });
