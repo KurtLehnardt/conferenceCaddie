@@ -10,7 +10,8 @@
 // regexes from the fixtures' strings and uses the header's ts as a raw string. Every "reject"
 // vector must throw a UsageError with the named code, and every "origin" vector must normalise as
 // stated. The mutation tests at the end prove that a canonical string without its origin line or
-// without its domain-separation line fails these vectors.
+// without its domain-separation line fails these vectors, and that a verifier that stops comparing
+// at the first match fails the compare counts.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,12 +48,16 @@ async function webCryptoHmacHex(key, text) {
 }
 const webCryptoSha256Hex = async (bytes) => hex(await crypto.subtle.digest('SHA-256', bytes));
 
-// The origin rule, written out here from the fixture's constants rather than the module.
+// The origin rule (the fixture's origin_rule), written out here rather than taken from the module.
 function portOrigin(value) {
   if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!/^[\x21-\x7e]+$/.test(text)) return null;
+  if (!/^https?:\/\//i.test(text)) return null;
+  if (text.includes('@') || text.includes('\\')) return null;
   let u;
   try {
-    u = new URL(value);
+    u = new URL(text);
   } catch {
     return null;
   }
@@ -150,9 +155,13 @@ describe('the v2 fixture file states the scheme the module implements', () => {
     assert.ok(filled.endsWith('\n') && !filled.includes('\r'));
     const filledV1 = fixture.v1_canonical_format.replaceAll('\\n', '\n').replace('<METHOD>', f.method).replace('<pathname + search>', f.pathWithQuery).replace('<bodySha256>', f.bodySha256).replace('<ts>', f.ts).replace('<nonce>', f.nonce);
     assert.equal(filledV1, canonicalString(f));
-    for (const phrase of ['exactly seven lines', 'line 1 "caddie-admin-v2"', 'line 7 the origin', 'new URL(base).origin', 'new URL(x).origin', 'no v1 string equals a v2 string', 'Math.floor(Date.now() / 1000)', 'no user name or password']) {
+    for (const phrase of ['exactly seven lines', 'line 1 "caddie-admin-v2"', 'line 7 the origin', 'new URL(x).origin', 'no v1 string equals a v2 string', 'Math.floor(Date.now() / 1000)', 'printable ASCII only, a literal http:// or https:// prefix', 'new URL(request.url).origin', 'Only a set ADMIN_ORIGIN with a refused entry, or an ADMIN_SIG_MIN other than unset, "1" or "2"', 'expect.compares', 'node_api_only']) {
       assert.ok(fixture.about.includes(phrase), `about names: ${phrase}`);
     }
+    assert.ok(fixture.origin_rule.includes('^[\\x21-\\x7e]+$') && fixture.origin_rule.includes('^https?://') && fixture.origin_rule.includes('no "@"'));
+    assert.ok(fixture.worker_admin_origin.includes('unset or empty: the expected origins are [new URL(request.url).origin], computed without origin_rule'));
+    assert.ok(fixture.worker_admin_origin.includes('never another deployment\'s origin'));
+    assert.ok(fixture.worker_admin_sig_min.includes('Any other value is invalid configuration'));
     assert.ok(fixture.verify_reasons.signature.includes('a wrong origin is this reason'));
     assert.ok(fixture.verify_reasons.malformed.includes('not in allowed_versions'));
   });
@@ -167,6 +176,18 @@ describe('the v2 fixture file states the scheme the module implements', () => {
     assert.ok(rejectCases.some((c) => c.call === 'verify' && c.reject === 'expected_origins'));
     assert.ok(rejectCases.some((c) => c.call === 'verify' && c.reject === 'version'));
     assert.ok(rejectCases.some((c) => c.call === 'sign' && c.reject === 'version'));
+    // Every verifier-settings case says whether a Worker has an equivalent. The Node-API-only ones
+    // are the missing, empty and non-list expectedOrigins and every allowedVersions case; every
+    // other one is a list holding an entry the origin rule refuses, as a set ADMIN_ORIGIN would.
+    for (const c of rejectCases.filter((x) => x.call === 'verify')) {
+      assert.equal(typeof c.node_api_only, 'boolean', c.id);
+      if (!c.node_api_only) {
+        assert.equal(c.reject, 'expected_origins', c.id);
+        assert.ok(Array.isArray(c.input.expected_origins) && c.input.expected_origins.some((o) => portOrigin(o) === null), c.id);
+      }
+    }
+    for (const id of ['reject-verify-origins-missing', 'reject-verify-origins-empty']) assert.equal(byId[id].node_api_only, true);
+    assert.equal(byId['reject-verify-origins-empty-entry'].node_api_only, false);
   });
 
   test('the required cases are present', () => {
@@ -179,7 +200,11 @@ describe('the v2 fixture file states the scheme the module implements', () => {
       'v-skew-plus-300', 'v-skew-plus-301', 'v-skew-minus-300', 'v-skew-minus-301', 'v-skew-after-wrong-origin', 'v-body-flag-stripped',
       'v-malformed-missing', 'v-malformed-origin-field', 'v-malformed-ts-leading-zero', 'v-malformed-joined-twice', 'v-malformed-uppercase-version',
       'reject-verify-origins-missing', 'reject-verify-origins-empty', 'reject-verify-origins-empty-entry', 'reject-v2-base-credentials', 'reject-version-3',
-      'origin-uppercase', 'origin-default-port-https', 'origin-punycode', 'origin-refused-path',
+      'origin-uppercase', 'origin-default-port-https', 'origin-punycode', 'origin-refused-path', 'origin-refused-request-url',
+      'get-stats-workers-dev', 'v-first-of-four-pairs', 'origin-refused-tab', 'origin-refused-newline', 'origin-refused-fullwidth', 'origin-refused-no-slashes',
+      'origin-refused-backslash-scheme', 'origin-refused-backslash-end', 'origin-refused-empty-userinfo', 'origin-refused-unicode',
+      'reject-verify-origins-tab', 'reject-verify-origins-newline', 'reject-verify-origins-fullwidth', 'reject-verify-origins-no-slashes', 'reject-verify-origins-backslash', 'reject-verify-origins-empty-userinfo',
+      'reject-v2-base-tab', 'reject-v2-base-fullwidth', 'reject-v2-base-no-slashes', 'reject-v2-base-backslash', 'reject-v2-base-empty-userinfo', 'reject-v2-base-unicode',
     ]) {
       assert.ok(byId[id], `missing case ${id}`);
     }
@@ -187,12 +212,23 @@ describe('the v2 fixture file states the scheme the module implements', () => {
     // Non-default ports, an uppercase host and a non-ASCII host are among the sign cases.
     assert.ok(signCases.some((c) => new URL(c.base).port !== '' && c.origin.endsWith(`:${new URL(c.base).port}`)));
     assert.ok(signCases.some((c) => c.base !== c.base.toLowerCase() && c.origin === c.origin.toLowerCase()));
-    assert.ok(signCases.some((c) => /[^\x00-\x7f]/.test(c.base) && c.origin.includes('xn--')));
-    // The list-membership cases hold two expected origins, of which one matches.
-    for (const id of ['v-origin-list-first-matches', 'v-origin-list-second-matches']) {
-      assert.equal(byId[id].expected_origins.length, 2);
+    assert.ok(signCases.some((c) => c.base.includes('xn--') && c.origin === c.base));
+    // Every value in the file is ASCII, and the Unicode spelling of a host is a refused origin.
+    assert.ok(signCases.every((c) => /^[\x21-\x7e]+$/.test(c.base)));
+    assert.equal(byId['origin-refused-unicode'].expect.origin, null);
+    // The list-membership cases hold two origins of one Worker (its custom domain and its
+    // workers.dev hostname), of which one matches; no expected list names another deployment.
+    for (const id of ['v-origin-list-first-matches', 'v-origin-list-second-matches', 'v-first-of-four-pairs']) {
+      assert.deepEqual(byId[id].expected_origins, [fixture.origins.custom_domain, fixture.origins.workers_dev]);
       assert.ok(byId[id].expected_origins.includes(byId[id].expect.origin));
     }
+    for (const c of verifyCases) assert.ok(!(c.expected_origins ?? []).includes(fixture.origins.other_deployment), c.id);
+    // The first-of-four case: two keys, two origins, the match on the first pair, four compares.
+    const four = byId['v-first-of-four-pairs'];
+    assert.deepEqual(four.keys, [fixture.keys.key1, fixture.keys.key2]);
+    assert.equal(four.header, byId['get-stats'].header);
+    assert.equal(four.expect.origin, four.expected_origins[0]);
+    assert.equal(four.expect.compares, 4);
   });
 });
 
@@ -295,16 +331,15 @@ describe('v2 sign cases: every vector recomputed from scratch', () => {
     assert.equal(byId['v-body-flag-stripped'].expect.reason, 'signature');
   });
 
-  test('a v2 signature needs an http: or https: base without credentials; v1 is unchanged', () => {
+  test('a v2 signature needs a strict origin string as its base; v1 is unchanged', () => {
     const key = fixture.keys.key1;
-    for (const base of ['file:///', 'ftp://caddie.example', 'https://user:secret@caddie.example']) {
-      assert.throws(() => signAdminRequest({ method: 'GET', path: '/admin/stats', base, key, version: 2 }), (e) => e instanceof UsageError && e.code === 'url', base);
+    const lax = ['file:///', 'ftp://caddie.example', 'https://user:secret@caddie.example', 'https://@caddie.example', 'https:caddie.example', 'https://caddie.example\\', 'https://cad\tdie.example'];
+    for (const base of [...lax, new URL('https://caddie.example')]) {
+      assert.throws(() => signAdminRequest({ method: 'GET', path: '/admin/stats', base, key, version: 2 }), (e) => e instanceof UsageError && e.code === 'url', String(base));
     }
     // v1 kept accepting these bases (it binds no origin), and still does.
-    assert.match(signAdminRequest({ method: 'GET', path: '/admin/stats', base: 'https://user:secret@caddie.example', key }).header, HEADER_RE);
-    // A base given as a URL object signs as its string does.
-    const c = byId['get-stats-port-8443'];
-    assert.equal(signAdminRequest({ method: 'GET', path: c.path, base: new URL(c.base), key, now: c.ts * 1000, nonce: c.nonce, version: 2 }).header, c.header);
+    for (const base of lax.slice(2)) assert.match(signAdminRequest({ method: 'GET', path: '/admin/stats', base, key }).header, HEADER_RE, base);
+    assert.match(signAdminRequest({ method: 'GET', path: '/admin/stats', base: new URL('https://caddie.example'), key }).header, HEADER_RE);
   });
 
   test('the default is v1: no version signs exactly the v1 vector, with the v1 result shape', () => {
@@ -364,6 +399,7 @@ describe('v2 verify cases: the module and a WebCrypto port agree with the fixtur
       const beforeHmac = ['malformed', 'bodyless_body_hash', 'no_key'].includes(got.reason);
       const pairs = () => (parsed.version === 2 ? usable * new Set(c.expected_origins.map((o) => new URL(o).origin)).size : usable);
       assert.equal(compares, beforeHmac ? 0 : pairs());
+      assert.equal(compares, c.expect.compares);
       const web = await verifyWithWebCrypto(portArgs(c));
       assert.equal(web.ok, got.ok);
       assert.equal(web.reason, got.reason);
@@ -447,12 +483,30 @@ describe('origin cases: the normalisation both sides apply', () => {
         // An accepted value is a fixed point: its origin normalises to itself.
         assert.equal(canonicalOrigin(c.expect.origin), c.expect.origin);
       }
+      // A request URL is refused as an origin value, while its own origin is what a Worker with
+      // ADMIN_ORIGIN unset expects.
+      if (c.request_url_origin !== undefined) assert.equal(new URL(c.input).origin, c.request_url_origin);
     });
   }
 
-  test('non-strings are refused', () => {
-    for (const x of [undefined, null, 42, {}, ['https://caddie.example']]) assert.equal(canonicalOrigin(x), null);
-    assert.equal(canonicalOrigin(new URL('HTTPS://Caddie.example:443')), 'https://caddie.example');
+  test('non-strings are refused, a URL object included', () => {
+    for (const x of [undefined, null, 42, {}, ['https://caddie.example'], new URL('https://caddie.example')]) assert.equal(canonicalOrigin(x), null);
+  });
+
+  test('every refused value that new URL() accepts would have been read as some origin: the strict rule is what refuses it', () => {
+    const lax = originCases.filter((c) => c.expect.origin === null && c.input.trim() !== '' && (() => {
+      try {
+        return /^https?:$/.test(new URL(c.input).protocol);
+      } catch {
+        return false;
+      }
+    })());
+    assert.ok(lax.length >= 8, `${lax.length}`);
+    for (const id of ['origin-refused-tab', 'origin-refused-newline', 'origin-refused-fullwidth', 'origin-refused-no-slashes', 'origin-refused-backslash-scheme', 'origin-refused-backslash-end', 'origin-refused-empty-userinfo', 'origin-refused-unicode']) {
+      assert.ok(lax.some((c) => c.id === id), id);
+    }
+    assert.equal(new URL(byId['origin-refused-newline'].input).origin, 'https://caddie.example.evil.example');
+    assert.equal(new URL(byId['origin-refused-fullwidth'].input).origin, 'https://caddie.example');
   });
 });
 
@@ -497,6 +551,35 @@ describe('mutation checks: the vectors catch a canonical string that loses a lin
     'origin line dropped': ['${nonce}\\n${origin}\\n`', '${nonce}\\n`'],
     'domain-separation line dropped': ['`caddie-admin-v2\\n${String(method)', '`${String(method)'],
   };
+  // A verifier that stops comparing at the first match, in either loop, makes fewer comparisons than
+  // expect.compares: the first-of-four case catches both.
+  const exitMutations = {
+    'early exit in the key loop': ['  for (const key of usable) {\n    const keyBuf', '  for (const key of usable) {\n    if (matched) break;\n    const keyBuf'],
+    'early exit in the origin loop': ['        matchedOrigin = origin;\n', '        matchedOrigin = origin;\n        break;\n'],
+  };
+  for (const [name, [from, to]] of Object.entries(exitMutations)) {
+    test(`in the module: ${name} fails the compare counts`, async () => {
+      const source = readFileSync(MODULE_URL, 'utf8');
+      assert.equal(source.split(from).length, 2, `the mutation "${name}" applies exactly once`);
+      const dir = mkdtempSync(join(tmpdir(), 'v2-admin-sign-mutant-'));
+      try {
+        const file = join(dir, 'admin-sign.mjs');
+        writeFileSync(file, source.replace(from, to));
+        const m = await import(pathToFileURL(file).href);
+        const wrong = [];
+        for (const c of verifyCases) {
+          let compares = 0;
+          const got = m.verifyAdminSignature(moduleArgs(c, { timingSafeEqual: (a, b) => (compares++, crypto.timingSafeEqual(a, b)) }));
+          assert.equal(got.ok, c.expect.ok, c.id);
+          if (compares !== c.expect.compares) wrong.push(c.id);
+        }
+        assert.ok(wrong.includes('v-first-of-four-pairs'), `the mutant's counts differ only in: ${wrong.join(', ')}`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   for (const [name, [from, to]] of Object.entries(sourceMutations)) {
     test(`in the module: ${name} fails the sign and verify vectors`, async () => {
       const source = readFileSync(MODULE_URL, 'utf8');

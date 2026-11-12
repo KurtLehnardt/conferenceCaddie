@@ -43,13 +43,14 @@
 //   <ts>
 //   <nonce>
 //   <origin>
-// The origin is not in the header. The client signs new URL(base).origin, which lowercases the
-// scheme and host, drops the scheme's default port and turns an internationalised host into
-// punycode; the verifier holds the list of origins it serves (the Worker's ADMIN_ORIGIN),
+// The origin is not in the header. The client signs the origin of its base, which lowercases the
+// scheme and host and drops the scheme's default port; the verifier holds the list of origins it
+// serves (on the Worker, ADMIN_ORIGIN when set, else the origin of the request's own URL),
 // normalised the same way, and tries each. A signature made for any other origin fails as
-// "signature", with no reason of its own. Both sides accept only a bare http: or https: origin
-// (canonicalOrigin). The signer signs v1 unless asked for v2, and the verifier accepts only v1
-// unless told otherwise; the migration is in DECISIONS.md ("Admin signature v2").
+// "signature", with no reason of its own. Both sides read an origin value strictly
+// (canonicalOrigin): printable ASCII, a literal http:// or https:// prefix, nothing but a host and
+// a port. The signer signs v1 unless asked for v2, and the verifier accepts only v1 unless told
+// otherwise; the migration is in DECISIONS.md ("Admin signature v2").
 
 import { createHash, createHmac, randomBytes, timingSafeEqual as nodeTimingSafeEqual } from 'node:crypto';
 
@@ -79,6 +80,11 @@ const METHOD_RE = /^[A-Z]{3,10}$/;
 // The schemes a v2 origin may have: anything else (file:, data:, a custom scheme) has the opaque
 // origin "null" or is not something the Worker serves.
 const ORIGIN_PROTOCOLS = new Set(['http:', 'https:']);
+// An origin value, after trimming: printable ASCII only, starting with a literal "http://" or
+// "https://" (in any case), with no "@" and no backslash anywhere.
+const ORIGIN_CHARS_RE = /^[\x21-\x7e]+$/;
+const ORIGIN_PREFIX_RE = /^https?:\/\//i;
+const ORIGIN_FORBIDDEN_RE = /[@\\]/;
 
 // A request the signer refuses before anything is sent: the caller's mistake, exit code 2 in the CLI.
 export class UsageError extends Error {
@@ -112,16 +118,25 @@ export function canonicalStringV2({ method, pathWithQuery, bodySha256, ts, nonce
   return `caddie-admin-v2\n${String(method).toUpperCase()}\n${pathWithQuery}\n${bodySha256}\n${ts}\n${nonce}\n${origin}\n`;
 }
 
-// The origin a v2 signature binds: new URL(value).origin, for a value that is a bare http: or
-// https: origin (path "/" or none, no query, no fragment, no user name or password). Returns null
-// for anything else, including every value whose origin would be the opaque "null". Examples:
+// The origin a v2 signature binds, read strictly from a string: surrounding whitespace is
+// trimmed; then any character outside printable ASCII (a tab or newline inside, a full-width or
+// other non-ASCII character, all of which the URL parser would strip or map silently), a value
+// that does not start with a literal "http://" or "https://" ("https:host" and "https:\\host"
+// parse too), and any "@" (userinfo, even an empty one) or backslash (which the parser reads as
+// "/") are refused. The rest must parse as an http: or https: URL with path "/" or none and no
+// query, fragment, user name or password, and the result is new URL(value).origin. Returns null
+// for anything else, including a URL object and a request URL with a path (a Worker that falls
+// back to its request's own origin takes new URL(request.url).origin, not this). Examples:
 // "HTTPS://Caddie.Example:443/" gives "https://caddie.example"; "https://caddie.example:8443"
-// keeps its port; "https://caddie.example." keeps its trailing dot and is another origin.
+// keeps its port; an internationalised host is accepted in its punycode form only;
+// "https://caddie.example." keeps its trailing dot and is another origin.
 export function canonicalOrigin(value) {
-  if (typeof value !== 'string' && !(value instanceof URL)) return null;
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!ORIGIN_CHARS_RE.test(text) || !ORIGIN_PREFIX_RE.test(text) || ORIGIN_FORBIDDEN_RE.test(text)) return null;
   let u;
   try {
-    u = new URL(value);
+    u = new URL(text);
   } catch {
     return null;
   }
@@ -174,8 +189,7 @@ export function canonicalUrl(path, base) {
 //
 // `version` is 1 (the default, DEFAULT_SIGN_VERSION) or 2. A v1 result is exactly what it was
 // before v2 existed; a v2 result also carries `version: 2` and the `origin` it signed, which is
-// canonicalOrigin(base): a v2 signature needs a base that is an http: or https: origin without
-// a user name or password.
+// canonicalOrigin(base): a v2 signature needs a base string that canonicalOrigin accepts.
 export function signAdminRequest({ method, path, base, body, key, now, nonce, version = DEFAULT_SIGN_VERSION }) {
   if (version !== 1 && version !== 2) throw new UsageError('The admin signature version must be the number 1 or 2.', 'version');
   const METHOD = String(method ?? '').toUpperCase();
@@ -195,7 +209,7 @@ export function signAdminRequest({ method, path, base, body, key, now, nonce, ve
     return { header: `${VERSION} ${ts} ${n} ${bodySha256} ${sig}`, url: url.href, pathWithQuery, method: METHOD, bodySha256, ts, nonce: n, canonical };
   }
   const origin = canonicalOrigin(base);
-  if (origin === null) throw new UsageError('A v2 admin signature needs a base that is an http: or https: origin without a user name or password.', 'url');
+  if (origin === null) throw new UsageError('A v2 admin signature needs a base that is a plain http:// or https:// origin in printable ASCII, with no user name, password or backslash.', 'url');
   const canonical = canonicalStringV2({ method: METHOD, pathWithQuery, bodySha256, ts, nonce: n, origin });
   const sig = hmacSha256Hex(keyBuf, canonical);
   return { header: `${VERSION_V2} ${ts} ${n} ${bodySha256} ${sig}`, url: url.href, pathWithQuery, method: METHOD, bodySha256, ts, nonce: n, canonical, version: 2, origin };
@@ -235,7 +249,7 @@ function verifierVersions(allowedVersions) {
 function verifierOrigins(expectedOrigins) {
   const origins = Array.isArray(expectedOrigins) ? expectedOrigins.map(canonicalOrigin) : [];
   if (origins.length === 0 || origins.includes(null)) {
-    throw new UsageError('A verifier that accepts v2 needs expectedOrigins: a non-empty list of http: or https: origins with no path, query, fragment or credentials.', 'expected_origins');
+    throw new UsageError('A verifier that accepts v2 needs expectedOrigins: a non-empty list of plain http:// or https:// origins in printable ASCII, with no path, query, fragment, credentials or backslash.', 'expected_origins');
   }
   return [...new Set(origins)];
 }
