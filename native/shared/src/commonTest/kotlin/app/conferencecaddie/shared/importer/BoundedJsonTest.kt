@@ -63,13 +63,17 @@ class BoundedJsonTest {
             append("1]")
         }
         val reader = BoundedJson()
+        val mark = TimeSource.Monotonic.markNow()
         val value = assertIs<JsonArray>(reader.parse(text))
         assertTrue(reader.built <= BoundedJson.MAX_VALUES, "built ${reader.built} values")
         assertTrue(value.size < BoundedJson.MAX_VALUES)
-        // The work is linear in the text, measured in characters examined rather than seconds (a
-        // debug build on a busy iOS simulator runner once took 31 s for this honest parse): the
-        // reader looks at each character a handful of times, never at the text again per value.
+        // The work is linear in the text, measured in characters examined rather than seconds: about
+        // 6.5 steps per character for this text (13 per "1,"), at most about 10 for any JSON; 16
+        // allows a few more looks per value, never a second pass over the text. The wall-clock bound
+        // is only a backstop against a hang: a debug build on a busy iOS simulator runner once took
+        // 31 s for this honest parse.
         assertTrue(reader.steps <= 16 * text.length, "${reader.steps} steps for ${text.length} characters")
+        assertTrue(mark.elapsedNow().inWholeSeconds < 180, "took ${mark.elapsedNow()}")
         // So the import reads it as JSON with nothing to find, as the Worker does.
         val prepared = ScheduleImport.Prepared(text, "big.json", "application/json", isFile = true)
         assertTrue(ScheduleImport.candidatesOf(prepared, ImportConference("x", "2026-11-10", "UTC")).isEmpty())

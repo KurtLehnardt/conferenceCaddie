@@ -17,7 +17,9 @@ import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.shared.search.TalkSearch
 import app.conferencecaddie.shared.search.TopicSearch
 import java.io.File
+import java.time.DayOfWeek
 import java.time.Instant as JavaInstant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -113,11 +115,10 @@ class TalkSmokeTest {
      * window with talks in it; the other conferences have not started, so n1 sees both answers.
      * Each of those checks fails when the data no longer gives it that, so none passes vacuously.
      */
-    private val now: JavaInstant by lazy {
-        val c = conf(primary).bundle.conference
-        val start = java.time.LocalDate.parse(c.startDate ?: error("$primary has no start date"))
-        start.plusDays(1).atTime(9, 0).atZone(ZoneId.of(c.timeZone ?: error("$primary has no time zone"))).toInstant()
-    }
+    private val primaryStart: LocalDate by lazy { LocalDate.parse(conf(primary).bundle.conference.startDate ?: error("$primary has no start date")) }
+    private val primaryEnd: LocalDate by lazy { LocalDate.parse(conf(primary).bundle.conference.endDate ?: error("$primary has no end date")) }
+    private val primaryZone: ZoneId by lazy { ZoneId.of(conf(primary).bundle.conference.timeZone ?: error("$primary has no time zone")) }
+    private val now: JavaInstant by lazy { primaryStart.plusDays(1).atTime(9, 0).atZone(primaryZone).toInstant() }
     private val nowMs: Long get() = now.toEpochMilli()
 
     private suspend fun load(): Map<String, Conf> {
@@ -276,7 +277,7 @@ class TalkSmokeTest {
     // m1, n1, n2, m2
     private fun timeChecks() {
         check("m1: \"tuesday afternoon\" leaves the text, filters the results and can be removed") {
-            val tuesday = listOf("2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12").first { JavaInstant.parse("${it}T12:00:00Z").atZone(ZoneId.of("UTC")).dayOfWeek.value == 2 }
+            val tuesday = generateSequence(primaryStart) { it.plusDays(1) }.takeWhile { it <= primaryEnd }.first { it.dayOfWeek == DayOfWeek.TUESDAY }.toString()
             val r = primary(SearchRequest(query = "kubernetes tuesday afternoon"))
             val keys = r.timePhrases.filter { it.applied }.map { it.key }.sorted().joinToString(",")
             val wrong = r.talks.filter { !it.start.startsWith(tuesday) || minutesOf(it.start) < 720 }
@@ -297,6 +298,7 @@ class TalkSmokeTest {
                 if (r.happeningNowAvailable != expected) problems += "$slug: expected $expected on $today"
             }
             if (true !in seen) problems += "no conference has talks on the pinned day, so the check proves nothing"
+            if (false !in seen) problems += "every conference has talks on the pinned day, so the unavailable case is not checked"
             report(problems.isEmpty(), "n1: Happening now is available exactly when the conference has talks today in its own zone", if (problems.isEmpty()) "checked 2 conferences against the local date in their zones: available ${seen.joinToString()}" else problems.joinToString())
         }
         check("n2: Happening now keeps only talks in progress or starting within 60 minutes") {
@@ -317,7 +319,7 @@ class TalkSmokeTest {
             report(problems.isEmpty(), "n2: Happening now keeps only talks in progress or starting within 60 minutes", if (problems.isEmpty()) "${r.total} of ${all.total} talks, at least $expected expected from the data, ${outside.size} outside the window" else problems.joinToString())
         }
         check("m2: \"after lunch day 2\" uses that day's lunch break and an empty remainder browses") {
-            val day2 = "2026-11-10"
+            val day2 = primaryStart.plusDays(1).toString()
             val lunch = conf(primary).data.filter { it.kind() == "break" && it.str("day") == day2 && it.str("title")!!.contains("lunch", ignoreCase = true) }
             val lunchEnd = lunch.maxOf { it["end_minutes"]!!.jsonPrimitive.int }
             val r = primary(SearchRequest(query = "after lunch day 2"))

@@ -31,8 +31,8 @@ internal class BoundedJson(
 
     /**
      * The characters examined for the last text read, for the tests. The reader moves forward only,
-     * so this stays a small multiple of the text's length; a second pass, or work per value that
-     * grows with the text, would show here whatever the machine's speed.
+     * so this stays a small multiple of the text's length whatever the machine's speed: a second
+     * pass over the text shows here; per-value work outside the scanners does not.
      */
     var steps = 0
         private set
