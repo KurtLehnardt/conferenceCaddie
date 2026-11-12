@@ -122,6 +122,9 @@ class PeopleContractTest {
                 if (requires != null && requires !in capabilitiesSent) {
                     assertEquals("presence.put", route, "$name: only presence.put has examples that need a capability")
                     assertFailsWith<Exception>("$route ($name): a request this client cannot build yet") { decodeRequest(PresencePutRequest.serializer(), body) }
+                    // ... and only because of until: "keep": the same body with "hour" builds.
+                    val asHour = JsonObject((body as JsonObject) + ("until" to JsonPrimitive("hour")))
+                    assertEquals(Opt.Of(PresenceMode.Hour), decodeRequest(PresencePutRequest.serializer(), asHour).until, "$route ($name)")
                     continue
                 }
                 if (name == "an unknown key is refused") {

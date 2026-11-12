@@ -101,6 +101,17 @@ describe("until: 'keep'", () => {
     assert.ok(Date.parse(p.ble_token_until) <= Date.parse(p.presence_until), 'the token never outlives the kept end');
   });
 
+  test('a re-key 3 minutes before the end gets a token that ends with the presence', async () => {
+    const { device, doc } = setup({}, Date.now() + 3 * MIN);
+    const stored = doc().presence_until;
+    const { result } = await put(device, { until: 'keep', ble: true });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    const p = doc();
+    assert.equal(p.presence_until, stored);
+    assert.equal(p.ble_token_until, p.presence_until, 'the ten-minute token is cut to the kept end');
+    assert.equal(result.body.ble.rotate_at <= p.presence_until, true);
+  });
+
   test('without ble leaves the Bluetooth session as it is', async () => {
     const { device, doc } = setup();
     const before = doc();
@@ -133,10 +144,55 @@ describe("until: 'keep'", () => {
       const { result } = await put(device, { until: 'keep', ...(ble === undefined ? {} : { ble }) });
       assert.equal(result.status, 400);
       assert.deepEqual(result.body, NOT_ACTIVE);
-      assert.equal(cluster.calls('update').length, 0, 'no write: keep never starts presence');
+      assert.deepEqual(cluster.tags(), ['get'], 'refused on the profile read: no filter, no write; keep never starts presence');
       assert.deepEqual(doc(), before);
     });
   }
+
+  test('without live presence it is refused before the spot line reaches the filter', async () => {
+    const { device, cluster, doc } = setup(PRESENCE_OFF);
+    const before = doc();
+    // A spot the filter refuses: the answer is presence_not_active, so the filter never ran.
+    const { result } = await put(device, { spot: 'see https://example.com', location: { lat: 1.23457, lon: 2.34568, accuracy: 10 }, until: 'keep', ble: true });
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.body, NOT_ACTIVE);
+    assert.deepEqual(cluster.tags(), ['get']);
+    assert.deepEqual(doc(), before);
+  });
+
+  test('with live presence the spot line still goes through the filter', async () => {
+    const { device, cluster, doc } = setup();
+    const before = doc();
+    const filtered = await put(device, { spot: 'see https://example.com', until: 'keep' });
+    assert.equal(filtered.result.status, 400);
+    assert.equal(filtered.result.body.error, 'filtered');
+    assert.deepEqual(cluster.tags(), ['get'], 'read, filtered, nothing written');
+    assert.deepEqual(doc(), before);
+  });
+
+  test('a presence that runs out after the guarded read stores no new position or session', async () => {
+    const { device, cluster, id, doc } = setup({}, Date.now() + 2 * MIN);
+    // Another write lands after the first read, so the guarded write conflicts and reads again;
+    // by then the clock has passed the stored end.
+    cluster.after('get', 1, (c) => c.patch(INDEX.people, id, { spot_hidden: false }));
+    const realNow = Date.now;
+    cluster.after('get', 2, () => {
+      const skew = 5 * MIN;
+      Date.now = () => realNow() + skew;
+    });
+    let result;
+    try {
+      ({ result } = await put(device, { location: { lat: 1.23457, lon: 2.34568, accuracy: 10 }, until: 'keep', ble: true }));
+    } finally {
+      Date.now = realNow;
+    }
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.body, NOT_ACTIVE);
+    assert.deepEqual(cluster.tags(), ['get', 'update', 'get']);
+    const p = doc();
+    assert.deepEqual(p.presence_location, { lat: 1.23456, lon: 2.34567 }, 'the old position is untouched');
+    assert.equal(p.presence_nonce, Buffer.alloc(16, 7).toString('base64url'), 'no new session');
+  });
 
   test('a presence that ended between the read and the write is not brought back', async () => {
     const { device, cluster, id, doc } = setup();
@@ -172,14 +228,23 @@ describe("until: 'keep'", () => {
   });
 
   for (const until of ['week', 'KEEP', 'Keep', ' keep', '', 0, 1, true, false, [], {}, ['keep']]) {
-    test(`until: ${JSON.stringify(until)} is 400 before anything is read`, async () => {
+    test(`until: ${JSON.stringify(until)} is 400 before anything is read or filtered`, async () => {
       const { device, cluster } = setup();
-      const { result } = await put(device, { until });
+      // A spot the filter would refuse: the mode is checked first.
+      const { result } = await put(device, { spot: 'see https://example.com', until });
       assert.equal(result.status, 400);
       assert.deepEqual(result.body, { error: "until must be 'hour', 'day' or 'keep'" });
       assert.deepEqual(cluster.tags(), []);
     });
   }
+
+  test('a malformed ble is 400 before the spot line is filtered', async () => {
+    const { device, cluster } = setup();
+    const { result } = await put(device, { spot: 'see https://example.com', until: 'keep', ble: 'off' });
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.body, { error: 'ble must be a boolean' });
+    assert.deepEqual(cluster.tags(), []);
+  });
 });
 
 describe("'hour' and 'day' are unchanged", () => {

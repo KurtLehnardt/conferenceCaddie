@@ -4,7 +4,7 @@
 import { apiFetch } from '../lib/apiBase';
 import { pausedMessage } from '../lib/pace';
 import { deleteCovers, getDevice } from './storage';
-import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
+import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, PresenceUntil, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
 // The fields are assigned by hand rather than as constructor parameter properties, so Node can run
 // this file by stripping its types (web/test does).
@@ -258,9 +258,10 @@ export function fetchBlocks(slug: string, signal?: AbortSignal) {
 
 /**
  * With a position, the server keeps it (rounded) only while its accuracy is within 200 m. `until`
- * 'day' runs presence to the end of the conference day instead of an hour.
+ * 'day' runs presence to the end of the conference day instead of an hour; 'keep' leaves the
+ * server's end as it is and is refused with 400 presence_not_active when presence is not on there.
  */
-export function putPresence(slug: string, zone: string, spot: string, location: Position | null = null, until: PresenceMode = 'hour') {
+export function putPresence(slug: string, zone: string, spot: string, location: Position | null = null, until: PresenceUntil = 'hour') {
   if (deleteCovers(slug)) return deleteUnfinished();
   return call<{ ok: boolean; presence_until: string; located?: boolean }>('/api/presence', {
     method: 'PUT',
@@ -269,7 +270,7 @@ export function putPresence(slug: string, zone: string, spot: string, location: 
   });
 }
 
-function presenceBody(slug: string, zone: string, spot: string, location: Position | null, until: PresenceMode) {
+function presenceBody(slug: string, zone: string, spot: string, location: Position | null, until: PresenceUntil) {
   const body: Record<string, unknown> = { event: slug, zone, spot: spot.trim().slice(0, 60) };
   if (location) body.location = { lat: location.lat, lon: location.lon, accuracy: Math.round(location.accuracy) };
   if (until !== 'hour') body.until = until;

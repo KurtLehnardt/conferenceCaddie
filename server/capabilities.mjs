@@ -19,7 +19,8 @@
 //                      row, until the server restarts.
 //
 // Tier 3 serves every People API v1 route with server-side ranking and polling, the talk search
-// routes and both server imports, and PUT /api/presence takes until: 'keep' (presence_keep_until). Only the official deployment holds the APNs key and may send
+// routes and both server imports, and PUT /api/presence takes until: 'keep'
+// (people.presence_keep_until). Only the official deployment holds the APNs key and may send
 // through the app's Firebase project, so on every other tier 3 server push.apns and push.fcm are
 // false.
 

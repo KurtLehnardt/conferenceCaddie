@@ -19,7 +19,7 @@ Two tests hold the freeze in place. `test/contracts-people-api.test.mjs` checks 
 | Status | `error` | Extra keys | Meaning |
 |---|---|---|---|
 | 400 | `filtered` | `message` | A line other people would read hit the filter (spot, note, spot-me). |
-| 400 | `presence_not_active` | `message` | `PUT /api/presence` with `until: "keep"` while no presence is live (none stored, or it has run out). Nothing is written. The client treats presence as off: it stops Bluetooth and turns presence on again with `hour` or `day` only when the user asks. |
+| 400 | `presence_not_active` | `message` | `PUT /api/presence` with `until: "keep"` while no presence is live (none stored, or it has run out). Nothing is written. The client turns presence off on the device, stops Bluetooth and positions, and turns presence on again with `hour` or `day` only when the user asks. |
 | 403 | `forbidden` | | Missing, malformed or wrong device credential; also a meet read or action by a non-participant, and accept or decline by the requester. |
 | 403 | `cross-origin request` | | A foreign `Origin` header. |
 | 403 | `profile_required` | | No live profile (with `open_to_meet: true` where the route needs it). |
@@ -115,13 +115,14 @@ Request and response shapes are the named `$defs` entries; the route table lists
 
 ## Keeping the end of presence (`until: "keep"`, optional)
 
-`until` is a mode, not a time: `hour` (the default, also for `null`) sets `presence_until` to 60 minutes from now and `day` to the end of the conference day, so every write with either starts the end again. A write that only changes Bluetooth, the zone, the spot line or the position would therefore make the person visible for longer than they chose. A backend whose capabilities say `people.presence_keep_until: true` (tier 3) also takes `until: "keep"`:
+`until` is a mode, not a time: `hour` (the default, also for `null`) sets `presence_until` to 60 minutes from now and `day` to the end of the conference day, so every write with either starts the end again. A write the app makes on its own while presence is on (a Bluetooth write, a re-key, a position fix) would therefore make the person visible for longer than they chose. A backend whose capabilities say `people.presence_keep_until: true` (tier 3) also takes `until: "keep"`:
 
 - **It keeps the stored `presence_until`** exactly (never past the end of the conference), and `presence_since` with it. Everything else in the body applies as with `hour` or `day`: `zone`, `spot` and `location` replace the stored ones, and `ble: true` starts a new Bluetooth session that ends with the kept `presence_until` (a re-key, [ble-tokens.md](ble-tokens.md)), `ble: false` ends it, and no `ble` leaves it as it is.
 - **It never starts presence.** With no presence stored, or one whose `presence_until` has passed, the answer is 400 `{ "error": "presence_not_active", "message": "until: 'keep' needs presence that is on; turn it on with 'hour' or 'day'." }` and nothing is written.
-- **It is judged against the guarded read.** The write is a guarded write of the device's own document (below), so a presence that a `DELETE /api/presence`, the purge or another write changed between the read and the write is read again and judged afresh; `keep` never brings back an end that is gone.
+- **It is judged against the guarded read.** The write is a guarded write of the device's own document (below), so a presence that a `DELETE /api/presence`, the purge or another write changed between the read and the write is read again and judged afresh, and one that runs out while the write is prepared is refused the same way; `keep` never brings back an end that is gone, and a refused `keep` stores no position and no Bluetooth session.
+- **It is refused early.** `until` and `ble` are checked before the spot line goes to the filter, and a `keep` without live presence is refused on the profile read, also before the filter, so neither costs a classifier call.
 - **The answer echoes `until: "keep"`**, with the kept `presence_until`.
-- A client sends `keep` only when the capabilities say `people.presence_keep_until`, and then with every write that only changes Bluetooth, the re-key included; a backend without it answers 400 with an English message, as for any unknown mode.
+- **Which writes send it.** A client sends `keep` only when the capabilities say `people.presence_keep_until`. Then, while presence is already on, every write except an explicit turn-on or restart sends `keep`: Bluetooth writes (`ble: true` or `false`), re-keys, position fixes and turning the position off. Turning presence on, and restarting it on purpose (Extend, a new zone, a confirmed zone), send `hour` or `day`, never `keep`, because `keep` never starts presence. A 400 `presence_not_active` answer means the device thought presence was on and the server says it is not: the client turns presence off on the device, stops Bluetooth and positions, refreshes its view, and turns it on again with `hour` or `day` only when the user asks. A backend without the flag answers `keep` with 400 and an English message, as for any unknown mode, so a client without the flag sends the mode as before.
 
 ## Bluetooth in the People API
 

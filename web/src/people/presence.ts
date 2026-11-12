@@ -7,13 +7,16 @@
 // ten minutes ago, the People tab asks "Still in {zone}?" (hour mode too). It also owns the
 // geolocation watch: with the user's say-so, watchPosition with high accuracy, at most one PUT
 // every 15 s, only while the page is visible, stopped when it is hidden and when presence turns
-// off. Denied or unavailable means zone-only, silently.
+// off. Denied or unavailable means zone-only, silently. Writes that only carry a position (a fix,
+// or the position turned off) do not restart the server's hour where the backend offers
+// until: 'keep' (capabilities.ts); turning presence on, moving zone, confirming it and Extend do.
 import { useEffect, useState } from 'preact/hooks';
 import { pacedMs } from '../lib/pace';
 import { loadSchedule } from '../offline/status';
 import { deletePresence, PeopleApiError, putPresence } from './api';
+import { keepUntilOffered } from './capabilities';
 import { getPresence, onPresenceFromOtherTab, setPresence } from './storage';
-import type { Presence, Position, PresenceMode, TalkLike } from './types';
+import type { Presence, Position, PresenceMode, PresenceUntil, TalkLike } from './types';
 
 export const PRESENCE_NOTICE =
   "While this is on, people you can see can also see that you're around and which zone you're in. How to spot you is shared only with someone you accept, only until you meet, and never stored after. Your exact position is shared only with someone you accept, only until you meet, and never stored after. It turns off by itself after an hour unless you choose to stay around for the day.";
@@ -168,8 +171,21 @@ function toPosition(pos: GeolocationPosition): Position | null {
   return { lat: latitude, lon: longitude, accuracy: Number.isFinite(accuracy) ? accuracy : 1e6 };
 }
 
-// Sends the newest fix with the current zone and spot. The server extends presence_until on
-// every write, but the device keeps its own hour, so the switch still goes off on time.
+// The `until` of a write that only changes the position while presence is on: 'keep' where the
+// backend takes it, so the write never moves the end the user chose; the mode otherwise, where
+// the server extends presence_until on every write but the device keeps its own hour, so the
+// switch still goes off on time.
+const positionUntil = (keep: boolean, mode: PresenceMode): PresenceUntil => (keep ? 'keep' : mode);
+
+// A 'keep' write refused with presence_not_active: the device thinks presence is on, the server
+// says it is not (it ran out or was ended elsewhere). Off here too, without a request of its own.
+function endedOnServer(slug: string, err: unknown): boolean {
+  if (!(err instanceof PeopleApiError) || err.status !== 400 || err.code !== 'presence_not_active') return false;
+  presenceEndedOnServer(slug);
+  return true;
+}
+
+// Sends the newest fix with the current zone and spot.
 async function sendFix(slug: string) {
   window.clearTimeout(sendTimer);
   sendTimer = undefined;
@@ -188,14 +204,16 @@ async function sendFix(slug: string) {
   sending = true;
   lastSentAt = Date.now();
   try {
+    const keep = await keepUntilOffered();
     await presenceWrite(async () => {
       // Presence may have been turned off (here or in another tab) while this waited its turn.
       const p = wanted();
       if (!p) return;
-      await putPresence(slug, p.zone as string, p.spot, fix, p.mode);
+      await putPresence(slug, p.zone as string, p.spot, fix, positionUntil(keep, p.mode));
       lastSentFix = fix;
     });
   } catch (err) {
+    if (endedOnServer(slug, err)) return;
     // A profile that is gone, or presence the server no longer accepts: stop sending positions;
     // the zone-only timers decide the rest. A 409 means the profile changed while the server
     // wrote, and 429 a short limit: the next fix tries again.
@@ -275,12 +293,15 @@ export async function sharePosition(slug: string, on: boolean): Promise<void> {
   } else {
     syncPositionWatch(slug);
     try {
+      const keep = await keepUntilOffered();
       await presenceWrite(async () => {
         const now = getPresence(slug);
-        if (now.on && now.zone) await putPresence(slug, now.zone, now.spot, null, now.mode);
+        if (now.on && now.zone) await putPresence(slug, now.zone, now.spot, null, positionUntil(keep, now.mode));
       });
-    } catch {
-      // It lapses with the presence; the hour on the device is unchanged.
+    } catch (err) {
+      // Ended on the server: off here too. Anything else lapses with the presence; the hour on
+      // the device is unchanged.
+      endedOnServer(slug, err);
     }
   }
 }
