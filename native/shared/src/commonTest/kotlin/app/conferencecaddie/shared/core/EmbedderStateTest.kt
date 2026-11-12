@@ -80,7 +80,11 @@ class EmbedderStateTest {
      * load waits for [gate] when there is one.
      */
     private class Loads(private val failures: Int, private val gate: CompletableDeferred<Unit>? = null) {
+        // Counted on the core's threads and read on the test's.
+        @kotlin.concurrent.Volatile
         var attempts = 0
+
+        @kotlin.concurrent.Volatile
         var closed = 0
         suspend fun load(): Embedder {
             attempts++
@@ -213,10 +217,12 @@ class EmbedderStateTest {
         // The failed load's job has not ended yet; the pause after the failure has passed.
         time += (CaddieCore.RETRY_FIRST_MS + 1).milliseconds
         core.search(SearchRequest(query = "kubernetes"))
-        core.until { it.semantic == SemanticState.Loading || it.semantic == SemanticState.Ready }
+        // Ready, not Loading: a load queues its Loading before it calls the loader, on another
+        // thread, so Loading can be seen before the second attempt is counted. Ready is queued only
+        // once the loader has returned the model, and the first load's job is still held here.
+        core.until { it.semantic == SemanticState.Ready }
         assertEquals(2, loads.attempts, "the second search loads the model again")
         end.complete(Unit)
-        core.until { it.semantic == SemanticState.Ready }
     }
 
     /**
