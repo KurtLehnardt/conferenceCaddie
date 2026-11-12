@@ -432,7 +432,9 @@ percent-encoded character, is refused as a usage error before any request is sig
 `CADDIE_ADMIN_SIG_VERSION` is the rollback: set it to `1` in the environment of a local run, or
 set the repository variable of the same name to `1` for the CI ingest (`.github/workflows/ingest.yml`
 passes it to the push step), and the clients sign v1 again. Unset or empty means v2, and any other
-value is a usage error when the client is created, before anything is sent. The rollback works
+value is a usage error when the client is created, before anything is sent; `push-ingest.mjs`
+checks it before anything else, also in a dry run, and the workflow's first step refuses it
+without printing it. The rollback works
 only while the Worker still accepts v1: step d will make the Worker refuse v1, and it removes the
 variable from the clients and the workflow in the same change. `scripts/moderation.mjs` (the
 deprecated wrapper in this directory) signs nothing and sends nothing; it only names the

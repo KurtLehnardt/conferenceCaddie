@@ -11,9 +11,11 @@
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EMPTY_BODY_SHA256, bodyMatches, parseVersionedAdminHeader, verifyAdminSignature } from '../../scripts/lib/admin-sign.mjs';
 import { AdminError, UsageError, adminClient, drainPending, normalizeApiBase } from '../ingest/lib.mjs';
@@ -22,6 +24,9 @@ const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.
 const KEY = fixture.keys.key1;
 const SLUG = 'caddie-fixture-2099';
 const MODERATION = fileURLToPath(new URL('../scripts/moderation.mjs', import.meta.url));
+const TOPICS_LOCAL = fileURLToPath(new URL('../ingest/topics-local.mjs', import.meta.url));
+const PUSH_INGEST = fileURLToPath(new URL('../ingest/push-ingest.mjs', import.meta.url));
+const DATA = fileURLToPath(new URL('../../data/', import.meta.url));
 
 // A server that records each request (method, path with query, headers, body bytes) and answers
 // with the next of `answers` ({ status, headers, body, drop }), then 200 {} once they run out.
@@ -583,6 +588,75 @@ describe('adminClient: signature version and API base (step c of admin signature
   });
 });
 
+// The real rollback path: the scripts create their client without an `env` option, so the switch
+// reaches them only through process.env, which the CI workflow fills from the repository variable.
+describe('adminClient: CADDIE_ADMIN_SIG_VERSION from the process environment (the rollback path the scripts and CI use)', () => {
+  const ENV_NAME = 'CADDIE_ADMIN_SIG_VERSION';
+  // A committed conference with a talk file, for the scripts that read one.
+  const slug = readdirSync(DATA).filter((d) => existsSync(join(DATA, d, 'talks.ndjson'))).sort()[0];
+  const home = mkdtempSync(join(tmpdir(), 'caddie-sig-env-'));
+  after(() => rmSync(home, { recursive: true, force: true }));
+
+  // Runs a script with only PATH, an empty HOME, no token file and `env`, so nothing from the
+  // environment of the test run (CADDIE_ADMIN_SIG_VERSION included) leaks into it.
+  function run(script, args, env) {
+    return new Promise((resolve) => {
+      execFile(process.execPath, [script, ...args], { cwd: fileURLToPath(new URL('../../', import.meta.url)), env: { PATH: process.env.PATH, HOME: home, ADMIN_TOKEN_FILE: join(home, 'no-admin-token'), ...env } }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr }));
+    });
+  }
+
+  test('without an env option the client reads process.env: "1" signs v1, unset, empty or "2" signs v2, and another value fails at creation', async () => {
+    const had = Object.prototype.hasOwnProperty.call(process.env, ENV_NAME);
+    const saved = process.env[ENV_NAME];
+    const { seen, base } = await recorder();
+    try {
+      const cases = [['1', 1], ['', 2], [undefined, 2], ['2', 2]];
+      for (const [value, version] of cases) {
+        if (value === undefined) delete process.env[ENV_NAME];
+        else process.env[ENV_NAME] = value;
+        await adminClient(base, KEY)('GET', `/admin/stats?event=${SLUG}`);
+        await adminClient(base, KEY, { retries: 0 })('GET', `/admin/stats?event=${SLUG}`);
+        for (const r of seen.splice(0)) assertSigned(r, { version });
+      }
+      process.env[ENV_NAME] = 'fake-invalid-sig-version';
+      assert.throws(() => adminClient(base, KEY), (e) => e instanceof UsageError && e.message.includes(ENV_NAME) && !e.message.includes('fake-invalid-sig-version'));
+      assert.equal(seen.length, 0);
+    } finally {
+      if (had) process.env[ENV_NAME] = saved;
+      else delete process.env[ENV_NAME];
+    }
+  });
+
+  test('topics-local.mjs --api signs v1 under CADDIE_ADMIN_SIG_VERSION=1 and v2 when it is empty or unset', async () => {
+    assert.ok(slug, 'a committed conference with a talk file under data/');
+    for (const [env, version] of [[{ [ENV_NAME]: '1' }, 1], [{ [ENV_NAME]: '' }, 2], [{}, 2]]) {
+      const { seen, base } = await recorder([{ body: { topics: [] } }]);
+      const r = await run(TOPICS_LOCAL, ['--event', slug, '--api', base, '--top', '1'], { ADMIN_TOKEN: KEY, ...env });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /topics \(built\)/);
+      assert.equal(seen.length, 1, JSON.stringify(env));
+      assert.match(seen[0].headers['x-caddie-admin'], version === 1 ? /^v1 / : /^v2 /);
+      assertSigned(seen[0], { version });
+      assert.ok(!r.stdout.includes(KEY) && !r.stderr.includes(KEY));
+    }
+  });
+
+  test('push-ingest.mjs checks CADDIE_ADMIN_SIG_VERSION first, also in a dry run that creates no client, and never repeats the value', async () => {
+    const { seen, base } = await recorder();
+    const args = ['--api', base, '--event', slug, '--dry-run'];
+    const bad = await run(PUSH_INGEST, args, { [ENV_NAME]: 'fake-invalid-sig-version' });
+    assert.equal(bad.code, 1, bad.stderr);
+    assert.ok(bad.stderr.includes(ENV_NAME), bad.stderr);
+    assert.ok(!bad.stderr.includes('fake-invalid-sig-version') && !bad.stdout.includes('fake-invalid-sig-version'));
+    assert.equal(bad.stdout, '');
+    // The same dry run with the switch empty gets through: the failure above is the value's.
+    const good = await run(PUSH_INGEST, args, { [ENV_NAME]: '' });
+    assert.equal(good.code, 0, good.stderr);
+    assert.match(good.stdout, /\(dry run\)/);
+    assert.equal(seen.length, 0);
+  });
+});
+
 // Runs the deprecated moderation.mjs with the given arguments and a token and Access values in its
 // environment; resolves with the exit code and both outputs.
 function moderation(args, env = {}) {
@@ -634,11 +708,16 @@ describe('worker/scripts/moderation.mjs (deprecated in favour of caddie-admin)',
     }
   });
 
-  test('it imports only node:util and holds no fetch or signer, so it cannot send a request at all', () => {
-    const source = readFileSync(MODERATION, 'utf8');
-    assert.deepEqual([...source.matchAll(/^\s*import\b[^;]*?from\s+'([^']+)'/gm)].map((m) => m[1]), ['node:util']);
-    assert.ok(!/\bimport\s*\(/.test(source), 'a dynamic import');
-    for (const word of ['fetch', 'signAdminRequest', 'adminClient', 'node:http', 'node:https', 'node:net']) assert.ok(!source.includes(word), word);
+  test('it imports only node:util and holds no fetch, signer, socket or child process, so it cannot send a request at all', () => {
+    // The code without its comments, so a comment may name what the script does not do. A line
+    // comment starts at the beginning of a line or after white space, so "https://" in a string stays.
+    const code = readFileSync(MODERATION, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+    // Every static import and re-export, with either quote, including a bare `import 'x'`.
+    const specifiers = [...code.matchAll(/(?:^|[;\s])(?:import|export)\b(?:[^'"`;]*?\bfrom)?\s*(['"`])([^'"`]+)\1/g)].map((m) => m[2]);
+    assert.deepEqual(specifiers, ['node:util']);
+    assert.ok(!/\bimport\s*\(/.test(code), 'a dynamic import');
+    assert.ok(!/\brequire\s*\(/.test(code), 'require');
+    for (const word of ['fetch', 'signAdminRequest', 'adminClient', 'http', 'node:net', 'node:tls', 'node:dgram', 'child_process', 'XMLHttpRequest', 'WebSocket', 'process.binding', 'createRequire']) assert.ok(!code.includes(word), word);
   });
 
   test('a value without the shape of its field is shown as a placeholder, never as it was typed', async () => {

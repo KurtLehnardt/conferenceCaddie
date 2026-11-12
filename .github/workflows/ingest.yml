@@ -20,7 +20,8 @@
 #   variable CADDIE_ADMIN_SIG_VERSION  optional rollback switch: unset (the default) signs every admin
 #                                request with signature v2, bound to the origin of CADDIE_API_BASE; "1"
 #                                signs v1 again while the Worker still accepts it (before step d of
-#                                DECISIONS.md, "Admin signature v2"); any other value stops the push
+#                                DECISIONS.md, "Admin signature v2"); any other value fails the run in
+#                                its first step, before anything is fetched or sent
 # Optional, only when a Cloudflare Access application with a service token guards /admin/* (empty
 # by default; the client sends the two Access headers only when both are set):
 #   secret   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
@@ -87,7 +88,14 @@ jobs:
         id: config
         env:
           ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+          CADDIE_ADMIN_SIG_VERSION: ${{ vars.CADDIE_ADMIN_SIG_VERSION }}
         run: |
+          # The rollback switch is checked first, so a bad value fails the run before the discovery
+          # step and not up to 90 minutes later in the push. The value itself is never printed.
+          case "$CADDIE_ADMIN_SIG_VERSION" in
+            ''|1|2) ;;
+            *) echo "::error::The CADDIE_ADMIN_SIG_VERSION variable must be unset, 1 or 2."; exit 1;;
+          esac
           missing=""
           if [ -z "$ADMIN_TOKEN" ]; then missing="the CADDIE_ADMIN_TOKEN secret"; fi
           if [ -z "$CADDIE_API_BASE" ]; then missing="${missing:+$missing and }the CADDIE_API_BASE variable"; fi
