@@ -751,7 +751,9 @@ if (!IS_WORKER) {
   // The tier 3 server (Cloud Run) serves the same document with tier 'paid'. Push flags are checked
   // for the schema only, because they change when native push is switched on.
   await check('cap3: GET /api/capabilities serves a valid tier 3 document', async () => {
-    const res = await fetch(`${API_BASE}/api/capabilities`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    // A redirect is never followed: the document must come from the API itself.
+    const res = await fetch(`${API_BASE}/api/capabilities`, { redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (res.status >= 300 && res.status < 400) throw new Error(`status ${res.status}, a redirect (not followed)`);
     const text = await res.text();
     otherResponses.push({ label: 'capabilities', path: '/api/capabilities', text, headersText: headerText(res.headers) });
     const problems = [];
@@ -2544,21 +2546,27 @@ try {
       const brPut = await putProfile(BR, PRIMARY, 'BR', { interests: `${word} glimmering quabbit rigs` }, { open: true });
       const brOn = await presenceBle(BR, 'BR-presence-ble');
       if (brPut.status !== 200 || brOn.status !== 200) setup.push(`BR: profile ${brPut.status}, presence ${brOn.status}`);
-      // BN11, in another zone, is made first: any token table that holds the co-located ten holds it
-      // too, so its "resolves nobody" below is the co-location rule and not a table that lacks it.
+      else if (derived && !brOn.json.ble_key_id) setup.push('BR: the presence write gave no ble_key_id');
+      // BN11 is in another zone. It is made first, and the other-zone probe below waits until 31 s
+      // after its presence write, so a token table either holds it or is old enough to be rebuilt
+      // on its unknown token: its "resolves nobody" is then the co-location rule, not a table that
+      // lacks it.
       const tokens = new Array(12);
+      let bn11At = 0;
       for (const i of [11, ...Array.from({ length: 11 }, (_, k) => k)]) {
         const d = newDevice();
         around.push(d);
         const put = await putProfile(d, PRIMARY, `BN${i}`, { expertise: `tuned ${word} glimmering quabbit rigs ${i}` }, { open: true });
         const p = await presenceBle(d, `BN${i}-presence-ble`, i === 11 ? ZONE_F : ZONE_A);
+        if (i === 11) bn11At = Date.now();
         tokens[i] = derived ? (p.json.ble_key ? tokenOf(p.json.ble_key) : null) : p.json.ble?.token;
         if (put.status !== 200 || p.status !== 200 || !tokens[i]) setup.push(`BN${i}: profile ${put.status}, presence ${p.status}${tokens[i] ? '' : `, no ${derived ? 'key' : 'token'}`}`);
       }
       if (setup.length) throw new Error(`setup failed: ${setup.slice(0, 3).join('; ')}`);
       // An answer counts only as a 200, which on derived-v1 also names the requester's key id.
-      const unanswered = (r) => (r.status !== 200 || (derived && r.json.ble_key_id !== brOn.json.ble_key_id)
+      const unansweredFor = (keyId) => (r) => (r.status !== 200 || (derived && r.json.ble_key_id !== keyId)
         ? `sightings gave ${r.status}${r.status === 200 ? ' without the requester\'s ble_key_id' : ''}` : null);
+      const unanswered = unansweredFor(brOn.json.ble_key_id);
       const report11 = () => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: BLE_RSSI })) }, { device: BR, label: 'BR-sightings' });
       // A token table is cached per instance (tier 3 runs up to two) and rebuilt on an unknown token
       // only once it is older than 30 seconds, so the ten may come back over several answers. Ask
@@ -2578,9 +2586,34 @@ try {
         if (nearby.length !== 10) problems.push(`${nearby.length} of 11 co-located matches returned, expected the cap of 10`);
         if (nearby.some((p) => p.zone !== ZONE_A)) problems.push('a same-zone person came without the zone');
       }
-      const far = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: BLE_RSSI }] }, { device: BR, label: 'BR-sightings' });
-      if (unanswered(far)) problems.push(`for the person in ${ZONE_F}: ${unanswered(far)}`);
-      else if ((far.json.nearby ?? []).length !== 0) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
+      // Co-location, from a fresh requester BRF in ZONE_A with BR's interests: BR has used up its ten
+      // new people for this window, so the cap alone would drop BN11 there. BRF reports BN11 (in
+      // ZONE_F) together with BN0 (in ZONE_A) and asks again until BN0 comes back, which shows the
+      // answer resolved the tokens; no answer may ever name BN11.
+      const BRF = newDevice();
+      around.push(BRF);
+      const brfPut = await putProfile(BRF, PRIMARY, 'BRF', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+      const brfOn = await presenceBle(BRF, 'BRF-presence-ble');
+      if (brfPut.status !== 200 || brfOn.status !== 200 || (derived && !brfOn.json.ble_key_id)) {
+        problems.push(`the other-zone probe's requester: profile ${brfPut.status}, presence ${brfOn.status}${derived && !brfOn.json.ble_key_id ? ', no ble_key_id' : ''}`);
+      } else {
+        await pause(Math.max(0, bn11At + 31_000 - Date.now()));
+        const unansweredF = unansweredFor(brfOn.json.ble_key_id);
+        const reportFar = () => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: BLE_RSSI }, { token: tokens[0], rssi: BLE_RSSI }] }, { device: BRF, label: 'BRF-sightings' });
+        const bn0 = testName('BN0');
+        const bn11 = testName('BN11');
+        let farSeen = false;
+        let far = await reportFar();
+        if (!unansweredF(far) && (far.json.nearby ?? []).some((p) => p.display_name === bn11)) farSeen = true;
+        for (const until = Date.now() + 45_000; !unansweredF(far) && !(far.json.nearby ?? []).some((p) => p.display_name === bn0) && Date.now() < until;) {
+          await pause(5000);
+          far = await reportFar();
+          if (!unansweredF(far) && (far.json.nearby ?? []).some((p) => p.display_name === bn11)) farSeen = true;
+        }
+        if (unansweredF(far)) problems.push(`for the person in ${ZONE_F}: ${unansweredF(far)}`);
+        else if (!(far.json.nearby ?? []).some((p) => p.display_name === bn0)) problems.push(`the other-zone probe never resolved BN0 in ${ZONE_A} within 45 s`);
+        if (farSeen) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
+      }
     } finally {
       for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble2-presence' }).catch(() => {});
     }
@@ -2610,9 +2643,10 @@ try {
       const tp = await putProfile(T3, PRIMARY, 'BU', { expertise: `tuned ${word} glimmering quabbit rigs` }, { open: true });
       const rOn = await presenceBle(R3, 'BQ-presence-ble');
       const first = await presenceBle(T3, 'BU-presence-ble1');
+      const firstAt = Date.now();
       const setup = [['the requester\'s profile write', rp], ['the target\'s profile write', tp], ['the requester\'s presence write', rOn], ['the target\'s presence write', first]]
         .filter(([, r]) => r.status !== 200).map(([what, r]) => `${what} gave ${r.status}`);
-      if (!setup.length && !(rOn.json.ble_key_id && first.json.ble_key)) setup.push('a presence write with ble:true gave no key');
+      if (!setup.length && !(rOn.json.ble_key_id && first.json.ble_key && first.json.ble_key_id)) setup.push('a presence write with ble:true gave no key or no ble_key_id');
       if (setup.length) throw new Error(`setup failed: ${setup.join('; ')}`);
       const keyOld = first.json.ble_key;
       const target = testName('BU');
@@ -2655,6 +2689,10 @@ try {
       await waitForWindow();
       // (a) windows w-1, w, w+1 resolve the target; w-2 and w+2 resolve nobody.
       for (const dw of [0, -1, 1]) note(await resolves(tokenOf(keyOld, dw), `the token of window ${sign(dw)}`));
+      // Not before 31 s after the target's presence write: a token table that lacks the target is then
+      // old enough to be rebuilt on these unknown tokens, so "nobody" is the window rule, not a table
+      // that never held the target.
+      await pause(Math.max(0, firstAt + 31_000 - Date.now()));
       for (const dw of [-2, 2]) note(await resolvesNobody(tokenOf(keyOld, dw), `the token of window ${sign(dw)}`));
       // (b) and (c) run in one window, so the table that (b) leaves cached still holds the old key's
       // token when (c) asks about it right after the re-key.
@@ -2669,7 +2707,7 @@ try {
       const second = await presenceBle(T3, 'BU-presence-ble2');
       const keyNew = second.json.ble_key;
       if (second.status !== 200 || !keyNew) {
-        throw new Error(`the re-key gave ${second.status} without a key`);
+        throw new Error([...problems, `the re-key gave ${second.status} without a key`].join('; '));
       }
       if (keyNew === keyOld || second.json.ble_key_id === first.json.ble_key_id) problems.push('the re-key returned the old key or key id');
       note(await resolvesNobody(tokenOf(keyOld), 'after the re-key, the old key\'s token'));
