@@ -77,7 +77,7 @@ fun CaddieTheme(preference: ThemePreference = ThemePreference.System, content: @
         LocalCaddieColors provides c,
         LocalCaddieDimens provides dimens,
         LocalCaddieType provides type,
-        // Controls reserve the platform's minimum touch target with minimumInteractiveComponentSize().
+        // Controls reserve the platform's minimum touch target with minimumTouchTarget() (TouchTarget.kt).
         LocalMinimumInteractiveComponentSize provides PlatformTouchTarget,
     ) {
         MaterialTheme(

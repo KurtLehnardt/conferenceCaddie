@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.MOTION_MS
+import app.conferencecaddie.ui.theme.touchTargetIn
 
 /** One choice of a [Segmented] control. */
 data class SegmentOption<T>(val value: T, val label: String)
@@ -117,7 +118,7 @@ fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit, modi
     Row(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
+            .touchTargetIn(minHeight = 48.dp)
             .toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -141,7 +142,7 @@ fun OptionRow(
     Row(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
+            .touchTargetIn(minHeight = 48.dp)
             .then(
                 if (radio) {
                     Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
@@ -218,7 +219,7 @@ fun SettingsRow(
                         Modifier
                     },
                 )
-                .heightIn(min = 48.dp)
+                .touchTargetIn(minHeight = 48.dp)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),

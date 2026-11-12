@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +40,7 @@ import app.conferencecaddie.ui.components.caddieClickable
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 
 /**
  * "Why this rank" under a search result (web RankDrawer in web/src/components/search.tsx): a text
@@ -64,7 +64,7 @@ fun RankDrawer(
         Row(
             Modifier
                 .offset(x = (-14).dp)
-                .minimumInteractiveComponentSize()
+                .minimumTouchTarget()
                 .heightIn(min = Caddie.dimens.minTouch)
                 .caddieClickable(Pill, role = Role.Button) { open = !open }
                 .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }

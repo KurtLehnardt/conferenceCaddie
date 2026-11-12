@@ -45,7 +45,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -117,6 +116,8 @@ import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.LocalCaddieType
 import app.conferencecaddie.ui.theme.MOTION_MS
+import app.conferencecaddie.ui.theme.minimumTouchTarget
+import app.conferencecaddie.ui.theme.touchTargetIn
 import kotlin.math.max
 import kotlin.math.min
 
@@ -429,7 +430,7 @@ fun PeopleSelect(
         Row(
             Modifier
                 .fillMaxWidth()
-                .minimumInteractiveComponentSize()
+                .minimumTouchTarget()
                 .heightIn(min = Caddie.dimens.minTouch)
                 .alpha(if (enabled) 1f else 0.45f)
                 .background(c.bg, shape)
@@ -490,8 +491,8 @@ fun RadioRow(
     Row(
         modifier
             .fillMaxWidth()
-            .minimumInteractiveComponentSize()
-            .heightIn(min = if (compact) Caddie.dimens.minTouch else 48.dp)
+            .minimumTouchTarget()
+            .touchTargetIn(minHeight = if (compact) Caddie.dimens.minTouch else 48.dp)
             .alpha(if (enabled) 1f else 0.45f)
             .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
@@ -550,8 +551,8 @@ fun PeopleSwitchRow(
         Row(
             Modifier
                 .fillMaxWidth()
-                .minimumInteractiveComponentSize()
-                .heightIn(min = if (variant == SwitchRowVariant.Presence) Caddie.dimens.minTouch else 48.dp)
+                .minimumTouchTarget()
+                .touchTargetIn(minHeight = if (variant == SwitchRowVariant.Presence) Caddie.dimens.minTouch else 48.dp)
                 .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
                 .then(rowModifier)
                 .then(if (settings) Modifier.padding(horizontal = 16.dp, vertical = 12.dp) else Modifier),
@@ -863,7 +864,7 @@ fun OverflowMenu(label: String, items: List<MenuItem>, modifier: Modifier = Modi
                         Box(
                             Modifier
                                 .fillMaxWidth()
-                                .minimumInteractiveComponentSize()
+                                .minimumTouchTarget()
                                 .heightIn(min = Caddie.dimens.minTouch)
                                 .alpha(if (item.enabled) 1f else 0.45f)
                                 .caddieClickable(RoundedCornerShape(8.dp), enabled = item.enabled) {

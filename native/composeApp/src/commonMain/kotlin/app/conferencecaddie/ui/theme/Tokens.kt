@@ -127,7 +127,7 @@ data class CaddieDimens(
      * The smallest visible height the web gives a control (buttons, icon buttons, links). The touch
      * target can be larger: [CaddieTheme] sets Material's minimum interactive size to the
      * platform's guideline (48 dp on Android, 44 pt on iOS), and controls reserve it with
-     * minimumInteractiveComponentSize().
+     * minimumTouchTarget().
      */
     val minTouch: Dp = 44.dp,
     /** .chip: the visible pill; it grows with large text, and its touch target is the platform's. */

@@ -24,7 +24,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -72,6 +71,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.MOTION_MS
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -476,7 +476,7 @@ private fun TopicChip(
     val interaction = remember { MutableInteractionSource() }
     Row(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .heightIn(min = Caddie.dimens.minTouch)
             .alpha(if (enabled) 1f else 0.45f)
             .focusRing(interaction, Pill)

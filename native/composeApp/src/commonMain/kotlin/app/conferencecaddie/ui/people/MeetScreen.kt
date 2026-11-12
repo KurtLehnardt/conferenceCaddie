@@ -3,7 +3,6 @@ package app.conferencecaddie.ui.people
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -51,6 +50,7 @@ import app.conferencecaddie.ui.components.caddieClickable
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.PlatformTouchTarget
+import app.conferencecaddie.ui.theme.touchTargetIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -542,10 +542,10 @@ private fun ThemCard(
  * 14/600 accent ink). The web's is 32 dp tall; this one keeps a touch target of at least 48 dp.
  */
 @Composable
-private fun SpotReportButton(onClick: () -> Unit) {
+internal fun SpotReportButton(onClick: () -> Unit) {
     Box(
         Modifier
-            .defaultMinSize(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget)
+            .touchTargetIn(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget)
             .caddieClickable(Pill, onClick = onClick)
             .padding(horizontal = 8.dp)
             .testTag("meet-spot-report"),
