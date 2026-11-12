@@ -42,6 +42,8 @@ import app.conferencecaddie.ui.components.LinkButton
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.ProgressBar
 import app.conferencecaddie.ui.components.caddieClickable
+import app.conferencecaddie.ui.components.DemoNote
+import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.components.textIconSize
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.isWebLink
@@ -144,6 +146,7 @@ fun ForYouScreen(
     LaunchedEffect(prefetchCounts, suggestedIds) { if (suggestedIds.isNotEmpty()) prefetchCounts?.invoke(suggestedIds) }
     when (val r = model.result) {
         ForYou.Result.NeedsInput -> Column(Modifier.fillMaxSize().padding(start = d.gutter, end = d.gutter, top = 4.dp).testTag("for-you-screen")) {
+            DemoNote(bundle.conference.demo, Modifier.padding(bottom = 12.dp))
             PickTopicsPrompt(onPickTopics)
         }
         else -> LazyColumn(
@@ -151,6 +154,7 @@ fun ForYouScreen(
             contentPadding = PaddingValues(start = d.gutter, end = d.gutter, top = 4.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (showsDemoLabel(bundle.conference.demo)) item("demo") { DemoNote(true) }
             item("lede") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(Strings.ForYou.LEDE_NATIVE, style = Caddie.type.stateBody, color = Caddie.colors.text2)

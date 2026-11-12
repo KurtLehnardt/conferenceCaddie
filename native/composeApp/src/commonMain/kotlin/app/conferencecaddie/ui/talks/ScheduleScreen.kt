@@ -40,6 +40,7 @@ import app.conferencecaddie.shared.search.SearchRequest
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.components.Hairline
 import app.conferencecaddie.ui.components.NoteText
 import app.conferencecaddie.ui.components.SegmentOption
@@ -61,7 +62,7 @@ enum class SearchView { Search, Schedule }
 /**
  * The Search tab: the "Search | Schedule" switch over the two views, as the web's `.view-switch`.
  * [search] and [schedule] draw the views; the tab keeps both models, so each view keeps its state when
- * the other one is shown.
+ * the other one is shown. A [demo] conference's Demo note sits above the switch, so both views show it.
  */
 @Composable
 fun SearchTab(
@@ -69,8 +70,10 @@ fun SearchTab(
     onView: (SearchView) -> Unit,
     search: @Composable () -> Unit,
     schedule: @Composable () -> Unit,
+    demo: Boolean = false,
 ) {
     Column(Modifier.fillMaxSize()) {
+        DemoNote(demo, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp))
         Segmented(
             options = listOf(
                 SegmentOption(SearchView.Search, Strings.Search.VIEW_SEARCH),

@@ -27,6 +27,8 @@ data class ConferenceItem(
     /** False when the schedule is not available here; the row then links to [officialUrl]. */
     val searchable: Boolean = true,
     val officialUrl: String? = null,
+    /** A demo conference (`"demo": true`): the switcher and the app bar show the Demo pill with its name. */
+    val demo: Boolean = false,
 )
 
 /** Whether the current server answered, for the Settings screen. */

@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.conferencecaddie.shared.Demo
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.BrandBlue
@@ -135,10 +136,11 @@ fun AppBarTitle(text: String) {
 /**
  * .switcher-btn: the current conference's name with a chevron; it opens the conference switcher.
  * Screen readers hear the name followed by ", change conference", as a heading (the web's button
- * sits in the app bar's h1).
+ * sits in the app bar's h1). A [demo] conference has the Demo pill between its name and the
+ * chevron, and screen readers hear "Demo conference, invented data" after the name.
  */
 @Composable
-fun SwitcherButton(name: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SwitcherButton(name: String, onClick: () -> Unit, modifier: Modifier = Modifier, demo: Boolean = false) {
     Row(
         modifier
             .offset(x = (-8).dp)
@@ -146,7 +148,7 @@ fun SwitcherButton(name: String, onClick: () -> Unit, modifier: Modifier = Modif
             .heightIn(min = Caddie.dimens.minTouch)
             .caddieClickable(RoundedCornerShape(10.dp), onClick = onClick)
             .semantics {
-                contentDescription = name + Strings.AppBar.CHANGE_CONFERENCE
+                contentDescription = name + (if (showsDemoLabel(demo)) ", ${Demo.SPOKEN}" else "") + Strings.AppBar.CHANGE_CONFERENCE
                 heading()
             }
             .testTag("conference-switcher")
@@ -162,6 +164,7 @@ fun SwitcherButton(name: String, onClick: () -> Unit, modifier: Modifier = Modif
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
+        if (showsDemoLabel(demo)) DemoPill(Modifier.padding(start = 4.dp), spoken = false)
         LucideImage(LucideIcon.ChevronDown, null, size = 20.dp)
     }
 }

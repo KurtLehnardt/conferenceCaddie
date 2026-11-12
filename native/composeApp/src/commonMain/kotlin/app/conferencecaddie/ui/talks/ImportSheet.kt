@@ -70,6 +70,7 @@ import app.conferencecaddie.shared.importer.MAX_IMPORT_TEXT
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieIconButton
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.FullScreenDialogBars
 import app.conferencecaddie.ui.components.fullScreenDialogProperties
@@ -339,6 +340,7 @@ private fun ColumnScope.StartPage(model: ImportModel, conference: Conference, in
     Column(
         Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = Caddie.dimens.gutter).padding(bottom = 16.dp),
     ) {
+        DemoNote(conference.demo, Modifier.padding(top = 4.dp))
         Text(Strings.Import.lead(conference.name), style = Caddie.type.stateBody, color = c.text2, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
         if (model.busy) {
             Column(
@@ -481,6 +483,7 @@ private fun ColumnScope.ReviewPage(
     Column(
         Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = Caddie.dimens.gutter).padding(bottom = 16.dp).testTag("import-review"),
     ) {
+        DemoNote(conference.demo, Modifier.padding(top = 4.dp))
         val summary = (if (matched.isNotEmpty()) Strings.Import.found(matched.size, conference.name) else Strings.Import.noneFound(conference.name)) +
             (if (result.unmatchedCount > 0) Strings.Import.unmatched(result.unmatchedCount) else "")
         Text(

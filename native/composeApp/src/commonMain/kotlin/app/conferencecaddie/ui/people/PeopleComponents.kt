@@ -111,6 +111,7 @@ import app.conferencecaddie.ui.components.Pill
 import app.conferencecaddie.ui.components.SectionHeading
 import app.conferencecaddie.ui.components.StateAction
 import app.conferencecaddie.ui.components.caddieClickable
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
@@ -146,15 +147,19 @@ val PeopleScreenGap: Dp = 20.dp
  * [PeopleScreenPadding] instead, and then adds `Modifier.imePadding()` itself.
  *
  * The scrolling area ends above the keyboard (imePadding), as Settings' does, so a focused field is
- * never covered: iOS no longer slides the whole view up for the keyboard.
+ * never covered: iOS no longer slides the whole view up for the keyboard. With [demo] (a demo
+ * conference's screen) the Demo note comes first.
  */
 @Composable
-fun PeopleScreenColumn(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun PeopleScreenColumn(modifier: Modifier = Modifier, demo: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(PeopleScreenPadding),
         verticalArrangement = Arrangement.spacedBy(PeopleScreenGap),
-        content = content,
-    )
+    ) {
+        // A demo conference's screens open with the Demo note.
+        DemoNote(demo)
+        content()
+    }
 }
 
 // -------------------------------------------------------------------------------------------------

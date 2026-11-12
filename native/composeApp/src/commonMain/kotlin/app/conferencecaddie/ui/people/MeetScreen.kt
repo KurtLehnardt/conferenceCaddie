@@ -259,12 +259,13 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
 
     // A found view this Meet up, or the one before a re-creation, got to comes first.
     val kept = host.foundPerson(meetId)
+    val demo = state.conference?.demo == true
     when (val v = if (kept != null) MeetUi.Found(kept.first, kept.second) else view) {
-        MeetUi.Loading -> PeopleScreenColumn(modifier.testTag("meet-screen")) { HintText(ConnectStrings.CHECKING, pad = true) }
-        is MeetUi.Ended -> PeopleScreenColumn(modifier.testTag("meet-screen")) { MeetEndedPrompt(v.message, host) }
-        MeetUi.Cancelled -> PeopleScreenColumn(modifier.testTag("meet-screen")) { MeetEndedPrompt(ConnectStrings.MEET_CANCELLED, host) }
-        is MeetUi.Found -> PeopleScreenColumn(modifier.testTag("meet-screen")) { FoundCard(meetId, v, host) }
-        is MeetUi.Live -> PeopleScreenColumn(modifier.testTag("meet-screen")) {
+        MeetUi.Loading -> PeopleScreenColumn(modifier.testTag("meet-screen"), demo = demo) { HintText(ConnectStrings.CHECKING, pad = true) }
+        is MeetUi.Ended -> PeopleScreenColumn(modifier.testTag("meet-screen"), demo = demo) { MeetEndedPrompt(v.message, host) }
+        MeetUi.Cancelled -> PeopleScreenColumn(modifier.testTag("meet-screen"), demo = demo) { MeetEndedPrompt(ConnectStrings.MEET_CANCELLED, host) }
+        is MeetUi.Found -> PeopleScreenColumn(modifier.testTag("meet-screen"), demo = demo) { FoundCard(meetId, v, host) }
+        is MeetUi.Live -> PeopleScreenColumn(modifier.testTag("meet-screen"), demo = demo) {
             val d = v.meet
             val name = d.other.displayName
             val active = d.state == MeetState.Active

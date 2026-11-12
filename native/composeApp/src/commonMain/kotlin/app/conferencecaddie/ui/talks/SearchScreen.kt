@@ -243,6 +243,7 @@ internal fun TalkResult(
         links = cardLinks(talk),
         onOpenLink = onOpenUrl,
         onClick = { onOpenTalk(talk) },
+        demo = bundle.conference.demo,
         // Under the actions, as on the web: the ranking drawer of a text search, the web's
         // TalkPeopleControls, then related talks.
         // The web (talk.tsx) and TalkSheet show the people controls for every kind; the ranking

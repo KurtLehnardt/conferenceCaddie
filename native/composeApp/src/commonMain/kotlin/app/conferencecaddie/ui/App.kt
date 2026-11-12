@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -62,6 +63,8 @@ import app.conferencecaddie.ui.components.AppBarBack
 import app.conferencecaddie.ui.components.AppBarLabeledBack
 import app.conferencecaddie.ui.components.AppBarTitle
 import app.conferencecaddie.ui.components.CaddieIconButton
+import app.conferencecaddie.ui.components.DemoNote
+import app.conferencecaddie.ui.components.DemoPill
 import app.conferencecaddie.ui.components.NavBar
 import app.conferencecaddie.ui.components.NavItem
 import app.conferencecaddie.ui.components.NeedsConnection
@@ -69,6 +72,7 @@ import app.conferencecaddie.ui.components.OfflineBadge
 import app.conferencecaddie.ui.components.StateAction
 import app.conferencecaddie.ui.components.StateView
 import app.conferencecaddie.ui.components.SwitcherButton
+import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.components.Toast
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.ConnectConfirmation
@@ -360,13 +364,21 @@ private fun ShellAppBar(
     AppBar(
         modifier = modifier,
         title = {
-            if (page != null) {
+            if (page is PeoplePage && showsDemoLabel(state.selectedConference?.demo)) {
+                // Profile, Requests and Meet up belong to the conference, so a demo one's pill
+                // follows their title, as the web's does; Settings has none.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f, fill = false)) { AppBarTitle(pageTitle(page)) }
+                    DemoPill()
+                }
+            } else if (page != null) {
                 AppBarTitle(pageTitle(page))
             } else {
                 SwitcherButton(
                     name = state.selectedConference?.name
                         ?: if (state.conferences != null) Strings.AppBar.CHOOSE_CONFERENCE else Strings.APP_NAME,
                     onClick = { navigation.switcherOpen = true },
+                    demo = state.selectedConference?.demo == true,
                 )
             }
         },
@@ -474,9 +486,10 @@ fun ForYouPlaceholder(online: Boolean) {
 
 /** The web's empty Interested list (web/src/components/interested.tsx). */
 @Composable
-fun InterestedPlaceholder() {
+fun InterestedPlaceholder(demo: Boolean = false) {
     val nav = LocalShellNavigator.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        DemoNote(demo, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp))
         // .screen-head and .screen-title (web/src/components/schedule.css).
         Text(
             Strings.Interested.TITLE,

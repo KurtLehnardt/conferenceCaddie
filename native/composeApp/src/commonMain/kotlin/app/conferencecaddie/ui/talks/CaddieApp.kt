@@ -40,6 +40,7 @@ import app.conferencecaddie.shared.ConnectLink
 import app.conferencecaddie.shared.bundle.Conference
 import app.conferencecaddie.shared.bundle.TalkTime
 import app.conferencecaddie.shared.Capabilities
+import app.conferencecaddie.shared.Demo
 import app.conferencecaddie.shared.Embedder
 import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.core.BundleState
@@ -454,6 +455,7 @@ fun CaddieApp(
                     SearchTab(
                         view = searchView,
                         onView = { searchView = it },
+                        demo = r.bundle.conference.demo,
                         search = {
                             SearchScreen(
                                 search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl,
@@ -501,7 +503,7 @@ fun CaddieApp(
                                 Strings.Share.SHARE_LIST,
                                 onSelect = {
                                     val conference = ready.bundle.conference
-                                    platform.shareText(shareText(conference, interestedTalks), Strings.Share.subject(conference.name))
+                                    platform.shareText(shareText(conference, interestedTalks), Strings.Share.subject(Demo.name(conference.name, conference.demo)))
                                 },
                                 enabled = interestedTalks.isNotEmpty(),
                                 testTag = "menu-share",
@@ -663,9 +665,11 @@ private const val MY_SCHEDULE_VIEW = "myschedule.view.v1"
  */
 internal fun shareText(conference: Conference, talks: List<Talk>): String {
     val sorted = talks.sortedBy { it.startEpochMs }
-    if (sorted.isEmpty()) return Strings.Share.subject(conference.name)
+    // A demo conference's name says so, as the screens' Demo pill does, wherever the text goes.
+    val subject = Strings.Share.subject(Demo.name(conference.name, conference.demo))
+    if (sorted.isEmpty()) return subject
     return buildString {
-        append(Strings.Share.subject(conference.name)).append('\n')
+        append(subject).append('\n')
         sorted.groupBy { it.day }.forEach { (day, list) ->
             append('\n').append(TalkTime.dayLong(day)).append('\n')
             list.forEach { t ->

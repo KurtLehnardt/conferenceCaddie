@@ -38,6 +38,8 @@ import app.conferencecaddie.shared.people.SyncStatus
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieChip
+import app.conferencecaddie.ui.components.DemoNote
+import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.icons.LucideIcon
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -335,6 +337,9 @@ fun PeopleScreen(
         state = listState,
         contentPadding = PeopleScreenPadding,
     ) {
+        if (showsDemoLabel(state.conference?.demo)) {
+            item(key = "demo", contentType = "demo") { DemoNote(true, Modifier.padding(bottom = PeopleScreenGap)) }
+        }
         item(key = "top", contentType = "top") {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PeopleScreenGap)) {
                 StillHereRow(state, host)

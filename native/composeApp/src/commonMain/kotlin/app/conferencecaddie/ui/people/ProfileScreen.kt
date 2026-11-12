@@ -47,6 +47,7 @@ import app.conferencecaddie.shared.people.SyncStatus
 import app.conferencecaddie.shared.people.TopicRef
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
@@ -205,6 +206,7 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
         modifier.fillMaxSize().imePadding().verticalScroll(scroll).padding(PeopleScreenPadding).testTag("profile-screen"),
         verticalArrangement = Arrangement.spacedBy(PeopleScreenGap),
     ) {
+        DemoNote(state.conference?.demo == true)
         SaveStatus(state.sync, editor.error)
         PendingDeleteBanner(state, host, onResult = { m -> answer(m) { deleteMessage = it } })
         if (state.visibility.hiddenForOwner) {
