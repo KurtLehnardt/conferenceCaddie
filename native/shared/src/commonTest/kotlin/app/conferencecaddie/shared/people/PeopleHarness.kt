@@ -126,8 +126,9 @@ class PeopleHarness(
     val ble: BlePlatform? = null,
     /** Epoch milliseconds of the virtual clock's start. */
     startMs: Long = START_MS,
+    /** The phone's clock: by default the test's virtual time from [startMs]. */
+    val clock: Clock = test.virtualClock(startMs),
 ) {
-    val clock: Clock = test.virtualClock(startMs)
     val server = StubPeopleServer(clock)
     val http = FakeApiHttp { server.handle(it) }
     val kv = MapKeyValue()

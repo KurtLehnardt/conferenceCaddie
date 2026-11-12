@@ -162,8 +162,7 @@ internal class PresenceRuntime(
         }
         // Turned off while the write was under way: the delete queued behind it has the last word.
         if (epoch != started) return null
-        val until = res.presenceUntil?.takeIf { IsoTime.epochMillis(it) != null }
-            ?: Instant.fromEpochMilliseconds(now() + PRESENCE_MINUTES * 60_000L).toString()
+        val until = untilOf(res)
         lastZone = zone
         val position = get(slug).positionChoice == PositionChoice.Yes && canSendPosition()
         set(slug) { p ->
@@ -191,6 +190,12 @@ internal class PresenceRuntime(
         host.presenceChanged(slug)
         return null
     }
+
+    // The presence_until a presence write's answer names, or an hour from now when it names none
+    // that can be read: the server restarts the hour on every presence write.
+    private fun untilOf(res: PresencePutResponse): String =
+        res.presenceUntil?.takeIf { IsoTime.epochMillis(it) != null }
+            ?: Instant.fromEpochMilliseconds(now() + PRESENCE_MINUTES * 60_000L).toString()
 
     /** Keeps the zone and spot and starts a fresh hour (or renews the day). */
     suspend fun extend(slug: String): String? {
@@ -270,12 +275,34 @@ internal class PresenceRuntime(
      * presence field from its body, so a write that sent only the zone would clear the spot line and
      * the position (docs/contracts/ble-tokens.md, Re-keying). It runs in the presence write queue and
      * returns null, sending nothing, when presence is off by the time its turn comes.
+     *
+     * The server restarts presence's hour (or renews the day) on every presence write, `ble` or not,
+     * and cannot be asked to keep the old `presence_until`. So, as [turnOn] does, the device takes
+     * the `presence_until` the answer names, with the spot line's state, and its expiry and the
+     * radio's deadline follow it: otherwise the person would stay visible, and their tokens
+     * resolvable, for up to an hour after the device says presence ended.
      */
-    suspend fun writeBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>? = presenceWrite {
-        val p = get(slug)
-        val zone = p.zone
-        if (!p.on || zone == null) return@presenceWrite null
-        putPresence(slug, zone, p.spot, if (p.position) serverFixes[slug] else null, p.mode, ble)
+    suspend fun writeBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>? {
+        val started = epoch
+        val r = presenceWrite {
+            val p = get(slug)
+            val zone = p.zone
+            if (!p.on || zone == null) return@presenceWrite null
+            putPresence(slug, zone, p.spot, if (p.position) serverFixes[slug] else null, p.mode, ble)
+        }
+        if (r is ApiResult.Ok) followWrite(slug, r.value, started)
+        return r
+    }
+
+    // A write that repeated presence went through: the device keeps the until and the spot line's
+    // state the server now holds. Presence turned off (or ended on the server) while the write was
+    // under way stays off: the delete queued behind it has the last word.
+    private suspend fun followWrite(slug: String, res: PresencePutResponse, started: Int) {
+        if (epoch != started || !get(slug).on) return
+        val until = untilOf(res)
+        set(slug) { p -> if (p.on) p.copy(until = until, spotHidden = res.spotHidden, held = res.held) else p }
+        if (watchedSlug == slug) scheduleExpiry(slug)
+        host.presenceChanged(slug)
     }
 
     /**

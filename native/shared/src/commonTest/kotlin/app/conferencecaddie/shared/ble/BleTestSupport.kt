@@ -12,14 +12,19 @@ import app.conferencecaddie.shared.people.PeopleHarness
 import app.conferencecaddie.shared.people.PresenceMode
 import app.conferencecaddie.shared.people.START_MS
 import app.conferencecaddie.shared.people.SentRequest
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /** A radio that records what it is told and lets a test hear payloads and stop it. */
 class FakeBleRadio(
@@ -88,6 +93,20 @@ class FakeBleRadio(
     override fun keepAwakeUntil(epochMillis: Long) {
         keepAwake += epochMillis
     }
+
+    /** What [takeUserStoppedApp] answers next: true when the person stopped the whole app. */
+    var userStoppedApp = false
+
+    /** How often the runtime asked [takeUserStoppedApp]. */
+    var userStoppedAsked = 0
+
+    override fun takeUserStoppedApp(): Boolean {
+        userStoppedAsked++
+        return userStoppedApp.also { userStoppedApp = false }
+    }
+
+    /** The platform woke the app for the report it was asked to stay awake for. */
+    fun reportDue() = events!!.onReportDue()
 
     /** Another phone's payload heard at [rssi] dBm at [at]. */
     fun hear(payload: ByteArray, rssi: Int, at: Long) = events!!.onHeard(payload, rssi, at)
@@ -167,7 +186,16 @@ fun bleCaps(intervalSeconds: Int, nearRssi: Int = -75): Capabilities =
 class BleRig(val test: TestScope, startMs: Long = START_MS) {
     val radio = FakeBleRadio()
     val keys = RecordingKeyStore()
-    val h = PeopleHarness(test, ble = BlePlatform(radio, keys), startMs = startMs)
+
+    /**
+     * Time the phone spent asleep: the phone's clock moves on by it while the runtime's timers, which
+     * run on the monotonic clock (the test's virtual time), do not.
+     */
+    var sleptMs = 0L
+    private val phoneClock = object : Clock {
+        override fun now(): Instant = Instant.fromEpochMilliseconds(startMs + test.testScheduler.currentTime + sleptMs)
+    }
+    val h = PeopleHarness(test, ble = BlePlatform(radio, keys), startMs = startMs, clock = phoneClock)
     val log = ArrayList<String>()
     val slug = FIXTURE_SLUG
     val alias = BleProtocol.keyAlias(BACKEND.base, FIXTURE_SLUG)
@@ -216,6 +244,21 @@ class BleRig(val test: TestScope, startMs: Long = START_MS) {
         (r.jsonObject["sightings"] as JsonArray).map { (it as JsonObject).let { o -> (o["token"] as JsonPrimitive).content to (o["rssi"] as JsonPrimitive).int } }
 
     fun presencePuts(): List<SentRequest> = h.sent("PUT", "/api/presence")
+
+    /** Presence's `until` on the device, in epoch milliseconds. */
+    fun presenceUntil(): Long? = h.state.presence.until?.let { Instant.parse(it).toEpochMilliseconds() }
+
+    /** Records the `presence_until` of every presence write's answer from here on, in epoch milliseconds. */
+    fun serverUntils(): List<Long> {
+        val untils = ArrayList<Long>()
+        val put = h.server.presencePut
+        h.server.presencePut = { r ->
+            put(r).also { res ->
+                Json.parseToJsonElement(res.text()).jsonObject["presence_until"]?.jsonPrimitive?.content?.let { untils += Instant.parse(it).toEpochMilliseconds() }
+            }
+        }
+        return untils
+    }
 
     /** A sightings answer naming [nearby] (JSON objects) with the current key id, or [keyId]. */
     fun answer(vararg nearby: String, keyId: String? = h.server.bleKeyId()): HttpResponse =
