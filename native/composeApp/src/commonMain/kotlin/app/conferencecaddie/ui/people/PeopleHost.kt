@@ -6,9 +6,11 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.bundle.TalkBundle
@@ -18,6 +20,10 @@ import app.conferencecaddie.shared.people.ReportKind
 import app.conferencecaddie.ui.shell.PeoplePage
 import app.conferencecaddie.ui.shell.ShellNavigator
 import app.conferencecaddie.ui.shell.Tab
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.random.Random
+import kotlin.reflect.KProperty
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -27,31 +33,35 @@ import kotlinx.coroutines.launch
  * take it as a parameter, next to the `PeopleUiState` they draw, and never reach for the app in any
  * other way:
  *
- * - [controller]: the people features. Its actions are suspend functions. Call an action whose
+ * - [controller]: the people features. Its actions are suspend functions. Start an action whose
  *   answer must still be shown after its composable has left (a card in a list, a row the answer
- *   removes) from [scope]; other actions can use a `rememberCoroutineScope()` of the screen.
+ *   removes, Back, another tab, a rotation) with [launchOnce], or on [scope]; reads that end with a
+ *   screen can use a `rememberCoroutineScope()` of the screen.
  * - Moving around: [openProfile], [openInbox], [openMeet], [openPeople], [openSettings] and [back].
  * - The shell's one toast: [showToast], and [showMessage] for an action's message.
  * - The sheets and the dialog that more than one screen opens, drawn once by the People layer:
  *   [ask] (AskSheet), [report] (ReportSheet) and [confirmBlock] (the block confirmation, then the
  *   block, its toast and Undo).
  * - Talks and links: [openTalk] opens the talk sheet; [openUrl] opens an http(s) link.
- * - What this run remembers across screens: [hasWaved] and [markWaved] ("Waved" on a card).
+ * - What this run remembers across screens: [hasWaved] and [markWaved] ("Waved" on a card),
+ *   the found views ([foundPerson]) and saved people ([metSaved]), the actions under way
+ *   ([isRunning]) and the open setup panels ([rememberPanel]).
  * - The platform: [nowMs] (the controller's clock, so a test's clock reaches the screens too) and
  *   [openAppSettings] (this app's page in the system settings, where [canOpenAppSettings]).
  *
- * One instance lives as long as the app's composition; it holds no data of its own beyond the
- * state of the sheets, the pending [request] and the refs waved at.
+ * One instance lives as long as the app's composition. What it remembers is in its memory
+ * ([PeopleHostMemory]), which [PeopleRetained] keeps across the activity's re-creation on Android.
  */
 @Stable
 class PeopleHost(
     val controller: PeopleController,
     private val navigator: ShellNavigator,
     /**
-     * A scope that lives as long as the app's composition, for work that must finish after a screen
-     * leaves (`controller.setInboxVisible(false)` from a DisposableEffect), and for an action whose
-     * answer must still be shown after its card has left (scrolled out of a list, another tab), or
-     * after the answer itself removed it. Other actions use the screen's own `rememberCoroutineScope()`.
+     * The scope of [PeopleRetained]: on Android it lives as long as the activity's ViewModelStore,
+     * across a rotation (else as long as the app's composition). For work that must finish after a
+     * screen leaves (`controller.setInboxVisible(false)` from a DisposableEffect), and for an action
+     * whose answer must still be shown after its composable has left, or after the answer itself
+     * removed it ([launchOnce]). Reads that end with a screen use the screen's own scope.
      */
     val scope: CoroutineScope,
     private val toast: (message: String, action: PeopleToastAction?) -> Unit,
@@ -155,12 +165,78 @@ class PeopleHost(
     fun ask(person: Person) {
         askedPerson = person
         memory.askingRef = person.ref
+        memory.askSent = null
     }
 
     fun closeAsk() {
         askedPerson = null
         memory.askingRef = null
+        memory.askSent = null
     }
+
+    /**
+     * True when the ask of the sheet open for [ref] was sent. Kept in the memory rather than in the
+     * sheet: an ask that is answered after a re-creation shows "Asked" in the sheet that shows now.
+     */
+    fun askSent(ref: String): Boolean = memory.askSent == ref
+
+    /** The ask to [ref] was sent; the sheet open for it says so. */
+    fun markAskSent(ref: String) {
+        if (memory.askingRef == ref) memory.askSent = ref
+    }
+
+    /**
+     * Whether a setup panel ([which]) is open, for the composable that calls it. The panel is open
+     * in the memory, which an answer after the activity was re-created still reaches (a copy of the
+     * card's own saved state would keep it open), under a token the card keeps in its saved state.
+     * The token comes back with the card after a re-creation, or a list that scrolled it away, so
+     * the panel does too; a card that starts over (its tab was left) has a new one, so the panel
+     * is closed there, as its draft is gone.
+     */
+    @Composable
+    internal fun rememberPanel(which: SetupPanel): OpenPanel {
+        val token = rememberSaveable { Random.nextLong().toString() }
+        return remember(which, token) { OpenPanel(memory, which, token) }
+    }
+
+    /** Whether the action named [key] ([launchOnce]) is under way. */
+    fun isRunning(key: String): Boolean = key in memory.running
+
+    /**
+     * Starts [action] on [scope] as the action named [key], unless an action of that name is under
+     * way: started here, or by a screen that has gone since (it was left and opened again, or the
+     * activity was re-created). Returns false when it did not start. The names live in the memory,
+     * so a screen that came back waits for the answer of the action its predecessor started, as the
+     * screen that asked would have.
+     */
+    fun launchOnce(key: String, action: suspend () -> Unit): Boolean {
+        if (!memory.start(key)) return false
+        // Released when the action ends whichever way, also when the scope was cancelled before it
+        // could start.
+        scope.launch { action() }.invokeOnCompletion { memory.finish(key) }
+        return true
+    }
+
+    /**
+     * The found view of [meetId] ("You found {name}") as its Meet up showed it, or null. Kept in the
+     * memory because it cannot be read again: the server answers a found meet-up with 410, so a Meet
+     * up shown again (after a re-creation, or an answer that came after one) would say it is over.
+     */
+    fun foundPerson(meetId: String): Pair<String, String?>? = memory.found[meetId]?.let { (it[0] ?: "") to it[1] }
+
+    /** [meetId] got to its found view, with [name] and [about]. */
+    fun markFound(meetId: String, name: String, about: String?) {
+        memory.found = memory.found + (meetId to listOf(name, about))
+    }
+
+    /** True when "Save this person" saved the person of [meetId]. */
+    fun metSaved(meetId: String): Boolean = meetId in memory.metSaved
+
+    /** "Save this person" saved the person of [meetId]: the found view says so from now on. */
+    fun markMetSaved(meetId: String) {
+        memory.metSaved = memory.metSaved + meetId
+    }
+
 
     /** What ReportSheet is open for, or null. */
     val reporting: ReportTarget? get() = memory.reporting
@@ -246,10 +322,13 @@ class PeopleHost(
 
 /**
  * The host's state that survives an activity's re-creation: the refs and small values of the open
- * sheets, the pending request and the refs waved at, never a person or a screen's data. Saved with
- * [Saver] by [rememberPeopleUi]. The block confirmation's `after` callback belongs to a screen that
- * is composed again; it is not saved, so a confirmation restored after a re-creation blocks without
- * it (the card it would drop comes back with the next inbox refresh).
+ * sheets and setup panels, the pending request, the refs waved at, the found views of meet-ups and
+ * the people saved from them, and the actions under way, never a person's profile. [PeopleRetained] keeps the
+ * very instance across a re-creation (an action that outlives it still changes what the new
+ * composition shows); [Saver] saves it for the process's end, without the actions under way, which
+ * end with the process. The block confirmation's `after` callback belongs to a screen that is
+ * composed again; it is not saved, so a confirmation restored after the process ended blocks
+ * without it (the card it would drop comes back with the next inbox refresh).
  */
 @Stable
 class PeopleHostMemory {
@@ -258,8 +337,64 @@ class PeopleHostMemory {
     internal var blocking: BlockTarget? by mutableStateOf(null)
     internal var waved: Set<String> by mutableStateOf(emptySet())
     internal var request: PeopleRequest? by mutableStateOf(null)
+    internal var askSent: String? by mutableStateOf(null)
+
+    /** The token of the card whose setup panel is open, per panel ([PeopleHost.rememberPanel]). */
+    internal var panels: Map<SetupPanel, String> by mutableStateOf(emptyMap())
+
+    /** The found view of each meet-up that got to it: the name and the about line ([PeopleHost.markFound]). */
+    internal var found: Map<String, List<String?>> by mutableStateOf(emptyMap())
+
+    /** The meet-ups whose person "Save this person" saved ([PeopleHost.markMetSaved]). */
+    internal var metSaved: Set<String> by mutableStateOf(emptySet())
+
+    // The actions under way ([PeopleHost.launchOnce]). Not saved: an action ends with the process.
+    // The atomic set is the one truth, changed from any thread; [changes] only tells a composition
+    // that read it to read it again. A write of the same value still tells it (neverEqualPolicy),
+    // so no change is missed whichever thread writes last.
+    @OptIn(ExperimentalAtomicApi::class)
+    private val runningNow = AtomicReference<Set<String>>(emptySet())
+    private val changes = mutableStateOf(Unit, neverEqualPolicy())
+
+    /** The actions under way, read where a composition sees a change. */
+    @OptIn(ExperimentalAtomicApi::class)
+    internal val running: Set<String>
+        get() {
+            changes.value
+            return runningNow.load()
+        }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    internal fun start(key: String): Boolean {
+        while (true) {
+            val now = runningNow.load()
+            if (key in now) return false
+            if (runningNow.compareAndSet(now, now + key)) break
+        }
+        changes.value = Unit
+        return true
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    internal fun finish(key: String) {
+        while (true) {
+            val now = runningNow.load()
+            if (runningNow.compareAndSet(now, now - key)) break
+        }
+        changes.value = Unit
+    }
 
     companion object {
+        /**
+         * [Saver], except that a restore finds [retained]'s memory when it has one: after a
+         * re-creation the composition goes on with the very memory the actions still change, and a
+         * restore from saved state happens only once the process was ended.
+         */
+        internal fun retainedSaver(retained: PeopleRetained): Saver<PeopleHostMemory, Any> = Saver(
+            save = { m -> with(Saver) { save(m) } },
+            restore = { saved -> retained.memory ?: Saver.restore(saved)?.also { retained.memory = it } },
+        )
+
         val Saver: Saver<PeopleHostMemory, Any> = Saver(
             save = { m ->
                 arrayListOf<Any?>(
@@ -268,6 +403,12 @@ class PeopleHostMemory {
                     m.blocking?.let { arrayListOf(it.ref, it.name) },
                     ArrayList(m.waved),
                     m.request?.let { arrayListOf(it.aroundNow, it.query, it.hereZone, it.id) },
+                    arrayListOf(
+                        m.askSent,
+                        ArrayList(m.panels.map { (k, v) -> "${k.name}=$v" }),
+                        ArrayList(m.found.map { (id, f) -> arrayListOf(id, f[0], f[1]) }),
+                        ArrayList(m.metSaved),
+                    ),
                 )
             },
             restore = { saved ->
@@ -282,6 +423,18 @@ class PeopleHostMemory {
                     m.waved = (list[3] as List<*>).filterIsInstance<String>().toSet()
                     (list[4] as List<*>?)?.let { q ->
                         m.request = PeopleRequest(q[0] as Boolean, q[1] as String?, q[2] as String?, q[3] as Long)
+                    }
+                    // Absent from state saved before these were kept.
+                    (list.getOrNull(5) as List<*>?)?.let { p ->
+                        m.askSent = p.getOrNull(0) as? String
+                        m.panels = (p.getOrNull(1) as? List<*>).orEmpty().filterIsInstance<String>().mapNotNull { e ->
+                            val (name, token) = e.split('=', limit = 2).takeIf { it.size == 2 } ?: return@mapNotNull null
+                            SetupPanel.entries.firstOrNull { it.name == name }?.let { it to token }
+                        }.toMap()
+                        m.found = (p.getOrNull(2) as? List<*>).orEmpty().filterIsInstance<List<*>>().mapNotNull { f ->
+                            (f.getOrNull(0) as? String)?.let { id -> id to listOf(f.getOrNull(1) as? String, f.getOrNull(2) as? String) }
+                        }.toMap()
+                        m.metSaved = (p.getOrNull(3) as? List<*>).orEmpty().filterIsInstance<String>().toSet()
                     }
                 }
             },
@@ -424,5 +577,21 @@ internal fun InComposition.Track() {
     DisposableEffect(this) {
         value = true
         onDispose { value = false }
+    }
+}
+
+/** The setup panels that are kept in the host's memory ([PeopleHost.rememberPanel]). */
+enum class SetupPanel { Presence, BluetoothCard, BluetoothSettings }
+
+/** Whether one card's setup panel is open, read and written through the host's memory; a delegate. */
+internal class OpenPanel(private val memory: PeopleHostMemory, private val which: SetupPanel, private val token: String) {
+    operator fun getValue(thisRef: Any?, property: KProperty<*>): Boolean = memory.panels[which] == token
+
+    operator fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
+        if (value) {
+            memory.panels = memory.panels + (which to token)
+        } else if (memory.panels[which] == token) {
+            memory.panels = memory.panels - which
+        }
     }
 }

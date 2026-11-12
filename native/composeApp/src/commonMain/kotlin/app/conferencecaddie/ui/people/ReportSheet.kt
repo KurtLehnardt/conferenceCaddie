@@ -39,9 +39,13 @@ import kotlinx.coroutines.launch
 @Composable
 fun ReportSheet(target: ReportTarget, host: PeopleHost, onClose: () -> Unit) {
     var reason by remember(target) { mutableStateOf<ReportReason?>(null) }
-    var busy by remember(target) { mutableStateOf(false) }
     var error by remember(target) { mutableStateOf<String?>(null) }
     val close by rememberUpdatedState(onClose)
+    // One report of this target at a time (PeopleHost.launchOnce), also across a sheet opened again
+    // meanwhile; an error after the sheet has gone goes in a toast ([shown]).
+    val key = "report:${target.kind}:${target.id}"
+    val busy = host.isRunning(key)
+    val shown = rememberInComposition()
 
     val send: () -> Unit = send@{
         val chosen = reason
@@ -49,17 +53,18 @@ fun ReportSheet(target: ReportTarget, host: PeopleHost, onClose: () -> Unit) {
             error = PeopleStrings.PICK_A_REASON
             return@send
         }
-        busy = true
+        if (host.isRunning(key)) return@send
         error = null
-        host.scope.launch {
+        host.launchOnce(key) {
             when (val res = host.controller.report(target.ref, target.kind, target.id, chosen)) {
                 is ApiResult.Ok -> {
                     host.showToast(PeopleStrings.REPORT_THANKS)
-                    close()
+                    // Closes the sheet only while it is still this report's: another may be open now.
+                    if (host.reporting == target) close()
                 }
                 is ApiResult.Failed -> {
-                    error = reportProblem(res.error)
-                    busy = false
+                    val message = reportProblem(res.error)
+                    if (shown.value) error = message else host.showMessage(message)
                 }
             }
         }

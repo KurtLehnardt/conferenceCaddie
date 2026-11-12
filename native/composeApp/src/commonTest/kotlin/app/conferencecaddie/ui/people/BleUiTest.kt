@@ -349,6 +349,9 @@ class BleUiTest {
         prompt.complete(Unit)
         waitUntil(timeoutMillis = 20_000) { rig.state.ble.on }
         u3WaitForNoTag("ble-setup")
+        // The start closes the panel as it answers and is done just after; the rig's host runs it off
+        // the UI thread, so the switch may be drawn once in between.
+        waitUntil(timeoutMillis = 20_000) { !rig.host.isRunning("bluetooth") }
         onNodeWithTag("ble-switch").assertIsEnabled().assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
     }
 

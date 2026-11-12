@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -43,13 +42,18 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AskSheet(person: Person, state: PeopleUiState, host: PeopleHost, onClose: () -> Unit) {
-    val scope = rememberCoroutineScope()
+    // The ask runs on the app's scope (PeopleHost.scope): the sheet can be closed, or the activity
+    // re-created, while it is sent, and its answer then goes in a toast ([shown]). It runs once per
+    // person at a time (PeopleHost.launchOnce), so a second tap, or a sheet opened again meanwhile,
+    // sends one ask.
+    val shown = rememberInComposition()
     val prefill = remember(person.ref) { PeopleText.askPrefill(person) }
     var note by rememberSaveable(person.ref) { mutableStateOf(prefill.first) }
-    var busy by remember { mutableStateOf(false) }
+    val busy = host.isRunning("ask:${person.ref}")
     var error by remember { mutableStateOf<String?>(null) }
     var openMeetId by remember { mutableStateOf<String?>(null) }
-    var sent by rememberSaveable(person.ref) { mutableStateOf(false) }
+    // In the host's memory, which an answer after a re-creation still reaches (PeopleHost.askSent).
+    val sent = host.askSent(person.ref)
 
     fun send() {
         val text = note.trim()
@@ -57,18 +61,31 @@ fun AskSheet(person: Person, state: PeopleUiState, host: PeopleHost, onClose: ()
             error = ConnectStrings.NOTE_EMPTY
             return
         }
-        scope.launch {
-            busy = true
-            error = null
-            openMeetId = null
-            when (val res = host.controller.ask(person, text, prefill.second)) {
-                is ApiResult.Ok -> sent = true
+        if (host.isRunning("ask:${person.ref}")) return
+        error = null
+        openMeetId = null
+        host.launchOnce("ask:${person.ref}") {
+            val res = host.controller.ask(person, text, prefill.second)
+            when (res) {
+                is ApiResult.Ok -> {
+                    host.markAskSent(person.ref)
+                    // A toast only when no sheet shows "Asked": this one has gone, and none was
+                    // opened for them again (as after a re-creation, where the sheet comes back).
+                    if (!shown.value && host.askingRef != person.ref) host.showToast(ConnectStrings.ASKED)
+                }
                 is ApiResult.Failed -> {
-                    error = connectAskProblem(res.error)
-                    openMeetId = res.error.meetId?.takeIf { res.error.kind == PeopleError.Kind.MeetOpen }
+                    val message = connectAskProblem(res.error)
+                    val meetId = res.error.meetId?.takeIf { res.error.kind == PeopleError.Kind.MeetOpen }
+                    when {
+                        shown.value -> {
+                            error = message
+                            openMeetId = meetId
+                        }
+                        meetId != null -> host.showToast(message, PeopleToastAction(PeopleCommonStrings.OPEN_MEET_UP) { host.openMeet(meetId) })
+                        else -> host.showMessage(message)
+                    }
                 }
             }
-            busy = false
         }
     }
 

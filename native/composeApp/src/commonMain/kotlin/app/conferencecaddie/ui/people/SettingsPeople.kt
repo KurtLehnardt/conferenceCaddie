@@ -51,9 +51,11 @@ fun SettingsPeople(state: PeopleUiState, host: PeopleHost) {
  */
 @Composable
 fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
-    val scope = rememberCoroutineScope()
-    var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Unblock runs on the app's scope (PeopleHost.scope), so leaving Settings meanwhile loses neither
+    // its toast nor its error ([shown]); one unblock per person at a time (PeopleHost.launchOnce),
+    // also across a screen that came back.
+    val shown = rememberInComposition()
     LaunchedEffect(host.controller, state.conference?.slug) { host.controller.refreshBlocks() }
 
     SettingsGroup(ProfileStrings.BLOCKED_PEOPLE, Modifier.testTag("set-blocked")) {
@@ -66,17 +68,22 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
                     CaddieButton(
                         ProfileStrings.UNBLOCK,
                         {
-                            scope.launch {
-                                busy = b.ref
-                                error = host.controller.unblock(b.ref)
-                                if (error == null) host.showToast(PeopleCommonStrings.unblocked(b.displayName))
-                                busy = null
+                            if (!host.isRunning("unblock:${b.ref}")) {
+                                error = null
+                                host.launchOnce("unblock:${b.ref}") {
+                                    val err = host.controller.unblock(b.ref)
+                                    when {
+                                        err == null -> host.showToast(PeopleCommonStrings.unblocked(b.displayName))
+                                        shown.value -> error = err
+                                        else -> host.showMessage(err)
+                                    }
+                                }
                             }
                         },
                         Modifier.testTag("unblock-${b.ref}"),
                         variant = ButtonVariant.Text,
                         small = true,
-                        enabled = busy != b.ref,
+                        enabled = !host.isRunning("unblock:${b.ref}"),
                     )
                 }
             }
