@@ -69,7 +69,8 @@ From `native/`:
 ./gradlew :androidApp:installDebug      # installs on a connected phone or a running emulator
 ./gradlew :composeApp:connectedAndroidDeviceTest   # the Compose UI tests and the model measurement on a phone or emulator
 ./gradlew :androidApp:connectedDebugAndroidTest    # the app's instrumented tests
-./gradlew :androidApp:assembleRelease && scripts/release-smoke.sh   # the R8 release build, started on the device
+CADDIE_BACKEND=<server URL> CADDIE_BUNDLE_BASE=<bundles URL, ends in /> \
+  ./gradlew :androidApp:assembleRelease && scripts/release-smoke.sh   # the R8 release build, started on the device
 ./gradlew :shared:smokeTalks -Pcaddie.smokeSite=<dir>   # the talk checks of scripts/smoke.mjs (see Talk features)
 ```
 
@@ -89,6 +90,7 @@ Release builds run R8 (code shrinking and resource shrinking). Compose, AndroidX
 kotlinx.serialization bring their own keep rules; app-specific rules go in
 `androidApp/proguard-rules.pro`, which keeps ONNX Runtime's Java API for its JNI code. Check a
 release build on a device after adding anything that uses reflection: `scripts/release-smoke.sh`
+(it needs `CADDIE_BACKEND`, the server's base URL, and `CADDIE_BUNDLE_BASE`, the bundles' base URL ending in `/`; it has no defaults)
 installs the release build of the device's ABI (signed with the debug key when no release key is
 set), checks the installed package for ONNX Runtime's telemetry provider and the network-state
 permission, starts it, opens Settings, and searches for letters that are in no talk, which only the

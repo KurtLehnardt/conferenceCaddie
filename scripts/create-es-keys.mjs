@@ -26,8 +26,12 @@
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
-const PROJECT = process.env.GC_PROJECT || 'project-9205d6eb-366e-4844-b77';
+import { esUrlOrExit } from './lib/es-url.mjs';
+const PROJECT = process.env.GC_PROJECT;
+if (!PROJECT) {
+  console.error('Set GC_PROJECT to your Google Cloud project id.');
+  process.exit(1);
+}
 const ADMIN = process.env.ELASTISEARCH_API_KEY;
 if (!ADMIN) {
   console.error('ELASTISEARCH_API_KEY is not set.');
@@ -63,7 +67,7 @@ const KEYS = [
 ];
 
 async function es(method, path, body, auth = `ApiKey ${ADMIN}`) {
-  const res = await fetch(ES_URL + path, {
+  const res = await fetch(esUrlOrExit() + path, {
     method,
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
