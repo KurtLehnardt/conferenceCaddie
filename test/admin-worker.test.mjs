@@ -626,6 +626,41 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
     }
   });
 
+  test('a redirect whose body stalls and never ends is refused at once, well before the timeout, and its target is never contacted', async () => {
+    // The headers of a 302 arrive, then a first chunk of a body that never ends (chunked, no
+    // Content-Length). The CLI cancels the body without waiting for it, so it neither hangs until
+    // TIMEOUT_MS (60 s) nor follows the Location.
+    const hops = [];
+    const sockets = new Set();
+    const stalling = http.createServer((req, res) => {
+      hops.push(req.url);
+      res.writeHead(302, { location: `${stub.url}${req.url}`, 'content-type': 'text/plain' });
+      res.write('moved, and the rest never comes');
+    });
+    stalling.on('connection', (socket) => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+    await new Promise((resolve) => stalling.listen(0, '127.0.0.1', resolve));
+    try {
+      writeConfig({ default: 't2', backends: { t2: { tier: 2, api: `http://127.0.0.1:${stalling.address().port}` } } });
+      for (const [argv, message] of [
+        [['stats', 'counts', '--event', EVENT], /GET \/admin\/stats: status 302, a redirect; admin requests never follow redirects/],
+        [['conferences', 'list'], /GET \/api\/conferences: status 302, a redirect/],
+      ]) {
+        const before = hops.length;
+        const started = Date.now();
+        const r = await invoke(argv);
+        const took = Date.now() - started;
+        assert.equal(r.code, 1, r.stderr);
+        assert.match(r.stderr, message);
+        assert.ok(took < 2000, `${argv.join(' ')} took ${took} ms`);
+        assert.equal(hops.length - before, 1, 'one attempt, no retry');
+        assert.equal(stub.requests.length, 0, 'the redirect target was never contacted');
+      }
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => stalling.close(resolve));
+    }
+  });
+
   test('the Access headers are sent only when both variables are set, on admin routes only, and never logged', async () => {
     const without = await invoke(['stats', 'counts', '--event', EVENT]);
     assert.equal(admins(without.requests)[0].headers['cf-access-client-id'], undefined);
