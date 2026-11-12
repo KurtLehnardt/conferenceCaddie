@@ -24,9 +24,12 @@ export function readCredential({ env, envName, fileEnvName, defaultFile }) {
   let st;
   try {
     st = statSync(file);
-  } catch {
+  } catch (err) {
+    if (err?.code === 'EACCES' || err?.code === 'EPERM') throw new AdminError(`credential file ${file} cannot be reached: a directory on its path cannot be searched by this user; check that directory's permissions`);
+    if (err?.code === 'ELOOP') throw new AdminError(`credential file ${file} is a symlink loop`);
     throw new AdminError(`no credential: set ${envName}, or put it in ${file} (mode 0600; ${fileEnvName} changes the path)`);
   }
+  if (st.isDirectory()) throw new AdminError(`credential file ${file} is a directory; the credential must be a file of mode 0600 at that path (${fileEnvName} changes the path)`);
   if ((st.mode & 0o177) !== 0) {
     const mode = (st.mode & 0o777).toString(8).padStart(4, '0');
     throw new AdminError(`credential file ${file} has mode ${mode}; only the owner may read it, run chmod 600 on it`);

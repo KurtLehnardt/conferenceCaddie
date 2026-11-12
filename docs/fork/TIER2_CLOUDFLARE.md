@@ -133,7 +133,7 @@ SMOKE_ADMIN_AUTH=signed \
 node scripts/smoke.mjs
 ```
 
-`BASE_URL` is the app; the API is on the same origin. The admin token makes it a Worker run. `SMOKE_BUNDLE_BASE` is your bundle base, which the smoke compares with what your Worker's capabilities document says (check `cap1`) and uses to read the bundles. The smoke tests the people features with test profiles that it creates and deletes itself, checks the static files' security headers, and scans `web/dist-worker/` for leaked keys. A line that starts with FAIL needs attention. On a deployed Worker some checks print SKIP and name `ADMIN_TEST_ROUTES`; that is expected and explained next.
+`BASE_URL` is the app; the API is on the same origin. The admin token makes it a Worker run. Name the token file as shown: the smoke reads the caddie-admin token file by itself only for a deployed Worker that caddie-admin's `config.json` lists, and only for signed calls ([ADMIN_CLI.md](../ADMIN_CLI.md#the-smoke-test-and-the-token-file)). `caddie-admin stats health` prints a smoke command with the token file already named. `SMOKE_BUNDLE_BASE` is your bundle base, which the smoke compares with what your Worker's capabilities document says (check `cap1`) and uses to read the bundles. The smoke tests the people features with test profiles that it creates and deletes itself, checks the static files' security headers, and scans `web/dist-worker/` for leaked keys. A line that starts with FAIL needs attention. On a deployed Worker some checks print SKIP and name `ADMIN_TEST_ROUTES`; that is expected and explained next.
 
 ### ADMIN_TEST_ROUTES: the smoke fixtures
 
