@@ -22,7 +22,7 @@
 //                                 the routes answer 502; the CLI passes its own)
 //   log(message)                  where the second pass's failure goes (console.error by default)
 
-import { PRESENCE_OFF } from './people-shared.mjs';
+import { PRESENCE_OFF, isPendingDelete } from './people-shared.mjs';
 
 const DELETE_BATCH = 1000;
 const DELETE_ROUNDS = 20;
@@ -140,10 +140,13 @@ export function createProfileDelete({ people, bulkOne, deleteDoc, withPreference
   // answers 200, because trying again would find no profile and change nothing. A write that lands
   // even later stays: the purge removes such a meet once it runs out, and a push subscription, a
   // nudge record or a block once the conference ends.
-  async function deleteProfileAndConnections(eventId, profileId) {
+  // Returns 'gone' when the hide finds no document and 'deleted' otherwise. With `guard` it runs the
+  // guarded delete below instead.
+  async function deleteProfileAndConnections(eventId, profileId, { guard = null } = {}) {
+    if (guard) return deleteGuarded(eventId, profileId, guard);
     const id = docId(eventId, profileId);
     const status = await bulk({ update: { _id: id, retry_on_conflict: HIDE_RETRIES } }, { doc: HIDE_FOR_DELETE });
-    if (status === 404) return;
+    if (status === 404) return 'gone';
     if (status < 200 || status > 299) throw new Failure(`bulk item status ${status}`);
     await deleteConnections(eventId, profileId);
     await removeDoc(id);
@@ -152,6 +155,55 @@ export function createProfileDelete({ people, bulkOne, deleteDoc, withPreference
     } catch (err) {
       log(`Deleting a deleted profile's connections again failed: ${errorText(err)}`);
     }
+    return 'deleted';
+  }
+
+  // A realtime read of the fields that decide a pending delete: { source, seqNo, primaryTerm }, or
+  // null when the document is gone.
+  async function readOwn(id) {
+    const { status, json } = await people('GET', `${idx(indices.people)}/_doc/${encodeURIComponent(id)}?_source_includes=open_to_meet,shared_talk_ids`, undefined, { okStatuses: [404] });
+    if (status === 404 || !json?.found) return null;
+    return { source: json._source ?? {}, seqNo: json._seq_no, primaryTerm: json._primary_term };
+  }
+
+  // The delete of a profile its owner did not ask to delete: the ingest's cleanup of a profile left
+  // with neither choice after a talk was deleted (scripts/lib/dropped-talks.mjs). guard is the
+  // { seqNo, primaryTerm } of the caller's own realtime read, which found the profile in the
+  // pending-delete state. The owner may make the profile visible again at any moment, and such a
+  // write must win, so every step that could undo it is a compare-and-write, in the order the
+  // purge finishes a pending delete (finishPendingDelete in server/people.mjs):
+  // 1. The hide, guarded by that read (if_seq_no instead of retry_on_conflict; Elasticsearch takes
+  //    one or the other). A write since the read answers 409: 'kept', nothing deleted.
+  // 2. A realtime read for the sequence number the hide left. A profile that is no longer a pending
+  //    delete is 'kept', nothing deleted.
+  // 3. Meets, push subscriptions and registrations, and nudge records.
+  // 4. The document, guarded by the read of step 2. A write since then answers 409, and the read
+  //    after it finds the profile: 'kept', with its blocks. It loses the meets, push and nudge
+  //    records of step 3, as a pending delete the purge finishes does; the app registers for push
+  //    again on its own.
+  // 5. The blocks the person made, only once a read finds the document gone, then the second pass
+  //    over the connections (best effort, as above).
+  // Returns 'deleted', 'kept' or 'gone' (the document went before step 1).
+  async function deleteGuarded(eventId, profileId, guard) {
+    if (!Number.isInteger(guard?.seqNo) || !Number.isInteger(guard?.primaryTerm)) throw new TypeError('the guard needs an integer seqNo and primaryTerm');
+    const id = docId(eventId, profileId);
+    const status = await bulk({ update: { _id: id, if_seq_no: guard.seqNo, if_primary_term: guard.primaryTerm } }, { doc: HIDE_FOR_DELETE });
+    if (status === 404) return 'gone';
+    if (status === 409) return 'kept';
+    if (status < 200 || status > 299) throw new Failure(`bulk item status ${status}`);
+    const hidden = await readOwn(id);
+    if (!hidden) return 'gone';
+    if (!isPendingDelete(hidden.source)) return 'kept';
+    await deleteMeetsPushAndNudges(eventId, profileId);
+    await people('DELETE', `${idx(indices.people)}/_doc/${encodeURIComponent(id)}?if_seq_no=${hidden.seqNo}&if_primary_term=${hidden.primaryTerm}&refresh=wait_for`, undefined, { okStatuses: [404, 409] });
+    if (await readOwn(id)) return 'kept';
+    await deleteOwnBlocks(eventId, profileId);
+    try {
+      await deleteConnections(eventId, profileId);
+    } catch (err) {
+      log(`Deleting a deleted profile's connections again failed: ${errorText(err)}`);
+    }
+    return 'deleted';
   }
 
   return { deleteWhere, deleteMeetsPushAndNudges, deleteOwnBlocks, deleteConnections, deleteProfileAndConnections };

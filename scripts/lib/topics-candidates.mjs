@@ -1,7 +1,9 @@
 // The candidate step of scripts/topics.mjs (tier 3), without Elasticsearch so a test can run it:
 // the regular candidates from the terms aggregation, then the merge targets that reach three talks
-// with their aliases (mergeTargets, shared with the bundle builder), then the empty guard.
-import { mergeTargets } from './topics.mjs';
+// with their aliases (mergeTargets, shared with the bundle builder), then the empty guard. Also the
+// two orders of its result, the label casing and the topic ranking, which use the bundle builder's
+// comparators so that all three builders break ties the same way.
+import { cmp, compareTopics, mergeTargets } from './topics.mjs';
 
 /**
  * termBuckets   buckets of the terms aggregation (at least three talks): [{ key, doc_count }]
@@ -40,4 +42,24 @@ export function checkNotShrinking(computed, stored, { allowEmpty = false, allowS
   if (computed > 0 && removed > 10 && removed > stored * 0.1 && !allowShrink && !allowEmpty) {
     throw new Error(`The computed list has ${computed} topics against ${stored} stored (${removed} fewer). Refusing to shrink it by more than 10 topics and 10%; pass --allow-shrink if that is intended.`);
   }
+}
+
+/**
+ * The label of a term: its most common original casing in the titles. A tie goes to the casing that
+ * has a capital letter, then to the first by UTF-16 code unit (cmp), as in the bundle builder and
+ * the Worker's ingest. casings is a Map of original text to count.
+ */
+export function commonCasing(casings) {
+  return [...casings.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || cmp(a[0], b[0]))[0][0];
+}
+
+/**
+ * Sorts a topic list in place by compareTopics (most talks first, then label, then topic id, with no
+ * dependence on ICU or the locale), keeps the first max and numbers their rank from 1. Returns it.
+ */
+export function rankTopics(topics, max) {
+  topics.sort(compareTopics);
+  topics.splice(max);
+  topics.forEach((t, i) => { t.rank = i + 1; });
+  return topics;
 }

@@ -68,7 +68,7 @@ Request and response shapes are the named `$defs` entries; the route table lists
 
 | Route | Auth | Request → response | Notes |
 |---|---|---|---|
-| `PUT /api/people/profile` | device | `ProfilePutRequest` → `ProfilePutResponse` | Create or update; `open_to_meet: false` with no shared talks deletes the profile and answers without `hidden_for_owner`. `degraded: { semantic: true }` when the text could not be embedded yet. |
+| `PUT /api/people/profile` | device | `ProfilePutRequest` → `ProfilePutResponse` | Create or update; `open_to_meet: false` with no shared talks deletes the profile and answers without `hidden_for_owner`. `degraded: { semantic: true }` when the text could not be embedded yet. A shared talk id of this conference that is not in its schedule (a cancelled or removed talk the app still holds) is dropped, not refused, and `shared_talk_ids` in the answer is the list that was stored, which the app keeps; when that leaves no shared talk and `open_to_meet` is false, the write deletes the profile. An id of another conference or a malformed id is 400. |
 | `DELETE /api/people/profile?event=` | device | → `Ok` | Deletes the profile, its blocks, meets, push subscriptions and nudge records. Answers 200 when there is nothing to delete. |
 | `POST /api/people/matches` | device | `MatchesRequest` → `MatchesResponse` | People to meet, text search by what people have built, and `when: around_now`. Pages by `from + size`; a page can be shorter than `size` because of the specificity rule. |
 | `POST /api/circles/counts` | none | `CircleCountsRequest` → `CircleCountsResponse` | Never who, only how many. |
