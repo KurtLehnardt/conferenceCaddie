@@ -23,13 +23,22 @@ import kotlinx.coroutines.withContext
  * - [hmac] is synchronous and safe from any thread (a GATT read is answered from a binder thread):
  *   each call looks the key up and uses its own `Mac`.
  * - A key that can no longer be used (lost, or invalidated by the platform) reads as missing, so the
- *   common runtime asks the server for a new one. Other Keystore errors are thrown, as in
- *   AndroidSecureStore, so a passing failure is never taken for a lost key.
+ *   common runtime asks the server for a new one. The Keystore reports a passing failure (its daemon
+ *   busy or restarting) with the same exceptions, and a missing key costs a re-key, which the runtime
+ *   allows once per window, so the HMAC is tried once more before the key counts as lost. Other
+ *   Keystore errors are thrown, as in AndroidSecureStore, so they are never taken for a lost key.
  * - Nothing here logs a key, an alias or an HMAC. Keystore entries are not backed up or moved to
  *   another device, like everything else the app stores.
  */
 class AndroidBleKeyStore : BleKeyStore {
     private val lock = Mutex()
+
+    /**
+     * One HMAC in the Keystore: the HMAC, or null when no key is stored under the alias; a key the
+     * Keystore refuses throws UnrecoverableKeyException or InvalidKeyException. The instrumented tests
+     * wrap it to play a passing Keystore failure; nothing else sets it.
+     */
+    @Volatile var attempt: (alias: String, message: ByteArray) -> ByteArray? = ::hmacOnce
 
     override suspend fun put(alias: String, key: ByteArray) {
         require(key.size == BleProtocol.KEY_BYTES) { "a Bluetooth key is 32 bytes" }
@@ -47,19 +56,24 @@ class AndroidBleKeyStore : BleKeyStore {
     }
 
     override fun hmac(alias: String, message: ByteArray): ByteArray? {
-        val key = try {
-            keyStore().getKey(alias, null) as? SecretKey
-        } catch (e: UnrecoverableKeyException) {
-            null
-        } ?: return null
-        return try {
-            Mac.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256).run {
-                init(key)
-                doFinal(message)
+        repeat(ATTEMPTS) {
+            try {
+                return attempt(alias, message)
+            } catch (e: UnrecoverableKeyException) {
+                // Lost, or the Keystore failed for a moment: tried once more, then taken as lost.
+            } catch (e: InvalidKeyException) {
+                // KeyPermanentlyInvalidatedException is one (the key cannot be used any more), but a
+                // passing failure can look the same: tried once more, then taken as lost.
             }
-        } catch (e: InvalidKeyException) {
-            // KeyPermanentlyInvalidatedException is one: the key cannot be used any more.
-            null
+        }
+        return null
+    }
+
+    private fun hmacOnce(alias: String, message: ByteArray): ByteArray? {
+        val key = keyStore().getKey(alias, null) as? SecretKey ?: return null
+        return Mac.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256).run {
+            init(key)
+            doFinal(message)
         }
     }
 
@@ -73,5 +87,8 @@ class AndroidBleKeyStore : BleKeyStore {
 
     private companion object {
         const val KEYSTORE = "AndroidKeyStore"
+
+        /** The first try and one more. */
+        const val ATTEMPTS = 2
     }
 }
