@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // The Compose Multiplatform UI. On Android it is a library that androidApp hosts; on iOS it is the
 // "ComposeApp" framework that the Xcode project in iosApp/ embeds. The framework re-exports
-// :shared, so Swift code can implement the shared interfaces (BleRadio, SecureStore and so on).
+// :shared, so Swift code can reach the shared types (IosPush, IosNotificationTaps, the Bluetooth restoration hook and so on).
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidMultiplatformLibrary)

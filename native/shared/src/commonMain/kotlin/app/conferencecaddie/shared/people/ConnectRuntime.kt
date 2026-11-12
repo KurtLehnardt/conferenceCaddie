@@ -368,9 +368,14 @@ internal class ConnectRuntime(
     /** The local date of today in the device's time zone, the day nudges are counted by. */
     private fun today(): String = Instant.fromEpochMilliseconds(now()).toLocalDateTime(host.timeZone).date.toString()
 
-    private fun wasNudgedToday(slug: String, ref: String): Boolean = store.record(slug).nudged[ref] == today()
+    /**
+     * True when [ref] was nudged about today at [slug]. In-app nudges and Bluetooth notifications
+     * share this record (as nudges.ts and ble.ts share `caddie.nudged.v1`), so neither repeats the other.
+     */
+    fun wasNudgedToday(slug: String, ref: String): Boolean = store.record(slug).nudged[ref] == today()
 
-    private suspend fun recordNudge(slug: String, ref: String) {
+    /** Records that [ref] was nudged about today at [slug]. */
+    suspend fun recordNudge(slug: String, ref: String) {
         val day = today()
         // Older days are of no further use, so the map holds today's entries only.
         store.update(slug) { r -> r.copy(nudged = r.nudged.filterValues { it == day } + (ref to day)) }
@@ -392,6 +397,12 @@ internal class ConnectRuntime(
     fun seeWho(nudge: Nudge) {
         reveal = nudge.slug to nudge.ref
         current = null
+        host.changed()
+    }
+
+    /** Asks the People tab to land on [ref]'s card, as a tapped Bluetooth notification does. */
+    fun requestReveal(slug: String, ref: String) {
+        reveal = slug to ref
         host.changed()
     }
 

@@ -18,6 +18,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.runAndroidComposeUiTest
 import androidx.test.platform.app.InstrumentationRegistry
+import app.conferencecaddie.shared.ble.BlePermissionKind
 
 // Android: the emulator's display is resized to the window (wm size at 480 dpi, three pixels per dp)
 // before the test activity starts, its system bars are hidden, and the camera is the shell's
@@ -184,3 +185,6 @@ internal actual fun ParitySystemTheme(dark: Boolean, content: @Composable () -> 
     }
     CompositionLocalProvider(LocalConfiguration provides configuration, content = content)
 }
+
+/** Android 12 and newer, as the emulators the screenshots run on: "Nearby devices". */
+internal actual val parityBlePermission: BlePermissionKind = BlePermissionKind.NearbyDevices

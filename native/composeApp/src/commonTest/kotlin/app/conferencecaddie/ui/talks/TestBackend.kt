@@ -41,6 +41,8 @@ class TestBackend(
     private val topics: List<Pair<String, String>>? = null,
     /** True offers native push nudges (apns and fcm) in the capabilities, with the people features. */
     private val push: Boolean = false,
+    /** True offers derived-v1 Bluetooth proximity with the contract's defaults, with the people features. */
+    private val ble: Boolean = false,
 ) : Http {
     class TestTalk(
         val id: String,
@@ -155,7 +157,7 @@ class TestBackend(
                     put("live", "poll")
                 }
             }
-            putJsonObject("ble") { put("mode", "none") }
+            putJsonObject("ble") { put("mode", if (people && ble) "derived-v1" else "none") }
             putJsonObject("push") {
                 put("apns", people && push)
                 put("fcm", people && push)

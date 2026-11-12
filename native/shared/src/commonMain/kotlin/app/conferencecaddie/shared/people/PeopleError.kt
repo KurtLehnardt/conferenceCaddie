@@ -35,6 +35,12 @@ class PeopleError(
     enum class Kind {
         // Stable codes (400, 403, 404, 409, 410, 429).
         Filtered,
+
+        /**
+         * 400 `presence_not_active`: a presence write with `until: "keep"` while no presence is live
+         * on the server (none stored, or it has run out). Nothing was written: presence is off there.
+         */
+        PresenceNotActive,
         Forbidden,
         CrossOrigin,
         ProfileRequired,
@@ -230,7 +236,11 @@ class PeopleError(
         /** The kind of an answer: its stable code when it has one for this status, else its status class. */
         fun kindOf(status: Int, code: String?): Kind {
             val stable = when (status) {
-                400 -> if (code == "filtered") Kind.Filtered else null
+                400 -> when (code) {
+                    "filtered" -> Kind.Filtered
+                    "presence_not_active" -> Kind.PresenceNotActive
+                    else -> null
+                }
                 403 -> when (code) {
                     "forbidden" -> Kind.Forbidden
                     "cross-origin request" -> Kind.CrossOrigin

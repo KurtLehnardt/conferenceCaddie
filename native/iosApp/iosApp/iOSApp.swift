@@ -14,9 +14,10 @@ struct iOSApp: App {
     }
 }
 
-/// The UIKit callbacks SwiftUI does not offer: the APNs device token and notification taps. Each
-/// one is handed straight to the Kotlin code (IosPush; openNotificationTap, which reads the link
-/// with IosNotificationTaps and hands it over like any other caddie:// link).
+/// The UIKit callbacks SwiftUI does not offer: the launch options, the APNs device token and
+/// notification taps. Each one is handed straight to the Kotlin code (IosBle; IosPush;
+/// openNotificationTap, which reads the link with IosNotificationTaps and hands it over like any
+/// other caddie:// link).
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
         _ application: UIApplication,
@@ -24,6 +25,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) -> Bool {
         // Set before launch finishes, so a tap that launched the app is not missed.
         UNUserNotificationCenter.current().delegate = self
+        // iOS relaunched the app in the background for Bluetooth state restoration: no scene (and so
+        // no MainViewController) is created, but the Bluetooth managers must exist again before this
+        // method returns, and the people features must run to start the radio (IosBle.kt).
+        let bluetooth = launchOptions?[.bluetoothCentrals] != nil || launchOptions?[.bluetoothPeripherals] != nil
+        IosBle.shared.restoreAfterLaunch(bluetooth: bluetooth)
         return true
     }
 

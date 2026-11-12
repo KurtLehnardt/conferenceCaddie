@@ -1,12 +1,27 @@
 package app.conferencecaddie.ui.people
 
 import app.conferencecaddie.shared.Capabilities
+import app.conferencecaddie.shared.InMemorySecureStore
+import app.conferencecaddie.shared.Notifier
+import app.conferencecaddie.shared.PeopleServices
+import app.conferencecaddie.shared.ble.BleAccess
+import app.conferencecaddie.shared.ble.BlePayloadSource
+import app.conferencecaddie.shared.ble.BlePermissionKind
+import app.conferencecaddie.shared.ble.BlePlatform
+import app.conferencecaddie.shared.ble.BleProtocol
+import app.conferencecaddie.shared.ble.BleRadio
+import app.conferencecaddie.shared.ble.BleRadioConfig
+import app.conferencecaddie.shared.ble.BleRadioEvents
+import app.conferencecaddie.shared.ble.BleRadioState
+import app.conferencecaddie.shared.ble.HmacSha256
+import app.conferencecaddie.shared.ble.InMemoryBleKeyStore
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.core.BundleState
 import app.conferencecaddie.shared.core.CaddieCore
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.HttpResponse
 import app.conferencecaddie.shared.people.ApiResult
+import app.conferencecaddie.shared.people.BleOutcome
 import app.conferencecaddie.shared.people.ConferenceInfo
 import app.conferencecaddie.shared.people.MatchesResponse
 import app.conferencecaddie.shared.people.MeetState
@@ -52,8 +67,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 
 // FakePeopleServer driven by the real PeopleController: the whole flow from profile to delete, the
 // failure modes, and the privacy rules, plus the raw shapes of a few answers. Plain tests, no UI.
@@ -79,9 +96,9 @@ class FakePeopleServerTest {
         override fun now(): Instant = Instant.fromEpochMilliseconds(TestClock.START_MS + testScheduler.currentTime)
     }
 
-    private class Rig(val test: TestScope, val clock: Clock) {
+    private class Rig(val test: TestScope, val clock: Clock, services: PeopleServices = PeopleServices(InMemorySecureStore())) {
         val server = FakePeopleServer({ clock.now().toEpochMilliseconds() }, FakeConference.alpha())
-        val controller: PeopleController = testPeopleController(server, test.backgroundScope, clock)
+        val controller: PeopleController = testPeopleController(server, test.backgroundScope, clock, services = services)
         val state get() = controller.state.value
         val me: FakePerson get() = server.me("alpha-conf-2099") ?: error("No profile on the server")
         val keyValue = InMemoryPeopleKeyValue()
@@ -92,12 +109,12 @@ class FakePeopleServerTest {
      * would: "Delete my profile" reaches every conference of the list that has not ended, and stays
      * unfinished while the list is not known.
      */
-    private suspend fun TestScope.rig(): Rig = Rig(this, virtualClock()).also {
+    private suspend fun TestScope.rig(caps: Capabilities = peopleOn, services: PeopleServices = PeopleServices(InMemorySecureStore())): Rig = Rig(this, virtualClock(), services).also {
         val alpha = ConferenceInfo(slug, "Alpha Conference", "UTC")
         it.controller.updateContext(
             PeopleContext(
                 backend = testBackendUrl(),
-                capabilities = peopleOn.forThisApp(),
+                capabilities = caps.forThisApp(),
                 conference = alpha,
                 bundle = null,
                 listed = listOf(alpha),
@@ -489,6 +506,135 @@ class FakePeopleServerTest {
             SystemFileSystem.delete(root, mustExist = false)
             database.closeWhenIdle()
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Bluetooth (derived-v1)
+
+    private fun sightingsBody(vararg sightings: Pair<String, Int>) = buildJsonObject {
+        put("event", slug)
+        putJsonArray("sightings") {
+            for ((token, rssi) in sightings) addJsonObject {
+                put("token", token)
+                put("rssi", rssi)
+            }
+        }
+    }
+
+    private fun JsonObject.str(key: String): String = (getValue(key) as JsonPrimitive).content
+
+    @Test
+    fun bluetoothKeysAreIssuedOnceAndSightingsResolveDerivedTokens() = runTest {
+        val r = rig()
+        makeVisible(r)
+        assertNull(r.controller.turnOnPresence("Hallway", ""))
+        val ada = r.server.seedPerson(slug, "Ada Seed", expertise = "Ran eBPF tracing for 200 clusters. Also upgrades.", speakTopics = listOf("ebpf"), around = "Hallway")
+        ada.bluetooth()
+        val far = r.server.seedPerson(slug, "Far Seed", expertise = "Elsewhere.", around = "Expo hall")
+        far.bluetooth()
+        val now = r.clock.now().toEpochMilliseconds()
+        fun token(p: FakePerson, at: Long = now) = BleProtocol.decodePayload(r.server.blePayload(p, at))!!.text
+
+        // No session of my own yet: 403 ble_required.
+        val (noSession, refused) = r.raw("POST", "/api/presence/sightings", sightingsBody(token(ada) to -50))
+        assertEquals(403, noSession)
+        assertEquals("ble_required", refused.str("error"))
+
+        // ble: true issues a key and its id, once; each such write starts a new session.
+        val first = r.raw("PUT", "/api/presence", buildJsonObject { put("event", slug); put("zone", "Hallway"); put("spot", ""); put("ble", true) }).second
+        val key = BleProtocol.decodeKey(first.str("ble_key"))!!
+        assertEquals(BleProtocol.keyIdOf(HmacSha256.mac(key, BleProtocol.keyIdMessage())), first.str("ble_key_id"))
+        assertEquals(r.server.bleKeyId(r.me), first.str("ble_key_id"))
+        val second = r.raw("PUT", "/api/presence", buildJsonObject { put("event", slug); put("zone", "Hallway"); put("spot", ""); put("ble", true) }).second
+        assertTrue(first.str("ble_key") != second.str("ble_key"))
+        val keyId = second.str("ble_key_id")
+        // A write without ble keeps the session and answers no key.
+        val plain = r.raw("PUT", "/api/presence", buildJsonObject { put("event", slug); put("zone", "Hallway"); put("spot", "") }).second
+        assertFalse("ble_key" in plain)
+        assertEquals(keyId, r.server.bleKeyId(r.me))
+
+        // Ada is in my zone; Far is not; an unknown token is nobody.
+        val (status, res) = r.raw("POST", "/api/presence/sightings", sightingsBody(token(ada) to -50, token(far) to -50, "A".repeat(22) to -40))
+        assertEquals(200, status)
+        assertEquals(setOf("nearby", "ble_key_id"), res.keys)
+        assertEquals(keyId, res.str("ble_key_id"))
+        val near = (res.getValue("nearby") as JsonArray).single() as JsonObject
+        assertEquals(setOf("ref", "display_name", "evidence", "speak_topics", "zone"), near.keys)
+        assertEquals(ada.ref, near.str("ref"))
+        assertEquals("Ran eBPF tracing for 200 clusters.", near.str("evidence"))
+        assertEquals("Hallway", near.str("zone"))
+        suspend fun resolved(vararg sightings: Pair<String, Int>) =
+            (r.raw("POST", "/api/presence/sightings", sightingsBody(*sightings)).second.getValue("nearby") as JsonArray).size
+        assertEquals(1, resolved(token(ada, now - 600_000) to -50), "the previous window")
+        assertEquals(1, resolved(token(ada, now + 600_000) to -50), "the next window")
+        assertEquals(0, resolved(token(ada, now + 1_200_000) to -50), "two windows away")
+        assertEquals(0, resolved(token(ada) to -76), "weaker than near_rssi")
+        assertEquals(400, r.raw("POST", "/api/presence/sightings", sightingsBody("short" to -50)).first)
+
+        // Ada stops: her tokens resolve to nobody. Mine ends with ble: false.
+        val adaToken = token(ada)
+        ada.bluetooth(on = false)
+        assertNull(r.server.blePayload(ada))
+        assertEquals(0, resolved(adaToken to -50))
+        r.raw("PUT", "/api/presence", buildJsonObject { put("event", slug); put("zone", "Hallway"); put("spot", ""); put("ble", false) })
+        assertEquals(403, r.raw("POST", "/api/presence/sightings", sightingsBody("A".repeat(22) to -50)).first)
+    }
+
+    private class TestRadio : BleRadio {
+        override val supported = true
+        override val permissionKind = BlePermissionKind.NearbyDevices
+        override var running = false
+        var source: BlePayloadSource? = null
+        var events: BleRadioEvents? = null
+
+        override fun access() = BleAccess.Granted
+        override suspend fun requestAccess() = BleAccess.Granted
+        override fun state() = BleRadioState.Ready
+        override fun start(config: BleRadioConfig, source: BlePayloadSource, events: BleRadioEvents) {
+            running = true
+            this.source = source
+            this.events = events
+        }
+        override fun refresh() = Unit
+        override fun stop() {
+            running = false
+        }
+    }
+
+    private class TestNotifier : Notifier {
+        val shown = ArrayList<Pair<String, String?>>()
+        override suspend fun requestPermission() = true
+        override fun show(id: String, title: String, body: String, deepLink: String?) {
+            shown += body to deepLink
+        }
+        override fun cancel(id: String) = Unit
+    }
+
+    @Test
+    fun theControllerFindsSomeoneRightNearThroughTheFake() = runTest {
+        val radio = TestRadio()
+        val notifier = TestNotifier()
+        val r = rig(
+            caps = peopleOn.copy(ble = Capabilities.Ble(mode = Capabilities.BleMode.DerivedV1)),
+            services = PeopleServices(InMemorySecureStore(), notifier = notifier, ble = BlePlatform(radio, InMemoryBleKeyStore())),
+        )
+        makeVisible(r)
+        assertNull(r.controller.turnOnPresence("Hallway", ""))
+        assertEquals(BleOutcome.On, r.controller.turnOnBluetooth())
+        assertTrue(r.state.ble.on)
+        // The phone serves the payload of the key the fake issued.
+        assertTrue(radio.source!!.payloadNow()!!.contentEquals(r.server.blePayload(r.me)!!))
+
+        val ada = r.server.seedPerson(slug, "Ada Seed", expertise = "Ran eBPF tracing for 200 clusters.", speakTopics = listOf("ebpf"), around = "Hallway")
+        ada.bluetooth()
+        radio.events!!.onHeard(r.server.blePayload(ada)!!, -50, r.clock.now().toEpochMilliseconds())
+        runCurrent()
+        assertEquals<List<Pair<String, String?>>>(listOf("Someone who's worked on Ran eBPF tracing for 200 clusters is right near you" to "caddie://people?around=1"), notifier.shown)
+        assertEquals(ada.ref, r.state.reveal)
+
+        r.controller.turnOffBluetooth()
+        assertFalse(radio.running)
+        assertNull(r.server.bleKeyId(r.me), "ble: false ended the session")
     }
 
     @Test

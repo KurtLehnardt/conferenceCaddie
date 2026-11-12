@@ -220,8 +220,14 @@ class PeopleContractTest {
         )
         assertEquals(
             """{"event":"e","zone":"Hallway","location":null,"until":"day","ble":false}""",
-            r.encodeToString(PresencePutRequest.serializer(), PresencePutRequest("e", "Hallway", location = Opt.Null, until = Opt.Of(PresenceMode.Day), ble = false)),
+            r.encodeToString(PresencePutRequest.serializer(), PresencePutRequest("e", "Hallway", location = Opt.Null, until = Opt.Of(PresenceUntil.Day), ble = false)),
         )
+        assertEquals(
+            """{"event":"e","zone":"Hallway","until":"keep","ble":true}""",
+            r.encodeToString(PresencePutRequest.serializer(), PresencePutRequest("e", "Hallway", until = Opt.Of(PresenceUntil.Keep), ble = true)),
+        )
+        assertEquals(PresenceUntil.Hour, PresenceUntil.of(PresenceMode.Hour))
+        assertEquals(PresenceUntil.Day, PresenceUntil.of(PresenceMode.Day))
         assertEquals("""{"event":"e","ref":"r","topic_id":null,"note":"hi"}""", r.encodeToString(MeetRequest.serializer(), MeetRequest("e", "r", Opt.Null, Opt.Of("hi"))))
         assertEquals("{}", r.encodeToString(EmptyRequest.serializer(), EmptyRequest()))
         assertEquals("""{"rendezvous":null}""", r.encodeToString(MeetDetailsRequest.serializer(), MeetDetailsRequest(rendezvous = Opt.Null)))
@@ -231,5 +237,15 @@ class PeopleContractTest {
         )
         assertEquals("""{"event":"e","platform":"fcm","token":"t"}""", r.encodeToString(NativePushPutRequest.serializer(), NativePushPutRequest("e", "fcm", "t")))
         assertTrue(!NativePushPutRequest("e", "fcm", "secret-token").toString().contains("secret-token"))
+    }
+
+    @Test
+    fun aPresenceAnswerThatEchoesKeepStillReads() {
+        val res = PeopleJson.responses.decodeFromString(
+            PresencePutResponse.serializer(),
+            """{"ok":true,"zone":"Hallway","spot":null,"spot_hidden":false,"until":"keep","presence_since":"2026-11-10T17:00:00Z","presence_until":"2026-11-10T18:00:00Z","located":false}""",
+        )
+        assertNull(res.until, "an until this app does not know reads as no mode")
+        assertEquals("2026-11-10T18:00:00Z", res.presenceUntil)
     }
 }

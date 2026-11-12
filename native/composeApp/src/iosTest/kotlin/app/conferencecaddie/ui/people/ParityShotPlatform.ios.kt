@@ -14,6 +14,7 @@ import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.unit.Density
+import app.conferencecaddie.shared.ble.BlePermissionKind
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.io.buffered
@@ -57,3 +58,6 @@ internal actual fun runParityShot(window: ParityWindow, block: ComposeUiTest.(Pa
 internal actual fun ParitySystemTheme(dark: Boolean, content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalSystemTheme provides if (dark) SystemTheme.Dark else SystemTheme.Light, content = content)
 }
+
+/** iOS asks for Bluetooth. */
+internal actual val parityBlePermission: BlePermissionKind = BlePermissionKind.Bluetooth

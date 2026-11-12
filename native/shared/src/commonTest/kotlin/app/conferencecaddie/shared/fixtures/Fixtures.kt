@@ -5,8 +5,10 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
-/** The contract fixtures (contracts/fixtures/capabilities, bundle and people-api), embedded at build time. */
+/** The contract fixtures (contracts/fixtures/capabilities, bundle, embedding, people-api and ble), embedded at build time. */
 @OptIn(ExperimentalEncodingApi::class)
 object Fixtures {
     const val SLUG = "caddie-fixture-2099"
@@ -29,6 +31,18 @@ object Fixtures {
     fun json(path: String): JsonElement = Json.parseToJsonElement(text(path))
 
     fun capabilities(name: String): JsonObject = json("capabilities/$name") as JsonObject
+
+    /**
+     * A capabilities fixture as an effective set writes it. The effective set always writes
+     * `people.presence_keep_until`, but the contract's fixtures carry it only once the server's
+     * `until: "keep"` (PR #84) lands: until then a fixture without it gets false, which is what it
+     * reads as. A fixture that has it is returned as it is.
+     */
+    fun asWritten(capabilities: JsonObject): JsonObject {
+        val people = capabilities.getValue("people").jsonObject
+        if ("presence_keep_until" in people) return capabilities
+        return JsonObject(capabilities + ("people" to JsonObject(people + ("presence_keep_until" to JsonPrimitive(false)))))
+    }
 
     val index: JsonObject get() = json("bundle/conferences.json") as JsonObject
 

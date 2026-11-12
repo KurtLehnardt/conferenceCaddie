@@ -35,7 +35,7 @@ import platform.darwin.dispatch_sync
 import kotlin.coroutines.resume
 
 /**
- * [LocationProvider] on Core Location, "when in use" only: the app declares no background mode and
+ * [LocationProvider] on Core Location, "when in use" only: the app declares no location background mode and
  * never asks for "always". The location manager and its delegate live on the main thread, where
  * Core Location delivers their callbacks; the provider keeps both for its whole life.
  *

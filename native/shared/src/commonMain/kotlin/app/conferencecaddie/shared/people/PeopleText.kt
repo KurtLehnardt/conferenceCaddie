@@ -1,8 +1,13 @@
 package app.conferencecaddie.shared.people
 
+import app.conferencecaddie.shared.ble.BlePermissionKind
 import app.conferencecaddie.shared.bundle.TalkBundle
+import app.conferencecaddie.shared.bundle.TalkTime
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.time.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 /**
  * The words and pure helpers of the people features that the web app keeps in its logic files
@@ -18,6 +23,19 @@ object PeopleText {
     const val POSITION_LABEL = "Use my position too (optional)"
     const val POSITION_EXPLAINER =
         "Ranks people near you higher and, once you've both agreed to meet, shows how far apart you are. Nobody else ever sees your position, and it's never stored after."
+
+    /**
+     * Native: a toast when a Bluetooth presence write (turning Bluetooth on or off, or a re-key)
+     * moved the end of presence, since the server restarts the hour on every presence write. The
+     * time is the device's clock time, as "People features are paused until 3:00 PM." writes it.
+     */
+    fun presenceRunsUntil(untilMs: Long, zone: TimeZone): String = "Being around now runs until ${clockTime(untilMs, zone)}."
+
+    /** "3:42 PM": the clock time of [ms] in [zone]. */
+    fun clockTime(ms: Long, zone: TimeZone): String {
+        val local = Instant.fromEpochMilliseconds(ms).toLocalDateTime(zone)
+        return TalkTime.time(local.hour * 60 + local.minute)
+    }
 
     /** The labels of the two presence modes. */
     val DURATION_LABELS: Map<PresenceMode, String> = mapOf(PresenceMode.Hour to "For an hour", PresenceMode.Day to "Until I turn it off today")
@@ -69,6 +87,99 @@ object PeopleText {
         return p.speakTopics.firstOrNull()?.label
     }
 
+    // ble.ts: Bluetooth proximity
+
+    /** The switch's label. */
+    const val BLE_LABEL = "Find people near me by Bluetooth (phone can stay in your pocket)"
+
+    /**
+     * The first-time explanation, shown before the first turn-on at a conference. The web's words,
+     * except that it says what Bluetooth itself can show: no profile details go over the air, but
+     * the phone's Bluetooth name can be read by a nearby device, as with any Bluetooth device (a
+     * phone this one connects to in order to read its code can read it, for one).
+     */
+    const val BLE_NOTICE =
+        "Your phone broadcasts a random code that changes every 10 minutes and listens for others. No profile details are sent over Bluetooth; nearby devices may see your phone's Bluetooth name, as with any Bluetooth device. The code means something only to our server, only while you're around. Only people who also turned this on can be found, and you're told only about strong matches within a few metres."
+
+    /** The body of a nearby notification. Never a name or a distance. */
+    fun nearbyText(evidence: String): String = "Someone who's worked on $evidence is right near you"
+
+    /** Presence is off where Bluetooth was asked for. */
+    const val BLE_NEEDS_PRESENCE = "Turn on being around first."
+
+    const val BLE_BLUETOOTH_OFF = "Turn on Bluetooth first."
+
+    /** Native, Android 8 to 11: a Bluetooth scan there needs the Location switch on. */
+    const val BLE_LOCATION_OFF = "Turn on Location first. This phone needs it to find people over Bluetooth."
+    const val BLE_UNSUPPORTED = "This phone's Bluetooth can't send the code."
+    const val BLE_PERMISSION = "Caddie needs the Nearby devices permission for this. You can allow it in Settings."
+    const val BLE_NOTIFICATIONS = "Turn on notifications for Caddie so it can tell you when someone is near."
+
+    /** A turn-on that failed for any other reason, such as a presence answer without a key. */
+    const val BLE_START_FAILED = "That could not be started. Please try again."
+
+    /** The notice when Bluetooth was switched off on the phone while this ran. */
+    const val BLE_STOPPED_BLUETOOTH_OFF = "Bluetooth turned off, so finding people near you stopped."
+
+    /** The notice when the phone's Bluetooth could not advertise. */
+    const val BLE_SEND_FAILED = "This phone's Bluetooth couldn't send the code."
+
+    /**
+     * Bluetooth stopped here because the same profile turned it on on another device: a second
+     * re-key within one token window (docs/contracts/ble-tokens.md, Re-keying).
+     */
+    const val BLE_OTHER_DEVICE = "Bluetooth proximity stopped: it is on with this profile on another device."
+
+    /**
+     * The words for a permission refusal. The web's wording names Android's "Nearby devices"; the
+     * same sentence names the permission each platform actually asks for.
+     */
+    fun blePermissionMessage(kind: BlePermissionKind): String = when (kind) {
+        BlePermissionKind.NearbyDevices -> BLE_PERMISSION
+        BlePermissionKind.Location -> "Caddie needs the Location permission for this. You can allow it in Settings."
+        BlePermissionKind.Bluetooth -> "Caddie needs the Bluetooth permission for this. You can allow it in Settings."
+    }
+
+    /** The words for [problem] (ble.ts `describe()`), with the permission named for [kind]. */
+    fun bleProblemMessage(problem: BleProblem, kind: BlePermissionKind = BlePermissionKind.NearbyDevices): String = when (problem) {
+        BleProblem.NeedsPresence -> BLE_NEEDS_PRESENCE
+        BleProblem.PermissionDenied, BleProblem.PermissionBlocked -> blePermissionMessage(kind)
+        BleProblem.BluetoothOff -> BLE_BLUETOOTH_OFF
+        BleProblem.LocationOff -> BLE_LOCATION_OFF
+        BleProblem.Unsupported -> BLE_UNSUPPORTED
+        BleProblem.OtherDevice -> BLE_OTHER_DEVICE
+        BleProblem.Failed -> BLE_START_FAILED
+    }
+
+    /**
+     * ble.ts `evidenceWords()`: the evidence of a nearby person as plain words (no `<mark>`, the few
+     * entities the web decodes, spaces collapsed, no trailing punctuation), cut at a word boundary
+     * near [EVIDENCE_MAX] characters with an ellipsis; else the first speak topic; else null.
+     */
+    fun nearbyEvidence(p: NearbyPerson): String? {
+        val text = p.evidence?.let { blePlainText(it).replace(TRAILING_PUNCTUATION, "") } ?: ""
+        if (text.isNotEmpty()) {
+            if (text.length <= EVIDENCE_MAX) return text
+            val cut = text.take(EVIDENCE_MAX + 1).replace(LAST_WORD, "").trim()
+            return "${cut.ifEmpty { text.take(EVIDENCE_MAX).trim() }}…"
+        }
+        return p.speakTopics.firstOrNull()?.label
+    }
+
+    // ble.ts plainText(): unlike nudges.ts it also decodes &#39;.
+    private fun blePlainText(s: String): String =
+        BLE_ENTITY.replace(s.replace(MARK, "")) { m ->
+            when (m.groupValues[1].lowercase()) {
+                "amp" -> "&"
+                "lt" -> "<"
+                "gt" -> ">"
+                "quot" -> "\""
+                "apos", "#39" -> "'"
+                "nbsp" -> " "
+                else -> m.value
+            }
+        }.replace(SPACES, " ").trim()
+
     // connect.ts, PersonCard.tsx and AskSheet.tsx: the notes an ask carries
 
     /** The longest note an ask may carry. */
@@ -113,6 +224,7 @@ object PeopleText {
 
     private val MARK = Regex("</?mark>")
     private val ENTITY = Regex("&(amp|lt|gt|quot|apos|nbsp|#\\d+|#x[0-9a-f]+);", RegexOption.IGNORE_CASE)
+    private val BLE_ENTITY = Regex("&(amp|lt|gt|quot|apos|#39|nbsp);", RegexOption.IGNORE_CASE)
     private val SPACES = Regex("\\s+")
     private val TRAILING_PUNCTUATION = Regex("[.;,:]+$")
     private val LAST_WORD = Regex("\\s+\\S*$")

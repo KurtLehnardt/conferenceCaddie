@@ -14,7 +14,8 @@ import kotlinx.coroutines.SupervisorJob
  * job. The job can start a cold process with no activity, so it must reach the same controller the
  * app uses, built the same way ([AndroidCore.people] with the app's debuggable flag), and must never
  * create a second set of platform services. The first call creates the controller and starts the
- * [BackgroundNudgeScheduler] that follows its state.
+ * [BackgroundNudgeScheduler] that follows its state. Native Bluetooth is part of it only where the
+ * build allows it ([BuildConfig.CADDIE_BLE_ENABLED]).
  */
 object CaddiePeople {
     @Volatile private var instance: PeopleController? = null
@@ -27,7 +28,8 @@ object CaddiePeople {
     fun controller(context: Context): PeopleController = instance ?: synchronized(this) {
         instance ?: run {
             val app = context.applicationContext
-            val controller = AndroidCore.people(app, AndroidPeopleServices.create(app, R.drawable.ic_stat_caddie), allowLocalHttp(app))
+            val services = AndroidPeopleServices.create(app, R.drawable.ic_stat_caddie, bleEnabled = BuildConfig.CADDIE_BLE_ENABLED)
+            val controller = AndroidCore.people(app, services, allowLocalHttp(app))
             scheduler = BackgroundNudgeScheduler(app, controller.state, CoroutineScope(SupervisorJob() + Dispatchers.Default)).also { it.start() }
             instance = controller
             controller
