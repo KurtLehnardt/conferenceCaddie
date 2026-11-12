@@ -58,7 +58,9 @@ import kotlinx.io.files.SystemTemporaryDirectory
 // Android device or emulator, as the other UI tests are.
 @OptIn(ExperimentalTestApi::class)
 class DemoUiTest {
-    private val backend = TestBackend()
+    // Alpha is published as a demo conference before the core exists, so the core never reads the
+    // list without it; it is listed first, so the app opens it.
+    private val backend = TestBackend().also { it.publish(listOf(it.alpha.asDemo(), it.beta)) }
     private val root = Path(SystemTemporaryDirectory, "caddie-demo-${Random.nextLong().toULong()}")
     private val database = CaddieDatabase.open(":memory:")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -159,9 +161,6 @@ class DemoUiTest {
 
     @Test
     fun aDemoConferenceFromTheBackendIsLabelledOnItsScreens() = runComposeUiTest {
-        val demo = backend.alpha.asDemo()
-        // Listed first, so the app opens it.
-        backend.publish(listOf(demo, backend.beta))
         setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
         // The Search tab: the note above the Search | Schedule switch, and a pill on each talk card.
