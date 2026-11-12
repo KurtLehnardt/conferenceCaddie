@@ -33,10 +33,13 @@ import { feedIds, viewAllUrl, apiDataUrl, parseViewAll } from './lib/sessionize.
 import { loadZoneTables, resolveTimeZone } from './lib/zones.mjs';
 import { buildTalks } from './lib/classify.mjs';
 import { hasKey, es, existingHashes, runBulk } from './lib/es.mjs';
+import { esUrl } from './lib/es-url.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // Where the conferences and raw downloads are read and written. CADDIE_DATA_DIR points a test at a
-// copy so it never touches the tracked data; the time zone tables always come from the repository.
+// copy so it never touches the tracked data; the time zone tables (data/windows-zones.json,
+// data/conference-overrides.json) and the topic fixups (data/topics/<slug>.json) always come from
+// the repository.
 const dataDir = process.env.CADDIE_DATA_DIR ? resolve(process.env.CADDIE_DATA_DIR) : join(root, 'data');
 
 class Fatal extends Error {}
@@ -355,6 +358,13 @@ function runTopicsHook(slug) {
 // ---------- Main ----------
 async function main() {
   if (!opts.dryRun && mode[0] !== '--list' && !hasKey()) fail('Set ES_API_KEY or ELASTISEARCH_API_KEY to index, or pass --dry-run.');
+  if (!opts.dryRun && mode[0] !== '--list') {
+    try {
+      esUrl();
+    } catch (e) {
+      fail(`${e.message} Or pass --dry-run.`);
+    }
+  }
 
   const listPath = join(dataDir, 'raw/lf-events-upcoming.json');
   const listRaw = await getRaw(LF_LIST_URL, listPath);

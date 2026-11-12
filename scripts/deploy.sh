@@ -53,8 +53,89 @@
 # touching the live one.
 set -euo pipefail
 
-PROJECT="project-9205d6eb-366e-4844-b77"
-REGION="us-west1"
+# Deployment settings come from the environment or, for the ones not set there, from an optional
+# local file of KEY=VALUE lines (never committed; override the path with CADDIE_DEPLOY_ENV):
+#   ${XDG_CONFIG_HOME:-~/.config}/conference-caddie/deploy.env
+# Only these keys are read from it, as plain text (the file is not executed; see the parser below):
+#   GC_PROJECT          Google Cloud project id (required)
+#   GC_REGION           Cloud Run region (default us-west1)
+#   ES_URL              the Elasticsearch address, https://<deployment>.es.io:443 (required, no default)
+#   FCM_PROJECT_ID      the Firebase project id of the Android app (optional; used only with
+#                       NATIVE_PUSH_FCM=1, step 7a of docs/OPERATOR_CHECKLIST.md)
+#   CADDIE_BUNDLE_BASE  the published talk bundles' base URL, an https URL ending in "/" (required;
+#                       passed to the service as TALKS_BUNDLE_BASE)
+if [ -n "${CADDIE_DEPLOY_ENV:-}" ]; then DEPLOY_ENV_FILE="$CADDIE_DEPLOY_ENV"
+elif [ -n "${XDG_CONFIG_HOME:-}" ]; then DEPLOY_ENV_FILE="$XDG_CONFIG_HOME/conference-caddie/deploy.env"
+elif [ -n "${HOME:-}" ]; then DEPLOY_ENV_FILE="$HOME/.config/conference-caddie/deploy.env"
+else DEPLOY_ENV_FILE=""; fi
+# What the messages below call the file; HOME may be unset (a bare cron or container shell).
+DEPLOY_ENV_LABEL="${DEPLOY_ENV_FILE:-the deploy.env file (HOME is unset: set CADDIE_DEPLOY_ENV to its path)}"
+# Lines are KEY=VALUE, optionally with a leading "export " and leading spaces, CRLF line ends, and
+# exactly one pair of matching single or double quotes around the value (nothing inside it is
+# unquoted or unescaped), and a UTF-8 byte order mark on the first line. A key given twice takes its
+# last value, as in a shell. Anything else in the file is ignored; a known key with blanks before
+# the "=" is reported, since a shell would not read it either.
+BOM="$(printf '\357\273\277')"
+if [ -n "$DEPLOY_ENV_FILE" ] && [ -f "$DEPLOY_ENV_FILE" ]; then
+  first=1
+  # tr drops CR and sed strips leading and trailing blanks and a leading "export ".
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$first" = 1 ]; then line="${line#$BOM}"; first=0; fi
+    line="$(printf '%s' "$line" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/^export[[:space:]][[:space:]]*//' -e 's/[[:space:]]*$//')"
+    case "$line" in
+      GC_PROJECT=*|GC_REGION=*|ES_URL=*|CADDIE_BUNDLE_BASE=*|FCM_PROJECT_ID=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        # One pair of matching quotes around the value.
+        value="$(printf '%s' "$value" | sed -e "s/^\"\(.*\)\"$/\1/" -e "s/^'\(.*\)'$/\1/")"
+        printf -v "FILE_$key" '%s' "$value"
+        ;;
+      GC_PROJECT[[:space:]]*=*|GC_REGION[[:space:]]*=*|ES_URL[[:space:]]*=*|CADDIE_BUNDLE_BASE[[:space:]]*=*|FCM_PROJECT_ID[[:space:]]*=*)
+        echo "Ignoring the line of ${line%%[[:space:]=]*} in $DEPLOY_ENV_FILE: no blanks are allowed before the =." >&2
+        ;;
+    esac
+  done < "$DEPLOY_ENV_FILE"
+fi
+# The environment wins over the file. SETTINGS_FROM says which of the two supplied the values.
+USED_ENV=0
+USED_FILE=0
+for key in GC_PROJECT GC_REGION ES_URL CADDIE_BUNDLE_BASE FCM_PROJECT_ID; do
+  if [ -n "${!key:-}" ]; then
+    USED_ENV=1
+  elif file_key="FILE_$key"; [ -n "${!file_key:-}" ]; then
+    export "$key=${!file_key}"
+    USED_FILE=1
+  fi
+done
+if [ "$USED_ENV" = 1 ] && [ "$USED_FILE" = 1 ]; then SETTINGS_FROM="environment and $DEPLOY_ENV_FILE"
+elif [ "$USED_FILE" = 1 ]; then SETTINGS_FROM="$DEPLOY_ENV_FILE"
+else SETTINGS_FROM="environment"; fi
+: "${GC_PROJECT:?Set GC_PROJECT to your Google Cloud project id (environment or $DEPLOY_ENV_LABEL).}"
+: "${ES_URL:?Set ES_URL to your Elasticsearch address, https://<deployment>.es.io:443 (environment or $DEPLOY_ENV_LABEL).}"
+: "${CADDIE_BUNDLE_BASE:?Set CADDIE_BUNDLE_BASE to the published talk bundles base URL, an https URL ending in / (environment or $DEPLOY_ENV_LABEL).}"
+PROJECT="$GC_PROJECT"
+REGION="${GC_REGION:-us-west1}"
+TALKS_BUNDLE_BASE="$CADDIE_BUNDLE_BASE"
+# A bad value must stop the script here, before any gcloud call, not deploy and fail at run time.
+# No comma or = in it: ENV_VARS is a comma-separated list of KEY=VALUE.
+BUNDLE_BASE_RE='^https://[^/[:space:]?#@,=]+(/[^[:space:]?#,=]*)?/$'
+if ! [[ "$ES_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
+  echo "ES_URL must be https://<host>[:port] with no quotes, path or spaces." >&2
+  exit 1
+fi
+ES_URL="${ES_URL%/}"
+if ! [[ "$PROJECT" =~ ^[a-z][a-z0-9-]{4,61}[a-z0-9]$ ]]; then
+  echo "GC_PROJECT must be a Google Cloud project id." >&2
+  exit 1
+fi
+if ! [[ "$REGION" =~ ^[a-z]+-[a-z]+[0-9]+$ ]]; then
+  echo "GC_REGION must be a Google Cloud region such as us-west1." >&2
+  exit 1
+fi
+if ! [[ "$TALKS_BUNDLE_BASE" =~ $BUNDLE_BASE_RE ]] || [ "${#TALKS_BUNDLE_BASE}" -gt 2048 ]; then
+  echo "CADDIE_BUNDLE_BASE must be an https URL ending in \"/\" without credentials, query, fragment, comma or =." >&2
+  exit 1
+fi
 # The Cloud Run service name; SERVICE=conference-caddie-test npm run deploy deploys a second
 # service for testing without touching the live one.
 SERVICE="${SERVICE:-conference-caddie}"
@@ -72,8 +153,8 @@ APNS_KEY_PATH="/secrets/apns/AuthKey.p8"
 # deploys it off.
 NATIVE_PUSH_APNS="${NATIVE_PUSH_APNS:-0}"
 NATIVE_PUSH_FCM="${NATIVE_PUSH_FCM:-0}"
-# The Firebase project of the Android app (not a secret), from the shell or set here once step 7a
-# is done. It is used only with NATIVE_PUSH_FCM=1.
+# The Firebase project of the Android app (not a secret), from the shell or deploy.env (above) once
+# step 7a is done. It is used only with NATIVE_PUSH_FCM=1.
 FCM_PROJECT_ID="${FCM_PROJECT_ID:-}"
 APNS_BUNDLE_ID="${APNS_BUNDLE_ID:-app.conferencecaddie}"
 BLE_MASTER_SECRET="caddie-ble-master"
@@ -82,7 +163,6 @@ PEOPLE_SEMANTIC_MIN_SIMILARITY="${PEOPLE_SEMANTIC_MIN_SIMILARITY:-}"
 PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY:-}"
 PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY:-}"
 VAPID_SUBJECT="${VAPID_SUBJECT:-https://github.com/KurtLehnardt/conferenceCaddie}"
-ES_URL="https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443"
 ES_INDEX="caddie-talks"
 
 # Filter (server/moderation.mjs). The rules index is read with the people key, so it stays
@@ -134,7 +214,9 @@ newest_enabled_version() {
 # Messaging API Admin on the Firebase project (step 7a of docs/OPERATOR_CHECKLIST.md), nothing else.
 RUNTIME_SA="caddie-runtime@$PROJECT.iam.gserviceaccount.com"
 
-ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI,PEOPLE_SEMANTIC_MIN_SIMILARITY=$PEOPLE_SEMANTIC_MIN_SIMILARITY,PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY,PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY"
+echo "Deploying $SERVICE to $PROJECT ($REGION), ES_URL=$ES_URL, bundles=$TALKS_BUNDLE_BASE (from: $SETTINGS_FROM)" >&2
+
+ENV_VARS="ES_URL=$ES_URL,ES_INDEX=$ES_INDEX,ES_RULES_INDEX=$ES_RULES_INDEX,MOD_CLASSIFIER=$MOD_CLASSIFIER,MOD_REJECT=$MOD_REJECT,MOD_HOLD=$MOD_HOLD,MOD_TIMEOUT_MS=$MOD_TIMEOUT_MS,BLE_NEAR_RSSI=$BLE_NEAR_RSSI,PEOPLE_SEMANTIC_MIN_SIMILARITY=$PEOPLE_SEMANTIC_MIN_SIMILARITY,PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY,PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY=$PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY,TALKS_BUNDLE_BASE=$TALKS_BUNDLE_BASE"
 SECRETS="ES_API_KEY=$READ_SECRET:latest,ES_PEOPLE_API_KEY=$PEOPLE_SECRET:latest"
 RUNTIME_SECRETS=("$READ_SECRET" "$PEOPLE_SECRET")
 

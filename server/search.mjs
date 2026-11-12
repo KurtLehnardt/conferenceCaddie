@@ -63,7 +63,7 @@ import { suggestChips } from './facets.mjs';
 import { conferencePreference, withPreference } from './preference.mjs';
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { ES_URL } from './es-url.mjs';
 const ES_INDEX = process.env.ES_INDEX || 'caddie-talks';
 const ES_TOPICS_INDEX = process.env.ES_TOPICS_INDEX || 'caddie-topics';
 const ES_TIMEOUT_MS = 8000;
