@@ -519,7 +519,7 @@ describe('SEC-11 confirmation', () => {
 });
 
 describe('SEC-12 audit log', () => {
-  const ALLOWED = new Set(['ts', 'backend', 'tier', 'command', 'target', 'reason', 'mode', 'result', 'counts', 'flags']);
+  const ALLOWED = new Set(['ts', 'backend', 'tier', 'command', 'target', 'reason', 'mode', 'result', 'counts', 'flags', 'error']);
 
   test('one whitelisted line per run, file mode 0600, no free text', async () => {
     await invoke(['attendees', 'search', '--event', SLUG, '--name', NAME]);
@@ -586,11 +586,28 @@ describe('SEC-12 audit log', () => {
     assert.deepEqual(entry, { ts: '2026-11-11T10:00:00.000Z', command: 'stats usage', mode: 'dry-run', result: 'ok', counts: { rows: 2 }, flags: ['text', 'all'] });
   });
 
-  test('failures are audited too, with the failure result', async () => {
+  test('failures are audited too, with the failure result and the short error code, never the message', async () => {
     await invoke(['stats', 'usage'], { behavior: throwing(new AdminError(NOTE)) });
     const entry = JSON.parse(auditLines()[0]);
     assert.equal(entry.result, 'failed');
+    assert.equal(entry.error, 'failed');
     assert.ok(!auditLines()[0].includes(NOTE));
+    const coded = new AdminError(NOTE);
+    coded.code = 'removal_superseded';
+    await invoke(['stats', 'usage'], { behavior: throwing(coded) });
+    assert.equal(JSON.parse(auditLines()[1]).error, 'removal_superseded');
+    const notFound = await invoke(['stats', 'usage'], { behavior: throwing(new NotFoundError('gone')) });
+    assert.equal(notFound.code, 4);
+    assert.equal(JSON.parse(auditLines()[2]).error, 'not_found');
+    // A code outside the token shape (free text, a space, upper case) is dropped.
+    const loose = new AdminError('x');
+    loose.code = `Bad code ${NOTE}`;
+    await invoke(['stats', 'usage'], { behavior: throwing(loose) });
+    assert.equal(JSON.parse(auditLines()[3]).error, undefined);
+    assert.ok(!auditLines()[3].includes(NOTE));
+    // A success carries no error key.
+    await invoke(['stats', 'usage']);
+    assert.equal(JSON.parse(auditLines()[4]).error, undefined);
   });
 });
 
@@ -731,7 +748,7 @@ describe('round-1 fixes', () => {
   test('a refused confirmation is audited as the run the operator asked for', async () => {
     let r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes', '--confirm', 'wrong']);
     assert.equal(r.code, 3);
-    assert.deepEqual(JSON.parse(r.audit.trim()), { ts: '2026-11-11T10:00:00.000Z', backend: 't3', tier: 3, command: 'attendees delete', target: REF, mode: 'run', result: 'refused', flags: [] });
+    assert.deepEqual(JSON.parse(r.audit.trim()), { ts: '2026-11-11T10:00:00.000Z', backend: 't3', tier: 3, command: 'attendees delete', target: REF, mode: 'run', result: 'refused', error: 'confirm', flags: [] });
     rmSync(join(home, 'audit.jsonl'));
     r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes']);
     assert.equal(r.code, 3);

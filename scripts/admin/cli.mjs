@@ -594,7 +594,7 @@ async function run(argv, ctx) {
     for (const warning of warnings) stderr.write(redact(`caddie-admin: warning: ${escapeControls(warning)}\n`));
     return warnings.length ? 1 : 0;
   } catch (error) {
-    writeAudit({ mode, result: auditResult(error) });
+    writeAudit({ mode, result: auditResult(error), error: error?.code });
     throw error;
   }
 }

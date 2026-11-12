@@ -49,6 +49,7 @@ const MEET_STATES = ['requested', 'accepted', 'declined', 'ended', 'other'];
 const STAT_KEYS = ['talks', 'topics', 'facets', 'people', 'shared_talks', 'presence', 'blocks', 'meets', 'reports', 'push_subs', 'nudges', 'vectors'];
 
 const LOOPBACK = ['localhost', '127.0.0.1', '[::1]'];
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const int = (v) => (Number.isInteger(v) ? v : Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
 const bool = (v) => v === true;
@@ -134,6 +135,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     const payload = body === undefined ? undefined : JSON.stringify(body);
     let lastError = 'no attempt';
     let lastStatus = 0;
+    let lastJson = null;
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
       const retried = attempt > 0;
       let signed;
@@ -178,10 +180,14 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       if (res.ok || okStatuses.includes(res.status)) return { status: res.status, json: json && typeof json === 'object' ? json : {}, retried };
       lastError = `${where}: ${describe(res.status, json)}`;
       lastStatus = res.status;
-      // An unretire overtook the removal between its steps: the conference stays as the unretire
-      // left it, nothing further was removed, and running the removal again is not the answer.
+      lastJson = json;
+      // An unretire ran during the removal: the directory row was kept and the object stays
+      // wiped. removeConference turns this into the two commands the operator chooses between.
       if (json?.error === 'removal_superseded' || (json?.error === 'removal_incomplete' && (res.status === 409 || json.cause === 'removal_superseded'))) {
-        throw new AdminError(`${where}: an unretire overtook the removal at step ${typeof json.step === 'string' && /^[a-z_]{1,20}$/.test(json.step) ? json.step : 'directory'}; nothing further was removed, the conference stays as the unretire left it (status ${res.status})`);
+        const superseded = new AdminError(`${where}: an unretire overtook the removal at step ${typeof json.step === 'string' && /^[a-z_]{1,20}$/.test(json.step) ? json.step : 'directory'} (status ${res.status})`);
+        superseded.code = 'removal_superseded';
+        superseded.status = res.status;
+        throw superseded;
       }
       // A removal that stopped between its steps (tombstone, wipe, directory row): the next run
       // finishes it, so the operator is told to run it again rather than the client retrying blind.
@@ -215,6 +221,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     }
     const gaveUp = new AdminError(`${lastError} (gave up after ${RETRIES + 1} attempts)`);
     gaveUp.status = lastStatus;
+    gaveUp.json = lastJson;
     throw gaveUp;
   }
 
@@ -308,9 +315,15 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     try {
       ({ json } = await admin('PUT', '/admin/conferences', body));
     } catch (err) {
-      // A flagged fan-out that failed answers 502; the client retried it (signed afresh, and a
-      // second unretire repairs the first). Still failing, the operator runs it again.
-      if (unretire && err instanceof AdminError && err.status === 502) throw new AdminError(`unretire incomplete; run it again (${err.message})`);
+      // A flagged fan-out that failed answers 502 unretire_incomplete with the slugs it could not
+      // sync; the client retried it (signed afresh, and a second unretire repairs the first).
+      // Still failing, the operator runs it again.
+      if (unretire && err instanceof AdminError && err.status === 502) {
+        const failed = (Array.isArray(err.json?.unretire_failed) ? err.json.unretire_failed : []).filter((s) => typeof s === 'string' && SLUG_RE.test(s));
+        const incomplete = new AdminError(`unretire of ${failed.length ? failed.join(', ') : slug} incomplete; run the unretire again (${err.message})`);
+        incomplete.code = 'unretire_incomplete';
+        throw incomplete;
+      }
       throw err;
     }
     const skipped = Array.isArray(json.skipped_retired) ? json.skipped_retired : [];
@@ -579,7 +592,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       return writeConferenceDoc(slug, doc, mode);
     },
 
-    async removeConference({ slug, mode }) {
+    async removeConference({ slug, reason, options, mode }) {
       if (mode === 'dry-run') {
         const stats = await statsOf(slug);
         if (!stats) return { counts: {}, summary: `the Worker does not route ${slug} (no directory row); a run would still wipe its object and leave a retired tombstone` };
@@ -590,6 +603,15 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       try {
         ({ json } = await admin('DELETE', `/admin/conference?${q({ event: slug })}`));
       } catch (err) {
+        // The CLI does not act on its own after a superseded removal: the operator chooses
+        // between finishing the removal and restoring the conference, with the same flags.
+        if (err?.code === 'removal_superseded') {
+          const confirm = `--yes --confirm ${slug}`;
+          const flags = `${reason ? ` --reason ${reason}` : ''}${options?.purgeLocal ? ' --purge-local' : ''}`;
+          const guided = new AdminError(`an unretire ran during the removal of ${slug}: the directory row was kept and the object stays wiped, nothing further was removed, and the object may refuse the conference until the unretire is repeated; choose one: finish the removal with \`caddie-admin conferences remove --event ${slug}${flags} ${confirm}\`, or restore the conference with \`caddie-admin conferences unretire --event ${slug} ${confirm}\` (${err.message})`);
+          guided.code = 'removal_superseded';
+          throw guided;
+        }
         throw isNotFound(err) ? notFound(`DELETE /admin/conference for ${slug}`, err) : err;
       }
       const counts = {};

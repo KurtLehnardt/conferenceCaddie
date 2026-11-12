@@ -1155,31 +1155,47 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
     stub.state.retired.add(EVENT);
     writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
-    for (let i = 0; i < 4; i++) stub.forced.push({ status: 502, body: { error: 'Conferences are temporarily unavailable' } });
+    // The final shape: 502 unretire_incomplete with the slugs whose fan-out failed, the counts
+    // beside it, and the tombstone already gone.
+    const incomplete = { error: 'unretire_incomplete', unretire_failed: [EVENT], upserted: 1, searchable: 1, synced: 0, skipped_retired: [] };
+    for (let i = 0; i < 4; i++) stub.forced.push({ status: 502, body: incomplete });
     const failed = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
     assert.equal(failed.code, 1);
     assert.equal(admins(failed.requests).length, 4, 'bounded retries');
-    assert.match(failed.stderr, /^caddie-admin: unretire incomplete; run it again \(PUT \/admin\/conferences: status 502 .*gave up after 4 attempts\)/);
+    assert.match(failed.stderr, /^caddie-admin: unretire of testconf-2099 incomplete; run the unretire again \(PUT \/admin\/conferences: status 502 \(unretire_incomplete\) \(gave up after 4 attempts\)\)/);
     assert.deepEqual(Object.keys(operatorFile().removed), [EVENT], 'the local removed entry stays');
     assert.equal(failed.audit.at(-1).result, 'failed');
+    assert.equal(failed.audit.at(-1).error, 'unretire_incomplete');
+    const asJson = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT, '--json'], EVENT), { });
+    assert.equal(asJson.code, 0, 'the next run, with no forced answer, repairs it');
   });
 
-  test('a removal overtaken by an unretire (409 removal_superseded in the removal_incomplete shape) exits 1 without a re-run hint and changes no local file', async () => {
+  test('a removal overtaken by an unretire (409 removal_superseded) exits 1, prints both commands with the right flags, acts on nothing and changes no local file', async () => {
     seedConferenceFiles(EVENT);
-    // cause before deleted, as the Worker now orders them; nothing here depends on the order.
-    stub.forced.push({ status: 409, body: { error: 'removal_incomplete', step: 'directory', retired: false, wiped: true, cause: 'removal_superseded', deleted: { talks: 3 } } });
-    const r = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    const superseded = { error: 'removal_superseded', step: 'directory', retired: false, wiped: true, deleted: { talks: 3, people: 2 } };
+    stub.forced.push({ status: 409, body: superseded });
+    const r = await invoke(confirmed(['conferences', 'remove', '--event', EVENT, '--reason', 'spam', '--purge-local', '--note', NOTE], EVENT));
     assert.equal(r.code, 1);
-    assert.equal(admins(r.requests).length, 1);
-    assert.match(r.stderr, /an unretire overtook the removal at step directory; nothing further was removed, the conference stays as the unretire left it \(status 409\)/);
-    assert.ok(!/run the removal again/.test(r.stderr), 'no re-run hint');
+    assert.equal(admins(r.requests).length, 1, 'one request, nothing else on its own');
+    assert.match(r.stderr, /^caddie-admin: an unretire ran during the removal of testconf-2099: the directory row was kept and the object stays wiped, nothing further was removed, and the object may refuse the conference until the unretire is repeated; choose one: finish the removal with `caddie-admin conferences remove --event testconf-2099 --reason spam --purge-local --yes --confirm testconf-2099`, or restore the conference with `caddie-admin conferences unretire --event testconf-2099 --yes --confirm testconf-2099` \(DELETE \/admin\/conference: an unretire overtook the removal at step directory \(status 409\)\)\n$/);
+    assert.ok(!/run the removal again/.test(r.stderr), 'no plain re-run hint');
+    assert.ok(!r.stderr.includes(NOTE));
     assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'searchable');
+    assert.ok(existsSync(join(root, 'data', EVENT, 'talks.ndjson')), 'nothing purged locally');
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
-    stub.forced.push({ status: 409, body: { error: 'removal_superseded', step: 'directory' } });
-    const bare = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
-    assert.equal(bare.code, 1);
-    assert.match(bare.stderr, /an unretire overtook the removal/);
-    assert.ok(!/run the removal again/.test(bare.stderr));
+    const entry = r.audit.at(-1);
+    assert.equal(entry.result, 'failed');
+    assert.equal(entry.error, 'removal_superseded');
+    assert.equal(entry.reason, 'spam');
+    stub.forced.push({ status: 409, body: superseded });
+    const asJson = await invoke(confirmed(['conferences', 'remove', '--event', EVENT, '--json'], EVENT));
+    assert.equal(asJson.code, 1);
+    const body = JSON.parse(asJson.stderr);
+    assert.equal(body.error, 'removal_superseded');
+    assert.match(body.message, /finish the removal with `caddie-admin conferences remove --event testconf-2099 --yes --confirm testconf-2099`, or restore/);
+    // The field order of the answer does not matter.
+    stub.forced.push({ status: 409, body: { deleted: {}, wiped: true, retired: false, step: 'directory', error: 'removal_superseded' } });
+    assert.match((await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT))).stderr, /an unretire ran during the removal/);
   });
 
   test('unretire without a local file sends the slug alone', async () => {

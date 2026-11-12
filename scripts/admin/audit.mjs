@@ -1,7 +1,7 @@
 // Append-only audit log of the caddie-admin CLI: one JSON object per line in <dir>/audit.jsonl.
 //
 // Only whitelisted keys are written, and a string is kept only when it has the shape of its key
-// (an enum member, an id, a slug). Free text cannot reach the file: --note, the --name search text,
+// (an enum member, an id, a slug, a failure's short code). Free text cannot reach the file: --note, the --name search text,
 // the rules test line, display names, profile text, contact fields, keys, tokens and URLs all
 // fail those shapes or have no key at all.
 
@@ -20,6 +20,9 @@ const MEET_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 const KIND_ID_RE = /^(profile|spot|meet):([0-9a-f]{16}|[A-Za-z0-9_-]{22})$/;
 const COUNT_KEY_RE = /^[A-Za-z0-9_]{1,40}$/;
+// The short code of a failure (the `error` of a --json error object), a token such as
+// removal_superseded; never a message.
+const ERROR_CODE_RE = /^[a-z][a-z0-9_]{0,39}$/;
 
 export function sanitizeAudit(entry) {
   const out = {};
@@ -35,6 +38,7 @@ export function sanitizeAudit(entry) {
   if (REASONS.includes(e.reason)) out.reason = e.reason;
   if (MODES.includes(e.mode)) out.mode = e.mode;
   if (RESULTS.includes(e.result)) out.result = e.result;
+  if (out.result && out.result !== 'ok' && out.result !== 'warned' && typeof e.error === 'string' && ERROR_CODE_RE.test(e.error)) out.error = e.error;
   if (e.counts && typeof e.counts === 'object' && !Array.isArray(e.counts)) {
     const counts = {};
     for (const [key, value] of Object.entries(e.counts)) {
