@@ -24,10 +24,10 @@ import kotlinx.serialization.json.int
 class PeopleContractTest {
     private val strict = Json
 
-    // The capabilities whose optional examples this client sends (a fixture example's "requires").
-    // until: "keep" (people.presence_keep_until) is not one yet: PresenceMode has no keep, so those
-    // requests cannot even be built. Add the flag here when the client sends it.
-    private val capabilitiesSent = emptySet<String>()
+    // The capabilities whose optional examples (a fixture example's "requires") this client sends.
+    // An example for one it does not send is left out, so an optional addition to the contract can
+    // land before the app implements it; until: "keep" is implemented, so its examples run.
+    private val capabilitiesSent = setOf("people.presence_keep_until")
 
     private class Route(val method: String, val path: String, val auth: Boolean = true)
 
@@ -104,6 +104,7 @@ class PeopleContractTest {
     @Test
     fun everyExampleGoesThroughTheClient() = runTest {
         var examples = 0
+        var optional = 0
         for (file in fixtureFiles()) {
             val doc = Fixtures.json(file) as JsonObject
             val route = (doc["route"] as JsonPrimitive).content
@@ -119,14 +120,8 @@ class PeopleContractTest {
                 val header = ((request["headers"] as? JsonObject)?.get("X-Caddie-Device") as? JsonPrimitive)?.content
 
                 val requires = (example["requires"] as? JsonPrimitive)?.content
-                if (requires != null && requires !in capabilitiesSent) {
-                    assertEquals("presence.put", route, "$name: only presence.put has examples that need a capability")
-                    assertFailsWith<Exception>("$route ($name): a request this client cannot build yet") { decodeRequest(PresencePutRequest.serializer(), body) }
-                    // ... and only because of until: "keep": the same body with "hour" builds.
-                    val asHour = JsonObject((body as JsonObject) + ("until" to JsonPrimitive("hour")))
-                    assertEquals(Opt.Of(PresenceMode.Hour), decodeRequest(PresencePutRequest.serializer(), asHour).until, "$route ($name)")
-                    continue
-                }
+                if (requires != null && requires !in capabilitiesSent) continue
+                if (requires != null) optional++
                 if (name == "an unknown key is refused") {
                     // A key the schema does not name cannot even be put into a request: the server's 400 cannot happen.
                     assertFailsWith<Exception> { decodeRequest(ProfilePutRequest.serializer(), body) }
@@ -166,6 +161,7 @@ class PeopleContractTest {
             }
         }
         assertTrue(examples >= 40, "$examples examples")
+        assertEquals(3, optional, "the until: \"keep\" examples went through the client")
     }
 
     @Test
