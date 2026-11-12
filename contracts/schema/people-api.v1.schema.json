@@ -267,7 +267,10 @@
             { "type": "null" }
           ]
         },
-        "until": { "enum": ["hour", "day", null] },
+        "until": {
+          "description": "hour (the default, also for null): presence_until is now + 60 minutes. day: the end of the conference day. keep: the stored presence_until is kept, so a write that only changes Bluetooth, the zone, the spot or the position never extends presence; it needs live presence (else 400 presence_not_active) and is sent only to backends whose capabilities say people.presence_keep_until. Every mode stops at the end of the conference.",
+          "enum": ["hour", "day", "keep", null]
+        },
         "ble": { "description": "true starts Bluetooth proximity (mints a new ble_key in derived-v1, a new token in server-rotate), false stops it, absent leaves it as it is.", "type": "boolean" }
       }
     },
@@ -285,7 +288,7 @@
         "zone": { "type": "string" },
         "spot": { "$ref": "#/$defs/NullableString" },
         "spot_hidden": { "type": "boolean" },
-        "until": { "enum": ["hour", "day"] },
+        "until": { "description": "The mode of the request, echoed: keep only in answer to until: 'keep'.", "enum": ["hour", "day", "keep"] },
         "presence_since": { "$ref": "#/$defs/Instant" },
         "presence_until": { "$ref": "#/$defs/Instant" },
         "located": { "type": "boolean" },

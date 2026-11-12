@@ -163,6 +163,94 @@
           "error": "profile_required"
         }
       }
+    },
+    {
+      "name": "keep: Bluetooth off keeps the stored end",
+      "requires": "people.presence_keep_until",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway",
+          "spot": "Green jacket",
+          "location": null,
+          "until": "keep",
+          "ble": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "zone": "Hallway",
+          "spot": "Green jacket",
+          "spot_hidden": false,
+          "until": "keep",
+          "presence_since": "2026-11-10T17:00:00.000Z",
+          "presence_until": "2026-11-10T18:00:00.000Z",
+          "located": false
+        }
+      }
+    },
+    {
+      "name": "keep: a derived-v1 re-key keeps the stored end",
+      "requires": "people.presence_keep_until",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway",
+          "spot": null,
+          "location": {
+            "lat": 40.76789,
+            "lon": -111.89012,
+            "accuracy": 15
+          },
+          "until": "keep",
+          "ble": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "zone": "Hallway",
+          "spot": null,
+          "spot_hidden": false,
+          "until": "keep",
+          "presence_since": "2026-11-10T17:00:00.000Z",
+          "presence_until": "2026-11-10T18:00:00.000Z",
+          "located": true,
+          "ble_key": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+          "ble_key_id": "D-6ig85DMpI"
+        }
+      }
+    },
+    {
+      "name": "keep: no live presence is refused and starts none",
+      "requires": "people.presence_keep_until",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "zone": "Hallway",
+          "until": "keep",
+          "ble": false
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "presence_not_active",
+          "message": "until: 'keep' needs presence that is on; turn it on with 'hour' or 'day'."
+        }
+      }
     }
   ]
 }

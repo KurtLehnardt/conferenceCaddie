@@ -87,6 +87,11 @@ export interface Presence {
 }
 
 export type PresenceMode = 'hour' | 'day';
+/**
+ * What a presence write sends as `until`: a mode, or 'keep' to leave the server's end as it is
+ * (only to a backend whose capabilities say people.presence_keep_until).
+ */
+export type PresenceUntil = PresenceMode | 'keep';
 
 /** A position as sent with presence: degrees and the accuracy in metres. */
 export interface Position {

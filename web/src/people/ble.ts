@@ -13,7 +13,8 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { useEffect, useState } from 'preact/hooks';
 import { isAbort, PeopleApiError, postSightings, putPresenceBle, rotateBleToken, type BleToken, type NearbyPerson, type Sighting } from './api';
-import { lastPositionFix, presenceWrite } from './presence';
+import { keepUntilOffered } from './capabilities';
+import { isPresenceNotActive, lastPositionFix, presenceWrite, writeWhileOn } from './presence';
 import { getPresence, isBlocked, notify, usePeopleStore } from './storage';
 import type { PersonResult } from './types';
 import { toast } from './ui';
@@ -329,14 +330,19 @@ async function onStopped(slug: string, reason: string): Promise<void> {
   }
 }
 
+// Most of these run without a tap (the rotate timer's not_running, the 'stale' alarm, a failed
+// start, a switch of conference), so they send 'keep' where the backend offers it and never move
+// the end of presence (writeWhileOn). A 'keep' refused with presence_not_active ends presence on
+// the device; Bluetooth is stopped already.
 async function clearOnServer(slug: string): Promise<void> {
   if (!getPresence(slug).on) return;
   try {
+    const keep = await keepUntilOffered();
     // In the presence write queue, and only if presence is still on when its turn comes: a write
     // after the delete would switch presence back on.
     await presenceWrite(async () => {
       const p = getPresence(slug);
-      if (p.on && p.zone) await putPresenceBle(slug, p.zone, p.spot, false, lastPositionFix(slug), p.mode);
+      if (p.on && p.zone) await writeWhileOn(slug, keep, p.mode, (until) => putPresenceBle(slug, p.zone as string, p.spot, false, lastPositionFix(slug), until), { retry: true });
     });
   } catch {
     // The token dies with presence, at the latest in ten minutes.
@@ -371,12 +377,19 @@ export async function startBle(slug: string): Promise<string | null> {
   }
   let res: Awaited<ReturnType<typeof putPresenceBle>> | null;
   try {
+    // Presence is on already, so this keeps its end where the backend offers 'keep'.
+    const keep = await keepUntilOffered();
     res = await presenceWrite(async () => {
       // Presence may have been turned off while the permission prompts were open.
       const now = getPresence(slug);
-      return now.on && now.zone ? putPresenceBle(slug, now.zone, now.spot, true, lastPositionFix(slug), now.mode) : null;
+      return now.on && now.zone
+        ? writeWhileOn(slug, keep, now.mode, (until) => putPresenceBle(slug, now.zone as string, now.spot, true, lastPositionFix(slug), until), { retry: true })
+        : null;
     });
   } catch (err) {
+    // Presence had ended on the server; it has ended on the device too (writeWhileOn), and
+    // nothing was started.
+    if (isPresenceNotActive(err)) return 'Turn on being around first.';
     return describe(err);
   }
   if (!res) return 'Turn on being around first.';

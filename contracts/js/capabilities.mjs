@@ -15,13 +15,14 @@ export const CLIENT_API_VERSIONS = Object.freeze([1]);
  * The effective capabilities of a backend that has no capabilities document but answers
  * GET /api/health with { "ok": true }: the existing tier 3 server as it was before Phase 1. It
  * serves every People API v1 route, legacy server-minted Bluetooth tokens, Web Push and both
- * server imports, and it has no talk bundles.
+ * server imports, and it has no talk bundles. It refuses until: 'keep', so presence_keep_until is
+ * false.
  */
 export const LEGACY = deepFreeze({
   api_version: 1,
   tier: 'paid',
   talks: { bundle_base: null, server_search: true },
-  people: { enabled: true, semantic: 'server', presence: true, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
+  people: { enabled: true, semantic: 'server', presence: true, presence_keep_until: false, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
   ble: { mode: 'server-rotate', service_uuid: SERVICE_UUID, near_rssi: -75, window_s: 600, sightings_min_interval_s: 10, colocation_required: false },
   push: { apns: false, fcm: false, webpush: true },
   imports: { github: 'server', schedule: 'server' },
@@ -86,6 +87,8 @@ export function effectiveCapabilities(doc) {
       enabled: peopleOn,
       semantic: peopleOn ? oneOf(people.semantic, ['server', 'client', 'off'], 'off') : 'off',
       presence,
+      // until: 'keep' on PUT /api/presence; off unless the backend says true.
+      presence_keep_until: presence && bool(people.presence_keep_until),
       gps_bands: presence && bool(people.gps_bands),
       meets: presence && bool(people.meets),
       circles: peopleOn && bool(people.circles),
