@@ -13,6 +13,26 @@ updates:
     directory: /native
     schedule:
       interval: weekly
+    # The build tools' floors in native/build.gradle.kts (DECISIONS.md, "Security floors for the native
+    # build's tools") are dependencies to Dependabot too. Bouncy Castle's three jars must stay on one
+    # release, so they move in one pull request, security updates included. The other floors share a
+    # weekly pull request, since each such pull request needs the verification metadata regenerated
+    # and the emulator job (the only place the test platform's Netty and Guava run) to pass.
+    groups:
+      bouncycastle:
+        patterns: ["org.bouncycastle:*"]
+      bouncycastle-security:
+        applies-to: security-updates
+        patterns: ["org.bouncycastle:*"]
+      tooling-floors:
+        patterns:
+          - "io.netty:netty-bom"
+          - "com.google.guava:guava"
+          - "org.bitbucket.b_c:jose4j"
+          - "org.jdom:jdom2"
+          - "io.opentelemetry:opentelemetry-api"
+          - "org.apache.commons:commons-lang3"
+          - "org.apache.httpcomponents:httpclient"
     ignore:
       # Ignores every version of this artifact, not only pre-releases. Material3 moves with
       # Compose Multiplatform, never alone (1.13.0-beta02 belongs to CMP 1.13.0-beta02 and needs
@@ -28,3 +48,20 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "gradle-wrapper"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Floors of the build tools. These rules can hold back security updates too, so a fix released
+      # only on a held-back line is raised by hand. grpc-netty (the test platform's gRPC) is built on
+      # Netty 4.1, so the BOM stays on 4.1. AGP is built on Guava 33, bundletool on jose4j 0.9 (a 0.x
+      # minor can break) and the Kotlin plugin's Swift export on OpenTelemetry 1. Commons Lang, JDOM
+      # and HttpClient need no rule: a Commons Lang 4 or HttpClient 5 has other coordinates, and
+      # JDOM 2.0.6.1 is the last release of its line.
+      - dependency-name: "io.netty:netty-bom"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "com.google.guava:guava"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.bitbucket.b_c:jose4j"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "io.opentelemetry:opentelemetry-api"
+        update-types: ["version-update:semver-major"]
+      # Not a security floor: it only keeps the plugin classpath from going back to 2.5.8, so newer
+      # releases are never proposed.
+      - dependency-name: "org.checkerframework:checker-qual"
