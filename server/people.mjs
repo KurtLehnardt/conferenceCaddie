@@ -666,8 +666,9 @@ export async function ownDoc(eventId, profileId) {
 }
 
 export const isLive = (source) => typeof source.visible_until === 'string' && Date.parse(source.visible_until) > Date.now();
-// True while the person has said they are around and that has not run out.
-export const isAround = (source) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > Date.now();
+// True while the person has said they are around and that has not run out at nowMs (now, unless
+// the caller reads its own clock, as nudge.mjs does).
+export const isAround = (source, nowMs = Date.now()) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > nowMs;
 
 // ---------------------------------------------------------------------------------------------
 // Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre), stored with

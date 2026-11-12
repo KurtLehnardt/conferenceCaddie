@@ -41,6 +41,14 @@
 // - A subscription the push service reports gone (404 or 410) is deleted, and so is a native
 //   registration that APNs or FCM reports gone (native-push.mjs says when), but only while it is
 //   unchanged since it was read: a token the device rotated to in the meantime is kept.
+// - Every time the rule reads comes from one clock, nudgeAfterPresence's now (the real clock,
+//   Date.now, read at each use, unless a test passes another): whether the two people are around,
+//   the conference day of the record, the hour of the limit and the record's created_at. The
+//   native pushes read the clock of their channel (createNativePush's now, the real clock in
+//   NATIVE_PUSH) when each is sent, for the APNs expiry and provider token and the FCM access
+//   token, so a test that pins the clock passes a channel made with the same one. Elasticsearch
+//   compares presence_until and expires_at with its own now, and web-push signs its VAPID token
+//   with the real clock.
 
 import crypto from 'node:crypto';
 import {
@@ -145,13 +153,13 @@ async function recentCount(eventId, profileId, nowMs) {
 // registration. A subscription the push service reports gone (404 or 410) is deleted, and a
 // registration APNs or FCM reports gone is deleted only while it is unchanged since it was read
 // (its guard), so a token the device registered while the push was out stays; the ids of both are
-// returned so the caller stops using them.
-async function pushTo(send, subs, payload) {
+// returned so the caller stops using them. nativePush is the native push channel (NATIVE_PUSH).
+async function pushTo(send, nativePush, subs, payload) {
   const data = JSON.stringify(payload);
   const gone = [];
   for (const s of subs) {
     if (s.native) {
-      if ((await NATIVE_PUSH.send(s.native, { ttl: TTL_SECONDS })) === 'gone') {
+      if ((await nativePush.send(s.native, { ttl: TTL_SECONDS })) === 'gone') {
         gone.push(s.id);
         if (s.guard) await deleteRegistrationIfUnchanged(s.id, s.guard).catch(() => undefined);
       }
@@ -179,15 +187,18 @@ const pairPause = () => new Promise((resolve) => {
 });
 
 // Runs the rule for one person whose presence (me.presence_zone, me.presence_until) was just
-// written. Resolves when done; never rejects. pause is what waits between the pushes to the two
-// people of a pair: a random pause of pairDelayMs, unless a test passes another.
-export async function nudgeAfterPresence(me, conf, { pause = pairPause } = {}) {
+// written. Resolves when done; never rejects. The options are for tests: pause is what waits
+// between the pushes to the two people of a pair (a random pause of pairDelayMs by default); now
+// is the clock, () => milliseconds since the epoch (the real clock by default); nativePush is the
+// native push channel (NATIVE_PUSH by default). A test that pins now passes a channel made by
+// createNativePush with the same now, so the pushes read the same clock as the rule.
+export async function nudgeAfterPresence(me, conf, { pause = pairPause, now = () => Date.now(), nativePush = NATIVE_PUSH } = {}) {
   try {
     const zone = me.presence_zone;
-    if (!zone || !isAround(me)) return;
+    if (!zone || !isAround(me, now())) return;
     if (me.hidden === true || me.sample === true) return;
     const send = await transport();
-    if (!send && !NATIVE_PUSH.apns && !NATIVE_PUSH.fcm) return;
+    if (!send && !nativePush.apns && !nativePush.fcm) return;
     const blocked = await blockedIds(conf.slug, me.profile_id);
     // The same query the Around view runs, distance leg included when I sent a position; the
     // distance leg never decides specificity (people.mjs), so it cannot create a nudge. The
@@ -200,18 +211,18 @@ export async function nudgeAfterPresence(me, conf, { pause = pairPause } = {}) {
     const { json, q } = ranked;
     const hits = (json.hits?.hits ?? []).filter((h) => {
       const s = h._source ?? {};
-      return s.profile_id && s.sample !== true && isAround(s) && s.presence_zone === zone && !isBroad(h, q.legs, me, topics.common);
+      return s.profile_id && s.sample !== true && isAround(s, now()) && s.presence_zone === zone && !isBroad(h, q.legs, me, topics.common);
     });
     if (!hits.length) return;
 
-    const now = Date.now();
-    const day = dayKey(now, conf.timeZone);
+    const at = now();
+    const day = dayKey(at, conf.timeZone);
     const url = `/e/${encodeURIComponent(conf.slug)}#/people?around=1`;
     // What the other person hears about me: my own words, the same fallback evidenceFor uses.
     const myPassage = passageOf(me.expertise || me.about || null, me, topics.labels);
     // Only the subscriptions and registrations of a channel this server sends on, chosen before
     // pushTargetsFor's cut to ten per receiver, so a target on a channel that is off takes no place.
-    const usable = (s) => (s.native ? NATIVE_PUSH[s.native.platform] === true : Boolean(send));
+    const usable = (s) => (s.native ? nativePush[s.native.platform] === true : Boolean(send));
     let subs = await pushTargetsFor(conf.slug, [me.profile_id, ...hits.map((h) => h._source.profile_id)], { usable });
     const subsOf = (id) => subs.filter((s) => s.profile_id === id);
     const drop = (gone) => {
@@ -219,7 +230,7 @@ export async function nudgeAfterPresence(me, conf, { pause = pairPause } = {}) {
     };
     const counts = new Map();
     const underLimit = async (id) => {
-      if (!counts.has(id)) counts.set(id, await recentCount(conf.slug, id, now));
+      if (!counts.has(id)) counts.set(id, await recentCount(conf.slug, id, at));
       return counts.get(id) < PUSHES_PER_HOUR;
     };
 
@@ -237,16 +248,16 @@ export async function nudgeAfterPresence(me, conf, { pause = pairPause } = {}) {
         day,
         profile_ids: [me.profile_id, them.profile_id],
         receivers,
-        created_at: iso(now),
+        created_at: iso(at),
         expires_at: conf.visibleUntil,
       }, { okStatuses: [409] });
       if (status === 409) continue;
       for (const id of receivers) counts.set(id, (counts.get(id) ?? 0) + 1);
       const toMe = receivers.includes(me.profile_id);
       const toThem = receivers.includes(them.profile_id);
-      if (toMe) drop(await pushTo(send, subsOf(me.profile_id), { title: TITLE, body: body(theirPassage, zone), data: { url } }));
+      if (toMe) drop(await pushTo(send, nativePush, subsOf(me.profile_id), { title: TITLE, body: body(theirPassage, zone), data: { url } }));
       if (toMe && toThem) await pause();
-      if (toThem) drop(await pushTo(send, subsOf(them.profile_id), { title: TITLE, body: body(myPassage, zone), data: { url } }));
+      if (toThem) drop(await pushTo(send, nativePush, subsOf(them.profile_id), { title: TITLE, body: body(myPassage, zone), data: { url } }));
     }
   } catch (err) {
     console.error(`Nudge after presence failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);
