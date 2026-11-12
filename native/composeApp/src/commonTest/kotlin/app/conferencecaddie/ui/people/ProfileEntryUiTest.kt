@@ -135,8 +135,8 @@ class ProfileEntryUiTest {
         override val viewModelStore = ViewModelStore()
     }
 
-    /** The toasts the shell was asked to show, on the UI thread. */
-    private val toasts = ArrayList<String>()
+    /** The toasts the shell was asked to show (the message and the action's label), on the UI thread. */
+    private val toasts = ArrayList<Pair<String, String?>>()
 
     /** The people host of the composition that shows now. */
     private var host: PeopleHost? = null
@@ -159,7 +159,7 @@ class ProfileEntryUiTest {
             CompositionLocalProvider(LocalViewModelStoreOwner provides owner) {
                 nav = rememberShellNavigation()
                 // Called on the UI thread, as the shell's toast is.
-                val showToast: (String, String?, (() -> Unit)?) -> Unit = { message, _, _ -> toasts += message }
+                val showToast: (String, String?, (() -> Unit)?) -> Unit = { message, label, _ -> toasts += message to label }
                 val ui = rememberPeopleUi(controller, nav, talks, online.value, true, null, showToast, {}, {}, request.value)!!
                 host = ui.host
                 val tabs = TabContent(people = ui.tab, appBarActions = ui.appBarActions, peoplePage = ui.page, settingsPeople = ui.settings)
@@ -321,6 +321,15 @@ class ProfileEntryUiTest {
         // From For you, Search and Interested: that tab's name, back there.
         backReturnsTo(Strings.Tabs.FOR_YOU, nav, restoration)
         backReturnsTo(Strings.Tabs.SEARCH, nav)
+        // A tab picked and Profile opened in the same frame (a link to a tab, then "Open profile"):
+        // Profile knows the tab picked, not the one drawn before.
+        runOnIdle {
+            nav().selectTab(Tab.Interested)
+            nav().openPage(PeoplePage.Profile)
+        }
+        waitForTag("profile-name")
+        onNodeWithContentDescription(Strings.AppBar.backTo(Strings.Tabs.INTERESTED)).performClick()
+        waitForTag("tab-body-Interested")
         backReturnsTo(Strings.Tabs.INTERESTED, nav, restoration)
 
         // From Settings: "‹ Settings", back to the Settings underneath, after a re-creation too, and
@@ -499,25 +508,33 @@ class ProfileEntryUiTest {
         onNodeWithTag("profile-about-me").assert(hasText("Platform engineer."))
         onNodeWithTag("profile-save-status").assert(hasText(PeopleCommonStrings.NOT_SAVED))
 
-        // An edit whose answer comes after Profile was left: one toast says it was not saved.
+        // Two edits whose answers come after Profile was left: one toast says they were not saved,
+        // with "Open profile".
         val slow = CompletableDeferred<Unit>()
         kv.slowFailure = slow
         onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer, SRE.")
+        onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer, SRE, on call.")
         onNodeWithContentDescription(backToPeople).performClick()
         waitForTag("people-home")
         runOnIdle { assertEquals(emptyList(), toasts.toList()) }
         slow.complete(Unit)
         waitUntil(timeoutMillis = 20_000) { runOnIdle { toasts.isNotEmpty() } }
-        runOnIdle { assertEquals(listOf(PeopleCommonStrings.NOT_SAVED), toasts.toList()) }
+        // Both answers are in once the editor takes another push (its pushes run one at a time):
+        // the second one says nothing more.
+        val editor = runOnIdle { checkNotNull(host).profileEditor(controller.state.value.backend) { error("Profile's editor is gone") } }
+        runBlocking { editor.push() }
+        waitForIdle()
+        runOnIdle { assertEquals(listOf(PeopleCommonStrings.NOT_SAVED to PeopleCommonStrings.OPEN_PROFILE), toasts.toList()) }
 
-        // Opened again, the text is still there and goes with the next edit once the records take it.
+        // Opened again once the records take writes, the text is still there and is saved without
+        // another keystroke.
+        kv.failWrites = false
         onNodeWithTag("profile-button").performClick()
         waitForTag("profile-name")
-        onNodeWithTag("profile-about-me").assert(hasText("Platform engineer, SRE."))
-        kv.failWrites = false
-        onNodeWithTag("profile-contact").performScrollTo().typeText("@jordan")
-        waitUntil(timeoutMillis = 20_000) { controller.state.value.profile.about == "Platform engineer, SRE." }
-        assertEquals("@jordan", controller.state.value.profile.contactNote)
+        onNodeWithTag("profile-about-me").assert(hasText("Platform engineer, SRE, on call."))
+        waitUntil(timeoutMillis = 20_000) { controller.state.value.profile.about == "Platform engineer, SRE, on call." }
+        waitUntil(timeoutMillis = 20_000) { onAllNodes(hasText(PeopleCommonStrings.NOT_SAVED)).fetchSemanticsNodes().isEmpty() }
+        runOnIdle { assertEquals(1, toasts.size) }
         runOnIdle { assertEquals(listOf<ShellPage>(PeoplePage.Profile), nav().pages) }
     }
 

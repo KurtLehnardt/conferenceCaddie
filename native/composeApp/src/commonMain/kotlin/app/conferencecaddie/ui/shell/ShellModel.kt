@@ -262,7 +262,11 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
 
     override fun openPage(page: ShellPage) {
         val i = pages.indexOf(page)
-        if (i < 0 && page == PeoplePage.Profile) profileFrom = if (pages.isEmpty()) shownTab ?: tab else null
+        if (page == PeoplePage.Profile) {
+            // Opened over a tab screen, it remembers the tab; over another page, or gone back to from
+            // a page opened over it (Settings › Profile), its Back leads to Settings, as the web's.
+            if (i < 0) profileFrom = if (pages.isEmpty()) shownTab ?: tab else null else if (i < pages.lastIndex) profileFrom = null
+        }
         pages = if (i >= 0) pages.take(i + 1) else pages + page
     }
 

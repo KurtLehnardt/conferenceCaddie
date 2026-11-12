@@ -231,11 +231,13 @@ class PeopleController(
 
     /**
      * Sets the selected conference's learn and speak topics (at most 30 each) and saves the profile.
-     * Returns null once they are on the device, or the message as [updateProfile] does; without a
-     * selected conference there is nothing to set them for, and the message says they were not saved.
+     * Returns null once they are on the device, or the message as [updateProfile] does. Topics picked
+     * for [conference] (a slug) are refused once another conference is selected, so one
+     * conference's topics never land on another's; without a selected conference there is nothing
+     * to set them for. Either way the message says they were not saved.
      */
-    suspend fun setTopics(learn: List<TopicRef>, speak: List<TopicRef>): String? = write(FAILED_MESSAGE) {
-        val slug = context?.conference?.slug ?: return@write FAILED_MESSAGE
+    suspend fun setTopics(learn: List<TopicRef>, speak: List<TopicRef>, conference: String? = null): String? = write(FAILED_MESSAGE) {
+        val slug = context?.conference?.slug?.takeIf { conference == null || it == conference } ?: return@write FAILED_MESSAGE
         editProfile { it.copy(topics = it.topics + (slug to ConferenceTopics(learn.take(30), speak.take(30)))) }
     }
 

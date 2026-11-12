@@ -155,6 +155,13 @@ class PeopleControllerTest {
         assertEquals("", c.state.value.profile.about, "a later write does not carry the edit that failed")
         assertEquals("Caddie Native Test A", c.state.value.profile.displayName)
 
+        // Topics picked for another conference than the one selected now are refused, not stored
+        // under this one.
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.setTopics(emptyList(), emptyList(), conference = "another-conference"))
+        assertEquals(ebpf, c.state.value.topics.speak)
+        assertNull(c.setTopics(ebpf, ebpf, conference = FIXTURE_SLUG))
+        assertEquals(ebpf, c.state.value.topics.learn)
+
         // A backend without people features: the web's "does not offer that".
         c.updateContext(h.context(PEOPLE_ON.copy(people = PEOPLE_ON.people.copy(enabled = false))))
         runCurrent()

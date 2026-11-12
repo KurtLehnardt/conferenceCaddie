@@ -102,12 +102,13 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
     // Kept in the host's memory, so an edit that was not saved is still here after the activity's
     // re-creation or when Profile is opened again; it takes what the controller holds now unless it
     // has such an edit.
+    val slug = state.conference?.slug
     val editor = remember(host, state.backend) {
-        host.profileEditor(state.backend) { ProfileEditor(controller, state.profile, state.topics) }.also { it.adopt(state.profile, state.topics) }
+        host.profileEditor(state.backend) { ProfileEditor(controller, state.profile, state.topics, slug) }.also { it.adopt(state.profile, state.topics, slug) }
     }
     // A change the user did not type (a delete clearing the device, another conference's topics)
-    // replaces what the fields show, once every edit has reached the controller.
-    LaunchedEffect(editor, state.profile, state.topics) { editor.adopt(state.profile, state.topics) }
+    // replaces what the fields or the pickers show, once their edits have reached the controller.
+    LaunchedEffect(editor, state.profile, state.topics, slug) { editor.adopt(state.profile, state.topics, slug) }
 
     val visBusy = host.isRunning(VISIBILITY_ACTION)
     // The switch shows the requested state while the first save, which can take a second or two,
@@ -136,7 +137,9 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
     fun save() {
         host.scope.launch {
             val message = editor.push() ?: return@launch
-            if (!shown.value && editor.tellOnce()) host.showMessage(message)
+            if (!shown.value && editor.tellOnce()) {
+                host.showToast(message, PeopleToastAction(PeopleCommonStrings.OPEN_PROFILE, host::openProfile))
+            }
         }
     }
 
@@ -150,6 +153,9 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
         editor.topics = ConferenceTopics(learn ?: t.learn, speak ?: t.speak)
         save()
     }
+
+    // An edit that was not saved is tried again when Profile shows again.
+    LaunchedEffect(editor) { if (editor.error != null) save() }
 
     fun toggleVisible(on: Boolean) {
         if (host.isRunning(VISIBILITY_ACTION)) return
@@ -387,9 +393,12 @@ internal data class ProfileDraft(
  * and goes with the next push.
  */
 @Stable
-internal class ProfileEditor(private val controller: PeopleController, profile: Profile, topics: ConferenceTopics) {
+internal class ProfileEditor(private val controller: PeopleController, profile: Profile, topics: ConferenceTopics, slug: String?) {
     var fields by mutableStateOf(ProfileDraft.of(profile))
     var topics by mutableStateOf(topics)
+
+    // The conference [topics] belong to: topics picked at one conference are never set at another.
+    private var topicsSlug = slug
 
     /** The controller's message for the last edit it could not keep, until a push has handed every edit over. */
     var error by mutableStateOf<String?>(null)
@@ -409,14 +418,28 @@ internal class ProfileEditor(private val controller: PeopleController, profile: 
         return true
     }
 
-    /** Takes what the controller holds now, unless an edit has not reached it yet. */
-    fun adopt(profile: Profile, topics: ConferenceTopics) {
-        if (fields != sentFields || this.topics != sentTopics) return
+    /**
+     * Takes what the controller holds now for the fields, and for the topics of the conference
+     * [slug], each unless an edit of it has not reached the controller yet. The topics of another
+     * conference than the one picked at are replaced all the same (an edit of them is dropped), and
+     * so is everything once the profile was deleted: no text typed before a delete outlives it.
+     */
+    fun adopt(profile: Profile, topics: ConferenceTopics, slug: String?) {
         val f = ProfileDraft.of(profile)
-        fields = f
-        sentFields = f
-        this.topics = topics
-        sentTopics = topics
+        val wiped = f == ProfileDraft() && sentFields != ProfileDraft()
+        if (wiped || fields == sentFields) {
+            fields = f
+            sentFields = f
+        }
+        if (wiped || slug != topicsSlug || this.topics == sentTopics) {
+            this.topics = topics
+            sentTopics = topics
+            topicsSlug = slug
+        }
+        if (fields == sentFields && this.topics == sentTopics) {
+            error = null
+            told = false
+        }
     }
 
     /**
@@ -431,7 +454,7 @@ internal class ProfileEditor(private val controller: PeopleController, profile: 
         }
         val t = topics
         if (t != sentTopics) {
-            controller.setTopics(t.learn, t.speak)?.let { return@withLock failed(it) }
+            controller.setTopics(t.learn, t.speak, conference = topicsSlug)?.let { return@withLock failed(it) }
             sentTopics = t
         }
         error = null
