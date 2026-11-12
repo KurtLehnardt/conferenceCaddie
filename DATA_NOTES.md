@@ -4,6 +4,8 @@ Talk data now comes from any Linux Foundation event whose schedule page embeds S
 
 Raw data was fetched on 2026-11-09, and KubeCon's again on 2026-11-11 (`raw_fetched_at` 2026-11-11T07:04:14.947Z, PR #50), with the User-Agent `ConferenceCaddie-ingest/0.2 (+https://github.com/KurtLehnardt/conferenceCaddie)`, one request per URL and a one-second pause between requests.
 
+Since #74, CI ingest runs send the User-Agent `ConferenceCaddie-ingest/0.2 (+https://github.com/<owner>/<repo>)`, derived from the repository in `.github/workflows/ingest.yml` unless the repository variable `CADDIE_USER_AGENT` is set, and local runs of `scripts/ingest.mjs` send `CADDIE_USER_AGENT` or a neutral default.
+
 ## Sources and how they chain
 
 1. The LF list, `https://events.linuxfoundation.org/wp-json/lfevents/v1/events?status=upcoming`, saved as `data/raw/lf-events-upcoming.json`. It held 62 events. It has no slug, so the slug is `slugify(name)` plus `-{year}` when the name does not already end with the year. All 62 slugs are unique; a collision would abort the run.
