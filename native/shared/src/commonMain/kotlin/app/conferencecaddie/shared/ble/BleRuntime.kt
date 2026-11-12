@@ -317,7 +317,9 @@ internal class BleRuntime(
         val res = when (val r = host.writePresenceBle(slug, true)) {
             null -> return refuse(slug, BleProblem.NeedsPresence)
             is ApiResult.Failed -> return when {
-                r.error.kind == PeopleError.Kind.PresenceRequired -> refuse(slug, BleProblem.NeedsPresence)
+                // presence_not_active: presence had already ended on the server, and the refused
+                // `until: "keep"` write ended it here too.
+                r.error.kind == PeopleError.Kind.PresenceRequired || r.error.kind == PeopleError.Kind.PresenceNotActive -> refuse(slug, BleProblem.NeedsPresence)
                 r.error.kind == PeopleError.Kind.DeleteUnfinished -> refuse(slug, BleProblem.Failed, PeopleError.DELETE_UNFINISHED_MESSAGE)
                 else -> refuse(slug, BleProblem.Failed, PeopleText.presenceProblem(r.error))
             }

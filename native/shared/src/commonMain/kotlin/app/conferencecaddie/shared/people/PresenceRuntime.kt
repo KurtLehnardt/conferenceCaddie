@@ -48,7 +48,8 @@ internal interface PresenceHost {
 
     /**
      * True when the backend keeps the `presence_until` it holds on a write with `until: "keep"`
-     * (capabilities `presence.keep_until`), so a Bluetooth write need not move the end of presence.
+     * (capabilities `people.presence_keep_until`), so a write of presence that is already on need
+     * not move the end of presence.
      */
     fun keepUntil(): Boolean
 
@@ -171,13 +172,59 @@ internal class PresenceRuntime(
         )
     }
 
+    /**
+     * A write of presence that is already on: a Bluetooth write, a re-key, a position, or the
+     * position switched off. On a backend that offers `people.presence_keep_until`
+     * ([PresenceHost.keepUntil]) it says `until: "keep"`, so the end of presence stays where the
+     * person put it: otherwise every such write would start the hour again on the server, and a
+     * phone that stopped writing (an app killed in hour mode) would leave the person visible for up
+     * to an hour after its last write. Without that capability it asks for [mode], as before. Only
+     * [turnOn] (turning presence on, "Extend", "Still in {zone}?") asks for the mode either way.
+     *
+     * Runs inside the presence write queue. When the server answers 400 `presence_not_active`,
+     * presence is not live there, and it ends on the device as well ([endedUnderKeep]).
+     */
+    private suspend fun putOnPresence(
+        slug: String,
+        zone: String,
+        spot: String,
+        fix: GeoFix?,
+        mode: PresenceMode,
+        ble: Boolean? = null,
+    ): ApiResult<PresencePutResponse> {
+        val started = epoch
+        val keep = host.keepUntil()
+        val r = putPresence(slug, zone, spot, fix, mode, ble, keep)
+        if (keep && r is ApiResult.Failed && r.error.kind == PeopleError.Kind.PresenceNotActive) endedUnderKeep(slug, started)
+        return r
+    }
+
+    /**
+     * The server refused `until: "keep"` with 400 `presence_not_active`: the presence this device
+     * holds as on is not live there (it ran out, or a delete, the purge or another device cleared
+     * it), and `keep` never starts it. Presence ends on the device as it does at its `until`: no
+     * toast and no request, the timers and the position watch stop, Bluetooth stops on the device
+     * (the server holds no session for presence that is gone), and the screens follow the new state,
+     * the Around list included. Presence turned off here while the write was under way is off
+     * already, with its delete queued.
+     *
+     * This runs inside the presence write queue and leaves the epoch alone, unlike
+     * [presenceEndedOnServer]: a turn-on queued behind the refused write was asked for after it, and
+     * its answer (presence started again with the hour or the day) must still be recorded.
+     */
+    private suspend fun endedUnderKeep(slug: String, started: Int) {
+        if (epoch != started) return
+        endOnDevice(slug)
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Turning presence on and off
 
     /**
      * Turns presence on (or moves it) and restarts the hour. The write itself is zone-only; with the
      * position choice the watch (re)starts and sends the first fix as soon as there is one. Returns
-     * an error message, or null.
+     * an error message, or null. It asks for [mode] even where the backend offers `until: "keep"`:
+     * this is the person choosing the end of presence (turning it on, "Extend", "Still in {zone}?").
      */
     suspend fun turnOn(slug: String, zone: String, spot: String, mode: PresenceMode = get(slug).mode): String? {
         val started = epoch
@@ -260,6 +307,11 @@ internal class PresenceRuntime(
      */
     suspend fun presenceEndedOnServer(slug: String) {
         epoch++
+        endOnDevice(slug)
+    }
+
+    // Presence off on the device, with its timers and the position watch, and Bluetooth told; no request.
+    private suspend fun endOnDevice(slug: String) {
         val raw = store.presence(slug)
         if (raw.on) {
             lastZone = raw.zone
@@ -303,8 +355,9 @@ internal class PresenceRuntime(
      * returns null, sending nothing, when presence is off by the time its turn comes.
      *
      * The server restarts presence's hour (or renews the day) on every presence write, `ble` or not,
-     * unless the backend offers `presence.keep_until` ([PresenceHost.keepUntil]): then the write
-     * says `until: "keep"` and the server keeps the `presence_until` it holds. Either way, as
+     * unless the backend offers `people.presence_keep_until` ([PresenceHost.keepUntil]): then the
+     * write says `until: "keep"` and the server keeps the `presence_until` it holds, and a 400
+     * `presence_not_active` ends presence here too ([putOnPresence]). Either way, as
      * [turnOn] does, the device takes the `presence_until` the answer names, with the spot line's
      * state, and its expiry and the radio's deadline follow it: otherwise the person would stay
      * visible, and their tokens resolvable, for up to an hour after the device says presence ended.
@@ -316,7 +369,7 @@ internal class PresenceRuntime(
             val p = get(slug)
             val zone = p.zone
             if (!p.on || zone == null) return@presenceWrite null
-            putPresence(slug, zone, p.spot, if (p.position) serverFixes[slug] else null, p.mode, ble, keep = host.keepUntil())
+            putOnPresence(slug, zone, p.spot, if (p.position) serverFixes[slug] else null, p.mode, ble)
         }
         if (r is ApiResult.Ok) followWrite(slug, r.value, started)
         return r
@@ -520,8 +573,8 @@ internal class PresenceRuntime(
             presenceWrite {
                 val now = get(slug)
                 val zone = now.zone
-                // It lapses with the presence otherwise; the hour on the device is unchanged.
-                if (now.on && zone != null) putPresence(slug, zone, now.spot, null, now.mode)
+                // It lapses with the presence otherwise. The device keeps its until, as for a fix (sendFix).
+                if (now.on && zone != null) putOnPresence(slug, zone, now.spot, null, now.mode)
             }
         }
         return PositionOutcome.Off
@@ -571,10 +624,13 @@ internal class PresenceRuntime(
         }
     }
 
-    // Sends the newest fix with the current zone and spot. The server restarts presence_until on
-    // every write, this one included, but unlike a Bluetooth write (writeBle) this one does not
-    // move the device's until: the device keeps its own hour, and when that runs out its expiry
-    // turns presence off with a delete, which ends it on the server too.
+    // Sends the newest fix with the current zone and spot. On a backend that offers
+    // people.presence_keep_until the write says until: "keep", so the server keeps the
+    // presence_until it holds, which is the device's, and a 400 presence_not_active ends presence
+    // here too (putOnPresence). Without it the server starts the hour (or the day) again on this
+    // write, but unlike a Bluetooth write (writeBle) this one does not move the device's until: the
+    // device keeps its own, and when that runs out its expiry turns presence off with a delete, which
+    // ends it on the server too.
     private suspend fun sendFix(slug: String) {
         sendJob?.cancel()
         sendJob = null
@@ -597,14 +653,15 @@ internal class PresenceRuntime(
             presenceWrite {
                 // Presence may have been turned off while this waited its turn.
                 val p = wanted() ?: return@presenceWrite
-                when (val r = putPresence(slug, p.zone!!, p.spot, fix, p.mode)) {
+                when (val r = putOnPresence(slug, p.zone!!, p.spot, fix, p.mode)) {
                     is ApiResult.Ok -> {
                         lastSentFix = fix
                         serverFixes[slug] = fix
                     }
                     is ApiResult.Failed -> {
                         // A profile that is gone, or presence the server no longer accepts: stop
-                        // sending positions. A 409 or a 429 tries again with the next fix.
+                        // sending positions (presence_not_active has ended presence here already).
+                        // A 409 or a 429 tries again with the next fix.
                         val s = r.error.status
                         if (s in 400..499 && s != 429 && s != 409) stopPositionWatch()
                     }

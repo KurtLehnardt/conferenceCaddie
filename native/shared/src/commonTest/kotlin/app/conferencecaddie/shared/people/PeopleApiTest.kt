@@ -32,6 +32,7 @@ class PeopleApiTest {
     fun everyStableCodeHasItsKind() = runTest {
         val cases = listOf(
             Triple(400, """{"error":"filtered","message":"That was held back by the filter. Edit it and try again."}""", PeopleError.Kind.Filtered),
+            Triple(400, """{"error":"presence_not_active","message":"until: 'keep' needs presence that is on; turn it on with 'hour' or 'day'."}""", PeopleError.Kind.PresenceNotActive),
             Triple(403, """{"error":"forbidden"}""", PeopleError.Kind.Forbidden),
             Triple(403, """{"error":"cross-origin request"}""", PeopleError.Kind.CrossOrigin),
             Triple(403, """{"error":"profile_required"}""", PeopleError.Kind.ProfileRequired),

@@ -29,7 +29,6 @@ data class Capabilities(
     val ble: Ble = Ble(),
     val push: Push = Push(),
     val imports: Imports = Imports(),
-    val presence: Presence = Presence(),
 ) {
     /** A label for people. No feature is ever gated on it. */
     enum class Tier(val code: String) { Demo("demo"), Free("free"), Paid("paid"), Unknown("unknown") }
@@ -52,6 +51,8 @@ data class Capabilities(
         val enabled: Boolean = false,
         val semantic: Semantic = Semantic.Off,
         val presence: Boolean = false,
+        /** `PUT /api/presence` takes `until: "keep"`, which keeps the stored `presence_until`. */
+        val presenceKeepUntil: Boolean = false,
         val gpsBands: Boolean = false,
         val meets: Boolean = false,
         val circles: Boolean = false,
@@ -80,20 +81,6 @@ data class Capabilities(
     )
 
     /**
-     * The top-level `presence` group, which the contract does not have yet: what a presence write
-     * can ask of this backend beyond `people.presence`.
-     */
-    data class Presence(
-        /**
-         * `presence.keep_until`: the backend takes `until: "keep"` on a presence write and keeps
-         * the `presence_until` it holds instead of restarting the hour, so a Bluetooth write
-         * (`ble: true` or `false`) does not move the end of presence. Absent, or anything but the
-         * JSON boolean true, is false; off with presence.
-         */
-        val keepUntil: Boolean = false,
-    )
-
-    /**
      * What this build of the app can use of these capabilities. The app implements only the
      * derived-v1 Bluetooth mode (tokens derived on the phone from a key), so the legacy
      * server-minted tokens (`server-rotate`) are never used here: the Capacitor app keeps them.
@@ -117,6 +104,7 @@ data class Capabilities(
             put("enabled", people.enabled)
             put("semantic", people.semantic.code)
             put("presence", people.presence)
+            put("presence_keep_until", people.presenceKeepUntil)
             put("gps_bands", people.gpsBands)
             put("meets", people.meets)
             put("circles", people.circles)
@@ -140,8 +128,6 @@ data class Capabilities(
             put("github", imports.github.code)
             put("schedule", imports.schedule.code)
         }
-        // Not in the contract's fixtures yet, so written only when on: every fixture stays as it is.
-        if (presence.keepUntil) putJsonObject("presence") { put("keep_until", true) }
     }
 
     /** The outcome of [negotiate]. */
@@ -241,7 +227,6 @@ data class Capabilities(
             val ble = d["ble"].asObject() ?: JsonObject(emptyMap())
             val push = d["push"].asObject() ?: JsonObject(emptyMap())
             val imports = d["imports"].asObject() ?: JsonObject(emptyMap())
-            val presenceGroup = d["presence"].asObject() ?: JsonObject(emptyMap())
 
             val bundleBase = talks["bundle_base"].asString()?.takeIf { isBundleBase(it, allowLocalHttpBundleBase) }
             // A backend that cannot take reports must not show other people's text at all.
@@ -260,6 +245,7 @@ data class Capabilities(
                     enabled = peopleOn,
                     semantic = if (peopleOn) oneOf(people["semantic"], Semantic.entries, Semantic::code) ?: Semantic.Off else Semantic.Off,
                     presence = presence,
+                    presenceKeepUntil = presence && people["presence_keep_until"].isTrue(),
                     gpsBands = presence && people["gps_bands"].isTrue(),
                     meets = presence && people["meets"].isTrue(),
                     circles = peopleOn && people["circles"].isTrue(),
@@ -281,7 +267,6 @@ data class Capabilities(
                     github = oneOf(imports["github"], ImportSite.entries, ImportSite::code) ?: ImportSite.Device,
                     schedule = oneOf(imports["schedule"], ImportSite.entries, ImportSite::code) ?: ImportSite.Device,
                 ),
-                presence = Presence(keepUntil = presence && presenceGroup["keep_until"].isTrue()),
             )
         }
 

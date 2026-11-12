@@ -977,7 +977,7 @@ class PeopleController(
 
         override suspend fun endPresence(slug: String) = presenceRuntime.turnOff(slug)
 
-        override fun keepUntil(): Boolean = context?.takeIf { it.backend == backend }?.capabilities?.presence?.keepUntil == true
+        override fun keepUntil(): Boolean = context?.takeIf { it.backend == backend }?.capabilities?.people?.presenceKeepUntil == true
 
         override fun isBlocked(slug: String, ref: String): Boolean = connect.isBlocked(slug, ref)
 

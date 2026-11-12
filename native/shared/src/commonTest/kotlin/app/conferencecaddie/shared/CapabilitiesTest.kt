@@ -42,7 +42,7 @@ class CapabilitiesTest {
     fun aCompleteV1DocumentIsItsOwnEffectiveFeatureSet() {
         for (name in listOf("tier2-free.json", "tier3-paid.json", "tier3-transition.json")) {
             val fixture = Fixtures.capabilities(name)
-            assertEquals(fixture, Capabilities.effective(fixture).toJson(), name)
+            assertEquals(Fixtures.asWritten(fixture), Capabilities.effective(fixture).toJson(), name)
         }
     }
 
@@ -60,7 +60,7 @@ class CapabilitiesTest {
 
     @Test
     fun legacyIsTheContractsLegacySet() {
-        assertEquals(Fixtures.capabilities("legacy-effective.json"), Capabilities.Legacy.toJson())
+        assertEquals(Fixtures.asWritten(Fixtures.capabilities("legacy-effective.json")), Capabilities.Legacy.toJson())
         assertEquals(Capabilities.Legacy, Capabilities.effective(Capabilities.Legacy.toJson()))
         assertEquals(Capabilities.BleMode.ServerRotate, Capabilities.Legacy.ble.mode)
         assertNull(Capabilities.Legacy.talks.bundleBase)
@@ -101,26 +101,36 @@ class CapabilitiesTest {
     }
 
     @Test
-    fun presenceKeepUntilIsReadOnlyAsTheBooleanTrueWithPresence() {
-        val people = """"people": { "enabled": true, "reports": true, "presence": true }"""
-        fun keep(rest: String) = Capabilities.effective(doc("""{ "api_version": 1, $people$rest }""")).presence.keepUntil
-        assertTrue(keep(""", "presence": { "keep_until": true }"""))
-        assertFalse(keep(""))
-        assertFalse(keep(""", "presence": {}"""))
-        assertFalse(keep(""", "presence": { "keep_until": false }"""))
-        assertFalse(keep(""", "presence": { "keep_until": "true" }"""), "a string is not a boolean")
-        assertFalse(keep(""", "presence": { "keep_until": 1 }"""))
-        assertFalse(keep(""", "presence": true"""), "a group that is not an object")
+    fun peoplePresenceKeepUntilIsOnOnlyAsTheBooleanTrueWithPresence() {
+        fun keep(people: String) =
+            Capabilities.effective(doc("""{ "api_version": 1, "people": { "enabled": true, "reports": true, $people } }""")).people.presenceKeepUntil
+        assertTrue(keep(""""presence": true, "presence_keep_until": true"""))
+        assertFalse(keep(""""presence": true"""), "missing is off")
+        assertFalse(keep(""""presence": true, "presence_keep_until": false"""))
+        assertFalse(keep(""""presence": true, "presence_keep_until": "true" """), "a string is not a boolean")
+        assertFalse(keep(""""presence": true, "presence_keep_until": 1"""))
+        assertFalse(keep(""""presence": true, "presence_keep_until": null"""))
+        assertFalse(keep(""""presence": true, "presence_keep_until": {}"""))
+        assertFalse(keep(""""presence_keep_until": true"""), "it needs presence")
+        assertFalse(keep(""""presence": false, "presence_keep_until": true"""), "it needs presence")
         assertFalse(
-            Capabilities.effective(doc("""{ "api_version": 1, "people": { "enabled": true, "reports": true }, "presence": { "keep_until": true } }""")).presence.keepUntil,
-            "off with presence",
+            Capabilities.effective(doc("""{ "api_version": 1, "people": { "enabled": true, "presence": true, "presence_keep_until": true } }""")).people.presenceKeepUntil,
+            "off with the people features (no reports)",
         )
-        // Written back only when on, so every contract fixture keeps its form.
-        val on = Capabilities.effective(doc("""{ "api_version": 1, $people, "presence": { "keep_until": true } }"""))
-        assertEquals(doc("""{ "keep_until": true }"""), on.toJson()["presence"])
+        // A top-level presence group, which no contract has, is not read.
+        assertFalse(
+            Capabilities.effective(doc("""{ "api_version": 1, "people": { "enabled": true, "reports": true, "presence": true }, "presence": { "keep_until": true } }""")).people.presenceKeepUntil,
+        )
+        assertFalse(Capabilities.Legacy.people.presenceKeepUntil, "the legacy server refuses until: keep")
+
+        // Written with the other people flags, on or off, and read back the same.
+        val on = Capabilities.effective(doc("""{ "api_version": 1, "people": { "enabled": true, "reports": true, "presence": true, "presence_keep_until": true } }"""))
+        assertEquals(JsonPrimitive(true), on.toJson().getValue("people").jsonObject["presence_keep_until"])
         assertEquals(on, Capabilities.effective(on.toJson()))
-        assertFalse("presence" in Capabilities.effective(doc("""{ "api_version": 1, $people }""")).toJson())
-        assertTrue(on.forThisApp().presence.keepUntil)
+        assertFalse("presence" in on.toJson(), "no top-level presence group")
+        val off = Capabilities.effective(doc("""{ "api_version": 1, "people": { "enabled": true, "reports": true, "presence": true } }"""))
+        assertEquals(JsonPrimitive(false), off.toJson().getValue("people").jsonObject["presence_keep_until"])
+        assertTrue(on.forThisApp().people.presenceKeepUntil)
     }
 
     @Test

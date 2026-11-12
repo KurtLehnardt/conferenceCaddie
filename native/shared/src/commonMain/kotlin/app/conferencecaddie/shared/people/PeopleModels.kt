@@ -114,7 +114,9 @@ enum class PresenceMode {
 /**
  * A presence write's `until`: a mode, which restarts presence's end on the server ([PresenceMode]),
  * or `keep`, which keeps the `presence_until` the server holds, on a backend whose capabilities say
- * `presence.keep_until` ([app.conferencecaddie.shared.Capabilities.Presence.keepUntil]).
+ * `people.presence_keep_until` ([app.conferencecaddie.shared.Capabilities.People.presenceKeepUntil]).
+ * `keep` is for the wire only: the person picks an hour or the day, never `keep`, so [PresenceMode]
+ * has no such value.
  */
 @Serializable
 enum class PresenceUntil {

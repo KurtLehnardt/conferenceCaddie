@@ -24,7 +24,7 @@ class DiscoveryTest {
         val http = FakeHttp(mapOf("https://caddie.example/api/capabilities" to json(200, Fixtures.text("capabilities/tier3-paid.json"))))
         val r = assertIs<Result.Found>(CapabilitiesDiscovery.discover("https://caddie.example", http, hadDocument = false))
         assertEquals(Source.Api, r.source)
-        assertEquals(Fixtures.capabilities("tier3-paid.json"), r.capabilities.toJson())
+        assertEquals(Fixtures.asWritten(Fixtures.capabilities("tier3-paid.json")), r.capabilities.toJson())
         assertEquals(listOf("https://caddie.example/api/capabilities"), http.calls)
     }
 
@@ -43,7 +43,7 @@ class DiscoveryTest {
         val r = assertIs<Result.Found>(CapabilitiesDiscovery.discover("https://legacy.example", FakeHttp(legacySite), hadDocument = false))
         assertEquals(Source.Legacy, r.source)
         assertNull(r.document)
-        assertEquals(Fixtures.capabilities("legacy-effective.json"), r.capabilities.toJson())
+        assertEquals(Fixtures.asWritten(Fixtures.capabilities("legacy-effective.json")), r.capabilities.toJson())
     }
 
     @Test
