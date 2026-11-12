@@ -219,9 +219,10 @@ export class DirectoryDO extends DurableObject {
       // A key that differs from "expect_status" or "unretire" only in letter case or surrounding
       // whitespace would skip the check or the flag and be stored and fanned out as part of the
       // document, so the request is refused instead and the answer names the key as it must be.
+      // The code holds no quotation mark, so a client that shows only plain codes still shows it.
       for (const key of Object.keys(raw)) {
         const folded = key.trim().toLowerCase();
-        if ((folded === 'expect_status' || folded === 'unretire') && key !== folded) throw bad(`the key must be written exactly "${folded}"`);
+        if ((folded === 'expect_status' || folded === 'unretire') && key !== folded) throw bad(`the key must be written exactly as ${folded}`);
       }
       if (raw.unretire !== undefined && typeof raw.unretire !== 'boolean') throw bad('unretire must be a boolean');
       if (raw.unretire === true && typeof raw.slug === 'string') unretiring.add(raw.slug);

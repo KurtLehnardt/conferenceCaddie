@@ -1707,7 +1707,7 @@ describe('the expect_status precondition on PUT /admin/conferences', { skip }, (
       // Also on a document whose slug is not valid, which the upsert would otherwise skip.
       for (const doc of [conf(SLUG, { name: 'renamed' }), { slug: 'Not A Slug' }]) {
         const r = await refused(ctx, [conf(NEW), { ...doc, [key]: value }], [SLUG]);
-        assert.deepEqual(r, [400, { error: `the key must be written exactly "${canonical}"` }], JSON.stringify(key));
+        assert.deepEqual(r, [400, { error: `the key must be written exactly as ${canonical}` }], JSON.stringify(key));
       }
     }
     assert.equal(docOf(ctx, NEW), null);

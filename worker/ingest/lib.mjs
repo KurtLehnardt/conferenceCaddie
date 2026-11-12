@@ -161,11 +161,14 @@ function describeShort(status, body) {
 // `unretire_failed` (PUT /admin/conferences, unretire_incomplete), the slugs of that list and the
 // directory's `upserted` count, so the operator sees which conferences were not unretired and that
 // the rest of the batch was applied. For a `409 status_mismatch` (the expect_status precondition
-// of PUT /admin/conferences), each mismatching document as `slug expected→actual`, where `null`
-// means that the directory has no row. Only well-formed slugs and statuses are named (at most 20);
-// an entry with anything else is counted, not shown. Never any other part of the body.
+// of PUT /admin/conferences), each mismatching document as `slug expected→actual`, where `(no
+// row)` stands for the JSON value null (the directory has no row) and a status that reads as null
+// is quoted, so that the two are never shown the same way. Only well-formed slugs and statuses are
+// named (at most 20); an entry with anything else is counted, not shown. Never any other part of
+// the body.
 const STATUS_WORD = /^[A-Za-z0-9_-]{1,40}$/;
 const isStatusWord = (v) => v === null || (typeof v === 'string' && STATUS_WORD.test(v));
+const statusShown = (v) => (v === null ? '(no row)' : /^null$/i.test(v) ? `"${v}"` : v);
 const listed = (names, total) => names.slice(0, 20).join(', ') + (total > 20 ? ` and ${total - 20} more` : '');
 function describe(status, body) {
   let out = describeShort(status, body);
@@ -178,9 +181,9 @@ function describe(status, body) {
   if (body.error === 'status_mismatch' && Array.isArray(body.mismatched)) {
     const shown = body.mismatched
       .filter((m) => m !== null && typeof m === 'object' && isSlug(m.slug) && isStatusWord(m.expected) && isStatusWord(m.actual))
-      .map((m) => `${m.slug} ${m.expected ?? 'null'}→${m.actual ?? 'null'}`);
+      .map((m) => `${m.slug} ${statusShown(m.expected)}→${statusShown(m.actual)}`);
     const hidden = body.mismatched.length - shown.length;
-    out += `: the directory holds another status (expected→actual, null for no row): ${listed(shown, shown.length) || '(none named)'}`;
+    out += `: the directory holds another status (expected→actual): ${listed(shown, shown.length) || '(none named)'}`;
     if (hidden > 0) out += ` (${hidden} malformed ${hidden === 1 ? 'entry' : 'entries'} not shown)`;
   }
   return out;
@@ -239,19 +242,23 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
   return async function admin(method, path, body) {
     const where = `${method} ${path.split('?')[0]}`;
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    const unretires = Array.isArray(body?.conferences) && body.conferences.some((c) => c?.unretire === true);
+    // The slugs this request unretires, so that the advice after a status_mismatch is the one for
+    // an unretire only when one of the mismatching documents is an unretire.
+    const unretiring = new Set(Array.isArray(body?.conferences) ? body.conferences.filter((c) => c?.unretire === true && typeof c.slug === 'string').map((c) => c.slug) : []);
     let lastError = 'no attempt';
     let lastBody = null;
     // Each earlier attempt that failed and was retried: its short description, and whether it may
     // have been applied (a 5xx, or no answer; a 429 was not).
     const earlier = [];
     const fail = (message, status, answer = null) => {
-      let text = message;
+      // A message that already ends a sentence loses its period, so that the suffix does not double it.
+      let text = earlier.length ? message.replace(/\.$/, '') : message;
       if (earlier.length === 1) text += `. An earlier attempt ${earlier[0].said}`;
       else if (earlier.length > 1) text += `. Earlier attempts: ${earlier.map((e) => e.said).join('; ')}`;
       if (status === 409 && answer?.error === 'status_mismatch' && earlier.some((e) => e.mayHaveApplied)) {
         text += `; ${earlier.length === 1 ? 'it' : 'one of them'} may have been applied, so the actual status can be the one it set`;
-        text += unretires
+        const unretireMismatched = Array.isArray(answer.mismatched) && answer.mismatched.some((m) => typeof m?.slug === 'string' && unretiring.has(m.slug));
+        text += unretireMismatched
           ? '; repeat the unretire without expect_status until it answers 200'
           : '; check the conference, then send the request again with the actual status or without expect_status';
       }
