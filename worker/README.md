@@ -597,6 +597,21 @@ line (method, path template, status, duration).
   conference document holds, so no ingest run can unretire. `push-ingest.mjs` and
   `migrate-from-backup.mjs` log each skipped slug by name and send nothing more for it, and
   `push-ingest.mjs` lists it under `skipped_retired` in its `--report`, not under `upserted`.
+- `PUT /admin/conferences` takes an optional precondition per document, the top-level key
+  `"expect_status"`: the status the operator expects the slug's directory row to have now, as the
+  directory stores it (`"searchable"` or `"unavailable"`), or `null` for no row, which is the state
+  after a completed removal. The body is `{"conferences": [{...document, "expect_status":
+  "searchable" | "unavailable" | null, "unretire"?: true}]}`; the key may be sent with or without
+  `"unretire"`, and a document without it is upserted as before. The DirectoryDO checks every
+  precondition of the request inside the upsert's transaction, before any write, against the rows
+  as stored at that moment. When any document does not match, the whole request answers `409
+  {"error": "status_mismatch", "mismatched": [{"slug", "expected", "actual"}]}`, with one entry per
+  mismatching document in the order of the request and `actual` `null` when the slug has no row,
+  and nothing is written: no row, no tombstone, no number of the order sequence, and no fan-out to
+  any object. A value that is neither a non-empty string nor `null` answers `400 {"error":
+  "expect_status must be a non-empty string or null"}` and nothing is written. The key is never
+  stored or sent to an object. `push-ingest.mjs` and `migrate-from-backup.mjs` strip it, as they
+  strip `unretire`, so no ingest run or migration ever sends a precondition.
 
 People text is stored without control characters: every write of a display name, profile text, a
 contact note, a spot line, a meet note or a how-to-spot-me line drops the C0 controls except tab
@@ -642,6 +657,20 @@ available` once it is removed) and run the operation you intended again. Neither
 live conference from one whose directory row exists while its object is still marked as removed,
 which is what an unretire that answered 502 or 503 and was not repeated leaves: both list the
 conference and answer the stats. So repeat an unretire until it answers 200.
+
+`expect_status` lets the operator say what they believe the conference's state is before they
+change it: `null` when unretiring a conference whose removal finished, `"searchable"` or
+`"unavailable"` when changing a listed one. If someone else changed it in the meantime, the request
+answers `409 status_mismatch` with the expected and the actual status of each slug, and nothing
+happens. Check the conference and send the request again with the status it has now, or without
+the key. A retry can also mismatch, and this is a known effect, not hidden: `adminClient` re-signs
+and repeats a request that answered a 5xx or no answer, and when the first attempt was applied
+(its answer was lost, or an unretire answered `502 unretire_incomplete` after storing the row),
+the repeat finds the row in the state the first attempt set and answers `409 status_mismatch`. The
+CLI shows the expected and the actual status, so the operator sees that the conference is already
+in the wanted state. After an `unretire_incomplete` the object may still be marked as removed:
+send the unretire again with `expect_status` set to the actual status the 409 showed, or without
+the key, until it answers 200.
 
 ## Logs and CPU
 

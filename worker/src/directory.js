@@ -197,6 +197,19 @@ export class DirectoryDO extends DurableObject {
   // never the query, so the signature's body hash covers it. The route prefixes are computed first
   // (an await), then every write runs in one transaction against the tombstones as they are at that
   // moment, so a removal that ran meanwhile is honoured.
+  //
+  // A document may also carry the top-level key "expect_status": the status the operator expects
+  // the slug's directory row to have now ("searchable" or "unavailable", as stored), or null for
+  // no row (the state after a completed removal). It is checked inside the transaction, before any
+  // write, against the rows as stored at that moment. When any document of the batch does not
+  // match, the whole request answers 409 {error: "status_mismatch", mismatched: [{slug, expected,
+  // actual}]} (actual null when there is no row, one entry per mismatching document in batch
+  // order) and nothing is written: no row, no tombstone, no number of the order sequence, and no
+  // fan-out, since the Worker returns the answer as it is. A value that is neither a non-empty
+  // string nor null is 400, before anything is written. The key is never stored, and a document
+  // without it is upserted as before. A request that matched and was applied, then retried by the
+  // client because its answer was lost, can mismatch on the retry: the row now has the status the
+  // first attempt set. That 409 is the expected answer and is not hidden.
   async #upsert(request) {
     const body = await readJson(request, new Set(['conferences']));
     if (!Array.isArray(body.conferences) || body.conferences.length > 5000) throw bad('conferences must be an array');
@@ -205,13 +218,16 @@ export class DirectoryDO extends DurableObject {
       if (!isPlainObject(raw)) continue;
       if (raw.unretire !== undefined && typeof raw.unretire !== 'boolean') throw bad('unretire must be a boolean');
       if (raw.unretire === true && typeof raw.slug === 'string') unretiring.add(raw.slug);
+      if (Object.hasOwn(raw, 'expect_status') && raw.expect_status !== null && (typeof raw.expect_status !== 'string' || raw.expect_status === '')) {
+        throw bad('expect_status must be a non-empty string or null');
+      }
     }
     const existing = new Map(this.sql.exec('SELECT slug, route_prefix FROM conferences').toArray().map((r) => [r.slug, r.route_prefix]));
     const used = new Set(existing.values());
     const planned = [];
     for (const raw of body.conferences) {
       if (!isPlainObject(raw) || typeof raw.slug !== 'string' || !SLUG_RE.test(raw.slug)) continue;
-      const { _id, unretire, ...doc } = raw;
+      const { _id, unretire, expect_status: expected, ...doc } = raw;
       let prefix = existing.get(doc.slug);
       if (!prefix) {
         for (let i = 0; ; i++) {
@@ -221,15 +237,29 @@ export class DirectoryDO extends DurableObject {
         used.add(prefix);
         existing.set(doc.slug, prefix);
       }
-      planned.push({ doc, prefix });
+      planned.push({ doc, prefix, expects: Object.hasOwn(raw, 'expect_status'), expected });
     }
     const now = Date.now();
     let upserted = 0;
     const searchable = [];
     const skipped = [];
     const unretireSeq = new Map();
+    const mismatched = [];
     this.state.storage.transactionSync(() => {
       const retired = new Set(this.sql.exec('SELECT slug FROM retired').toArray().map((r) => r.slug));
+      // Every precondition is checked against the rows as they are before this request writes
+      // anything, so a mismatch takes no number of the order sequence and changes nothing. The
+      // statuses are read only when the request carries a precondition, so a request without one
+      // runs exactly as before.
+      const expecting = planned.filter((p) => p.expects);
+      if (expecting.length) {
+        const stored = new Map(this.sql.exec('SELECT slug, status FROM conferences').toArray().map((r) => [r.slug, r.status]));
+        for (const { doc, expected } of expecting) {
+          const actual = stored.get(doc.slug) ?? null;
+          if (actual !== expected) mismatched.push({ slug: doc.slug, expected, actual });
+        }
+        if (mismatched.length) return;
+      }
       const current = new Map(this.sql.exec('SELECT slug, doc, route_prefix, has_object FROM conferences').toArray().map((r) => [r.slug, r]));
       for (const { doc, prefix: plannedPrefix } of planned) {
         const wasRetired = retired.has(doc.slug);
@@ -269,6 +299,7 @@ export class DirectoryDO extends DurableObject {
         if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(unretired ? { unretired: unretireSeq.get(doc.slug) } : {}) });
       }
     });
+    if (mismatched.length) return json(409, { error: 'status_mismatch', mismatched });
     this.docs = null;
     return json(200, { upserted, searchable, skipped_retired: skipped });
   }
