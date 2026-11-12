@@ -60,5 +60,5 @@ export function createAdapter(backend, { credential, env = {}, spawn, fetch, now
   if (backend.tier === 3) tier = createEsAdapter(backend, deps);
   else if (backend.tier === 2) tier = createWorkerAdapter(backend, deps);
   else throw new AdminError(`backend "${backend.name}" has tier ${backend.tier}; only 2 and 3 exist`);
-  return withConferenceFiles(tier, { root, now });
+  return withConferenceFiles(tier, { root, now, tier: backend.tier });
 }

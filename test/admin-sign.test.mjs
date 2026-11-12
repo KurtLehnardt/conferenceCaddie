@@ -159,7 +159,10 @@ describe('sign cases: every vector recomputed from scratch', () => {
     assert.ok(JSON.parse(b.body).allow_shrink === true && JSON.parse(a.body).allow_shrink === undefined);
     assert.notEqual(a.body_sha256, b.body_sha256);
     assert.notEqual(a.sig, b.sig);
-    assert.equal(JSON.parse(byId['post-unretire-flag'].body).unretire, true);
+    // The flag lives on the document: the DirectoryDO allows only `conferences` at the top level.
+    const unretireBody = JSON.parse(byId['post-unretire-flag'].body);
+    assert.deepEqual(Object.keys(unretireBody), ['conferences']);
+    assert.equal(unretireBody.conferences[0].unretire, true);
     // The same flag in the query is refused outright: the charset has no room for it to hide, and
     // even allow_shrink=1 (which would pass the charset) would sit outside the body hash, so the
     // CLI and the smoke put every flag in the body.

@@ -28,12 +28,14 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BODYLESS_METHODS, bodyMatches, verifyAdminSignature } from '../scripts/lib/admin-sign.mjs';
 import { main } from '../scripts/admin/cli.mjs';
 
 const realFetch = globalThis.fetch;
-const TOKEN = 'dummy-worker-admin-token-0123456789-abcdefghijklmnopqrstuvwxyz';
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const TOKEN ='dummy-worker-admin-token-0123456789-abcdefghijklmnopqrstuvwxyz';
 const ACCESS_ID = 'dummy-access-client-id.access';
 const ACCESS_SECRET = 'dummy-access-client-secret-0123456789abcdef';
 const EVENT = 'testconf-2099';
@@ -106,6 +108,10 @@ function stubWorker() {
     if (path === '/admin/conferences') {
       if (method !== 'PUT') return [405, { error: 'Method not allowed' }, { Allow: 'PUT' }];
       const b = parsed();
+      // Only `conferences` at the top level, as the DirectoryDO's readJson allows; the flag lives
+      // on each document.
+      const unknown = Object.keys(b ?? {}).find((k) => k !== 'conferences');
+      if (unknown !== undefined) return [400, { error: `Unknown key: ${unknown}` }];
       if (!Array.isArray(b?.conferences)) return [400, { error: 'conferences must be an array' }];
       if (b.conferences.some((d) => d.unretire !== undefined && typeof d.unretire !== 'boolean')) return [400, { error: 'unretire must be a boolean' }];
       const skipped = [];
@@ -1128,7 +1134,11 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
     assert.match(r.stdout, /sent testconf-2099 with unretire: true; the Worker dropped its tombstone \(upserted 1\); commit data\/conference-operator\.json; run conferences refresh --event testconf-2099 next/);
     assert.deepEqual(r.audit.at(-1).counts, { upserted: 1, searchable: 1, synced: 1 });
-    assert.equal((await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT))).code, 4);
+    // On tier 2 a second unretire is sent again (the repair path), with no local entry to drop.
+    const again = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(admins(again.requests).length, 1);
+    assert.match(again.stdout, /has no removed entry for testconf-2099, so it is left as it is/);
   });
 
   test('unretire of an unavailable local document renders the counts as the Worker returns them (synced 1, searchable 0)', async () => {
@@ -1196,6 +1206,52 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     // The field order of the answer does not matter.
     stub.forced.push({ status: 409, body: { deleted: {}, wiped: true, retired: false, step: 'directory', error: 'removal_superseded' } });
     assert.match((await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT))).stderr, /an unretire ran during the removal/);
+    // A wipe that lost to a newer unretire answers the same with step "wipe": the same guidance,
+    // nothing done on its own.
+    stub.forced.push({ status: 409, body: { error: 'removal_superseded', step: 'wipe', retired: false, wiped: false } });
+    const wipe = await invoke(confirmed(['conferences', 'remove', '--event', EVENT, '--purge-local'], EVENT));
+    assert.equal(wipe.code, 1);
+    assert.equal(admins(wipe.requests).length, 1);
+    assert.match(wipe.stderr, /choose one: finish the removal with `caddie-admin conferences remove --event testconf-2099 --purge-local --yes --confirm testconf-2099`, or restore the conference with `caddie-admin conferences unretire --event testconf-2099 --yes --confirm testconf-2099` \(DELETE \/admin\/conference: an unretire overtook the removal at step wipe \(status 409\)\)/);
+    assert.ok(!/run the removal again/.test(wipe.stderr));
+    assert.ok(existsSync(join(root, 'data', EVENT, 'talks.ndjson')), 'nothing purged locally');
+    assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
+    assert.equal(wipe.audit.at(-1).error, 'removal_superseded');
+  });
+
+  test('unretire sends the flag on the document and only `conferences` at the top level; the stand-in refuses any other top-level key, as the Worker does', async () => {
+    seedConferenceFiles(EVENT);
+    stub.state.retired.add(EVENT);
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    const body = JSON.parse(admins(r.requests)[0].body);
+    assert.deepEqual(Object.keys(body), ['conferences'], 'no top-level unretire key');
+    assert.equal(body.conferences[0].unretire, true);
+    // The fixture's vector carries the same shape, and a top-level flag would be a 400.
+    const fixture = JSON.parse(readFileSync(join(ROOT, 'test', 'fixtures', 'admin-sign.v1.json'), 'utf8')).cases.find((c) => c.id === 'post-unretire-flag');
+    assert.deepEqual(Object.keys(JSON.parse(fixture.body)), ['conferences']);
+    assert.equal(JSON.parse(fixture.body).conferences[0].unretire, true);
+    const res = await realFetch(`${stub.url}/admin/conferences`, { method: 'PUT', body: '{"conferences":[],"unretire":true}' });
+    assert.equal(res.status, 404, 'unsigned, so refused before the key rule');
+    stub.problems.length = 0;
+  });
+
+  test('on tier 2 an unretire with no local removed entry is still sent (the repair after removal_superseded or unretire_incomplete), and the operator file is left alone', async () => {
+    seedConferenceFiles(EVENT);
+    stub.state.retired.add(EVENT);
+    const dry = await invoke(['conferences', 'unretire', '--event', EVENT]);
+    assert.equal(dry.code, 0, dry.stderr);
+    assert.match(dry.stdout, /would send it anyway \(data\/conference-operator\.json has no removed entry for testconf-2099, so it is left as it is\)/);
+    assert.ok(stub.state.retired.has(EVENT));
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(JSON.parse(admins(r.requests)[0].body).conferences[0].unretire, true);
+    assert.ok(!stub.state.retired.has(EVENT), 'the tombstone is gone');
+    assert.deepEqual(operatorFile(), { hidden: {}, removed: {} }, 'nothing to drop, nothing written');
+    assert.match(r.stdout, /data\/conference-operator\.json has no removed entry for testconf-2099, so it is left as it is; run conferences refresh --event testconf-2099 next/);
+    assert.ok(!r.stdout.includes('commit data/conference-operator.json'));
+    assert.equal(r.audit.at(-1).result, 'ok');
   });
 
   test('unretire without a local file sends the slug alone', async () => {
