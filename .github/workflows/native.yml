@@ -59,7 +59,6 @@ jobs:
   android:
     name: Shared tests and Android build
     if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
-    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -492,7 +491,6 @@ jobs:
   ios:
     name: iOS simulator build
     if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
-    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -588,7 +586,6 @@ jobs:
   ios-device-link:
     name: iOS device Release link
     if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
-    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -638,7 +635,6 @@ jobs:
   # shipped query model. No secrets; pull requests and main.
   talk-smoke:
     name: Talk checks against the on-device search
-    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: ubuntu-latest
     timeout-minutes: 45
