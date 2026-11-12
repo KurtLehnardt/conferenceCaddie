@@ -617,6 +617,24 @@ class BleServiceLifecycleTest {
     }
 
     @Test
+    fun aStopThatFoundNothingIsForgottenWhenTheRuntimeStopsTheRadio() {
+        showApp()
+        // A Stop from a notification left over, then a restore that resumes nothing (the runtime
+        // stops the radio): a session the person starts by hand afterwards keeps running.
+        val stop = Intent(context, BleRadioService::class.java).setAction(STOP_ACTION)
+        radio.restartGraceMillis = 10_000L
+        context.startService(stop)
+        Thread.sleep(1_000)
+        assertTrue(waitFor { !serviceRunning() })
+        radio.stop()
+        val events = Events()
+        startRunning(Source(payload(1)), events)
+        Thread.sleep(500)
+        assertTrue(events.stopped.isEmpty())
+        assertTrue(radio.running)
+    }
+
+    @Test
     fun aStartRefusedInTheBackgroundWaitsForTheForeground() {
         assumeTrue("Android 12 and newer refuse a start from the background", Build.VERSION.SDK_INT >= 31)
         val refusals = AtomicInteger()

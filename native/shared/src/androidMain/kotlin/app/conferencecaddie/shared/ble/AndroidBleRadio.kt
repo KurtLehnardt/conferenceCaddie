@@ -32,7 +32,8 @@ import app.conferencecaddie.shared.AndroidPermissions
  * the service: during the grace after a system restart, or from a notification left over in a new
  * process. The radio then remembers the Stop for [restartGraceMillis] and stops the next session the
  * runtime starts with [BleStopReason.User], so the runtime turns Bluetooth proximity off as the
- * person asked.
+ * person asked. A [stop] from the runtime forgets it: the runtime stops the radio when its restore
+ * resumes nothing, so the Stop is never applied to a session the person starts later by hand.
  *
  * Permissions: on Android 12 and newer "Nearby devices" (BLUETOOTH_SCAN, BLUETOOTH_ADVERTISE and
  * BLUETOOTH_CONNECT, the scan declared as never used for location); on Android 8 to 11 the location
@@ -172,6 +173,10 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
         // which a service started for the foreground must call whatever happens).
         main.post {
             deferred = null
+            // A Stop remembered from the notification is spent: the runtime has stopped the radio
+            // itself, which it also does when a restart restores nothing, so a session the person
+            // starts by hand later is not taken for the one that Stop was meant for.
+            userStopUntil = Long.MIN_VALUE
             service?.stopQuietly()
         }
     }
