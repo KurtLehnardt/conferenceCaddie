@@ -29,8 +29,14 @@
 // another repository root (the tests use it).
 //
 // Tier 2 (Cloudflare Worker): the backend entry holds api, the Worker's own origin (https; plain
-// http for localhost only; no path). Every admin request is signed with the token (X-Caddie-Admin,
-// scripts/lib/admin-sign.mjs), re-signed on each retry, and never follows a redirect. A 404 is
+// http for localhost only; no path), read strictly as typed (canonicalOrigin: plain ASCII, no user
+// name, "%" or backslash, an internationalised host in its punycode xn-- form; anything else is
+// exit 2). Every admin request is signed with the token (X-Caddie-Admin, scripts/lib/admin-sign.mjs),
+// re-signed on each retry, and never follows a redirect. The signature is v2, bound to the api's
+// origin; CADDIE_ADMIN_SIG_VERSION=1 signs v1, the temporary rollback until step d of the migration
+// (DECISIONS.md, "Admin signature v2"), with one warning on stderr that v1 is not bound to a host;
+// unset or empty means 2, and any other value is exit 2. The api and the version are checked right
+// after the backend is chosen, before the credential is read or a confirmation asked. A 404 is
 // exit 4: "no such target" when the Worker answers not_found or no_operator_block, "refused" (the
 // key, the failed-signature limit or the route) when it answers "Not found". After an attempt that
 // may have run (a 5xx, or a timeout or reset once connected; never a failure to connect or a 429),

@@ -51,9 +51,9 @@
 // (canonicalOrigin): printable ASCII, a literal http:// or https:// prefix, nothing but a host and
 // a port. The origin rules, the Worker's ADMIN_ORIGIN and ADMIN_SIG_MIN readers and the client's
 // version override live in scripts/lib/admin-origin.mjs, which has no imports so the Worker can
-// use it as it is; this module re-exports them. The signer signs v1 unless asked for v2, and the
-// verifier accepts only v1 unless told otherwise; the migration is in DECISIONS.md ("Admin
-// signature v2").
+// use it as it is; this module re-exports them. The signer signs v2 unless asked for v1 (step c of
+// the migration), and the verifier accepts only v1 unless told otherwise; the migration is in
+// DECISIONS.md ("Admin signature v2").
 
 import { createHash, createHmac, randomBytes, timingSafeEqual as nodeTimingSafeEqual } from 'node:crypto';
 import { UsageError, canonicalOrigin } from './admin-origin.mjs';
@@ -65,9 +65,11 @@ export {
 
 export const VERSION = 'v1';
 export const VERSION_V2 = 'v2';
-// The version signAdminRequest() signs when the caller names none. It stays 1 until the clients
-// move to v2 (step c of the migration).
-export const DEFAULT_SIGN_VERSION = 1;
+// The version signAdminRequest() signs when the caller names none: 2 from step c of the migration
+// on, the same version signVersionFromEnv() returns when CADDIE_ADMIN_SIG_VERSION is unset or
+// empty. The clients still pass version: signVersionFromEnv(process.env) explicitly, so
+// CADDIE_ADMIN_SIG_VERSION=1 rolls them back to v1 until step d removes v1.
+export const DEFAULT_SIGN_VERSION = 2;
 export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 export const QUERY_RE = /^[A-Za-z0-9_.:=&,-]*$/;
 export const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
@@ -151,7 +153,7 @@ export function canonicalUrl(path, base) {
 // into the signature (for tests and fixtures). `now` is milliseconds; `nonce` is for tests only,
 // because a nonce is single-use on the Worker and every retry must sign afresh.
 //
-// `version` is 1 (the default, DEFAULT_SIGN_VERSION) or 2. A v1 result is exactly what it was
+// `version` is 1 or 2 (the default, DEFAULT_SIGN_VERSION). A v1 result is exactly what it was
 // before v2 existed; a v2 result also carries `version: 2` and the `origin` it signed, which is
 // canonicalOrigin(base): a v2 signature needs a base string that canonicalOrigin accepts.
 export function signAdminRequest({ method, path, base, body, key, now, nonce, version = DEFAULT_SIGN_VERSION }) {

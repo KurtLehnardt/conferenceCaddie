@@ -33,11 +33,20 @@ export const ORIGIN_PREFIX_RE = /^https?:\/\//i;
 export const ORIGIN_FORBIDDEN_RE = /[@\\%,]/;
 export const ORIGIN_ALLOW_RE = /^https?:\/\/(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]*)?\/?$/i;
 const ORIGIN_PROTOCOLS = new Set(['http:', 'https:']);
+// ORIGIN_ALLOW_RE with the host (group 1) and the port (group 2, possibly empty) captured, so the
+// host and port the URL parser returns can be compared with the ones typed.
+const ORIGIN_PARTS_RE = /^https?:\/\/([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]*))?\/?$/i;
+const DEFAULT_PORTS = { 'http:': '80', 'https:': '443' };
 
 // The origin a v2 signature binds, read strictly from a string: surrounding whitespace is trimmed
 // (String.prototype.trim), the four checks above run, and the rest must parse as an http: or
-// https: URL with path "/" or none and no query, fragment, user name or password. The result is
-// new URL(value).origin: lowercase scheme and host, the default port dropped. Returns null for
+// https: URL with path "/" or none and no query, fragment, user name or password. The parser must
+// not have turned the host into another one: its host must be the typed host in lower case, and
+// its port the typed port with the scheme's default port (or an empty port) dropped. That refuses
+// the numeric IPv4 forms the parser rewrites (2130706433, 0x7f.1, 0177.0.0.1, 127.000.0.1, 127.1,
+// a dotted quad with a trailing dot), an IPv6 address not in its canonical compressed form, and a
+// port with a leading zero; a canonical dotted quad such as 127.0.0.1 and [::1] stay. The result
+// is new URL(value).origin: lowercase scheme and host, the default port dropped. Returns null for
 // anything else, including a URL object and a request URL with a path (a Worker that falls back to
 // its request's own origin takes new URL(request.url).origin, not this). An internationalised host
 // is accepted in its punycode (xn--) form only; "https://caddie.example." keeps its trailing dot
@@ -54,6 +63,9 @@ export function canonicalOrigin(value) {
   }
   if (!ORIGIN_PROTOCOLS.has(u.protocol)) return null;
   if (u.pathname !== '/' || u.search !== '' || u.hash !== '' || u.username !== '' || u.password !== '') return null;
+  const [, typedHost, typedPort = ''] = ORIGIN_PARTS_RE.exec(text);
+  if (u.hostname !== typedHost.toLowerCase()) return null;
+  if (u.port !== (typedPort === DEFAULT_PORTS[u.protocol] ? '' : typedPort)) return null;
   return u.origin;
 }
 

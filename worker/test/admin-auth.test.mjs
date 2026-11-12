@@ -174,10 +174,11 @@ function stubEnv(vars = { ADMIN_TOKEN: KEY }) {
 let ipSeq = 0;
 const freshIp = () => `2001:db8::${(++ipSeq).toString(16)}`;
 
-// A request signed with signAdminRequest. `send` replaces the body that is sent (the signed one by
-// default) and `headers` adds or overrides headers.
+// A request signed with signAdminRequest, version 1 (this file is the v1 suite; v2 is in
+// admin-auth-v2.test.mjs). `send` replaces the body that is sent (the signed one by default) and
+// `headers` adds or overrides headers.
 function signedRequest(method, path, { body, key = KEY, now, nonce, ip = freshIp(), headers = {}, send } = {}) {
-  const s = signAdminRequest({ method, path, base: BASE, body, key, now, nonce });
+  const s = signAdminRequest({ method, path, base: BASE, body, key, now, nonce, version: 1 });
   const h = new Headers({ 'X-Caddie-Admin': s.header, 'CF-Connecting-IP': ip });
   const payload = send !== undefined ? send : body;
   if (payload !== undefined && payload !== null) h.set('Content-Type', 'application/json');
