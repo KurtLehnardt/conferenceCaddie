@@ -39,7 +39,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase,
-  parseArgs, readAdminToken, readNdjson, withTopics,
+  parseArgs, readAdminToken, readNdjson, withTopics, withoutOperatorKeys,
 } from './lib.mjs';
 
 const TABLES = ['conferences', 'talks', 'topics', 'facets', 'people', 'reports', 'rules'];
@@ -61,8 +61,10 @@ export function personPayload(row) {
 const dropId = ({ _id, ...rest }) => rest;
 // A conference document as the backup holds it, without its _id and without an `unretire` key, so
 // a migration can never bring back a conference the operator removed, whatever the backup holds.
-// The operator's `expect_status` precondition is dropped too: a migration never sends it.
-const conferenceDoc = ({ _id, unretire, expect_status, ...rest }) => rest;
+// The operator's `expect_status` precondition is dropped too: a migration never sends it. So is a
+// key that differs from either only in letter case or surrounding whitespace, which the Worker
+// would refuse with 400 for the whole request (withoutOperatorKeys in lib.mjs).
+const conferenceDoc = ({ _id, ...rest }) => withoutOperatorKeys(rest);
 
 function groupBy(rows, key) {
   const m = new Map();

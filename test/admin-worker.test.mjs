@@ -41,13 +41,15 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BODYLESS_METHODS, HEADER_NAME, bodyMatches, signAdminRequest, verifyAdminSignature } from '../scripts/lib/admin-sign.mjs';
 import { main } from '../scripts/admin/cli.mjs';
 import { createWorkerAdapter } from '../scripts/admin/backends/worker.mjs';
+import { shellPath } from '../scripts/lib/admin-token-file.mjs';
 
 const realFetch = globalThis.fetch;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -2287,10 +2289,88 @@ describe('STAT-1 to STAT-3 stats', () => {
     assert.equal(r.code, 0, r.stderr);
     assert.deepEqual(r.requests.map((x) => `${x.method} ${x.path}`), ['GET /api/health', 'GET /api/capabilities']);
     assert.match(r.stdout, /^health=200 ok=true\ncapabilities=200 tier=2 ble_mode=off push_apns=false push_fcm=false\n/);
-    assert.ok(r.stdout.includes(`smoke=BASE_URL="${stub.url}" ADMIN_TOKEN_FILE="~/.config/conference-caddie/admin-token" node scripts/smoke.mjs`), r.stdout);
+    // The file the CLI reads (CADDIE_ADMIN_HOME/admin-token here) is always named, single-quoted,
+    // never a value.
+    assert.ok(r.stdout.includes(`smoke=BASE_URL='${stub.url}' SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(join(home, 'admin-token'))} node scripts/smoke.mjs`), r.stdout);
+    assert.ok(!r.stdout.split('\n').find((l) => l.startsWith('smoke=')).includes('"'), 'nothing double-quoted, so nothing in the line expands but a leading ~/');
     assert.ok(r.stdout.includes('logs=(cd worker && npx wrangler tail --format json) | node /path/to/scratch/tail-filter.mjs'), r.stdout);
     assert.match(r.stdout, /never run wrangler tail unfiltered/);
     const file = await invoke(['stats', 'health'], { env: { ADMIN_TOKEN_FILE: '/srv/caddie/admin-token' } });
-    assert.ok(file.stdout.includes('ADMIN_TOKEN_FILE="/srv/caddie/admin-token"'));
+    assert.ok(file.stdout.includes(`SMOKE_API=worker ADMIN_TOKEN_FILE='/srv/caddie/admin-token' node scripts/smoke.mjs`), file.stdout);
+  });
+
+  // The printed smoke command, pasted into bash -c with HOME set to a temporary directory and nothing
+  // else from this environment, finds the token file: the smoke stops at "at least 32 characters"
+  // on the fake short token it read, before any request (BASE_URL is never contacted).
+  test('health: the printed smoke command, pasted into bash, resolves and reads the token file', { timeout: 120_000 }, async () => {
+    const API = 'https://caddie-worker.example.test';
+    const viaStub = (url, init) => realFetch(String(url).replace(API, stub.url), init);
+    const SHORT = 'fake-short-token-not-a-secret';
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'caddie-tok-paste-')));
+    const realHome = process.env.HOME;
+    const put = (file, text) => {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, text, { mode: 0o600 });
+    };
+    const paste = (command, HOME) => new Promise((done) => {
+      const child = spawn('bash', ['-c', command], { cwd: ROOT, env: { PATH: process.env.PATH, HOME }, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 });
+      let stdout = '';
+      child.stdout.on('data', (d) => { stdout += d; });
+      child.stderr.on('data', () => {});
+      child.on('close', (code) => done({ code, stdout }));
+    });
+    let n = 0;
+    // One case: a fresh HOME, the CLI run with that HOME and `env`, the token put at `tokenAt(home)`.
+    const check = async (label, { env = {}, tokenAt, configAt, expect }) => {
+      const caseHome = join(tmp, `home ${++n}`);
+      mkdirSync(caseHome);
+      const config = configAt(caseHome);
+      put(join(config, 'config.json'), JSON.stringify({ default: 'live', backends: { live: { tier: 2, api: API } } }));
+      put(tokenAt(caseHome), `${SHORT}\n`);
+      process.env.HOME = caseHome;
+      let r;
+      try {
+        r = await invoke(['stats', 'health', '--json'], { fetch: viaStub, env: { CADDIE_ADMIN_HOME: undefined, XDG_CONFIG_HOME: undefined, ...env(caseHome) } });
+      } finally {
+        process.env.HOME = realHome;
+      }
+      assert.equal(r.code, 0, `${label}: ${r.stderr}`);
+      const { smoke } = r.json().result.commands;
+      assert.equal(smoke, expect(caseHome), label);
+      const run = await paste(smoke, caseHome);
+      assert.equal(run.code, 1, `${label}: ${run.stdout}`);
+      assert.ok(run.stdout.includes('FAIL config: the admin token must have at least 32 characters'), `${label}: the smoke did not read the token file\n${run.stdout}`);
+      assert.ok(!run.stdout.includes(SHORT), `${label}: the token is never printed`);
+    };
+    const configHome = (h) => join(h, '.config', 'conference-caddie');
+    try {
+      await check('the default file: named as ~/ outside single quotes', {
+        env: () => ({}),
+        configAt: configHome,
+        tokenAt: (h) => join(configHome(h), 'admin-token'),
+        expect: () => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE=~/'.config/conference-caddie/admin-token' node scripts/smoke.mjs`,
+      });
+      await check('ADMIN_TOKEN_FILE under HOME with a space, a quote and a $: ~/ outside the quotes', {
+        env: (h) => ({ ADMIN_TOKEN_FILE: join(h, "my dir", "it's $HOME", 'admin-token') }),
+        configAt: configHome,
+        tokenAt: (h) => join(h, "my dir", "it's $HOME", 'admin-token'),
+        expect: () => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE=~/'my dir/it'\\''s $HOME/admin-token' node scripts/smoke.mjs`,
+      });
+      await check('XDG_CONFIG_HOME under HOME: its file is named, so any shell finds it', {
+        env: (h) => ({ XDG_CONFIG_HOME: join(h, 'xdg') }),
+        configAt: (h) => join(h, 'xdg', 'conference-caddie'),
+        tokenAt: (h) => join(h, 'xdg', 'conference-caddie', 'admin-token'),
+        expect: () => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE=~/'xdg/conference-caddie/admin-token' node scripts/smoke.mjs`,
+      });
+      await check('CADDIE_ADMIN_HOME outside HOME: an absolute single-quoted path', {
+        env: (h) => ({ CADDIE_ADMIN_HOME: join(dirname(h), `cah ${n}`) }),
+        configAt: (h) => join(dirname(h), `cah ${n}`),
+        tokenAt: (h) => join(dirname(h), `cah ${n}`, 'admin-token'),
+        expect: (h) => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE='${join(dirname(h), `cah ${n}`, 'admin-token')}' node scripts/smoke.mjs`,
+      });
+    } finally {
+      process.env.HOME = realHome;
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

@@ -69,8 +69,9 @@ private const val SPOT_MAX = 60
  * `state.presence.zone ?: state.lastZone`, "How long" as [RadioRow]s with
  * `PeopleText.DURATION_LABELS`, the spot field (60), I'm around / Save =
  * `controller.turnOnPresence(zone, spot, mode)` with `PeopleText.presenceProblem` for failures);
- * and U3's [PushControls] in the [PushVariant.Card] variant under a hairline. Off is
- * `controller.turnOffPresence()`. Shown only when `state.features.presence`.
+ * U3's [PushControls] in the [PushVariant.Card] variant under a hairline; and [BleControls] in the
+ * [BleVariant.Card] variant under another. Off is `controller.turnOffPresence()`. Shown only when
+ * `state.features.presence`.
  *
  * The position is precise or nothing: when the phone allows only approximate location, or refuses
  * location, the card says so and offers the system settings ([PeopleHost.openAppSettings]); no position is
@@ -240,11 +241,10 @@ fun PresenceControls(
                 onCancel = { panel = false },
             )
         }
-        // Under the zone, duration and position: the push nudge switch, then (Android only) Bluetooth.
+        // Under the zone, duration and position: the push nudge switch, then Bluetooth, which shows
+        // only where the backend resolves derived-v1 tokens and this phone has a radio for them.
         PushControls(state, host, PushVariant.Card)
-        // TODO(phase 4): BleControls goes here, under the push switch. The web shows it only when the
-        // backend's Bluetooth mode is derived-v1 (`state.features.bleMode`) and the platform has a
-        // radio for it (BleControls.tsx: the Android app's bridge).
+        BleControls(state, host, BleVariant.Card)
     }
 }
 

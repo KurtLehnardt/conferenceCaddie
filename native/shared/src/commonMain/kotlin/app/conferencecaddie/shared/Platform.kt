@@ -1,12 +1,9 @@
 package app.conferencecaddie.shared
 
-import kotlinx.coroutines.flow.Flow
-
 // Interfaces that each platform implements and injects at start-up (docs/NATIVE_PLAN.md, section
 // 10.3). Android implements them in Kotlin in androidMain. iOS implements them in Kotlin in iosMain
 // where the platform bindings or a cinterop reach the API (the Keychain, notifications, ONNX
-// Runtime's C API), and in Swift, passed in, where they do not (Core Bluetooth is easiest to reach
-// from Swift).
+// Runtime's C API, Core Bluetooth), and in Swift only where Kotlin cannot reach the API.
 
 /** Turns text into embedding vectors on the device (bge-small-en-v1.5 through ONNX Runtime). */
 interface Embedder {
@@ -23,42 +20,8 @@ interface Embedder {
     suspend fun close() {}
 }
 
-/** One Bluetooth sighting: a token heard from a nearby phone and its strongest signal. */
-data class BleSighting(
-    val token: ByteArray,
-    val rssi: Int,
-    val heardAtEpochMillis: Long,
-) {
-    override fun equals(other: Any?): Boolean =
-        other is BleSighting &&
-            token.contentEquals(other.token) &&
-            rssi == other.rssi &&
-            heardAtEpochMillis == other.heardAtEpochMillis
-
-    override fun hashCode(): Int =
-        (token.contentHashCode() * 31 + rssi) * 31 + heardAtEpochMillis.hashCode()
-}
-
-/**
- * Advertises this phone's current token and scans for other phones' tokens. Token derivation and
- * sightings batching are common code; only the radio work is per platform.
- */
-interface BleRadio {
-    /** False when the hardware or OS cannot advertise and scan; the UI then hides the feature. */
-    val isAvailable: Boolean
-
-    /** Tokens heard while running. Collect it to batch sightings for the backend. */
-    val sightings: Flow<BleSighting>
-
-    /** Starts advertising [token] under [serviceUuid] and scanning for the same UUID. */
-    suspend fun start(serviceUuid: String, token: ByteArray)
-
-    /** Replaces the advertised token without interrupting the scan. */
-    suspend fun rotate(token: ByteArray)
-
-    /** Stops advertising and scanning. Safe to call when not running. */
-    suspend fun stop()
-}
+// Bluetooth proximity's platform interfaces (BleRadio, BleKeyStore) are in the ble package
+// (ble/BlePlatform.kt), next to the protocol they serve.
 
 /** Local notifications ("someone who's worked on X is right near you"). */
 interface Notifier {

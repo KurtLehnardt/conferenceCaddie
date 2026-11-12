@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import app.conferencecaddie.shared.ble.BleAccess
 import app.conferencecaddie.ui.platform.IncomingHandoff
 import kotlin.time.Instant
 import kotlinx.serialization.json.JsonArray
@@ -545,6 +546,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
     ParityState("profile-filled", 2629, 2870, extras = extras(3000)) {
         start(tab = null)
         openProfile()
+        waitSuggested()
         pause(600)
         shoot()
     },
@@ -572,6 +574,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         tapTag("profile-delete")
         waitFor(hasTestTag("profile-delete-confirm"))
         profileTop()
+        waitSuggested()
         pause(400)
         shoot()
     },
@@ -588,11 +591,12 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         })
         openProfile()
         waitFor(hasTestTag("profile-hidden-banner"))
+        waitSuggested()
         pause(400)
         shoot()
     },
     ParityState("profile-delete-pending", 2913, 3198) {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val now = rig.clock.ms
         start(tab = null, record = { r ->
             JsonObject(r + ("delete_pending" to buildJsonObject {
                 put("attempts", 2)
@@ -604,11 +608,12 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         })
         openProfile()
         waitFor(hasTestTag("profile-pending-delete"))
+        waitSuggested()
         pause(400)
         shoot()
     },
     ParityState("profile-delete-stuck", 3043, 3421) {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val now = rig.clock.ms
         start(tab = null, record = { r ->
             JsonObject(r + ("delete_pending" to buildJsonObject {
                 put("attempts", 6)
@@ -620,6 +625,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         })
         openProfile()
         waitFor(hasTestTag("profile-stop-trying"))
+        waitSuggested()
         pause(400)
         shoot()
     },
@@ -701,12 +707,93 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         pause(600)
         shoot()
     },
+
+    // --- Bluetooth (phase 4; parity-4/scenarios.mjs) --------------------------------------------
+    ParityState("ble-presence-off", 2400, 2400, ble = true) {
+        start()
+        settleCards()
+        waitFor(hasTestTag("ble-card"))
+        peopleTop()
+        pause(400)
+        shoot()
+    },
+    ParityState("ble-card-off", 2400, 2400, ble = true) {
+        aroundWithBluetooth()
+        shoot()
+    },
+    ParityState("ble-notice", 2400, 2400, ble = true) {
+        aroundWithBluetooth()
+        bleSwitch()
+        waitFor(hasTestTag("ble-setup"))
+        peopleTop()
+        pause(400)
+        shoot()
+    },
+    ParityState("ble-on", 2400, 2400, ble = true) {
+        aroundWithBluetooth()
+        bleSwitch()
+        tapTag("ble-turn-on")
+        waitUntil(timeoutMillis = 20_000) { controller.state.value.ble.on }
+        waitGone(hasTestTag("ble-setup"))
+        peopleTop()
+        pause(400)
+        shoot()
+    },
+    ParityState("ble-permission", 2400, 2400, ble = true) {
+        // Refused at the prompt for good: the web's words, and the way to the system settings.
+        rig.radio.access = BleAccess.NotAsked
+        rig.radio.afterRequest = BleAccess.Blocked
+        aroundWithBluetooth()
+        bleSwitch()
+        tapTag("ble-turn-on")
+        waitFor(hasTestTag("ble-open-settings"))
+        peopleTop()
+        pause(400)
+        shoot()
+    },
+    ParityState("settings-ble", 2000, 2200, ble = true) {
+        aroundWithBluetooth()
+        openSettings()
+        waitFor(hasTestTag("set-ble"))
+        pause(600)
+        shoot()
+    },
 )
+
+/**
+ * I'm around in the Hallway with the position step answered "Zone only" (parity-4/scenarios.mjs
+ * aroundForBle), Sawyer joining me there, at a backend and on a phone with Bluetooth.
+ */
+@OptIn(ExperimentalTestApi::class)
+private fun ParityRun.aroundWithBluetooth() {
+    start(prepare = {
+        presence("Hallway")
+        sawyerJoins("Hallway")
+        controller.sharePosition(false)
+    })
+    waitFor(hasTestTag("ble-card"))
+    searchedAround()
+    peopleTop()
+    pause(400)
+}
+
+/** Taps the Bluetooth switch in the presence card. */
+@OptIn(ExperimentalTestApi::class)
+private fun ParityRun.bleSwitch() {
+    tap(isToggleable() and hasText(app.conferencecaddie.shared.people.PeopleText.BLE_LABEL))
+}
+
+/**
+ * Waits for Profile's "Suggested for you" topics (from Jordan's free text), which the topic picker
+ * shows only after its debounce (ProfileTopicPicker), so the shot has them as the web's has.
+ */
+@OptIn(ExperimentalTestApi::class)
+private fun ParityRun.waitSuggested() = waitFor(hasText(ProfileStrings.SUGGESTED_FOR_YOU, ignoreCase = true))
 
 /** I'm around in the Expo hall, back after twenty minutes: "Still in Expo hall?" (scenarios.mjs still-in). */
 @OptIn(ExperimentalTestApi::class)
 private fun ParityRun.stillIn() {
-    val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+    val now = rig.clock.ms
     start(
         prepare = {
             presence("Expo hall")

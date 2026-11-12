@@ -16,14 +16,17 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.InMemorySecureStore
 import app.conferencecaddie.shared.LocationAccess
+import app.conferencecaddie.shared.NoNotifier
 import app.conferencecaddie.shared.NoPush
+import app.conferencecaddie.shared.Notifier
 import app.conferencecaddie.shared.PeopleServices
 import app.conferencecaddie.shared.PushRegistrar
 import app.conferencecaddie.shared.SystemSettings
+import app.conferencecaddie.shared.ble.BlePlatform
 import app.conferencecaddie.shared.net.ApiHttp
 import app.conferencecaddie.shared.net.HttpResponse
 import app.conferencecaddie.shared.people.ApiResult
@@ -80,6 +83,9 @@ internal class FakePushRegistrar(private val token: String?) : PushRegistrar {
 internal class U3Rig(
     access: LocationAccess = LocationAccess.Precise,
     push: PushRegistrar = NoPush,
+    /** Bluetooth's radio and key store, or null for a phone without them. */
+    ble: BlePlatform? = null,
+    notifier: Notifier = NoNotifier,
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val clock = TestClock()
@@ -117,8 +123,10 @@ internal class U3Rig(
         PeopleServices(
             InMemorySecureStore(),
             location = location,
+            notifier = notifier,
             push = push,
             systemSettings = SystemSettings { settingsOpened.update { it + 1 } },
+            ble = ble,
         ),
         scope,
         allowLocalHttp = false,
@@ -130,10 +138,12 @@ internal class U3Rig(
     val host = PeopleHost(controller, nav, scope, { message, _ -> toasts.update { it + message } }, {}, {})
     val state: PeopleUiState get() = controller.state.value
 
-    fun context(push: Boolean = false, gpsBands: Boolean = true) = PeopleContext(
+    /** The summit's context; [ble] offers derived-v1 Bluetooth with the server's defaults. */
+    fun context(push: Boolean = false, gpsBands: Boolean = true, ble: Boolean = false) = PeopleContext(
         backend = testBackendUrl(),
         capabilities = Capabilities(
             people = Capabilities.People(enabled = true, presence = true, gpsBands = gpsBands, meets = true, circles = true, reports = true),
+            ble = if (ble) Capabilities.Ble(mode = Capabilities.BleMode.DerivedV1) else Capabilities.Ble(),
             push = Capabilities.Push(fcm = push),
         ).forThisApp(),
         conference = ConferenceInfo(SLUG, "Alpha Conference", "UTC"),

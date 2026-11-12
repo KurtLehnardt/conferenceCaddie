@@ -1,10 +1,13 @@
 package app.conferencecaddie.ui.people
 
+import app.conferencecaddie.shared.ble.BleProtocol
+import app.conferencecaddie.shared.ble.HmacSha256
 import app.conferencecaddie.shared.bundle.Sha256
 import app.conferencecaddie.shared.net.ApiHttp
 import app.conferencecaddie.shared.net.HttpResponse
 import app.conferencecaddie.shared.people.DeviceCredential
 import app.conferencecaddie.shared.people.PeopleZones
+import app.conferencecaddie.shared.secureRandomBytes
 import kotlin.math.PI
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -15,6 +18,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -114,36 +120,77 @@ class RecordedRequest(val method: String, val url: String, val headers: Map<Stri
  * Presence "day" mode ends at the end of the UTC day. The conference has no end date here. No
  * rate limit is simulated except through [failure]. Words in [filterWords] are held by the line
  * filter (400 `filtered`).
+ *
+ * Bluetooth is derived-v1 (docs/contracts/ble-tokens.md): a presence write with `ble: true` mints a
+ * random 32-byte key for a new session and answers it once with its id; `ble: false`, the end of
+ * presence and the profile's deletion end the session. Sightings resolve the tokens of windows
+ * w - 1, w and w + 1 of every live session at the conference, at or above [nearRssi], to the people
+ * who are around in the requester's zone and visible (the co-location rule, zones only), ranked like
+ * matches, and answer `{ nearby, ble_key_id }`.
  */
 class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConference>) : ApiHttp {
     constructor(clock: () -> Long, vararg conferences: FakeConference) : this(clock, conferences.toList())
 
     private val conferences = conferences.associateBy { it.slug }
+
+    // The code under test sends from its own threads while the test reads the server from another,
+    // so the stored state below is only read and changed under this lock. Without it, a test that
+    // read the profiles while a delete removed one failed now and then (a NullPointerException
+    // inside me(), reported as a timeout). The lock is taken the same blocking way everywhere and
+    // never held across a suspension, so no waiter is a coroutine queued on a thread that is itself
+    // blocked waiting for it.
+    private val lock = Mutex()
+
+    private fun <T> locked(block: () -> T): T = runBlocking { lock.withLock { block() } }
+
+    /** Reads a stored field of a person under the lock, for [FakePerson]. */
+    internal fun <T> read(block: () -> T): T = locked(block)
+
     private val docs = ArrayList<Doc>()
     private val meets = ArrayList<Meet>()
     private val reports = ArrayList<Report>()
     private var counter = 0
 
-    /** Every request the code under test sent, oldest first (calls a [FakePerson] makes are not recorded). */
-    val requests = ArrayList<RecordedRequest>()
+    // Replaced as a whole under the lock, so a reader always holds a complete list.
+    @kotlin.concurrent.Volatile
+    private var log: List<RecordedRequest> = emptyList()
+
+    /**
+     * Every request the code under test sent, oldest first (calls a [FakePerson] makes are not
+     * recorded), as it is now: a copy that later requests do not change.
+     */
+    val requests: List<RecordedRequest> get() = log
+
+    /** Records [request] as sent, for a test's stand-in that answers it instead of the server. */
+    fun record(request: RecordedRequest) = locked { log = log + request }
+
+    /** Forgets the requests after the first [count], for calls a test sends as the device itself. */
+    fun forgetRequestsAfter(count: Int) = locked { log = log.take(count) }
 
     /** The mode every request meets; set it back to [FakeFailure.None] to recover. */
+    @kotlin.concurrent.Volatile
     var failure: FakeFailure = FakeFailure.None
 
     /** Sent as `X-Caddie-Pace` on every answer when set. */
+    @kotlin.concurrent.Volatile
     var pace: String? = null
 
+    /** `ble.near_rssi`: weaker sightings resolve to nobody. */
+    var nearRssi: Int = -75
+
     /** The native push platforms this server pushes to ("apns", "fcm"); empty answers 404 `push_unavailable`. */
+    @kotlin.concurrent.Volatile
     var pushPlatforms: Set<String> = emptySet()
 
     /** Lines containing one of these words (any case) are refused with 400 `filtered`. */
+    @kotlin.concurrent.Volatile
     var filterWords: Set<String> = setOf("badword")
 
     private var deleteFailures = 0
     private var deleteFailureStatus = 502
 
     /** The next [count] profile deletes answer [status] and delete nothing. */
-    fun failNextDeletes(count: Int, status: Int = 502) {
+    fun failNextDeletes(count: Int, status: Int = 502) = locked {
         deleteFailures = count
         deleteFailureStatus = status
     }
@@ -170,14 +217,13 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         }
     }
 
-    @kotlin.concurrent.Volatile
     private var holds: List<Hold> = emptyList()
 
     /**
      * Holds the next request with [method] to [path], and only that one, until [Hold.release]. For
      * tests of what happens when the screen that asked has gone by the time the answer comes.
      */
-    fun hold(method: String, path: String): Hold = Hold(method, path).also { holds = holds + it }
+    fun hold(method: String, path: String): Hold = Hold(method, path).also { locked { holds = holds + it } }
 
     /** The recorded requests with [method] to [path]. */
     fun requests(method: String, path: String): List<RecordedRequest> = requests.filter { it.method == method && it.path == path }
@@ -209,34 +255,45 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         contactNote: String? = null,
     ): FakePerson {
         val conf = conferences.getValue(slug)
-        val d = newDoc(slug, seeded = true)
-        d.displayName = displayName
-        d.about = about
-        d.expertise = expertise
-        d.interests = interests
-        d.speak = speakTopics.filter { it in conf.topics }
-        d.learn = learnTopics.filter { it in conf.topics }
-        d.shared = sharedTalkIds
-        d.openToMeet = openToMeet
-        d.linkedin = linkedinUrl
-        d.contactNote = contactNote
-        docs += d
+        val d = locked {
+            newDoc(slug, seeded = true).also { d ->
+                d.displayName = displayName
+                d.about = about
+                d.expertise = expertise
+                d.interests = interests
+                d.speak = speakTopics.filter { it in conf.topics }
+                d.learn = learnTopics.filter { it in conf.topics }
+                d.shared = sharedTalkIds
+                d.openToMeet = openToMeet
+                d.linkedin = linkedinUrl
+                d.contactNote = contactNote
+                docs += d
+            }
+        }
+        // Outside the lock: going around is a call to the server, which takes it.
         val person = FakePerson(this, d)
         if (around != null) person.goAround(around, located = located)
         return person
     }
 
+    /** This phone's Bluetooth payload for [person] at the clock's window, as their radio would serve it; null without a live session. */
+    fun blePayload(person: FakePerson, atMs: Long = clock()): ByteArray? =
+        person.doc.bleKey?.let { BleProtocol.encodePayload(BleProtocol.tokenOf(HmacSha256.mac(it, BleProtocol.tokenMessage(BleProtocol.windowAtMillis(atMs))))) }
+
+    /** The `ble_key_id` of [person]'s live Bluetooth session, or null. */
+    fun bleKeyId(person: FakePerson): String? = person.doc.bleKey?.let { keyIdOf(it) }
+
     /** The profile most recently created through the API at [slug] (the device under test), or null when there is none. */
-    fun me(slug: String): FakePerson? = docs.lastOrNull { it.slug == slug && !it.seeded }?.let { FakePerson(this, it) }
+    fun me(slug: String): FakePerson? = locked { docs.lastOrNull { it.slug == slug && !it.seeded } }?.let { FakePerson(this, it) }
 
     /** The person with [ref] at [slug], or null. */
-    fun person(slug: String, ref: String): FakePerson? = docs.firstOrNull { it.slug == slug && it.ref == ref }?.let { FakePerson(this, it) }
+    fun person(slug: String, ref: String): FakePerson? = locked { docs.firstOrNull { it.slug == slug && it.ref == ref } }?.let { FakePerson(this, it) }
 
     /** The stored state of a meet, or null when there is no such meet (after the time and presence transitions). */
-    fun meetState(meetId: String): String? = meets.firstOrNull { it.id == meetId }?.also { refresh(it) }?.state
+    fun meetState(meetId: String): String? = locked { meets.firstOrNull { it.id == meetId }?.also { refresh(it) }?.state }
 
     /** Every ref at [slug] that [person] has blocked, oldest first. */
-    fun blockedBy(person: FakePerson): List<String> = person.doc.blocks.map { it.first }
+    fun blockedBy(person: FakePerson): List<String> = locked { person.doc.blocks.map { it.first } }
 
     private fun newDoc(slug: String, seeded: Boolean, credential: Pair<String, String>? = null): Doc {
         counter++
@@ -248,13 +305,15 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     // ApiHttp
 
     override suspend fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?, timeoutMs: Long, maxBytes: Long): HttpResponse {
-        requests += RecordedRequest(method, url, headers, body?.decodeToString())
-        val request = RecordedRequest(method, url, headers, null)
-        holds.firstOrNull { it.method == method && it.path == request.path }?.let { held ->
-            holds = holds - held
-            held.wait()
+        val text = body?.decodeToString()
+        val request = RecordedRequest(method, url, headers, text)
+        val held = locked {
+            log = log + request
+            holds.firstOrNull { it.method == method && it.path == request.path }?.also { holds = holds - it }
         }
-        return answer(method, url, headers, body?.decodeToString())
+        // A held request waits without the lock, so the test can read the server meanwhile.
+        held?.wait()
+        return locked { answer(method, url, headers, text) }
     }
 
     private fun answer(method: String, url: String, headers: Map<String, String>, body: String?): HttpResponse {
@@ -276,7 +335,7 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     /** Runs a request as [doc] without recording it; used by [FakePerson]. */
     internal fun actAs(doc: Doc, method: String, path: String, body: JsonObject?): JsonObject {
         val h = mapOf("X-Caddie-Device" to "${doc.profileId}.${doc.secret}")
-        val r = answer(method, "https://fake.test$path", h, body?.toString())
+        val r = locked { answer(method, "https://fake.test$path", h, body?.toString()) }
         val parsed = Json.parseToJsonElement(r.text()) as JsonObject
         if (r.status !in 200..299) throw FakeCallFailed(r.status, parsed.str("error"))
         return parsed
@@ -413,6 +472,8 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         d.contactNote = contactNote
         d.openToMeet = open
         d.shared = shared
+        // Conference-wide visibility off ends the Bluetooth session with it.
+        if (!open) d.bleKey = null
         if (reportCount(conf.slug, "profile", d.ref) >= 2) d.hidden = true
         return buildJsonObject {
             put("ok", true)
@@ -618,7 +679,12 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         me.until = if (mode == "day") endOfDay(now) else now + HOUR_MS
         me.loc = located
         val bleOn = (b["ble"] as? JsonPrimitive)?.booleanOrNull
-        if (bleOn != null) me.ble = bleOn
+        // Every write with ble: true starts a new session (a new nonce, so a new key); false ends it.
+        when (bleOn) {
+            true -> me.bleKey = secureRandomBytes(BleProtocol.KEY_BYTES)
+            false -> me.bleKey = null
+            null -> Unit
+        }
         return buildJsonObject {
             put("ok", true)
             put("zone", zone)
@@ -628,9 +694,9 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
             put("presence_since", iso(me.since))
             put("presence_until", iso(me.until))
             put("located", located != null)
-            if (bleOn == true) {
-                put("ble_key", DeviceCredential.base64Url(bytes(32, me.profileId.hashCode())))
-                put("ble_key_id", DeviceCredential.base64Url(bytes(8, me.profileId.hashCode())).take(11))
+            me.bleKey?.takeIf { bleOn == true }?.let { key ->
+                put("ble_key", DeviceCredential.base64Url(key))
+                put("ble_key_id", keyIdOf(key))
             }
         }
     }
@@ -647,14 +713,14 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         d.spot = null
         d.until = 0
         d.loc = null
-        d.ble = false
+        d.bleKey = null
         for (m in meets) if (m.state == "active" && d.profileId in setOf(m.requester, m.target)) m.state = "expired"
     }
 
     private fun rotateBle(c: Ctx): JsonObject {
         val b = c.obj(setOf("event"), setOf("event"))
         val me = c.live(c.conf(b.str("event")).slug)
-        if (!around(me) || !me.ble) fail(403, "ble_required")
+        if (!around(me) || me.bleKey == null) fail(403, "ble_required")
         return buildJsonObject {
             put("ok", true)
             putJsonObject("ble") {
@@ -666,15 +732,50 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
 
     private fun sightings(c: Ctx): JsonObject {
         val b = c.obj(setOf("event", "sightings"), setOf("event", "sightings"))
-        val me = c.live(c.conf(b.str("event")).slug)
+        val conf = c.conf(b.str("event"))
+        val me = c.live(conf.slug)
         val list = b["sightings"] as? JsonArray ?: bad("sightings must be an array")
         if (list.size > 50) bad("sightings must have at most 50 entries")
-        if (!around(me) || !me.ble) fail(403, "ble_required")
+        // The strongest RSSI per token.
+        val heard = LinkedHashMap<String, Int>()
+        for (e in list) {
+            val o = e as? JsonObject ?: bad("sightings must be objects")
+            for (k in o.keys) if (k !in setOf("token", "rssi")) bad("Unknown key: sightings.${k.take(40)}")
+            val token = o.str("token")?.takeIf { TOKEN_RE.matches(it) } ?: bad("token must be 22 base64url characters")
+            val rssi = (o["rssi"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()?.takeIf { it in -127..20 }
+                ?: bad("rssi must be an integer from -127 to 20")
+            heard[token] = maxOf(heard[token] ?: rssi, rssi)
+        }
+        val myKey = me.bleKey
+        if (!around(me) || myKey == null) fail(403, "ble_required")
+        // The token table of this window: w - 1, w and w + 1 of every live session at the conference.
+        val w = BleProtocol.windowAtMillis(clock())
+        val table = HashMap<String, Doc>()
+        for (d in docs) {
+            val key = d.bleKey ?: continue
+            if (d.slug != conf.slug || !around(d)) continue
+            for (x in w - 1..w + 1) table[BleProtocol.encodeToken(BleProtocol.tokenOf(HmacSha256.mac(key, BleProtocol.tokenMessage(x))))] = d
+        }
+        val found = heard.filter { it.value >= nearRssi }.keys.mapNotNull { table[it] }.distinct()
+            .filter { it !== me && it.zone == me.zone && it.openToMeet && !it.hidden && !blockedEither(me, it) }
+            .sortedWith(compareByDescending<Doc> { score(me, it, emptyList()) }.thenBy { it.displayName }.thenBy { it.ref })
         return buildJsonObject {
-            put("ble_key_id", DeviceCredential.base64Url(bytes(8, me.profileId.hashCode())).take(11))
-            put("nearby", JsonArray(emptyList()))
+            put("nearby", JsonArray(found.map { nearbyJson(conf, it) }))
+            put("ble_key_id", keyIdOf(myKey))
         }
     }
+
+    // A nearby entry in the contract's closed shape; the zone is set because co-location here is the same zone.
+    private fun nearbyJson(conf: FakeConference, d: Doc): JsonObject = buildJsonObject {
+        val passage = firstSentence(d.expertise.ifEmpty { d.about })
+        put("ref", d.ref)
+        put("display_name", d.displayName)
+        put("evidence", if (passage.isNotEmpty()) escapeHtml(passage.take(160)) else null)
+        put("speak_topics", topicRefs(conf, d.speak))
+        put("zone", d.zone)
+    }
+
+    private fun keyIdOf(key: ByteArray): String = BleProtocol.keyIdOf(HmacSha256.mac(key, BleProtocol.keyIdMessage()))
 
     // ---------------------------------------------------------------------------------------------
     // Meets
@@ -889,7 +990,7 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     }
 
     /** The native push registrations of [person], as "platform:token". */
-    fun pushRegistrations(person: FakePerson): Set<String> = person.doc.push.filter { !it.startsWith("web:") }.toSet()
+    fun pushRegistrations(person: FakePerson): Set<String> = locked { person.doc.push.filter { !it.startsWith("web:") }.toSet() }
 
     // ---------------------------------------------------------------------------------------------
     // Shaping people
@@ -1062,7 +1163,9 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         var since = 0L
         var until = 0L
         var loc: Pair<Double, Double>? = null
-        var ble = false
+
+        /** The key of the live Bluetooth session, or null; only ever handed out once, in the presence answer. */
+        var bleKey: ByteArray? = null
         val blocks = ArrayList<Pair<String, Long>>()
         val push = LinkedHashSet<String>()
     }
@@ -1084,6 +1187,7 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         val ID_RE = Regex("^[A-Za-z0-9_-]{22}$")
         val SECRET_RE = Regex("^[A-Za-z0-9_-]{43}$")
         val REF_RE = Regex("^[0-9a-f]{16}$")
+        val TOKEN_RE = Regex("^[A-Za-z0-9_-]{22}$")
         val SLUG_RE = Regex("^[a-z0-9][a-z0-9-]{0,99}$")
         val LINKEDIN_RE = Regex("^https://(www\\.)?linkedin\\.com/in/[A-Za-z0-9_-]{3,100}/?$")
         val APNS_RE = Regex("^(?:[0-9A-Fa-f]{2}){32,100}$")
@@ -1102,20 +1206,20 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
  */
 class FakePerson internal constructor(private val server: FakePeopleServer, internal val doc: FakePeopleServer.Doc) {
     val ref: String get() = doc.ref
-    val displayName: String get() = doc.displayName
+    val displayName: String get() = server.read { doc.displayName }
     val slug: String get() = doc.slug
 
     /** True while this person is visible conference-wide, as the server stores it. */
-    val openToMeet: Boolean get() = doc.openToMeet
+    val openToMeet: Boolean get() = server.read { doc.openToMeet }
 
     /** The talk ids this person shares for, as the server stores them. */
-    val sharedTalkIds: List<String> get() = doc.shared
+    val sharedTalkIds: List<String> get() = server.read { doc.shared }
 
     /** The zone this person's presence is on in, or null while presence is off, as the server stores it. */
-    val zone: String? get() = doc.zone
+    val zone: String? get() = server.read { doc.zone }
 
     /** True while the profile is hidden after reports. */
-    val hidden: Boolean get() = doc.hidden
+    val hidden: Boolean get() = server.read { doc.hidden }
 
     private fun call(method: String, path: String, build: JsonObjectBuilder.() -> Unit = {}): JsonObject =
         server.actAs(doc, method, path, buildJsonObject { put("event", doc.slug); build() })
@@ -1164,9 +1268,20 @@ class FakePerson internal constructor(private val server: FakePeopleServer, inte
         }
     }
 
+    /** Turns Bluetooth proximity on (a new session and key) or off, repeating the zone and spot (presence must be on). */
+    fun bluetooth(on: Boolean = true) {
+        call("PUT", "/api/presence") {
+            put("zone", doc.zone ?: error("Not around"))
+            put("spot", doc.spot ?: "")
+            put("until", doc.mode)
+            put("ble", on)
+        }
+    }
+
     /** Moves the stored position, keeping the zone and the hour (presence must be on). */
     fun locate(lat: Double, lon: Double) {
-        goAround(doc.zone ?: error("Not around"), doc.spot ?: "", located = true, lat = lat, lon = lon)
+        val (zone, spot) = server.read { doc.zone to doc.spot }
+        goAround(zone ?: error("Not around"), spot ?: "", located = true, lat = lat, lon = lon)
     }
 
     fun leave() {

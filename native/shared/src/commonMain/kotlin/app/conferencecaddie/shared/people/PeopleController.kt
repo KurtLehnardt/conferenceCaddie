@@ -8,6 +8,8 @@ import app.conferencecaddie.shared.Notifier
 import app.conferencecaddie.shared.PeopleServices
 import app.conferencecaddie.shared.PushToken
 import app.conferencecaddie.shared.SystemSettings
+import app.conferencecaddie.shared.ble.BleHost
+import app.conferencecaddie.shared.ble.BleRuntime
 import app.conferencecaddie.shared.core.CoreState
 import app.conferencecaddie.shared.net.ApiHttp
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -41,26 +43,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 
-/**
- * Bluetooth proximity, phase 4. The controller stops it before a delete and when "Delete my
- * profile" clears the device; starting it (a presence write with `ble: true`, the key in the secure
- * store, the radio) arrives with the derived-v1 tokens, gated by `forThisApp().ble.mode`.
- */
-interface BleSession {
-    /** True while Bluetooth runs for conference [slug]. */
-    fun isRunning(slug: String): Boolean
-
-    /** Stops Bluetooth for [slug], or everywhere with null, without telling the server. */
-    suspend fun stop(slug: String?)
-}
-
-/** No Bluetooth: phase 3. */
-object NoBleSession : BleSession {
-    override fun isRunning(slug: String): Boolean = false
-
-    override suspend fun stop(slug: String?) = Unit
-}
-
 /** What [PeopleController.enablePush] ended with. */
 sealed interface PushOutcome {
     /** The backend now holds this device's token for the conference. */
@@ -83,8 +65,8 @@ sealed interface PushOutcome {
 
 /**
  * The people features of the native apps in one place: profile and visibility sync, deletes,
- * presence, asks and meets, the inbox, nudges, the watch list, blocks, reports, circles and push,
- * ported from web/src/people and talking People API v1 ([PeopleApi]).
+ * presence, asks and meets, the inbox, nudges, the watch list, blocks, reports, circles, push and
+ * Bluetooth proximity, ported from web/src/people and talking People API v1 ([PeopleApi]).
  *
  * Feed it the current backend, its capabilities, the selected conference and its installed bundle,
  * either with [bind] (from [CoreState]) or with [updateContext], and tell it when the app goes to
@@ -118,7 +100,6 @@ class PeopleController(
     /** Where the controller reads the time; the screens read "now" from it too, so tests agree with it. */
     val clock: Clock = Clock.System,
     private val timeZone: TimeZone = TimeZone.currentSystemDefault(),
-    private val ble: BleSession = NoBleSession,
 ) {
     @OptIn(ExperimentalCoroutinesApi::class)
     private val serial: CoroutineDispatcher =
@@ -186,9 +167,9 @@ class PeopleController(
 
     /**
      * The app went to the background (false) or came back (true). In the background, hour-mode
-     * presence ends after five minutes, positions stop and nothing is polled; back in the
-     * foreground, an old zone is asked about, unfinished deletes are tried again and the inbox is
-     * read.
+     * presence ends after five minutes (not while Bluetooth proximity runs at that conference),
+     * positions stop and nothing is polled; back in the foreground, an old zone is asked about,
+     * unfinished deletes are tried again and the inbox is read.
      */
     fun setForeground(foreground: Boolean) {
         scope.launch {
@@ -381,8 +362,8 @@ class PeopleController(
      */
     suspend fun turnOnPresence(zone: String, spot: String, mode: PresenceMode? = null): String? = write(FAILED_MESSAGE) {
         val r = ready()?.takeIf { it.features.presence } ?: return@write PeopleError.NOT_OFFERED_MESSAGE
-        // TODO(phase 4): with forThisApp().ble.mode derived-v1 and Bluetooth on, this write carries
-        // ble: true and the BleSession starts with the ble_key of the answer.
+        // A write without `ble` leaves Bluetooth as it is on the server; a new until reaches the
+        // radio through PresenceHost.presenceChanged.
         r.s.presenceRuntime.turnOn(r.slug, zone, spot, mode ?: r.s.presenceRuntime.get(r.slug).mode).also { publish() }
     }
 
@@ -396,6 +377,30 @@ class PeopleController(
     suspend fun turnOffPresence(): Unit = write(Unit) {
         val r = ready() ?: return@write
         r.s.presenceRuntime.turnOff(r.slug)
+        publish()
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Bluetooth proximity (phase 4)
+
+    /**
+     * "Find people near me by Bluetooth" on at the selected conference (web ble.ts startBle): needs
+     * presence on, a derived-v1 backend and a radio ([PeopleUiState.ble] `available`). Asks for the
+     * Bluetooth permission and for notifications, writes presence again with `ble: true` (repeating
+     * the zone, spot, position and duration), keeps the key in the platform key store and starts the
+     * radio. [PeopleUiState.ble] follows every step (`starting` while it runs); a problem stays under
+     * the switch until the next turn-on. Turning it on at one conference stops it at any other.
+     * Show [PeopleText.BLE_NOTICE] first while [BleView.noticeSeen] is false.
+     */
+    suspend fun turnOnBluetooth(): BleOutcome = write(BleOutcome.Problem(BleProblem.Failed, PeopleText.BLE_START_FAILED)) {
+        val r = ready()?.takeIf { it.features.presence } ?: return@write BleOutcome.Problem(BleProblem.Unsupported, PeopleText.BLE_UNSUPPORTED)
+        r.s.ble.turnOn(r.slug).also { publish() }
+    }
+
+    /** Turns Bluetooth proximity off at the selected conference and tells the server (`ble: false`); presence stays. */
+    suspend fun turnOffBluetooth(): Unit = write(Unit) {
+        val r = ready() ?: return@write
+        r.s.ble.turnOff(r.slug)
         publish()
     }
 
@@ -915,7 +920,7 @@ class PeopleController(
     // ---------------------------------------------------------------------------------------------
     // Internals
 
-    private inner class Session(val backend: BackendUrl.Valid) : SyncHost, PresenceHost, ConnectHost {
+    private inner class Session(val backend: BackendUrl.Valid) : SyncHost, PresenceHost, ConnectHost, BleHost {
         val store = PeopleStore(keyValue, backend.base)
         val credentials = DeviceCredentials(services.secureStore, backend)
         override val pace = Pace(this@PeopleController.clock)
@@ -923,6 +928,7 @@ class PeopleController(
         val sync = ProfileSync(store, api, credentials, scope, this)
         val presenceRuntime = PresenceRuntime(store, api, scope, this)
         val connect = ConnectRuntime(store, api, scope, this)
+        val ble = BleRuntime(services.ble, store, api, scope, this)
         var hasDevice = false
 
         /** No circle counts are asked of this backend before this time (a 429, or a 503 with Retry-After). */
@@ -957,6 +963,39 @@ class PeopleController(
 
         override suspend fun presenceEndedOnServer(slug: String) = presenceRuntime.presenceEndedOnServer(slug)
 
+        override fun bluetoothRunning(slug: String): Boolean = ble.running(slug)
+
+        override suspend fun presenceChanged(slug: String) = ble.presenceChanged(slug)
+
+        override val backendBase: String get() = backend.base
+
+        override fun bleOffered(): Boolean = context?.let { featuresOf(it) }?.let { it.presence && it.bleMode == Capabilities.BleMode.DerivedV1 } == true
+
+        override fun bleSettings(): Capabilities.Ble = context?.capabilities?.ble ?: Capabilities.Ble()
+
+        override suspend fun writePresenceBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>? = presenceRuntime.writeBle(slug, ble)
+
+        override suspend fun endPresence(slug: String) = presenceRuntime.turnOff(slug)
+
+        override fun keepUntil(): Boolean = context?.takeIf { it.backend == backend }?.capabilities?.people?.presenceKeepUntil == true
+
+        override fun isBlocked(slug: String, ref: String): Boolean = connect.isBlocked(slug, ref)
+
+        override fun nudgedToday(slug: String, ref: String): Boolean = connect.wasNudgedToday(slug, ref)
+
+        override suspend fun recordNudge(slug: String, ref: String) = connect.recordNudge(slug, ref)
+
+        override fun reveal(slug: String, ref: String) = connect.requestReveal(slug, ref)
+
+        // The toasts of Bluetooth and presence are about the radio or about being around, never
+        // about the profile, so they offer no "Open profile".
+        override fun notice(message: String) {
+            if (session === this) setNotice(message, opensProfile = false)
+        }
+
+        override fun bluetoothChanged(slug: String) = presenceRuntime.onBluetoothChanged(slug)
+
+        // Before a delete: Bluetooth stops on the device only, since the delete ends its session.
         override suspend fun stopRuntime(slug: String?) {
             ble.stop(slug)
             if (slug == null) presenceRuntime.reset()
@@ -1057,6 +1096,9 @@ class PeopleController(
         }
         val backendChanged = session?.backend != next.backend
         if (backendChanged) {
+            // Bluetooth belongs to the backend that issued its key: it stops on the device and the
+            // keys go, without a request (that backend ends the session with presence).
+            session?.ble?.stop(null)
             session?.stopAll()
             session = null
             lastInterested = null
@@ -1075,6 +1117,9 @@ class PeopleController(
                 session = s
                 s.sync.reconcileCredential()?.let { setNotice(it) }
                 s.sync.startDeleteRetries()
+                // Resumes Bluetooth where it was on (a restart, a restored service or app), or
+                // records it as off.
+                s.ble.restore()
                 // A profile edit still waiting for its one-second pause when this backend was left
                 // stopped with the sync timers; it is sent now.
                 if (s.sync.status.state == SyncStatus.State.Saving) s.sync.scheduleProfileSync(next.conference?.slug)
@@ -1104,6 +1149,10 @@ class PeopleController(
                 s.connect.stopPoll()
                 aroundJob?.cancel()
             }
+            // The same backend's capabilities no longer offer Bluetooth (derived-v1 or presence
+            // withdrawn): its switch is gone, so it is turned off here, telling the server. A new
+            // session decided that in restore() already.
+            if (!backendChanged) s.ble.offerChanged()
         }
         publish()
     }
@@ -1394,6 +1443,7 @@ class PeopleController(
             blocks = record.blocks,
             met = record.met,
             push = PushView(available = features.pushChannel != null, on = record.push.on, noticeSeen = record.push.noticeSeen),
+            ble = s.ble.view(slug),
             around = around,
             notice = notice,
         )

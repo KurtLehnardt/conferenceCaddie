@@ -81,11 +81,11 @@ data class Capabilities(
     )
 
     /**
-     * What this build of the app can use of these capabilities. The app implements no Bluetooth
-     * mode yet, and Phase 4 brings only derived-v1, so the legacy server-minted tokens
-     * (`server-rotate`) are never used here: the Capacitor app keeps them. It does not compute
-     * people vectors either, so `semantic: client` is read as off, as the contract asks of a client
-     * that does not implement it.
+     * What this build of the app can use of these capabilities. The app implements only the
+     * derived-v1 Bluetooth mode (tokens derived on the phone from a key), so the legacy
+     * server-minted tokens (`server-rotate`) are never used here: the Capacitor app keeps them.
+     * It does not compute people vectors either, so `semantic: client` is read as off, as the
+     * contract asks of a client that does not implement it.
      */
     fun forThisApp(): Capabilities = copy(
         people = if (people.semantic == Semantic.Client) people.copy(semantic = Semantic.Off) else people,

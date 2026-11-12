@@ -43,6 +43,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.theme.Caddie
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -67,6 +68,10 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
     val incoming = inbox.incoming.filter { it.state.isOpen }
     val outgoing = inbox.outgoing.filter { it.state.isOpen }
     val now = rememberNowMs(host, active = incoming.isNotEmpty())
+    // The cards' actions run in the screen's scope, not the card's: an ask that ran out is dropped
+    // by the controller before the answer reaches the card, and the card's own scope would be
+    // cancelled with it, losing "That ask has run out."
+    val scope = rememberCoroutineScope()
 
     PeopleScreenColumn(modifier.testTag("inbox-screen")) {
         // .pp-section: 10 dp between its parts.
@@ -78,7 +83,7 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
             }
             if (incoming.isNotEmpty()) {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    incoming.forEach { meet -> key(meet.meetId) { IncomingCard(meet, host, now) } }
+                    incoming.forEach { meet -> key(meet.meetId) { IncomingCard(meet, host, now, scope) } }
                 }
             }
         }
@@ -96,9 +101,8 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
 /** IncomingCard: an ask to me, with Accept, Not now and its time left, or Open meet-up once active. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long) {
+private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long, scope: CoroutineScope) {
     val c = Caddie.colors
-    val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val name = meet.from?.displayName ?: meet.other.displayName

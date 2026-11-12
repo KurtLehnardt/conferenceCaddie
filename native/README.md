@@ -16,7 +16,7 @@ these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 
 | Path | What it is |
 |---|---|
-| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), the schedule import (`importer/`: the Worker's parser and matcher ported to common Kotlin, and the client of a backend's import route), the `caddie://` link parser (`AppLink`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), the platform interfaces (`Embedder`, `BleRadio`, `Notifier`, `SecureStore`, and the people features' `PlatformServices.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
+| `shared/` | Kotlin Multiplatform library with no UI: the capabilities client (`Capabilities`, `CapabilitiesDiscovery`, `ConnectLink`, `BackendUrl`), the talk bundle client (`bundle/`: the index reader, verification, SHA-256, canonical JSON, the bundle cache and the downloader), the SQLite store (`db/`), search (`search/`: FTS5 and meaning fused by reciprocal rank fusion, filters, facets, time phrases, suggestions, evidence, For you and the topic lists), the query embedder (`embed/`: the WordPiece tokenizer, `BgeEmbedder` and ONNX Runtime, through its Java API on Android and the JVM, `src/ortJava`, and its C API on iOS, `src/nativeInterop/cinterop/onnxruntime.def`), the schedule import (`importer/`: the Worker's parser and matcher ported to common Kotlin, and the client of a backend's import route), the `caddie://` link parser (`AppLink`), `core/CaddieCore`, which ties them together for the screens, the people features (`people/`: the People API v1 client, the device credential, the device-side records and `PeopleController`; see People features below), Bluetooth proximity (`ble/`: the derived-token protocol, the runtime that drives the radio, and the platform's `BleRadio` and `BleKeyStore`; see Bluetooth proximity below), the platform interfaces (`Embedder`, `Notifier`, `SecureStore`, the people features' `PlatformServices.kt` and `ble/BlePlatform.kt`), and their Android and iOS implementations (see People platform services). Its tests in `commonTest` run on the JVM and on the iOS simulator; `iosTest` adds the Keychain tests, `jvmTest` holds the live People API harness, `fixtures/` holds the reference query vectors and `scripts/` the generators of the test fixtures. |
 | `composeApp/` | Compose Multiplatform UI: the theme, icons, components and copy of the design system, `App()`, the web app's shell (see Design system), and the talk screens in `ui/talks` (`CaddieApp`, For you, the topic picker, Search with Why this rank, the full schedule, the Filters sheet, the talk sheet, My schedule with its Day timeline, and Import my schedule). `ui/platform` holds what the hosts provide (the file picker and the share sheet, `PlatformActions`) and the hand-off of links and files from the platforms (`IncomingHandoff`). The query model and its vocabulary are its Compose resources. On iOS this module is built as the `ComposeApp` framework, which also exports `shared`. Its UI tests in `commonTest` run on the iOS simulator and on Android devices. |
 | `androidApp/` | The Android application: `MainActivity` hosts `CaddieApp`, receives `caddie://` links and schedule files, opens the file picker and the share sheet, shows the permission prompts the platform services ask for and hands notification taps to the screens. Its instrumented tests (the smoke test, the secure store and the platform services) are in `src/androidTest`. |
 | `iosApp/` | The Xcode project. A SwiftUI entry point hosts `App()` through `ComposeUIViewController` and hands the URLs the system opens it with to the shared code, its app delegate hands the APNs token and notification taps to Kotlin, and a build phase runs Gradle to build and embed the framework. |
@@ -225,6 +225,20 @@ Normal test runs skip them. On Android, pass the instrumentation argument `caddi
 (optionally `caddieParityOnly=<state>,<state>`) and pull the PNGs from
 `/data/local/tmp/caddie-parity` with `adb pull`; on iOS, set `SIMCTL_CHILD_CADDIE_PARITY_DIR` to a folder on this Mac (and optionally
 `SIMCTL_CHILD_CADDIE_PARITY_ONLY`) for `:composeApp:iosSimulatorArm64Test`.
+The states run at a fixed instant, 09:00 on the sample summit's second day (`ParitySample.pinnedNowMs`),
+not on the wall clock, so they look the same on any day; `ParityClockTest` checks that with the
+other UI tests.
+
+On Android the shots change the device while they run: its display size and density, its text size,
+and SystemUI's demo mode, which keeps the status bar's clock at the pinned 09:00. Use an AVD of
+their own, not one you use for anything else. Each window writes the values it changes to
+`/data/local/tmp/caddie-parity/.restore` first and puts them back when it ends; if a run is killed
+in between, the next run puts them back from that file before it starts, so clear old PNGs with
+`adb shell rm /data/local/tmp/caddie-parity/*.png` rather than removing the folder. To put an
+emulator back by hand:
+`adb shell am broadcast -a com.android.systemui.demo -e command exit; adb shell settings delete global sysui_demo_allowed; adb shell wm size reset; adb shell wm density reset`.
+Some Android shots still show the status bar, part faded, where a window brought it back just
+before the shot; two runs of a state can differ by that bar, never by the time on it.
 
 ## Build and run on iOS
 
@@ -713,6 +727,76 @@ build the people controller.
   Each prints one line, `caddie.selftest securestore: passed` or what failed, never a value or a
   position.
 
+## Bluetooth proximity
+
+Phase 4 brings "Find people near me by Bluetooth" to both apps on backends whose capabilities say
+`ble.mode: derived-v1` ([`docs/contracts/ble-tokens.md`](../docs/contracts/ble-tokens.md)). It is
+off by default, runs only while the person is around at the conference, and shows under the
+presence card's push switch and as the Bluetooth group in Settings.
+
+- **Tokens on the phone.** Turning it on writes presence again with `ble: true`; the answer's
+  `ble_key` goes straight into the platform key store under an alias per backend and conference,
+  and its text is dropped. The phone then derives each ten-minute token itself
+  (`ble/BleProtocol.kt`), so rotation needs no network call and keeps working while the app sleeps,
+  which is what stopped discovery on Android on 2026-11-09 (`docs/NATIVE_PLAN.md`, section 4.5).
+- **Common runtime.** `ble/BleRuntime.kt` (owned by `PeopleController`) does the turn-on steps
+  (presence, permission, Bluetooth state, notifications, the presence write, the key), hands the
+  radio the payload of the current window whenever it asks, reports sightings in batches
+  (`ble.sightings_min_interval_s`, at most 50, never older than five minutes, never the phone's own
+  token or one already reported in the window, backing off on errors), re-keys at most once per
+  window, and turns strong matches into at most one local notification per person per day and three
+  an hour, shared with the in-app nudges. It resumes after the system restarted the process.
+- **Android.** `AndroidBleRadio` runs `BleRadioService`, a foreground service of type
+  `connectedDevice` with its own ongoing notification ("Conference Caddie is finding people near
+  you", with Stop). It advertises an extended set with the payload as service data and, on Android
+  14 and newer only, a non-discoverable legacy connectable set with the service UUID and a GATT
+  server that serves the advertised payload (before Android 14 a connected peer could read the
+  phone's name), restarts the sets at every window so the address changes with the token, scans for
+  the service UUID and for the iOS overflow area, and connects to read the token from phones that do
+  not send it in their advertisement (`ble/BleInterrogation.kt`: at most six reads a minute, one at
+  a time, each address once per window), never serving its own token over a link it opened. It is `START_STICKY` and keeps running when the app is swiped from Recents.
+  Keys are non-exportable HMAC keys in the Android Keystore (`AndroidBleKeyStore`).
+- **iOS.** `IosBleRadio` uses Core Bluetooth from Kotlin, with state restoration and the
+  `bluetooth-central` and `bluetooth-peripheral` background modes. It advertises the service UUID
+  only (iOS cannot advertise service data, and moves the UUID to the overflow area in the
+  background), always serves the token characteristic, and reads it from phones that do not send
+  service data. When iOS relaunches the app for Bluetooth, `iOSApp.swift` calls
+  `IosBle.restoreAfterLaunch`, which creates the people controller without any UI so the session
+  resumes. Keys are Keychain items, after first unlock, this device only (`IosBleKeyStore`).
+- **Tests.** The common tests check the protocol against the contract's golden vectors and drive
+  the runtime with a fake radio on virtual time (turn-on paths, batching, back-off, re-keying,
+  notifications, presence, restoring). `androidApp/src/androidTest` checks the Keystore key against
+  the golden vectors and the service's lifecycle with a fake Bluetooth stack (foreground type,
+  notification, refresh, GATT reads, Stop, the deadline, Bluetooth off, the system restart, the
+  activity finishing). `shared/src/iosTest` checks the Keychain store's logic and the radio on the
+  simulator, which has no Bluetooth; `-caddie.selftest blekeys` and `-caddie.selftest bleradio` run
+  the Keychain and radio checks inside the app (see People platform services for how to launch
+  one). `BleUiTest` covers the controls on both platforms.
+- **Not checked without phones.** Emulators and simulators have no real radio: discovery between
+  phones, two backgrounded iPhones, the overflow area seen from Android, the address change per
+  window, Doze timing and battery are measured on real phones (`docs/NATIVE_PLAN.md`, Phase 4 exit
+  criteria).
+- **Release gate.** Release builds ship without native Bluetooth until the exit test below passes:
+  `CADDIE_BLE_ENABLED` is on in Android debug builds and the iOS Debug configuration and off in
+  release builds, which then declare no Bluetooth permission, service or background mode at all
+  (DECISIONS.md, "Native apps phase 4", review rounds 1 and 2). Turning it on for release is a
+  one-line change of each flag after the exit test.
+- **Exit-test builds.** The exit test runs on optimised release builds with Bluetooth on, built only
+  for it and never published: Android `./gradlew -Pcaddie.bleEnabled=true :androidApp:assembleRelease`
+  (R8 on, `CADDIE_BLE_ENABLED` true, the Bluetooth manifest entries merged in); iOS
+  `xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -configuration Release CADDIE_BLE_ENABLED=YES ...`
+  (the Release configuration with the flag on and the Bluetooth background modes kept).
+- **Exit test** (`docs/NATIVE_PLAN.md`, Phase 4), on those builds and real phones: two hours in a
+  pocket with the screen off and the app swiped from Recents (discovery continues past ten minutes
+  on Android; a strong match within 3 m notifies within one sightings interval plus 30 seconds);
+  the iOS S1 matrix; the battery drain per hour (target 3 % or less); a brief encounter (two phones
+  near each other for under a minute are reported); and the **name check**: from another phone,
+  connect to each test phone over GATT while it runs Bluetooth proximity (and let it connect out
+  to a phone advertising the service UUID) and record which Bluetooth device name, if any, the
+  peer can read, for an Android 14 or newer phone, an Android 13 or older phone and an iPhone.
+  Whether iPhones find an Android 14 phone's non-discoverable connectable set is recorded too; until
+  then Android shows "iPhones may not find this phone, but it still finds them." on every version.
+
 ## Privacy
 
 - ONNX Runtime's telemetry is switched off on both platforms (Talk features, No telemetry).
@@ -725,8 +809,18 @@ build the people controller.
 - Android permissions: `INTERNET`, and for the people features `ACCESS_COARSE_LOCATION` and
   `ACCESS_FINE_LOCATION` (asked together, only while the app is in use; no background location)
   and `POST_NOTIFICATIONS` (Android 13 and newer). `android.hardware.location` is not required.
-- iOS: `Info.plist` has `NSLocationWhenInUseUsageDescription` and no background modes;
-  notifications need no usage text. `iosApp/iosApp.entitlements` requests Push Notifications.
+  Bluetooth proximity adds `BLUETOOTH_SCAN` (declared `neverForLocation`: no position is derived
+  from what the scan hears), `BLUETOOTH_ADVERTISE` and `BLUETOOTH_CONNECT` on Android 12 and newer,
+  `BLUETOOTH` and `BLUETOOTH_ADMIN` up to Android 11 (where a scan also needs the location
+  permission, asked only when the person turns Bluetooth on), `FOREGROUND_SERVICE` with
+  `FOREGROUND_SERVICE_CONNECTED_DEVICE`, and `WAKE_LOCK` for the short wake around a report.
+  `android.hardware.bluetooth_le` is not required. These come from `androidApp/src/ble/AndroidManifest.xml`,
+  merged into debug builds and, with `-Pcaddie.bleEnabled=true`, into the exit-test release build
+  only: a release build without the flag declares no Bluetooth at all.
+- iOS: `Info.plist` has `NSLocationWhenInUseUsageDescription`, `NSBluetoothAlwaysUsageDescription`
+  and the `bluetooth-central` and `bluetooth-peripheral` background modes (Bluetooth proximity
+  only; there is still no background location; a build phase removes the two modes whenever
+  `CADDIE_BLE_ENABLED` is not YES, as in the Release configuration); notifications need no usage text. `iosApp/iosApp.entitlements` requests Push Notifications.
 - iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking and no tracking domains. Its
   collected data is what the people features send to the official backend, all linked to the
   profile, none for tracking, all for the app's function: name, other user contact info, other
@@ -748,11 +842,11 @@ build the people controller.
 
 `gradle/verification-metadata.xml` holds the SHA-256 of every dependency and plugin the build
 resolves, and Gradle refuses an artifact whose checksum is missing or different. After changing a
-version in `gradle/libs.versions.toml` (Dependabot's Gradle updates included), regenerate it on a
-Mac, so the iOS artifacts are covered, and review the diff:
+version in `gradle/libs.versions.toml` or a floor in `build.gradle.kts` (Dependabot's Gradle updates
+included), regenerate it on a Mac, so the iOS artifacts are covered, and review the diff:
 
 ```sh
-./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
+./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help checkToolingFloors \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
   :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
   :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
@@ -762,6 +856,14 @@ Mac, so the iOS artifacts are covered, and review the diff:
 
 Then build the iOS app once with `xcodebuild` (see above), since Xcode's build phase resolves a few
 more artifacts; if it reports a missing checksum, add the task it names to the command.
+
+`checkToolingFloors` resolves the tool classpaths that only Android Lint, the device tests and Swift
+export use, so their artifacts are covered too. Those classpaths get security floors from the root
+`build.gradle.kts`: a dependency of a build tool that Dependabot reports is raised there, never in the
+version catalog (DECISIONS.md, "Security floors for the native build's tools"). The task fails when a
+floor no longer applies, for example because a plugin renamed one of the configurations, when any
+resolvable configuration resolves a floored module below its floor, and when Bouncy Castle's three jars
+are not on one release.
 
 Files that are not Maven artifacts (the query model, its vocabulary and ONNX Runtime's iOS archive)
 are pinned in `gradle/pinned-downloads.properties` by URL, size and SHA-256 instead. When ONNX

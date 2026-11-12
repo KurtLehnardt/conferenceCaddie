@@ -2,11 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Bluetooth and foreground-service permissions arrive with the BleRadio implementation. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- The people features: the device's position for presence ("Use my position too"), only
-         while the app is in use, so there is no background location and no foreground service.
+         while the app is in use, so there is no background location and no foreground service for it.
          Android 12 and newer need both location permissions in the same request; the person then
          picks precise or approximate. POST_NOTIFICATIONS shows nudges on Android 13 and newer.
          The background nudge check is a periodic JobScheduler job, which needs no permission of its
@@ -19,6 +18,10 @@
 
     <!-- The app works without location hardware; the position switch is then hidden. -->
     <uses-feature android:name="android.hardware.location" android:required="false" />
+
+    <!-- Bluetooth proximity's permissions, hardware and foreground service are in
+         src/ble/AndroidManifest.xml, which only the builds with the feature on merge
+         (build.gradle.kts, CADDIE_BLE_ENABLED). -->
 
     <!-- ONNX Runtime's AAR adds a telemetry uploader to Microsoft (a content provider that starts
          with the app) and the network-state permission it uses. The app sends nothing but to its

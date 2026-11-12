@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -31,7 +32,11 @@ import androidx.compose.ui.test.printToString
 import app.conferencecaddie.shared.GeoFix
 import app.conferencecaddie.shared.InMemorySecureStore
 import app.conferencecaddie.shared.LocationAccess
+import app.conferencecaddie.shared.NoNotifier
 import app.conferencecaddie.shared.PeopleServices
+import app.conferencecaddie.shared.SystemSettings
+import app.conferencecaddie.shared.ble.BlePlatform
+import app.conferencecaddie.shared.ble.InMemoryBleKeyStore
 import app.conferencecaddie.shared.bundle.BundleFiles
 import app.conferencecaddie.shared.core.CaddieCore
 import app.conferencecaddie.shared.db.CaddieDatabase
@@ -51,7 +56,6 @@ import kotlin.math.sin
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import kotlin.time.Clock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -78,20 +82,28 @@ import kotlinx.serialization.json.put
 // (parityShotsRequested), so normal test runs skip them; see ParityShotPlatform for how each
 // platform sizes the window and saves the pictures.
 
-/** One state to shoot: its web screenshot name, its window heights at 390 and 320 dp, and how to reach it. */
+/**
+ * One state to shoot: its web screenshot name, its window heights at 390 and 320 dp, and how to
+ * reach it. [ble] gives the backend derived-v1 Bluetooth and the phone a fake radio, as in the
+ * Android app where the web draws BleControls.
+ */
 internal class ParityState(
     val name: String,
     val h390: Int,
     val h320: Int,
     /** Extra windows beyond 390 and 320 wide (name suffix to window), shot in the light theme only. */
     val extras: Map<String, ParityWindow> = emptyMap(),
+    val ble: Boolean = false,
     val drive: ParityRun.() -> Unit,
 )
 
-/** The people, server, controller and app of one screenshot run. */
+/** The people, server, controller and app of one screenshot run; with [ble], a phone with a (fake) Bluetooth radio. */
 @OptIn(ExperimentalTestApi::class)
-internal class ParityRig {
-    val clock = TestClock(Clock.System.now().toEpochMilliseconds())
+internal class ParityRig(val ble: Boolean = false) {
+    val backend = TestBackend(people = true, topics = ParitySample.TOPICS, push = true, ble = ble).also { it.publish(listOf(ParitySample.testConference())) }
+
+    /** Fixed at [ParitySample.pinnedNowMs] for the core, the app, the controller and the fake server alike. */
+    val clock = TestClock(ParitySample.pinnedNowMs(backend.bundleOf(ParitySample.testConference()).conference))
     val server = FakePeopleServer({ clock.ms }, ParitySample.fakeConference())
     val people: Map<String, FakePerson> = ParitySample.PEOPLE.associate { p ->
         val person = server.seedPerson(
@@ -114,11 +126,14 @@ internal class ParityRig {
         mutex.withLock { mock.send(method, url, headers, body, timeoutMs, maxBytes) }
     }
     val location = FakeDeviceLocation(LocationAccess.Precise)
+
+    /** The phone's Bluetooth radio, when [ble]; a state sets its permission before turning it on. */
+    val radio = FakeUiBleRadio(parityBlePermission)
+    private val bleKeys = InMemoryBleKeyStore()
     val keyValue = InMemoryPeopleKeyValue()
     private val secure = InMemorySecureStore()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     var controller: PeopleController = newController()
-    val backend = TestBackend(people = true, topics = ParitySample.TOPICS, push = true).also { it.publish(listOf(ParitySample.testConference())) }
     val dark = mutableStateOf(false)
     private val root = Path(SystemTemporaryDirectory, "caddie-parity-${Random.nextLong().toULong()}")
     private val database = CaddieDatabase.open(":memory:")
@@ -129,19 +144,33 @@ internal class ParityRig {
     init {
         SystemFileSystem.createDirectories(Path(root, "bundles"))
         files = BundleFiles(Path(root, "bundles"))
-        core = CaddieCore(database, files, backend, coreScope, allowLocalHttp = false)
+        core = CaddieCore(database, files, backend, coreScope, allowLocalHttp = false, clock = clock)
         core.setBackend(testBackendUrl(backend.base))
     }
 
     fun newController(): PeopleController = PeopleController(
         keyValue,
         http,
-        PeopleServices(secure, location = location, push = FakePushRegistrar("f".repeat(40))),
+        PeopleServices(
+            secure,
+            location = location,
+            notifier = if (ble) FakeNotifier() else NoNotifier,
+            push = FakePushRegistrar("f".repeat(40)),
+            // "Open settings" shows only where the platform can open them.
+            systemSettings = if (ble) SystemSettings {} else null,
+            ble = if (ble) BlePlatform(radio, bleKeys) else null,
+        ),
         scope,
         allowLocalHttp = false,
         clock = clock,
         timeZone = TimeZone.UTC,
     )
+
+    /** The whole app over this rig's core and [controller], on the rig's [clock] like everything else here. */
+    @Composable
+    fun App(controller: PeopleController) {
+        CaddieApp(core, isDebugBuild = false, appVersion = "parity", people = controller, clock = clock)
+    }
 
     /** The key under which the controller keeps the summit's record (PeopleStore). */
     val conferenceKey: String get() = "people:v1:${testBackendUrl(backend.base).base}#conference:${ParitySample.SLUG}"
@@ -317,7 +346,7 @@ internal class ParityRun(
         setContent {
             ParitySystemTheme(rig.dark.value) {
                 Box(Modifier.fillMaxSize().consumeWindowInsets(WindowInsets.safeDrawing)) {
-                    CaddieApp(rig.core, isDebugBuild = false, appVersion = "parity", people = controller)
+                    rig.App(controller)
                 }
             }
         }
@@ -454,7 +483,7 @@ class PeopleParityShots {
             for ((file, window, both) in windows) {
                 try {
                     runParityShot(window) { camera ->
-                        val rig = ParityRig()
+                        val rig = ParityRig(ble = state.ble)
                         try {
                             ParityRun(this, rig, camera, file, both).apply(state.drive)
                         } finally {

@@ -21,8 +21,19 @@
 //                        and the development origins in its ALLOWED_ORIGINS.
 //   SMOKE_DIST           the built web app the bundle scan reads, relative to the repository root.
 //                        Default web/dist-worker against the Worker on BASE_URL's origin, else web/dist.
-//   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token (the file's first line is used). With it
-//                        the three Elasticsearch helpers below are replaced by the Worker's test
+//   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token. The file is read as caddie-admin reads
+//                        it (mode 0600, the whole file trimmed), so both use the same key. A set but
+//                        empty ADMIN_TOKEN_FILE means no token. With neither set, a signed run whose
+//                        API_BASE origin is exactly the api of a tier 2 backend in caddie-admin's
+//                        config.json, and is not on this machine (a local Worker has its own token in
+//                        worker/.dev.vars), reads the token file caddie-admin reads:
+//                        <config dir>/admin-token, the config dir being CADDIE_ADMIN_HOME, else
+//                        $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie. When that
+//                        file does not exist and CADDIE_ADMIN_HOME is unset, the old
+//                        ~/.config/conference-caddie/admin-token is read, if the config.json beside it
+//                        (when there is one) lists that origin too, and a NOTE line says to move it.
+//                        Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. With a token the
+//                        three Elasticsearch helpers below are replaced by the Worker's test
 //                        fixtures: POST /admin/test/profile (the expired profile),
 //                        POST /admin/test/age-presence (the aged presence) and GET /admin/stats (the
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
@@ -30,6 +41,9 @@
 //                        The reports the run makes are removed at the end with POST /admin/moderation.
 //                        The token is only ever used towards API_BASE: as the key of the X-Caddie-Admin
 //                        signature (SMOKE_ADMIN_AUTH=signed) or as a bearer (SMOKE_ADMIN_AUTH=bearer).
+//                        A signature does not cover the host: whatever answers at API_BASE can replay a
+//                        signed request to the real Worker within its five-minute window, while that
+//                        nonce is unused there. Point API_BASE only at the Worker the token belongs to.
 //   SMOKE_ADMIN_AUTH     signed or bearer: how the admin calls authenticate. signed builds the
 //                        X-Caddie-Admin header of scripts/lib/admin-sign.mjs for every admin call, with a
 //                        fresh nonce and timestamp on each attempt, and sends no Authorization header;
@@ -79,7 +93,7 @@
 //                        push.fcm with it. Unset, np2 passes when both are false and is skipped when
 //                        one is true, because the script cannot tell whether the backend should
 //                        hold that platform's key.
-//   SMOKE_UNAVAILABLE=<slug>  with an admin token and a local API: flip that conference to unavailable
+//   SMOKE_UNAVAILABLE=<slug>  with ADMIN_TOKEN or ADMIN_TOKEN_FILE and a local API: flip that conference to unavailable
 //                        for check unav1 (an owner can still delete) and restore it. Never against a
 //                        deployed Worker, because the conference would vanish from the app meanwhile.
 //   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only against Cloud Run, and only
@@ -111,6 +125,8 @@ import { DEFAULT_BUNDLE_BASE } from '../worker/src/capabilities.js';
 import { primaryOver, emptyWindowSkip } from './lib/smoke-primary-over.mjs';
 import { conferenceForWorker } from './lib/smoke-conference-doc.mjs';
 import { isLoopbackHost } from './lib/loopback-host.mjs';
+import { configuredWorkerOrigins, resolveAdminTokenFile } from './lib/admin-token-file.mjs';
+import { CREDENTIAL_SOURCES, readCredential } from './admin/credentials.mjs';
 import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
@@ -148,17 +164,61 @@ const BASE_PATH = new URL(BASE_URL).pathname.replace(/\/+$/, ''); // '' at the r
 const CROSS_ORIGIN_API = API_ORIGIN !== BASE_ORIGIN;
 const EVIL_ORIGIN = 'https://evil.example';
 
-// The admin token comes from the environment or from the first line of a file, and is never printed.
-function readAdminToken() {
-  if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN.trim();
-  const file = process.env.ADMIN_TOKEN_FILE;
-  if (!file) return '';
+// Which API SMOKE_API says this is, if it says (IS_WORKER below).
+const API_KIND_ENV = (process.env.SMOKE_API || '').toLowerCase();
+if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
+  console.log('FAIL config: SMOKE_API must be worker or cloudrun');
+  process.exit(1);
+}
+
+// The admin token comes from ADMIN_TOKEN, else the file ADMIN_TOKEN_FILE (set but empty: no token),
+// else the file caddie-admin reads (scripts/lib/admin-token-file.mjs: <config dir>/admin-token, or
+// the old ~/.config/conference-caddie/admin-token with a NOTE). Files are read with caddie-admin's own
+// checks (readCredential: mode 0600, the whole file trimmed), so the smoke and the CLI use one key.
+// The default file is the production Worker's token, and a signed request is not bound to a host:
+// whoever receives one can replay it to the Worker within the five-minute window. So it is read only
+// when API_BASE's origin is exactly the api of a tier 2 backend in caddie-admin's config.json
+// (loadConfig: https or http to this machine, an origin with no path), that origin is not on this
+// machine (a local Worker has its own token in worker/.dev.vars), the calls are signed (bearer would
+// send the token itself) and SMOKE_API is not cloudrun. The old path is read only without
+// CADDIE_ADMIN_HOME and only if the config.json beside it, when there is one, lists the origin too
+// (resolveAdminTokenFile). Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. The token is never
+// printed; a NOTE about a file that was read is printed only after the read succeeded.
+const defaultTokenFileApplies = () => API_KIND_ENV !== 'cloudrun'
+  && (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase() === 'signed'
+  && !isLoopbackHost(new URL(API_BASE).hostname)
+  && configuredWorkerOrigins(process.env).includes(API_ORIGIN);
+function readTokenFile(file) {
   try {
-    return readFileSync(file, 'utf8').split('\n')[0].trim();
-  } catch {
-    console.log('FAIL config: ADMIN_TOKEN_FILE cannot be read');
+    return readCredential({ env: { ADMIN_TOKEN_FILE: file }, ...CREDENTIAL_SOURCES[2] });
+  } catch (err) {
+    console.log(`FAIL config: ${err.message}`);
     process.exit(1);
   }
+}
+// Where the token came from: 'env', 'file' (ADMIN_TOKEN_FILE), 'default' (read by itself) or ''.
+let ADMIN_TOKEN_SOURCE = '';
+function readAdminToken() {
+  if (process.env.ADMIN_TOKEN) {
+    ADMIN_TOKEN_SOURCE = 'env';
+    return process.env.ADMIN_TOKEN.trim();
+  }
+  const named = process.env.ADMIN_TOKEN_FILE;
+  if (named !== undefined) {
+    if (named === '') return '';
+    ADMIN_TOKEN_SOURCE = 'file';
+    return readTokenFile(named);
+  }
+  if (!defaultTokenFileApplies()) return '';
+  const { file, note } = resolveAdminTokenFile(process.env, { apiOrigin: API_ORIGIN });
+  if (!file) {
+    if (note) console.log(note);
+    return '';
+  }
+  const token = readTokenFile(file);
+  ADMIN_TOKEN_SOURCE = 'default';
+  if (note) console.log(note);
+  return token;
 }
 const ADMIN_TOKEN = readAdminToken();
 
@@ -187,13 +247,9 @@ function adminAuth(method, path, body, key = ADMIN_TOKEN) {
   return { headers: { 'X-Caddie-Admin': signed.header }, url: signed.url };
 }
 
-// Which API this is. The Worker needs the CORS checks, the admin fixtures and text-only imports;
-// Cloud Run serves everything from one origin and keeps the Elasticsearch helpers.
-const API_KIND_ENV = (process.env.SMOKE_API || '').toLowerCase();
-if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
-  console.log('FAIL config: SMOKE_API must be worker or cloudrun');
-  process.exit(1);
-}
+// Which API this is (SMOKE_API is read above, before the admin token). The Worker needs the CORS
+// checks, the admin fixtures and text-only imports; Cloud Run serves everything from one origin and
+// keeps the Elasticsearch helpers.
 const IS_WORKER = API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API || Boolean(ADMIN_TOKEN);
 // A browser sends its Origin on every call to a Worker on another origin, and on every same-origin
 // POST, PUT and DELETE, so the run sends it on every call to the Worker. Against Cloud Run no Origin
@@ -2781,8 +2837,10 @@ try {
 
   await check('unav1: an owner can delete while the conference is unavailable', async () => {
     const slug = process.env.SMOKE_UNAVAILABLE;
-    if (!slug || WRITE_MODE !== 'admin' || !LOCAL_API) {
-      skip('unav1: an owner can delete while the conference is unavailable', 'needs SMOKE_UNAVAILABLE=<slug>, an admin token and a local API');
+    // The token must be named (ADMIN_TOKEN or ADMIN_TOKEN_FILE): the one read by itself is the
+    // production Worker's, and is never read for a local API anyway.
+    if (!slug || WRITE_MODE !== 'admin' || !LOCAL_API || ADMIN_TOKEN_SOURCE === 'default') {
+      skip('unav1: an owner can delete while the conference is unavailable', 'needs SMOKE_UNAVAILABLE=<slug>, an admin token from ADMIN_TOKEN or ADMIN_TOKEN_FILE and a local API');
       return;
     }
     // A Worker with its fixtures gated off is a deployed one, whose conferences must not be flipped.

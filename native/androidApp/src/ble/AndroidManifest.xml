@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Everything native Bluetooth proximity declares. build.gradle.kts merges this file only into the
+     builds where the feature is on (CADDIE_BLE_ENABLED): every debug build, and a release build only
+     with -Pcaddie.bleEnabled=true (the Phase 4 exit test on real phones). A release build with the
+     gate off therefore asks for no Bluetooth permission, declares no foreground service and no
+     Bluetooth hardware, and has no BleRadioService to start; the checkReleaseBluetoothManifest task
+     fails the build if any of it comes back. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Bluetooth proximity (docs/contracts/ble-tokens.md): the phone advertises a token derived
+         from its session key, serves it to phones that connect, and scans for the tokens of others.
+         Android 12 and newer (API 31) ask for these three together as "Nearby devices". The scan is
+         declared as never used for location, which is true: no position is derived from a scan
+         result, and only tokens and their signal strength are passed on. Before Android 12 the
+         install-time BLUETOOTH and BLUETOOTH_ADMIN permissions cover all three, and a scan needs
+         ACCESS_FINE_LOCATION (declared in src/main for presence) although no position is read. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+
+    <!-- While Bluetooth proximity is on, a foreground service of type connectedDevice keeps it
+         running with the app in the background or the screen off, with an ongoing notification
+         that has a Stop action. Nothing else in the app runs in the foreground. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- When the Bluetooth runtime's next report is due, an alarm wakes the phone and a partial wake
+         lock of at most 15 seconds keeps it awake while the report goes out. Nothing else in the app
+         holds a wake lock (the background nudge job is a JobScheduler job, which needs none). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Before Android 13, the Bluetooth service's receiver of the app's own alarms and notification
+         dismissals is registered behind this signature permission, so no other app can send to it
+         (what ContextCompat.registerReceiver does with RECEIVER_NOT_EXPORTED; AndroidX Core declares
+         the same permission, and the two declarations merge). -->
+    <permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+
+    <!-- The app works without Bluetooth LE; Bluetooth proximity is then hidden. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+    <application>
+        <!-- Bluetooth proximity's radio (shared/.../ble/BleRadioService.kt). Swiping the app from
+             Recents does not stop it; the system may restart it after ending the process, and
+             CaddieApplication then recreates the people features that restore its session. -->
+        <service
+            android:name="app.conferencecaddie.shared.ble.BleRadioService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+    </application>
+
+</manifest>

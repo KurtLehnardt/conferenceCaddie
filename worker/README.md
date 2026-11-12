@@ -2,7 +2,7 @@
 
 This directory holds the free hosting of Conference Caddie: one Cloudflare Worker,
 `conference-caddie`, that serves the web app as static assets and the API on the same origin
-(`https://conference-caddie.krlehnardt.workers.dev`), with SQLite-backed Durable Objects for all
+(`https://<your-worker>.workers.dev`; this deployment: `https://conference-caddie.krlehnardt.workers.dev`), with SQLite-backed Durable Objects for all
 storage (FTS5 for keyword search, float32 vectors with brute-force cosine in code), Workers AI for
 embeddings, a Cron Trigger for purges and expiry, and VAPID Web Push sent from the Worker. GitHub
 Pages publishes only the public talk bundles and a landing page that links to the app; the app is
@@ -20,6 +20,11 @@ The Cloud Run plus Elasticsearch stack in `server/` and `scripts/deploy.sh` is u
 deployable from `main`. `worker/` is listed in `.gcloudignore` and `.dockerignore`, so the Cloud
 Run upload and image never include it.
 
+This README records how this deployment is built and run. To run your own copy of the free stack
+on Cloudflare, follow [docs/fork/TIER2_CLOUDFLARE.md](../docs/fork/TIER2_CLOUDFLARE.md), the guide
+for a fork; the steps below that name this deployment's addresses use placeholders such as
+`<your-worker>.workers.dev` and `<owner>/<repo>` for yours.
+
 ## Requirements
 
 - Node 22 or later. Wrangler is a dev dependency of `worker/package.json`; always run it as
@@ -31,8 +36,8 @@ Run upload and image never include it.
   subdomain, create the subdomain once in the dashboard. D1, KV, Vectorize and Pages are not used. A token that can
   list Workers but answers 403 "No access to the specified resource" on
   `/workers/scripts/<name>` lacks "Workers Scripts: Edit"; `deploy.sh` says so when it fails.
-- The GitHub CLI (`gh`), logged in with access to `KurtLehnardt/conferenceCaddie`, for the
-  repository secret, variable, Pages and workflow steps.
+- The GitHub CLI (`gh`), logged in with access to `<owner>/<repo>` (this deployment:
+  `KurtLehnardt/conferenceCaddie`), for the repository secret, variable, Pages and workflow steps.
 
 Never print a token, a secret or a device secret: no `set -x`, no `curl -v`, no `env` or
 `printenv`, and no unfiltered `wrangler tail` (see [Logs and CPU](#logs-and-cpu)).
@@ -146,9 +151,32 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    It generates `ADMIN_TOKEN` and `REF_SALT` (32 random bytes each, hex) and a VAPID P-256 pair
    with Web Crypto, and writes each value to the standard input of `npx wrangler secret put NAME`,
    never to a command line, a log or the terminal. `ADMIN_TOKEN` also goes to
-   `gh secret set CADDIE_ADMIN_TOKEN` (for the ingest workflow) and to
-   `~/.config/conference-caddie/admin-token` with mode 0600 (for the smoke, migration and
-   moderation runs). `--only-missing` skips names the Worker already has. An existing `REF_SALT`
+   `gh secret set CADDIE_ADMIN_TOKEN` (for the ingest workflow) and to the token file with mode
+   0600 (for the smoke, the ingest and migration scripts and the `caddie-admin` CLI). The token
+   file is the one `ADMIN_TOKEN_FILE` names, or else `admin-token` in the CLI's config directory
+   (`configDir` in `scripts/admin/config.mjs`): `$CADDIE_ADMIN_HOME/admin-token` when
+   `CADDIE_ADMIN_HOME` is set, else `$XDG_CONFIG_HOME/conference-caddie/admin-token`, with
+   `~/.config` when `XDG_CONFIG_HOME` is unset; an empty variable counts as unset. With neither
+   variable set that is `~/.config/conference-caddie/admin-token`, which was the only default
+   before. `readAdminToken` in `worker/ingest/lib.mjs` follows the same rule
+   (`worker/ingest/admin-token-file.mjs`). If you set `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` and
+   your token is still in `~/.config/conference-caddie/admin-token`, a script that reads the token
+   file and finds none at the new place reads the old one and prints one line on stderr that names
+   both paths and says, if that file holds this deployment's token, to move it to the new place or
+   set `ADMIN_TOKEN_FILE` to it (with `CADDIE_ADMIN_HOME` keeping a second deployment apart, the old
+   place may hold the other deployment's token). When both files exist and hold different tokens,
+   or the old one exists and cannot be read, it reads the new one and prints one line that names
+   both paths (never the values). The script writes only the new place, says so in one line when
+   the old file still exists, and never deletes it. Two paths that lead to one file through a
+   symbolic link or a hard link (say, `~/.config` is a link to `$XDG_CONFIG_HOME`) are one file,
+   so there is no old file then. There is no such fallback when `ADMIN_TOKEN_FILE` is set.
+   `--only-missing` skips names the Worker already has. It sets a missing `CADDIE_ADMIN_TOKEN`
+   from the token file, and `--rotate-admin-token` prints its recipe for an unfinished rotation
+   from it, only when the file is trusted: `ADMIN_TOKEN_FILE` names it, no different file is at
+   the old place, or both hold the same token. In each of the other cases (the fallback to the old
+   file, two files with different tokens, an old file that cannot be read) the script stops with
+   exit 1, changes nothing, names both paths and says to set `ADMIN_TOKEN_FILE` to the file that
+   holds this deployment's token; do that and run it again. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.
    The first `BLE_MASTER_KEYRING` (Bluetooth derived tokens v1, one random master) is created
    when the Worker has none and never replaced; rotate it by hand (docs/FREE_HOSTING.md).
@@ -170,13 +198,29 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 
 3. **Migrate the data** from the Elasticsearch backup (one time).
 
+   A fork skips this step: the migration only moves this deployment's own earlier data, from the
+   Elasticsearch stack it replaced, and a new copy has no such backup. Set the first two variables
+   below anyway, because step 4 uses them, and then load the committed data with
+   `node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE"` before the smoke. Without
+   `--event` it pushes every committed conference folder in `data/`, including the conferences that
+   have left the LF upcoming list. The smoke needs those: its default conferences are among them
+   (`SMOKE_CONFERENCE` defaults to `kubecon-cloudnativecon-north-america-2026`, which leaves the
+   list once it ends on 2026-11-12), and its check `conf` fails when they are not listed as
+   searchable. The ingest workflow, weekly or started by hand, pushes only the upcoming events it
+   fetched (`--events-from`), not the committed conferences that have left the LF list, such as
+   the smoke's default conferences, so it does not replace this command.
+
    ```sh
-   export CADDIE_APP_URL=https://conference-caddie.krlehnardt.workers.dev   # the URL deploy.sh printed
+   export CADDIE_APP_URL=https://<your-worker>.workers.dev   # the URL deploy.sh printed
    export CADDIE_API_BASE="$CADDIE_APP_URL"
-   export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
-   node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE" --dry-run
-   node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE"
+   export ADMIN_TOKEN_FILE="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}/admin-token"   # the token file of step 2
+   node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE" --dry-run
+   node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE"
    ```
+
+   Setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place, so if a note from step 2
+   named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's
+   token, move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
 
    Conferences, talks, topics and facets are copied as they are, so topic ids stay identical.
    Only sample profiles are copied by default (`--include-real` copies the others too); presence,
@@ -194,8 +238,8 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    ```sh
    gh variable set CADDIE_APP_URL --body "$CADDIE_APP_URL"
    gh variable set CADDIE_API_BASE --body "$CADDIE_API_BASE"
-   gh api -X POST repos/KurtLehnardt/conferenceCaddie/pages -f build_type=workflow \
-     || gh api -X PUT repos/KurtLehnardt/conferenceCaddie/pages -f build_type=workflow   # on HTTP 409
+   gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow \
+     || gh api -X PUT repos/<owner>/<repo>/pages -f build_type=workflow   # on HTTP 409
    gh workflow run pages.yml
    ```
 
@@ -224,10 +268,13 @@ The smoke script in `scripts/smoke.mjs` is the only verification. Against the fr
 
 ```sh
 BASE_URL="$CADDIE_APP_URL" \
-ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token \
-SMOKE_ADMIN_AUTH=signed \
+ADMIN_TOKEN_FILE="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}/admin-token" \
 node scripts/smoke.mjs
 ```
+
+As in deploy step 3, setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place: if a note
+named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's token,
+move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
 
 `BASE_URL` is the app, and the API defaults to the same origin. The admin token makes it a Worker
 run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures (see
@@ -252,9 +299,11 @@ deploy replaces the Worker's variables with those of `wrangler.toml`. Never set 
 `wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
 deleted it.
 
-`SMOKE_ADMIN_AUTH=signed` makes the smoke sign its admin calls ([Admin requests](#admin-requests)).
-Its default is still the old bearer, which this Worker answers with 404, until the smoke's own
-change makes signing the default.
+The smoke signs its admin calls by default (`SMOKE_ADMIN_AUTH=signed`, since #67;
+[Admin requests](#admin-requests)), and none of them follows a redirect: a 3xx is a FAIL.
+`SMOKE_ADMIN_AUTH=bearer` sends the token as `Authorization: Bearer` instead. It is only for a
+Worker, local or deployed, built from before signed admin requests; a current Worker answers a
+bearer with 404.
 
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
 
@@ -273,14 +322,17 @@ over the lines `caddie-admin-v1`, the method, the path with its query, `bodySha2
 `nonce`, each followed by a newline. The token never travels. A header that leaks from a log can
 be used at most once, for the same method, path, query and body, and only while its timestamp is
 within five minutes of the Worker's clock. `scripts/lib/admin-sign.mjs` signs and
-`src/lib/admin-auth.js` verifies; both are tested against `test/fixtures/admin-sign.v1.json`. The
-signer refuses a path or query that would be percent-encoded, so both sides always sign the same
-bytes, and flags such as `allow_shrink` travel in the JSON body, which the hash covers.
+`src/lib/admin-auth.js` verifies; both are tested against `test/fixtures/admin-sign.v1.json` and
+`test/fixtures/admin-sign.v2.json`. The signer refuses a path or query that would be
+percent-encoded, so both sides always sign the same bytes, and flags such as `allow_shrink` travel
+in the JSON body, which the hash covers. The Worker also accepts version 2 of the header, which
+binds the request to the origin it was sent to; see [Signature v2](#signature-v2).
 
-The Worker checks, in this order: an `Origin` header, an `ADMIN_TOKEN` of at least 32 characters,
-the shape of the header, the empty-body hash on GET, HEAD and DELETE, the failed-auth limit of the
-caller's address, and the signature, which it compares in constant time with `ADMIN_TOKEN` and,
-during a rotation, `ADMIN_TOKEN_NEXT`. Any failure so far answers `404 {"error":"Not found"}`, as
+The Worker checks, in this order: an `Origin` header, its own configuration (`ADMIN_SIG_MIN` and
+`ADMIN_ORIGIN`, see [Signature v2](#signature-v2)), an `ADMIN_TOKEN` of at least 32 characters,
+the shape and version of the header, the empty-body hash on GET, HEAD and DELETE, the failed-auth
+limit of the caller's address, and the signature, which it compares in constant time with
+`ADMIN_TOKEN` and, during a rotation, `ADMIN_TOKEN_NEXT`. Any failure so far answers `404 {"error":"Not found"}`, as
 an unknown path does, and the body has not been read. A valid signature whose timestamp is more
 than 300 seconds from the Worker's clock answers `401 admin_skew`. Only then does the Worker read
 the body (at most 4 MB). It checks the clock again once the body is in, because a body can be
@@ -301,22 +353,23 @@ admin request, `GET /admin/stats` and `GET /admin/moderation` included, answers
 nonce. The cron records no nonce and keeps its meter readings (`src/lib/meter.js`).
 
 The clients that sign are `worker/ingest/push-ingest.mjs`, `topics-local.mjs` and
-`migrate-from-backup.mjs` (through `adminClient` in `worker/ingest/lib.mjs`),
-`worker/scripts/moderation.mjs` and the smoke (with `SMOKE_ADMIN_AUTH=signed`); the `caddie-admin`
-CLI signs with the same module once it gains its Worker backend. They read the token from
-`ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`, and their `--api` base must be the Worker's origin, with no
-path, over https (plain http for localhost only). `adminClient` and `moderation.mjs` never follow a
-redirect: fetch drops only `Authorization` on a cross-origin redirect, so following one would hand
-the signed header and the Access secret to another origin; a 3xx answer is an error as soon as its
-headers arrive, never retried. The smoke (`scripts/smoke.mjs`) still follows redirects until its own
-change lands, so point it only at the Worker's own origin. A retry is signed afresh with a new nonce
-and timestamp, so it is a new request to the Worker, and every admin route handles a repeated
+`migrate-from-backup.mjs` (through `adminClient` in `worker/ingest/lib.mjs`), the smoke (signed by
+default), and the `caddie-admin` CLI, whose tier 2 backend (`scripts/admin/backends/worker.mjs`,
+#70) signs every request with the same module today; docs/ADMIN_CLI.md describes the CLI. They read
+the token from `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`, and the ingest scripts and the CLI also from the
+default token file of deploy step 2 (the smoke needs one of the two variables). The base of the ingest scripts (`--api`) and of
+the CLI (the backend's `api` in its `config.json`) must be the Worker's origin, with no path, over
+https (plain http for localhost only); the smoke calls `API_BASE`, by default the origin of
+`BASE_URL`. None of them follows a redirect: fetch drops only `Authorization` on a cross-origin
+redirect, so following one would hand the signed header and the Access secret to another origin; a
+3xx answer is an error as soon as its headers arrive, never retried. A retry is signed afresh with
+a new nonce and timestamp, so it is a new request to the Worker, and every admin route handles a repeated
 request idempotently, with three exceptions: on `POST /admin/moderation`, `"action": "delete"`
 answers 404 when the target is already gone, and `"action": "unhide"` of a target that no longer
 exists answers 404 once its reports are gone; and `POST /admin/people/block` with
 `"action": "unblock"` answers 404 once the operator report is gone. Each, when its first answer was
 lost, reports 404 on the retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `adminClient` and
-`moderation.mjs` also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
+the `caddie-admin` CLI also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
 Cloudflare Access application in front of `/admin/*`; the Worker does not check them, and the
 signature stays the check that matters. To rotate the token without an outage, see
 [Rotating the admin token](#rotating-the-admin-token).
@@ -342,6 +395,83 @@ stay at `schema_version` 3, so the next schema change must use version 4: a late
 to 3 again would be skipped silently, because `migrate()` in `src/schema.js` does nothing when the
 stored version is at least `SCHEMA_VERSION`.
 
+### Signature v2
+
+A v1 signature does not cover the host, so a signed request that reaches another host (a typo in
+the base, a hostile mirror, a staging Worker that holds the same token) could be replayed here
+within the five-minute window; the nonce table does not stop it, because that replay is the
+nonce's first use here. Version 2 binds the origin, and the replay is closed once step d refuses
+v1: during steps b and c the Worker still accepts v1, so a captured v1 request can still be
+replayed across hosts. The v2 header has the v1 fields with `v2` in front:
+
+```
+X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>
+```
+
+and `sig` covers the lines `caddie-admin-v2`, the method, the path with its query, `bodySha256`,
+`ts`, `nonce` and the origin the client sent the request to (for example
+`https://conference-caddie.<subdomain>.workers.dev`), each followed by a newline. The origin is not
+in the header: the Worker tries every origin it serves, with every key, and runs every comparison
+even after one matched. A v2 signature made for another origin is an ordinary bad signature: 404,
+and one token from the failed-auth bucket. The nonce table and the Durable Objects' 305-second
+clock check are the same for both versions, and v1 and v2 nonces share the table.
+
+The move to v2 is in four steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
+a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
+Worker refuses v1. Until step c every client still signs v1, so deploying step b changes nothing
+for them.
+
+Two optional Worker variables decide what is accepted. Neither is set in `wrangler.toml` today.
+
+- `ADMIN_ORIGIN`: the comma-separated list of the origins this Worker serves admin requests on,
+  for example `"https://caddie.example.org,https://conference-caddie.<subdomain>.workers.dev"`.
+  Each entry must be a plain `http://` or `https://` origin with no path, query, credentials, `%`
+  or non-ASCII character (an internationalised host in its `xn--` form); it is lowercased and the
+  default port is dropped. When it is unset or empty, the Worker expects the origin of the request
+  URL it was invoked with. The Worker never reads the `Host` header itself, but on Cloudflare the
+  request URL's host is the host the client sent, limited only to the hostnames whose routes match
+  this Worker. That is safe for the exact `workers.dev` hostname and for nothing else: with a zone
+  route such as `*.example.org/*`, a client can name any matching subdomain, even one that is
+  DNS-only or served elsewhere (a staging host), by connecting to a Cloudflare address directly,
+  and a request signed for that host would then verify here. A Worker with any zone route or
+  custom domain, or behind Cloudflare Access or another proxy in front of `/admin/*`, needs
+  `ADMIN_ORIGIN` in `[vars]`, listing every hostname that routes to it. Never list another
+  deployment's origin: a request signed for that deployment would then verify here. Keep the list
+  short (a few entries): each failed v2 attempt costs one HMAC per key and listed origin.
+- `ADMIN_SIG_MIN`: the oldest version accepted. Unset means the default in the source,
+  `WORKER_DEFAULT_SIG_MIN` in `src/lib/admin-auth.js`, which is `"1"` until step d changes it to
+  `"2"`. The value is matched exactly: `"1"` accepts v1 and v2, `"2"` accepts v2 only, and a v1
+  header is then a malformed header (404).
+
+Security warning: any other value is invalid configuration, and the Worker then answers 404 to
+every admin request, v1 included, without charging the failed-auth bucket. It logs one line,
+`admin config invalid: ADMIN_ORIGIN` or `admin config invalid: ADMIN_SIG_MIN`, which names the
+setting and never its value. That covers an `ADMIN_ORIGIN` entry that is not a plain origin
+(including the empty entry a trailing comma leaves) and an `ADMIN_SIG_MIN` that is empty, has
+surrounding whitespace, is `"02"` or `"v2"`, or is a TOML number rather than a quoted string.
+
+Security warning: set both only in `[vars]` of `wrangler.toml`, committed. Never set either from
+the Cloudflare dashboard or with `wrangler deploy --var`: `deploy.sh` runs `wrangler deploy`,
+which replaces the Worker's variables with those of `wrangler.toml` on every deploy, so such a
+value would vanish at the next routine deploy. For `ADMIN_ORIGIN` that would silently fall back to
+the request URL's origin, which is wrong behind a proxy; that is also why the minimum's default
+lives in the source rather than in a variable.
+
+Security warning: never set either with `wrangler secret put`. A secret is the one kind of value
+that survives every deploy, and nothing in the repository shows it. A leftover `ADMIN_SIG_MIN`
+secret of `"1"` would override the source default of step d on every deploy and keep the v1
+replay window open, an empty one would answer 404 to every admin call, the ingest included, and
+a forgotten `ADMIN_ORIGIN` secret that lists a staging origin would make requests signed for
+staging verify here. Before deploying this step, and again before step d, run this in `worker/`,
+which prints the names of the Worker's secrets and never their values:
+
+```sh
+npx wrangler secret list
+```
+
+Neither `ADMIN_SIG_MIN` nor `ADMIN_ORIGIN` may be among them. If one is, remove it with
+`npx wrangler secret delete <name>`, and commit the value in `[vars]` instead if one is needed.
+
 ### Rotating the admin token
 
 The Worker verifies a signature with `ADMIN_TOKEN` and, when `ADMIN_TOKEN_NEXT` is also set (at
@@ -359,18 +489,19 @@ node worker/scripts/setup-secrets.mjs --rotate-admin-token
 
 The script generates 32 random bytes as hex and, in this order: puts them as `ADMIN_TOKEN_NEXT`
 (`npx wrangler secret put`, on standard input, no trailing newline), which makes the Worker accept
-the old and the new token; writes them to `~/.config/conference-caddie/admin-token` (mode 0600,
-`ADMIN_TOKEN_FILE` changes the path), only after the Worker put succeeded; and sets the repository
+the old and the new token; writes them to the token file (mode 0600; deploy step 2 says where it
+is), only after the Worker put succeeded; and sets the repository
 secret `CADDIE_ADMIN_TOKEN` (`--skip-gh` leaves it). It never prints the value, and it does nothing
 else: no other secret is touched, and it cannot be combined with `--only-missing` or
 `--rotate-ref-salt`. It prints where the repository secret goes before it changes anything, then
 the two commands that finish the rotation, which you run from
 `worker/` once any running ingest or smoke has finished (a client signs with the token it read when
-it started), in this order:
+it started), in this order, with the token file's real path in place of `<token file>` (quoted
+for the shell when it needs quotes):
 
 ```sh
 cd worker
-npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token
+npx wrangler secret put ADMIN_TOKEN < <token file>
 npx wrangler secret delete ADMIN_TOKEN_NEXT
 ```
 
@@ -395,12 +526,14 @@ exits 1 without changing anything: replacing its value would make the Worker ref
 and a repository secret that may hold exactly that value. It cannot read the Worker's or GitHub's
 secrets, so it cannot tell where the earlier rotation stopped, and it leads with one recipe that is
 safe wherever it stopped: it makes the value in the token file the only admin token, everywhere. It
-prints it with the resolved repository and the real path, never the value:
+prints it with the resolved repository and the real path of the token file it read, never the
+value. That is the old `~/.config/conference-caddie/admin-token` when the script fell back to it
+(deploy step 2), after the one-line note that says so:
 
 ```sh
-gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < ~/.config/conference-caddie/admin-token
+gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < <token file>
 cd worker
-npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token
+npx wrangler secret put ADMIN_TOKEN < <token file>
 npx wrangler secret delete ADMIN_TOKEN_NEXT
 ```
 
@@ -423,30 +556,53 @@ until the secret is set, and the output says so. The same recipe is in docs/FREE
 
 Two reports from different people hide a profile, a spot line or a meet, and one report from the
 operator hides a profile or a spot line on its own ([Operator routes](#operator-routes)). The
-operator reviews and
-undoes or confirms hides with `worker/scripts/moderation.mjs`, which calls
-`GET` and `POST /admin/moderation`, signing each request with the admin token from `ADMIN_TOKEN`
-or `ADMIN_TOKEN_FILE` (default `~/.config/conference-caddie/admin-token`):
+supported client for reviewing, undoing and confirming hides is the `caddie-admin` CLI
+(docs/ADMIN_CLI.md) with a tier 2 backend. Its moderation commands call `GET` and
+`POST /admin/moderation`, signing each request with the admin token from `ADMIN_TOKEN` or
+`ADMIN_TOKEN_FILE` (default `admin-token` in the CLI's config directory, which is
+`~/.config/conference-caddie` unless `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` says otherwise; the
+file must have mode 0600, as `setup-secrets.mjs` writes it). `setup-secrets.mjs` writes the token to
+that same default file (deploy step 2). The CLI has no fallback to the old
+`~/.config/conference-caddie/admin-token`, so if your token is still there while either variable is
+set, move it to the new place, as the note of the Worker scripts says, or point `ADMIN_TOKEN_FILE`
+at it. On Windows the CLI reads no token file at all, only `ADMIN_TOKEN`. The Worker's origin is
+the `api` of a tier 2 backend in the CLI's `config.json`, in the same directory. If you have no
+`config.json` yet, the first command below creates it; otherwise add the `"worker"` entry to its
+`backends` by hand, and either set `"default": "worker"` or pass `--backend worker` to each command
+below. The CLI sends a command without `--backend` to the backend that `"default"` names, so with an
+existing `"default": "es"` the moderation commands would go to that tier 3 backend without any
+notice. The first command never overwrites an existing file (`noclobber` makes it fail instead):
 
 ```sh
-export CADDIE_API_BASE=https://conference-caddie.krlehnardt.workers.dev
-node worker/scripts/moderation.mjs --event <slug> --hidden
-node worker/scripts/moderation.mjs --event <slug> --since 2026-11-10T08:00:00Z
-node worker/scripts/moderation.mjs --event <slug> --hidden --show-content
-node worker/scripts/moderation.mjs --event <slug> --unhide profile:<ref>
-node worker/scripts/moderation.mjs --event <slug> --delete spot:<ref>
-node worker/scripts/moderation.mjs --event <slug> --delete meet:<meet id>
-node worker/scripts/moderation.mjs --event <slug> --purge
+dir="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}"
+mkdir -p "$dir" && (set -o noclobber; cat > "$dir/config.json" <<'EOT'
+{ "default": "worker", "backends": { "worker": { "tier": 2, "api": "https://<your-worker>.workers.dev" } } }
+EOT
+)
+node scripts/caddie-admin.mjs moderation queue --event <slug>
+node scripts/caddie-admin.mjs moderation queue --event <slug> --since 2026-11-10T08:00:00Z
+node scripts/caddie-admin.mjs moderation queue --event <slug> --show-content
+node scripts/caddie-admin.mjs moderation unhide --event <slug> profile:<ref> --yes --confirm profile:<ref>
+node scripts/caddie-admin.mjs moderation delete --event <slug> spot:<ref> --yes --confirm spot:<ref>
+node scripts/caddie-admin.mjs moderation delete --event <slug> meet:<meet-id> --yes --confirm meet:<meet-id>
+node scripts/caddie-admin.mjs moderation purge-reports --event <slug> --yes --confirm <slug>
 ```
 
-By default the output holds kinds, refs, meet ids, times and report counts only. Display names and
-report reasons are printed only with `--show-content`. Profile ids, reporter ids and the token are
-never printed. `--unhide` also removes the target's reports, the operator's included, so it needs
-two new ones to be hidden again; it answers `{"ok": true, "found": <bool>, "removed": <n>}`, and for
-a profile that was deleted since (reports outlive it) it still removes the reports, with `found`
-false, so a profile made again from the same device is not hidden by them. Only a target with
-neither a row nor a report is 404. `--delete profile:<ref>` deletes the profile everywhere, as a
-profile delete does. `--purge` deletes the reports of a conference that has ended.
+The queue lists the hidden targets, and with `--since` also the reports made since that instant.
+Without `--yes`, `unhide`, `delete` and `purge-reports` only preview what they would do; with it,
+`--confirm` (or typing the target at the prompt) names the exact target. By default the output holds
+kinds, refs, meet ids, times and report counts only. Display names and report reasons are printed
+only with `--show-content`. Profile ids, reporter ids and the token are never printed. An unhide
+also removes the target's reports, the operator's included, so it needs two new ones to be hidden
+again; the Worker answers it with `{"ok": true, "found": <bool>, "removed": <n>}`, and for a profile
+that was deleted since (reports outlive it) it still removes the reports, with `found` false, so a
+profile made again from the same device is not hidden by them. Only a target with neither a row nor
+a report is 404. Deleting `profile:<ref>` deletes the profile everywhere, as a profile delete does.
+`purge-reports` deletes the reports of a conference that has ended. The CLI's other commands, such
+as `moderation hide` and the attendee and conference commands, are in docs/ADMIN_CLI.md.
+
+`worker/scripts/moderation.mjs` is deprecated. It makes no request any more: it prints, on stderr,
+the `caddie-admin` command that does what its options asked for (or the whole mapping) and exits 2.
 
 The word list in `config/moderation-words.json` is compiled into the Worker; changing it needs a
 deploy.
@@ -620,7 +776,10 @@ line (method, path template, status, duration).
   without `"unretire": true` whose precondition matches still answers 200 with the slug under
   `skipped_retired`, and nothing of it was applied. The key is never stored or sent to an object.
   `push-ingest.mjs` and `migrate-from-backup.mjs` strip it, as they strip `unretire`, so no ingest
-  run or migration ever sends a precondition.
+  run or migration ever sends a precondition. They also drop any key that equals either one after
+  trimming and lower-casing (`withoutOperatorKeys` in `ingest/lib.mjs`), the match the DirectoryDO
+  uses, so a stray `"Unretire"` or `"expect_status "` in a committed `conference.json` cannot fail
+  the whole weekly batch with 400.
 
 People text is stored without control characters: every write of a display name, profile text, a
 contact note, a spot line, a meet note or a how-to-spot-me line drops the C0 controls except tab
@@ -633,10 +792,10 @@ splits a word, as before.
 To bring a removed conference back, clear its tombstone with a signed `PUT /admin/conferences`
 whose document carries `"unretire": true`, then push the conference again. The CLI does both with
 `caddie-admin conferences unretire --event <slug>` and then `conferences refresh --event <slug>`
-once it has its Worker backend; `unretire` also deletes the slug's `removed` entry in
+on a tier 2 backend; `unretire` also deletes the slug's `removed` entry in
 `data/conference-operator.json`, which otherwise keeps `scripts/ingest.mjs` from fetching it
-(delete that entry by hand and commit it if the CLI is not used). Until then, from the repository
-root, with `CADDIE_API_BASE` and `ADMIN_TOKEN_FILE` set, this sends the local document with the
+(delete that entry by hand and commit it if the CLI is not used). Without the CLI, from the
+repository root, with `CADDIE_API_BASE` and `ADMIN_TOKEN_FILE` set, this sends the local document with the
 flag and prints the counts:
 
 ```sh
@@ -698,7 +857,10 @@ can be the one it set; repeat the unretire without expect_status until it answer
 
 When an earlier attempt answered a 5xx or no answer, the message says it may have been applied,
 and when none of the mismatching slugs is one the request unretires, it says to check the
-conference and send the request again with the actual status or without the key. After an `unretire_incomplete` the
+conference and send the request again with the actual status or without the key. When the 409
+names both, each kind gets its own advice with its slugs: `repeat the unretire of <slugs> without
+expect_status until it answers 200; for <slugs>, check the conference, then send the request again
+with the actual status or without expect_status`. After an `unretire_incomplete` the
 object may still be marked as removed: send the unretire again with `expect_status` set to the
 actual status the 409 showed, or without the key, until it answers 200. Nothing in the message
 comes from the request or a header. The `caddie-admin` CLI does not use `adminClient`; it has its
@@ -775,7 +937,7 @@ unset val
 rm -f "$SCRATCH/staged.diff"; rmdir "$SCRATCH"
 ```
 
-Add the value of `~/.config/conference-caddie/admin-token` to the same check once it exists, and
+Add the value of the token file (deploy step 2) to the same check once it exists, and
 make sure nothing under `data/exports/` and no `.dev.vars` file is staged.
 
 ## Shutting down the paid stack

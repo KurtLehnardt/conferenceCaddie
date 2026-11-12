@@ -525,7 +525,8 @@ enum class SwitchRowVariant {
  * [leadingGap] before the label (the push row's bell, 8 dp) and [trailing] [trailingGap] before the
  * switch (its "On", 10 dp). [rowModifier] goes on the row that toggles (a test tag), [modifier] on
  * the whole, hairline included. In the [SwitchRowVariant.Settings] variant, [first] leaves out the
- * hairline above.
+ * hairline above. [labelColor] is the label's colour, the text colour unless given (the Bluetooth row
+ * greys its label while presence is off, as .pp-ble-off does).
  */
 @Composable
 fun PeopleSwitchRow(
@@ -541,6 +542,7 @@ fun PeopleSwitchRow(
     rowModifier: Modifier = Modifier,
     leadingGap: Dp = 12.dp,
     trailingGap: Dp = 12.dp,
+    labelColor: Color = Caddie.colors.text,
 ) {
     val settings = variant == SwitchRowVariant.Settings
     Column(modifier.fillMaxWidth()) {
@@ -558,7 +560,7 @@ fun PeopleSwitchRow(
         ) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(leadingGap)) {
                 leading?.invoke(this)
-                Text(label, style = if (settings) Caddie.type.body else Caddie.type.stateBody, color = Caddie.colors.text)
+                Text(label, style = if (settings) Caddie.type.body else Caddie.type.stateBody, color = labelColor)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(trailingGap)) {
                 trailing?.invoke(this)

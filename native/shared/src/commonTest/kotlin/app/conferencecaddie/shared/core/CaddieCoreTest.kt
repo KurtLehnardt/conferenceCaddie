@@ -22,6 +22,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -405,5 +406,34 @@ class CaddieCoreTest {
         // has ended there; judged in UTC it would still be running.
         assertEquals("later-2099", CaddieCore.defaultConference(list, Instant.parse("2099-03-02T23:30:00Z").toEpochMilliseconds()))
         assertEquals(Fixtures.SLUG, CaddieCore.defaultConference(list, Instant.parse("2099-03-02T08:00:00Z").toEpochMilliseconds()))
+    }
+
+    /**
+     * A talk marked on a first start while the conference list is in and the conference it picks
+     * is being read, before that is published: the mark is stored, and shown once the conference is
+     * selected. The revalidation is held between its read and its publish with a test hook.
+     */
+    @Test
+    fun aTalkMarkedWhileTheFirstConferenceIsBeingChosenIsShown() = runTest {
+        val database = CaddieDatabase.open(dbPath).also { databases += it }
+        database.setSetting("backend", backend)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { scopes += it }
+        val core = CaddieCore(database, files, online(), scope, allowLocalHttp = false, clock = clock)
+        val read = CompletableDeferred<Unit>()
+        val publish = CompletableDeferred<Unit>()
+        core.afterSelectionRead = {
+            read.complete(Unit)
+            publish.await()
+        }
+        core.start()
+        withContext(Dispatchers.Default) { withTimeout(20_000) { read.await() } }
+        assertEquals(null, core.state.value.selectedSlug, "no conference is selected yet")
+
+        core.setInterested(Fixtures.A, true)
+        withContext(Dispatchers.Default) { withTimeout(20_000) { while (Fixtures.A !in database.interested(scopeA)) delay(10) } }
+        publish.complete(Unit)
+        core.until { it.selectedSlug == Fixtures.SLUG && it.bundle is BundleState.Ready }
+        core.awaitIdle()
+        assertEquals(listOf(Fixtures.A), core.state.value.interested)
     }
 }

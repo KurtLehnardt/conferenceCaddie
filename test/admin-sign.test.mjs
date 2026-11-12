@@ -65,12 +65,13 @@ describe('the fixture file states the scheme the module implements', () => {
     assert.ok(fixture.about.includes('Math.floor(Date.now() / 1000)'));
     assert.ok(fixture.about.includes('base is an origin'));
     assert.ok(fixture.verify_reasons._note.includes('any one of those applying reasons is acceptable'));
-    // The fixture names every code the module throws, and nothing else.
+    // The fixture names every code the v1 signer throws, and nothing else; the module's other
+    // codes (version, expected_origins) belong to v2 and are named in admin-sign.v2.json.
     const codes = Object.keys(fixture.reject_reasons).filter((k) => !k.startsWith('_')).sort();
     assert.deepEqual(codes, ['body_on_bodyless_method', 'body_type', 'key_too_short', 'method', 'nonce', 'path_charset', 'query_charset', 'ts', 'url']);
     const source = readFileSync(new URL('../scripts/lib/admin-sign.mjs', import.meta.url), 'utf8');
     const thrown = [...new Set([...source.matchAll(/new UsageError\([\s\S]*?, '([a-z_]+)'\);/g)].map((m) => m[1]))].sort();
-    assert.deepEqual(thrown, codes);
+    assert.deepEqual(thrown, [...codes, 'expected_origins', 'version'].sort());
     assert.ok(rejectCases.every((c) => codes.includes(c.reject)));
     for (const code of codes) assert.ok(rejectCases.some((c) => c.reject === code), `no reject case for ${code}`);
     assert.equal(fixture.empty_body_sha256, EMPTY_BODY_SHA256);

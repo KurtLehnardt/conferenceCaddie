@@ -14,7 +14,7 @@ import { ConferenceDO } from './conference.js';
 import { DirectoryDO } from './directory.js';
 import { CONFERENCE_ADMIN_PATHS } from './admin.js';
 import { capabilitiesDocument, CAPABILITIES_MAX_AGE_S } from './capabilities.js';
-import { HEADER_NAME, NONCE_HEADER, TS_HEADER, adminKeys, bodyMatches, verifyAdminHeader, withinSkew } from './lib/admin-auth.js';
+import { HEADER_NAME, NONCE_HEADER, TS_HEADER, adminConfig, adminKeys, bodyMatches, verifyAdminHeader, withinSkew } from './lib/admin-auth.js';
 import { json, isPlainObject, SLUG_RE, dailyLimitResponse, isDailyLimitError } from './lib/http.js';
 import { utcDay } from './lib/time.js';
 
@@ -362,32 +362,50 @@ async function handleApi(request, env, url, originAllowed) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Admin routes: every /admin/* request carries X-Caddie-Admin: v1 <ts> <nonce> <bodySha256> <sig>,
-// an HMAC-SHA256 made with ADMIN_TOKEN (or ADMIN_TOKEN_NEXT during a rotation) over the method, the
-// path and query, the body hash, the timestamp and the nonce (lib/admin-auth.js). The checks run in
-// this order, and every failure before the clock check answers 404, so the routes are never
+// Admin routes: every /admin/* request carries X-Caddie-Admin: v1 <ts> <nonce> <bodySha256> <sig>
+// or the same fields with "v2" in front, an HMAC-SHA256 made with ADMIN_TOKEN (or ADMIN_TOKEN_NEXT
+// during a rotation) over the method, the path and query, the body hash, the timestamp and the
+// nonce, and for v2 also the origin the request was signed for (lib/admin-auth.js). The checks run
+// in this order, and every failure before the clock check answers 404, so the routes are never
 // advertised and a 401 needs a valid signature (a key holder's, or a captured header's while its
 // timestamp is fresh):
 //   1. an Origin header (a browser is never an admin client): 404;
-//   2. no ADMIN_TOKEN of at least 32 characters after trimming: 404;
-//   3. the header absent or malformed: 404;
+//   2. invalid configuration (an ADMIN_SIG_MIN that is set to anything other than exactly "1" or
+//      "2", or an ADMIN_ORIGIN with an entry that is not a plain origin; an unset ADMIN_SIG_MIN
+//      means WORKER_DEFAULT_SIG_MIN): 404 and one log line naming the setting, never its value;
+//      or no ADMIN_TOKEN of at least 32 characters after trimming: 404. Neither takes a
+//      token from the failed-auth bucket;
+//   3. the header absent or malformed, or of a version ADMIN_SIG_MIN does not allow: 404;
 //   4. GET, HEAD or DELETE with a body hash other than the empty body's: 404;
 //   5. ten failed signatures from this address within the last minute (peek, nothing computed): 404;
-//   6. no key reproduces the signature: one token taken from that bucket, 404;
+//   6. no key reproduces the signature (for v2, with no origin this Worker serves): one token
+//      taken from that bucket, 404. A v2 signature made for another origin is this failure, with
+//      nothing to tell it apart;
 //   7. the timestamp more than 300 seconds from the Worker's clock: 401 admin_skew;
 //   8. only now the body is read (4 MB cap); the clock is checked again, because the body may
 //      take any time to arrive (401 admin_skew); then the body is hashed, and another hash than
 //      the signed one is 401 admin_body;
 //   9. the buffered bytes are forwarded with the verified nonce and timestamp; the Durable Object
 //      checks the timestamp against its own clock (305 seconds, 401 admin_skew) and refuses a
-//      nonce it has seen (401 admin_replay, schema.js admin_nonces).
-// The Authorization header is not read here.
+//      nonce it has seen (401 admin_replay, schema.js admin_nonces). v1 and v2 nonces share the
+//      table, and the forwarded headers do not carry the version.
+// The origins a v2 signature may name are the ADMIN_ORIGIN list when it is set, else the origin of
+// the request's own URL (adminConfig). The Worker never reads the Host header itself, but on
+// Cloudflare the request URL's host is the one the client sent, limited to the hostnames routed to
+// this Worker, so the fallback is safe only on the exact workers.dev hostname. The Authorization
+// header is not read here.
 
 const timingSafeEqual = (a, b) => crypto.subtle.timingSafeEqual(a, b);
 
-// Steps 1 to 7. Returns the verified header ({ ts, nonce, bodySha256, sig }, as strings).
+// Steps 1 to 7. Returns the verified header ({ version, ts, nonce, bodySha256, sig }, the fields
+// as strings).
 async function adminAuth(request, env, url) {
   if (request.headers.has('origin')) throw reply(404, { error: 'Not found' });
+  const config = adminConfig(env, url.href);
+  if (!config.ok) {
+    console.error(`admin config invalid: ${config.invalid}`);
+    throw reply(404, { error: 'Not found' });
+  }
   const failKey = `admin-fail:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
   const v = await verifyAdminHeader({
     headerValue: request.headers.get(HEADER_NAME),
@@ -397,6 +415,8 @@ async function adminAuth(request, env, url) {
     nowMs: Date.now(),
     timingSafeEqual,
     mayTry: () => peek(failKey, ADMIN_FAIL_PER_MIN),
+    allowedVersions: config.allowedVersions,
+    origins: config.origins,
   });
   if (v.ok) return v.header;
   if (v.reason === 'signature') take(failKey, ADMIN_FAIL_PER_MIN);
