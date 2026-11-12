@@ -99,6 +99,10 @@ jobs:
       - name: Check that only openEncoder uses ONNX Runtime
         run: bash scripts/check-onnxruntime-entry.sh
 
+      # Material3 is not bumped by Dependabot; it must stay the pair of Compose Multiplatform.
+      - name: Check the Compose Multiplatform and Material3 pairing
+        run: bash scripts/check-compose-pairing.sh
+
       # On Linux the iOS targets are skipped, so allTests runs the shared tests on the JVM, the
       # embedding tests with the real model among them, and the checks of the pinned downloads.
       # Every assemble also checks the merged manifest for ONNX Runtime's telemetry provider.
