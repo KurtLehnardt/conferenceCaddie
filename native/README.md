@@ -148,7 +148,8 @@ buttons 44 dp, chips 36 dp), and every control's touch target is at least the pl
 dp on Android and 44 pt on iOS, through `minimumTouchTarget()` and `touchTargetIn()`
 (`ui/theme/TouchTarget.kt`), which round the minimum up to whole pixels where Material's
 `minimumInteractiveComponentSize()` and `heightIn` round to the nearest one;
-`scripts/check-touch-targets.sh` keeps those out. Icons that
+`scripts/check-touch-targets.sh` keeps those out. The segmented control is the exception: its 44 dp
+segments sit in a bar that is 48 dp tall with its padding. Icons that
 carry meaning have content descriptions, headings are marked as headings, and controls have keyboard
 focus rings like the web's.
 

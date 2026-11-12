@@ -4,10 +4,13 @@
 # a pixel under it (48 dp is 122.4 px at 2.55 and became 122 px). minimumTouchTarget() and
 # touchTargetIn() (composeApp, ui/theme/TouchTarget.kt) round it up. Flagged, outside the files that
 # define the touch target:
-#   - Material's minimumInteractiveComponentSize;
-#   - PlatformTouchTarget anywhere but in the arguments of touchTargetIn(...) (an alias included);
-#   - heightIn, widthIn, sizeIn, requiredSizeIn or defaultMinSize given a 48.dp minimum.
-# Comments are skipped; calls may span lines. A "//" inside a string hides the rest of its line.
+#   - Material's minimumInteractiveComponentSize, an import of it under another name included;
+#   - PlatformTouchTarget anywhere but in the arguments of touchTargetIn(...), so a copy of it in a
+#     val, or an import of it under another name, is flagged too (CaddieTheme.kt may use it);
+#   - heightIn, widthIn, sizeIn, requiredHeightIn, requiredWidthIn, requiredSizeIn or defaultMinSize
+#     given 48.dp other than as a max.
+# Strings and comments are skipped; calls may span lines. Not covered: a 48 dp minimum held in a
+# constant or a token (heightIn(min = RowMin)), and fixed sizes such as height(48.dp).
 # CI runs this; locally: bash native/scripts/check-touch-targets.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,11 +18,12 @@ cd "$(dirname "$0")/.."
 theme=composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/theme
 allowed=(
   "$theme/TouchTarget.kt"
-  "$theme/CaddieTheme.kt"
   composeApp/src/androidMain/kotlin/app/conferencecaddie/ui/theme/TouchTarget.android.kt
   composeApp/src/iosMain/kotlin/app/conferencecaddie/ui/theme/TouchTarget.ios.kt
 )
-for a in "${allowed[@]}"; do
+# Provides PlatformTouchTarget as Material's minimum interactive size; the other rules still apply.
+export PLATFORM_TOUCH_TARGET_ALLOWED="$theme/CaddieTheme.kt"
+for a in "${allowed[@]}" "$PLATFORM_TOUCH_TARGET_ALLOWED"; do
   if [ ! -f "$a" ]; then
     echo "::error::$a is gone; update the allowed files in native/scripts/check-touch-targets.sh."
     exit 1
@@ -39,19 +43,28 @@ if [ "${#files[@]}" -lt 50 ]; then
   exit 1
 fi
 
-# Prints "file:line: what" for each hit.
+# Prints "file:line: what" for each hit. Everything blanked keeps its length and its newlines, so
+# positions and line numbers stay those of the file.
 hits=$(perl -0777 -ne '
+  sub blank { my $m = shift; $m =~ s/[^\n]/ /g; $m }
   my $s = $_;
-  # Block comments (KDoc included) and line comments go; their newlines stay, so lines still count.
-  $s =~ s{/\*.*?\*/}{"\n" x (() = $& =~ /\n/g)}gse;
-  $s =~ s{//[^\n]*}{}g;
-  $s =~ s{^[ \t]*import [^\n]*}{}gm;
+  # Strings and character literals, then comments (KDoc included).
+  $s =~ s{"""(?s:.*?)"""}{blank($&)}ge;
+  $s =~ s{'"'"'(?:[^'"'"'\\\n]|\\.)+'"'"'}{blank($&)}ge;
+  $s =~ s{"(?:[^"\\\n]|\\.)*"}{blank($&)}ge;
+  $s =~ s{/\*.*?\*/}{blank($&)}gse;
+  $s =~ s{//[^\n]*}{blank($&)}ge;
   my @hits;
+  while ($s =~ /^[ \t]*import[ \t]+\S*\b(minimumInteractiveComponentSize|PlatformTouchTarget)[ \t]+as\b/gm) {
+    push @hits, [$-[0], "$1 imported under another name"];
+  }
+  $s =~ s{^[ \t]*import [^\n]*}{blank($&)}gme;
   while ($s =~ /\bminimumInteractiveComponentSize\b/g) { push @hits, [$-[0], "minimumInteractiveComponentSize"] }
-  # touchTargetIn(...)'"'"'s arguments are blanked to spaces of the same length, so positions stay.
-  (my $t = $s) =~ s{\btouchTargetIn\s*(\((?:[^()]++|(?1))*\))}{my $m = $&; $m =~ s/[^\n]/ /g; $m}ge;
-  while ($t =~ /\bPlatformTouchTarget\b/g) { push @hits, [$-[0], "PlatformTouchTarget outside touchTargetIn()"] }
-  while ($s =~ /\b(heightIn|widthIn|sizeIn|requiredSizeIn|defaultMinSize)\s*(\((?:[^()]++|(?2))*\))/g) {
+  if ($ARGV ne $ENV{PLATFORM_TOUCH_TARGET_ALLOWED}) {
+    (my $t = $s) =~ s{\btouchTargetIn\s*(\((?:[^()]++|(?1))*\))}{blank($&)}ge;
+    while ($t =~ /\bPlatformTouchTarget\b/g) { push @hits, [$-[0], "PlatformTouchTarget outside touchTargetIn()"] }
+  }
+  while ($s =~ /\b(heightIn|widthIn|sizeIn|requiredHeightIn|requiredWidthIn|requiredSizeIn|defaultMinSize)\s*(\((?:[^()]++|(?2))*\))/g) {
     my ($name, $args, $at) = ($1, $2, $-[0]);
     $args =~ s/\bmax\w*\s*=\s*[^,)]*//g;
     push @hits, [$at, "$name with a 48.dp minimum"] if $args =~ /(?<![\w.])48\.dp\b/;
