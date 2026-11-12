@@ -16,6 +16,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { capabilitiesDocument } from '../worker/src/capabilities.js';
 import { EMPTY_BODY_SHA256, verifyAdminSignature } from '../scripts/lib/admin-sign.mjs';
 
 const SMOKE = fileURLToPath(new URL('../scripts/smoke.mjs', import.meta.url));
@@ -289,6 +290,63 @@ test('a 302 on an API request is a FAIL naming 302, never followed or retried', 
     server.close();
     other.server.close();
   }
+});
+
+// cap1 compares the Worker's bundle_base with the configured base (SMOKE_BUNDLE_BASE, then
+// CADDIE_BUNDLE_BASE, then the default), so a fork with its own TALKS_BUNDLE_BASE passes.
+describe('cap1 and the configured bundle base', { timeout: 120_000 }, () => {
+  const OWN = 'https://fork.example.github.io/caddie-fork/bundles/';
+  const OTHER = 'https://other.example.github.io/x/bundles/';
+  const DEFAULT = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+  async function run(advertised, env) {
+    const { server, port } = await stubWorker({ authOk: signedOk });
+    const base = server.listeners('request')[0];
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      if (req.url === '/api/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' });
+        return res.end(JSON.stringify(capabilitiesDocument({ TALKS_BUNDLE_BASE: advertised })));
+      }
+      return base(req, res);
+    });
+    try {
+      const r = await runSmoke(port, { SMOKE_BUNDLE_BASE: '', ...env });
+      return { ...r, cap1: r.lines.find((l) => /^(PASS|FAIL) cap1:/.test(l)) };
+    } finally {
+      server.close();
+    }
+  }
+  test('SMOKE_BUNDLE_BASE is the expected base', async () => {
+    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OWN });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+  });
+  test('CADDIE_BUNDLE_BASE is used when SMOKE_BUNDLE_BASE is not set', async () => {
+    const r = await run(OWN, { CADDIE_BUNDLE_BASE: OWN });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+  });
+  test('SMOKE_BUNDLE_BASE wins over CADDIE_BUNDLE_BASE', async () => {
+    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OWN, CADDIE_BUNDLE_BASE: OTHER });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+  });
+  test('a base that differs from the Worker\'s FAILs cap1 naming bundle_base', async () => {
+    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(r.cap1?.startsWith('FAIL cap1:') && r.cap1.includes('bundle_base'), r.cap1);
+  });
+  test('with nothing configured the default is expected', async () => {
+    const r = await run(DEFAULT, {});
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+    const fork = await run(OWN, {});
+    assert.ok(fork.cap1?.startsWith('FAIL cap1:') && fork.cap1.includes('SMOKE_BUNDLE_BASE'), fork.cap1);
+  });
+  test('the default base against a remote API prints one NOTE naming SMOKE_BUNDLE_BASE; a configured base prints none', async () => {
+    const note = (r) => r.lines.filter((l) => l.startsWith('NOTE the default bundle base is used against a remote API'));
+    const remote = await run(DEFAULT, {});
+    assert.equal(note(remote).length, 1);
+    assert.ok(note(remote)[0].includes('SMOKE_BUNDLE_BASE'));
+    assert.equal(note(await run(OWN, { SMOKE_BUNDLE_BASE: OWN })).length, 0);
+    assert.equal(note(await run(OWN, { CADDIE_BUNDLE_BASE: OWN })).length, 0);
+    assert.equal(note(await run(DEFAULT, { SMOKE_TREAT_AS_REMOTE: '' })).length, 0, 'a loopback API prints none');
+  });
 });
 
 test('SMOKE_ADMIN_AUTH refuses an unknown value before any request', async () => {

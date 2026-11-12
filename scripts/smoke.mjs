@@ -57,7 +57,8 @@
 //                        localhost or 127.0.0.1, which is loaded from the seed) reads the committed
 //                        data/ snapshot. Check bun1 compares every searchable conference with its bundle.
 //   SMOKE_BUNDLE_BASE    the talk bundle base for SMOKE_TALKS=bundle, an https URL ending in "/" (or
-//                        http://localhost or http://127.0.0.1 for a local test). Default https://kurtlehnardt.github.io/conferenceCaddie/bundles/.
+//                        http://localhost or http://127.0.0.1 for a local test). Falls back to CADDIE_BUNDLE_BASE, then
+//                        https://kurtlehnardt.github.io/conferenceCaddie/bundles/. Check cap1 compares the Worker's bundle_base with it.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
@@ -194,7 +195,11 @@ if (!['bundle', 'data'].includes(TALKS_FROM)) {
   console.log('FAIL config: SMOKE_TALKS must be bundle or data');
   process.exit(1);
 }
-const BUNDLE_BASE = process.env.SMOKE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+// SMOKE_BUNDLE_BASE, then CADDIE_BUNDLE_BASE (the variable the deploy scripts read), then the default.
+// Check cap1 compares the Worker's advertised bundle_base with it, so a fork whose Worker sets its own
+// TALKS_BUNDLE_BASE passes when the smoke is given the same base.
+const BUNDLE_BASE_CONFIGURED = process.env.SMOKE_BUNDLE_BASE || process.env.CADDIE_BUNDLE_BASE || '';
+const BUNDLE_BASE = BUNDLE_BASE_CONFIGURED || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
 // https, or plain http to this machine for a local test.
 if (TALKS_FROM === 'bundle' && !/^https:\/\/[^\s?#]+\/$/.test(BUNDLE_BASE) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?\/$/.test(BUNDLE_BASE)) {
   console.log('FAIL config: SMOKE_BUNDLE_BASE must be an https URL that ends in "/"');
@@ -512,6 +517,9 @@ let fixturesGated = null;
 // the SKIP. SMOKE_TREAT_AS_REMOTE=1 is test-only: it makes a loopback API count as deployed, so the
 // loopback stub of test/smoke-admin-sign.test.mjs can exercise the SKIP path.
 const API_IS_LOOPBACK = process.env.SMOKE_TREAT_AS_REMOTE !== '1' && LOCAL_API;
+if (IS_WORKER && !API_IS_LOOPBACK && !BUNDLE_BASE_CONFIGURED) {
+  console.log('NOTE the default bundle base is used against a remote API: a Worker with its own TALKS_BUNDLE_BASE needs SMOKE_BUNDLE_BASE set to it (cap1 and the bundle checks compare against it)');
+}
 if (process.env.SMOKE_TREAT_AS_REMOTE === '1') console.log('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed');
 const FIXTURES_GATED_LOCAL_HINT = 'the Worker answers 404 to /admin/test/*: set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (or run npm --prefix worker run dev-vars, which adds it when absent)';
 function gatedFixtures() {
@@ -724,7 +732,7 @@ if (!IS_WORKER) {
     const v = validator('capabilities.v1')(capsDoc, { closed: true });
     if (!v.valid) problems.push(`schema: ${v.errors.slice(0, 3).map((e) => `${e.path} ${e.message}`).join('; ')}`);
     if (capsDoc.tier !== 'free') problems.push(`tier ${capsDoc.tier}`);
-    if (capsDoc.talks?.bundle_base !== 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/') problems.push(`bundle_base ${capsDoc.talks?.bundle_base}`);
+    if (capsDoc.talks?.bundle_base !== BUNDLE_BASE) problems.push(`bundle_base ${capsDoc.talks?.bundle_base}, the smoke expects ${BUNDLE_BASE} (set SMOKE_BUNDLE_BASE)`);
     if (!/public/.test(res.headers.get('cache-control') ?? '') || !/max-age=300/.test(res.headers.get('cache-control') ?? '')) problems.push(`Cache-Control ${res.headers.get('cache-control')}`);
     if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
     report(problems.length === 0, 'cap1: GET /api/capabilities serves a valid tier 2 document', problems.length ? problems.join('; ') : `closed-mode valid, ble.mode ${capsDoc.ble?.mode}, people.semantic ${capsDoc.people?.semantic}`);
