@@ -149,6 +149,18 @@ test('conferenceForWorker drops unretire and recounts after takedowns', () => {
   assert.equal(conf.unretire, true, 'the local document is not changed');
 });
 
+test('push-ingest never sends expect_status: conferenceForWorker and the send path drop it, with or without unretire', async () => {
+  const conf = { slug: 'gone-2099', status: 'searchable', expect_status: 'unavailable', unretire: true, counts: { sessions: 3, talk: 3 } };
+  assert.deepEqual(conferenceForWorker(conf, undefined), { slug: 'gone-2099', status: 'searchable', counts: { sessions: 3, talk: 3 } });
+  assert.ok(!('expect_status' in conferenceForWorker({ slug: 'kept-2099', expect_status: null }, undefined)), 'null is dropped too');
+  const prepared = { dropped: 1, talks: [talk('gone-2099', 1), talk('gone-2099', 2)] };
+  assert.ok(!('expect_status' in conferenceForWorker(conf, prepared)), 'also with the takedown recount');
+  assert.equal(conf.expect_status, 'unavailable', 'the local document is not changed');
+  const { admin, calls } = fakeAdmin({ upserted: 2, skipped_retired: [] });
+  await upsertConferences(admin, [conf, { slug: 'kept-2099', status: 'unavailable', expect_status: null }], { log: () => {} });
+  assert.deepEqual(calls[0].body.conferences.map((d) => [d.slug, 'expect_status' in d, 'unretire' in d]), [['gone-2099', false, false], ['kept-2099', false, false]]);
+});
+
 test('migrate-from-backup skips a conference whose object answers "conference is not available", names it, and carries on', async () => {
   const byConf = (make) => new Map(['first-2099', 'bare-2099', 'last-2099'].map((slug) => [slug, make(slug)]));
   const plan = {
@@ -216,6 +228,23 @@ test('the migration never sends an unretire key from a backup conference documen
     const { admin, calls } = recordingAdmin([]);
     await migrate(p, admin);
     assert.deepEqual(calls.map((c) => [c.url, c.body.conferences.some((d) => 'unretire' in d)]), [['/admin/conferences', false]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the migration never sends an expect_status key from a backup conference document', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'caddie-backup-'));
+  try {
+    writeFileSync(join(dir, 'caddie-conferences-v1.ndjson'), `${[
+      { _id: 'gone-2099', slug: 'gone-2099', status: 'searchable', expect_status: null, unretire: true },
+      { _id: 'kept-2099', slug: 'kept-2099', status: 'searchable', expect_status: 'searchable' },
+    ].map((d) => JSON.stringify(d)).join('\n')}\n`);
+    const p = migrationPlan(dir, { include: new Set(['conferences']), includeReal: false });
+    assert.deepEqual(p.conferences.send, [{ slug: 'gone-2099', status: 'searchable' }, { slug: 'kept-2099', status: 'searchable' }]);
+    const { admin, calls } = recordingAdmin([]);
+    await migrate(p, admin);
+    assert.deepEqual(calls.map((c) => [c.url, c.body.conferences.some((d) => 'expect_status' in d)]), [['/admin/conferences', false]]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

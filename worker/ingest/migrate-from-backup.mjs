@@ -61,7 +61,8 @@ export function personPayload(row) {
 const dropId = ({ _id, ...rest }) => rest;
 // A conference document as the backup holds it, without its _id and without an `unretire` key, so
 // a migration can never bring back a conference the operator removed, whatever the backup holds.
-const conferenceDoc = ({ _id, unretire, ...rest }) => rest;
+// The operator's `expect_status` precondition is dropped too: a migration never sends it.
+const conferenceDoc = ({ _id, unretire, expect_status, ...rest }) => rest;
 
 function groupBy(rows, key) {
   const m = new Map();
