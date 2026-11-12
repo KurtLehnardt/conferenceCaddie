@@ -509,6 +509,16 @@ class BleServiceLifecycleTest {
     }
 
     @Test
+    fun iPhonesMayNotFindThisPhoneOnEveryAndroidVersionForNow() {
+        // Android 14 and newer offer the connectable set, but whether iPhones find it is not checked on
+        // a phone yet, so the screens say that they may not, as on Android 13 and older.
+        fake.connectable = true
+        assertTrue(radio.hiddenFromIphones)
+        fake.connectable = false
+        assertTrue(radio.hiddenFromIphones)
+    }
+
+    @Test
     fun withoutTheConnectableSetThereIsNoGattServer() {
         // Before Android 14 the legacy connectable set is not offered (a connected peer could read the
         // phone's name), and so neither is the GATT server behind it.
@@ -772,6 +782,34 @@ class BleServiceLifecycleTest {
             radio.processExits = { listOf(BleProcessExit(startedAt - 60_000L, userRequested = true)) }
             assertFalse(radio.takeUserStoppedApp())
             radio.processExits = { listOf(BleProcessExit(System.currentTimeMillis() + 1_000L, userRequested = true)) }
+            assertTrue(radio.takeUserStoppedApp())
+        } finally {
+            val editor = prefs.edit().remove("exits_checked_at")
+            if (saved != null) editor.putLong("exits_checked_at", saved)
+            editor.commit()
+        }
+    }
+
+    @Test
+    fun aForceStopFromBeforeTheRadioLastStartedDoesNotCount() {
+        val prefs = context.getSharedPreferences("caddie_ble_radio", Context.MODE_PRIVATE)
+        val saved = prefs.all["exits_checked_at"] as Long?
+        try {
+            // Looked long ago. Since then the person force-stopped the app while Bluetooth was off, and
+            // nothing asked about it.
+            prefs.edit().putLong("exits_checked_at", 1_000L).commit()
+            val forceStop = System.currentTimeMillis() - 60_000L
+            radio.processExits = { listOf(BleProcessExit(forceStop, userRequested = true)) }
+            // Then the person turns Bluetooth on, and later the radio stops.
+            startRunning(Source(payload(1)), Events())
+            radio.stop()
+            assertTrue(waitFor { !serviceRunning() })
+            // That force stop came before this start: it does not stop the session at the next restore.
+            assertFalse(radio.takeUserStoppedApp())
+            // One after the start still counts.
+            radio.processExits = {
+                listOf(BleProcessExit(System.currentTimeMillis() + 1_000L, userRequested = true), BleProcessExit(forceStop, userRequested = true))
+            }
             assertTrue(radio.takeUserStoppedApp())
         } finally {
             val editor = prefs.edit().remove("exits_checked_at")

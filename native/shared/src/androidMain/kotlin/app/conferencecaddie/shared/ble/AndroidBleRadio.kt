@@ -168,7 +168,15 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
 
     override val running: Boolean get() = started
 
-    override val hiddenFromIphones: Boolean get() = !hardware.connectableAdvertising()
+    /**
+     * True on every Android version for now. Android 13 and older offer no connectable set, so an
+     * iPhone in the background has nothing to find. Android 14 and newer offer one, but advertise it
+     * non-discoverable and without the Flags field, and whether iPhones find such a set has not been
+     * checked on a phone yet (the Phase 4 exit test); until it has, the screens say that iPhones may
+     * not find this phone everywhere rather than promise it where it may not hold. The connectable
+     * set and the GATT server stay as they are ([BleHardware.connectableAdvertising]).
+     */
+    override val hiddenFromIphones: Boolean get() = true
 
     override fun access(): BleAccess {
         val missing = PERMISSIONS.filterNot { permissionGranted(it) }
@@ -214,8 +222,10 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
             session = s
             started = true
         }
-        // The first run ever: a force stop from before it says nothing about Bluetooth.
-        if (!radioPrefs.contains(KEY_EXITS_CHECKED)) radioPrefs.edit().putLong(KEY_EXITS_CHECKED, System.currentTimeMillis()).apply()
+        // The process ends that matter are those after the radio started: a force stop from before
+        // (the first run ever, or one the runtime's restore did not ask about) says nothing about
+        // Bluetooth, and must not stop a session the person started after it.
+        radioPrefs.edit().putLong(KEY_EXITS_CHECKED, System.currentTimeMillis()).apply()
         main.post { deliver(s) }
     }
 
@@ -233,11 +243,12 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
     }
 
     /**
-     * True when the newest end of the app's process since the last call was the person's own (a force
-     * stop in the app's settings, or the Task Manager), as Android 11 and newer record it; false
-     * otherwise and before Android 11. Each call moves the point it looks from to the newest end it
-     * saw, so an end counts once, and the first run of the radio sets it to then, so a force stop from
-     * before Bluetooth was ever on does not count.
+     * True when the newest end of the app's process since the last call, or since the radio last
+     * started, was the person's own (a force stop in the app's settings, or the Task Manager), as
+     * Android 11 and newer record it; false otherwise and before Android 11. Each call moves the point
+     * it looks from to the newest end it saw, so an end counts once, and every [start] moves it to
+     * then, so a force stop from before the radio last started (before Bluetooth was ever on, or while
+     * it was off) does not count. The runtime asks before it starts the radio at a restore.
      */
     override fun takeUserStoppedApp(): Boolean {
         val exits = try {
