@@ -22,7 +22,8 @@
 // says to move the old file and leave a symlink at the old path, as the smoke's does, because a
 // shell without XDG_CONFIG_HOME still uses the old path. When both files exist and hold different
 // tokens, or the old one exists and cannot be read, the new one is read, with a one-line note that
-// names both paths (never the values).
+// names both paths (never the values). When the old place cannot be checked (~/.config cannot be
+// searched), no note or doubt says that a file is there: they say that a file may be there.
 //
 // There is no fallback with CADDIE_ADMIN_HOME set, because it names a separate setup (a fork's,
 // say) whose token is never the old file. When the old file exists then, it is not read, and a
@@ -82,6 +83,15 @@ function ignoredOldText(old) {
     : `a file that may be at the old place ${old} (it cannot be checked)`;
 }
 
+// The same for the fallback under XDG_CONFIG_HOME, where found is what present(legacy) returned:
+// "the file at its old place" when a stat found it, else (found is 'maybe', ~/.config cannot be
+// searched) "a file that may be at its old place … (it cannot be checked)".
+function oldPlaceText(legacy, found) {
+  return found === 'yes'
+    ? `the file at its old place ${legacy}`
+    : `a file that may be at its old place ${legacy} (it cannot be checked)`;
+}
+
 // The old default place ~/.config/conference-caddie/admin-token when CADDIE_ADMIN_HOME is set (and
 // ADMIN_TOKEN_FILE is not), something is there, and it is not proven the same file as path: the
 // file that is never read in that case, which a caller names in one note. Else null.
@@ -126,7 +136,11 @@ function readOnce(path) {
 // the file, else null: the rule of resolveAdminTokenFile in scripts/lib/admin-token-file.mjs, so
 // one setup's config never sends another setup's token. It refuses when it exists and does not
 // list apiOrigin as a tier 2 api, and when it cannot be checked (its directory cannot be
-// searched); the clause says which.
+// searched); the clause says which. It is a copy rather than a call to resolveAdminTokenFile, which
+// decides differently when the old place cannot be searched (it returns the old path for a read
+// that fails, with no note). worker/test/admin-token-parity.test.mjs runs both modules over old
+// config.json files that are not valid JSON, have a tier 3 backend only, or have a tier 2 api with
+// a path, so a change to either copy of the rule fails there.
 function oldConfigRefuses(legacy, apiOrigin) {
   const oldDir = dirname(legacy);
   const config = join(oldDir, 'config.json');
@@ -171,16 +185,22 @@ export function adminTokenFileToRead(env = process.env, home = homedir(), { apiO
     };
   }
 
-  if (!legacy || !present(legacy)) return result;
+  const found = legacy ? present(legacy) : false;
+  if (!found) return result;
+  // The old place in a doubt with no file at the new one: "only one at its old place" when a stat
+  // found it, else that a file may be there.
+  const onlyOld = found === 'yes'
+    ? `only one at its old place ${legacy}`
+    : `and a file may be at its old place ${legacy} (it cannot be checked)`;
   if (!current.exists) {
     const refusedBy = apiOrigin === undefined ? null : oldConfigRefuses(legacy, apiOrigin);
     if (refusedBy) {
       return {
         ...result,
         legacy,
-        note: `Note: the admin token file is not at ${path}, its default place under XDG_CONFIG_HOME, and the file at its old place ${legacy} is not read, because ${refusedBy}; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`,
+        note: `Note: the admin token file is not at ${path}, its default place under XDG_CONFIG_HOME, and ${oldPlaceText(legacy, found)} is not read, because ${refusedBy}; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`,
         trusted: false,
-        doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, only one at its old place ${legacy}, which is not read because ${refusedBy}`,
+        doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, ${onlyOld}, which is not read because ${refusedBy}`,
       };
     }
   }
@@ -202,11 +222,21 @@ export function adminTokenFileToRead(env = process.env, home = homedir(), { apiO
         ? null
         : `Note: the admin token file is not at ${path}, its default place under XDG_CONFIG_HOME, so the file at its old place ${legacy} was read instead; if that file holds this deployment's token, move it to ${path} and leave a symlink at the old path (ln -s ${shellPath(path, home)} ${shellPath(legacy, home)}), so every script uses one file, or set ADMIN_TOKEN_FILE to it.`,
       trusted: false,
-      doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, only one at its old place ${legacy}, which may hold another deployment's token`,
+      doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, ${onlyOld}, which may hold another deployment's token`,
     };
   }
   if (current.value === null) return result;
   if (old.value === null) {
+    // readOnce counts any failure but "no such file" as a file that exists, so a found of 'maybe'
+    // (~/.config cannot be searched) gets here too; the note then says a file may be there.
+    if (found !== 'yes') {
+      return {
+        ...result,
+        note: `Note: the admin token file ${path} is used, but a file may be at its old place ${legacy} (it cannot be checked), so the two cannot be compared; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`,
+        trusted: false,
+        doubt: `a file may be at the old place ${legacy} of the token file ${path} (it cannot be checked), so it is not clear which one holds this deployment's token`,
+      };
+    }
     return {
       ...result,
       note: `Note: the admin token file ${path} is used, but the file at its old place ${legacy} exists and cannot be read, so the two cannot be compared; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`,

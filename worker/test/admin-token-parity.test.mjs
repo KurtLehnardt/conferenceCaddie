@@ -54,7 +54,10 @@ const config = (api) => JSON.stringify({ backends: { live: { tier: 2, api } } })
 
 // Each layout sets up the scratch directories and returns the environment, with what both modules
 // must say: the path, whether there is an old place (legacy), and whether the path and the old
-// place are proven one file (same).
+// place are proven one file (same). A layout that sets from also says which file both modules must
+// take a token from for ORIGIN (null for none); the config.json layouts set it, so a change to the
+// rule that makes one module accept a config.json the other refuses fails here, and so does a
+// change that makes both accept it.
 const LAYOUTS = {
   'no variables, nothing on disk': (s) => ({ env: {}, path: s.old, legacy: false, same: true }),
   'no variables, the old file there': (s) => {
@@ -97,12 +100,30 @@ const LAYOUTS = {
   'XDG_CONFIG_HOME set, only the old file there, and its config.json lists another origin': (s) => {
     s.put(s.old, TOKEN);
     s.put(join(dirname(s.old), 'config.json'), config('https://other.example'));
-    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false };
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false, from: null };
   },
   'XDG_CONFIG_HOME set, only the old file there, and its config.json lists the origin': (s) => {
     s.put(s.old, TOKEN);
     s.put(join(dirname(s.old), 'config.json'), config(ORIGIN));
-    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false };
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false, from: s.old };
+  },
+  // The config.json sub-rule that a config which lists nothing refuses the fallback: a file that is
+  // not valid JSON, one with only a tier 3 backend (whose api is the origin), and one whose tier 2
+  // api has a path under the origin all list no tier 2 origin, so neither module reads the old file.
+  'XDG_CONFIG_HOME set, only the old file there, and its config.json is not valid JSON': (s) => {
+    s.put(s.old, TOKEN);
+    s.put(join(dirname(s.old), 'config.json'), `{ "backends": { "live": { "tier": 2, "api": "${ORIGIN}" }`);
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false, from: null };
+  },
+  'XDG_CONFIG_HOME set, only the old file there, and its config.json has a tier 3 backend only': (s) => {
+    s.put(s.old, TOKEN);
+    s.put(join(dirname(s.old), 'config.json'), JSON.stringify({ backends: { paid: { tier: 3, es_url: 'https://es.caddie.example', api: ORIGIN } } }));
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false, from: null };
+  },
+  'XDG_CONFIG_HOME set, only the old file there, and its config.json has a tier 2 api with a path': (s) => {
+    s.put(s.old, TOKEN);
+    s.put(join(dirname(s.old), 'config.json'), config(`${ORIGIN}/base`));
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false, from: null };
   },
   // sameFile cannot stat the old place when ~/.config cannot be searched, so its false means "not
   // proven the same": both modules keep the old place, and neither reads it.
@@ -218,7 +239,10 @@ describe('worker/ingest/admin-token-file.mjs and scripts/lib/admin-token-file.mj
 
       const read = worker.adminTokenFileToRead(env, s.home, { apiOrigin: ORIGIN });
       const { file } = shared.resolveAdminTokenFile(env, { home: s.home, apiOrigin: ORIGIN });
-      assert.equal(read.value === null ? null : read.path, file && readable(file) ? file : null, 'the file a token comes from');
+      const workerFrom = read.value === null ? null : read.path;
+      const sharedFrom = file && readable(file) ? file : null;
+      assert.equal(workerFrom, sharedFrom, 'the file a token comes from');
+      if ('from' in want) assert.equal(workerFrom, want.from, 'the file both modules take a token from');
       for (const value of [TOKEN, OTHER]) assert.ok(!`${read.note}\n${read.doubt}`.includes(value), 'no value in a note');
     });
   }

@@ -435,13 +435,7 @@ async function writeTokenFile(value, hint = '', previous = '') {
     ? ''
     : ` The two paths were hard links to one file, which this write split, so ${old ?? ignored} now holds the previous token${previous ? `, ${previous}` : ''}.`;
   if (ignored) {
-    // The split sentence is news, so it is never held back by the print-once guard of the plain
-    // note: with a split, the note and the sentence are printed together even if the note was
-    // printed before.
-    if (split) {
-      ignoredOldNoted = true;
-      console.log(`${ignoredOldNote(TOKEN_FILE, ignored)}${split}`);
-    } else noteIgnoredOldTokenFile(ignored);
+    console.log(`${ignoredOldNote(TOKEN_FILE, ignored)}${split}`);
     return;
   }
   // No advice to delete the old file: that it is a different file rests on sameFile saying it is
@@ -459,23 +453,25 @@ function existingOldTokenFile() {
   return legacy && existsSync(legacy) ? legacy : null;
 }
 
+// The two notes below are printed at most once per run without a guard, because a run calls at
+// most one of readTokenFile, writeTokenFile and dryRunOldTokenFileLine, and each of those prints
+// each note at most once. --rotate-admin-token returns after readTokenFile (an unfinished rotation)
+// or after dryRunOldTokenFileLine (a dry run), before writeTokenFile. Otherwise readTokenFile runs
+// only for the GitHub sync, which needs ADMIN_TOKEN out of the plan, while dryRunOldTokenFileLine
+// and writeTokenFile run only with ADMIN_TOKEN in it. A change that calls two of them in one run
+// must add a guard; the setup-secrets tests assert that each note is printed once.
+
 // With CADDIE_ADMIN_HOME set there is no fallback to the old default place, and the old file is
-// never read or changed. When it exists, the run says so once, in one note that names both paths
+// never read or changed. When it exists, the run says so in one note that names both paths
 // (ignoredOldNote of admin-token-file.mjs).
-let ignoredOldNoted = false;
 function noteIgnoredOldTokenFile(old = ignoredOldTokenFile()) {
-  if (!old || ignoredOldNoted) return;
-  ignoredOldNoted = true;
-  console.log(ignoredOldNote(TOKEN_FILE, old));
+  if (old) console.log(ignoredOldNote(TOKEN_FILE, old));
 }
 
 // With CADDIE_ADMIN_HOME set and ADMIN_TOKEN_FILE naming the old default place itself, the file is
-// used, because ADMIN_TOKEN_FILE comes first, but the run says once that it is the token file of a
-// setup without CADDIE_ADMIN_HOME (explicitOldNote of admin-token-file.mjs).
-let explicitOldNoted = false;
+// used, because ADMIN_TOKEN_FILE comes first, but the run says that it is the token file of a setup
+// without CADDIE_ADMIN_HOME (explicitOldNote of admin-token-file.mjs).
 function noteExplicitOldTokenFile() {
-  if (explicitOldNoted) return;
-  explicitOldNoted = true;
   const note = explicitOldNote(process.env);
   if (note) console.log(note);
 }

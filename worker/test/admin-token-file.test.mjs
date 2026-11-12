@@ -132,6 +132,37 @@ describe('adminTokenFileToRead: the fallback to the old place, and whether the f
     assertNoPartOf(TOKEN, `${got.note}\n${got.doubt}`, 'the note and the doubt');
   });
 
+  // ~/.config cannot be searched, so the old place cannot be checked: a stat of it fails with
+  // EACCES, not ENOENT. No note or doubt may then say that a file exists there.
+  test('with XDG_CONFIG_HOME set and ~/.config unsearchable, the note and the doubt say a file may be at the old place, not that one is', { skip: AS_ROOT && 'root can search a directory at mode 000' }, (t) => {
+    const s = scratch(t);
+    s.put(s.old, OTHER);
+    const config = join(s.home, '.config');
+    const xdg = join(s.dir, 'x');
+    const missing = join(xdg, 'conference-caddie', 'admin-token');
+    chmodSync(config, 0o000);
+    let fallback;
+    let both;
+    let file;
+    try {
+      fallback = adminTokenFileToRead({ XDG_CONFIG_HOME: xdg }, s.home);
+      file = s.put(missing, `${TOKEN}\n`);
+      both = adminTokenFileToRead({ XDG_CONFIG_HOME: xdg }, s.home);
+    } finally {
+      chmodSync(config, 0o700);
+    }
+    // No file at the new place: nothing is read, and the doubt says a file may be at the old one.
+    assert.deepEqual(shape(fallback), { path: s.old, value: null, legacy: s.old, trusted: false });
+    assert.equal(fallback.note, null);
+    assert.equal(fallback.doubt, `there is no token file at ${missing}, its default place under XDG_CONFIG_HOME, and a file may be at its old place ${s.old} (it cannot be checked), which may hold another deployment's token`);
+    // A file at the new place: it is read, not trusted, and the note says a file may be at the old one.
+    assert.deepEqual(shape(both), { path: file, value: TOKEN, legacy: s.old, trusted: false });
+    assert.equal(both.note, `Note: the admin token file ${file} is used, but a file may be at its old place ${s.old} (it cannot be checked), so the two cannot be compared; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`);
+    assert.equal(both.doubt, `a file may be at the old place ${s.old} of the token file ${file} (it cannot be checked), so it is not clear which one holds this deployment's token`);
+    for (const got of [fallback, both]) assert.doesNotMatch(`${got.note}\n${got.doubt}`, /exists|only one at/);
+    for (const value of [TOKEN, OTHER]) assertNoPartOf(value, `${fallback.doubt}\n${both.note}\n${both.doubt}`, 'the notes and the doubts');
+  });
+
   test('names the new file, trusted and with no value or note, when neither exists', (t) => {
     const s = scratch(t);
     assert.deepEqual(adminTokenFileToRead({ CADDIE_ADMIN_HOME: join(s.dir, 'c') }, s.home), { path: join(s.dir, 'c', 'admin-token'), value: null, note: null, legacy: null, trusted: true, doubt: null });
@@ -449,7 +480,9 @@ describe('adminTokenFileToRead: CADDIE_ADMIN_HOME and the old directory\'s confi
     try {
       const got = adminTokenFileToRead({ XDG_CONFIG_HOME: xdg }, s.home, { apiOrigin: ORIGIN });
       assert.deepEqual(shape(got), { path: file, value: null, legacy: s.old, trusted: false });
-      assert.equal(got.note, `Note: the admin token file is not at ${file}, its default place under XDG_CONFIG_HOME, and the file at its old place ${s.old} is not read, because ${join(oldDir, 'config.json')} cannot be checked for ${ORIGIN}; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`);
+      // The old file cannot be stat'ed either, so the note says a file may be there, not that one is.
+      assert.equal(got.note, `Note: the admin token file is not at ${file}, its default place under XDG_CONFIG_HOME, and a file that may be at its old place ${s.old} (it cannot be checked) is not read, because ${join(oldDir, 'config.json')} cannot be checked for ${ORIGIN}; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`);
+      assert.equal(got.doubt, `there is no token file at ${file}, its default place under XDG_CONFIG_HOME, and a file may be at its old place ${s.old} (it cannot be checked), which is not read because ${join(oldDir, 'config.json')} cannot be checked for ${ORIGIN}`);
       assert.doesNotMatch(got.note, /does not list/);
     } finally {
       chmodSync(oldDir, 0o700);
