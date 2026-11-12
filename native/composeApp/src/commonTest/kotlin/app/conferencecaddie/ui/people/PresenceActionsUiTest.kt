@@ -4,6 +4,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onNodeWithTag
@@ -282,6 +284,58 @@ class PresenceActionsUiTest {
             check(rig.controller.turnOnPresence("Hallway", "") == null)
         }
         return rig
+    }
+
+    // --- A card that starts over -------------------------------------------------------------------
+    // The People tab leaves the composition when a page, another tab or Settings shows, with nothing
+    // to save the card's state: the card starts over when the tab comes back.
+
+    private fun ComposeUiTest.showHomeUnsaved(rig: U3Rig) = u3Show(rig) { state -> if (shown.value) U3PresenceHome(state, rig) }
+
+    @Test
+    fun aSetupPanelLeftOpenIsClosedWhenTheTabComesBack() = runComposeUiTest {
+        val rig = rig()
+        u3Await(rig) {
+            rig.controller.updateContext(rig.context())
+            rig.makeVisible()
+        }
+        showHomeUnsaved(rig)
+        onNode(isToggleable() and hasText(ConnectStrings.PRESENCE_LABEL)).performClick()
+        u3WaitForTag("presence-setup")
+        leave()
+        comeBack()
+        // Its draft (zone, spot, how long) is gone with the card, and so is the panel.
+        onNodeWithTag("presence-setup").assertDoesNotExist()
+        onNode(isToggleable() and hasText(ConnectStrings.PRESENCE_LABEL)).assertIsOff()
+    }
+
+    @Test
+    fun aBluetoothPanelLeftOpenIsClosedWhenTheTabComesBack() = runComposeUiTest {
+        val rig = bluetoothRig(FakeUiBleRadio())
+        showHomeUnsaved(rig)
+        onNodeWithTag("ble-switch").performScrollTo().performClick()
+        u3WaitForTag("ble-setup")
+        leave()
+        comeBack()
+        onNodeWithTag("ble-setup").assertDoesNotExist()
+        onNodeWithTag("ble-switch").assertIsOff()
+    }
+
+    @Test
+    fun aCardThatComesBackWhileItsActionIsUnderWayWaitsForIt() = runComposeUiTest {
+        val rig = rig()
+        presenceOn(rig)
+        showHomeUnsaved(rig)
+
+        val hold = rig.server.hold("PUT", "/api/presence")
+        onNodeWithTag("presence-extend").performClick()
+        waitUntil(timeoutMillis = 20_000) { hold.hasArrived }
+        leave()
+        comeBack()
+        // The card that came back knows Extend is under way: a second one is not sent.
+        onNodeWithTag("presence-extend").assertIsNotEnabled()
+        hold.release()
+        u3WaitForToast(rig, ConnectStrings.EXTENDED)
     }
 
     // --- A double tap ------------------------------------------------------------------------------

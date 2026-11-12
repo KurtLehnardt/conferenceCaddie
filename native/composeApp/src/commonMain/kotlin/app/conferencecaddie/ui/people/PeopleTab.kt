@@ -309,8 +309,6 @@ fun rememberPeopleUi(
     if (controller == null) return null
     val state by controller.state.collectAsState()
     val toast by rememberUpdatedState(showToast)
-    val talkOpener by rememberUpdatedState(openTalk)
-    val urlOpener by rememberUpdatedState(openUrl)
     // What outlives the activity's re-creation on Android (PeopleRetained): the scope the actions'
     // answers run in, their toasts, the navigation and the host's memory. Held by the activity's
     // ViewModelStore, as the Search screen's state is (CaddieApp); without an owner it lives as long
@@ -322,9 +320,19 @@ fun rememberPeopleUi(
     } else {
         remember { PeopleRetained(compositionScope) }
     }
+    // The shell's navigation and openers, as this composition has them; the host reaches them only
+    // through [retained], so an action that outlives this composition holds nothing of it.
     DisposableEffect(retained, navigation) {
         retained.current = navigation
         onDispose { if (retained.current === navigation) retained.current = null }
+    }
+    DisposableEffect(retained, openTalk, openUrl) {
+        retained.currentOpenTalk = openTalk
+        retained.currentOpenUrl = openUrl
+        onDispose {
+            if (retained.currentOpenTalk === openTalk) retained.currentOpenTalk = null
+            if (retained.currentOpenUrl === openUrl) retained.currentOpenUrl = null
+        }
     }
     val memory = rememberSaveable(retained, saver = PeopleHostMemory.retainedSaver(retained)) {
         retained.memory ?: PeopleHostMemory().also { retained.memory = it }
@@ -335,8 +343,8 @@ fun rememberPeopleUi(
             navigator = retained.navigator,
             scope = retained.scope,
             toast = retained::post,
-            openTalk = { talkOpener(it) },
-            openUrl = { urlOpener(it) },
+            openTalk = retained.openTalk,
+            openUrl = retained.openUrl,
             memory = memory,
         )
     }
@@ -375,7 +383,7 @@ fun rememberPeopleUi(
         snapshotFlow { enabled to availability }.first { (on, now) -> on || now != PeopleAvailability.Loading }
         waiting = null
         if (!enabled) {
-            toast(Strings.Blockers.NOT_AVAILABLE_HERE, null, null)
+            host.showToast(Strings.Blockers.NOT_AVAILABLE_HERE)
             return@LaunchedEffect
         }
         decodePeopleRoute(encoded)?.let { route(it, host, navigation) }
@@ -399,11 +407,8 @@ fun rememberPeopleUi(
     // the web's toast does, with "Open profile" when the controller says the fix is on the profile.
     LaunchedEffect(state.notice) {
         val notice = state.notice ?: return@LaunchedEffect
-        if (notice.opensProfile) {
-            toast(notice.message, PeopleCommonStrings.OPEN_PROFILE, host::openProfile)
-        } else {
-            toast(notice.message, null, null)
-        }
+        // Through the same queue as the screens' toasts, so they show in the order they came.
+        host.showToast(notice.message, if (notice.opensProfile) PeopleToastAction(PeopleCommonStrings.OPEN_PROFILE, host::openProfile) else null)
         controller.clearNotice()
     }
 

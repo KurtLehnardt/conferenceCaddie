@@ -51,8 +51,9 @@ import kotlinx.coroutines.launch
  * at once and then polls. A [SectionTitle] "Requests"; "Checking…" until `state.inbox.loaded`;
  * [PeoplePrompt] (Inbox) "No requests yet"; each incoming ask as a [PersonFrame] (title 16/600 by
  * `same_zone` / topic, about, the note, the menu "Options for {name}" with Block,
- * `host.confirmBlock(ref, name)`), Accept (`controller.acceptMeet(id)`, then `host.openMeet(id)`;
- * 404/410 toast "That ask has run out."), Not now (`controller.declineMeet(id)`, silent for the
+ * `host.confirmBlock(ref, name)`), Accept (`controller.acceptMeet(id)`, then `host.openMeet(id)`, or
+ * a toast offering the meet-up when Requests was left meanwhile; 404/410 toast "That ask has run
+ * out."), Not now (`controller.declineMeet(id)`, silent for the
  * asker) and "Expires in {n} min"; then "Your requests" rows with "No reply yet" or "Open meet-up".
  * Only open asks (requested or active) show. Owner U3.
  */
@@ -97,7 +98,7 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
 @Composable
 private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long) {
     val c = Caddie.colors
-    var busy by remember { mutableStateOf(false) }
+    val busy = host.isRunning("inbox:${meet.meetId}")
     var error by remember { mutableStateOf<String?>(null) }
     val shown = rememberInComposition()
     val name = meet.from?.displayName ?: meet.other.displayName
@@ -117,18 +118,14 @@ private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long) {
     // On the app's scope (PeopleHost.scope), not the card's or the screen's: an ask that ran out is
     // dropped by the controller before the answer comes back, which takes the card away, and
     // Requests can be left while Accept or Not now is under way. The answer then goes in a toast
-    // ([shown]); an accepted ask offers its meet-up there rather than opening it over whatever shows. busy is set before the launch, so a second tap
-    // in the same frame (Accept twice, or Accept then Not now) starts nothing.
+    // ([shown]); an accepted ask offers its meet-up there rather than opening it over whatever shows.
+    // One answer per ask at a time (PeopleHost.launchOnce), so a second tap in the same frame (Accept
+    // twice, or Accept then Not now), or on Requests opened again meanwhile, starts nothing.
     fun act(accept: Boolean) {
-        if (busy) return
-        busy = true
+        if (host.isRunning("inbox:${meet.meetId}")) return
         error = null
-        host.scope.launch {
-            val res = try {
-                if (accept) host.controller.acceptMeet(meet.meetId) else host.controller.declineMeet(meet.meetId)
-            } finally {
-                busy = false
-            }
+        host.launchOnce("inbox:${meet.meetId}") {
+            val res = if (accept) host.controller.acceptMeet(meet.meetId) else host.controller.declineMeet(meet.meetId)
             when (res) {
                 is ApiResult.Ok -> if (accept) {
                     if (shown.value) {

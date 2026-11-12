@@ -43,12 +43,13 @@ import kotlinx.coroutines.launch
 @Composable
 fun AskSheet(person: Person, state: PeopleUiState, host: PeopleHost, onClose: () -> Unit) {
     // The ask runs on the app's scope (PeopleHost.scope): the sheet can be closed, or the activity
-    // re-created, while it is sent, and its answer then goes in a toast ([shown]). busy is set before
-    // the launch, so a second tap in the same frame sends one ask.
+    // re-created, while it is sent, and its answer then goes in a toast ([shown]). It runs once per
+    // person at a time (PeopleHost.launchOnce), so a second tap, or a sheet opened again meanwhile,
+    // sends one ask.
     val shown = rememberInComposition()
     val prefill = remember(person.ref) { PeopleText.askPrefill(person) }
     var note by rememberSaveable(person.ref) { mutableStateOf(prefill.first) }
-    var busy by remember { mutableStateOf(false) }
+    val busy = host.isRunning("ask:${person.ref}")
     var error by remember { mutableStateOf<String?>(null) }
     var openMeetId by remember { mutableStateOf<String?>(null) }
     // In the host's memory, which an answer after a re-creation still reaches (PeopleHost.askSent).
@@ -60,16 +61,11 @@ fun AskSheet(person: Person, state: PeopleUiState, host: PeopleHost, onClose: ()
             error = ConnectStrings.NOTE_EMPTY
             return
         }
-        if (busy) return
-        busy = true
+        if (host.isRunning("ask:${person.ref}")) return
         error = null
         openMeetId = null
-        host.scope.launch {
-            val res = try {
-                host.controller.ask(person, text, prefill.second)
-            } finally {
-                busy = false
-            }
+        host.launchOnce("ask:${person.ref}") {
+            val res = host.controller.ask(person, text, prefill.second)
             when (res) {
                 is ApiResult.Ok -> {
                     host.markAskSent(person.ref)

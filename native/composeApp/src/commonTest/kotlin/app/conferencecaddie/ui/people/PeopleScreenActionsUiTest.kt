@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -11,11 +12,15 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.v2.runComposeUiTest
 import app.conferencecaddie.shared.people.ConferenceInfo
 import app.conferencecaddie.shared.people.PeopleError
+import app.conferencecaddie.shared.people.PeopleTestHook
 import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.ui.shell.PeoplePage
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlinx.coroutines.flow.updateAndGet
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CompletableDeferred
 
 // The people screens and sheets (Meet up, the found card, the ask sheet, Unblock in Settings,
 // Profile's Shared talks, Requests' Accept and Not now) against the fake server, at the two moments
@@ -187,6 +192,28 @@ class PeopleScreenActionsUiTest {
         assertEquals(1, rig.state.met.size)
     }
 
+    @Test
+    fun aMeetUpOpenedAgainWhileItsActionIsUnderWayWaitsForIt() = runComposeUiTest {
+        val rig = rig()
+        val id = activeMeet(rig)
+        show(rig) { state -> MeetScreen(id, state, rig.host) }
+        u3WaitForTag("meet-spot-me")
+        onNodeWithTag("meet-spot-me").performScrollTo().typeText("green hoodie")
+
+        // Held once the line is saved and before the action returns, so Meet up can load again.
+        val held = HeldAction(rig.controller) { rig.calls("PUT", "/api/meet/$id/details").isNotEmpty() }
+        onNodeWithTag("meet-spot-me-save").performScrollTo().performClick()
+        waitUntil(timeoutMillis = 20_000) { held.hasArrived }
+        leave("meet-screen")
+        shown.value = true
+        u3WaitForTag("meet-found")
+        // The Meet up that came back knows an action of this meet-up is under way.
+        onNodeWithTag("meet-found").assertIsNotEnabled()
+        held.release()
+        waitUntil(timeoutMillis = 20_000) { !rig.host.isRunning("meet:$id") }
+        assertEquals(1, rig.calls("PUT", "/api/meet/$id/details").size)
+    }
+
     // --- The ask sheet ---------------------------------------------------------------------------
 
     @Test
@@ -232,6 +259,34 @@ class PeopleScreenActionsUiTest {
         hold.release()
         u3WaitForText(ConnectStrings.ASKED)
         afterQueuedRequests(rig)
+        assertEquals(1, rig.calls("POST", "/api/meet").size)
+    }
+
+    @Test
+    fun anAskSheetOpenedAgainWhileTheAskIsUnderWayWaitsForIt() = runComposeUiTest {
+        val rig = rig()
+        val ada = u3Await(rig) {
+            rig.controller.updateContext(rig.context())
+            rig.makeVisible()
+            val ada = rig.seedAda("Hallway")
+            check(rig.controller.turnOnPresence("Hallway", "") == null)
+            ada
+        }
+        show(rig) { }
+        runOnIdle { rig.host.ask(rig.person(ada)) }
+        u3WaitForTag("ask-send")
+
+        val hold = rig.server.hold("POST", "/api/meet")
+        onNodeWithTag("ask-send").performScrollTo().performClick()
+        waitUntil(timeoutMillis = 20_000) { hold.hasArrived }
+        runOnIdle { rig.host.closeAsk() }
+        u3WaitForNoTag("ask-sheet")
+        runOnIdle { rig.host.ask(rig.person(ada)) }
+        u3WaitForTag("ask-send")
+        // The sheet opened again knows the ask is under way, and says "Asked" once it is answered.
+        onNodeWithTag("ask-send").assertIsNotEnabled()
+        hold.release()
+        u3WaitForText(ConnectStrings.ASKED)
         assertEquals(1, rig.calls("POST", "/api/meet").size)
     }
 
@@ -363,6 +418,29 @@ class PeopleScreenActionsUiTest {
         hold.release()
         waitUntil(timeoutMillis = 20_000) { rig.toasts.value.isNotEmpty() }
         assertEquals(listOf(DELETED_MESSAGE), rig.toasts.value)
+    }
+
+    @OptIn(PeopleTestHook::class)
+    @Test
+    fun aDoubleTapOnStopSharingStopsOnce() = runComposeUiTest {
+        val rig = rig()
+        onProfile(rig, visible = true)
+        u3Await(rig) { check(rig.controller.shareForTalks(listOf("$SLUG:1")) == null) }
+        u3WaitForTag("profile-shared-row")
+
+        // Each write the controller finishes; the first is held until both taps have been handled.
+        val writes = MutableStateFlow(0)
+        val gate = CompletableDeferred<Unit>()
+        rig.controller.beforeActionReturns = {
+            if (writes.updateAndGet { it + 1 } == 1) gate.await()
+        }
+        doubleTap(onNodeWithText(ProfileStrings.STOP_SHARING_ALL_TALKS).performScrollTo())
+        waitUntil(timeoutMillis = 20_000) { writes.value >= 1 }
+        gate.complete(Unit)
+        // A later one queues behind any second one on the share lock: the tap's and this one, no more.
+        u3Await(rig) { rig.controller.unshareAll() }
+        rig.controller.beforeActionReturns = {}
+        assertEquals(2, writes.value)
     }
 
     // --- Requests --------------------------------------------------------------------------------

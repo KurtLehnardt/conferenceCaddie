@@ -99,8 +99,9 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     // The actions run on the app's scope (PeopleHost.scope), not one of this screen's own: Back, or
     // another tab, while an action is under way would cancel its caller and lose its answer. An
-    // answer this screen shows itself goes in a toast once the screen has left ([shown]). busy is
-    // set before the launch, so a second tap in the same frame starts nothing.
+    // answer this screen shows itself goes in a toast once the screen has left ([shown]). They run
+    // one at a time under the meet-up's name (PeopleHost.launchOnce), so a second tap in the same
+    // frame, or on a Meet up opened again while one is under way, starts nothing.
     val shown = rememberInComposition()
     var view by remember { mutableStateOf<MeetUi>(MeetUi.Loading) }
     var spotMe by rememberSaveable { mutableStateOf("") }
@@ -108,7 +109,7 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
     var spotError by remember { mutableStateOf<String?>(null) }
     var rendezvous by remember { mutableStateOf("") }
     var picking by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
+    val busy = host.isRunning("meet:$meetId")
     var confirmCancel by remember { mutableStateOf(false) }
     // Not state: what the poll checks. The last open meet shown is kept for the found view when
     // the other person ends it.
@@ -167,17 +168,9 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
         }
     }
 
-    /** Runs [action] on the app's scope with busy set, unless an action is under way already. */
+    /** Runs [action] on the app's scope under the meet-up's name, unless one is under way already. */
     fun act(action: suspend () -> Unit) {
-        if (busy) return
-        busy = true
-        host.scope.launch {
-            try {
-                action()
-            } finally {
-                busy = false
-            }
-        }
+        host.launchOnce("meet:$meetId", action)
     }
 
     fun found() {
@@ -434,7 +427,7 @@ private fun FoundCard(meetId: String, found: MeetUi.Found, host: PeopleHost) {
                 CaddieButton(
                     ConnectStrings.SAVE_PERSON,
                     {
-                        // saved is checked before anything else: a second tap in the same frame,
+                        // Checked and marked before anything else: a second tap in the same frame,
                         // before the button gives way to "Saved under Settings", saves nobody twice.
                         if (!saved) {
                             saved = true

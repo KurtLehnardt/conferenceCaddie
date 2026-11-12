@@ -1,6 +1,5 @@
 package app.conferencecaddie.ui.people
 
-import androidx.compose.runtime.Stable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.conferencecaddie.ui.shell.ShellNavigator
@@ -19,20 +18,24 @@ import kotlinx.coroutines.flow.receiveAsFlow
  *   the re-creation still shows its toast, closes its panel or its sheet afterwards.
  * - The toasts ([post]): the answer is queued here and shown by whichever composition shows now
  *   ([toasts]); one shown by the composition that has gone would never be seen.
- * - [navigator]: the shell's navigation as it is now. A toast's "Open profile", or a Meet up opened
- *   by an Accept that finished after the re-creation, moves the screens that show.
- * - The host's memory ([memory]): the open sheets, the people waved at and the setup panels. An
- *   answer that closes a sheet changes the memory the new composition shows; a copy restored from
- *   saved state would still have it open.
+ * - [navigator], [openTalk] and [openUrl]: the shell's as they are now. A toast's "Open profile", or
+ *   a Meet up opened by an Accept that finished after the re-creation, moves the screens that show,
+ *   and nothing an action holds keeps the old activity alive.
+ * - The host's memory ([memory]): the open sheets, the people waved at, the setup panels and the
+ *   actions under way. An answer that closes a sheet changes the memory the new composition shows;
+ *   a copy restored from saved state would still have it open.
  *
- * [PeopleViewModel] holds it for as long as the activity's ViewModelStore lives, as SearchViewModel
- * holds the Search screen's state: it outlives a rotation and ends when the activity finishes, so
- * no answer is shown on a later visit. Without a ViewModelStoreOwner (previews, some tests) it
- * lives as long as the composition, with the composition's scope.
+ * [PeopleViewModel] holds it in the activity's ViewModelStore, as the Search screen's model is held
+ * (SearchViewModel), but unlike that model its work runs in a scope of its own (the ViewModel's),
+ * since an answer must outlive the composition: it lives across a rotation and ends when the
+ * activity finishes, so no answer is shown on a later visit (DECISIONS.md). Without a
+ * ViewModelStoreOwner (previews, some tests) it lives as long as the composition, with the
+ * composition's scope.
  */
-@Stable
 class PeopleRetained(val scope: CoroutineScope) {
-    private val queue = Channel<Pending>(Channel.UNLIMITED)
+    // A toast the collector had taken but not shown when its composition went (a rotation at that
+    // moment) is queued again for the next one.
+    private val queue: Channel<Pending> = Channel(Channel.UNLIMITED) { undelivered -> queue.trySend(undelivered) }
 
     /** A toast waiting to be shown. */
     internal class Pending(val message: String, val action: PeopleToastAction?)
@@ -71,6 +74,20 @@ class PeopleRetained(val scope: CoroutineScope) {
             current?.back()
         }
     }
+
+    /** The shell's "open this talk" of the composition that shows now; set by it. */
+    @kotlin.concurrent.Volatile
+    internal var currentOpenTalk: ((String) -> Unit)? = null
+
+    /** The shell's "open this link" of the composition that shows now; set by it. */
+    @kotlin.concurrent.Volatile
+    internal var currentOpenUrl: ((String) -> Unit)? = null
+
+    /** Opens a talk in whichever composition shows now. */
+    internal val openTalk: (String) -> Unit = { currentOpenTalk?.invoke(it) }
+
+    /** Opens a link from whichever composition shows now. */
+    internal val openUrl: (String) -> Unit = { currentOpenUrl?.invoke(it) }
 
     /** The host's memory, once the first composition has made or restored it. */
     internal var memory: PeopleHostMemory? = null

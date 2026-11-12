@@ -51,10 +51,11 @@ fun SettingsPeople(state: PeopleUiState, host: PeopleHost) {
  */
 @Composable
 fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
-    var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     // Unblock runs on the app's scope (PeopleHost.scope), so leaving Settings meanwhile loses neither
-    // its toast nor its error ([shown]); busy is set before the launch, one unblock at a time.
+    // its toast nor its error ([shown]); one unblock at a time, every row waiting while one runs
+    // (PeopleHost.launchOnce), also across a screen that came back.
+    val busy = host.isRunning(UNBLOCK_ACTION)
     val shown = rememberInComposition()
     LaunchedEffect(host.controller, state.conference?.slug) { host.controller.refreshBlocks() }
 
@@ -68,15 +69,10 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
                     CaddieButton(
                         ProfileStrings.UNBLOCK,
                         {
-                            if (busy == null) {
-                                busy = b.ref
+                            if (!host.isRunning(UNBLOCK_ACTION)) {
                                 error = null
-                                host.scope.launch {
-                                    val err = try {
-                                        host.controller.unblock(b.ref)
-                                    } finally {
-                                        busy = null
-                                    }
+                                host.launchOnce(UNBLOCK_ACTION) {
+                                    val err = host.controller.unblock(b.ref)
                                     when {
                                         err == null -> host.showToast(PeopleCommonStrings.unblocked(b.displayName))
                                         shown.value -> error = err
@@ -88,7 +84,7 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
                         Modifier.testTag("unblock-${b.ref}"),
                         variant = ButtonVariant.Text,
                         small = true,
-                        enabled = busy != b.ref,
+                        enabled = !busy,
                     )
                 }
             }
@@ -206,3 +202,6 @@ private fun Modifier.stretchedLeft(dp: Int): Modifier = this.layout { measurable
     val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
     layout(constraints.maxWidth, placeable.height) { placeable.place(-extra, 0) }
 }
+
+/** The name Unblock runs under ([PeopleHost.launchOnce]): one at a time. */
+private const val UNBLOCK_ACTION = "unblock"

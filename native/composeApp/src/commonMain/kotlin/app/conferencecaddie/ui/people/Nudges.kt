@@ -124,12 +124,12 @@ fun PushControls(state: PeopleUiState, host: PeopleHost, variant: PushVariant, m
     val push = state.push
     val settings = variant == PushVariant.Settings
     var panel by remember { mutableStateOf<PushPanel?>(null) }
-    var busy by remember { mutableStateOf(false) }
+    val busy = host.isRunning("push")
     // Turning push on runs on the app's scope (PeopleHost.scope), not one of this control's own: the
     // presence card it sits in can be scrolled away or the tab left while the system's prompt is up,
     // and a backend without native push takes the control away as it answers. A hint this control
-    // shows itself goes in a toast once it has left. busy is set before the launch, so a second tap
-    // in the same frame starts nothing.
+    // shows itself goes in a toast once it has left. It runs once at a time (PeopleHost.launchOnce),
+    // so a second tap in the same frame, or on a control that came back, starts nothing.
     val shown = rememberInComposition()
 
     fun show(outcome: PushOutcome) {
@@ -158,17 +158,14 @@ fun PushControls(state: PeopleUiState, host: PeopleHost, variant: PushVariant, m
 
     /** Turns push on; with [noticeFirst], records first that the notice was shown. */
     fun turnOn(noticeFirst: Boolean) {
-        if (busy) return
-        busy = true
-        host.scope.launch {
-            val outcome = try {
+        if (host.isRunning("push")) return
+        host.launchOnce("push") {
+            val outcome = run {
                 if (noticeFirst) {
                     controller.markPushNoticeSeen()
                     panel = null
                 }
                 controller.enablePush()
-            } finally {
-                busy = false
             }
             show(outcome)
         }

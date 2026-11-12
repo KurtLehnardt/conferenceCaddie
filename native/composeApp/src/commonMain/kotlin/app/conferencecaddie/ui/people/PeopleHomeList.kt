@@ -204,8 +204,11 @@ internal fun PeopleHomeCreateProfilePrompt(host: PeopleHost) {
  */
 @Composable
 internal fun PeopleHomeVisibilityPrompt(host: PeopleHost) {
-    var busy by remember { mutableStateOf(false) }
+    // The same action as Profile's visibility switch, one at a time (PeopleHost.launchOnce); a message
+    // after the prompt has gone goes in a toast ([shown]).
+    val busy = host.isRunning(VISIBILITY_ACTION)
     var message by remember { mutableStateOf<String?>(null) }
+    val shown = rememberInComposition()
     PeoplePrompt(
         PeopleStrings.VISIBILITY_TITLE,
         Modifier.testTag("people-visibility-prompt"),
@@ -213,14 +216,11 @@ internal fun PeopleHomeVisibilityPrompt(host: PeopleHost) {
         body = PeopleStrings.VISIBILITY_BODY,
         notice = PeopleCommonStrings.VISIBILITY_NOTICE,
         action = StateAction(PeopleStrings.MAKE_VISIBLE, {
-            if (!busy) {
-                busy = true
-                host.scope.launch {
-                    try {
-                        message = host.controller.setOpenToMeet(true)
-                    } finally {
-                        busy = false
-                    }
+            host.launchOnce(VISIBILITY_ACTION) {
+                val err = host.controller.setOpenToMeet(true)
+                message = null
+                if (err != null) {
+                    if (shown.value) message = err else host.showMessage(err)
                 }
             }
         }),

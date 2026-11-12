@@ -94,20 +94,22 @@ fun PresenceControls(
     // The card's actions run on the app's scope (PeopleHost.scope), not one of the card's own: the
     // card is an item of the People home's list, so scrolling it away or leaving the tab while an
     // action is under way would cancel the action's caller and lose its toast or error. An outcome
-    // the card shows itself goes in a toast once the card has left ([shown]). busy is set before
-    // the launch, so a second tap in the same frame starts nothing.
+    // the card shows itself goes in a toast once the card has left ([shown]). One action at a time
+    // (PeopleHost.launchOnce), so a second tap in the same frame, or on a card that came back,
+    // starts nothing.
     val shown = rememberInComposition()
     val presence = state.presence
     val zones = state.zones
     val currentState by rememberUpdatedState(state)
     val handled by rememberUpdatedState(onHereZoneHandled)
 
-    // In the host's memory, which an answer after a re-creation still reaches (PeopleHost.presencePanel).
-    var panel by host::presencePanel
+    // In the host's memory, which an answer after a re-creation still reaches (PeopleHost.rememberPanel).
+    var panel by host.rememberPanel(SetupPanel.Presence)
     var zone by rememberSaveable { mutableStateOf("") }
     var modeName by rememberSaveable { mutableStateOf(presence.mode.name) }
     var spot by rememberSaveable { mutableStateOf(presence.spot) }
-    var busy by remember { mutableStateOf(false) }
+    // The card's actions are one at a time, also across a card that came back (PeopleHost.launchOnce).
+    val busy = host.isRunning(PRESENCE_ACTION)
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     var unknownZone by rememberSaveable { mutableStateOf(false) }
     var positionProblem by remember { mutableStateOf<PositionOutcome?>(null) }
@@ -143,18 +145,13 @@ fun PresenceControls(
     }
 
     fun applyPanel() {
-        if (busy) return
+        if (host.isRunning(PRESENCE_ACTION)) return
         val z = zone.ifEmpty { zones.firstOrNull() ?: return }
         val s = spot
         val m = mode
-        busy = true
         error = null
-        host.scope.launch {
-            val err = try {
-                controller.turnOnPresence(z, s, m)
-            } finally {
-                busy = false
-            }
+        host.launchOnce(PRESENCE_ACTION) {
+            val err = controller.turnOnPresence(z, s, m)
             if (err != null) {
                 if (shown.value) error = err else host.showMessage(err)
             } else {
@@ -175,14 +172,9 @@ fun PresenceControls(
     }
 
     fun extend() {
-        if (busy) return
-        busy = true
-        host.scope.launch {
-            val err = try {
-                controller.extendPresence()
-            } finally {
-                busy = false
-            }
+        if (host.isRunning(PRESENCE_ACTION)) return
+        host.launchOnce(PRESENCE_ACTION) {
+            val err = controller.extendPresence()
             // The web keeps the error for the closed panel, where it is never seen; here it is a toast.
             if (err != null) host.showMessage(err) else host.showToast(ConnectStrings.EXTENDED)
         }
@@ -193,15 +185,10 @@ fun PresenceControls(
     val askPosition = presence.on && !panel && canLocate && presence.positionChoice == null
 
     fun choosePosition(on: Boolean) {
-        if (busy) return
-        busy = true
+        if (host.isRunning(PRESENCE_ACTION)) return
         positionProblem = null
-        host.scope.launch {
-            val outcome = try {
-                controller.sharePosition(on)
-            } finally {
-                busy = false
-            }
+        host.launchOnce(PRESENCE_ACTION) {
+            val outcome = controller.sharePosition(on)
             when (outcome) {
                 PositionOutcome.On -> if (on) host.showToast(ConnectStrings.USING_POSITION_TOAST)
                 PositionOutcome.Denied, PositionOutcome.Approximate ->
@@ -448,7 +435,8 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
     val zone = state.presence.zone
     if (!state.presence.on || !state.presence.confirmPending || zone == null) return
     val c = Caddie.colors
-    var busy by remember { mutableStateOf(false) }
+    // One answer at a time, the card's actions included (PeopleHost.launchOnce).
+    val busy = host.isRunning(PRESENCE_ACTION)
     var picking by rememberSaveable { mutableStateOf(false) }
     var other by rememberSaveable { mutableStateOf("") }
     val zones = state.zones
@@ -458,14 +446,9 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
     // that before confirmZone returns, so the row can leave the composition (cancelling a scope of its
     // own) before the answer comes back, and "Now in {zone}" would never show.
     fun answer(z: String) {
-        if (busy || z.isEmpty()) return
-        busy = true
-        host.scope.launch {
-            val err = try {
-                host.controller.confirmZone(z)
-            } finally {
-                busy = false
-            }
+        if (host.isRunning(PRESENCE_ACTION) || z.isEmpty()) return
+        host.launchOnce(PRESENCE_ACTION) {
+            val err = host.controller.confirmZone(z)
             if (err != null) {
                 host.showMessage(err)
             } else {
@@ -556,3 +539,6 @@ internal fun ConnectAskedText(text: String, modifier: Modifier = Modifier, leadi
         Text(text, style = Caddie.type.peopleLabel, color = Caddie.colors.text2)
     }
 }
+
+/** The name the presence card and "Still in" run their actions under ([PeopleHost.launchOnce]): one at a time. */
+internal const val PRESENCE_ACTION = "presence"

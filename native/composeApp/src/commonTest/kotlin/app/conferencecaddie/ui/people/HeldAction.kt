@@ -56,9 +56,9 @@ internal class HeldAction(controller: PeopleController, until: () -> Boolean) {
 
 /**
  * Two taps on [node] handled one after the other before anything else runs on the UI thread, as
- * when both reach the app in one frame: the first one's action has not started when the second
- * comes. (Injected touches would let the test's clock run, and the first action start, between
- * the two.)
+ * when both reach the app in one frame: the screen has not been composed again between them, so it
+ * still shows the first one's button enabled. (Injected touches would let the test's clock run,
+ * and the screen recompose, between the two.)
  */
 @OptIn(ExperimentalTestApi::class)
 internal fun ComposeUiTest.doubleTap(node: SemanticsNodeInteraction) {
