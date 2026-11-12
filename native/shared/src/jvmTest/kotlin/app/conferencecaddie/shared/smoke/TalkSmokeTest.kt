@@ -458,31 +458,18 @@ class TalkSmokeTest {
     private fun forYouChecks() {
         val own = conf(primary).data.filter { it.kind() == "talk" }.map { it.str("talk_id")!! }.toSet()
         check("r1: For you puts talks with a wanted topic first and never an ended or marked one") {
-            // The topic is chosen now, as in scripts/smoke.mjs: the one with the most talks that have not
-            // ended, at least 3 (two are marked and one must remain); none has 3 means N/A.
-            val bundleTopics = conf(primary).bundle.topics
-            val upcoming = bundleTopics.take(12).map { t ->
-                t to forYou(primary, ForYou.Request(listOf(t.topicId), "", emptySet(), 50)).count { it.talk.endEpochMs > nowMs && t.topicId in it.talk.topics }
-            }
-            val pick = upcoming.filter { it.second >= 3 }.maxByOrNull { it.second }
-            if (pick == null) {
-                na("r1: For you puts talks with a wanted topic first and never an ended or marked one", "no topic has 3 or more talks that have not ended")
-                return@check
-            }
-            val wanted = pick.first.topicId
-            val wantedLabel = pick.first.label
-            val first = forYou(primary, ForYou.Request(listOf(wanted), ""))
+            val first = forYou(primary, ForYou.Request(listOf("ebpf"), "kernel level tracing and observability"))
             val marked = first.take(2).map { it.talk.talkId }.toSet()
-            val results = forYou(primary, ForYou.Request(listOf(wanted), "", marked, 50))
-            val chips = forYou(primary, ForYou.Request(listOf(wanted), "", marked, 50))
+            val results = forYou(primary, ForYou.Request(listOf("ebpf"), "kernel level tracing and observability", marked, 50))
+            val chips = forYou(primary, ForYou.Request(listOf("ebpf"), "", marked, 50))
             val problems = ArrayList<String>()
             if (results.isEmpty()) problems += "no results"
             val top = results.firstOrNull()
-            if (top != null && !(wanted in top.talk.topics && wantedLabel in top.learnTopics)) problems += "the first result \"${top.talk.title}\" lacks $wantedLabel"
+            if (top != null && !("ebpf" in top.talk.topics && "eBPF" in top.learnTopics)) problems += "the first result \"${top.talk.title}\" lacks eBPF"
             // Native only: the marked talks also find talks like them, so a chips-only request with
             // marked talks can hold talks without the topic; without marked talks it cannot.
-            val chipsAlone = forYou(primary, ForYou.Request(listOf(wanted), "", emptySet(), 50))
-            if (chipsAlone.isEmpty() || !chipsAlone.all { wanted in it.talk.topics }) problems += "a chips-only result lacks the wanted topic"
+            val chipsAlone = forYou(primary, ForYou.Request(listOf("ebpf"), "", emptySet(), 50))
+            if (chipsAlone.isEmpty() || !chipsAlone.all { "ebpf" in it.talk.topics }) problems += "a chips-only result lacks the wanted topic"
             for (r in results + chips) {
                 if (r.talk.endEpochMs <= nowMs) problems += "ended talk \"${r.talk.title}\""
                 if (r.talk.talkId in marked) problems += "marked talk \"${r.talk.title}\""
