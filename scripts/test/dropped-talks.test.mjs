@@ -95,6 +95,36 @@ test('a profile its owner makes visible between the read and the hide is kept: t
   assert.equal(action.retry_on_conflict, undefined);
 });
 
+test('a profile its owner makes visible right after the hide is kept, with everything it has', async () => {
+  const s = setup({ open_to_meet: false, shared_talk_ids: [GONE] });
+  const [id] = s.ids;
+  const profileId = id.slice(EVENT.length + 1);
+  s.cluster.put(INDEX.meets, 'meet-own', { event_id: EVENT, meet_id: 'meet-own', participants: [profileId, 'other1'], expires_at: FUTURE });
+  s.cluster.put(INDEX.blocks, 'block-own', { event_id: EVENT, blocker_id: profileId, blocked_id: 'other1', expires_at: FUTURE });
+  s.cluster.after('hide', 1, (c) => c.patch(INDEX.people, id, { open_to_meet: true }));
+  assert.deepEqual(await s.run(), { unshared: 1, profilesDeleted: 0, failed: 0 });
+  assert.equal(s.cluster.source(INDEX.people, id).open_to_meet, true);
+  assert.deepEqual(s.cluster.ids(INDEX.meets), ['meet-own']);
+  assert.deepEqual(s.cluster.ids(INDEX.blocks), ['block-own']);
+  assert.equal(s.cluster.calls('delete-doc').length, 0);
+});
+
+test('a profile its owner makes visible just before its document is deleted keeps the document and its blocks', async () => {
+  const s = setup({ open_to_meet: false, shared_talk_ids: [GONE] });
+  const [id] = s.ids;
+  const profileId = id.slice(EVENT.length + 1);
+  s.cluster.put(INDEX.meets, 'meet-own', { event_id: EVENT, meet_id: 'meet-own', participants: [profileId, 'other1'], expires_at: FUTURE });
+  s.cluster.put(INDEX.blocks, 'block-own', { event_id: EVENT, blocker_id: profileId, blocked_id: 'other1', expires_at: FUTURE });
+  s.cluster.before('delete-doc', 1, (c) => c.patch(INDEX.people, id, { open_to_meet: true }));
+  assert.deepEqual(await s.run(), { unshared: 1, profilesDeleted: 0, failed: 0 });
+  assert.equal(s.cluster.source(INDEX.people, id).open_to_meet, true, 'the guarded document delete answered 409');
+  assert.deepEqual(s.cluster.ids(INDEX.blocks), ['block-own'], 'the blocks go only once the document is gone');
+  // As when the purge finishes a pending delete, the meets went before the document.
+  assert.deepEqual(s.cluster.ids(INDEX.meets), []);
+  const [del] = s.cluster.calls('delete-doc');
+  assert.ok(del.params.has('if_seq_no') && del.params.has('if_primary_term'));
+});
+
 test('a profile deleted meanwhile is skipped without a failure', async () => {
   const s = setup({ open_to_meet: false, shared_talk_ids: [GONE] });
   const [id] = s.ids;
@@ -114,9 +144,15 @@ test('one profile that fails is counted and logged without its id; the others ar
 test('five profiles failing in a row stop the cleanup instead of waiting on every one', async () => {
   const s = setup(...Array.from({ length: 7 }, () => ({ open_to_meet: true, shared_talk_ids: [GONE] })));
   for (let n = 1; n <= 5; n++) s.cluster.fail({ tag: 'update', nth: n, how: 'item503' });
-  await assert.rejects(s.run(), (err) => err instanceof PeopleError && err.message === 'stopped after 5 profiles in a row failed');
+  await assert.rejects(s.run(), (err) => err instanceof PeopleError && err.message === 'stopped after 5 profiles in a row failed'
+    && JSON.stringify(err.result) === JSON.stringify({ unshared: 0, profilesDeleted: 0, failed: 5 }));
   assert.equal(s.cluster.calls('update').length, 5);
   assert.equal(s.lines.length, 5);
+
+  // A success in between starts the count again.
+  const t = setup(...Array.from({ length: 7 }, () => ({ open_to_meet: true, shared_talk_ids: [GONE] })));
+  for (const n of [1, 2, 3, 4, 6, 7]) t.cluster.fail({ tag: 'update', nth: n, how: 'item503' });
+  assert.deepEqual(await t.run(), { unshared: 1, profilesDeleted: 0, failed: 6 });
 });
 
 test('a profile that keeps conflicting gives up after three attempts', async () => {

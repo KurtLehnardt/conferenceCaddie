@@ -362,9 +362,15 @@ async function unshareDeletedTalks(slug, plan, lines) {
     }
     const people = peopleTransport((method, path, body, o) => es(method, path, body, { ...o, key: process.env.ES_PEOPLE_API_KEY || undefined }));
     const cleanup = createDeletedTalkCleanup({ people, indices: indicesFrom(process.env), log });
-    const r = await cleanup.unshareDeletedTalks(slug, gone);
-    log(`${r.unshared} profile${r.unshared === 1 ? '' : 's'} stopped sharing for the ${gone.length} deleted talk${gone.length === 1 ? '' : 's'}; ${r.profilesDeleted} deleted, left neither open to meet nor sharing${r.failed ? `; ${r.failed} failed (${NOT_RETRIED})` : ''}`);
-    return r.failed > 0;
+    const counts = (r) => `${r.unshared} profile${r.unshared === 1 ? '' : 's'} stopped sharing for the ${gone.length} deleted talk${gone.length === 1 ? '' : 's'}; ${r.profilesDeleted} deleted, left neither open to meet nor sharing`;
+    try {
+      const r = await cleanup.unshareDeletedTalks(slug, gone);
+      log(`${counts(r)}${r.failed ? `; ${r.failed} failed (${NOT_RETRIED})` : ''}`);
+      return r.failed > 0;
+    } catch (e) {
+      if (e.result) log(`${counts(e.result)} before the cleanup stopped`);
+      throw e;
+    }
   } catch (e) {
     log(`taking the deleted talks out of people's shared talks failed: ${e.message} (${NOT_RETRIED})`);
     return true;

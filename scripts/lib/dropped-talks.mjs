@@ -139,9 +139,9 @@ export function createDeletedTalkCleanup({ people, indices, log = (message) => c
     // Neither open to meet nor sharing for any talk now: the profile goes, as a profile write with
     // both choices off deletes it. The unshare above left exactly the state of a pending delete
     // (open_to_meet false, no shared_talk_ids), which every route and the export already treat as
-    // gone and the hourly purge would finish. A realtime read first, and the delete's hide is
-    // guarded by that read: a profile its owner made visible or shared again in the meantime, even
-    // in the moment between the read and the hide, is kept with everything it has.
+    // gone and the hourly purge would finish. A realtime read first, and the delete is guarded by
+    // it (deleteProfileAndConnections with guard): a profile its owner makes visible or shares
+    // again at any moment before its document is deleted is kept.
     const now = await readProfile(hit._id);
     if (!now || !isPendingDelete(now.source)) return 'unshared';
     const deleted = await profileDelete.deleteProfileAndConnections(slug, profileId, { guard: { seqNo: now.seqNo, primaryTerm: now.primaryTerm } });
@@ -154,7 +154,7 @@ export function createDeletedTalkCleanup({ people, indices, log = (message) => c
    * neither choice. Returns { unshared, profilesDeleted, failed }: profiles that stopped sharing for
    * a deleted talk (the deleted ones among them), profiles deleted, and profiles whose cleanup
    * failed (each logged). Throws PeopleError when the people search itself fails, or after
-   * MAX_FAILURES_IN_A_ROW profiles in a row failed.
+   * MAX_FAILURES_IN_A_ROW profiles in a row failed (with the counts so far as its `result`).
    */
   async function unshareDeletedTalks(slug, talkIds) {
     const result = { unshared: 0, profilesDeleted: 0, failed: 0 };
@@ -183,7 +183,11 @@ export function createDeletedTalkCleanup({ people, indices, log = (message) => c
         } catch (err) {
           result.failed++;
           log(`A profile that shared for a deleted talk could not be updated: ${errorText(err)}`);
-          if (++inARow >= MAX_FAILURES_IN_A_ROW) throw new PeopleError(`stopped after ${inARow} profiles in a row failed`);
+          if (++inARow >= MAX_FAILURES_IN_A_ROW) {
+            const stop = new PeopleError(`stopped after ${inARow} profiles in a row failed`);
+            stop.result = result;
+            throw stop;
+          }
         }
       }
       if (hits.length < PAGE) return result;

@@ -1361,17 +1361,18 @@ async function putProfile(req, res) {
   const requested = idList(body.shared_talk_ids, 'shared_talk_ids', 50, TALK_ID_RE);
   const conf = await conferenceFor(body.event);
   const id = docId(conf.slug, device.profileId);
-  // Before the both-off check, as on the Worker: a write whose every shared talk left the schedule
-  // and that is not open to meet deletes the profile.
-  let shared = await checkSharedTalks(conf.slug, requested);
 
   for (let attempt = 1; ; attempt++) {
-    // A retry after a conflict reads the talks again: the write that won may be the ingest taking a
-    // deleted talk out of this profile (scripts/lib/dropped-talks.mjs), which must not come back.
-    if (attempt > 1) shared = await checkSharedTalks(conf.slug, requested);
     const own = await ownDoc(conf.slug, device.profileId);
     const profile = { ...input };
     if (own.found && !secretMatches(device.secret, own.source.secret_hash)) throw forbidden();
+    // The shared talks to store, before the both-off check as on the Worker: a write whose every
+    // shared talk left the schedule and that is not open to meet deletes the profile. Read after
+    // the profile, and again on every retry: the ingest refreshes the talks before it takes a
+    // deleted talk out of the profiles (scripts/lib/dropped-talks.mjs), so either the talk is
+    // already gone here, or the ingest's write lands after this read and the guarded write below
+    // conflicts and is retried. A talk the ingest took out never comes back.
+    const shared = await checkSharedTalks(conf.slug, requested);
 
     // Both visibility choices off: the document must not exist, nor anything that connected it.
     if (!body.open_to_meet && !shared.length) {

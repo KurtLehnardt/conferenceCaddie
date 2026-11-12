@@ -88,7 +88,14 @@ async function main() {
 }
 
 // Run as a script (also through a symlink), not when a test imports it.
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const isMain = () => {
+  try {
+    return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+};
+if (isMain()) {
   main().then(
     (code) => { process.exitCode = code; },
     (err) => {
