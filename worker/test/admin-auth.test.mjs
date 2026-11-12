@@ -231,7 +231,8 @@ const NOT_FOUND = { error: 'Not found' };
 
 describe('the Worker\'s admin check, step by step', { skip }, () => {
   test('every /admin/* route goes through it: unsigned or bearer requests get 404 and reach no object', async () => {
-    const { env, received } = stubEnv();
+    // The /admin/test/* fixtures are served only with ADMIN_TEST_ROUTES="1" (admin-test-routes.test.mjs).
+    const { env, received } = stubEnv({ ADMIN_TOKEN: KEY, ADMIN_TEST_ROUTES: '1' });
     const routes = [...adminRoutes.map((r) => [r.method, r.path]), ['PUT', '/admin/conferences'], ['GET', '/admin/no-such-route'], ['POST', '/admin/x']];
     assert.ok(routes.some(([m, p]) => m === 'POST' && p === '/admin/test/profile'), 'the /admin/test/* fixtures are among them');
     for (const [method, path] of routes) {
