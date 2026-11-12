@@ -23,15 +23,18 @@
 //                        Default web/dist-worker against the Worker on BASE_URL's origin, else web/dist.
 //   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token. The file is read as caddie-admin reads
 //                        it (mode 0600, the whole file trimmed), so both use the same key. A set but
-//                        empty ADMIN_TOKEN_FILE means no token. With neither set, a signed run whose
-//                        API_BASE origin is exactly the api of a tier 2 backend in caddie-admin's
-//                        config.json, and is not on this machine (a local Worker has its own token in
-//                        worker/.dev.vars), reads the token file caddie-admin reads:
-//                        <config dir>/admin-token, the config dir being CADDIE_ADMIN_HOME, else
-//                        $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie. When that
-//                        file does not exist and CADDIE_ADMIN_HOME is unset, the old
-//                        ~/.config/conference-caddie/admin-token is read, if the config.json beside it
-//                        (when there is one) lists that origin too, and a NOTE line says to move it.
+//                        empty ADMIN_TOKEN_FILE means no token. With neither set, a run whose origin as
+//                        typed (API_BASE, or the scheme and host of BASE_URL; canonicalOrigin below) is
+//                        exactly the api of a tier 2 backend in caddie-admin's config.json, and is not
+//                        on this machine (a local Worker has its own token in worker/.dev.vars), reads
+//                        the token file caddie-admin reads: <config dir>/admin-token, the config dir
+//                        being CADDIE_ADMIN_HOME, else $XDG_CONFIG_HOME/conference-caddie, else
+//                        ~/.config/conference-caddie. When that file does not exist and
+//                        CADDIE_ADMIN_HOME is unset, the old ~/.config/conference-caddie/admin-token is
+//                        read, if the config.json beside it (when there is one) lists that origin too,
+//                        and a NOTE line says to move it. The fallback fails closed: an old path, or a
+//                        config.json beside it, that cannot be checked (a directory on its path cannot
+//                        be searched) is not read, and a NOTE line says so.
 //                        Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. With a token the
 //                        three Elasticsearch helpers below are replaced by the Worker's test
 //                        fixtures: POST /admin/test/profile (the expired profile),
@@ -39,17 +42,28 @@
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
 //                        Check meter1 also uses POST /admin/test/meter-restart (a new usage meter).
 //                        The reports the run makes are removed at the end with POST /admin/moderation.
-//                        The token is only ever used towards API_BASE: as the key of the X-Caddie-Admin
-//                        signature (SMOKE_ADMIN_AUTH=signed) or as a bearer (SMOKE_ADMIN_AUTH=bearer).
-//                        A signature does not cover the host: whatever answers at API_BASE can replay a
-//                        signed request to the real Worker within its five-minute window, while that
-//                        nonce is unused there. Point API_BASE only at the Worker the token belongs to.
-//   SMOKE_ADMIN_AUTH     signed or bearer: how the admin calls authenticate. signed builds the
-//                        X-Caddie-Admin header of scripts/lib/admin-sign.mjs for every admin call, with a
-//                        fresh nonce and timestamp on each attempt, and sends no Authorization header;
-//                        bearer sends Authorization: Bearer <token>, the scheme of a local or old Worker
-//                        that does not have the signed admin routes (a current Worker answers it 404).
-//                        Default signed. No admin request follows a redirect: a 3xx is a FAIL.
+//                        The token is only ever used towards API_BASE, as the key of the X-Caddie-Admin
+//                        signature; it is never sent itself. The signature is v2 by default
+//                        (CADDIE_ADMIN_SIG_VERSION below), which binds API_BASE's origin, so a signed
+//                        request that reaches another host cannot be replayed to the real Worker. A v1
+//                        signature does not cover the host: whatever answers at API_BASE can replay it
+//                        to the real Worker within its five-minute window, while that nonce is unused
+//                        there. Point API_BASE only at the Worker the token belongs to. Whenever the
+//                        run signs admin calls (with a token, or against the Worker, where adm1 signs
+//                        a probe with a random key), API_BASE as typed (when it is unset, the scheme
+//                        and host of BASE_URL as typed; trailing "/" dropped, surrounding whitespace
+//                        trimmed) must pass canonicalOrigin of scripts/lib/admin-origin.mjs before any
+//                        URL parsing: plain ASCII, http:// or https://, a host and a port only, no
+//                        user name, "%" or backslash, an internationalised host in its punycode (xn--)
+//                        form. Anything else, such as a full-width character the URL parser would map
+//                        to another host, is a FAIL config before any request.
+//   SMOKE_ADMIN_AUTH     signed, or unset: every admin call carries the X-Caddie-Admin header of
+//                        scripts/lib/admin-sign.mjs, built afresh with a new nonce and timestamp on each
+//                        attempt, and no Authorization header. Bearer mode (SMOKE_ADMIN_AUTH=bearer,
+//                        which sent the raw token in Authorization to whatever host API_BASE named) is
+//                        removed: the Worker has not read Authorization on /admin/* since #65. Any value
+//                        other than signed is a FAIL config before any request.
+//                        No admin request follows a redirect: a 3xx is a FAIL.
 //                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
 //                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
 //                        Worker); against a loopback API (localhost, *.localhost, 127.0.0.0/8, 0.0.0.0, [::1], IPv4-mapped [::ffff:7f..:..]) that FAILs with a hint to set
@@ -57,6 +71,14 @@
 //                        makes a loopback API count as deployed. Against a deployed Worker the checks
 //                        that need the fixtures (meter1, the expired profile, the aged presence,
 //                        unav1) print SKIP instead of FAIL.
+//   CADDIE_ADMIN_SIG_VERSION  the admin signature version, read as caddie-admin and the ingest read it
+//                        (signVersionFromEnv of scripts/lib/admin-origin.mjs): unset or empty means 2,
+//                        bound to API_BASE's origin; exactly "1" signs v1, the temporary rollback until
+//                        step d of the migration (DECISIONS.md, "Admin signature v2") removes v1 from
+//                        the Worker; exactly "2" means 2. Any other value is a FAIL config with exit
+//                        code 2 before any request, never a silent default. Under "1" a run that signs
+//                        prints one NOTE saying that v1 is not bound to a host and to unset the
+//                        variable once the rollback is over.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -120,7 +142,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
+import { SIG_VERSION_ENV, canonicalOrigin, signAdminRequest, signVersionFromEnv, UsageError } from './lib/admin-sign.mjs';
 import { DEFAULT_BUNDLE_BASE } from '../worker/src/capabilities.js';
 import { primaryOver, emptyWindowSkip } from './lib/smoke-primary-over.mjs';
 import { conferenceForWorker } from './lib/smoke-conference-doc.mjs';
@@ -172,21 +194,50 @@ if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
   process.exit(1);
 }
 
+// How the admin calls authenticate (SMOKE_ADMIN_AUTH above): always signed. Bearer mode is gone,
+// because it sent the raw token to whatever host API_BASE named. Checked before any token is read.
+const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase();
+if (ADMIN_AUTH !== 'signed') {
+  console.log(ADMIN_AUTH === 'bearer'
+    ? 'FAIL config: SMOKE_ADMIN_AUTH=bearer was removed: the admin calls are always signed (X-Caddie-Admin), and the token is never sent; unset SMOKE_ADMIN_AUTH'
+    : 'FAIL config: SMOKE_ADMIN_AUTH must be signed (or unset)');
+  process.exit(1);
+}
+// The signature version (CADDIE_ADMIN_SIG_VERSION above): unset or empty means 2, exactly "1" or
+// "2" means that version, anything else exits 2 before any request, as caddie-admin does.
+let SIGN_VERSION;
+try {
+  SIGN_VERSION = signVersionFromEnv(process.env);
+} catch (err) {
+  if (!(err instanceof UsageError)) throw err;
+  console.log(`FAIL config: ${SIG_VERSION_ENV} must be exactly "1" or "2" when it is set (unset or empty means 2)`);
+  process.exit(2);
+}
+// API_BASE as typed, before any URL parsing (API_BASE above): the variable itself, or, when it is
+// unset, the scheme and host of BASE_URL as typed (everything before the first "/", "?" or "#"
+// after "//"). canonicalOrigin reads it strictly, so a value the URL parser would map to another
+// host (a full-width or other non-ASCII character, a percent-encoded host) is refused rather than
+// normalised; null when it is refused. The checks below require it to equal API_ORIGIN.
+const API_BASE_TYPED = process.env.API_BASE ? API_BASE : (/^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#]*/.exec(BASE_URL)?.[0] ?? BASE_URL);
+const API_ORIGIN_TYPED = canonicalOrigin(API_BASE_TYPED);
+
 // The admin token comes from ADMIN_TOKEN, else the file ADMIN_TOKEN_FILE (set but empty: no token),
 // else the file caddie-admin reads (scripts/lib/admin-token-file.mjs: <config dir>/admin-token, or
 // the old ~/.config/conference-caddie/admin-token with a NOTE). Files are read with caddie-admin's own
 // checks (readCredential: mode 0600, the whole file trimmed), so the smoke and the CLI use one key.
-// The default file is the production Worker's token, and a signed request is not bound to a host:
-// whoever receives one can replay it to the Worker within the five-minute window. So it is read only
-// when API_BASE's origin is exactly the api of a tier 2 backend in caddie-admin's config.json
-// (loadConfig: https or http to this machine, an origin with no path), that origin is not on this
-// machine (a local Worker has its own token in worker/.dev.vars), the calls are signed (bearer would
-// send the token itself) and SMOKE_API is not cloudrun. The old path is read only without
+// The default file is the production Worker's token, and a v1 signed request is not bound to a host:
+// whoever receives one can replay it to the Worker within the five-minute window (a v2 one is bound
+// to API_BASE's origin, but CADDIE_ADMIN_SIG_VERSION=1 still signs v1 until step d). So it is read
+// only when the origin as typed (API_BASE_TYPED) is exactly the api of a tier 2 backend in
+// caddie-admin's config.json (configuredWorkerOrigins: https or http to this machine, an origin that
+// canonicalOrigin accepts), that origin is not on this machine (a local Worker has its own token in
+// worker/.dev.vars) and SMOKE_API is not cloudrun. The old path is read only without
 // CADDIE_ADMIN_HOME and only if the config.json beside it, when there is one, lists the origin too
-// (resolveAdminTokenFile). Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. The token is never
+// (resolveAdminTokenFile); an old path or config.json that cannot be checked is not read (the
+// fallback fails closed, with a NOTE). Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. The token is never
 // printed; a NOTE about a file that was read is printed only after the read succeeded.
 const defaultTokenFileApplies = () => API_KIND_ENV !== 'cloudrun'
-  && (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase() === 'signed'
+  && API_ORIGIN_TYPED === API_ORIGIN
   && !isLoopbackHost(new URL(API_BASE).hostname)
   && configuredWorkerOrigins(process.env).includes(API_ORIGIN);
 function readTokenFile(file) {
@@ -223,15 +274,10 @@ function readAdminToken() {
 }
 const ADMIN_TOKEN = readAdminToken();
 
-// How the admin calls authenticate (SMOKE_ADMIN_AUTH above). The signed scheme needs a key of at
-// least 32 characters, which the Worker requires of ADMIN_TOKEN anyway.
-const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase();
-if (!['signed', 'bearer'].includes(ADMIN_AUTH)) {
-  console.log('FAIL config: SMOKE_ADMIN_AUTH must be signed or bearer');
-  process.exit(1);
-}
-if (ADMIN_TOKEN && ADMIN_AUTH === 'signed' && ADMIN_TOKEN.length < 32) {
-  console.log('FAIL config: the admin token must have at least 32 characters to sign with (SMOKE_ADMIN_AUTH=signed)');
+// The signature needs a key of at least 32 characters, which the Worker requires of ADMIN_TOKEN
+// anyway.
+if (ADMIN_TOKEN && ADMIN_TOKEN.length < 32) {
+  console.log('FAIL config: the admin token must have at least 32 characters to sign with');
   process.exit(1);
 }
 // The auth headers of one admin attempt. A signed header carries a fresh nonce and timestamp
@@ -240,11 +286,11 @@ if (ADMIN_TOKEN && ADMIN_AUTH === 'signed' && ADMIN_TOKEN.length < 32) {
 function adminAuthHeaders(method, path, body, key = ADMIN_TOKEN) {
   return adminAuth(method, path, body, key).headers;
 }
-// The auth headers and the URL of one admin attempt. In signed mode the URL is the one the signer
-// canonicalised and signed, so what is sent is exactly what the signature covers.
+// The auth headers and the URL of one admin attempt. The URL is the one the signer canonicalised
+// and signed, so what is sent is exactly what the signature covers; a v2 signature also binds the
+// origin of API_BASE. No Authorization header is ever built.
 function adminAuth(method, path, body, key = ADMIN_TOKEN) {
-  if (ADMIN_AUTH === 'bearer') return { headers: { Authorization: `Bearer ${key}` }, url: `${API_BASE}${path}` };
-  const signed = signAdminRequest({ method, path, base: API_BASE, body, key });
+  const signed = signAdminRequest({ method, path, base: API_BASE, body, key, version: SIGN_VERSION });
   return { headers: { 'X-Caddie-Admin': signed.header }, url: signed.url };
 }
 
@@ -252,6 +298,18 @@ function adminAuth(method, path, body, key = ADMIN_TOKEN) {
 // checks, the admin fixtures and text-only imports; Cloud Run serves everything from one origin and
 // keeps the Elasticsearch helpers.
 const IS_WORKER = API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API || Boolean(ADMIN_TOKEN);
+// The run signs admin calls whenever it holds a token, and against the Worker even without one
+// (adm1 signs a probe with a random key). Then API_BASE as typed (API_BASE_TYPED above) must pass
+// canonicalOrigin, or the run is a config FAIL before any request; the value is never printed.
+const SIGNS_ADMIN = IS_WORKER || Boolean(ADMIN_TOKEN);
+if (SIGNS_ADMIN && API_ORIGIN_TYPED !== API_ORIGIN) {
+  console.log(`FAIL config: ${process.env.API_BASE ? 'API_BASE' : 'the origin of BASE_URL'} must be the Worker's origin as plain ASCII (http:// or https://, a host and a port only, no user name, "%" or backslash; an internationalised host in its punycode xn-- form) to sign admin calls`);
+  process.exit(1);
+}
+// The rollback to v1 (CADDIE_ADMIN_SIG_VERSION=1, until step d) is never silent.
+if (SIGNS_ADMIN && SIGN_VERSION === 1) {
+  console.log('NOTE CADDIE_ADMIN_SIG_VERSION=1: the admin calls are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over');
+}
 // A browser sends its Origin on every call to a Worker on another origin, and on every same-origin
 // POST, PUT and DELETE, so the run sends it on every call to the Worker. Against Cloud Run no Origin
 // is sent, as before.
@@ -1011,7 +1069,7 @@ if (!IS_WORKER) {
       ...(await probe('a wrong token', adminAuthHeaders('GET', probePath, undefined, crypto.randomBytes(32).toString('hex')))),
     ];
     // With the real token, an Origin header must still be refused, because a browser page must never reach admin.
-    // The probe is signed in signed mode on purpose: the Worker refuses the Origin header before it
+    // The probe is signed on purpose: the Worker refuses the Origin header before it
     // verifies anything, so a valid signature proves the refusal is the Origin rule and not the signature.
     if (ADMIN_TOKEN) problems.push(...(await probe('the token with an Origin header', { ...adminAuthHeaders('GET', probePath, undefined), Origin: SMOKE_ORIGIN })));
     report(problems.length === 0, 'adm1: the admin routes answer 404 without a valid token and send no CORS headers', problems.length ? problems.join('; ') : `${ADMIN_TOKEN ? 3 : 2} requests, all 404 without CORS headers`);
@@ -2589,9 +2647,10 @@ try {
   });
 
   // until: 'keep' (people.presence_keep_until): a write while presence is on keeps its end, and a
-  // keep with no live presence is refused. Tier 3 advertises it; the Worker is skipped until it
-  // does. One test profile with only the common topic, so it is safe anywhere; deleted at the end
-  // with the others, and its presence is ended here.
+  // keep with no live presence is refused. Tier 3 advertises it (#84) and so does the Worker (#96);
+  // a backend that does not, such as a Worker from before #96, is skipped. One test profile with
+  // only the common topic, so it is safe anywhere; deleted at the end with the others, and its
+  // presence is ended here.
   const KEEP1 = "keep1: until 'keep' with ble:false keeps presence_until";
   const KEEP2 = "keep2: until 'keep' after DELETE /api/presence answers 400 presence_not_active";
   // By the consumer rules (docs/contracts/capabilities.md): the flag counts only with people
@@ -2599,7 +2658,7 @@ try {
   const keepOffered = capsDoc ? effectiveCapabilities(capsDoc).people.presence_keep_until : false;
   if (!keepOffered) {
     const why = !capsDoc ? 'no capabilities document'
-      : IS_WORKER ? 'the Worker does not advertise people.presence_keep_until yet'
+      : IS_WORKER ? 'this Worker does not advertise people.presence_keep_until (a Worker from before #96)'
         : 'this backend does not advertise people.presence_keep_until';
     skip(KEEP1, why);
     skip(KEEP2, why);

@@ -309,8 +309,8 @@ private fun PersonAction(person: Person, state: PeopleUiState, host: PeopleHost)
     val around = person.around
     val sameZone = around && PeoplePrivacy.inMyZone(person, state.presence)
     val watched = state.watch.any { it.ref == ref }
-    var waving by remember(ref) { mutableStateOf(false) }
-    var toggling by remember(ref) { mutableStateOf(false) }
+    // One wave and one watch toggle at a time, also across a card that came back (PeopleHost.launchOnce).
+    val waving = host.isRunning("wave:$ref")
 
     ActionsRow(Modifier.padding(top = 2.dp)) {
         when {
@@ -333,17 +333,8 @@ private fun PersonAction(person: Person, state: PeopleUiState, host: PeopleHost)
             features.meets && sameZone -> CaddieButton(
                 if (waving) PeopleStrings.WAVING else PeopleStrings.WAVE,
                 {
-                    if (!waving) {
-                        waving = true
-                        // The app's scope, so the wave is sent even if the card leaves the list meanwhile.
-                        host.scope.launch {
-                            try {
-                                sendWave(person, host)
-                            } finally {
-                                waving = false
-                            }
-                        }
-                    }
+                    // The app's scope, so the wave is sent even if the card leaves the list meanwhile.
+                    host.launchOnce("wave:$ref") { sendWave(person, host) }
                 },
                 variant = ButtonVariant.Primary,
                 small = true,
@@ -360,18 +351,10 @@ private fun PersonAction(person: Person, state: PeopleUiState, host: PeopleHost)
             features.presence -> CaddieButton(
                 if (watched) PeopleStrings.WATCHING else PeopleStrings.WATCH,
                 {
-                    // Set before the launch, as waving: a second tap in the same frame would turn
-                    // the watch straight back.
-                    if (!toggling) {
-                        toggling = true
-                        host.scope.launch {
-                            val on = try {
-                                host.controller.toggleWatch(ref, name)
-                            } finally {
-                                toggling = false
-                            }
-                            host.showToast(if (on) PeopleStrings.watchOn(name) else PeopleStrings.stoppedWatching(name))
-                        }
+                    // One toggle at a time: a second tap in the same frame would turn the watch straight back.
+                    host.launchOnce("watch:$ref") {
+                        val on = host.controller.toggleWatch(ref, name)
+                        host.showToast(if (on) PeopleStrings.watchOn(name) else PeopleStrings.stoppedWatching(name))
                     }
                 },
                 Modifier.semantics { toggleableState = ToggleableState(watched) },

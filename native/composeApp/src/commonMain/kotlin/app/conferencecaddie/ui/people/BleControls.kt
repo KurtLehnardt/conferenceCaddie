@@ -9,7 +9,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -77,23 +76,19 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
     val controller = host.controller
     val settings = variant == BleVariant.Settings
     val presenceOn = state.presence.on
-    var panel by rememberSaveable { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
+    // In the host's memory, which an answer after a re-creation still reaches (PeopleHost.rememberPanel).
+    var panel by host.rememberPanel(if (settings) SetupPanel.BluetoothSettings else SetupPanel.BluetoothCard)
+    val busy = host.isRunning("bluetooth")
     val starting = busy || ble.starting
 
     // On the app's scope (PeopleHost.scope), as the presence card's actions: the start waits for the
     // system's permission prompt, and the card may be scrolled away or the tab left meanwhile. Its
-    // problem is in the state, so nothing is lost there. busy is set before the launch, so a second
-    // tap in the same frame does not start a second attempt (and, after a refusal, a second prompt).
+    // problem is in the state, so nothing is lost there. It runs once at a time (PeopleHost.launchOnce),
+    // so a second tap does not start a second attempt (and, after a refusal, a second prompt).
     fun turnOn() {
-        if (busy) return
-        busy = true
-        host.scope.launch {
-            val outcome = try {
-                controller.turnOnBluetooth()
-            } finally {
-                busy = false
-            }
+        if (host.isRunning("bluetooth")) return
+        host.launchOnce("bluetooth") {
+            val outcome = controller.turnOnBluetooth()
             // A problem keeps the panel open with the words under it, as the web's error does.
             if (outcome == BleOutcome.On) panel = false
         }

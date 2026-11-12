@@ -129,6 +129,9 @@ object ConnectStrings {
     fun expiresIn(minutes: Int) = "Expires in $minutes min"
 
     const val RAN_OUT = "That ask has run out."
+
+    /** Native: an Accept that finished after Requests was left; the toast offers the meet-up. */
+    const val ACCEPTED_TOAST = "Accepted. Open the meet-up to find each other."
     const val YOUR_REQUESTS = "Your requests"
 
     // InboxScreen.tsx and MeetScreen.tsx

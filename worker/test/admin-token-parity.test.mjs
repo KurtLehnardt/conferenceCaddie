@@ -134,7 +134,7 @@ const LAYOUTS = {
   },
   'XDG_CONFIG_HOME set, ~/.config cannot be searched, the new file missing': (s) => {
     s.lock(join(s.home, '.config'));
-    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false };
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false, from: null };
   },
   'CADDIE_ADMIN_HOME set, only the new file there (the old one missing)': (s) => {
     s.put(s.caddieFile, TOKEN);
@@ -248,11 +248,10 @@ describe('worker/ingest/admin-token-file.mjs and scripts/lib/admin-token-file.mj
   }
 
   // With no variable set the path and the old place are the same string. sameFile cannot stat it
-  // when ~/.config cannot be searched, so the shared module then reports that same path as legacy;
-  // the Worker module counts two equal path strings as one path and reports none. Both mean "no
-  // other file to fall back to", which is what is compared here. The Worker module's null is
-  // checked strictly, because without that guard it would report an old place, and compare or
-  // note a file against itself, for an operator with no variable set.
+  // when ~/.config cannot be searched, so both modules count two equal path strings as one path and
+  // report no old place. Both nulls are checked strictly, because without that guard a module
+  // would report an old place, and compare or note a file against itself, for an operator with no
+  // variable set.
   test('no variables, ~/.config cannot be searched: no other file to fall back to', (t) => {
     const s = scratch(t);
     s.lock(join(s.home, '.config'));
@@ -260,13 +259,27 @@ describe('worker/ingest/admin-token-file.mjs and scripts/lib/admin-token-file.mj
     const p = shared.adminTokenPaths({}, s.home);
     assert.equal(w.path, s.old);
     assert.equal(p.path, s.old);
-    const otherFile = (legacy, path) => legacy !== null && legacy !== path;
-    assert.equal(otherFile(w.legacy, w.path), false);
-    assert.equal(otherFile(p.legacy, p.path), false);
     assert.equal(w.legacy, null, 'the Worker module reports no old place');
+    assert.equal(p.legacy, null, 'the shared module reports no old place');
+    assert.deepEqual(shared.resolveAdminTokenFile({}, { home: s.home, apiOrigin: ORIGIN }), { file: s.old, note: null }, 'the shared reader names the one path, so its read fails and says so');
     const read = worker.adminTokenFileToRead({}, s.home);
     assert.equal(read.legacy, null, 'the Worker reader reports no old place');
     assert.equal(read.note, null, 'no note for an operator with no variable set');
     assert.equal(read.trusted, true);
+  });
+
+  // The fallback fails closed in both modules: when the old place cannot be checked, neither reads
+  // it, and each says that it cannot be checked rather than that nothing is there.
+  test('XDG_CONFIG_HOME set, ~/.config cannot be searched, the new file missing: both refuse with a "cannot be checked" note', (t) => {
+    const s = scratch(t);
+    s.lock(join(s.home, '.config'));
+    const env = { XDG_CONFIG_HOME: s.xdg };
+    const read = worker.adminTokenFileToRead(env, s.home, { apiOrigin: ORIGIN });
+    const shared1 = shared.resolveAdminTokenFile(env, { home: s.home, apiOrigin: ORIGIN });
+    assert.equal(read.value, null);
+    assert.equal(shared1.file, null, 'the shared module reads nothing');
+    assert.match(`${read.note}\n${read.doubt}`, /cannot be checked/);
+    assert.match(shared1.note, /^NOTE admin token: .* is not read, because it cannot be checked/);
+    assert.ok(shared1.note.includes(s.old) && shared1.note.includes(s.xdgFile));
   });
 });

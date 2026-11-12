@@ -25,7 +25,7 @@ const SCRIPT = fileURLToPath(new URL('../scripts/setup-secrets.mjs', import.meta
 // The rule for where the token file is, which the script imports, and the shared module it builds
 // on (scripts/lib/admin-token-file.mjs) with what that imports, as paths relative to the repository.
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
-const TOKEN_FILE_MODULES = ['worker/ingest/admin-token-file.mjs', 'scripts/lib/admin-token-file.mjs', 'scripts/admin/config.mjs', 'scripts/admin/errors.mjs'];
+const TOKEN_FILE_MODULES = ['worker/ingest/admin-token-file.mjs', 'scripts/lib/admin-token-file.mjs', 'scripts/lib/admin-origin.mjs', 'scripts/admin/config.mjs', 'scripts/admin/errors.mjs'];
 const OLD_TOKEN = 'f'.repeat(64);
 const ALL_NAMES = ['ADMIN_TOKEN', 'REF_SALT', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY', 'BLE_MASTER_KEYRING'];
 const THIS_REPO_URL = 'https://github.com/KurtLehnardt/conferenceCaddie.git';

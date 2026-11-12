@@ -10,6 +10,10 @@
 // - The token signs requests and goes nowhere else: never in a URL, a header, a body, an argument
 //   list, a child environment, a result or an error. Every attempt is signed afresh, because a
 //   nonce is single-use on the Worker and the timestamp has a five-minute window.
+// - The signature is v2, bound to the origin of the configured api, unless env says
+//   CADDIE_ADMIN_SIG_VERSION=1 (v1, the rollback until step d of the migration); any value other
+//   than unset, empty, "1" or "2" is a usage error before any request. The api is read with
+//   canonicalOrigin as configured, before any URL parsing (workerOrigin).
 // - A redirect is never followed: the response is refused as soon as its status arrives, its body
 //   is cancelled, and nothing is retried (fetch would carry the signed header and the optional
 //   Access secret to another origin).
@@ -56,7 +60,7 @@ import { spawnSync as defaultSpawnSync } from 'node:child_process';
 import dc from 'node:diagnostics_channel';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HEADER_NAME, signAdminRequest } from '../../lib/admin-sign.mjs';
+import { HEADER_NAME, canonicalOrigin, signAdminRequest, signVersionFromEnv } from '../../lib/admin-sign.mjs';
 import { adminTokenPaths, shellPath, shellQuote } from '../../lib/admin-token-file.mjs';
 import { withoutControlKeys } from '../commands/conferences.mjs';
 import { AdminError, NotFoundError, UnsupportedError, UsageError } from '../errors.mjs';
@@ -209,17 +213,43 @@ function accessHeaders(env) {
 
 // The Worker's origin from the config entry: https, or plain http to this machine only (the rule of
 // worker/ingest/lib.mjs normalizeApiBase), with no path, query or fragment, as the signer requires.
+// The api string as configured goes through canonicalOrigin (scripts/lib/admin-origin.mjs) before
+// any URL parsing, so a value the URL parser would silently map to another host (a full-width or
+// other non-ASCII character, a percent-encoded host such as caddie.example%E3%80%82evil.example, a
+// user name) is a usage error (exit 2) rather than a request to wherever the parser lands; a
+// Unicode host must be written in its punycode (xn--) form. A v2 signature binds that origin.
 export function workerOrigin(backend) {
-  let u;
-  try {
-    u = new URL(String(backend.api ?? ''));
-  } catch {
-    throw new UsageError(`backend "${backend.name}" needs an https api url`);
+  const raw = typeof backend.api === 'string' ? backend.api : '';
+  const origin = canonicalOrigin(raw);
+  if (origin === null) {
+    let parsed = false;
+    try {
+      parsed = /^https?:$/.test(new URL(raw).protocol);
+    } catch {}
+    throw new UsageError(parsed
+      ? `backend "${backend.name}": api must be the Worker's origin as plain ASCII, with no path, query, fragment, user name, "%" or "\\" (an internationalised host in its punycode xn-- form)`
+      : `backend "${backend.name}" needs an https api url`);
   }
+  const u = new URL(origin);
   if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK.includes(u.hostname))) throw new UsageError(`backend "${backend.name}" needs an https api url (http only for localhost)`);
-  if (u.pathname !== '/' || u.search || u.hash) throw new UsageError(`backend "${backend.name}": api must be the Worker's origin with no path, query or fragment`);
-  return u.origin;
+  return origin;
 }
+
+// The signature version from env: CADDIE_ADMIN_SIG_VERSION unset or empty means 2, exactly "1" or
+// "2" means that version (1 is the rollback until step d of the migration), anything else is a
+// usage error (exit 2) before any request. The message names the variable, never its value.
+export function workerSignVersion(env) {
+  try {
+    return signVersionFromEnv(env);
+  } catch (err) {
+    if (err?.code === 'version') throw new UsageError('CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set (unset or empty means 2)');
+    throw err;
+  }
+}
+
+// What the CLI prints on stderr, once, when the version is 1: the rollback must not become the
+// normal state, because a v1 signature is not bound to a host.
+export const V1_ROLLBACK_WARNING = 'CADDIE_ADMIN_SIG_VERSION=1: admin requests are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over';
 
 // The search text as the Worker reads it: base64url without padding of at most 200 bytes of UTF-8.
 export function q64Of(text) {
@@ -243,6 +273,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
   if (typeof credential !== 'string' || !credential) throw new AdminError('no credential for the Worker backend');
   const api = workerOrigin(backend);
   const access = accessHeaders(env);
+  const version = workerSignVersion(env);
 
   // ---- transport ----
 
@@ -277,7 +308,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
       let signed;
       try {
-        signed = signAdminRequest({ method, path, base: api, body: payload, key: credential, now: now().getTime() });
+        signed = signAdminRequest({ method, path, base: api, body: payload, key: credential, now: now().getTime(), version });
       } catch (err) {
         throw new UsageError(`${where}: ${err.message}`);
       }
