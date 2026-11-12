@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adminKeys } from '../src/lib/admin-auth.js';
 
@@ -1073,26 +1073,107 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     assert.doesNotMatch(r.text, /Note: the admin token file|gh secret set|secret put ADMIN_TOKEN/);
   });
 
-  test('--only-missing sets a missing GitHub secret from the old file when only it exists, with the note and never the value', (t) => {
+  test('--only-missing refuses to set a missing GitHub secret from the old file when only it exists, unless ADMIN_TOKEN_FILE names it', (t) => {
     const w = world(t, { workerSecrets: ALL_NAMES, githubSecrets: [], tokenFile: null });
     writeOld(w, NEW1);
     const home = join(w.dir, 'caddie home');
     const env = { ADMIN_TOKEN_FILE: undefined, CADDIE_ADMIN_HOME: home };
+    const why = `ADMIN_TOKEN is set on the Worker and CADDIE_ADMIN_TOKEN is not, but there is no token file at ${join(home, 'admin-token')}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${oldFile(w)}, which may hold another deployment's token. CADDIE_ADMIN_TOKEN is not set from it, and nothing was changed. If that file holds this Worker's token, move it to ${join(home, 'admin-token')}, or set ADMIN_TOKEN_FILE to ${oldFile(w)}, and run this command again.`;
     const dry = w.run(['--only-missing', '--dry-run'], { env });
     assert.equal(dry.status, 0, dry.text);
-    assert.ok(dry.stdout.includes(`(value from ${oldFile(w)}, on standard input)`), dry.stdout);
-    const r = w.run(['--only-missing'], { env, fail: ['gh-set'] });
-    assert.equal(r.status, 1);
-    assert.equal(w.got('gh-CADDIE_ADMIN_TOKEN'), NEW1);
-    assert.equal(r.stderr.split('\n').filter((l) => l.startsWith(`Note: the admin token file is not at ${join(home, 'admin-token')},`)).length, 1, r.stderr);
-    assert.ok(r.stderr.includes('  gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt/conferenceCaddie < ~/.config/conference-caddie/admin-token'), r.stderr);
-    assertNoPartOf(NEW1, r.text, 'the output');
-    const ok = w.run(['--only-missing'], { env });
+    assert.ok(dry.stdout.includes(`Note: ${why}\nDry run: nothing is generated or changed. A real run stops here.\n`), dry.stdout);
+    assert.doesNotMatch(dry.stdout, /Would set/);
+    const r = w.run(['--only-missing'], { env });
+    assert.equal(r.status, 1, r.text);
+    assert.ok(r.stderr.includes(`${why}\n`), r.stderr);
+    assert.doesNotMatch(r.stderr, /Note: the admin token file/, 'the refusal says it all, in one message');
+    assert.deepEqual(putsOf(w), [], 'nothing was put or set');
+    assert.deepEqual(w.githubState(), {});
+    assert.equal(existsSync(home), false, 'a read never creates the new place');
+    assertNoPartOf(NEW1, `${dry.text}\n${r.text}`, 'the output');
+    // ADMIN_TOKEN_FILE set to the old file is the operator's choice: the secret is set from it.
+    const ok = w.run(['--only-missing'], { env: { ...env, ADMIN_TOKEN_FILE: oldFile(w) } });
     assert.equal(ok.status, 0, ok.text);
     assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, NEW1);
-    assert.equal(existsSync(home), false, 'a read never creates the new place');
+    assert.deepEqual(putsOf(w), ['gh secret set']);
     assertNoPartOf(NEW1, ok.text, 'the output');
   });
+
+  test('--only-missing refuses to set a missing GitHub secret when the token file and the old one hold different tokens', (t) => {
+    const w = world(t, { workerSecrets: ALL_NAMES, githubSecrets: [], tokenFile: null });
+    const NEW2 = 'b4'.repeat(32);
+    writeOld(w, NEW1);
+    const xdg = join(w.dir, 'xdg');
+    const file = join(xdg, 'conference-caddie', 'admin-token');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${NEW2}\n`, { mode: 0o600 });
+    const env = { ADMIN_TOKEN_FILE: undefined, XDG_CONFIG_HOME: xdg };
+    const why = `ADMIN_TOKEN is set on the Worker and CADDIE_ADMIN_TOKEN is not, but the token file ${file} and the file at its old place ${oldFile(w)} hold different tokens, so it is not clear which one is this Worker's. CADDIE_ADMIN_TOKEN is not set, and nothing was changed. Set ADMIN_TOKEN_FILE to the file that holds this Worker's token and run this command again.`;
+    const dry = w.run(['--only-missing', '--dry-run'], { env });
+    assert.equal(dry.status, 0, dry.text);
+    assert.ok(dry.stdout.includes(`Note: ${why}\n`), dry.stdout);
+    const r = w.run(['--only-missing'], { env });
+    assert.equal(r.status, 1, r.text);
+    assert.equal(r.stderr, `${why}\n`);
+    assert.deepEqual(putsOf(w), []);
+    for (const value of [NEW1, NEW2]) assertNoPartOf(value, `${dry.text}\n${r.text}`, 'the output');
+    // With the same token in both, there is no doubt, and the secret is set from the new file.
+    writeFileSync(oldFile(w), NEW2);
+    const ok = w.run(['--only-missing'], { env });
+    assert.equal(ok.status, 0, ok.text);
+    assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, NEW2);
+    assert.doesNotMatch(ok.text, /Note: |old place/);
+  });
+
+  // ~/.config (or ~/.config/conference-caddie) can be a link to the new place, so both paths are
+  // one file. Nothing may then call it the old file: deleting it, as that line advises, would
+  // delete the live token.
+  for (const [name, link] of [
+    ['~/.config is a link to $XDG_CONFIG_HOME', (w) => {
+      const xdg = join(w.dir, 'xdg');
+      mkdirSync(xdg);
+      symlinkSync(xdg, join(w.home, '.config'));
+      return { env: { ADMIN_TOKEN_FILE: undefined, XDG_CONFIG_HOME: xdg }, file: join(xdg, 'conference-caddie', 'admin-token'), dir: join(xdg, 'conference-caddie') };
+    }],
+    ['~/.config/conference-caddie is a link to $CADDIE_ADMIN_HOME', (w) => {
+      const caddie = join(w.dir, 'caddie home');
+      mkdirSync(caddie);
+      mkdirSync(join(w.home, '.config'));
+      symlinkSync(caddie, join(w.home, '.config', 'conference-caddie'));
+      return { env: { ADMIN_TOKEN_FILE: undefined, CADDIE_ADMIN_HOME: caddie }, file: join(caddie, 'admin-token'), dir: caddie };
+    }],
+  ]) {
+    test(`${name}: no old-file line in a dry run or a real run, and the token is written once`, (t) => {
+      const w = world(t, { workerSecrets: [], githubSecrets: [], tokenFile: null });
+      const { env, file, dir } = link(w);
+      const oldLine = /old token file|old place/;
+      // Before the token file exists: the linked directory makes the two paths one file.
+      const dryFirst = w.run(['--dry-run'], { env });
+      assert.equal(dryFirst.status, 0, dryFirst.text);
+      assert.ok(dryFirst.stdout.includes(`Would write ADMIN_TOKEN to ${file}  (mode 0600)`), dryFirst.stdout);
+      assert.doesNotMatch(dryFirst.text, oldLine);
+
+      const r = w.run([], { env });
+      assert.equal(r.status, 0, r.text);
+      const value = w.got('put-ADMIN_TOKEN');
+      assert.equal(read(file), value);
+      assert.equal(read(oldFile(w)), value, 'the old path leads to the same file');
+      assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('Wrote ')).length, 1, r.stdout);
+      assert.deepEqual(readdirSync(dir), ['admin-token'], 'one file, no copy and no temporary file');
+      assert.equal(statSync(file).mode & 0o777, 0o600);
+      assert.doesNotMatch(r.text, oldLine);
+
+      // With the file there: a dry run of the plain run and of a rotation.
+      const dry = w.run(['--dry-run'], { env });
+      assert.equal(dry.status, 0, dry.text);
+      assert.doesNotMatch(dry.text, oldLine);
+      const dryRotate = w.run(['--rotate-admin-token', '--dry-run'], { env });
+      assert.equal(dryRotate.status, 0, dryRotate.text);
+      assert.ok(dryRotate.stdout.includes(`Would write the new value to ${file}  (mode 0600)`), dryRotate.stdout);
+      assert.doesNotMatch(dryRotate.text, oldLine);
+      assertNoPartOf(value, [dryFirst.text, r.text, dry.text, dryRotate.text].join('\n'), 'the output');
+    });
+  }
 });
 
 describe('setup-secrets.mjs gives each child only the environment it needs', () => {

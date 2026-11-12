@@ -34,9 +34,12 @@
 // Options:
 //   --only-missing      Skip names that `wrangler secret list` already shows. When ADMIN_TOKEN is
 //                       skipped but the local token file exists and the GitHub secret is missing,
-//                       the GitHub secret is set from that file (found as described under Env, with
-//                       the fallback to the old default place). It never looks at
-//                       ADMIN_TOKEN_NEXT (not one of the names above), which is safe after a rotation
+//                       the GitHub secret is set from that file (found as described under Env). The
+//                       run stops with exit 1 before changing anything when that file would be the
+//                       old default place (it may hold another deployment's token, for example one
+//                       kept apart with CADDIE_ADMIN_HOME), or when the token file and the old one
+//                       hold different tokens; set ADMIN_TOKEN_FILE to the right file then. It
+//                       never looks at ADMIN_TOKEN_NEXT (not one of the names above), which is safe after a rotation
 //                       has started only because the Worker accepts ADMIN_TOKEN and ADMIN_TOKEN_NEXT
 //                       side by side (src/lib/admin-auth.js, adminKeys): between the first step of a
 //                       rotation and the last, the token file and the GitHub secret hold the value
@@ -87,10 +90,13 @@
 //      ${XDG_CONFIG_HOME:-~/.config}/conference-caddie/admin-token. Without either variable that is
 //      ~/.config/conference-caddie/admin-token, which was the only default before. The token is
 //      written only to that file. When that is a new place and the old file still exists, a write
-//      says so in one line and leaves the old file alone, and a read (the --only-missing GitHub
-//      sync and the check of an unfinished rotation) that finds no file at the new place reads the
-//      old one, says so in one line on stderr, and the commands it prints name the file it read.
-//      With ADMIN_TOKEN_FILE set there is no fallback.
+//      says so in one line and leaves the old file alone. The check of an unfinished rotation, a
+//      read, reads the old file when there is no file at the new place, says so in one line on
+//      stderr, and the commands it prints name the file it read; when both files hold different
+//      tokens it reads the new one and says so in one line on stderr. The --only-missing GitHub sync
+//      refuses in both cases (see above). Two paths that lead to one file through a symbolic link
+//      (~/.config a link to $XDG_CONFIG_HOME, say) are one file, so there is no old file then.
+//      With ADMIN_TOKEN_FILE set there is no fallback and no comparison.
 //      CADDIE_GH_REPO, <owner>/<name> (default: the github.com repository that the git remote
 //      "origin" of this clone names, in https or ssh form; when that cannot be worked out the
 //      script stops and names the variable; --skip-gh needs neither). `gh repo view` is not used: in a fork clone, which has the original as
@@ -99,6 +105,7 @@
 //      process gets only the environment it needs (wrangler no GitHub token, gh no Cloudflare one).
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -108,9 +115,8 @@ import { adminTokenFile, adminTokenFileToRead } from '../ingest/admin-token-file
 
 const WORKER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = resolve(WORKER_DIR, '..');
-// The token file this script writes, and the old default place it leaves alone (null when it is the
-// same file or ADMIN_TOKEN_FILE is set); see Env above.
-const { path: TOKEN_FILE, legacy: OLD_TOKEN_FILE } = adminTokenFile(process.env);
+// The token file this script writes; see Env above.
+const { path: TOKEN_FILE } = adminTokenFile(process.env);
 // <owner>/<name>: the owner starts with a letter or digit, and the name is not . or .. .
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*\/(?!\.\.?$)[A-Za-z0-9._-]+$/;
 const NAMES = ['ADMIN_TOKEN', 'REF_SALT', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY', 'BLE_MASTER_KEYRING'];
@@ -410,20 +416,17 @@ async function writeTokenFile(value, hint = '') {
     process.exit(1);
   }
   console.log(`Wrote ${TOKEN_FILE} (mode 0600).`);
-  const old = await oldTokenFileLine();
-  if (old) console.log(old);
+  const old = existingOldTokenFile();
+  if (old) console.log(`The old token file ${old} still exists and was left as it is (not updated, not deleted); the token file is now ${TOKEN_FILE}, so delete the old one once nothing reads it.`);
 }
 
-// One line when the token file is at a new default place (CADDIE_ADMIN_HOME or XDG_CONFIG_HOME) and
-// a file is still at the old one, which this script never changes or deletes; else ''.
-async function oldTokenFileLine() {
-  if (!OLD_TOKEN_FILE) return '';
-  try {
-    await stat(OLD_TOKEN_FILE);
-  } catch {
-    return '';
-  }
-  return `The old token file ${OLD_TOKEN_FILE} still exists and was left as it is (not updated, not deleted); the token file is now ${TOKEN_FILE}, so delete the old one once nothing reads it.`;
+// The old default place ~/.config/conference-caddie/admin-token when the token file is at a new
+// default place (CADDIE_ADMIN_HOME or XDG_CONFIG_HOME) and a different file is still at the old one,
+// which this script never changes or deletes; else null. It is asked from the file system each
+// time, so a path that leads to the token file through a symbolic link never counts as old.
+function existingOldTokenFile() {
+  const { legacy } = adminTokenFile(process.env);
+  return legacy && existsSync(legacy) ? legacy : null;
 }
 
 // A path for a command line the operator will paste: ~ for the home directory, quotes where the
@@ -436,14 +439,11 @@ function shellPath(file) {
 }
 
 // The token file to read: TOKEN_FILE, or the old default place when only that exists (see Env
-// above), with a one-line note on stderr then that names both paths, never the value.
-let tokenFileReadNoted = false;
+// above), with a one-line note on stderr then that names both paths, never the value, as when both
+// exist and hold different tokens.
 function tokenFileToRead() {
   const { path, note } = adminTokenFileToRead(process.env);
-  if (note && !tokenFileReadNoted) {
-    tokenFileReadNoted = true;
-    console.error(note);
-  }
+  if (note) console.error(note);
   return path;
 }
 
@@ -537,8 +537,8 @@ async function rotateAdminToken() {
     if (replacing) console.log(`${NEXT_NAME} is already set on the Worker; --replace-next would replace it.`);
     console.log(`Would set ${NEXT_NAME}: npx wrangler secret put ${NEXT_NAME}  (a new value, 32 random bytes as hex, on standard input; the Worker then accepts the old and the new token)`);
     console.log(`Would write the new value to ${TOKEN_FILE}  (mode 0600), only after ${NEXT_NAME} was set`);
-    const old = await oldTokenFileLine();
-    if (old) console.log(`Would leave the old token file ${OLD_TOKEN_FILE} as it is (not updated, not deleted).`);
+    const old = existingOldTokenFile();
+    if (old) console.log(`Would leave the old token file ${old} as it is (not updated, not deleted).`);
     if (skipGh) console.log(`Would leave the GitHub secret ${GH_SECRET} alone (--skip-gh).`);
     else console.log(`Would set ${GH_SECRET}: gh secret set ${GH_SECRET} --repo ${repo}  (value on standard input; the repository is ${ghRepoFound.source === 'CADDIE_GH_REPO' ? 'CADDIE_GH_REPO' : 'what the git remote "origin" names'})`);
     console.log(`Would then print the two commands that finish the rotation, from ${WORKER_DIR} (this script never runs them):\n${finishing}`);
@@ -618,6 +618,29 @@ if (!plan.has('ADMIN_TOKEN') && has('ADMIN_TOKEN') && !options['skip-gh']) {
   if (ghNames && !ghNames.has(GH_SECRET)) syncGithubFromFile = true;
 }
 
+// The GitHub secret is set from the token file only when there is no doubt which file holds this
+// Worker's token. The old default place may hold another deployment's token (CADDIE_ADMIN_HOME keeps
+// a second one apart), and of two files with different tokens either may be stale, so either case
+// stops the run before anything is changed; ADMIN_TOKEN_FILE names the file to use. The contents
+// are compared in memory by adminTokenFileToRead and never printed.
+if (syncGithubFromFile) {
+  const { fallback, differs, legacy } = adminTokenFileToRead(process.env);
+  let why = '';
+  if (fallback) {
+    why = `ADMIN_TOKEN is set on the Worker and ${GH_SECRET} is not, but there is no token file at ${TOKEN_FILE}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${legacy}, which may hold another deployment's token. ${GH_SECRET} is not set from it, and nothing was changed. If that file holds this Worker's token, move it to ${TOKEN_FILE}, or set ADMIN_TOKEN_FILE to ${legacy}, and run this command again.`;
+  } else if (differs) {
+    why = `ADMIN_TOKEN is set on the Worker and ${GH_SECRET} is not, but the token file ${TOKEN_FILE} and the file at its old place ${legacy} hold different tokens, so it is not clear which one is this Worker's. ${GH_SECRET} is not set, and nothing was changed. Set ADMIN_TOKEN_FILE to the file that holds this Worker's token and run this command again.`;
+  }
+  if (why) {
+    if (!dryRun) {
+      console.error(why);
+      process.exit(1);
+    }
+    console.log(`Note: ${why}\nDry run: nothing is generated or changed. A real run stops here.`);
+    process.exit(0);
+  }
+}
+
 if (dryRun) {
   console.log('Dry run: nothing is generated or changed.');
   for (const name of NAMES) {
@@ -625,7 +648,8 @@ if (dryRun) {
     console.log(`Would set ${name}: npx wrangler secret put ${name}  (value on standard input)`);
     if (name === 'ADMIN_TOKEN') {
       console.log(`Would write ${name} to ${TOKEN_FILE}  (mode 0600)`);
-      if (await oldTokenFileLine()) console.log(`Would leave the old token file ${OLD_TOKEN_FILE} as it is (not updated, not deleted).`);
+      const old = existingOldTokenFile();
+      if (old) console.log(`Would leave the old token file ${old} as it is (not updated, not deleted).`);
       if (!options['skip-gh']) console.log(`Would set ${GH_SECRET}: gh secret set ${GH_SECRET} --repo ${await ghRepo()}  (value on standard input)`);
     }
   }

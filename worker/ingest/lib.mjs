@@ -125,7 +125,10 @@ export function withTopics(doc, topics) {
 // operator file that worker/scripts/setup-secrets.mjs writes, at the default place of
 // admin-token-file.mjs (the caddie-admin CLI's config directory). When only the old default
 // ~/.config/conference-caddie/admin-token exists, that file is read and warn gets one line naming
-// both paths (never the value). Returns '' when none is available. env, home and warn are for tests.
+// both paths (never the value). When both exist as two files with different tokens, the default one
+// is read and warn gets one line naming both paths (never the values). Two paths that lead to one
+// file through a symbolic link count as one file. Returns '' when none is available. env, home and
+// warn are for tests.
 export function readAdminToken({ env = process.env, home = homedir(), warn = (line) => process.stderr.write(`${line}\n`) } = {}) {
   const direct = (env.ADMIN_TOKEN || '').trim();
   if (direct) return direct;

@@ -162,9 +162,16 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    (`worker/ingest/admin-token-file.mjs`). If you set `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` and
    your token is still in `~/.config/conference-caddie/admin-token`, a script that reads the token
    file and finds none at the new place reads the old one and prints one line on stderr that names
-   both paths and says to move the file; the script writes only the new place, says so in one line
-   when the old file still exists, and never deletes it. There is no such fallback when
-   `ADMIN_TOKEN_FILE` is set. `--only-missing` skips names the Worker already has. An existing `REF_SALT`
+   both paths and says to move the file; when both files exist and hold different tokens, it reads
+   the new one and prints one line that names both paths and says which one is used (never the
+   values). The script writes only the new place, says so in one line when the old file still
+   exists, and never deletes it. Two paths that lead to one file through a symbolic link (say,
+   `~/.config` is a link to `$XDG_CONFIG_HOME`) are one file, so there is no old file then. There
+   is no such fallback when `ADMIN_TOKEN_FILE` is set. `--only-missing` skips names the Worker
+   already has. When it would set a missing `CADDIE_ADMIN_TOKEN` from the token file, it stops
+   with exit 1 and changes nothing if that file is the old one (it may hold another deployment's
+   token) or if the two files hold different tokens; move the file, or set `ADMIN_TOKEN_FILE` to
+   the right one, and run it again. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.
    The first `BLE_MASTER_KEYRING` (Bluetooth derived tokens v1, one random master) is created
    when the Worker has none and never replaced; rotate it by hand (docs/FREE_HOSTING.md).
@@ -205,6 +212,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE" --dry-run
    node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE"
    ```
+
+   Setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place, so if a note from step 2
+   named the old `~/.config/conference-caddie/admin-token`, move that file to the new place first,
+   or point `ADMIN_TOKEN_FILE` at the old path.
 
    Conferences, talks, topics and facets are copied as they are, so topic ids stay identical.
    Only sample profiles are copied by default (`--include-real` copies the others too); presence,
@@ -255,6 +266,10 @@ BASE_URL="$CADDIE_APP_URL" \
 ADMIN_TOKEN_FILE="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}/admin-token" \
 node scripts/smoke.mjs
 ```
+
+As in deploy step 3, setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place: if a note
+named the old `~/.config/conference-caddie/admin-token`, move that file to the new place first, or
+point `ADMIN_TOKEN_FILE` at the old path.
 
 `BASE_URL` is the app, and the API defaults to the same origin. The admin token makes it a Worker
 run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures (see
