@@ -43,6 +43,9 @@ const ALLOWED = [
   // The official apps ship with the official server compiled in.
   'native/shared/src/commonMain/kotlin/app/conferencecaddie/shared/core/CaddieCore.kt',
   'native/composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/shell/StandaloneShell.kt',
+  // The apps' published privacy policy names that server and its hosting; it reaches nothing, and a
+  // fork rewrites it (docs/fork/APPS.md, "The privacy policy").
+  'scripts/lib/privacy-page.mjs',
 ];
 
 const isTest = (f) => /(^|\/)[A-Za-z]*[Tt]ests?[A-Za-z]*\//.test(f) || /\.test\.[cm]?[jt]sx?$/.test(f) || /Test\.kt$/.test(f);

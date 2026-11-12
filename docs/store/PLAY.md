@@ -70,7 +70,16 @@ Conference Caddie is an independent open-source project. It is not affiliated wi
 
 **Phone screenshots** (2 to 8; JPEG or 24-bit PNG; each side 320 to 3840 px; the long side at most twice the short side, so 9:16 portrait fits). Captured from the R8 release build (Bluetooth off, as published) on a Pixel 2 emulator (1080 x 1920) at a clean state on KubeCon + CloudNativeCon North America 2026. Upload them in this order:
 
-SCREENSHOTS_TABLE
+| # | File | Shows |
+|---|---|---|
+| 1 | `docs/store/screenshots/android/01-meaning-search.png` | Search by meaning: "debugging Kubernetes networking" finds the right talk, with the matching words highlighted. |
+| 2 | `docs/store/screenshots/android/02-talk-detail.png` | A talk: speakers, time, room, track, how many people want to talk about it, and related talks. |
+| 3 | `docs/store/screenshots/android/03-for-you.png` | For you suggests upcoming talks like the ones you marked. |
+| 4 | `docs/store/screenshots/android/04-schedule.png` | The whole schedule, day by day, with one-tap marking. |
+| 5 | `docs/store/screenshots/android/05-my-schedule-day.png` | My schedule's Day view: your talks on a timeline, with a Now line. |
+| 6 | `docs/store/screenshots/android/06-filters.png` | Filters by day, morning or afternoon, and track, with live counts. |
+
+All six are 1080 x 1920, 24-bit PNG with no alpha, 92 to 196 KB each. The emulator's clock was set to 09:41 on the conference's last day (12 November 2026), so the talks read as upcoming; the status bar is System UI demo mode. Five talks were marked on the device; no profile was created and nothing was written to the server. The "4 people want to talk about this" line is a count from the live server, with no names.
 
 Tablet screenshots (7 and 10 inch) are optional; without them the app is not featured on tablets but still installs there.
 
