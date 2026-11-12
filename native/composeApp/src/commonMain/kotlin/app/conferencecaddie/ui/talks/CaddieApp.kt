@@ -148,7 +148,6 @@ fun CaddieApp(
     // My schedule's List or Day choice is kept on this device, as the web keeps it in local storage;
     // the Day view's day belongs to its conference.
     val myViewChoice = remember { StoredChoice(MyScheduleView.List) }
-    val myView = myViewChoice.value
     var myDay by rememberSaveable { mutableStateOf<String?>(null) }
     var myDaySlug by rememberSaveable { mutableStateOf<String?>(null) }
     var clearOpen by rememberSaveable { mutableStateOf(false) }
@@ -476,7 +475,7 @@ fun CaddieApp(
                         shareAll = peopleUi?.shareAll,
                         peopleControls = peopleUi?.talkControls,
                         prefetchCounts = peopleUi?.prefetchCounts,
-                        view = myView,
+                        view = myViewChoice.value,
                         onView = {
                             myViewChoice.choose(it)
                             core.setUiSetting(MY_SCHEDULE_VIEW, if (it == MyScheduleView.Day) "day" else "list")

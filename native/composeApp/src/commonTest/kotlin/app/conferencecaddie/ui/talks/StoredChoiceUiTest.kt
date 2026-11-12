@@ -8,6 +8,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isSelectable
+import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
@@ -86,18 +87,39 @@ class StoredChoiceUiTest {
         core.setUiSetting("theme", ThemePreference.Light.name)
         runBlocking { core.awaitIdle() }
         holdTheDatabase()
-        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test") }
-        // The app's read of the stored theme has started and waits for the database.
-        waitForIdle()
-        onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
-        settingsOption(Strings.Settings.THEME_DARK).performClick()
-        waitForIdle()
-        settingsOption(Strings.Settings.THEME_DARK).assertIsSelected()
-
-        released.complete(Unit)
+        try {
+            setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test") }
+            // The app's read of the stored theme has started and waits for the database.
+            waitForIdle()
+            onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
+            settingsOption(Strings.Settings.THEME_DARK).performClick()
+            waitForIdle()
+            settingsOption(Strings.Settings.THEME_DARK).assertIsSelected()
+        } finally {
+            released.complete(Unit)
+        }
         waitForStored("theme", ThemePreference.Dark.name)
         settingsOption(Strings.Settings.THEME_DARK).assertIsSelected()
         settingsOption(Strings.Settings.THEME_LIGHT).assertIsNotSelected()
+    }
+
+    @Test
+    fun aStoredThemeAndViewAreShownWhenNoneIsChosen() = runComposeUiTest {
+        runBlocking {
+            withTimeout(20_000) { core.state.first { it.selectedSlug == gamma && it.bundle is BundleState.Ready } }
+            core.setInterested("$gamma:1", true)
+            core.setUiSetting("theme", ThemePreference.Dark.name)
+            core.setUiSetting("myschedule.view.v1", "day")
+            core.awaitIdle()
+        }
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Interested)) }
+        waitUntil(timeoutMillis = 20_000) {
+            onAllNodes(hasText(Strings.Interested.VIEW_DAY) and isSelected() and hasAnyAncestor(hasTestTag("my-schedule-view"))).fetchSemanticsNodes().isNotEmpty()
+        }
+        option(Strings.Interested.VIEW_LIST, "my-schedule-view").assertIsNotSelected()
+        onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
+        waitUntil(timeoutMillis = 20_000) { onAllNodes(hasText(Strings.Settings.THEME_DARK) and isSelected()).fetchSemanticsNodes().isNotEmpty() }
+        settingsOption(Strings.Settings.THEME_SYSTEM).assertIsNotSelected()
     }
 
     @Test
@@ -110,18 +132,20 @@ class StoredChoiceUiTest {
             core.awaitIdle()
         }
         holdTheDatabase()
-        // The theme comes from the launch, so the first read the app makes is My schedule's view.
-        setContent {
-            CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Interested, theme = ThemePreference.Light))
+        try {
+            // The theme comes from the launch, so the first read the app makes is My schedule's view.
+            setContent {
+                CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Interested, theme = ThemePreference.Light))
+            }
+            waitForIdle()
+            waitUntil(timeoutMillis = 20_000) { onAllNodes(hasTestTag("my-schedule-view")).fetchSemanticsNodes().isNotEmpty() }
+            option(Strings.Interested.VIEW_DAY, "my-schedule-view").performClick()
+            option(Strings.Interested.VIEW_LIST, "my-schedule-view").performClick()
+            waitForIdle()
+            option(Strings.Interested.VIEW_LIST, "my-schedule-view").assertIsSelected()
+        } finally {
+            released.complete(Unit)
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 20_000) { onAllNodes(hasTestTag("my-schedule-view")).fetchSemanticsNodes().isNotEmpty() }
-        option(Strings.Interested.VIEW_DAY, "my-schedule-view").performClick()
-        option(Strings.Interested.VIEW_LIST, "my-schedule-view").performClick()
-        waitForIdle()
-        option(Strings.Interested.VIEW_LIST, "my-schedule-view").assertIsSelected()
-
-        released.complete(Unit)
         waitForStored("myschedule.view.v1", "list")
         option(Strings.Interested.VIEW_LIST, "my-schedule-view").assertIsSelected()
         option(Strings.Interested.VIEW_DAY, "my-schedule-view").assertIsNotSelected()

@@ -451,11 +451,13 @@ class CaddieCore(
     }
 
     /**
-     * For tests: waits until the load of the query embedder that has started, if one has, has ended
-     * and its state is written. A load starts within the call that needs it ([search], [forYou]),
-     * so a test can check after this that a call started none.
+     * For tests: waits until every call made before it has run, then until the load of the query
+     * embedder those calls started, if any, has ended and its state is written. A test can check
+     * after this that a call started no load. A load starts within the call that needs it ([search],
+     * [forYou]); the first awaitIdle also covers one started from the core's queue.
      */
     internal suspend fun awaitEmbedderLoad() {
+        awaitIdle()
         embedderMutex.withLock { embedderJob }?.join()
         awaitIdle()
     }
