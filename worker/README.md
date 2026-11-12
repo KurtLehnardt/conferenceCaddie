@@ -326,8 +326,8 @@ to deploy while `ADMIN_TEST_ROUTES` is a secret of the Worker, and its message g
 The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
 redirect: a 3xx is a FAIL. Since #93 it signs with signature v2, like the Worker-side clients, and
 since step e it cannot sign anything else: `CADDIE_ADMIN_SIG_VERSION` is ignored, with one `NOTE`
-when it is set, so a Worker from before v2 must be deployed again before the smoke can pass. Its
-bearer mode is gone, and a current Worker answers a bearer with 404.
+when it is set to a non-empty value, so a Worker from before v2 must be deployed again before the
+smoke can pass. Its bearer mode is gone, and a current Worker answers a bearer with 404.
 
 The smoke's `keep1` and `keep2` run against the Worker too, where they printed SKIP before
 ([Presence modes](#presence-modes)).
@@ -462,8 +462,10 @@ then still signed v1. Step e is done, and it did not wait for the weekly run: CI
 43301747743, dispatched by hand on 2026-11-12 from `main`, which runs the same push step with the
 same secrets, passed under step d, signing v2, and the switch is gone from the clients, the smoke
 and `.github/workflows/ingest.yml`. The first scheduled run under steps d and e is on Monday
-2026-11-16; if it fails for a reason specific to v2, the rollback is to revert steps e and d
-(below).
+2026-11-16, and it is also the workflow's first scheduled run of any kind, since the workflow was
+added on 2026-11-10. If it fails, first look for a cause in the scheduled path (the event name,
+the empty `inputs` of a scheduled run, or a schedule that GitHub disabled). Only if it fails for a
+reason specific to v2 is the rollback to revert steps e and d (below).
 
 From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
 so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and

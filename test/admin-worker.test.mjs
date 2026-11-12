@@ -615,6 +615,33 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
     }
   });
 
+  // The real CLI hands main() process.env as its env (scripts/caddie-admin.mjs), so an adapter that
+  // read process.env directly would pass every test above. With "1" in process.env and an injected
+  // env that lacks the variable, every attempt is still v2, and nothing warns, because only the
+  // injected env is read.
+  test('the adapter reads nothing of CADDIE_ADMIN_SIG_VERSION from process.env: "1" there signs v2 on the first attempt and on a retry', async () => {
+    const NAME = 'CADDIE_ADMIN_SIG_VERSION';
+    const had = Object.prototype.hasOwnProperty.call(process.env, NAME);
+    const saved = process.env[NAME];
+    process.env[NAME] = '1';
+    try {
+      for (const fetch of [realFetch, flakyFetch(['ECONNRESET'], { after: true })]) {
+        const r = await invoke(['stats', 'counts', '--event', EVENT], { env: {}, fetch });
+        assert.equal(r.code, 0, r.stderr);
+        const calls = admins(r.requests);
+        assert.equal(calls.length, fetch === realFetch ? 1 : 2);
+        for (const call of calls) {
+          assert.equal(call.version, 2);
+          assert.ok(call.headers['x-caddie-admin'].startsWith('v2 '), call.headers['x-caddie-admin']);
+        }
+        assert.ok(!r.stderr.includes(NAME), r.stderr);
+      }
+    } finally {
+      if (had) process.env[NAME] = saved;
+      else delete process.env[NAME];
+    }
+  });
+
   // The api as configured goes through canonicalOrigin before any URL parsing: each of these parses
   // to the stand-in's own origin, so the code before step c would have signed and sent to it.
   test('the api as configured must pass canonicalOrigin: a full-width, percent-encoded or user-name api is exit 2 before any request', async () => {
