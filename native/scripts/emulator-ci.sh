@@ -93,10 +93,7 @@ install_package() {
   local pkg=$1 sdkmanager=$2 try log
   for try in $(seq 1 "$TRIES"); do
     log="$TMP_ROOT/emu-sdkmanager-$try.log"
-    # SCRATCH (reverted before merge): a bad package name on try 1 of the system image only.
-    local name=$pkg
-    if [ "$try" -eq 1 ] && [ "$pkg" = "$SYSTEM_IMAGE" ]; then name="$pkg-scratch-bad-name"; fi
-    if "$sdkmanager" --install "$name" --channel="$CHANNEL" < /dev/null > "$log" 2>&1; then
+    if "$sdkmanager" --install "$pkg" --channel="$CHANNEL" < /dev/null > "$log" 2>&1; then
       echo "$pkg is installed and up to date (try $try of $TRIES)."
       if [ "$try" -gt 1 ]; then
         echo "::warning title=Android SDK download retried::$pkg was installed on try $try of $TRIES."
@@ -211,10 +208,6 @@ cmd_run() {
     return 1
   fi
 
-  # SCRATCH (reverted before merge): the emulator process dies 5 s into Gradle on attempt 1.
-  if [ "$attempt" = 1 ]; then
-    (sleep 5; echo "SCRATCH: killing the emulator process"; pkill -9 -f "$EMULATOR_PROCESS" || true) &
-  fi
   set +e
   ./gradlew :composeApp:connectedAndroidDeviceTest :androidApp:connectedDebugAndroidTest 2>&1 | tee "$dir/gradle.log"
   status=${PIPESTATUS[0]}
