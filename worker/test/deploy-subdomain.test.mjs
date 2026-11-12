@@ -1,6 +1,8 @@
 // worker/scripts/deploy.sh, step 1 (W9): the workers.dev subdomain it creates when the account has
 // none comes from CADDIE_WORKERS_SUBDOMAIN, and without it from the random fallback, never from a
-// name built into the script. An account that already has a subdomain keeps it.
+// name built into the script. An account that already has a subdomain keeps it. Only a PUT
+// answered 409 or 400 is followed by another PUT; after any other failed PUT the subdomain is read
+// once more, so a PUT that went through is never followed by a second one that could rename it.
 //
 // The script runs with --subdomain-only, which stops after step 1, and with a stand-in for curl
 // first on its PATH, so nothing reaches Cloudflare and no real token is involved (the one passed is
@@ -18,8 +20,10 @@ const SCRIPT = fileURLToPath(new URL('../scripts/deploy.sh', import.meta.url));
 const FAKE_TOKEN = 'placeholder-token-not-a-credential';
 
 // curl: -o FILE, -w '%{http_code}', -X METHOD, --data BODY and the URL. The answers come from
-// responses.json: { get: { code, body }, put: [{ code, body | echo }, ...] } (echo makes the
-// success answer carry the subdomain that was asked for).
+// responses.json: { get: ANSWER | [ANSWER, ...], put: [ANSWER, ...] }, where an ANSWER is
+// { code, body }, { echo: true } or { fail: true }. A list answers the calls in turn and repeats its
+// last entry; echo makes the success answer carry the subdomain that was asked for; fail makes curl
+// exit without an answer, which the script reads as status 000.
 const CURL = `#!${process.execPath}
 const fs = require('node:fs');
 const dir = process.env.STUB_DIR;
@@ -31,14 +35,20 @@ const data = args.includes('--data') ? opt('--data') : null;
 const url = args[args.length - 1];
 fs.appendFileSync(dir + '/calls.log', JSON.stringify({ method, url, data, args }) + '\\n');
 const responses = JSON.parse(fs.readFileSync(dir + '/responses.json', 'utf8'));
+const next = (name, list) => {
+  if (!Array.isArray(list)) return list;
+  const file = dir + '/' + name + '-count';
+  const n = fs.existsSync(file) ? Number(fs.readFileSync(file, 'utf8')) : 0;
+  fs.writeFileSync(file, String(n + 1));
+  return list[Math.min(n, list.length - 1)];
+};
 let answer;
-if (method === 'GET') answer = responses.get;
+if (method === 'GET') answer = next('get', responses.get);
 else {
-  const n = fs.existsSync(dir + '/put-count') ? Number(fs.readFileSync(dir + '/put-count', 'utf8')) : 0;
-  fs.writeFileSync(dir + '/put-count', String(n + 1));
-  answer = responses.put[Math.min(n, responses.put.length - 1)];
+  answer = next('put', responses.put);
   if (answer.echo) answer = { code: 200, body: { success: true, result: { subdomain: JSON.parse(data).subdomain } } };
 }
+if (answer.fail) process.exit(7);
 fs.writeFileSync(opt('-o'), JSON.stringify(answer.body));
 process.stdout.write(String(answer.code));
 `;
@@ -132,6 +142,80 @@ test('a 404 with error code 10007 also means that the account has none, and only
     assert.equal(rb.status, 1, rb.text);
     assert.deepEqual(puts(bad), [], JSON.stringify(get));
     assert.match(rb.stderr, /Could not read the workers\.dev subdomain/);
+  }
+});
+
+test('error code 10007 means none at HTTP 200, 400 or 404 when the answer is not a success, as wrangler reads it', (t) => {
+  const cases = [
+    ['400 with 10007', { code: 400, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.not_found' }], result: null } }],
+    ['200 not a success, with 10007', { code: 200, body: { success: false, errors: [{ code: 10007, message: 'not found' }], result: null } }],
+    ['404 with 10007 among others', { code: 404, body: { success: false, errors: [{ code: 10000 }, { code: 10007 }] } }],
+  ];
+  for (const [why, get] of cases) {
+    const w = world(t, { get, put: [{ echo: true }] });
+    const r = w.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
+    assert.equal(r.status, 0, `${why}: ${r.text}`);
+    assert.deepEqual(puts(w), ['my-conf-caddie'], why);
+    assert.match(r.stdout, /^workers\.dev subdomain: my-conf-caddie$/m, why);
+  }
+  // Code 10007 at any other status, or beside success true, is not "no subdomain": no PUT.
+  for (const get of [
+    { code: 500, body: { success: false, errors: [{ code: 10007 }] } },
+    { code: 409, body: { success: false, errors: [{ code: 10007 }] } },
+    { code: 200, body: { success: true, errors: [{ code: 10007 }], result: {} } },
+  ]) {
+    const bad = world(t, { get, put: [{ echo: true }] });
+    const rb = bad.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
+    assert.equal(rb.status, 1, rb.text);
+    assert.deepEqual(puts(bad), [], JSON.stringify(get));
+    assert.match(rb.stderr, /Could not read the workers\.dev subdomain/);
+    assert.match(rb.stderr, /If it keeps failing, create the subdomain once in the dashboard \(Workers & Pages, Overview, workers\.dev subdomain\), then run this script again\./);
+  }
+});
+
+test('only a PUT answered 409 or 400 leads to another PUT, with a fallback name', (t) => {
+  for (const code of [409, 400]) {
+    const w = world(t, { ...NONE, put: [{ code, body: { success: false, errors: [{ code: 10000, message: 'taken' }] } }, { echo: true }] });
+    const r = w.run({ CADDIE_WORKERS_SUBDOMAIN: 'taken-name' });
+    assert.equal(r.status, 0, r.text);
+    const asked = puts(w);
+    assert.equal(asked.length, 2, `${code}: two PUTs`);
+    assert.equal(asked[0], 'taken-name');
+    assert.match(asked[1], /^conference-caddie-[a-z]{6}$/);
+    assert.match(r.stdout, new RegExp(`^workers\\.dev subdomain: ${asked[1]}$`, 'm'));
+  }
+});
+
+test('any other failed PUT is never followed by a second PUT: the subdomain is read once more', (t) => {
+  const gets = (w) => w.calls().filter((c) => c.method === 'GET');
+  const failed = [
+    ['502', { code: 502, body: { success: false, errors: [{ code: 10013, message: 'bad gateway detail' }] } }, /HTTP 502, error codes: 10013\)/],
+    ['404', { code: 404, body: { success: false, errors: [{ code: 7003, message: 'Could not route' }] } }, /HTTP 404, error codes: 7003\)/],
+    ['no answer', { fail: true }, /HTTP 000, error codes: none\)/],
+    ['200 not a success', { code: 200, body: { success: false, errors: [{ code: 10001, message: 'odd detail' }] } }, /HTTP 200, error codes: 10001\)/],
+  ];
+  for (const [why, put, pattern] of failed) {
+    // The PUT went through after all: the second read names the subdomain, which is used.
+    const w = world(t, { get: [NONE.get, { code: 200, body: { success: true, result: { subdomain: 'my-conf-caddie' } } }], put: [put, { echo: true }] });
+    const r = w.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
+    assert.equal(r.status, 0, `${why}: ${r.text}`);
+    assert.deepEqual(puts(w), ['my-conf-caddie'], `${why}: exactly one PUT`);
+    assert.equal(gets(w).length, 2, `${why}: read once more`);
+    assert.match(r.stdout, /^workers\.dev subdomain: my-conf-caddie$/m, why);
+
+    // The second read names none: the script stops, with the statuses and the error codes only.
+    for (const second of [NONE.get, { code: 500, body: 'Internal Server Error' }]) {
+      const n = world(t, { get: [NONE.get, second], put: [put, { echo: true }] });
+      const rn = n.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
+      assert.equal(rn.status, 1, `${why}: ${rn.text}`);
+      assert.deepEqual(puts(n), ['my-conf-caddie'], `${why}: exactly one PUT`);
+      assert.equal(gets(n).length, 2, `${why}: read once more`);
+      assert.match(rn.stderr, /Creating the workers\.dev subdomain my-conf-caddie failed/, why);
+      assert.match(rn.stderr, pattern, why);
+      assert.match(rn.stderr, new RegExp(`reading it again did not name one \\(HTTP ${second.code}, error codes: none\\)`), why);
+      assert.doesNotMatch(rn.stderr, /bad gateway detail|Could not route|odd detail|trying a fallback/, `${why}: codes only, no fallback`);
+      assert.doesNotMatch(rn.stdout, /workers\.dev subdomain:/, why);
+    }
   }
 });
 
