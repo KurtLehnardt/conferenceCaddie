@@ -36,19 +36,18 @@
 // api's origin. CADDIE_ADMIN_SIG_VERSION, the override that step e of the migration removed
 // (DECISIONS.md, "Admin signature v2"), is ignored: when it is still set to a non-empty value, the
 // CLI prints one warning on stderr (code sig_version_removed with --json) and signs v2. The api is
-// checked right after the backend is chosen, before the credential is read or a confirmation
-// asked. A 404 is
-// exit 4: "no such target" when the Worker answers not_found or no_operator_block, "refused" (the
-// key, the failed-signature limit or the route) when it answers "Not found". After an attempt that
-// may have run (a 5xx, or a timeout or reset once connected; never a failure to connect or a 429),
-// a retried delete or unhide that answers not_found, or unblock that answers not_found or
-// no_operator_block, reads as "already done" and exits 0 with a note. A conference the Worker does
-// not route (never added, a typo, or removed) exits 4 with the code conference_unavailable. An
-// unretire is refused when the Worker lists the slug with another status than the one it sends.
-// `conferences add` and `refresh` start the ingest workflow with `gh workflow run ingest.yml`;
-// `moderation purge-expired` and `moderation rules` exit 5 (the cron purges; the word list is
-// compiled into the Worker). When CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are both set,
-// admin requests also carry the Cloudflare Access headers.
+// checked right after the backend is chosen, before the credential is read or a confirmation asked.
+// A 404 is exit 4: "no such target" when the Worker answers not_found or no_operator_block,
+// "refused" (the key, the failed-signature limit or the route) when it answers "Not found". After
+// an attempt that may have run (a 5xx, or a timeout or reset once connected; never a failure to
+// connect or a 429), a retried delete or unhide that answers not_found, or unblock that answers
+// not_found or no_operator_block, reads as "already done" and exits 0 with a note. A conference the
+// Worker does not route (never added, a typo, or removed) exits 4 with the code
+// conference_unavailable. An unretire is refused when the Worker lists the slug with another status
+// than the one it sends. `conferences add` and `refresh` start the ingest workflow with
+// `gh workflow run ingest.yml`; `moderation purge-expired` and `moderation rules` exit 5 (the cron
+// purges; the word list is compiled into the Worker). When CF_ACCESS_CLIENT_ID and
+// CF_ACCESS_CLIENT_SECRET are both set, admin requests also carry the Cloudflare Access headers.
 //
 // Privacy rules: a credential is never printed, logged or written to the audit log. The audit log
 // (<dir>/audit.jsonl, mode 0600) holds only times, the backend, the command, an id or slug, an enum

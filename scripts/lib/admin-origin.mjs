@@ -102,8 +102,9 @@ export function parseAdminSigMin(raw) {
 }
 
 // The client's override of the version it signs, CADDIE_ADMIN_SIG_VERSION, existed from step c of
-// the migration until step e, which removed it once the first weekly CI ingest under step d had
-// passed: every client now signs v2 and never reads the variable for the version. A client that
+// the migration until step e, which removed it once the first CI ingest run under step d had passed
+// (a run dispatched by hand on the day step d merged, not the weekly scheduled one; DECISIONS.md,
+// step e): every client now signs v2 and never reads the variable for the version. A client that
 // still finds it set to a non-empty value (sigVersionSettingStale) prints
 // SIG_VERSION_REMOVED_WARNING once and signs v2 anyway; the value itself is never printed. An empty
 // value is how GitHub Actions passes an undefined repository variable, so it counts as unset. `env`

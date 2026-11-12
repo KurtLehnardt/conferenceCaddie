@@ -634,6 +634,18 @@ describe('CADDIE_ADMIN_SIG_VERSION in the process environment is ignored with on
     }
   });
 
+  test('with "1" in process.env and no env option, a retried request signs v2 on every attempt', async () => {
+    const { seen, base } = await recorder([{ status: 503, headers: { 'Retry-After': '1' }, body: { error: 'busy' } }, { body: { ok: true } }]);
+    await withProcessEnv('1', async () => {
+      assert.deepEqual(await adminClient(base, KEY, { retries: 1 })('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), { ok: true });
+    });
+    assert.equal(seen.length, 2);
+    for (const r of seen) assertSigned(r);
+    const headers = seen.map((r) => parseVersionedAdminHeader(r.headers['x-caddie-admin']));
+    assert.deepEqual(headers.map((h) => h.version), [2, 2]);
+    assert.notEqual(headers[0].nonce, headers[1].nonce);
+  });
+
   test('topics-local.mjs --api signs v2 for every value, and warns once exactly when the value is not empty', async () => {
     assert.ok(slug, 'a committed conference with a talk file under data/');
     for (const [value, warned] of CASES) {
@@ -791,8 +803,13 @@ describe('worker/scripts/moderation.mjs (deprecated in favour of caddie-admin)',
 
 // Step e: no client sends v1. Every X-Caddie-Admin header that reached a server of this file, from
 // adminClient in this process and from the scripts run as child processes, under every value of
-// CADDIE_ADMIN_SIG_VERSION above, is v2. This test comes last so it sees them all.
+// CADDIE_ADMIN_SIG_VERSION above, is v2. This is an end-of-file sweep: it reads the headers that
+// the earlier tests recorded, so it comes last, and it needs the whole file to run. Under a test
+// name filter the other tests may not have run, so the count is not checked then; the headers that
+// were recorded must still all be v2. Each test that uses recorder() also checks its own requests
+// with assertSigned, which fails on a v1 header in the test that sent it.
+const FILTERED = process.execArgv.some((a) => /^--test-(name-pattern|skip-pattern|only)\b/.test(a));
 test('no server of this file ever received a v1 header', () => {
-  assert.ok(adminHeaders.length >= 40, `only ${adminHeaders.length} headers were recorded`);
+  if (!FILTERED) assert.ok(adminHeaders.length >= 40, `only ${adminHeaders.length} headers were recorded`);
   for (const h of adminHeaders) assert.match(h, /^v2 /);
 });

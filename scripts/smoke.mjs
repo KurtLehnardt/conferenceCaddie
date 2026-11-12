@@ -44,8 +44,9 @@
 //                        The reports the run makes are removed at the end with POST /admin/moderation.
 //                        The token is only ever used towards API_BASE, as the key of the X-Caddie-Admin
 //                        signature; it is never sent itself. The signature is always v2
-//                        (CADDIE_ADMIN_SIG_VERSION below), which binds API_BASE's origin, so a signed
-//                        request that reaches another host cannot be replayed to the real Worker.
+//                        (CADDIE_ADMIN_SIG_VERSION below is ignored), which binds API_BASE's origin, so
+//                        a signed request that reaches another host cannot be replayed to the real
+//                        Worker.
 //                        Point API_BASE only at the Worker the token belongs to. Whenever the
 //                        run signs admin calls (with a token, or against the Worker, where adm1 signs
 //                        a probe with a random key), API_BASE as typed (when it is unset, the scheme

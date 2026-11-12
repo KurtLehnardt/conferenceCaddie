@@ -216,7 +216,7 @@ test('the User-Agent of the ingest has a neutral default and an environment over
 
 test('the CLI messages quoted in ADMIN_CLI.md exist in scripts/admin', () => {
   const doc = read('docs/ADMIN_CLI.md');
-  const sources = ['scripts/admin/cli.mjs', 'scripts/admin/credentials.mjs', 'scripts/admin/config.mjs', 'scripts/admin/confirm.mjs', ...fs.readdirSync(path.join(ROOT, 'scripts/admin/backends')).map((f) => `scripts/admin/backends/${f}`), ...fs.readdirSync(path.join(ROOT, 'scripts/admin/commands')).map((f) => `scripts/admin/commands/${f}`)]
+  const sources = ['scripts/admin/cli.mjs', 'scripts/lib/admin-origin.mjs', 'scripts/admin/credentials.mjs', 'scripts/admin/config.mjs', 'scripts/admin/confirm.mjs', ...fs.readdirSync(path.join(ROOT, 'scripts/admin/backends')).map((f) => `scripts/admin/backends/${f}`), ...fs.readdirSync(path.join(ROOT, 'scripts/admin/commands')).map((f) => `scripts/admin/commands/${f}`)]
     .filter((f) => fs.existsSync(path.join(ROOT, f)))
     .map(read)
     .join('\n');
@@ -249,9 +249,11 @@ test('the CLI messages quoted in ADMIN_CLI.md exist in scripts/admin', () => {
     'refused, because that would change a live conference',
     'which is not one status a directory row stores (',
     'so this command cannot tell what to expect; refused, nothing was sent',
-    // The warning code for the removed CADDIE_ADMIN_SIG_VERSION (step e of "Admin signature v2") and
-    // the strict reading of a tier 2 api (step c).
+    // The warning code and text for the removed CADDIE_ADMIN_SIG_VERSION (step e of "Admin signature
+    // v2"; the text is SIG_VERSION_REMOVED_WARNING in scripts/lib/admin-origin.mjs) and the strict
+    // reading of a tier 2 api (step c).
     'sig_version_removed',
+    'was removed in step e of the admin signature migration (DECISIONS.md, "Admin signature v2") and is ignored: every admin request is signed with v2; unset it',
     "api must be the Worker's origin as plain ASCII",
   ];
   assert.deepEqual(quoted.filter((q) => !sources.includes(q)), [], 'quoted in the test list but not printed by the CLI');
@@ -296,7 +298,7 @@ test('the setup guides keep the flags and variables of the scripts they describe
   }
   // Step e of "Admin signature v2" removed the client override, so no guide may set it any more.
   for (const doc of ['docs/fork/TIER2_CLOUDFLARE.md', 'docs/FREE_HOSTING.md', 'docs/ADMIN_CLI.md', 'docs/FORK.md', 'worker/README.md']) {
-    assert.ok(!/CADDIE_ADMIN_SIG_VERSION=1 |CADDIE_ADMIN_SIG_VERSION: \$\{\{ vars\.CADDIE_ADMIN_SIG_VERSION/.test(read(doc)), `${doc} still sets CADDIE_ADMIN_SIG_VERSION`);
+    assert.ok(!/CADDIE_ADMIN_SIG_VERSION=1(?![0-9])|CADDIE_ADMIN_SIG_VERSION: \$\{\{ vars\.CADDIE_ADMIN_SIG_VERSION/.test(read(doc)), `${doc} still sets CADDIE_ADMIN_SIG_VERSION`);
   }
   // Bearer mode is gone from the smoke, so no guide may offer it, nor SMOKE_ADMIN_AUTH at all.
   assert.ok(!tier2.includes('SMOKE_ADMIN_AUTH'), 'TIER2_CLOUDFLARE.md still sets SMOKE_ADMIN_AUTH');

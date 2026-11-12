@@ -458,8 +458,12 @@ The move to v2 is in five steps (DECISIONS.md, "Admin signature v2"), each deplo
 a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
 Worker refuses v1; e, the clients' switch `CADDIE_ADMIN_SIG_VERSION` is removed once the first
 weekly CI ingest under step d has passed. Deploying step b changed nothing for the clients, which
-then still signed v1. Step e is done: the CI ingest run 43301747743 passed under step d, signing
-v2, and the switch is gone from the clients, the smoke and `.github/workflows/ingest.yml`.
+then still signed v1. Step e is done, and it did not wait for the weekly run: CI ingest run
+43301747743, dispatched by hand on 2026-11-12 from `main`, which runs the same push step with the
+same secrets, passed under step d, signing v2, and the switch is gone from the clients, the smoke
+and `.github/workflows/ingest.yml`. The first scheduled run under steps d and e is on Monday
+2026-11-16; if it fails for a reason specific to v2, the rollback is to revert steps e and d
+(below).
 
 From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
 so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and
