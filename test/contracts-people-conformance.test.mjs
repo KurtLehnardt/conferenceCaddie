@@ -515,8 +515,14 @@ test('ending presence and deleting the profile', async () => {
   // A device of its own, so the write buckets of the devices above do not run out.
   const leaver = newDevice();
   conforms('PUT', '/api/people/profile', await call('PUT', '/api/people/profile', { device: leaver, body: profileBody('Leaving Tester') }));
-  conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: leaver, body: { event: EVENT, zone: 'Hallway', ble: true } }));
+  const on = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: leaver, body: { event: EVENT, zone: 'Hallway', ble: true } }));
+  // until: 'keep' (people.presence_keep_until): Bluetooth off keeps the end; with nothing live it is refused.
+  const kept = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: leaver, body: { event: EVENT, zone: 'Hallway', until: 'keep', ble: false } }));
+  assert.equal(kept.until, 'keep');
+  assert.equal(kept.presence_until, on.presence_until);
   conforms('DELETE', '/api/presence', await call('DELETE', `/api/presence?event=${EVENT}`, { device: leaver }));
+  const refused = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: leaver, body: { event: EVENT, zone: 'Hallway', until: 'keep' } }), 400);
+  assert.equal(refused.error, 'presence_not_active');
   conforms('POST', '/api/presence/ble/rotate', await call('POST', '/api/presence/ble/rotate', { device: leaver, body: { event: EVENT } }), 403);
   conforms('DELETE', '/api/people/profile', await call('DELETE', `/api/people/profile?event=${EVENT}`, { device: leaver }));
   assert.equal(store('caddie-people').has(`${EVENT}:${leaver.profileId}`), false);

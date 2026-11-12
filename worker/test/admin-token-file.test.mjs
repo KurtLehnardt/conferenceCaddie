@@ -477,12 +477,14 @@ describe('the ingest, migration and topics scripts pass the --api origin to the 
   }
   const spawn = (name, args, env) => spawnSync(process.execPath, [join(ROOT, 'worker', 'ingest', name), ...args], { env, encoding: 'utf8', timeout: 60_000 });
 
-  test('migrate-from-backup asks for the token with the origin of --api', async (t) => {
+  // The --api value is not in canonical form, so the test also checks that the origin passed is
+  // the one normalizeApiBase returns, which is the origin adminClient signs v2 for.
+  test('migrate-from-backup asks for the token with the canonical origin of --api', async (t) => {
     const s = scratch(t);
     const backup = dirname(s.put(join(s.dir, 'backup', 'caddie-conferences-v1.ndjson'), ''));
     const asked = [];
     const out = [];
-    const code = await migrate(['--backup', backup, '--api', 'https://caddie.example/base/', '--only', 'conferences', '--dry-run'], {
+    const code = await migrate(['--backup', backup, '--api', 'HTTPS://Caddie.Example:443/', '--only', 'conferences', '--dry-run'], {
       readToken: (options) => {
         asked.push(options);
         return '';

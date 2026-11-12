@@ -331,8 +331,10 @@ async function main() {
   const talks = readEventTalks(args.event);
   let admin = null;
   if (args.api) {
+    // api is the canonical origin from normalizeApiBase, the same origin adminClient signs v2 for,
+    // and readAdminToken checks a fallback to the old token file against that origin.
     const api = normalizeApiBase(args.api);
-    const token = readAdminToken({ apiOrigin: new URL(api).origin });
+    const token = readAdminToken({ apiOrigin: api });
     if (!token) throw new UsageError('--api needs ADMIN_TOKEN (or ADMIN_TOKEN_FILE).');
     admin = adminClient(api, token);
   }

@@ -38,7 +38,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase,
+  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, adminSignVersion, chunk, drainPending, isSlug, normalizeApiBase,
   parseArgs, readAdminToken, readNdjson, withTopics, withoutOperatorKeys,
 } from './lib.mjs';
 
@@ -281,6 +281,10 @@ export async function run(argv, { client = adminClient, readToken = readAdminTok
     const args = parseArgs(argv, { flags: ['dry-run', 'include-real'], values: ['backup', 'api', 'only'] });
     if (!args.backup) throw new UsageError('--backup <dir> is required.');
     const api = normalizeApiBase(args.api);
+    // CADDIE_ADMIN_SIG_VERSION is checked here, as push-ingest.mjs does, and not only when the admin
+    // client is created: a dry run creates no client, and a real run creates it only after the plan
+    // has been read and printed, so a bad value should stop every run before any of that.
+    if (adminSignVersion() === 1) error('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). Remove the setting once v2 works again: the Worker refuses v1 after step (d).');
     const backup = resolve(args.backup);
     if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
 
@@ -288,7 +292,8 @@ export async function run(argv, { client = adminClient, readToken = readAdminTok
     const bad = only.filter((t) => !TABLES.includes(t));
     if (bad.length) throw new UsageError(`Unknown table in --only: ${bad.join(', ')}. Known: ${TABLES.join(', ')}.`);
     const dryRun = args['dry-run'];
-    const token = readToken({ apiOrigin: new URL(api).origin });
+    // api is the canonical origin from normalizeApiBase, the same origin adminClient signs v2 for.
+    const token = readToken({ apiOrigin: api });
     if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to migrate, or pass --dry-run.');
 
     const p = plan(backup, { include: new Set(only), includeReal: args['include-real'] });
