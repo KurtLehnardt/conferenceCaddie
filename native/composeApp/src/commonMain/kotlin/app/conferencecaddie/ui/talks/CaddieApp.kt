@@ -147,7 +147,8 @@ fun CaddieApp(
     var searchView by rememberSaveable { mutableStateOf(SearchView.Search) }
     // My schedule's List or Day choice is kept on this device, as the web keeps it in local storage;
     // the Day view's day belongs to its conference.
-    var myView by remember { mutableStateOf(MyScheduleView.List) }
+    val myViewChoice = remember { StoredChoice(MyScheduleView.List) }
+    val myView = myViewChoice.value
     var myDay by rememberSaveable { mutableStateOf<String?>(null) }
     var myDaySlug by rememberSaveable { mutableStateOf<String?>(null) }
     var clearOpen by rememberSaveable { mutableStateOf(false) }
@@ -173,7 +174,8 @@ fun CaddieApp(
     var pickerOpen by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val openUrl: (String) -> Unit = { url -> if (isWebLink(url)) runCatching { uriHandler.openUri(url) } }
-    var theme by remember { mutableStateOf(launch.theme ?: ThemePreference.System) }
+    val themeChoice = remember { StoredChoice(launch.theme ?: ThemePreference.System) }
+    val theme = themeChoice.value
     var pendingConnect by remember { mutableStateOf(launch.connect) }
     val onConnectHandled = { pendingConnect = null }
     var openTalk by rememberSaveable { mutableStateOf<String?>(null) }
@@ -206,12 +208,12 @@ fun CaddieApp(
         if (state.semantic == SemanticState.Ready || state.semantic == SemanticState.Unavailable) search.submit()
     }
     // The theme choice is kept on this device, as the web keeps it in local storage; a debug
-    // launch option wins for that run.
+    // launch option wins for that run. A choice made before the stored one is read wins too.
     LaunchedEffect(core) {
         if (launch.theme == null) {
-            core.uiSetting(THEME)?.let { saved -> ThemePreference.entries.firstOrNull { it.name == saved } }?.let { theme = it }
+            themeChoice.restore { core.uiSetting(THEME)?.let { saved -> ThemePreference.entries.firstOrNull { it.name == saved } } }
         }
-        if (core.uiSetting(MY_SCHEDULE_VIEW) == "day") myView = MyScheduleView.Day
+        myViewChoice.restore { if (core.uiSetting(MY_SCHEDULE_VIEW) == "day") MyScheduleView.Day else null }
     }
     val ready = state.bundle as? BundleState.Ready
     LaunchedEffect(state.selectedSlug, ready?.bundle?.contentHash) {
@@ -339,7 +341,7 @@ fun CaddieApp(
                 link.day?.let { schedule.day = it }
             }
             AppLink.Tab.Interested -> {
-                link.view?.let { myView = if (it == AppLink.View.Day) MyScheduleView.Day else MyScheduleView.List }
+                link.view?.let { myViewChoice.choose(if (it == AppLink.View.Day) MyScheduleView.Day else MyScheduleView.List) }
                 link.day?.let {
                     myDay = it
                     myDaySlug = on
@@ -410,7 +412,7 @@ fun CaddieApp(
             },
             onDeclineConnect = onConnectHandled,
             onThemeChange = {
-                theme = it
+                themeChoice.choose(it)
                 core.setUiSetting(THEME, it.name)
             },
             onClearSavedSchedules = {
@@ -476,7 +478,7 @@ fun CaddieApp(
                         prefetchCounts = peopleUi?.prefetchCounts,
                         view = myView,
                         onView = {
-                            myView = it
+                            myViewChoice.choose(it)
                             core.setUiSetting(MY_SCHEDULE_VIEW, if (it == MyScheduleView.Day) "day" else "list")
                         },
                         day = myDay.takeIf { myDaySlug == state.selectedSlug },
@@ -546,7 +548,7 @@ fun CaddieApp(
                 onUndo = { ids -> core.setInterested(ids.mapNotNull { id -> ready.bundle.talksById[id] }, false) },
                 onViewSchedule = { day ->
                     importOpen = false
-                    myView = MyScheduleView.Day
+                    myViewChoice.choose(MyScheduleView.Day)
                     core.setUiSetting(MY_SCHEDULE_VIEW, "day")
                     myDay = day
                     myDaySlug = state.selectedSlug
