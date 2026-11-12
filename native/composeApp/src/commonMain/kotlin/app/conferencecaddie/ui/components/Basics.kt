@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.icons.vector
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 
 /** The pill shape of buttons, chips and badges (border-radius: 999px). */
 val Pill: Shape = RoundedCornerShape(percent = 50)
@@ -128,7 +128,7 @@ fun CaddieButton(
     }
     Row(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .alpha(if (enabled) 1f else 0.45f)
             .heightIn(min = Caddie.dimens.minTouch)
             .caddieClickable(Pill, enabled = enabled, onClick = onClick)
@@ -167,7 +167,7 @@ fun CaddieIconButton(
 ) {
     Box(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .size(Caddie.dimens.minTouch)
             .caddieClickable(CircleShape, onClick = onClick)
             .semantics { this.contentDescription = contentDescription },

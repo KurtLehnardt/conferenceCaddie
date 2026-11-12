@@ -54,6 +54,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import app.conferencecaddie.ui.assertTouchTarget
 
 // "Find people near me by Bluetooth" (BleControls) in the presence card and in Settings: every state
 // it draws, from constructed states, and the flows through a real PeopleController on the fake
@@ -143,7 +144,7 @@ class BleUiTest {
             .assert(hasText(PeopleText.BLE_LABEL))
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
             .assert(describedBy(BleStrings.HINT_OFF))
-            .assertHeightIsAtLeast(44.dp)
+            .assertTouchTarget(minWidth = null, minHeight = 44.dp)
         assertEquals("Find people near me by Bluetooth (phone can stay in your pocket). Only people who also turned this on can be found.", BleStrings.switchDescription(BleStrings.HINT_OFF))
         onNodeWithTag("ble-hint").assertTextEquals(BleStrings.HINT_OFF)
         onNodeWithTag("ble-setup").assertDoesNotExist()
@@ -280,7 +281,7 @@ class BleUiTest {
             .performScrollTo()
             .assertIsOff()
             .assert(hasText(PeopleText.BLE_LABEL))
-            .assertHeightIsAtLeast(48.dp)
+            .assertTouchTarget(minWidth = null, minHeight = 48.dp)
         onNodeWithTag("ble-hint").assertTextEquals(BleStrings.HINT_OFF)
     }
 

@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -51,6 +50,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.PlatformTouchTarget
+import app.conferencecaddie.ui.theme.touchTargetIn
 import kotlinx.coroutines.launch
 
 /** The longest spot line ("Where in the zone"), as the web's SPOT_MAX. */
@@ -507,11 +507,11 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
  * label instead of clipping it.
  */
 @Composable
-private fun StillChip(label: String, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
+internal fun StillChip(label: String, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val c = Caddie.colors
     // The tappable box is the 48 dp one; the chip drawn in it keeps its 36 dp look.
     Box(
-        Modifier.defaultMinSize(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget).caddieClickable(Pill, enabled = enabled, onClick = onClick),
+        Modifier.touchTargetIn(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget).caddieClickable(Pill, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Box(

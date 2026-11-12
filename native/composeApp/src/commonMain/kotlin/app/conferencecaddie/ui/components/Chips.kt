@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -35,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 
 /** How a chip behaves when tapped. */
 enum class ChipKind {
@@ -76,7 +76,7 @@ fun CaddieChip(
     val shape = Pill
     Row(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .heightIn(min = height)
             // Both tap areas (the chip and its clear button) fill the pill's height, whatever the
             // text size makes it.
@@ -221,7 +221,7 @@ fun ChipRow(
 fun ClearAllButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .heightIn(min = Caddie.dimens.minTouch)
             .caddieClickable(Pill, onClick = onClick)
             .padding(horizontal = 8.dp),

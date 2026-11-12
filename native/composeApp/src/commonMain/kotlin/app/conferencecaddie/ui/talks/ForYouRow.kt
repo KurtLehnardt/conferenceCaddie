@@ -52,6 +52,7 @@ import app.conferencecaddie.ui.people.SectionHead
 import app.conferencecaddie.ui.people.refreshing
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -115,6 +116,7 @@ private fun SeeAllLink(onClick: () -> Unit) {
     val c = Caddie.colors
     Row(
         Modifier
+            .minimumTouchTarget()
             .heightIn(min = Caddie.dimens.minTouch)
             .caddieClickable(RoundedCornerShape(6.dp), onClick = onClick)
             .padding(horizontal = 4.dp)

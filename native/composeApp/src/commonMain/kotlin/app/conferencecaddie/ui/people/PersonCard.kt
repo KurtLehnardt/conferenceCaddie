@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +50,7 @@ import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.caddieClickable
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 import kotlinx.coroutines.launch
 
 /**
@@ -278,7 +278,7 @@ private fun PersonContact(person: Person, host: PeopleHost) {
                 Row(
                     Modifier
                         .heightIn(min = Caddie.dimens.minTouch)
-                        .minimumInteractiveComponentSize()
+                        .minimumTouchTarget()
                         .caddieClickable(RoundedCornerShape(4.dp)) { host.openUrl(url) }
                         .testTag("person-linkedin"),
                     verticalAlignment = Alignment.CenterVertically,

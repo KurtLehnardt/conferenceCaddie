@@ -30,6 +30,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 
 /**
  * "Related talks" under a talk card, closed until tapped (web RelatedTalks in
@@ -63,6 +64,7 @@ fun RelatedTalks(
                             Column(
                                 Modifier
                                     .weight(1f)
+                                    .minimumTouchTarget()
                                     .heightIn(min = Caddie.dimens.minTouch)
                                     .caddieClickable(RoundedCornerShape(8.dp), role = Role.Button) { onOpenTalk(r) }
                                     .padding(vertical = 6.dp),

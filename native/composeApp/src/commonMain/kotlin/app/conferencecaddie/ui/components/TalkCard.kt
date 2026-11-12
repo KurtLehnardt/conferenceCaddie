@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -36,6 +35,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.isWebLink
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 
 /** A link at the bottom of a talk card (.card-links). Only http(s) URLs are ever opened. */
 data class CardLink(val label: String, val icon: LucideIcon, val url: String)
@@ -174,7 +174,7 @@ fun InterestedToggle(on: Boolean, ended: Boolean, onToggle: () -> Unit, modifier
     val interaction = remember { MutableInteractionSource() }
     Row(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .heightIn(min = Caddie.dimens.minTouch)
             .focusRing(interaction, Pill)
             .clip(Pill)
@@ -198,7 +198,7 @@ fun InterestedToggle(on: Boolean, ended: Boolean, onToggle: () -> Unit, modifier
 fun LinkButton(text: String, icon: LucideIcon?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Row(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .heightIn(min = Caddie.dimens.minTouch)
             .caddieClickable(RoundedCornerShape(6.dp), role = Role.Button, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,

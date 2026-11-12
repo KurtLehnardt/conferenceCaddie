@@ -3,7 +3,6 @@ package app.conferencecaddie.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -33,7 +32,6 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -58,6 +56,8 @@ import app.conferencecaddie.ui.theme.BrandBlue
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.MOTION_MS
 import app.conferencecaddie.ui.theme.PlatformTouchTarget
+import app.conferencecaddie.ui.theme.minimumTouchTarget
+import app.conferencecaddie.ui.theme.touchTargetIn
 
 /**
  * .appbar: [leading] (a Back button), the title, and [actions] on the right, on the page colour,
@@ -102,7 +102,7 @@ fun AppBarLabeledBack(label: String, contentDescription: String, onClick: () -> 
     val c = Caddie.colors
     Row(
         modifier
-            .defaultMinSize(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget)
+            .touchTargetIn(minWidth = PlatformTouchTarget, minHeight = PlatformTouchTarget)
             .caddieClickable(Pill, onClick = onClick)
             .semantics { this.contentDescription = contentDescription }
             .testTag("appbar-back")
@@ -139,7 +139,7 @@ fun SwitcherButton(name: String, onClick: () -> Unit, modifier: Modifier = Modif
     Row(
         modifier
             .offset(x = (-8).dp)
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .heightIn(min = Caddie.dimens.minTouch)
             .caddieClickable(RoundedCornerShape(10.dp), onClick = onClick)
             .semantics {

@@ -78,6 +78,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.platform.PickedFile
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.touchTargetIn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -508,7 +509,7 @@ private fun ColumnScope.ReviewPage(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 48.dp)
+                    .touchTargetIn(minHeight = 48.dp)
                     .toggleable(value = on, enabled = !already, role = Role.Checkbox, onValueChange = { model.toggle(id) })
                     .padding(vertical = 12.dp)
                     .testTag("import-row-$id"),

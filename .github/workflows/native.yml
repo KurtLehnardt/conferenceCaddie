@@ -99,6 +99,11 @@ jobs:
       - name: Check that only openEncoder uses ONNX Runtime
         run: bash scripts/check-onnxruntime-entry.sh
 
+      # Touch targets round their minimum up to whole pixels (composeApp, ui/theme/TouchTarget.kt);
+      # TouchTargetDensityUiTest checks them at several densities in the emulator and simulator jobs.
+      - name: Check that touch targets round their minimum up
+        run: bash scripts/check-touch-targets.sh
+
       # Material3 is not bumped by Dependabot; it must stay the pair of Compose Multiplatform.
       - name: Check the Compose Multiplatform and Material3 pairing
         run: bash scripts/check-compose-pairing.sh

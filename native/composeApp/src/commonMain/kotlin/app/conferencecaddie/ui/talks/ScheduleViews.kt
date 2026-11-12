@@ -22,7 +22,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -58,6 +57,7 @@ import app.conferencecaddie.ui.format.Format
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Instant
@@ -138,7 +138,7 @@ private fun DayChip(label: String, on: Boolean, today: Boolean, onClick: () -> U
     val c = Caddie.colors
     Row(
         modifier
-            .minimumInteractiveComponentSize()
+            .minimumTouchTarget()
             .heightIn(min = Caddie.dimens.chipHeight)
             .clip(Pill)
             .background(if (on) c.accentTint else c.surface, Pill)
@@ -406,7 +406,7 @@ internal fun ScheduleRow(
         if (!event) {
             Box(
                 Modifier
-                    .minimumInteractiveComponentSize()
+                    .minimumTouchTarget()
                     .size(Caddie.dimens.minTouch)
                     .caddieClickable(CircleShape, role = Role.Checkbox) { onToggle(talk) }
                     .semantics {
