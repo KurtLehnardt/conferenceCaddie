@@ -16,12 +16,12 @@ buildscript {
     dependencies {
         constraints {
             listOf(
-                "org.bouncycastle:bcprov-jdk18on:1.85" to
+                "org.bouncycastle:bcprov-jdk18on:1.86" to
                     "GHSA-9pwp-9qqc-pr26, GHSA-qp49-qgx5-5m26, GHSA-574f-3g2m-x479, GHSA-p93r-85wp-75v3, GHSA-c3fc-8qff-9hwx",
                 // Bouncy Castle's jars are released together and must stay on one version, so bcpkix
                 // (first fixed in 1.84) and bcutil (no alert) follow bcprov.
-                "org.bouncycastle:bcpkix-jdk18on:1.85" to "GHSA-wg6q-6289-32hp; same release as bcprov",
-                "org.bouncycastle:bcutil-jdk18on:1.85" to "same release as bcprov",
+                "org.bouncycastle:bcpkix-jdk18on:1.86" to "GHSA-wg6q-6289-32hp; same release as bcprov",
+                "org.bouncycastle:bcutil-jdk18on:1.86" to "same release as bcprov",
                 "com.google.guava:guava:33.7.2-jre" to "GHSA-xxph-c9ww-hj94",
                 "io.opentelemetry:opentelemetry-api:1.67.0" to "GHSA-ccrj-gw8r-854m, GHSA-rcgg-9c38-7xpx",
                 "org.bitbucket.b_c:jose4j:0.9.6" to "GHSA-3677-xxcr-wjqv",
