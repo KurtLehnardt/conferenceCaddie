@@ -16,7 +16,10 @@
 #      PUT {"subdomain":"<CADDIE_WORKERS_SUBDOMAIN>"} (an optional environment variable: the name you
 #      want, lowercase letters, digits and hyphens), and when it is unset, or the name is taken, use
 #      conference-caddie-<6 random lowercase letters>. An account that already has a subdomain keeps
-#      it, whatever the variable says.
+#      it, whatever the variable says. Only two answers mean "no subdomain yet": a successful answer
+#      whose subdomain is null, and a 404 with Cloudflare's error code 10007. Any other answer that
+#      does not name the subdomain stops the script without a PUT, because a PUT on an account that
+#      has a subdomain could rename it.
 #   2. Build the web app in Worker mode (npm --prefix web run build:worker: base "/", same-origin
 #      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
 #      wrangler.toml, so the app ships with the Worker.
@@ -24,10 +27,9 @@
 #      and refuse to deploy while ADMIN_SIG_MIN, ADMIN_ORIGIN or ADMIN_TEST_ROUTES is a secret of the
 #      Worker (DECISIONS.md, "Admin signature v2", step d). The check reads the secrets' names only;
 #      Cloudflare does not return their values, and the script prints only which of the three names
-#      it found. A 404 with
-#      Cloudflare's error code 10007 means the Worker does not exist yet (a first deploy) and passes.
-#      Any other answer (a 403, a 5xx, no answer, a body that cannot be read) refuses to deploy, so a
-#      check that could not run never passes.
+#      it found. A 404 with Cloudflare's error code 10007 means the Worker does not exist yet (a
+#      first deploy) and passes. Any other answer (a 403, a 5xx, no answer, a body that cannot be
+#      read) refuses to deploy, so a check that could not run never passes.
 #   4. npx wrangler deploy from worker/ (the wrangler version pinned in worker/package.json).
 #      Its output goes to a temporary file that is deleted on exit; only the URL is printed.
 #
@@ -117,7 +119,7 @@ json_field() {
 
 # Cloudflare's error codes and messages, which never contain the token.
 api_errors() {
-  json_field '(r.errors || []).map((e) => `${e.code}: ${e.message}`).join("; ") || "no error details"'
+  json_field '(Array.isArray(r.errors) ? r.errors : []).filter((e) => e && typeof e === "object").map((e) => `${e.code}: ${e.message}`).join("; ") || "no error details"'
 }
 
 # Cloudflare's numeric error codes alone, without the messages.
@@ -140,12 +142,30 @@ blocker() {
   exit 1
 }
 
-# 1. The workers.dev subdomain.
+# 1. The workers.dev subdomain. A subdomain is created only on an answer that says the account has
+# none: a 200 with success true and a null subdomain, or a 404 with error code 10007. Every other
+# answer that does not name the subdomain stops here, without a PUT, because a PUT on an account
+# that already has a subdomain could rename it and break every client of the old URL.
 status="$(cf_api GET /workers/subdomain)"
 subdomain=""
 unreadable=0
+create=0
+subdomain_unreadable() {
+  echo "Could not read the workers.dev subdomain (HTTP $1, error codes: $(api_codes)), so none was created and nothing was deployed. Run this script again." >&2
+  exit 1
+}
 if [ "$status" = "200" ]; then
-  subdomain="$(json_field 'r.result && r.result.subdomain')"
+  # "set:<name>" when the answer names the subdomain, "none" when it says there is none, and empty
+  # for anything else (not a success, no result object, or a subdomain that is neither a non-empty
+  # string nor null).
+  state="$(json_field 'r.success === true && r.result !== null && typeof r.result === "object" && !Array.isArray(r.result) ? (typeof r.result.subdomain === "string" && r.result.subdomain !== "" ? "set:" + r.result.subdomain : (r.result.subdomain === null ? "none" : "")) : ""')"
+  case "$state" in
+    set:*) subdomain="${state#set:}" ;;
+    none) create=1 ;;
+    *) subdomain_unreadable "$status" ;;
+  esac
+elif [ "$status" = "404" ] && [ "$(json_field '(Array.isArray(r.errors) ? r.errors : []).some((e) => e && e.code === 10007)')" = "true" ]; then
+  create=1
 elif [ "$status" = "401" ] || [ "$status" = "403" ]; then
   if [ "$SUBDOMAIN_ONLY" = "1" ]; then
     blocker "Reading the workers.dev subdomain failed with HTTP $status ($(api_errors))."
@@ -157,9 +177,11 @@ elif [ "$status" = "401" ] || [ "$status" = "403" ]; then
 elif [ "$status" = "000" ]; then
   echo "Could not reach api.cloudflare.com." >&2
   exit 1
+else
+  subdomain_unreadable "$status"
 fi
 
-if [ -z "$subdomain" ] && [ "$unreadable" = "0" ]; then
+if [ "$create" = "1" ]; then
   candidate="${PREFERRED_SUBDOMAIN:-$FALLBACK_PREFIX$(random_suffix)}"
   for attempt in 1 2 3 4; do
     status="$(cf_api PUT /workers/subdomain "{\"subdomain\":\"$candidate\"}")"

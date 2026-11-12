@@ -128,16 +128,17 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    bash worker/scripts/deploy.sh
    ```
 
-   The script makes sure the account has a `workers.dev` subdomain (it reads it with the
-   Cloudflare API and, when there is none, creates the one named by the optional environment
-   variable `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<6 random letters>` when the variable
-   is unset or that name is taken; an account that already has a subdomain keeps it, whatever the
-   variable says), builds the web app in Worker
-   mode into `web/dist-worker/`, checks that none of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and
-   `ADMIN_TEST_ROUTES` is a secret of the Worker ([Signature v2](#signature-v2), [Smoke](#smoke);
-   it refuses to deploy when one is, or when it cannot tell), then runs `npx wrangler deploy`, which uploads the app with the
-   Worker. It prints only the subdomain and the app URL, which is also the API's base. Until
-   step 2 has run, the admin routes answer 404, because admin fails closed without `ADMIN_TOKEN`.
+   The script makes sure the account has a `workers.dev` subdomain (it reads it with the Cloudflare
+   API and, when there is none, creates the one named by the optional environment variable
+   `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<6 random letters>` when the variable is unset
+   or that name is taken; an account that already has a subdomain keeps it, whatever the variable
+   says, and an answer that neither names a subdomain nor says there is none stops the script before
+   anything is created), builds the web app in Worker mode into `web/dist-worker/`, checks that none
+   of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES` is a secret of the Worker ([Signature
+   v2](#signature-v2), [Smoke](#smoke); it refuses to deploy when one is, or when it cannot tell),
+   then runs `npx wrangler deploy`, which uploads the app with the Worker. It prints only the
+   subdomain and the app URL, which is also the API's base. Until step 2 has run, the admin routes
+   answer 404, because admin fails closed without `ADMIN_TOKEN`.
 
    If the token cannot read or create the subdomain (HTTP 403 from the subdomain API), create it
    once in the Cloudflare dashboard (Workers & Pages, Overview, `workers.dev` subdomain) and run the
@@ -474,11 +475,11 @@ passes it to the push step), and the clients sign v1 again. Unset or empty means
 value is a usage error when the client is created, before anything is sent; `push-ingest.mjs`
 and `migrate-from-backup.mjs` check it before anything else, also in a dry run, and the
 workflow's first step refuses it without printing it. Since step d the Worker refuses v1, so this
-switch helps only together with the Worker's own rollback, `ADMIN_SIG_MIN = "1"` committed in
-`[vars]` and deployed (below). It stays in the clients and the workflow for one soak period, so
-that rolling back step d needs no change to the code, and step e removes it once the first weekly
-CI ingest under step d has passed. `scripts/moderation.mjs` (the
-deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
+switch helps only together with the Worker's own rollback, an `ADMIN_SIG_MIN` of `"1"`, which
+belongs in `[vars]`, committed and deployed, and never in a secret (below). It stays in the clients
+and the workflow for one soak period, so that rolling back step d needs no change to the code, and
+step e removes it once the first weekly CI ingest under step d has passed. `scripts/moderation.mjs`
+(the deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
 `caddie-admin` command to use.
 
 Step c covers every client: since #93 the `caddie-admin` CLI (`scripts/admin/`) and
@@ -528,12 +529,14 @@ secret of `"1"` would override the source default (`"2"`) on every deploy and ke
 replay window open, an empty one would answer 404 to every admin call, the ingest included, and
 a forgotten `ADMIN_ORIGIN` secret that lists a staging origin would make requests signed for
 staging verify here. `deploy.sh` enforces this before every deploy: it reads the names of the
-Worker's secrets through the Cloudflare API (`GET /accounts/<account>/workers/scripts/<name>/secrets`,
-which returns names and types, never values) and refuses to deploy while either name is among
-them, or `ADMIN_TEST_ROUTES` ([Smoke](#smoke)), printing which one and the remedy. It also refuses when it cannot tell, on any answer other
-than a list of secrets or the 404 with error code 10007 of a Worker that does not exist yet (a
-first deploy), printing only the HTTP status and Cloudflare's error codes. To check by hand, run
-this in `worker/`, which prints the names of the Worker's secrets and never their values:
+Worker's secrets through the Cloudflare API
+(`GET /accounts/<account>/workers/scripts/<name>/secrets`, which returns names and types, never
+values) and refuses to deploy while either name is among them, or `ADMIN_TEST_ROUTES`
+([Smoke](#smoke)), printing which one and the remedy. It also refuses when it cannot tell, on any
+answer other than a list of secrets or the 404 with error code 10007 of a Worker that does not
+exist yet (a first deploy), printing only the HTTP status and Cloudflare's error codes. To check
+by hand, run this in `worker/`, which prints the names of the Worker's secrets and never their
+values:
 
 ```sh
 npx wrangler secret list

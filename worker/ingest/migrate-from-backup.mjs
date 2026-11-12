@@ -284,7 +284,7 @@ export async function run(argv, { client = adminClient, readToken = readAdminTok
     // CADDIE_ADMIN_SIG_VERSION is checked here, as push-ingest.mjs does, and not only when the admin
     // client is created: a dry run creates no client, and a real run creates it only after the plan
     // has been read and printed, so a bad value should stop every run before any of that.
-    if (adminSignVersion() === 1) error('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). The Worker refuses v1 since step d unless ADMIN_SIG_MIN = "1" is committed in [vars] of worker/wrangler.toml and deployed (the rollback of step d); remove the setting once v2 works again.');
+    if (adminSignVersion() === 1) error('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). The Worker refuses v1 since step d unless its ADMIN_SIG_MIN is "1" (the rollback of step d, which belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret); remove the setting once v2 works again.');
     const backup = resolve(args.backup);
     if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
 

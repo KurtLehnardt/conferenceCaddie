@@ -75,11 +75,11 @@
 //                        (signVersionFromEnv of scripts/lib/admin-origin.mjs): unset or empty means 2,
 //                        bound to API_BASE's origin; exactly "1" signs v1, which the Worker refuses
 //                        since step d of the migration (DECISIONS.md, "Admin signature v2") unless
-//                        ADMIN_SIG_MIN = "1" is committed in its [vars] (the rollback); exactly "2"
-//                        means 2. Any other value is a FAIL config with exit
-//                        code 2 before any request, never a silent default. Under "1" a run that signs
-//                        prints one NOTE saying that v1 is not bound to a host and to unset the
-//                        variable once the rollback is over.
+//                        its ADMIN_SIG_MIN is "1" (the rollback, which belongs in [vars] of
+//                        worker/wrangler.toml, never a secret); exactly "2" means 2. Any other value
+//                        is a FAIL config with exit code 2 before any request, never a silent
+//                        default. Under "1" a run that signs prints one NOTE saying that v1 is not
+//                        bound to a host and to unset the variable once the rollback is over.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -309,9 +309,9 @@ if (SIGNS_ADMIN && API_ORIGIN_TYPED !== API_ORIGIN) {
   process.exit(1);
 }
 // The rollback to v1 (CADDIE_ADMIN_SIG_VERSION=1, which the Worker accepts since step d only while
-// ADMIN_SIG_MIN = "1" is committed in its [vars]) is never silent.
+// its ADMIN_SIG_MIN is "1", which belongs in [vars] of worker/wrangler.toml) is never silent.
 if (SIGNS_ADMIN && SIGN_VERSION === 1) {
-  console.log('NOTE CADDIE_ADMIN_SIG_VERSION=1: the admin calls are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; since step d the Worker accepts v1 only while ADMIN_SIG_MIN = "1" is committed in [vars] of worker/wrangler.toml and deployed; unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over');
+  console.log('NOTE CADDIE_ADMIN_SIG_VERSION=1: the admin calls are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; since step d the Worker accepts v1 only while its ADMIN_SIG_MIN is "1" (the rollback, which belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret); unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over');
 }
 // A browser sends its Origin on every call to a Worker on another origin, and on every same-origin
 // POST, PUT and DELETE, so the run sends it on every call to the Worker. Against Cloud Run no Origin

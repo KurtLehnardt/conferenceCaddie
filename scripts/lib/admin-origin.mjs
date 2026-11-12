@@ -105,9 +105,10 @@ export function parseAdminSigMin(raw) {
 // removes it once the first weekly CI ingest under step d has passed: CADDIE_ADMIN_SIG_VERSION
 // unset or empty means 2 (GitHub Actions passes an undefined repository variable as the empty
 // string), exactly "1" or "2" means that version, and anything else is a UsageError ("version",
-// exit 2). Since step d the Worker refuses v1 unless ADMIN_SIG_MIN = "1" is committed in [vars] of
-// worker/wrangler.toml and deployed, so "1" is useful only together with that rollback. `env` is
-// passed in (process.env in Node), so this module needs no process.
+// exit 2). Since step d the Worker refuses v1 unless its ADMIN_SIG_MIN is "1" (the rollback, which
+// belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret), so "1" is
+// useful only together with that rollback. `env` is passed in (process.env in Node), so this module
+// needs no process.
 export const SIG_VERSION_ENV = 'CADDIE_ADMIN_SIG_VERSION';
 
 export function signVersionFromEnv(env) {

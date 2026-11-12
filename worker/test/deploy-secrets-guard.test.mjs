@@ -1,9 +1,10 @@
 // worker/scripts/deploy.sh, step 3: the script refuses to deploy while ADMIN_SIG_MIN, ADMIN_ORIGIN or
 // ADMIN_TEST_ROUTES is a secret of the Worker (DECISIONS.md, "Admin signature v2", step d), because a
 // secret survives every deploy and would override the source default, for example keeping v1 open or
-// the /admin/test/* fixture routes on. It reads the
-// secrets' names through the Cloudflare API, passes a first deploy (404 with error code 10007) and
-// refuses on any other answer, so a check that could not run never passes.
+// the /admin/test/* fixture routes on. It reads the secrets' names through the Cloudflare API,
+// passes a first deploy (404 with error code 10007) and refuses on any other answer, so a check that
+// could not run never passes. Step 1 fails closed the same way: a subdomain answer it cannot read
+// stops the script without a PUT and before wrangler runs.
 //
 // The script runs from a copy in a temporary tree (worker/scripts/deploy.sh, the real
 // worker/wrangler.toml, empty node_modules directories), so the real web app is never built, with
@@ -66,7 +67,7 @@ fs.appendFileSync(process.env.STUB_DIR + '/calls.log', JSON.stringify({ tool: 'n
 process.stdout.write('Deployed ${WORKER_NAME}\\n  https://${WORKER_NAME}.stub-sub.workers.dev\\n');
 `;
 
-function world(t, secrets) {
+function world(t, secrets, subdomain = { code: 200, body: { success: true, result: { subdomain: 'stub-sub' } } }) {
   const dir = mkdtempSync(join(tmpdir(), 'caddie-deploy-guard-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = join(dir, 'bin');
@@ -75,7 +76,7 @@ function world(t, secrets) {
   copyFileSync(SCRIPT, join(repo, 'worker', 'scripts', 'deploy.sh'));
   copyFileSync(WRANGLER_TOML, join(repo, 'worker', 'wrangler.toml'));
   for (const [name, text] of [['curl', CURL], ['npm', NPM], ['npx', NPX]]) writeFileSync(join(bin, name), text, { mode: 0o755 });
-  writeFileSync(join(dir, 'responses.json'), JSON.stringify({ subdomain: { code: 200, body: { success: true, result: { subdomain: 'stub-sub' } } }, secrets }));
+  writeFileSync(join(dir, 'responses.json'), JSON.stringify({ subdomain, secrets }));
   return {
     run(extra = []) {
       const env = { PATH: `${bin}:${process.env.PATH}`, TMPDIR: dir, STUB_DIR: dir, CLOUDFLARE_API_TOKEN: FAKE_TOKEN, CLOUDFLARE_ACCOUNT_ID: ACCOUNT, HOME: dir };
@@ -233,4 +234,37 @@ test('--subdomain-only stops before the check and the deploy', (t) => {
   assert.deepEqual(secretsCalls(w), []);
   assert.deepEqual(deployCalls(w), []);
   checkTokenHygiene(w, r);
+});
+
+test('a subdomain answer that cannot be read stops the script: no PUT, no build, no deploy', (t) => {
+  // Only a successful answer with a null subdomain, or a 404 with error code 10007, means that the
+  // account has no subdomain yet (deploy-subdomain.test.mjs). Anything else that does not name the
+  // subdomain must not lead to a PUT, which could rename an existing subdomain.
+  const cases = [
+    ['200 with body null', { code: 200, body: 'null' }, /HTTP 200, error codes: none\)/],
+    ['200 with body {}', { code: 200, body: {} }, /HTTP 200, error codes: none\)/],
+    ['200 not JSON', { code: 200, body: '<html>' }, /HTTP 200, error codes: none\)/],
+    ['200 without result.subdomain', { code: 200, body: { success: true, result: {} } }, /HTTP 200, error codes: none\)/],
+    ['200 with an empty subdomain', { code: 200, body: { success: true, result: { subdomain: '' } } }, /HTTP 200, error codes: none\)/],
+    ['200 with a number as the subdomain', { code: 200, body: { success: true, result: { subdomain: 5 } } }, /HTTP 200, error codes: none\)/],
+    ['200 not a success', { code: 200, body: { success: false, errors: [{ code: 10013, message: `x ${CANARY}` }], result: { subdomain: null } } }, /HTTP 200, error codes: 10013\)/],
+    ['200 with result null', { code: 200, body: { success: true, result: null } }, /HTTP 200, error codes: none\)/],
+    ['404 without 10007', { code: 404, body: { success: false, errors: [{ code: 7003, message: 'Could not route' }] } }, /HTTP 404, error codes: 7003\)/],
+    ['500', { code: 500, body: 'Internal Server Error' }, /HTTP 500, error codes: none\)/],
+  ];
+  for (const [why, subdomain, pattern] of cases) {
+    for (const extra of [[], ['--subdomain-only']]) {
+      const w = world(t, ok([]), subdomain);
+      const r = w.run(extra);
+      assert.equal(r.status, 1, `${why} ${extra}: ${r.text}`);
+      assert.match(r.stderr, /Could not read the workers\.dev subdomain/, why);
+      assert.match(r.stderr, pattern, why);
+      assert.deepEqual(w.calls().filter((c) => c.tool === 'curl' && c.method === 'PUT'), [], `${why}: no PUT`);
+      assert.deepEqual(w.calls().filter((c) => c.tool === 'npm' || c.tool === 'npx'), [], `${why}: no build and no deploy`);
+      assert.deepEqual(secretsCalls(w), [], `${why}: stopped in step 1`);
+      assert.doesNotMatch(r.stdout, /App URL|workers\.dev subdomain:/, why);
+      assert.doesNotMatch(r.stderr, /Could not route|TypeError|SyntaxError|^\s+at |node:internal/m, `${why}: codes only, no Node error`);
+      checkTokenHygiene(w, r);
+    }
+  }
 });

@@ -20,10 +20,10 @@
 #   variable CADDIE_ADMIN_SIG_VERSION  optional rollback switch: unset (the default) signs every admin
 #                                request with signature v2, bound to the origin of CADDIE_API_BASE; "1"
 #                                signs v1 again, which the Worker refuses since step d of DECISIONS.md,
-#                                "Admin signature v2", unless ADMIN_SIG_MIN = "1" is committed in
-#                                [vars] of worker/wrangler.toml and deployed (the rollback; the switch
-#                                is removed in step e); any other value fails the run in its first
-#                                step, before anything is fetched or sent
+#                                "Admin signature v2", unless its ADMIN_SIG_MIN is "1" (the rollback,
+#                                which belongs in [vars] of worker/wrangler.toml, committed and
+#                                deployed, never a secret; step e removes the switch); any other value
+#                                fails the run in its first step, before anything is fetched or sent
 # Optional, only when a Cloudflare Access application with a service token guards /admin/* (empty
 # by default; the client sends the two Access headers only when both are set):
 #   secret   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET

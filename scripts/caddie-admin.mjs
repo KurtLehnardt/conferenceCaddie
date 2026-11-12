@@ -34,8 +34,8 @@
 // exit 2). Every admin request is signed with the token (X-Caddie-Admin, scripts/lib/admin-sign.mjs),
 // re-signed on each retry, and never follows a redirect. The signature is v2, bound to the api's
 // origin; CADDIE_ADMIN_SIG_VERSION=1 signs v1, which the Worker refuses since step d of the migration
-// (DECISIONS.md, "Admin signature v2") unless ADMIN_SIG_MIN = "1" is committed in its [vars] (the
-// rollback), with one warning on stderr that v1 is not bound to a host;
+// (DECISIONS.md, "Admin signature v2") unless its ADMIN_SIG_MIN is "1" (the rollback, which belongs
+// in [vars] of worker/wrangler.toml), with one warning on stderr that v1 is not bound to a host;
 // unset or empty means 2, and any other value is exit 2. The api and the version are checked right
 // after the backend is chosen, before the credential is read or a confirmation asked. A 404 is
 // exit 4: "no such target" when the Worker answers not_found or no_operator_block, "refused" (the

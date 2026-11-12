@@ -53,7 +53,7 @@ crons = ["*/10 * * * *"]
 # deployed Worker unless this variable is the string "1" (src/index.js, handleAdmin).
 # worker/scripts/dev-vars.mjs sets it for a local run (.dev.vars). Set it on a deployed Worker only
 # with `wrangler deploy --var ADMIN_TEST_ROUTES:1`, never with `wrangler secret put`: a secret
-# survives every deploy, and scripts/deploy.sh refuses to deploy while it is one.
+# survives every deploy, and worker/scripts/deploy.sh refuses to deploy while it is one.
 
 # Extra origins allowed to call the API cross-origin, for local development only (the Vite dev
 # server and preview). The app itself is served by this Worker, so its own origin is always

@@ -387,8 +387,9 @@ function stubWorker() {
       // The failed-signature limiter is peeked before the signature is checked: once it is empty,
       // every request is refused, a valid one included.
       if (state.failedSignatures >= 10) return json(res, 404, { error: 'Not found' });
-      // As the Worker with ADMIN_ORIGIN unset: v1 or v2, a v2 signature bound to this stand-in's
-      // own origin (the api in the config), so one signed for any other origin is refused.
+      // As a Worker rolled back with ADMIN_SIG_MIN "1", ADMIN_ORIGIN unset: v1 or v2, a v2
+      // signature bound to this stand-in's own origin (the api in the config), so one signed for
+      // any other origin is refused.
       const v = verifyAdminSignature({ headerValue: req.headers['x-caddie-admin'] ?? null, method: req.method, pathWithQuery: record.pathWithQuery, keys: [TOKEN], allowedVersions: [1, 2], expectedOrigins: [`http://127.0.0.1:${server.address().port}`] });
       record.nonce = v.nonce ?? null;
       record.version = v.ok ? (v.version ?? 1) : null;
