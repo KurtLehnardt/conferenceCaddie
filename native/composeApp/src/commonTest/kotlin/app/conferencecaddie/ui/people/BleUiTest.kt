@@ -209,6 +209,9 @@ class BleUiTest {
         u3Show(rig) { PeopleScreenColumn { BleControls(bleState(ble), rig.host, BleVariant.Card) } }
         val cases = listOf(
             Triple(BleProblem.BluetoothOff, "Turn on Bluetooth first.", false),
+            // Android 8 to 11 with the Location switch off; the switch is in the system's quick
+            // settings, not on the app's page, so there is no "Open settings".
+            Triple(BleProblem.LocationOff, "Turn on Location first. This phone needs it to find people over Bluetooth.", false),
             Triple(BleProblem.Unsupported, "This phone's Bluetooth can't send the code.", false),
             Triple(BleProblem.PermissionDenied, "Caddie needs the Nearby devices permission for this. You can allow it in Settings.", true),
             Triple(BleProblem.PermissionBlocked, "Caddie needs the Nearby devices permission for this. You can allow it in Settings.", true),

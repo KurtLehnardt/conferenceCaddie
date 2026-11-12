@@ -5,11 +5,14 @@ import app.conferencecaddie.shared.people.FakeApiHttp
 import app.conferencecaddie.shared.people.PresenceMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -339,6 +342,113 @@ class BleSightingsTest {
         runCurrent()
         assertEquals(2, b.sightings().size)
         assertEquals(2, b.radio.keepAwake.size, "nothing waits, so nothing to stay awake for")
+    }
+
+    @Test
+    fun aWakeAtTheReportsTimeSendsItEvenWhenTheTimerHasNotFired() = runTest {
+        val b = BleRig(this)
+        b.on()
+        val t0 = b.now()
+        b.radio.hear(otherPayload(1), -60, t0)
+        runCurrent()
+        assertEquals(1, b.sightings().size, "the first report goes at once")
+        // A brief encounter: another phone heard once, due an interval after the last report.
+        b.radio.hear(otherPayload(2), -60, b.now())
+        runCurrent()
+        val at = b.radio.keepAwake.last()
+        assertEquals(t0 + 10_000, at)
+        // A wake before then sends nothing: the interval holds.
+        b.radio.reportDue()
+        runCurrent()
+        assertEquals(1, b.sightings().size)
+
+        // The phone sleeps until then: its clock reaches the time, but the runtime's timer, on the
+        // monotonic clock, has not fired (Android's stands still in deep sleep).
+        b.sleptMs = at - b.now()
+        runCurrent()
+        assertEquals(at, b.now())
+        assertEquals(1, b.sightings().size, "the timer alone has not fired")
+        // The platform's wake at that time sends it.
+        b.radio.reportDue()
+        runCurrent()
+        assertEquals(2, b.sightings().size)
+        assertEquals(listOf(tokenText(2) to -60), b.reported(b.sightings()[1]))
+        // The timer that comes later finds nothing left to send.
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(2, b.sightings().size)
+    }
+
+    @Test
+    fun aWakeWhileAReportIsUnderWaySendsTheNextOnlyAfterIt() = runTest {
+        val b = BleRig(this)
+        b.on()
+        val gate = CompletableDeferred<Unit>()
+        b.h.server.sightings = {
+            gate.await()
+            b.answer()
+        }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        assertEquals(1, b.sightings().size, "under way")
+        b.radio.hear(otherPayload(2), -60, b.now())
+        b.sleptMs = 10_000
+        b.radio.reportDue()
+        runCurrent()
+        assertEquals(1, b.sightings().size, "one report at a time")
+        b.h.server.sightings = { b.answer() }
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(2, b.sightings().size, "due when the first one ended, so it goes then")
+        assertEquals(listOf(tokenText(2) to -60), b.reported(b.sightings()[1]))
+    }
+
+    @Test
+    fun aWakeKeepsTheBackoffOfAFailedReport() = runTest {
+        val b = BleRig(this)
+        b.on()
+        b.h.server.sightings = { FakeApiHttp.json(502, """{"error":"People are temporarily unavailable"}""") }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        assertEquals(1, b.sightings().size)
+        val at = b.radio.keepAwake.last()
+        assertEquals(b.now() + 10_000, at, "kept, and tried again after the backoff")
+        b.h.server.sightings = { b.answer() }
+        b.sleptMs = 5_000
+        b.radio.reportDue()
+        runCurrent()
+        assertEquals(1, b.sightings().size, "not before the backoff ends")
+        b.sleptMs = 10_000
+        b.radio.reportDue()
+        runCurrent()
+        assertEquals(2, b.sightings().size)
+    }
+
+    @Test
+    fun turningItOffCancelsAReportUnderWay() = runTest {
+        val b = BleRig(this)
+        b.on()
+        val gate = CompletableDeferred<Unit>()
+        var cancelled = false
+        b.h.server.sightings = {
+            try {
+                gate.await()
+            } catch (e: CancellationException) {
+                cancelled = true
+                throw e
+            }
+            b.answer(nearby("p1", evidence = "eBPF"))
+        }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        assertEquals(1, b.sightings().size, "under way")
+        b.controller.turnOffBluetooth()
+        runCurrent()
+        assertTrue(cancelled, "the stop cancelled the report")
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(b.h.notifier.shown.isEmpty())
+        assertFalse(b.radio.running)
     }
 
     @Test

@@ -204,6 +204,26 @@ class BleTurnOnTest {
     }
 
     @Test
+    fun locationOffRefusesWithItsOwnWordsBeforeAnyWrite() = runTest {
+        val b = BleRig(this)
+        b.ready()
+        // Android 8 to 11 with the Location switch off: a scan would hear nothing.
+        b.radio.stateNow = BleRadioState.LocationOff
+        assertEquals(BleOutcome.Problem(BleProblem.LocationOff, PeopleText.BLE_LOCATION_OFF), b.controller.turnOnBluetooth())
+        assertEquals(BleProblem.LocationOff, b.view.problem)
+        assertEquals("Turn on Location first. This phone needs it to find people over Bluetooth.", b.view.message)
+        assertEquals(PeopleText.BLE_LOCATION_OFF, PeopleText.bleProblemMessage(BleProblem.LocationOff))
+        assertFalse(b.view.on)
+        assertTrue(b.presencePuts().isEmpty())
+        assertTrue(b.keys.aliases.isEmpty())
+        assertTrue(b.radio.starts.isEmpty())
+        // Location switched on: the next attempt starts and the words go.
+        b.radio.stateNow = BleRadioState.Ready
+        assertEquals(BleOutcome.On, b.controller.turnOnBluetooth())
+        assertNull(b.view.problem)
+    }
+
+    @Test
     fun anAnswerWithoutAKeyOrWithTheWrongKeyIdFails() = runTest {
         val b = BleRig(this)
         b.ready()

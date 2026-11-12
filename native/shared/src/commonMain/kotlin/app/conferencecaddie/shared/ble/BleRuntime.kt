@@ -24,6 +24,7 @@ import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -137,6 +138,14 @@ internal class BleRuntime(
 
         override fun onStopped(reason: BleStopReason) {
             scope.launch { radioStopped(this@Run, reason) }
+        }
+
+        // The platform woke the app at the time keepAwakeUntil named, or later. The report timer
+        // runs on the monotonic clock, which may have stood still while the phone slept, so the
+        // schedule is worked out again from the wall clock: a report that is due (or overdue) goes
+        // now, one that is not yet due keeps its time, and one already being sent is left alone.
+        override fun onReportDue() {
+            scope.launch { reportDue(this@Run) }
         }
     }
 
@@ -389,10 +398,13 @@ internal class BleRuntime(
         host.changed()
     }
 
-    private fun endRun(r: Run) {
+    private suspend fun endRun(r: Run) {
         run = null
         r.source.closed = true
-        r.flushJob?.cancel()
+        // A report under way is cancelled with its job, unless the report itself is what stops
+        // the run (a 403, a second re-key in the window): cancelling it then would cut this stop short.
+        val self = currentCoroutineContext()[Job]
+        r.flushJob?.takeIf { it !== self }?.cancel()
         r.windowJob?.cancel()
         r.untilJob?.cancel()
         r.flushJob = null
@@ -433,9 +445,25 @@ internal class BleRuntime(
      * presence is live, the key is still in the store and names the stored key id, the permission is
      * granted and the radio can run; otherwise the record says off and the key goes, with no server
      * call. One conference at most resumes; when none does, the radio is stopped all the same.
+     *
+     * When the platform says the person stopped the whole app since the radio last ran
+     * ([BleRadio.takeUserStoppedApp], asked at every restore since asking clears it), nothing
+     * resumes: every conference whose record says on is turned off as the person's own off, on the
+     * device at once and then, while presence is on, with `ble: false` to the server (best effort,
+     * in the presence write queue, after this returns).
      */
     suspend fun restore() {
         val slugs = store.slugsWhere { it.ble.on }
+        if (platform?.radio?.takeUserStoppedApp() == true) {
+            for (s in slugs) {
+                offsBySlug[s] = (offsBySlug[s] ?: 0) + 1
+                problems.remove(s)
+                stop(s)
+                scope.launch { host.writePresenceBle(s, false) }
+            }
+            platform.radio.stop()
+            return
+        }
         val resume = slugs.firstOrNull { canResume(it) }
         for (s in slugs) if (s != resume) stop(s)
         if (resume != null && run == null) startRun(resume, alias(resume))
@@ -574,11 +602,20 @@ internal class BleRuntime(
             r.awakeUntil = at
             platform?.radio?.keepAwakeUntil(at)
         }
+        // The job stays the run's flushJob while its report is under way, so a stop cancels the
+        // report too; flush lets go of it once the report is over.
         r.flushJob = scope.launch {
             delay(max(0, at - now()))
-            r.flushJob = null
             flush(r)
         }
+    }
+
+    // A wake from the platform (BleRadioEvents.onReportDue): the next report is scheduled again from
+    // the wall clock now, which sends it at once when it is due. scheduleFlush leaves a report that
+    // is being sent alone and keeps the interval and any backoff.
+    private fun reportDue(r: Run) {
+        if (run !== r) return
+        scheduleFlush(r)
     }
 
     // Whatever the report runs into (an exception from the records or a notification included),
@@ -590,6 +627,9 @@ internal class BleRuntime(
             flushNow(r)
         } finally {
             r.sending = false
+            // This report is over: its job is no longer the one to cancel, and must not be
+            // cancelled by the scheduling of the next.
+            if (r.flushJob === currentCoroutineContext()[Job]) r.flushJob = null
             scheduleFlush(r)
         }
     }

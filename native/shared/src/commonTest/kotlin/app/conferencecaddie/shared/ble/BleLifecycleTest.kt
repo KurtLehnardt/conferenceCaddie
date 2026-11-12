@@ -221,6 +221,12 @@ class BleLifecycleTest {
             assertEquals("Bluetooth turned off, so finding people near you stopped.", b.h.state.notice?.message)
             assertTrue(b.presencePuts().isEmpty())
         }
+        stopped(BleStopReason.LocationOff).let { b ->
+            assertEquals(BleProblem.LocationOff, b.view.problem)
+            assertEquals(PeopleText.BLE_LOCATION_OFF, b.view.message)
+            assertEquals(PeopleText.BLE_LOCATION_OFF, b.h.state.notice?.message)
+            assertTrue(b.presencePuts().isEmpty(), "the device's own stop: the session ends with presence")
+        }
         stopped(BleStopReason.PermissionLost).let { b ->
             assertEquals(BleProblem.PermissionBlocked, b.view.problem)
             assertNull(b.h.state.notice?.message)
@@ -316,6 +322,7 @@ class BleLifecycleTest {
             { it.accessNow = BleAccess.Denied },
             { it.accessNow = BleAccess.Blocked },
             { it.stateNow = BleRadioState.PoweredOff },
+            { it.stateNow = BleRadioState.LocationOff },
             { it.stateNow = BleRadioState.Unauthorized },
             { it.stateNow = BleRadioState.Unsupported },
             { it.supported = false },
@@ -358,6 +365,46 @@ class BleLifecycleTest {
             assertTrue(radio.starts.isEmpty())
             assertFalse(c.state.value.ble.on)
         }
+    }
+
+    @Test
+    fun aRestartAfterThePersonStoppedTheAppTurnsItOffAndTellsTheServer() = runTest {
+        val b = BleRig(this)
+        b.on()
+        // Everything would let it resume: presence, the key, the permission, the radio.
+        val (c, radio) = restart(b, FakeBleRadio().apply { running = true; userStoppedApp = true })
+        c.updateContext(b.h.context(BLE_ON))
+        runCurrent()
+        assertTrue(radio.starts.isEmpty(), "nothing resumes")
+        assertFalse(radio.running)
+        assertTrue(b.keys.aliases.isEmpty())
+        assertFalse(c.state.value.ble.on)
+        assertNull(c.state.value.ble.problem, "the person's own off: nothing to explain")
+        assertEquals(listOf("""{"event":"${b.slug}","zone":"Hallway","spot":"Green jacket","ble":false}"""), b.presencePuts().map { it.body })
+        assertTrue(c.state.value.presence.on, "presence stays on")
+        assertEquals(1, radio.userStoppedAsked)
+        assertFalse(radio.userStoppedApp, "asking cleared it")
+
+        // Turned on again by hand, it runs: the answer was used up.
+        assertEquals(BleOutcome.On, c.turnOnBluetooth())
+        runCurrent()
+        assertTrue(radio.running)
+        assertTrue(c.state.value.ble.on)
+    }
+
+    @Test
+    fun aRestartAfterThePersonStoppedTheAppWithPresenceGoneSendsNothing() = runTest {
+        val b = BleRig(this)
+        b.on()
+        b.controller.close()
+        advanceTimeBy(3_700_000)
+        val (c, radio) = restart(b, FakeBleRadio().apply { userStoppedApp = true })
+        c.updateContext(b.h.context(BLE_ON))
+        runCurrent()
+        assertTrue(radio.starts.isEmpty())
+        assertTrue(b.keys.aliases.isEmpty())
+        assertFalse(c.state.value.ble.on)
+        assertTrue(b.h.http.sent.none { it.path.startsWith("/api/presence") }, "presence ended, and the server's session with it")
     }
 
     @Test
