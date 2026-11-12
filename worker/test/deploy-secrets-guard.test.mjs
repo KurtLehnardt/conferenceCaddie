@@ -237,8 +237,9 @@ test('--subdomain-only stops before the check and the deploy', (t) => {
 });
 
 test('a subdomain answer that cannot be read stops the script: no PUT, no build, no deploy', (t) => {
-  // Only a successful answer with a null subdomain, or a 404 with error code 10007, means that the
-  // account has no subdomain yet (deploy-subdomain.test.mjs). Anything else that does not name the
+  // Only a successful answer with a null subdomain, or an answer at HTTP 200, 400 or 404 that is
+  // not a success, does not name a subdomain and has error code 10007 first, means that the account
+  // has no subdomain yet (deploy-subdomain.test.mjs). Anything else that does not name the
   // subdomain must not lead to a PUT, which could rename an existing subdomain.
   const cases = [
     ['200 with body null', { code: 200, body: 'null' }, /HTTP 200, error codes: none\)/],
@@ -259,6 +260,7 @@ test('a subdomain answer that cannot be read stops the script: no PUT, no build,
       assert.equal(r.status, 1, `${why} ${extra}: ${r.text}`);
       assert.match(r.stderr, /Could not read the workers\.dev subdomain/, why);
       assert.match(r.stderr, pattern, why);
+      assert.match(r.stderr, /If it keeps failing, create the subdomain once in the dashboard \(Workers & Pages, Overview, workers\.dev subdomain\)/, why);
       assert.deepEqual(w.calls().filter((c) => c.tool === 'curl' && c.method === 'PUT'), [], `${why}: no PUT`);
       assert.deepEqual(w.calls().filter((c) => c.tool === 'npm' || c.tool === 'npx'), [], `${why}: no build and no deploy`);
       assert.deepEqual(secretsCalls(w), [], `${why}: stopped in step 1`);
@@ -266,5 +268,45 @@ test('a subdomain answer that cannot be read stops the script: no PUT, no build,
       assert.doesNotMatch(r.stderr, /Could not route|TypeError|SyntaxError|^\s+at |node:internal/m, `${why}: codes only, no Node error`);
       checkTokenHygiene(w, r);
     }
+  }
+});
+
+test('a subdomain answer of 401 or 403 never leads to a PUT: the deploy goes ahead, and --subdomain-only stops', (t) => {
+  const puts = (w) => w.calls().filter((c) => c.tool === 'curl' && c.method === 'PUT');
+  for (const code of [401, 403]) {
+    const subdomain = { code, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } };
+    // Without --subdomain-only the script carries on without creating one, since wrangler deploy
+    // works when the subdomain was created in the dashboard.
+    const w = world(t, ok([]), subdomain);
+    const r = w.run();
+    assertDeployed(w, r);
+    assert.deepEqual(puts(w), [], `${code}: no PUT`);
+    assert.match(r.stderr, new RegExp(`the token cannot read the workers\\.dev subdomain \\(HTTP ${code}\\); deploying anyway`));
+    assert.match(r.stdout, /^workers\.dev subdomain: stub-sub$/m);
+
+    // With --subdomain-only it stops with the blocker, before the check and the deploy.
+    const only = world(t, ok([]), subdomain);
+    const ro = only.run(['--subdomain-only']);
+    assert.equal(ro.status, 1, ro.text);
+    assert.deepEqual(puts(only), [], `${code} --subdomain-only: no PUT`);
+    assert.match(ro.stderr, new RegExp(`Reading the workers\\.dev subdomain failed with HTTP ${code}`));
+    assert.match(ro.stderr, /^Blocker: .*Workers & Pages, Overview, workers\.dev subdomain/m);
+    assert.deepEqual(only.calls().filter((c) => c.tool === 'npm' || c.tool === 'npx'), [], `${code}: no build and no deploy`);
+    assert.deepEqual(secretsCalls(only), []);
+    checkTokenHygiene(only, ro);
+  }
+});
+
+test('no answer to the subdomain read stops the script: no PUT, no build, no deploy', (t) => {
+  for (const extra of [[], ['--subdomain-only']]) {
+    const w = world(t, ok([]), { fail: true });
+    const r = w.run(extra);
+    assert.equal(r.status, 1, `${extra}: ${r.text}`);
+    assert.match(r.stderr, /^Could not reach api\.cloudflare\.com\.$/m);
+    assert.deepEqual(w.calls().filter((c) => c.tool === 'curl' && c.method === 'PUT'), [], `${extra}: no PUT`);
+    assert.deepEqual(w.calls().filter((c) => c.tool === 'npm' || c.tool === 'npx'), [], `${extra}: no build and no deploy`);
+    assert.deepEqual(secretsCalls(w), []);
+    assert.doesNotMatch(r.stdout, /App URL|workers\.dev subdomain:/);
+    checkTokenHygiene(w, r);
   }
 });

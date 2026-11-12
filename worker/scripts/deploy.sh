@@ -16,10 +16,17 @@
 #      PUT {"subdomain":"<CADDIE_WORKERS_SUBDOMAIN>"} (an optional environment variable: the name you
 #      want, lowercase letters, digits and hyphens), and when it is unset, or the name is taken, use
 #      conference-caddie-<6 random lowercase letters>. An account that already has a subdomain keeps
-#      it, whatever the variable says. Only two answers mean "no subdomain yet": a successful answer
-#      whose subdomain is null, and a 404 with Cloudflare's error code 10007. Any other answer that
-#      does not name the subdomain stops the script without a PUT, because a PUT on an account that
-#      has a subdomain could rename it.
+#      it, whatever the variable says. Only two kinds of answer mean "no subdomain yet": a
+#      successful answer whose subdomain is null, and an answer at HTTP 200, 400 or 404 that is not
+#      a success, does not name a subdomain, and whose first error code is Cloudflare's 10007 (the
+#      pinned wrangler reads only the first error code, and treats 10007 there as "no subdomain").
+#      Any other answer that does not name the subdomain stops the script without a PUT, because a
+#      PUT on an account that has a subdomain could rename it; a 401 or 403 deploys anyway, without
+#      a PUT, and stops with --subdomain-only. Only a PUT answered 409 or 400 (the name is taken or
+#      not valid) is followed by another PUT, with a random fallback name. After any other failed
+#      PUT, other than 401 or 403 which stop with the blocker, the script reads the subdomain once
+#      more and uses it when the answer names one, and otherwise stops, because the PUT may have
+#      created it and a second PUT could rename it.
 #   2. Build the web app in Worker mode (npm --prefix web run build:worker: base "/", same-origin
 #      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
 #      wrangler.toml, so the app ships with the Worker.
@@ -143,28 +150,42 @@ blocker() {
 }
 
 # 1. The workers.dev subdomain. A subdomain is created only on an answer that says the account has
-# none: a 200 with success true and a null subdomain, or a 404 with error code 10007. Every other
-# answer that does not name the subdomain stops here, without a PUT, because a PUT on an account
-# that already has a subdomain could rename it and break every client of the old URL.
-status="$(cf_api GET /workers/subdomain)"
+# none: a 200 with success true and a null subdomain, or an answer at HTTP 200, 400 or 404 whose
+# success is not true, which does not name a subdomain, and whose first error code is Cloudflare's
+# 10007 (the pinned wrangler, getWorkersDevSubdomainInternal, reads 10007 as "no subdomain"
+# whatever the status, and its APIError carries only the first error code). Every other answer
+# that does not name the subdomain stops here, without a PUT, because a PUT on an account that
+# already has a subdomain could rename it and break every client of the old URL.
 subdomain=""
 unreadable=0
 create=0
 subdomain_unreadable() {
-  echo "Could not read the workers.dev subdomain (HTTP $1, error codes: $(api_codes)), so none was created and nothing was deployed. Run this script again." >&2
+  echo "Could not read the workers.dev subdomain (HTTP $1, error codes: $(api_codes)), so none was created and nothing was deployed. Run this script again. If it keeps failing, create the subdomain once in the dashboard (Workers & Pages, Overview, workers.dev subdomain), then run this script again." >&2
   exit 1
 }
-if [ "$status" = "200" ]; then
-  # "set:<name>" when the answer names the subdomain, "none" when it says there is none, and empty
-  # for anything else (not a success, no result object, or a subdomain that is neither a non-empty
-  # string nor null).
-  state="$(json_field 'r.success === true && r.result !== null && typeof r.result === "object" && !Array.isArray(r.result) ? (typeof r.result.subdomain === "string" && r.result.subdomain !== "" ? "set:" + r.result.subdomain : (r.result.subdomain === null ? "none" : "")) : ""')"
+# subdomain_state prints "set:<name>" when the last answer was a 200 that names the subdomain,
+# "none" when it says that the account has none, and empty for anything else (not a success, no
+# result object, or a subdomain that is neither a non-empty string nor null).
+subdomain_state() {
+  if [ "$1" = "200" ]; then
+    json_field 'r.success === true && r.result !== null && typeof r.result === "object" && !Array.isArray(r.result) ? (typeof r.result.subdomain === "string" && r.result.subdomain !== "" ? "set:" + r.result.subdomain : (r.result.subdomain === null ? "none" : "")) : ""'
+  fi
+}
+# no_subdomain_error is "true" when the last answer was not a success, does not name a subdomain,
+# and its first error code is 10007, the one code wrangler reads.
+no_subdomain_error() {
+  json_field 'r.success !== true && Array.isArray(r.errors) && r.errors.length > 0 && r.errors[0] !== null && typeof r.errors[0] === "object" && r.errors[0].code === 10007 && !(r.result !== null && typeof r.result === "object" && typeof r.result.subdomain === "string" && r.result.subdomain !== "")'
+}
+status="$(cf_api GET /workers/subdomain)"
+state="$(subdomain_state "$status")"
+if [ -n "$state" ]; then
   case "$state" in
     set:*) subdomain="${state#set:}" ;;
     none) create=1 ;;
     *) subdomain_unreadable "$status" ;;
   esac
-elif [ "$status" = "404" ] && [ "$(json_field '(Array.isArray(r.errors) ? r.errors : []).some((e) => e && e.code === 10007)')" = "true" ]; then
+elif { [ "$status" = "200" ] || [ "$status" = "400" ] || [ "$status" = "404" ]; } \
+  && [ "$(no_subdomain_error)" = "true" ]; then
   create=1
 elif [ "$status" = "401" ] || [ "$status" = "403" ]; then
   if [ "$SUBDOMAIN_ONLY" = "1" ]; then
@@ -193,14 +214,26 @@ if [ "$create" = "1" ]; then
     if [ "$status" = "401" ] || [ "$status" = "403" ]; then
       blocker "Creating the workers.dev subdomain failed with HTTP $status ($(api_errors))."
     fi
-    if [ "$status" = "000" ]; then
-      echo "Could not reach api.cloudflare.com." >&2
-      exit 1
+    if [ "$status" = "409" ] || [ "$status" = "400" ]; then
+      # Cloudflare answers 409 or 400 for a name that is taken or not valid; only then is the next
+      # attempt made, with a random fallback name.
+      echo "The subdomain $candidate is not available (HTTP $status: $(api_errors)); trying a fallback." >&2
+      candidate="$FALLBACK_PREFIX$(random_suffix)"
+      continue
     fi
-    # Any other answer is treated as "name not available" (Cloudflare uses 409 or 400 for a taken
-    # name), and the next attempt uses a random fallback name.
-    echo "The subdomain $candidate is not available (HTTP $status: $(api_errors)); trying a fallback." >&2
-    candidate="$FALLBACK_PREFIX$(random_suffix)"
+    # Any other answer (a 5xx, a 404, no answer, a 200 that is not a success) does not say that
+    # the name was refused, and the PUT may have created the subdomain anyway. A second PUT with
+    # another name could then rename it, so the subdomain is read once more instead.
+    put_status="$status"
+    put_codes="$(api_codes)"
+    status="$(cf_api GET /workers/subdomain)"
+    state="$(subdomain_state "$status")"
+    if [ "${state#set:}" != "$state" ]; then
+      subdomain="${state#set:}"
+      break
+    fi
+    echo "Creating the workers.dev subdomain $candidate failed (HTTP $put_status, error codes: $put_codes), and reading it again did not name one (HTTP $status, error codes: $(api_codes)), so nothing was deployed. Run this script again." >&2
+    exit 1
   done
   if [ -z "$subdomain" ]; then
     echo "Could not create a workers.dev subdomain after 4 attempts." >&2

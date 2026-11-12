@@ -8,6 +8,11 @@
 // which sets PUSH_TRANSPORT=stub, so every push (Web Push, APNs and FCM) is recorded instead of
 // sent; nothing reaches the network. APNs is configured with a key generated for this run, and FCM
 // with a project id; the stub answers the metadata server's token request.
+//
+// The clock. Every nudge here runs on one pinned clock, passed to nudgeAfterPresence and to a
+// native push channel made with it, except in the two tests of the defaults. Nothing depends on
+// the wall clock: a run that crosses midnight cannot change the day of the once-per-pair rule
+// between two calls, and the APNs expiry is an exact number.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,10 +30,30 @@ delete process.env.APNS_BUNDLE_ID;
 
 const { handlePeopleApi } = await import('../server/people.mjs');
 const { nudgeAfterPresence, pairDelayMs, PAIR_JITTER_MAX_MS } = await import('../server/nudge.mjs');
+const { createNativePush } = await import('../server/native-push.mjs');
 // The pause between the two pushes of a pair, which these tests do not wait for.
 const NO_PAUSE = { pause: async () => {} };
 const { registrationId } = await import('../server/push.mjs');
 const { refFor } = await import('../server/device.mjs');
+
+// The pinned clock starts 1 ms before midnight UTC, in the test conference's year, at every pair();
+// clock.set moves it. nativePush is a channel made with it, from the settings above.
+const JUST_BEFORE_MIDNIGHT = Date.parse('2099-12-30T23:59:59.999Z');
+const MIDNIGHT = JUST_BEFORE_MIDNIGHT + 1;
+function pinnedClock(ms) {
+  let t = ms;
+  const now = () => t;
+  now.set = (next) => {
+    t = next;
+  };
+  return now;
+}
+let clock = pinnedClock(JUST_BEFORE_MIDNIGHT);
+let nativePush = createNativePush(process.env, { now: clock });
+// nudgeAfterPresence's options for the pinned clock: the clock, the channel made with it and no
+// pause, unless more replaces one of them.
+const pinned = (more = {}) => ({ now: clock, nativePush, ...NO_PAUSE, ...more });
+const iso = (ms) => new Date(ms).toISOString();
 
 // Answers the stub gives for particular tokens ({ status, body, meanwhile }); every other push gets
 // 201. meanwhile, when set, runs while the push is out, before the answer.
@@ -58,21 +83,23 @@ const fcmToken = () => `${crypto.randomBytes(8).toString('base64url')}:APA91b${c
 
 // Puts a person around in Hall A with a spot line, straight into the stand-in, with the given
 // Web Push subscription (web: true) and native registrations (a device has at most one per
-// platform: apns and fcm are tokens).
+// platform: apns and fcm are tokens). The presence starts at the pinned clock and lasts 30 minutes.
 function around(d, { web = false, apns = null, fcm = null } = {}) {
   const id = `${EVENT}:${d.profileId}`;
-  const until = new Date(Date.now() + 30 * 60_000).toISOString();
-  fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_spot: SPOT, presence_since: new Date().toISOString(), presence_until: until, presence_location: { lat: 1.5, lon: 2.5 } });
+  fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_spot: SPOT, presence_since: iso(clock()), presence_until: iso(clock() + 30 * 60_000), presence_location: { lat: 61.5, lon: 102.5 } });
   if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
   for (const [platform, token] of [['apns', apns], ['fcm', fcm]]) {
     if (token) fake.put('caddie-people-push', registrationId(EVENT, d.profileId, platform), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
   }
 }
 
-// The trigger T (expertise eBPF) and a strong match V (wants to learn eBPF).
+// The trigger T (expertise eBPF) and a strong match V (wants to learn eBPF), around from 1 ms
+// before midnight UTC on a fresh pinned clock.
 async function pair(tOpts, vOpts) {
   fake.reset();
   answers.clear();
+  clock = pinnedClock(JUST_BEFORE_MIDNIGHT);
+  nativePush = createNativePush(process.env, { now: clock });
   const t = newDevice();
   const v = newDevice();
   assert.equal((await put(t, 'Harry Trigger', { expertise: 'eBPF probes in production', speak: ['ebpf'] })).status, 200);
@@ -81,6 +108,14 @@ async function pair(tOpts, vOpts) {
   around(v, vOpts);
   fake.calls.length = 0;
   return { t, v, me: { ...docOf(t) } };
+}
+
+// Moves the pinned clock to ms and writes presence again at that time for each person, as the app
+// does before a nudge runs. Returns the first person's document, the nudge's me.
+function later(ms, ...people) {
+  clock.set(ms);
+  for (const d of people) around(d);
+  return { ...docOf(people[0]) };
 }
 
 const records = () => [...fake.store('caddie-people-nudges').values()].map((r) => r.source);
@@ -100,12 +135,11 @@ describe('push nudge with native push', () => {
     const vApns = apnsToken();
     const vFcm = fcmToken();
     const { t, v, me } = await pair({ web: true, apns: tApns }, { web: true, apns: vApns, fcm: vFcm });
-    const before = Date.now();
     const lines = [];
     const error = console.error;
     console.error = (...args) => lines.push(args.join(' '));
     try {
-      await nudgeAfterPresence(me, CONF, NO_PAUSE);
+      await nudgeAfterPresence(me, CONF, pinned());
     } finally {
       console.error = error;
     }
@@ -135,9 +169,12 @@ describe('push nudge with native push', () => {
       assert.ok(!nativeText.includes(leak), `${leak} reached a native push`);
     }
 
-    // Nothing about either person in any push: no name, ref, profile_id, spot line or distance.
+    // Nothing about either person in any push: no name, ref, profile_id, spot line, distance or
+    // position. The position's numbers are ones no ISO time can hold (it has a "." only after its
+    // seconds, 00 to 59), so an ISO time added to a payload later cannot match them. They have one
+    // decimal, so they also catch a position rounded to one decimal.
     const sent = JSON.stringify(fake.pushes.map((p) => p.payload));
-    for (const leak of ['Harry', 'Vic', 'Trigger', 'Match', refFor(EVENT, t.profileId), refFor(EVENT, v.profileId), t.profileId, v.profileId, SPOT, 'coffee', 'distance', 'profile_id', '"ref"', '1.5', '2.5']) {
+    for (const leak of ['Harry', 'Vic', 'Trigger', 'Match', refFor(EVENT, t.profileId), refFor(EVENT, v.profileId), t.profileId, v.profileId, SPOT, 'coffee', 'distance', 'profile_id', '"ref"', '61.5', '102.5']) {
       assert.ok(!sent.includes(leak), `${leak} reached a push`);
     }
     const apns = fake.pushes.find((p) => p.platform === 'apns');
@@ -145,14 +182,13 @@ describe('push nudge with native push', () => {
     assert.equal(apns.headers['apns-topic'], 'app.conferencecaddie');
     assert.equal(apns.headers['apns-priority'], '5');
     assert.equal(apns.headers.authorization, undefined, 'the recorder never holds the provider token');
-    const expires = Number(apns.headers['apns-expiration']);
-    assert.ok(expires >= Math.floor(before / 1000) + 600 && expires <= Math.floor(Date.now() / 1000) + 600, 'expires with the Web Push TTL, 600 s');
+    assert.equal(apns.headers['apns-expiration'], String(Math.floor(JUST_BEFORE_MIDNIGHT / 1000) + 600), 'expires with the Web Push TTL, 600 s');
     assert.deepEqual(fake.pushes.find((p) => p.platform === 'fcm').payload.message.android, { ttl: '600s', priority: 'normal', notification: { tag: 'caddie-nudge' } });
     assert.equal(fake.pushes.find((p) => !p.platform).options.TTL, 600, 'Web Push is unchanged');
 
     // Once per pair per day, whichever channels.
     fake.pushes.length = 0;
-    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    await nudgeAfterPresence(me, CONF, pinned());
     assert.equal(fake.pushes.length, 0);
     assert.equal(records().length, 1);
   });
@@ -163,9 +199,9 @@ describe('push nudge with native push', () => {
     const { t, v, me } = await pair({ web: true, apns: tApns, fcm: tFcm }, { apns: apnsToken() });
     // T was nudged twice in the last hour already.
     for (const i of [1, 2]) {
-      fake.put('caddie-people-nudges', `earlier-${i}`, { event_id: EVENT, day: 'x', profile_ids: [t.profileId, `someone${i}`], receivers: [t.profileId], created_at: new Date(Date.now() - i * 60_000).toISOString(), expires_at: FUTURE });
+      fake.put('caddie-people-nudges', `earlier-${i}`, { event_id: EVENT, day: 'x', profile_ids: [t.profileId, `someone${i}`], receivers: [t.profileId], created_at: iso(clock() - i * 60_000), expires_at: FUTURE });
     }
-    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    await nudgeAfterPresence(me, CONF, pinned());
     const toT = fake.pushes.filter((p) => [`apns:${tApns}`, `fcm:${tFcm}`, `web:https://fcm.googleapis.com/fcm/send/${t.profileId}`].includes(addressOf(p)));
     assert.equal(toT.length, 3, 'the third nudge of the hour reaches all three of T\'s channels');
     const pairRecord = records().find((r) => r.profile_ids.includes(v.profileId));
@@ -177,7 +213,7 @@ describe('push nudge with native push', () => {
     const wFcm = fcmToken();
     around(w, { fcm: wFcm });
     fake.pushes.length = 0;
-    await nudgeAfterPresence({ ...docOf(t) }, CONF, NO_PAUSE);
+    await nudgeAfterPresence({ ...docOf(t) }, CONF, pinned());
     assert.deepEqual(fake.pushes.map(addressOf), [`fcm:${wFcm}`]);
     assert.deepEqual(records().find((r) => r.profile_ids.includes(w.profileId)).receivers, [w.profileId]);
   });
@@ -190,10 +226,10 @@ describe('push nudge with native push', () => {
     around(w, { web: true });
     // T is at two nudges this hour already, so only the first pair reaches T; the second pair
     // reaches W alone and needs no pause.
-    fake.put('caddie-people-nudges', 'earlier', { event_id: EVENT, day: 'x', profile_ids: [t.profileId, 'someone'], receivers: [t.profileId], created_at: new Date(Date.now() - 60_000).toISOString(), expires_at: FUTURE });
-    fake.put('caddie-people-nudges', 'earlier-2', { event_id: EVENT, day: 'x', profile_ids: [t.profileId, 'someone-2'], receivers: [t.profileId], created_at: new Date(Date.now() - 120_000).toISOString(), expires_at: FUTURE });
+    fake.put('caddie-people-nudges', 'earlier', { event_id: EVENT, day: 'x', profile_ids: [t.profileId, 'someone'], receivers: [t.profileId], created_at: iso(clock() - 60_000), expires_at: FUTURE });
+    fake.put('caddie-people-nudges', 'earlier-2', { event_id: EVENT, day: 'x', profile_ids: [t.profileId, 'someone-2'], receivers: [t.profileId], created_at: iso(clock() - 120_000), expires_at: FUTURE });
     const pauses = [];
-    await nudgeAfterPresence(me, CONF, { pause: async () => pauses.push(fake.pushes.map(addressOf).sort()) });
+    await nudgeAfterPresence(me, CONF, pinned({ pause: async () => pauses.push(fake.pushes.map(addressOf).sort()) }));
     assert.equal(pauses.length, 1, 'one pause, in the pair with two receivers');
     assert.deepEqual(pauses[0], [`apns:${tApns}`, `web:https://fcm.googleapis.com/fcm/send/${t.profileId}`].sort(), 'all of the first person\'s pushes go out before it');
     const after = fake.pushes.map(addressOf).slice(2);
@@ -228,7 +264,7 @@ describe('push nudge with native push', () => {
     around(w, { web: true });
     fake.calls.length = 0;
     const targetSearches = () => fake.calls.filter((c) => c.index === 'caddie-people-push' && c.op === '_search');
-    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    await nudgeAfterPresence(me, CONF, pinned());
     assert.equal(targetSearches().length, 1, 'one search for the writer and both matches');
     assert.deepEqual(targetSearches()[0].body.aggs.receivers.terms, { field: 'profile_id', size: 3 });
     // The writer hears about both matches, and each match about the writer: the pushes main sent.
@@ -240,7 +276,7 @@ describe('push nudge with native push', () => {
     // one search is made first, as before.
     fake.pushes.length = 0;
     fake.calls.length = 0;
-    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    await nudgeAfterPresence(me, CONF, pinned());
     assert.equal(fake.pushes.length, 0);
     assert.equal(targetSearches().length, 1);
   });
@@ -255,7 +291,7 @@ describe('push nudge with native push', () => {
     const error = console.error;
     console.error = (...args) => lines.push(args.join(' '));
     try {
-      await nudgeAfterPresence(me, CONF, NO_PAUSE);
+      await nudgeAfterPresence(me, CONF, pinned());
     } finally {
       console.error = error;
     }
@@ -272,7 +308,7 @@ describe('push nudge with native push', () => {
     assert.equal((await put(w, 'Wanda Third', { expertise: 'Kafka', interests: 'ebpf probes', learn: ['ebpf'] })).status, 200);
     around(w, { apns: topicApns, fcm: busyFcm });
     const fcmError = (code, status, errorCode) => ({ error: { code, status, details: errorCode ? [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode }] : [] } });
-    answers.set(goneApns, { status: 410, body: { reason: 'Unregistered', timestamp: Date.now() } });
+    answers.set(goneApns, { status: 410, body: { reason: 'Unregistered', timestamp: clock() } });
     answers.set(goneFcm, { status: 404, body: fcmError(404, 'NOT_FOUND', 'UNREGISTERED') });
     answers.set(badApns, { status: 400, body: { reason: 'BadDeviceToken' } });
     answers.set(keptFcm, { status: 503, body: fcmError(503, 'UNAVAILABLE') });
@@ -282,7 +318,7 @@ describe('push nudge with native push', () => {
     const error = console.error;
     console.error = (...args) => lines.push(args.join(' '));
     try {
-      await nudgeAfterPresence(me, CONF, NO_PAUSE);
+      await nudgeAfterPresence(me, CONF, pinned());
     } finally {
       console.error = error;
     }
@@ -308,14 +344,111 @@ describe('push nudge with native push', () => {
     // platform answers that the old token is gone.
     const rotate = (d, platform, token) => () => {
       const id = registrationId(EVENT, d.profileId, platform);
-      fake.put('caddie-people-push', id, { ...fake.doc('caddie-people-push', id), token, created_at: new Date().toISOString() });
+      fake.put('caddie-people-push', id, { ...fake.doc('caddie-people-push', id), token, created_at: iso(clock()) });
     };
-    answers.set(oldApns, { status: 410, body: { reason: 'Unregistered', timestamp: Date.now() }, meanwhile: rotate(t, 'apns', newApns) });
+    answers.set(oldApns, { status: 410, body: { reason: 'Unregistered', timestamp: clock() }, meanwhile: rotate(t, 'apns', newApns) });
     answers.set(oldFcm, { status: 404, body: fcmError(404, 'NOT_FOUND', 'UNREGISTERED'), meanwhile: rotate(v, 'fcm', newFcm) });
-    await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    await nudgeAfterPresence(me, CONF, pinned());
     assert.equal(fake.pushes.length, 2);
     assert.equal(fake.doc('caddie-people-push', registrationId(EVENT, t.profileId, 'apns'))?.token, newApns, 'APNs: the new token stays');
     assert.equal(fake.doc('caddie-people-push', registrationId(EVENT, v.profileId, 'fcm'))?.token, newFcm, 'FCM: the new token stays');
     assert.equal(fake.calls.filter((c) => c.index === 'caddie-people-push' && c.method === 'DELETE').length, 2, 'both deletes were tried, and refused');
+  });
+
+  test('the once-per-pair day is the conference\'s: across midnight UTC a conference in UTC nudges the pair again, one in Los Angeles only after its own midnight', async () => {
+    const [tApns, vFcm] = [apnsToken(), fcmToken()];
+    // In UTC, 23:59:59.999 and the next millisecond are two conference days.
+    let { t, v, me } = await pair({ apns: tApns }, { fcm: vFcm });
+    await nudgeAfterPresence(me, CONF, pinned());
+    clock.set(MIDNIGHT);
+    await nudgeAfterPresence(me, CONF, pinned());
+    assert.deepEqual(fake.pushes.map(addressOf), [`apns:${tApns}`, `fcm:${vFcm}`, `apns:${tApns}`, `fcm:${vFcm}`], 'nudged on both days');
+    assert.deepEqual(records().map((r) => [r.day, r.created_at]).sort(), [['2099-12-30', '2099-12-30T23:59:59.999Z'], ['2099-12-31', '2099-12-31T00:00:00.000Z']]);
+
+    // In Los Angeles (UTC-8 in December) the same two instants are 15:59:59.999 and 16:00 on
+    // 30 December, one conference day, so the second nudge is refused.
+    const la = { ...CONF, timeZone: 'America/Los_Angeles' };
+    ({ t, v, me } = await pair({ apns: tApns }, { fcm: vFcm }));
+    await nudgeAfterPresence(me, la, pinned());
+    clock.set(MIDNIGHT);
+    await nudgeAfterPresence(me, la, pinned());
+    assert.equal(fake.pushes.length, 2, 'nudged once');
+    assert.deepEqual(records().map((r) => r.day), ['2099-12-30']);
+    // Its own midnight is 08:00 UTC: 1 ms before it the pair is still refused, at it nudged again.
+    await nudgeAfterPresence(later(Date.parse('2099-12-31T07:59:59.999Z'), t, v), la, pinned());
+    assert.equal(fake.pushes.length, 2, 'still 30 December in Los Angeles');
+    await nudgeAfterPresence(later(Date.parse('2099-12-31T08:00:00.000Z'), t, v), la, pinned());
+    assert.equal(fake.pushes.length, 4, '31 December in Los Angeles');
+    assert.deepEqual(records().map((r) => [r.day, r.created_at]).sort(), [['2099-12-30', '2099-12-30T23:59:59.999Z'], ['2099-12-31', '2099-12-31T08:00:00.000Z']]);
+  });
+
+  test('a conference with no time zone keeps its days in UTC-12, as dayBounds and visible_until do', async () => {
+    const [tApns, vFcm] = [apnsToken(), fcmToken()];
+    const noZone = { ...CONF, timeZone: null };
+    const { t, v, me } = await pair({ apns: tApns }, { fcm: vFcm });
+    await nudgeAfterPresence(me, noZone, pinned());
+    assert.equal(fake.pushes.length, 2);
+    // Midnight in UTC-12 is 12:00 UTC: 1 ms before it the pair is still refused, at it nudged again.
+    await nudgeAfterPresence(later(Date.parse('2099-12-31T11:59:59.999Z'), t, v), noZone, pinned());
+    assert.equal(fake.pushes.length, 2, 'still 30 December in UTC-12');
+    await nudgeAfterPresence(later(Date.parse('2099-12-31T12:00:00.000Z'), t, v), noZone, pinned());
+    assert.equal(fake.pushes.length, 4, '31 December in UTC-12');
+    assert.deepEqual(records().map((r) => [r.day, r.created_at]).sort(), [['2099-12-30', '2099-12-30T23:59:59.999Z'], ['2099-12-31', '2099-12-31T12:00:00.000Z']]);
+  });
+
+  test('the hourly limit counts the nudges of the hour before the nudge\'s clock, its first millisecond included', async () => {
+    for (const [edge, pushed] of [[60 * 60_000 + 1, true], [60 * 60_000, false]]) {
+      const tApns = apnsToken();
+      const { t, me } = await pair({ apns: tApns }, { apns: apnsToken() });
+      // T was nudged one minute, two minutes and edge ms before the pinned clock.
+      for (const [i, ago] of [60_000, 120_000, edge].entries()) {
+        fake.put('caddie-people-nudges', `earlier-${i}`, { event_id: EVENT, day: 'x', profile_ids: [t.profileId, `someone${i}`], receivers: [t.profileId], created_at: iso(clock() - ago), expires_at: FUTURE });
+      }
+      await nudgeAfterPresence(me, CONF, pinned());
+      assert.equal(fake.pushes.map(addressOf).includes(`apns:${tApns}`), pushed, `a nudge ${edge} ms earlier ${pushed ? 'is not' : 'is'} in the hour`);
+    }
+  });
+
+  test('under a pinned clock each APNs push expires 600 s after the time that clock gives when the push is sent', async () => {
+    const [tApns, vApns] = [apnsToken(), apnsToken()];
+    const { me } = await pair({ apns: tApns }, { apns: vApns });
+    // The pause between the two people of the pair moves the clock on by 2.5 s.
+    await nudgeAfterPresence(me, CONF, pinned({ pause: async () => clock.set(clock() + 2500) }));
+    const seconds = Math.floor(JUST_BEFORE_MIDNIGHT / 1000);
+    const expiry = Object.fromEntries(fake.pushes.map((p) => [addressOf(p), p.headers['apns-expiration']]));
+    assert.deepEqual(expiry, { [`apns:${tApns}`]: String(seconds + 600), [`apns:${vApns}`]: String(seconds + 3 + 600) }, 'the second push was sent at 00:00:02.499');
+    assert.equal(records()[0].created_at, '2099-12-30T23:59:59.999Z', 'the record has the time the nudge ran');
+  });
+
+  test('a presence that has run out by the nudge\'s clock counts as gone, even while Elasticsearch\'s clock still sees it', async () => {
+    // The stand-in for Elasticsearch compares presence_until with the wall clock, decades before
+    // these presences end, so only the nudge's own reads of its clock can leave them out.
+    const { t, me } = await pair({ web: true }, { web: true });
+    clock.set(Date.parse(me.presence_until));
+    await nudgeAfterPresence(me, CONF, pinned());
+    assert.equal(fake.peopleSearches().length, 0, 'the trigger is no longer around: no query');
+    // The trigger writes presence again; the match's, written 30 minutes earlier, has just run out.
+    await nudgeAfterPresence(later(clock(), t), CONF, pinned());
+    assert.equal(fake.peopleSearches().length, 1);
+    assert.equal(fake.pushes.length, 0);
+    assert.equal(records().length, 0);
+  });
+
+  // Keep this test last: while Date.now is mocked, NATIVE_PUSH's FCM access token and the topics
+  // cache are stamped in 2099, so they look fresh to any later test in this file.
+  test('with no clock and no channel given, the rule and NATIVE_PUSH read Date.now when they run', async (t) => {
+    const [tApns, vFcm] = [apnsToken(), fcmToken()];
+    const { me } = await pair({ apns: tApns }, { fcm: vFcm });
+    // Date.now replaced after the server modules were imported; the stand-in reads it too.
+    const now = Date.parse('2099-12-30T12:34:56.789Z');
+    t.mock.method(Date, 'now', () => now);
+    try {
+      await nudgeAfterPresence(me, CONF, NO_PAUSE);
+    } finally {
+      t.mock.restoreAll();
+    }
+    assert.deepEqual(records().map((r) => [r.day, r.created_at]), [['2099-12-30', '2099-12-30T12:34:56.789Z']]);
+    assert.deepEqual(fake.pushes.map(addressOf), [`apns:${tApns}`, `fcm:${vFcm}`]);
+    assert.equal(fake.pushes[0].headers['apns-expiration'], String(Math.floor(now / 1000) + 600));
   });
 });
