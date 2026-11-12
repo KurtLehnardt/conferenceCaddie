@@ -20,14 +20,16 @@
 // directory has its own config.json, that config must list the origin as a tier 2 api, or the old
 // file is not read, as in the smoke (a config.json that cannot be checked lists nothing). The note
 // says to move the old file and leave a symlink at the old path, as the smoke's does, because a
-// shell without XDG_CONFIG_HOME still uses the old path. When both files exist and hold different tokens, or the old
-// one exists and cannot be read, the new one is read, with a one-line note that names both paths
-// (never the values).
+// shell without XDG_CONFIG_HOME still uses the old path. When both files exist and hold different
+// tokens, or the old one exists and cannot be read, the new one is read, with a one-line note that
+// names both paths (never the values).
 //
 // There is no fallback with CADDIE_ADMIN_HOME set, because it names a separate setup (a fork's,
 // say) whose token is never the old file. When the old file exists then, it is not read, and a
 // reader gets one note that names both paths. There is no fallback with ADMIN_TOKEN_FILE set
-// either: the file it names is read as it is, or not at all.
+// either: the file it names is read as it is, or not at all. When both are set and ADMIN_TOKEN_FILE
+// names the old file itself, that file is read, because ADMIN_TOKEN_FILE comes first, but a reader
+// gets one note that says so, since it is the token file of a setup without CADDIE_ADMIN_HOME.
 //
 // The file read is trusted only when ADMIN_TOKEN_FILE names it, when the resolved default is the
 // only candidate (no old file, or CADDIE_ADMIN_HOME set and the default exists), or when the old
@@ -59,15 +61,25 @@ export function adminTokenFile(env = process.env, home = homedir()) {
   return { path, legacy: legacy === path ? null : legacy };
 }
 
-// Whether something may be at path: a stat that finds it, or one that fails for any other reason
-// than "no such file" (a directory that cannot be searched). Reads nothing.
+// Whether something may be at path: 'yes' when a stat finds it, 'maybe' when the stat fails for
+// any other reason than "no such file" (a directory that cannot be searched), else false. Reads
+// nothing.
 function present(path) {
   try {
     statSync(path);
-    return true;
+    return 'yes';
   } catch (err) {
-    return err.code !== 'ENOENT' && err.code !== 'ENOTDIR';
+    return err.code !== 'ENOENT' && err.code !== 'ENOTDIR' ? 'maybe' : false;
   }
+}
+
+// The old place in a note or a doubt about the file that is not read with CADDIE_ADMIN_HOME set:
+// "the file at the old place", or, when the old place cannot be checked, a wording that says a file
+// may be there, so no line claims a file that may not exist.
+function ignoredOldText(old) {
+  return present(old) === 'yes'
+    ? `the file at the old place ${old}`
+    : `a file that may be at the old place ${old} (it cannot be checked)`;
 }
 
 // The old default place ~/.config/conference-caddie/admin-token when CADDIE_ADMIN_HOME is set (and
@@ -83,11 +95,25 @@ export function ignoredOldTokenFile(env = process.env, home = homedir(), path = 
 // The one note about the old file that is not read with CADDIE_ADMIN_HOME set. It names both paths
 // and never a value.
 export function ignoredOldNote(path, old) {
-  return `Note: CADDIE_ADMIN_HOME is set, so the admin token file is ${path}; the file at the old place ${old} is not read or changed, because there is no fallback to the old place with CADDIE_ADMIN_HOME set.`;
+  return `Note: CADDIE_ADMIN_HOME is set, so the admin token file is ${path}; ${ignoredOldText(old)} is not read or changed, because there is no fallback to the old place with CADDIE_ADMIN_HOME set.`;
 }
 
-// { exists, value }: value is the trimmed contents of the file, or null when it cannot be read; exists
-// is false only when there is no file at the path. Read once, and kept in memory only.
+// The one note for ADMIN_TOKEN_FILE naming the old default place ~/.config/conference-caddie/
+// admin-token (the path itself, or a link that is proven to lead to the same file) while
+// CADDIE_ADMIN_HOME is set: the file is read and used, because ADMIN_TOKEN_FILE comes first, but it
+// is the token file of a setup without CADDIE_ADMIN_HOME, which may not be this deployment's. Else
+// null. It names the paths and never a value.
+export function explicitOldNote(env = process.env, home = homedir()) {
+  if (!env.ADMIN_TOKEN_FILE || !env.CADDIE_ADMIN_HOME) return null;
+  const { path } = adminTokenPaths(env, home);
+  const old = legacyAdminTokenFile(home);
+  if (path !== old && !sameFile(path, old)) return null;
+  const names = path === old ? `the old place ${old}` : `${path}, which is the file at the old place ${old}`;
+  return `Note: CADDIE_ADMIN_HOME is set, but ADMIN_TOKEN_FILE names ${names}, the token file of a setup without CADDIE_ADMIN_HOME; it is used, because ADMIN_TOKEN_FILE comes first. If the setup at $CADDIE_ADMIN_HOME has its own token, unset ADMIN_TOKEN_FILE.`;
+}
+
+// { exists, value }: value is the trimmed contents of the file, or null when it cannot be read;
+// exists is false only when there is no file at the path. Read once, and kept in memory only.
 function readOnce(path) {
   try {
     return { exists: true, value: readFileSync(path, 'utf8').trim() };
@@ -97,10 +123,10 @@ function readOnce(path) {
 }
 
 // Why the old directory's config.json refuses the fallback for apiOrigin, as a clause that names
-// the file, else null: the rule of resolveAdminTokenFile in scripts/lib/admin-token-file.mjs, so one
-// setup's config never sends another setup's token. It refuses when it exists and does not list
-// apiOrigin as a tier 2 api, and when it cannot be checked (its directory cannot be searched); the
-// clause says which.
+// the file, else null: the rule of resolveAdminTokenFile in scripts/lib/admin-token-file.mjs, so
+// one setup's config never sends another setup's token. It refuses when it exists and does not
+// list apiOrigin as a tier 2 api, and when it cannot be checked (its directory cannot be
+// searched); the clause says which.
 function oldConfigRefuses(legacy, apiOrigin) {
   const oldDir = dirname(legacy);
   const config = join(oldDir, 'config.json');
@@ -131,7 +157,7 @@ function oldConfigRefuses(legacy, apiOrigin) {
 export function adminTokenFileToRead(env = process.env, home = homedir(), { apiOrigin } = {}) {
   const { path, legacy } = adminTokenFile(env, home);
   const current = readOnce(path);
-  const result = { path, value: current.value, note: null, legacy: null, trusted: true, doubt: null };
+  const result = { path, value: current.value, note: explicitOldNote(env, home), legacy: null, trusted: true, doubt: null };
 
   const ignored = ignoredOldTokenFile(env, home, path);
   if (ignored) {
@@ -141,7 +167,7 @@ export function adminTokenFileToRead(env = process.env, home = homedir(), { apiO
       ...result,
       note,
       trusted: false,
-      doubt: `there is no token file at ${path}, and the file at the old place ${ignored} is not read, because there is no fallback to the old place with CADDIE_ADMIN_HOME set`,
+      doubt: `there is no token file at ${path}, and ${ignoredOldText(ignored)} is not read, because there is no fallback to the old place with CADDIE_ADMIN_HOME set`,
     };
   }
 
@@ -166,7 +192,8 @@ export function adminTokenFileToRead(env = process.env, home = homedir(), { apiO
     // advice to move the old file rests on that, not on sameFile. Only XDG_CONFIG_HOME leads here
     // (adminTokenPaths gives no old place with CADDIE_ADMIN_HOME or ADMIN_TOKEN_FILE set). A shell
     // without XDG_CONFIG_HOME still reads the old path, so the advice is the smoke's
-    // (resolveAdminTokenFile): move the file and leave a symlink at the old path, never only move it.
+    // (resolveAdminTokenFile): move the file and leave a symlink at the old path, never only move
+    // it.
     return {
       ...result,
       path: legacy,

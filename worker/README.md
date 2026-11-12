@@ -163,9 +163,12 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    `~/.config/conference-caddie/admin-token`, a script that reads the token file and finds none at
    the new place reads the old one and prints one line on stderr that names both paths and says,
    if that file holds this deployment's token, to move it to the new place and leave a symlink at
-   the old path, or set `ADMIN_TOKEN_FILE` to it. There is no fallback when `CADDIE_ADMIN_HOME` is set, because it names
-   a separate setup: the old file is then never read, and a script that finds it prints one line
-   that names both paths. The ingest, migration and topics scripts, which know the `--api` origin,
+   the old path, or set `ADMIN_TOKEN_FILE` to it. There is no fallback when `CADDIE_ADMIN_HOME` is
+   set, because it names a separate setup: the old file is then never read, and a script that
+   finds it prints one line that names both paths. When `ADMIN_TOKEN_FILE` names the old file
+   itself while `CADDIE_ADMIN_HOME` is set, that file is used, because `ADMIN_TOKEN_FILE` comes
+   first, and the scripts print one line that says it is the token file of a setup without
+   `CADDIE_ADMIN_HOME`. The ingest, migration and topics scripts, which know the `--api` origin,
    also skip the fallback when the old directory has a `config.json` that does not list that origin
    as a tier 2 `api`, as the smoke does. When both files exist and hold different tokens,
    or the old one exists and cannot be read, it reads the new one and prints one line that names
@@ -224,8 +227,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    ```
 
    Setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place, so if a note from step 2
-   named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's
-   token, move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
+   named the old `~/.config/conference-caddie/admin-token` under `XDG_CONFIG_HOME` and that file
+   holds this deployment's token, first move it to the new place and leave a symlink at the old
+   path (`ln -s <new path> ~/.config/conference-caddie/admin-token`), or point `ADMIN_TOKEN_FILE`
+   at it. With `CADDIE_ADMIN_HOME` set the old file belongs to another setup: leave it in place.
 
    Conferences, talks, topics and facets are copied as they are, so topic ids stay identical.
    Only sample profiles are copied by default (`--include-real` copies the others too); presence,
@@ -278,8 +283,10 @@ node scripts/smoke.mjs
 ```
 
 As in deploy step 3, setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place: if a note
-named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's token,
-move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
+named the old `~/.config/conference-caddie/admin-token` under `XDG_CONFIG_HOME` and that file holds
+this deployment's token, first move it to the new place and leave a symlink at the old path
+(`ln -s <new path> ~/.config/conference-caddie/admin-token`), or point `ADMIN_TOKEN_FILE` at it.
+With `CADDIE_ADMIN_HOME` set the old file belongs to another setup: leave it in place.
 
 `BASE_URL` is the app, and the API defaults to the same origin. The admin token makes it a Worker
 run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures (see
@@ -568,9 +575,12 @@ supported client for reviewing, undoing and confirming hides is the `caddie-admi
 `~/.config/conference-caddie` unless `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` says otherwise; the
 file must have mode 0600, as `setup-secrets.mjs` writes it). `setup-secrets.mjs` writes the token to
 that same default file (deploy step 2). The CLI has no fallback to the old
-`~/.config/conference-caddie/admin-token`, so if your token is still there while either variable is
-set, move it to the new place, as the note of the Worker scripts says, or point `ADMIN_TOKEN_FILE`
-at it. On Windows the CLI reads no token file at all, only `ADMIN_TOKEN`. The Worker's origin is
+`~/.config/conference-caddie/admin-token`, so if your token is still there while `XDG_CONFIG_HOME`
+is set, move it to the new place and leave a symlink at the old path, as the note of the Worker
+scripts says, or point `ADMIN_TOKEN_FILE` at it. With `CADDIE_ADMIN_HOME` set, the old file belongs
+to another setup (the one without the variable) and must not be moved: a shell without the
+variable would lose its token, and this setup would take that setup's token for its own. Put this
+setup's token at `$CADDIE_ADMIN_HOME/admin-token`, or point `ADMIN_TOKEN_FILE` at it. On Windows the CLI reads no token file at all, only `ADMIN_TOKEN`. The Worker's origin is
 the `api` of a tier 2 backend in the CLI's `config.json`, in the same directory. If you have no
 `config.json` yet, the first command below creates it; otherwise add the `"worker"` entry to its
 `backends` by hand, and either set `"default": "worker"` or pass `--backend worker` to each command

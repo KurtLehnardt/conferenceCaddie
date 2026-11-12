@@ -1160,9 +1160,12 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     assert.deepEqual(w.githubState(), {});
     assert.equal(existsSync(home), false, 'a read never creates the new place');
     assertNoPartOf(NEW1, `${dry.text}\n${r.text}`, 'the output');
-    // ADMIN_TOKEN_FILE set to the old file is the operator's choice: the secret is set from it.
+    // ADMIN_TOKEN_FILE set to the old file is the operator's choice: the secret is set from it,
+    // and one note says that file is the token file of a setup without CADDIE_ADMIN_HOME.
     const ok = w.run(['--only-missing'], { env: { ...env, ADMIN_TOKEN_FILE: oldFile(w) } });
     assert.equal(ok.status, 0, ok.text);
+    const explicitNote = `Note: CADDIE_ADMIN_HOME is set, but ADMIN_TOKEN_FILE names the old place ${oldFile(w)}, the token file of a setup without CADDIE_ADMIN_HOME; it is used, because ADMIN_TOKEN_FILE comes first. If the setup at $CADDIE_ADMIN_HOME has its own token, unset ADMIN_TOKEN_FILE.`;
+    assert.equal(ok.stdout.split('\n').filter((line) => line === explicitNote).length, 1, ok.stdout);
     assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, NEW1);
     assert.deepEqual(putsOf(w), ['gh secret set']);
     assertNoPartOf(NEW1, ok.text, 'the output');

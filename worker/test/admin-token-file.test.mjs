@@ -13,7 +13,7 @@ import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, r
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adminTokenFile, adminTokenFileToRead, ignoredOldNote, sameFile } from '../ingest/admin-token-file.mjs';
+import { adminTokenFile, adminTokenFileToRead, explicitOldNote, ignoredOldNote, sameFile } from '../ingest/admin-token-file.mjs';
 import { readAdminToken } from '../ingest/lib.mjs';
 import { run as migrate } from '../ingest/migrate-from-backup.mjs';
 import { configDir } from '../../scripts/admin/config.mjs';
@@ -353,6 +353,47 @@ describe('adminTokenFileToRead: CADDIE_ADMIN_HOME and the old directory\'s confi
     const caddie = join(s.dir, 'caddie');
     const file = s.put(join(caddie, 'admin-token'), TOKEN);
     assert.deepEqual(adminTokenFileToRead({ CADDIE_ADMIN_HOME: caddie }, s.home), { path: file, value: TOKEN, note: null, legacy: null, trusted: true, doubt: null });
+  });
+
+  test('with CADDIE_ADMIN_HOME set and the old place unsearchable, the note and the doubt say a file may be there, not that one is', { skip: AS_ROOT && 'root can search a directory at mode 000' }, (t) => {
+    const s = scratch(t);
+    s.put(s.old, TOKEN);
+    const config = join(s.home, '.config');
+    const caddie = join(s.dir, 'caddie');
+    const file = join(caddie, 'admin-token');
+    chmodSync(config, 0o000);
+    let got;
+    try {
+      got = adminTokenFileToRead({ CADDIE_ADMIN_HOME: caddie }, s.home);
+    } finally {
+      chmodSync(config, 0o700);
+    }
+    assert.equal(got.note, `Note: CADDIE_ADMIN_HOME is set, so the admin token file is ${file}; a file that may be at the old place ${s.old} (it cannot be checked) is not read or changed, because there is no fallback to the old place with CADDIE_ADMIN_HOME set.`);
+    assert.equal(got.doubt, `there is no token file at ${file}, and a file that may be at the old place ${s.old} (it cannot be checked) is not read, because there is no fallback to the old place with CADDIE_ADMIN_HOME set`);
+    assert.equal(got.trusted, false, 'still refused');
+    assert.equal(got.value, null);
+  });
+
+  test('with CADDIE_ADMIN_HOME set and ADMIN_TOKEN_FILE naming the old file, that file is used and trusted, with one note that says whose file it is', (t) => {
+    const s = scratch(t);
+    s.put(s.old, TOKEN);
+    const caddie = join(s.dir, 'caddie');
+    s.put(join(caddie, 'admin-token'), OTHER);
+    const note = `Note: CADDIE_ADMIN_HOME is set, but ADMIN_TOKEN_FILE names the old place ${s.old}, the token file of a setup without CADDIE_ADMIN_HOME; it is used, because ADMIN_TOKEN_FILE comes first. If the setup at $CADDIE_ADMIN_HOME has its own token, unset ADMIN_TOKEN_FILE.`;
+    const env = { ADMIN_TOKEN_FILE: s.old, CADDIE_ADMIN_HOME: caddie };
+    assert.deepEqual(adminTokenFileToRead(env, s.home), { path: s.old, value: TOKEN, note, legacy: null, trusted: true, doubt: null });
+    for (const value of [TOKEN, OTHER]) assertNoPartOf(value, note, 'the note');
+    const lines = [];
+    assert.equal(readAdminToken({ env, home: s.home, warn: (line) => lines.push(line) }), TOKEN);
+    assert.deepEqual(lines, [note]);
+    // A link that is proven to lead to the old file counts too, and the note names both paths.
+    const link = join(s.dir, 'link');
+    symlinkSync(s.old, link);
+    assert.equal(explicitOldNote({ ADMIN_TOKEN_FILE: link, CADDIE_ADMIN_HOME: caddie }, s.home), `Note: CADDIE_ADMIN_HOME is set, but ADMIN_TOKEN_FILE names ${link}, which is the file at the old place ${s.old}, the token file of a setup without CADDIE_ADMIN_HOME; it is used, because ADMIN_TOKEN_FILE comes first. If the setup at $CADDIE_ADMIN_HOME has its own token, unset ADMIN_TOKEN_FILE.`);
+    // No note without CADDIE_ADMIN_HOME, or for another file.
+    assert.equal(explicitOldNote({ ADMIN_TOKEN_FILE: s.old }, s.home), null);
+    assert.equal(adminTokenFileToRead({ ADMIN_TOKEN_FILE: s.old }, s.home).note, null);
+    assert.equal(explicitOldNote({ ADMIN_TOKEN_FILE: join(caddie, 'admin-token'), CADDIE_ADMIN_HOME: caddie }, s.home), null);
   });
 
   test('the fallback with an API origin: read when the old directory has no config.json or lists the origin, refused when its config.json does not', (t) => {

@@ -103,7 +103,9 @@
 //      either, because it names a separate setup: the old file is never read or changed, and when
 //      it exists the run prints one note that names both paths. The file at $CADDIE_ADMIN_HOME is
 //      then trusted when it exists; when only the old file is there, both reads stop with exit 1
-//      as above.
+//      as above. When CADDIE_ADMIN_HOME is set and ADMIN_TOKEN_FILE names the old file itself, that
+//      file is used, because ADMIN_TOKEN_FILE comes first, and the run prints one note that says it
+//      is the token file of a setup without CADDIE_ADMIN_HOME.
 //      CADDIE_GH_REPO, <owner>/<name> (default: the github.com repository that the git remote
 //      "origin" of this clone names, in https or ssh form; when that cannot be worked out the
 //      script stops and names the variable; --skip-gh needs neither). `gh repo view` is not used: in a fork clone, which has the original as
@@ -118,7 +120,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { adminTokenFile, adminTokenFileToRead, ignoredOldNote, ignoredOldTokenFile } from '../ingest/admin-token-file.mjs';
+import { adminTokenFile, adminTokenFileToRead, explicitOldNote, ignoredOldNote, ignoredOldTokenFile } from '../ingest/admin-token-file.mjs';
 
 const WORKER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = resolve(WORKER_DIR, '..');
@@ -408,6 +410,7 @@ async function removeStaleTempFiles(dir) {
 // failure. The rename splits a hard link between the old default place and the token file: the old
 // path then keeps the previous token, and previous says what that token is now to the Worker.
 async function writeTokenFile(value, hint = '', previous = '') {
+  noteExplicitOldTokenFile();
   const oldBefore = existingOldTokenFile() ?? ignoredOldTokenFile();
   let tmp;
   try {
@@ -432,7 +435,13 @@ async function writeTokenFile(value, hint = '', previous = '') {
     ? ''
     : ` The two paths were hard links to one file, which this write split, so ${old ?? ignored} now holds the previous token${previous ? `, ${previous}` : ''}.`;
   if (ignored) {
-    noteIgnoredOldTokenFile(ignored, split);
+    // The split sentence is news, so it is never held back by the print-once guard of the plain
+    // note: with a split, the note and the sentence are printed together even if the note was
+    // printed before.
+    if (split) {
+      ignoredOldNoted = true;
+      console.log(`${ignoredOldNote(TOKEN_FILE, ignored)}${split}`);
+    } else noteIgnoredOldTokenFile(ignored);
     return;
   }
   // No advice to delete the old file: that it is a different file rests on sameFile saying it is
@@ -452,16 +461,28 @@ function existingOldTokenFile() {
 
 // With CADDIE_ADMIN_HOME set there is no fallback to the old default place, and the old file is
 // never read or changed. When it exists, the run says so once, in one note that names both paths
-// (ignoredOldNote of admin-token-file.mjs), followed by suffix, if any.
+// (ignoredOldNote of admin-token-file.mjs).
 let ignoredOldNoted = false;
-function noteIgnoredOldTokenFile(old = ignoredOldTokenFile(), suffix = '') {
+function noteIgnoredOldTokenFile(old = ignoredOldTokenFile()) {
   if (!old || ignoredOldNoted) return;
   ignoredOldNoted = true;
-  console.log(`${ignoredOldNote(TOKEN_FILE, old)}${suffix}`);
+  console.log(ignoredOldNote(TOKEN_FILE, old));
+}
+
+// With CADDIE_ADMIN_HOME set and ADMIN_TOKEN_FILE naming the old default place itself, the file is
+// used, because ADMIN_TOKEN_FILE comes first, but the run says once that it is the token file of a
+// setup without CADDIE_ADMIN_HOME (explicitOldNote of admin-token-file.mjs).
+let explicitOldNoted = false;
+function noteExplicitOldTokenFile() {
+  if (explicitOldNoted) return;
+  explicitOldNoted = true;
+  const note = explicitOldNote(process.env);
+  if (note) console.log(note);
 }
 
 // The line of a dry run about the old file that a write would leave alone, if there is one.
 function dryRunOldTokenFileLine() {
+  noteExplicitOldTokenFile();
   const old = existingOldTokenFile();
   if (old) console.log(`Would leave the old token file ${old} as it is (not updated, not deleted).`);
   else noteIgnoredOldTokenFile();
@@ -484,7 +505,10 @@ function readTokenFile() {
   const { path, value, trusted, doubt } = adminTokenFileToRead(process.env);
   if (value) generated.push(value);
   // A refusal names both paths in doubt; a trusted read names the old file it did not read once.
-  if (trusted) noteIgnoredOldTokenFile();
+  if (trusted) {
+    noteIgnoredOldTokenFile();
+    noteExplicitOldTokenFile();
+  }
   return { value: value || null, path, trusted, doubt };
 }
 

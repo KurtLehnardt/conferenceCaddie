@@ -129,7 +129,8 @@ export function withTopics(doc, topics) {
 // the API the token is for, that fallback also needs the old directory's config.json, when there is
 // one, to list apiOrigin as a tier 2 api, as in the smoke; otherwise the old file is not read and
 // warn gets one line that says why. With CADDIE_ADMIN_HOME set the old file is never read, and when
-// it exists warn gets one line naming both paths. When both exist as two files with different
+// it exists warn gets one line naming both paths; when ADMIN_TOKEN_FILE names the old file itself
+// then, it is read, because ADMIN_TOKEN_FILE comes first, and warn gets one line that says so. When both exist as two files with different
 // tokens, or the old one cannot be read, the default one is read and warn gets one line naming both
 // paths (never the values). Two paths that lead to one file through a symbolic or a hard link count
 // as one file. The value returned is the one admin-token-file.mjs read and compared, not a second
