@@ -41,9 +41,10 @@ fun ReportSheet(target: ReportTarget, host: PeopleHost, onClose: () -> Unit) {
     var reason by remember(target) { mutableStateOf<ReportReason?>(null) }
     var error by remember(target) { mutableStateOf<String?>(null) }
     val close by rememberUpdatedState(onClose)
-    // One report at a time (PeopleHost.launchOnce), also across a sheet opened again meanwhile; an
-    // error after the sheet has gone goes in a toast ([shown]).
-    val busy = host.isRunning("report")
+    // One report of this target at a time (PeopleHost.launchOnce), also across a sheet opened again
+    // meanwhile; an error after the sheet has gone goes in a toast ([shown]).
+    val key = "report:${target.kind}:${target.id}"
+    val busy = host.isRunning(key)
     val shown = rememberInComposition()
 
     val send: () -> Unit = send@{
@@ -52,13 +53,14 @@ fun ReportSheet(target: ReportTarget, host: PeopleHost, onClose: () -> Unit) {
             error = PeopleStrings.PICK_A_REASON
             return@send
         }
-        if (host.isRunning("report")) return@send
+        if (host.isRunning(key)) return@send
         error = null
-        host.launchOnce("report") {
+        host.launchOnce(key) {
             when (val res = host.controller.report(target.ref, target.kind, target.id, chosen)) {
                 is ApiResult.Ok -> {
                     host.showToast(PeopleStrings.REPORT_THANKS)
-                    close()
+                    // Closes the sheet only while it is still this report's: another may be open now.
+                    if (host.reporting == target) close()
                 }
                 is ApiResult.Failed -> {
                     val message = reportProblem(res.error)

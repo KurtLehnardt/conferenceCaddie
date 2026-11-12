@@ -6,6 +6,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
@@ -43,7 +44,8 @@ import kotlinx.coroutines.launch
  *   block, its toast and Undo).
  * - Talks and links: [openTalk] opens the talk sheet; [openUrl] opens an http(s) link.
  * - What this run remembers across screens: [hasWaved] and [markWaved] ("Waved" on a card),
- *   the actions under way ([isRunning]) and the open setup panels ([rememberPanel]).
+ *   the found views ([foundPerson]) and saved people ([metSaved]), the actions under way
+ *   ([isRunning]) and the open setup panels ([rememberPanel]).
  * - The platform: [nowMs] (the controller's clock, so a test's clock reaches the screens too) and
  *   [openAppSettings] (this app's page in the system settings, where [canOpenAppSettings]).
  *
@@ -209,14 +211,30 @@ class PeopleHost(
      */
     fun launchOnce(key: String, action: suspend () -> Unit): Boolean {
         if (!memory.start(key)) return false
-        scope.launch {
-            try {
-                action()
-            } finally {
-                memory.finish(key)
-            }
-        }
+        // Released when the action ends whichever way, also when the scope was cancelled before it
+        // could start.
+        scope.launch { action() }.invokeOnCompletion { memory.finish(key) }
         return true
+    }
+
+    /**
+     * The found view of [meetId] ("You found {name}") as its Meet up showed it, or null. Kept in the
+     * memory because it cannot be read again: the server answers a found meet-up with 410, so a Meet
+     * up shown again (after a re-creation, or an answer that came after one) would say it is over.
+     */
+    fun foundPerson(meetId: String): Pair<String, String?>? = memory.found[meetId]?.let { (it[0] ?: "") to it[1] }
+
+    /** [meetId] got to its found view, with [name] and [about]. */
+    fun markFound(meetId: String, name: String, about: String?) {
+        memory.found = memory.found + (meetId to listOf(name, about))
+    }
+
+    /** True when "Save this person" saved the person of [meetId]. */
+    fun metSaved(meetId: String): Boolean = meetId in memory.metSaved
+
+    /** "Save this person" saved the person of [meetId]: the found view says so from now on. */
+    fun markMetSaved(meetId: String) {
+        memory.metSaved = memory.metSaved + meetId
     }
 
 
@@ -304,8 +322,8 @@ class PeopleHost(
 
 /**
  * The host's state that survives an activity's re-creation: the refs and small values of the open
- * sheets and setup panels, the pending request, the refs waved at and the actions under way,
- * never a person or a screen's data. [PeopleRetained] keeps the
+ * sheets and setup panels, the pending request, the refs waved at, the found views of meet-ups and
+ * the people saved from them, and the actions under way, never a person's profile. [PeopleRetained] keeps the
  * very instance across a re-creation (an action that outlives it still changes what the new
  * composition shows); [Saver] saves it for the process's end, without the actions under way, which
  * end with the process. The block confirmation's `after` callback belongs to a screen that is
@@ -324,12 +342,27 @@ class PeopleHostMemory {
     /** The token of the card whose setup panel is open, per panel ([PeopleHost.rememberPanel]). */
     internal var panels: Map<SetupPanel, String> by mutableStateOf(emptyMap())
 
-    // The actions under way ([PeopleHost.launchOnce]). The atomic set decides; [running] mirrors it
-    // for the screens to read. Not saved: an action ends with the process.
+    /** The found view of each meet-up that got to it: the name and the about line ([PeopleHost.markFound]). */
+    internal var found: Map<String, List<String?>> by mutableStateOf(emptyMap())
+
+    /** The meet-ups whose person "Save this person" saved ([PeopleHost.markMetSaved]). */
+    internal var metSaved: Set<String> by mutableStateOf(emptySet())
+
+    // The actions under way ([PeopleHost.launchOnce]). Not saved: an action ends with the process.
+    // The atomic set is the one truth, changed from any thread; [changes] only tells a composition
+    // that read it to read it again. A write of the same value still tells it (neverEqualPolicy),
+    // so no change is missed whichever thread writes last.
     @OptIn(ExperimentalAtomicApi::class)
     private val runningNow = AtomicReference<Set<String>>(emptySet())
-    internal var running: Set<String> by mutableStateOf(emptySet())
-        private set
+    private val changes = mutableStateOf(Unit, neverEqualPolicy())
+
+    /** The actions under way, read where a composition sees a change. */
+    @OptIn(ExperimentalAtomicApi::class)
+    internal val running: Set<String>
+        get() {
+            changes.value
+            return runningNow.load()
+        }
 
     @OptIn(ExperimentalAtomicApi::class)
     internal fun start(key: String): Boolean {
@@ -338,7 +371,7 @@ class PeopleHostMemory {
             if (key in now) return false
             if (runningNow.compareAndSet(now, now + key)) break
         }
-        running = runningNow.load()
+        changes.value = Unit
         return true
     }
 
@@ -348,7 +381,7 @@ class PeopleHostMemory {
             val now = runningNow.load()
             if (runningNow.compareAndSet(now, now - key)) break
         }
-        running = runningNow.load()
+        changes.value = Unit
     }
 
     companion object {
@@ -370,7 +403,12 @@ class PeopleHostMemory {
                     m.blocking?.let { arrayListOf(it.ref, it.name) },
                     ArrayList(m.waved),
                     m.request?.let { arrayListOf(it.aroundNow, it.query, it.hereZone, it.id) },
-                    arrayListOf(m.askSent, ArrayList(m.panels.map { (k, v) -> "${k.name}=$v" })),
+                    arrayListOf(
+                        m.askSent,
+                        ArrayList(m.panels.map { (k, v) -> "${k.name}=$v" }),
+                        ArrayList(m.found.map { (id, f) -> arrayListOf(id, f[0], f[1]) }),
+                        ArrayList(m.metSaved),
+                    ),
                 )
             },
             restore = { saved ->
@@ -393,6 +431,10 @@ class PeopleHostMemory {
                             val (name, token) = e.split('=', limit = 2).takeIf { it.size == 2 } ?: return@mapNotNull null
                             SetupPanel.entries.firstOrNull { it.name == name }?.let { it to token }
                         }.toMap()
+                        m.found = (p.getOrNull(2) as? List<*>).orEmpty().filterIsInstance<List<*>>().mapNotNull { f ->
+                            (f.getOrNull(0) as? String)?.let { id -> id to listOf(f.getOrNull(1) as? String, f.getOrNull(2) as? String) }
+                        }.toMap()
+                        m.metSaved = (p.getOrNull(3) as? List<*>).orEmpty().filterIsInstance<String>().toSet()
                     }
                 }
             },

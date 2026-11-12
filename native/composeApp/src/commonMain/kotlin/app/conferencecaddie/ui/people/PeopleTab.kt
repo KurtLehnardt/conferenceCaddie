@@ -407,7 +407,7 @@ fun rememberPeopleUi(
     // the web's toast does, with "Open profile" when the controller says the fix is on the profile.
     LaunchedEffect(state.notice) {
         val notice = state.notice ?: return@LaunchedEffect
-        // Through the same queue as the screens' toasts, so they show in the order they came.
+        // Through the same queue as the screens' toasts, so a notice does not overtake one of theirs.
         host.showToast(notice.message, if (notice.opensProfile) PeopleToastAction(PeopleCommonStrings.OPEN_PROFILE, host::openProfile) else null)
         controller.clearNotice()
     }

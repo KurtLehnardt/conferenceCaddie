@@ -34,7 +34,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
  */
 class PeopleRetained(val scope: CoroutineScope) {
     // A toast the collector had taken but not shown when its composition went (a rotation at that
-    // moment) is queued again for the next one.
+    // moment) is queued again for the next one, after any still waiting.
     private val queue: Channel<Pending> = Channel(Channel.UNLIMITED) { undelivered -> queue.trySend(undelivered) }
 
     /** A toast waiting to be shown. */

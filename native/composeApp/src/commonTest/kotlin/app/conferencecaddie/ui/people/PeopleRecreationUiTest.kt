@@ -16,6 +16,7 @@ import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
@@ -202,6 +203,38 @@ class PeopleRecreationUiTest {
         // The sheet the new composition shows says so, as the one that asked would have.
         u3WaitForText(ConnectStrings.ASKED)
         u3WaitForNoTag("ask-send")
+    }
+
+    @Test
+    fun aFoundViewAnsweredAfterARecreationShowsAndStaysAfterTheNext() = runComposeUiTest {
+        val rig = rig()
+        val id = u3Await(rig) {
+            rig.controller.updateContext(rig.context())
+            rig.makeVisible()
+            val ada = rig.seedAda("Hallway")
+            check(rig.controller.turnOnPresence("Expo hall", "") == null)
+            rig.activeMeet(ada)
+        }
+        val restoration = showPeople(rig) { ui ->
+            val state by ui.host.controller.state.collectAsState()
+            MeetScreen(id, state, ui.host)
+        }
+        u3WaitForTag("meet-found")
+
+        val held = HeldAction(rig.controller) { rig.calls("POST", "/api/meet/$id/found").isNotEmpty() }
+        onNodeWithTag("meet-found").performScrollTo().performClick()
+        waitUntil(timeoutMillis = 20_000) { held.hasArrived }
+        restoration.emulateSaveAndRestore()
+        held.release()
+        // Found, as the Meet up that asked would have shown; read again, the server would say 410.
+        u3WaitForTag("meet-found-card")
+        onNodeWithText(ConnectStrings.SAVE_PERSON).performClick()
+        waitUntil(timeoutMillis = 20_000) { rig.state.met.isNotEmpty() }
+
+        restoration.emulateSaveAndRestore()
+        u3WaitForTag("meet-found-card")
+        u3WaitForText(ConnectStrings.SAVED_UNDER_SETTINGS)
+        onNodeWithText(ConnectStrings.SAVE_PERSON).assertDoesNotExist()
     }
 
     @Test

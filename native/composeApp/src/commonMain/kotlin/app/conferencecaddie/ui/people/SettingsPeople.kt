@@ -53,9 +53,8 @@ fun SettingsPeople(state: PeopleUiState, host: PeopleHost) {
 fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
     var error by remember { mutableStateOf<String?>(null) }
     // Unblock runs on the app's scope (PeopleHost.scope), so leaving Settings meanwhile loses neither
-    // its toast nor its error ([shown]); one unblock at a time, every row waiting while one runs
-    // (PeopleHost.launchOnce), also across a screen that came back.
-    val busy = host.isRunning(UNBLOCK_ACTION)
+    // its toast nor its error ([shown]); one unblock per person at a time (PeopleHost.launchOnce),
+    // also across a screen that came back.
     val shown = rememberInComposition()
     LaunchedEffect(host.controller, state.conference?.slug) { host.controller.refreshBlocks() }
 
@@ -69,9 +68,9 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
                     CaddieButton(
                         ProfileStrings.UNBLOCK,
                         {
-                            if (!host.isRunning(UNBLOCK_ACTION)) {
+                            if (!host.isRunning("unblock:${b.ref}")) {
                                 error = null
-                                host.launchOnce(UNBLOCK_ACTION) {
+                                host.launchOnce("unblock:${b.ref}") {
                                     val err = host.controller.unblock(b.ref)
                                     when {
                                         err == null -> host.showToast(PeopleCommonStrings.unblocked(b.displayName))
@@ -84,7 +83,7 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
                         Modifier.testTag("unblock-${b.ref}"),
                         variant = ButtonVariant.Text,
                         small = true,
-                        enabled = !busy,
+                        enabled = !host.isRunning("unblock:${b.ref}"),
                     )
                 }
             }
@@ -202,6 +201,3 @@ private fun Modifier.stretchedLeft(dp: Int): Modifier = this.layout { measurable
     val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
     layout(constraints.maxWidth, placeable.height) { placeable.place(-extra, 0) }
 }
-
-/** The name Unblock runs under ([PeopleHost.launchOnce]): one at a time. */
-private const val UNBLOCK_ACTION = "unblock"

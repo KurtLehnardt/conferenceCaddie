@@ -5,12 +5,18 @@ import app.conferencecaddie.shared.people.ReportKind
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 // The host's memory through its Saver, as Android saves it when the activity goes and restores it
 // after the process was ended, and through retainedSaver, which finds the very memory again after a
@@ -53,6 +59,34 @@ class PeopleHostMemoryTest {
         // An action under way ends with the process: nothing is under way after a restore.
         assertTrue(restored.running.isEmpty())
         assertTrue(restored.start("presence"))
+    }
+
+    @Test
+    fun theFoundViewsAndThePeopleSavedFromThemAreSaved() {
+        val m = PeopleHostMemory().apply {
+            found = mapOf("meet-1" to listOf("Ada Seed", null), "meet-2" to listOf("Bea Seed", "Designer."))
+            metSaved = setOf("meet-2")
+        }
+        val restored = PeopleHostMemory.Saver.restore(save(m))!!
+        assertEquals(mapOf("meet-1" to listOf("Ada Seed", null), "meet-2" to listOf("Bea Seed", "Designer.")), restored.found)
+        assertEquals(setOf("meet-2"), restored.metSaved)
+    }
+
+    @Test
+    fun anActionOnAScopeThatHasEndedDoesNotStayUnderWay() = runTest {
+        val ended = CoroutineScope(Job().apply { cancel() })
+        val clock = TestClock()
+        val controller = testPeopleController(FakePeopleServer({ clock.ms }, FakeConference.alpha()), scope, clock)
+        val host = PeopleHost(controller, app.conferencecaddie.ui.shell.ShellNavigation(), ended, { _, _ -> }, {}, {})
+        assertTrue(host.launchOnce("presence") {})
+        // The scope could not run it, so its name is soon free again, and the next tap is not refused.
+        withContext(Dispatchers.Default) {
+            withTimeout(10_000) {
+                while (host.isRunning("presence")) delay(10)
+            }
+        }
+        assertFalse(host.isRunning("presence"))
+        controller.close()
     }
 
     @Test

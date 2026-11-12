@@ -115,7 +115,13 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
     // the other person ends it.
     val run = remember { MeetRun() }
 
-    fun foundView(d: MeetView): MeetUi = MeetUi.Found(d.other.displayName, d.other.about.takeIf { it.isNotEmpty() })
+    // The found view is kept in the host's memory as well (PeopleHost.foundPerson): the server answers
+    // a found meet-up with 410, so a Meet up composed again after a re-creation could not read it.
+    fun foundView(d: MeetView): MeetUi {
+        val about = d.other.about.takeIf { it.isNotEmpty() }
+        host.markFound(meetId, d.other.displayName, about)
+        return MeetUi.Found(d.other.displayName, about)
+    }
 
     suspend fun load() {
         val res = controller.readMeet(meetId)
@@ -160,6 +166,8 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
     // Read at once, then every 15 seconds (stretched by the API's pace), skipped while the app is
     // in the background, as the web skips a hidden page.
     LaunchedEffect(meetId) {
+        // Nothing to read once it is found: the server would answer 410.
+        if (host.foundPerson(meetId) != null) return@LaunchedEffect
         run.stopped = false
         load()
         while (isActive) {
@@ -249,7 +257,9 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
         }
     }
 
-    when (val v = view) {
+    // A found view this Meet up, or the one before a re-creation, got to comes first.
+    val kept = host.foundPerson(meetId)
+    when (val v = if (kept != null) MeetUi.Found(kept.first, kept.second) else view) {
         MeetUi.Loading -> PeopleScreenColumn(modifier.testTag("meet-screen")) { HintText(ConnectStrings.CHECKING, pad = true) }
         is MeetUi.Ended -> PeopleScreenColumn(modifier.testTag("meet-screen")) { MeetEndedPrompt(v.message, host) }
         MeetUi.Cancelled -> PeopleScreenColumn(modifier.testTag("meet-screen")) { MeetEndedPrompt(ConnectStrings.MEET_CANCELLED, host) }
@@ -411,7 +421,9 @@ private fun MeetEndedPrompt(title: String, host: PeopleHost) {
 @Composable
 private fun FoundCard(meetId: String, found: MeetUi.Found, host: PeopleHost) {
     val seen by produceState<SeenPerson?>(null, meetId) { value = host.controller.personForMeet(meetId) }
-    var saved by remember { mutableStateOf(false) }
+    // In the host's memory, as the found view is: shown again after a re-creation, the view says the
+    // person was saved instead of offering to save them twice.
+    val saved = host.metSaved(meetId)
     val opener = seen?.opener?.takeIf { it.isNotBlank() } ?: seen?.reasons?.firstOrNull()?.takeIf { it.isNotBlank() }
     PeopleCard(Modifier.testTag("meet-found-card"), gap = 14.dp) {
         PeopleCardTitle(ConnectStrings.youFound(found.name), Modifier.semantics { liveRegion = LiveRegionMode.Polite })
@@ -429,8 +441,8 @@ private fun FoundCard(meetId: String, found: MeetUi.Found, host: PeopleHost) {
                     {
                         // Checked and marked before anything else: a second tap in the same frame,
                         // before the button gives way to "Saved under Settings", saves nobody twice.
-                        if (!saved) {
-                            saved = true
+                        if (!host.metSaved(meetId)) {
+                            host.markMetSaved(meetId)
                             val about = found.about ?: seen?.about ?: ""
                             host.scope.launch { host.controller.saveMet(found.name, about) }
                             host.showToast(ConnectStrings.SAVED_TOAST)
