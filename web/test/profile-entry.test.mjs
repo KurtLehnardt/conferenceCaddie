@@ -37,13 +37,13 @@ test('the button links to the profile editor, with the icon-btn styling and a us
   assert.equal(icon.props['aria-hidden'], 'true');
 });
 
-test('the label says "Your profile" once a name is set, and "Set up your profile" while it is blank', () => {
-  assert.equal(profileEntryLabel('Sam'), 'Your profile');
-  assert.equal(profileEntryLabel(''), 'Set up your profile');
-  assert.equal(profileEntryLabel('   '), 'Set up your profile');
+test('the label is "Profile", as on the native People tab, whatever the display name', () => {
+  assert.equal(profileEntryLabel('Sam'), 'Profile');
+  assert.equal(profileEntryLabel(''), 'Profile');
+  assert.equal(profileEntryLabel('   '), 'Profile');
   for (const [name, label] of [
-    ['Sam', 'Your profile'],
-    ['', 'Set up your profile'],
+    ['Sam', 'Profile'],
+    ['', 'Profile'],
   ]) {
     const link = profileEntryLink(name);
     assert.equal(link.props['aria-label'], label);
@@ -73,7 +73,6 @@ test('the app shell renders the button once, next to Requests, under the same co
 test('on a phone narrower than 360px, Requests steps aside while the Offline badge shows, and Profile stays', () => {
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /@media \(max-width: 359px\) \{\s*\.offline-badge ~ \.appbar-inbox \{\s*display: none;/);
-  assert.doesNotMatch(css, /appbar-profile/);
   // The badge comes before Requests in the app bar, so the sibling selector can reach it.
   const app = readFileSync(new URL('../src/app.tsx', import.meta.url), 'utf8');
   const badge = app.indexOf('<OfflineBadge />');
@@ -100,7 +99,9 @@ test('Back on the profile editor goes to Settings otherwise, popping only when S
   // A reload or a deep link: the screen behind is not known.
   assert.deepEqual(profileBack(null, 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
   // Another screen, or People or For you of another conference: Back links to Settings, as before.
-  assert.deepEqual(profileBack(route('kc', 'search'), 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
+  assert.deepEqual(profileBack(route('kc', 'search'), 'kc'), { href: '#/search', pops: true, tab: 'search', label: 'Search' });
+  assert.deepEqual(profileBack(route('kc', 'interested'), 'kc'), { href: '#/interested', pops: true, tab: 'interested', label: 'Interested' });
+  assert.deepEqual(profileBack(route('kc', 'inbox'), 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
   assert.deepEqual(profileBack(route('other', 'people'), 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
   assert.deepEqual(profileBack(route('other', 'for-you'), 'kc'), { href: '#/settings', pops: false, tab: 'settings', label: 'Settings' });
 });

@@ -23,9 +23,13 @@ export function showsPeopleActions(tab: Tab, searchable: boolean): boolean {
   return searchable && (tab === 'people' || tab === 'here');
 }
 
-/** The button's accessible name and tooltip: an invitation while the display name is blank. */
-export function profileEntryLabel(displayName: string): string {
-  return displayName.trim() ? 'Your profile' : 'Set up your profile';
+/**
+ * The button's accessible name and tooltip: "Profile", the same label as the native People tab's
+ * button, so both clients name it alike. The display name is still taken so a later label can depend
+ * on it without changing the callers.
+ */
+export function profileEntryLabel(_displayName: string): string {
+  return 'Profile';
 }
 
 /** The Profile link for a display name. Split from ProfileButton so the tests need no renderer. */
