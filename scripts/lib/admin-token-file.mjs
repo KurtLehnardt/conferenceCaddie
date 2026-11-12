@@ -12,6 +12,7 @@ import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { configDir, loadConfig } from '../admin/config.mjs';
+import { canonicalOrigin } from './admin-origin.mjs';
 
 // Where a path is, symlinks resolved, whether or not it exists yet: the real path of its nearest
 // existing ancestor with the missing segments joined back on. A symlinked ~/.config or
@@ -109,9 +110,11 @@ export function defaultAdminTokenFile(env, home = homedir()) {
 }
 
 // The origins of the tier 2 (Worker) backends in the config.json of env's config dir, which
-// loadConfig has checked are https (or http to this machine). An api with a path, a query or a
-// fragment is skipped, as workerOrigin of scripts/admin/backends/worker.mjs refuses it. None when
-// the file is missing or not valid. The smoke reads a token file by itself only for one of these.
+// loadConfig has checked are https (or http to this machine). An api that canonicalOrigin refuses
+// as configured (a path, a query or a fragment, a user name, a full-width or other non-ASCII
+// character, a "%") is skipped, as workerOrigin of scripts/admin/backends/worker.mjs refuses it.
+// None when the file is missing or not valid. The smoke reads a token file by itself only for one
+// of these.
 export function configuredWorkerOrigins(env = process.env) {
   let config;
   try {
@@ -122,8 +125,8 @@ export function configuredWorkerOrigins(env = process.env) {
   const origins = [];
   for (const backend of Object.values(config.backends)) {
     if (backend.tier !== 2) continue;
-    const u = new URL(backend.api);
-    if (u.pathname === '/' && !u.search && !u.hash) origins.push(u.origin);
+    const origin = canonicalOrigin(backend.api);
+    if (origin !== null) origins.push(origin);
   }
   return origins;
 }

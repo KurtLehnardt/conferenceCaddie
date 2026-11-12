@@ -414,6 +414,11 @@ describe('configuredWorkerOrigins', () => {
     assert.deepEqual(configuredWorkerOrigins({ CADDIE_ADMIN_HOME: dir }), ['https://c.example.test'], 'an api with a path or a query is no Worker origin');
     writeConfig(dir, { a: { tier: 2, api: 'http://plain.example.test' } });
     assert.deepEqual(configuredWorkerOrigins({ CADDIE_ADMIN_HOME: dir }), [], 'plain http to another host is refused by loadConfig');
+    // The api as configured goes through canonicalOrigin, as workerOrigin of the CLI reads it: a
+    // full-width dot, a percent-encoded host or a user name that the URL parser would map or drop
+    // is no Worker origin, even when it would parse to a listed one.
+    writeConfig(dir, { a: { tier: 2, api: 'https://a\uff0eexample.test' }, b: { tier: 2, api: 'https://b.example%E3%80%82evil.example.test' }, c: { tier: 2, api: 'https://user@c.example.test' }, d: { tier: 2, api: 'https://xn--bcher-kva.example.test' } });
+    assert.deepEqual(configuredWorkerOrigins({ CADDIE_ADMIN_HOME: dir }), ['https://xn--bcher-kva.example.test'], 'only the plain ASCII origin');
   }));
 });
 
@@ -597,7 +602,7 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
     try {
       const dir = join(home, '.config', 'conference-caddie');
       const loose = join(dir, 'admin-token');
-      writeConfig(dir, { live: { tier: 2, api: WORKER }, paid: { tier: 3, es_url: 'https://es.example.test', api: 'https://run.example.test' }, local: { tier: 2, api: 'http://127.0.0.1:8787' }, pathy: { tier: 2, api: 'https://pathy.example.test/admin' } });
+      writeConfig(dir, { live: { tier: 2, api: WORKER }, paid: { tier: 3, es_url: 'https://es.example.test', api: 'https://run.example.test' }, local: { tier: 2, api: 'http://127.0.0.1:8787' }, pathy: { tier: 2, api: 'https://pathy.example.test/admin' }, wide: { tier: 2, api: 'https://wide\uff0eexample.test' } });
       put(loose);
       chmodSync(loose, 0o644);
       const READ = `FAIL config: credential file ${loose} has mode 0644`;
@@ -616,7 +621,11 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
         [{ BASE_URL: 'https://pathy.example.test' }, NOT_READ, 'a tier 2 api with a path is no Worker origin'],
         [{ BASE_URL: 'http://127.0.0.1:9' }, NOT_READ, 'a loopback API not in config.json'],
         [{ SMOKE_API: 'cloudrun' }, NOT_READ],
-        [{ SMOKE_ADMIN_AUTH: 'bearer' }, NOT_READ, 'bearer would send the token itself'],
+        [{ SMOKE_ADMIN_AUTH: 'bearer' }, 'FAIL config: SMOKE_ADMIN_AUTH=bearer was removed', 'bearer mode is gone, refused before any token is read'],
+        [{ BASE_URL: WORKER.replace('caddie-smoke.', 'caddie-smoke\uff0e') }, NOT_READ, 'a full-width dot the URL parser maps to the configured origin'],
+        [{ BASE_URL: WORKER.replace('https://', 'https://user@') }, NOT_READ, 'a user name the origin drops'],
+        [{ API_BASE: WORKER.replace('caddie-smoke.', 'caddie-smoke\uff0e') }, NOT_READ, 'the same for API_BASE'],
+        [{ BASE_URL: 'https://wide.example.test' }, NOT_READ, 'a config.json api with a full-width dot is no Worker origin'],
         [{ ADMIN_TOKEN: FAKE }, SHORT_FAIL, 'ADMIN_TOKEN first'],
         [{ ADMIN_TOKEN_FILE: join(home, 'missing') }, `FAIL config: no credential: set ADMIN_TOKEN, or put it in ${join(home, 'missing')}`, 'then ADMIN_TOKEN_FILE'],
         [{ ADMIN_TOKEN_FILE: loose }, READ, 'a named file gets the same checks'],
