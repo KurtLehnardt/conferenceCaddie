@@ -225,6 +225,20 @@ Normal test runs skip them. On Android, pass the instrumentation argument `caddi
 (optionally `caddieParityOnly=<state>,<state>`) and pull the PNGs from
 `/data/local/tmp/caddie-parity` with `adb pull`; on iOS, set `SIMCTL_CHILD_CADDIE_PARITY_DIR` to a folder on this Mac (and optionally
 `SIMCTL_CHILD_CADDIE_PARITY_ONLY`) for `:composeApp:iosSimulatorArm64Test`.
+The states run at a fixed instant, 09:00 on the sample summit's second day (`ParitySample.pinnedNowMs`),
+not on the wall clock, so they look the same on any day; `ParityClockTest` checks that with the
+other UI tests.
+
+On Android the shots change the device while they run: its display size and density, its text size,
+and SystemUI's demo mode, which keeps the status bar's clock at the pinned 09:00. Use an AVD of
+their own, not one you use for anything else. Each window writes the values it changes to
+`/data/local/tmp/caddie-parity/.restore` first and puts them back when it ends; if a run is killed
+in between, the next run puts them back from that file before it starts, so clear old PNGs with
+`adb shell rm /data/local/tmp/caddie-parity/*.png` rather than removing the folder. To put an
+emulator back by hand:
+`adb shell am broadcast -a com.android.systemui.demo -e command exit; adb shell settings delete global sysui_demo_allowed; adb shell wm size reset; adb shell wm density reset`.
+Some Android shots still show the status bar, part faded, where a window brought it back just
+before the shot; two runs of a state can differ by that bar, never by the time on it.
 
 ## Build and run on iOS
 
