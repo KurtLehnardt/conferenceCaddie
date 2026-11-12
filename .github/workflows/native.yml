@@ -87,7 +87,7 @@ jobs:
 
       # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
       # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
-      # only read the cache; on main the first Linux job and the first macOS job write it.
+      # only read the cache; on main the first Linux job and the simulator job write it.
       - name: Restore the pinned downloads
         id: pinned
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -299,7 +299,7 @@ jobs:
 
       # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
       # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
-      # only read the cache; on main the first Linux job and the first macOS job write it.
+      # only read the cache; on main the first Linux job and the simulator job write it.
       - name: Restore the pinned downloads
         id: pinned
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -414,7 +414,7 @@ jobs:
 
       # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
       # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
-      # only read the cache; on main the first Linux job and the first macOS job write it.
+      # only read the cache; on main the first Linux job and the simulator job write it.
       - name: Restore the pinned downloads
         id: pinned
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -493,12 +493,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           cache-provider: basic
+          cache-read-only: true
 
       - name: Restore Kotlin/Native
+        id: konan
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
+
+      - name: Show the Xcode version
+        run: xcodebuild -version
 
       - name: Restore the pinned downloads
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -508,6 +513,15 @@ jobs:
 
       - name: Link the Release framework for devices
         run: ./gradlew :composeApp:linkReleaseFrameworkIosArm64
+
+      # Mirrors the simulator job: on a cold Kotlin bump both jobs download Kotlin/Native, and
+      # whichever saves first wins; saving an existing key only warns.
+      - name: Save Kotlin/Native
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
   # The talk checks of scripts/smoke.mjs against the on-device search (TalkSmokeTest), the exit
   # criterion of phase 2 in docs/NATIVE_PLAN.md: bundles are built from the committed data with
@@ -537,7 +551,7 @@ jobs:
 
       # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
       # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
-      # only read the cache; on main the first Linux job and the first macOS job write it.
+      # only read the cache; on main the first Linux job and the simulator job write it.
       - name: Restore the pinned downloads
         id: pinned
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -627,7 +641,7 @@ jobs:
   # Not yet run: see native/README.md.
   ios-release-build:
     name: iOS Release framework
-    needs: [ios, testflight-gate]
+    needs: [ios, ios-device-link, testflight-gate]
     if: needs.testflight-gate.outputs.ready == 'true'
     runs-on: macos-26
     timeout-minutes: 60
@@ -653,7 +667,7 @@ jobs:
 
       # The pinned downloads of gradle/pinned-downloads.properties (the query embedding model, its
       # vocabulary and ONNX Runtime for iOS), kept by SHA-256 in Gradle's user home. Pull requests
-      # only read the cache; on main the first Linux job and the first macOS job write it.
+      # only read the cache; on main the first Linux job and the simulator job write it.
       - name: Restore the pinned downloads
         id: pinned-release
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

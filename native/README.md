@@ -795,9 +795,13 @@ dependencies.
   `reactivecircus/android-emulator-runner`. The emulator's booted state is cached as a snapshot.
   No secrets. The release APK is signed only after this job passes.
 - **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
-  the third-party notices check, the Release device framework link, and an unsigned simulator build
+  the third-party notices check, and an unsigned simulator build
   of the Xcode project. The TestFlight jobs write the Release app's size, installed and zipped, and
   the signed IPA's size to their job summaries.
+- **iOS device Release link** (macOS): `:composeApp:linkReleaseFrameworkIosArm64`, a compile check of
+  the device framework in Release. It takes 30 to 45 minutes on a contended runner, so it runs in
+  parallel with the simulator job instead of inside it, which kept that job under its time limit.
+  The iOS Release framework job waits for it.
 - **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
   skipped when its secrets are missing.
 
