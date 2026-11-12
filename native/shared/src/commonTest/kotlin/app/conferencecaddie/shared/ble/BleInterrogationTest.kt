@@ -52,7 +52,7 @@ class BleInterrogationTest {
     }
 
     @Test
-    fun theServiceComesFirstThenTheOverflowAreaThenOtherAppleData() {
+    fun theOverflowAreaComesFirstThenTheServiceThenOtherAppleData() {
         val p = policy()
         p.offer("apple", -40, Kind.Apple, t0)
         p.offer("overflow", -70, Kind.AppleOverflow, t0)
@@ -63,7 +63,7 @@ class BleInterrogationTest {
             order += c.address
             p.finished(c.address, Outcome.NotCaddie, t0 + it)
         }
-        assertEquals(listOf("service", "overflow", "apple"), order)
+        assertEquals(listOf("overflow", "service", "apple"), order)
     }
 
     @Test

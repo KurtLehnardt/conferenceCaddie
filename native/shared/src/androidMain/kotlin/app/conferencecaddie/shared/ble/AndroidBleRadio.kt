@@ -168,6 +168,8 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
 
     override val running: Boolean get() = started
 
+    override val hiddenFromIphones: Boolean get() = !hardware.connectableAdvertising()
+
     override fun access(): BleAccess {
         val missing = PERMISSIONS.filterNot { permissionGranted(it) }
         if (missing.isEmpty()) return BleAccess.Granted

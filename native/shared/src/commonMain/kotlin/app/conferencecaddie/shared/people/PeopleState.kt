@@ -227,6 +227,8 @@ data class BleView(
     val message: String? = null,
     /** False when notifications are not allowed, so a nearby match cannot be announced. */
     val notificationsAllowed: Boolean = true,
+    /** True when iPhones may not find this phone (Android 13 and older; [app.conferencecaddie.shared.ble.BleRadio.hiddenFromIphones]). */
+    val hiddenFromIphones: Boolean = false,
 )
 
 /** What [PeopleController.turnOnBluetooth] ended with. */

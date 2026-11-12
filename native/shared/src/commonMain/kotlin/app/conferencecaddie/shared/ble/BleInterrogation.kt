@@ -6,17 +6,19 @@ package app.conferencecaddie.shared.ble
  * interrogate"). An Android phone puts the payload in its extended advertisement's service data and
  * needs no connection; an iPhone cannot, so it is found by its advertisement and then read over GATT:
  *
- * - [Kind.Service]: the service UUID without service data. An iPhone with the app in the foreground,
- *   or an Android phone's legacy connectable set, seen by a scanner that did not also receive its
- *   extended set. Certainly a Caddie phone, so it is read first.
  * - [Kind.AppleOverflow]: Apple manufacturer data (company 0x004C) whose first byte is 0x01, the
  *   "overflow area" into which iOS moves the service UUIDs of an app advertising in the background.
  *   Only other iPhones can decode the area, but its presence means some app on that iPhone is
- *   advertising a service in the background, so it is the next best guess.
+ *   advertising a service in the background. An iPhone in a pocket is reachable no other way, and it
+ *   is the phone this whole reading exists for, so it is read first.
+ * - [Kind.Service]: the service UUID without service data. An iPhone with the app in the foreground,
+ *   or an Android phone's legacy connectable set (Android 14 and newer) seen by a scanner that did
+ *   not also receive its extended set, which a later scan usually does. Certainly a Caddie phone, but
+ *   most often one that is found anyway, so it comes second.
  * - [Kind.Apple]: any other Apple manufacturer data (an iPhone's routine advertisements, but also
- *   AirPods, watches and Macs). An iPhone advertises everything from one address at a time, so an
- *   iPhone running the app in the background can still be reached through these when its overflow
- *   advertisement was missed; most of them are not Caddie phones, which is why they come last.
+ *   AirPods, watches and Macs). Most of them are not Caddie phones, and a connection out lets the
+ *   peer read this phone's device name, so they come last; Android's scan filter no longer passes
+ *   them (it matches the overflow area's first byte only), and its radio never connects to one.
  *
  * Within a kind, the stronger signal goes first. Only connectable advertisements at or above
  * `near_rssi` are candidates: a sighting weaker than that is not reported anyway, and a connection
@@ -47,11 +49,11 @@ class BleInterrogation(
 
     /** Why an advertisement is worth a connection, best first. */
     enum class Kind {
-        /** The service UUID without service data. */
-        Service,
-
         /** Apple manufacturer data starting with 0x01, the iOS overflow area. */
         AppleOverflow,
+
+        /** The service UUID without service data. */
+        Service,
 
         /** Any other Apple manufacturer data. */
         Apple,

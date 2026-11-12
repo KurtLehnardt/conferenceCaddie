@@ -198,6 +198,8 @@ private fun BleLines(ble: BleView, hint: BleHint, host: PeopleHost, settings: Bo
     BleLine(hint.text, error = problem != null, settings, Modifier.testTag("ble-hint"))
     // The permission kind is Bluetooth only on iOS.
     if (ble.on && ble.permission == BlePermissionKind.Bluetooth) BleLine(BleStrings.IOS_CAVEAT, error = false, settings, Modifier.testTag("ble-ios-caveat"))
+    // Android 13 and older: no connectable set, so iPhones may not find this phone.
+    if (ble.on && ble.hiddenFromIphones) BleLine(BleStrings.ANDROID_CAVEAT, error = false, settings, Modifier.testTag("ble-android-caveat"))
     val notificationsOff = ble.on && !ble.notificationsAllowed
     if (notificationsOff) BleLine(PeopleText.BLE_NOTIFICATIONS, error = true, settings, Modifier.testTag("ble-notifications"))
     // Both refusals are told "You can allow it in Settings.", so both get the way there.

@@ -51,6 +51,13 @@ object BleStrings {
      */
     const val IOS_CAVEAT = "Other iPhones may find you only while one of you has Caddie open."
 
+    /**
+     * Native, Android 13 and older: the phone offers no connectable advertising set (it would give
+     * away the phone's name to anyone who connects), so iPhones may not find it, while it still finds
+     * them. Shown while it runs, like [IOS_CAVEAT].
+     */
+    const val ANDROID_CAVEAT = "iPhones may not find this phone, but it still finds them."
+
     /** The setup panel's explanation as a region (BleControls.tsx: role="region" aria-label). */
     const val NOTICE_LABEL = "About finding people by Bluetooth"
 

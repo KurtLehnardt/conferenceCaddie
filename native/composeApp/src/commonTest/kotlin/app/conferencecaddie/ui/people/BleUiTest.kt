@@ -193,10 +193,18 @@ class BleUiTest {
         onNodeWithTag("ble-ios-caveat").assertTextEquals(BleStrings.IOS_CAVEAT)
         onNodeWithTag("ble-hint").assertTextEquals(BleStrings.HINT_ON)
 
+        // An Android phone without the connectable set (Android 13 and older) says iPhones may not find it.
+        onNodeWithTag("ble-android-caveat").assertDoesNotExist()
+        ble = ble.copy(permission = BlePermissionKind.NearbyDevices, hiddenFromIphones = true)
+        waitForIdle()
+        onNodeWithTag("ble-android-caveat").assertTextEquals(BleStrings.ANDROID_CAVEAT)
+        onNodeWithTag("ble-ios-caveat").assertDoesNotExist()
+
         // Notifications refused: the web's words in the error style, and the way to the settings.
-        ble = ble.copy(permission = BlePermissionKind.NearbyDevices, notificationsAllowed = false)
+        ble = ble.copy(permission = BlePermissionKind.NearbyDevices, notificationsAllowed = false, hiddenFromIphones = false)
         waitForIdle()
         onNodeWithTag("ble-ios-caveat").assertDoesNotExist()
+        onNodeWithTag("ble-android-caveat").assertDoesNotExist()
         onNodeWithTag("ble-notifications").assertTextEquals(PeopleText.BLE_NOTIFICATIONS).assert(politeLiveRegion)
         onNodeWithTag("ble-open-settings").assertTextEquals(ConnectStrings.OPEN_SETTINGS).assertHeightIsAtLeast(44.dp).performClick()
         waitUntil(timeoutMillis = 5_000) { rig.settingsOpened.value == 1 }

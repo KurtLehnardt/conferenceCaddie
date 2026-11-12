@@ -222,6 +222,7 @@ internal class BleRuntime(
             problem = problem?.first,
             message = problem?.second,
             notificationsAllowed = notificationsAllowed,
+            hiddenFromIphones = platform?.radio?.hiddenFromIphones ?: false,
         )
     }
 

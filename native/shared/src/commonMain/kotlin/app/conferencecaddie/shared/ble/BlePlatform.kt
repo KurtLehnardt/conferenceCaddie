@@ -232,6 +232,14 @@ interface BleRadio {
      * proximity off and tells the server instead of resuming it. Reading it clears it. False by default.
      */
     fun takeUserStoppedApp(): Boolean = false
+
+    /**
+     * True when iPhones may not find this phone: Android 13 and older offer no connectable
+     * advertising set (it would let any phone that connects read the device name), so an iPhone,
+     * which cannot read Android's extended advertisement in the background, has nothing to find.
+     * This phone still finds iPhones. False by default.
+     */
+    val hiddenFromIphones: Boolean get() = false
 }
 
 /** Bluetooth proximity's platform services; null in [app.conferencecaddie.shared.PeopleServices] where there is no radio. */
