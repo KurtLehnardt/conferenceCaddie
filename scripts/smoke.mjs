@@ -21,8 +21,14 @@
 //                        and the development origins in its ALLOWED_ORIGINS.
 //   SMOKE_DIST           the built web app the bundle scan reads, relative to the repository root.
 //                        Default web/dist-worker against the Worker on BASE_URL's origin, else web/dist.
-//   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token (the file's first line is used). With it
-//                        the three Elasticsearch helpers below are replaced by the Worker's test
+//   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token (the file's first line is used). With
+//                        neither set, a run against a deployed Worker (SMOKE_API=worker, or API_BASE on
+//                        another origin; not a loopback API) reads the file caddie-admin reads:
+//                        <config dir>/admin-token, the config dir being CADDIE_ADMIN_HOME, else
+//                        $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie. When that
+//                        file does not exist, the old ~/.config/conference-caddie/admin-token is read
+//                        and a NOTE line says to move it. With a token the three Elasticsearch
+//                        helpers below are replaced by the Worker's test
 //                        fixtures: POST /admin/test/profile (the expired profile),
 //                        POST /admin/test/age-presence (the aged presence) and GET /admin/stats (the
 //                        "an import stores nothing" counts), cleaned up with DELETE /admin/test/profile.
@@ -111,6 +117,7 @@ import { DEFAULT_BUNDLE_BASE } from '../worker/src/capabilities.js';
 import { primaryOver, emptyWindowSkip } from './lib/smoke-primary-over.mjs';
 import { conferenceForWorker } from './lib/smoke-conference-doc.mjs';
 import { isLoopbackHost } from './lib/loopback-host.mjs';
+import { resolveAdminTokenFile } from './lib/admin-token-file.mjs';
 import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
@@ -148,15 +155,32 @@ const BASE_PATH = new URL(BASE_URL).pathname.replace(/\/+$/, ''); // '' at the r
 const CROSS_ORIGIN_API = API_ORIGIN !== BASE_ORIGIN;
 const EVIL_ORIGIN = 'https://evil.example';
 
-// The admin token comes from the environment or from the first line of a file, and is never printed.
+// Which API SMOKE_API says this is, if it says (IS_WORKER below).
+const API_KIND_ENV = (process.env.SMOKE_API || '').toLowerCase();
+if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
+  console.log('FAIL config: SMOKE_API must be worker or cloudrun');
+  process.exit(1);
+}
+
+// The admin token comes from ADMIN_TOKEN, else the first line of the file ADMIN_TOKEN_FILE, else the
+// first line of the file caddie-admin reads (scripts/lib/admin-token-file.mjs: <config dir>/admin-token,
+// or the old ~/.config/conference-caddie/admin-token with a NOTE). That last file is the deployed
+// Worker's token, so it is read only when the run is known to target a Worker without it
+// (SMOKE_API=worker, or API_BASE on another origin than BASE_URL) and the API is not on this machine
+// (a local Worker has its own token in worker/.dev.vars; SMOKE_TREAT_AS_REMOTE=1 counts it as
+// remote). A Cloud Run run, or a local one, never picks it up by itself. The token is never printed.
+const DEFAULT_TOKEN_FILE_APPLIES = (API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API)
+  && (process.env.SMOKE_TREAT_AS_REMOTE === '1' || !isLoopbackHost(new URL(API_BASE).hostname));
 function readAdminToken() {
   if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN.trim();
-  const file = process.env.ADMIN_TOKEN_FILE;
+  if (!process.env.ADMIN_TOKEN_FILE && !DEFAULT_TOKEN_FILE_APPLIES) return '';
+  const { file, note } = resolveAdminTokenFile(process.env);
   if (!file) return '';
+  if (note) console.log(note);
   try {
     return readFileSync(file, 'utf8').split('\n')[0].trim();
   } catch {
-    console.log('FAIL config: ADMIN_TOKEN_FILE cannot be read');
+    console.log(process.env.ADMIN_TOKEN_FILE ? 'FAIL config: ADMIN_TOKEN_FILE cannot be read' : `FAIL config: the admin token file ${file} cannot be read`);
     process.exit(1);
   }
 }
@@ -187,13 +211,9 @@ function adminAuth(method, path, body, key = ADMIN_TOKEN) {
   return { headers: { 'X-Caddie-Admin': signed.header }, url: signed.url };
 }
 
-// Which API this is. The Worker needs the CORS checks, the admin fixtures and text-only imports;
-// Cloud Run serves everything from one origin and keeps the Elasticsearch helpers.
-const API_KIND_ENV = (process.env.SMOKE_API || '').toLowerCase();
-if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
-  console.log('FAIL config: SMOKE_API must be worker or cloudrun');
-  process.exit(1);
-}
+// Which API this is (SMOKE_API is read above, before the admin token). The Worker needs the CORS
+// checks, the admin fixtures and text-only imports; Cloud Run serves everything from one origin and
+// keeps the Elasticsearch helpers.
 const IS_WORKER = API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API || Boolean(ADMIN_TOKEN);
 // A browser sends its Origin on every call to a Worker on another origin, and on every same-origin
 // POST, PUT and DELETE, so the run sends it on every call to the Worker. Against Cloud Run no Origin
