@@ -609,9 +609,16 @@ line (method, path template, status, duration).
   mismatching document in the order of the request and `actual` `null` when the slug has no row,
   and nothing is written: no row, no tombstone, no number of the order sequence, and no fan-out to
   any object. A value that is neither a non-empty string nor `null` answers `400 {"error":
-  "expect_status must be a non-empty string or null"}` and nothing is written. The key is never
-  stored or sent to an object. `push-ingest.mjs` and `migrate-from-backup.mjs` strip it, as they
-  strip `unretire`, so no ingest run or migration ever sends a precondition.
+  "expect_status must be a non-empty string or null"}` and nothing is written, and so does a key
+  that differs from `"expect_status"` or `"unretire"` only in letter case or surrounding whitespace
+  (`400 {"error": "the key must be written exactly \"expect_status\""}`, or the same with
+  `unretire`). A removal that did not finish (`removal_incomplete`) leaves both the tombstone and
+  the row, so the slug's actual status is the one the row stores and `null` mismatches. A matching
+  precondition does not override the tombstone: a document of a slug with a tombstone and
+  without `"unretire": true` whose precondition matches still answers 200 with the slug under
+  `skipped_retired`, and nothing of it was applied. The key is never stored or sent to an object.
+  `push-ingest.mjs` and `migrate-from-backup.mjs` strip it, as they strip `unretire`, so no ingest
+  run or migration ever sends a precondition.
 
 People text is stored without control characters: every write of a display name, profile text, a
 contact note, a spot line, a meet note or a how-to-spot-me line drops the C0 controls except tab
@@ -659,18 +666,39 @@ which is what an unretire that answered 502 or 503 and was not repeated leaves: 
 conference and answer the stats. So repeat an unretire until it answers 200.
 
 `expect_status` lets the operator say what they believe the conference's state is before they
-change it: `null` when unretiring a conference whose removal finished, `"searchable"` or
-`"unavailable"` when changing a listed one. If someone else changed it in the meantime, the request
-answers `409 status_mismatch` with the expected and the actual status of each slug, and nothing
-happens. Check the conference and send the request again with the status it has now, or without
-the key. A retry can also mismatch, and this is a known effect, not hidden: `adminClient` re-signs
-and repeats a request that answered a 5xx or no answer, and when the first attempt was applied
-(its answer was lost, or an unretire answered `502 unretire_incomplete` after storing the row),
-the repeat finds the row in the state the first attempt set and answers `409 status_mismatch`. The
-CLI shows the expected and the actual status, so the operator sees that the conference is already
-in the wanted state. After an `unretire_incomplete` the object may still be marked as removed:
-send the unretire again with `expect_status` set to the actual status the 409 showed, or without
-the key, until it answers 200.
+change it: `null` when unretiring a conference whose removal finished, and the status its row
+stores (`"searchable"` or `"unavailable"`) when changing a listed one or when unretiring one whose
+removal did not finish (after `removal_incomplete` the tombstone and the row are both still there).
+If someone else changed it in the meantime, the request answers `409 status_mismatch` with the
+expected and the actual status of each slug, and nothing happens. Check the conference and send
+the request again with the status it has now, or without the key. A 200 that lists the slug under `skipped_retired` was not applied either: the slug has a
+tombstone, and only a document with `"unretire": true` brings it back.
+
+A retry can also mismatch, and this is a known effect, not hidden: `adminClient` re-signs and
+repeats a request that answered a 5xx or no answer, and when the first attempt was applied (its
+answer was lost, or an unretire answered `502 unretire_incomplete` after storing the row), the
+repeat finds the row in the state the first attempt set and answers `409 status_mismatch` when
+that state is not the one expected (always for an unretire with `null`, whose first attempt stored
+the row). `adminClient` then throws an `AdminError` whose `body` is the 409's JSON object and whose message
+names each mismatching slug as `slug expected→actual` (`null` for no row; only well-formed slugs
+and statuses are named) and every earlier attempt that failed and was retried, which `earlier`
+also lists. For an unretire whose first attempt answered `502 unretire_incomplete`, the message
+reads (on one line):
+
+```text
+PUT /admin/conferences: status 409 (status_mismatch): the directory holds another status
+(expected→actual, null for no row): <slug> null→searchable. An earlier attempt answered status 502
+(unretire_incomplete, cause unretire_superseded); it may have been applied, so the actual status
+can be the one it set; repeat the unretire without expect_status until it answers 200.
+```
+
+When an earlier attempt answered a 5xx or no answer, the message says it may have been applied,
+and for a request that does not unretire, it says to check the conference and send the request
+again with the actual status or without the key. After an `unretire_incomplete` the
+object may still be marked as removed: send the unretire again with `expect_status` set to the
+actual status the 409 showed, or without the key, until it answers 200. Nothing in the message
+comes from the request or a header. The `caddie-admin` CLI does not use `adminClient`; it has its
+own client and shows these answers in its own way.
 
 ## Logs and CPU
 

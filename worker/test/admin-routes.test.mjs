@@ -1691,6 +1691,52 @@ describe('the expect_status precondition on PUT /admin/conferences', { skip }, (
     }
     assert.equal(docOf(ctx, NEW), null);
   });
+
+  test('a key that differs from expect_status or unretire only in letter case or surrounding whitespace is 400, names the key and writes nothing', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG]);
+    const cases = [
+      ['Expect_Status', 'searchable', 'expect_status'],
+      ['expect_status ', 'unavailable', 'expect_status'],
+      [' EXPECT_STATUS\t', null, 'expect_status'],
+      ['Unretire', true, 'unretire'],
+      ['unretire ', true, 'unretire'],
+      ['\nUNRETIRE', false, 'unretire'],
+    ];
+    for (const [key, value, canonical] of cases) {
+      // Also on a document whose slug is not valid, which the upsert would otherwise skip.
+      for (const doc of [conf(SLUG, { name: 'renamed' }), { slug: 'Not A Slug' }]) {
+        const r = await refused(ctx, [conf(NEW), { ...doc, [key]: value }], [SLUG]);
+        assert.deepEqual(r, [400, { error: `the key must be written exactly "${canonical}"` }], JSON.stringify(key));
+      }
+    }
+    assert.equal(docOf(ctx, NEW), null);
+    // The keys as they must be written are still taken, and keys that only contain them are documents' own.
+    ok(await put(ctx, [{ ...conf(SLUG, { name: 'renamed' }), expect_status: 'searchable', unretire: false, expect_status_note: 'x', unretired: 'y' }]));
+    assert.deepEqual([docOf(ctx, SLUG).name, docOf(ctx, SLUG).expect_status_note, docOf(ctx, SLUG).unretired, 'expect_status' in docOf(ctx, SLUG)], ['renamed', 'x', 'y', false]);
+  });
+
+  test('after a removal that did not finish, the row is still there: its stored status matches, null does not, and a match without unretire is skipped, not applied', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG]);
+    const env = { ...ctx.env, CONFERENCE: failOnce(ctx.CONFERENCE, (p) => p === '/internal/wipe') };
+    const removal = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.deepEqual([removal.status, removal.json.error], [502, 'removal_incomplete']);
+    assert.deepEqual([rows(directoryDb(ctx), 'SELECT slug FROM retired').map((x) => x.slug), statusOf(ctx, SLUG)], [[SLUG], 'searchable']);
+    // null means no row, and the row is still there.
+    const none = await refused(ctx, [{ ...conf(SLUG), unretire: true, expect_status: null }], [SLUG]);
+    assert.deepEqual(none, [409, { error: 'status_mismatch', mismatched: [{ slug: SLUG, expected: null, actual: 'searchable' }] }]);
+    // The stored status matches, but without unretire the tombstone wins: 200 with the slug under
+    // skipped_retired, and nothing was applied.
+    const before = stored(ctx, [SLUG]);
+    const skippedOnly = await put(ctx, [{ ...conf(SLUG, { name: 'renamed' }), expect_status: 'searchable' }]);
+    assert.deepEqual(pair(skippedOnly), [200, { upserted: 0, searchable: 0, synced: 0, skipped_retired: [SLUG] }]);
+    assert.deepEqual(stored(ctx, [SLUG]), before);
+    // With unretire and the stored status, the unretire is applied and the tombstone goes.
+    const back = await put(ctx, [{ ...conf(SLUG, { name: 'renamed' }), unretire: true, expect_status: 'searchable' }]);
+    assert.deepEqual(pair(back), [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
+    assert.deepEqual([docOf(ctx, SLUG).name, rows(directoryDb(ctx), 'SELECT slug FROM retired'), ctx.obj().retiredAt], ['renamed', [], null]);
+  });
 });
 
 describe('people text drops control characters (review round 1)', { skip }, () => {
