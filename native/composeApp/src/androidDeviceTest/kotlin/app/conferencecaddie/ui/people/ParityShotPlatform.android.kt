@@ -21,8 +21,21 @@ import androidx.test.platform.app.InstrumentationRegistry
 // before the test activity starts, its system bars are hidden, and the camera is the shell's
 // screencap, so sheets, dialogs and menus (windows of their own) are in the picture. The PNGs land
 // in /data/local/tmp/caddie-parity, where `adb pull` finds them after the run.
+//
+// A sheet's window can still show the status bar for a moment, with the device's clock in it. So
+// the status bar is put in SystemUI's demo mode for the run: its clock reads 09:00, the rig's pinned
+// instant (ParitySample.pinnedNowMs), and its icons stay put, so no shot shows the wall clock.
 
 private const val SHOT_DIR = "/data/local/tmp/caddie-parity"
+
+private const val DEMO = "am broadcast -a com.android.systemui.demo -e command"
+private val DEMO_ON = listOf(
+    "$DEMO enter",
+    "$DEMO clock -e hhmm 0900",
+    "$DEMO battery -e level 100 -e plugged false",
+    "$DEMO network -e wifi show -e level 4 -e mobile hide",
+    "$DEMO notifications -e visible false",
+)
 
 internal actual fun parityShotsRequested(): List<String>? {
     val args = InstrumentationRegistry.getArguments()
@@ -41,16 +54,21 @@ internal actual fun runParityShot(window: ParityWindow, block: ComposeUiTest.(Pa
     val height = window.heightDp * scale
     shell(automation, "mkdir -p $SHOT_DIR")
     val fontScale = shellOutput(automation, "settings get system font_scale").trim().toFloatOrNull() ?: 1f
+    val demoAllowed = shellOutput(automation, "settings get global sysui_demo_allowed").trim()
     shell(automation, "wm density ${160 * scale}")
     shell(automation, "wm size ${width}x$height")
     shell(automation, "settings put system font_scale ${window.fontScale}")
-    // The device gets its own display size, density and text size back whatever happens.
+    shell(automation, "settings put global sysui_demo_allowed 1")
+    DEMO_ON.forEach { shell(automation, it) }
+    // The device gets its own display size, density, text size and status bar back whatever happens.
     try {
         shoot(window, width, height, block)
     } finally {
         shell(automation, "wm size reset")
         shell(automation, "wm density reset")
         shell(automation, "settings put system font_scale $fontScale")
+        shell(automation, "$DEMO exit")
+        shell(automation, if (demoAllowed == "1") "settings put global sysui_demo_allowed 1" else "settings delete global sysui_demo_allowed")
     }
 }
 
