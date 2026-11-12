@@ -10,17 +10,35 @@
 //   --dry-run                   fetch, build and write files; index nothing
 //   --no-fetch                  build from the committed data/raw files; no network call at all
 //   --skip-topics               do not run scripts/topics.mjs after an event is indexed
+//   --allow-shrink              let a conference lose more than 10 talks and more than 10% of its stored
+//                               talks in one run; without it such a run is refused for that conference
+//                               (the shrink guard, below) and a dry run reports that it would be
 //   --report <file>             write { "processed": [slugs] } when the run ends: the conferences whose
 //                               data/{slug}/conference.json this run wrote. Ended events drop off the
 //                               upcoming list, so data/ also holds conferences this run did not touch;
 //                               ingest.yml pushes and publishes only the ones listed here.
 // Env: ES_URL, ES_API_KEY or ELASTISEARCH_API_KEY (needed only to index, or to show dry-run counts).
+//      ES_PEOPLE_API_KEY (optional) for the people indices when a run deletes talks; the ingest key
+//      otherwise. ES_PEOPLE_INDEX and the other ES_PEOPLE_*_INDEX names as the server reads them.
 //      CADDIE_DATA_DIR (optional) reads and writes the conferences and raw files there instead of data/.
 // Operator file: data/conference-operator.json (written by caddie-admin conferences hide/remove/unretire).
 // A removed slug is skipped; a hidden slug is written as unavailable (operator_hidden) and keeps its talks.
 //
+// Deleted talks, as the Worker's finalize handles them (worker/src/admin.js finalizeTalks; the
+// details are in scripts/lib/dropped-talks.mjs):
+// - The shrink guard. When the plan for a conference would delete more than 10 talks and more than
+//   10% of its stored talks, the run writes nothing for that conference (no talk file, no index
+//   write, no people change, no conference document) unless --allow-shrink is passed. It is checked
+//   in the plan phase, before any write; a dry run that can read the index reports it.
+// - People. After the deletes, every talk the index no longer holds leaves the shared_talk_ids of
+//   the profiles at that conference, and a profile then neither open to meet nor sharing for any
+//   talk is deleted with its meets, push registrations, nudge records and blocks
+//   (server/people-delete.mjs, the user's own delete), with the people key's privileges.
+//
 // Exit codes: 0 when every event ended searchable or unavailable for a non-error reason; 1 on a fatal
-// error; 2 when the run stopped at the embedding limit or an event ended partial_index or fetch_failed.
+// error; 2 when the run stopped at the embedding limit, an event ended partial_index or fetch_failed,
+// the shrink guard refused an event (in a dry run: would refuse it), or the people cleanup after a
+// talk delete failed.
 // Node built-ins only.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, statSync } from 'node:fs';
@@ -33,6 +51,8 @@ import { feedIds, viewAllUrl, apiDataUrl, parseViewAll } from './lib/sessionize.
 import { loadZoneTables, resolveTimeZone } from './lib/zones.mjs';
 import { buildTalks } from './lib/classify.mjs';
 import { hasKey, es, existingHashes, runBulk } from './lib/es.mjs';
+import { shrinkRefusal, peopleTransport, createDeletedTalkCleanup } from './lib/dropped-talks.mjs';
+import { indicesFrom } from './admin/backends/es.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // Where the conferences and raw downloads are read and written. CADDIE_DATA_DIR points a test at a
@@ -54,6 +74,7 @@ const opts = {
   dryRun: false,
   noFetch: false,
   skipTopics: false,
+  allowShrink: false,
   report: null,
 };
 for (let i = 0; i < argv.length; i++) {
@@ -70,6 +91,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--dry-run') opts.dryRun = true;
   else if (a === '--no-fetch') opts.noFetch = true;
   else if (a === '--skip-topics') opts.skipTopics = true;
+  else if (a === '--allow-shrink') opts.allowShrink = true;
   else if (a === '--report') opts.report = value();
   else usage(`Unknown argument: ${a}`);
 }
@@ -79,7 +101,7 @@ if (mode.length !== 1) usage('Choose exactly one of --list, --event <slug> or --
 function usage(message) {
   console.error(message);
   console.error('Usage: node scripts/ingest.mjs --list | --event <slug> [--event <slug> ...] | --all-upcoming');
-  console.error('       [--index name] [--conferences-index name] [--dry-run] [--no-fetch] [--skip-topics] [--report file]');
+  console.error('       [--index name] [--conferences-index name] [--dry-run] [--no-fetch] [--skip-topics] [--allow-shrink] [--report file]');
   process.exit(1);
 }
 
@@ -235,7 +257,6 @@ async function processEvent(ev) {
   }
   conf.category_mapping = built.mapping;
   conf.counts = built.counts;
-  writeFile(join(outDir, 'talks.ndjson'), built.docs.map((d) => JSON.stringify(d)).join('\n') + '\n');
 
   const c = built.counts;
   lines.push(
@@ -259,7 +280,18 @@ async function processEvent(ev) {
       lines.push(`  (index ${opts.index} not readable: ${e.message})`);
     }
   }
+  const plan = existing === null ? null : planOps(built.docs, existing);
 
+  // The shrink guard, before anything is written for this conference. A refused run leaves the
+  // talk file, the index, the people and the conference document as they were.
+  const shrink = plan ? shrinkRefusal(plan.counts.deleted, existing.size) : null;
+  const refused = Boolean(shrink) && !opts.allowShrink;
+  if (refused && !opts.dryRun) {
+    lines.push(`  refused by the shrink guard: ${shrink}. Nothing was written for this conference; re-run with --allow-shrink if the schedule really shrank.`);
+    return { conf, lines, stop: false, refused };
+  }
+
+  writeFile(join(outDir, 'talks.ndjson'), built.docs.map((d) => JSON.stringify(d)).join('\n') + '\n');
   conf.status = 'searchable';
   conf.status_reason = null;
   if (existing === null) {
@@ -267,12 +299,13 @@ async function processEvent(ev) {
     return { conf, lines, stop: false };
   }
 
-  const plan = planOps(built.docs, existing);
   const p = plan.counts;
   const verb = opts.dryRun ? 'would index' : 'index';
   lines.push(`  ${verb}: ${p.new} new, ${p.updated} updated, ${p.unchanged} unchanged, ${p.deleted} deleted`);
   lines.push(`  bulk ops: ${plan.ops.filter((o) => o.action === 'index').length} index (model calls), ${plan.ops.filter((o) => o.action === 'update').length} update (no model call), ${p.deleted} delete`);
-  if (opts.dryRun) return { conf, lines, stop: false };
+  if (shrink && opts.allowShrink) lines.push(`  shrink guard: ${shrink}; allowed by --allow-shrink`);
+  else if (shrink) lines.push(`  shrink guard: ${shrink}. A run without --dry-run would refuse this conference and write nothing for it, unless --allow-shrink is passed.`);
+  if (opts.dryRun) return { conf, lines, stop: false, refused };
 
   const now = new Date().toISOString();
   for (const op of plan.ops) if (op.doc) op.doc.ingested_at = now;
@@ -280,19 +313,56 @@ async function processEvent(ev) {
   await es('POST', `/${encodeURIComponent(opts.index)}/_refresh`);
   conf.ingested_at = now;
   for (const f of result.failures.slice(0, 10)) lines.push(`  failed ${f.action} ${f.id} (${f.status}) ${f.reason}`);
+  // Also after a stop at the embedding limit: the deletes that did run are cleaned up after.
+  const peopleFailed = await unshareDeletedTalks(ev.slug, plan, lines);
   if (result.limit) {
     conf.status = 'unavailable';
     conf.status_reason = 'embedding_limit';
     lines.push(`  stopped: ${result.limit}`);
     lines.push(`  done before the stop: ${result.ok.index} index, ${result.ok.update} update, ${result.ok.delete} delete`);
-    return { conf, lines, stop: true };
+    return { conf, lines, stop: true, peopleFailed };
   }
   if (result.failures.length) {
     conf.status = 'unavailable';
     conf.status_reason = 'partial_index';
     lines.push(`  ${result.failures.length} operations failed`);
   }
-  return { conf, lines, stop: false };
+  return { conf, lines, stop: false, peopleFailed };
+}
+
+// The ids among `ids` that the talks index no longer holds, read after the refresh: a delete that
+// failed, or that a stop at the embedding limit never sent, keeps its talk and its sharing.
+async function absentTalks(index, ids) {
+  const { status, json } = await es('POST', `/${encodeURIComponent(index)}/_search`, { size: ids.length, _source: false, query: { ids: { values: ids } } });
+  if (status !== 200 || !json?.hits) throw new Error(`reading ${index} after the deletes failed with status ${status}`);
+  const present = new Set(json.hits.hits.map((h) => h._id));
+  return ids.filter((id) => !present.has(id));
+}
+
+// The people who shared for a talk this run deleted (scripts/lib/dropped-talks.mjs): the talk
+// leaves their shared_talk_ids, and a profile left with neither choice is deleted. Runs with the
+// people key (ES_PEOPLE_API_KEY) when it is set, else the ingest key. Returns true when anything
+// failed; the talks stay deleted either way, and a profile still naming a deleted talk drops it at
+// its owner's next profile write (server/people.mjs checkSharedTalks).
+async function unshareDeletedTalks(slug, plan, lines) {
+  const deleted = plan.ops.filter((o) => o.action === 'delete').map((o) => o.id);
+  if (!deleted.length) return false;
+  const log = (message) => lines.push(`  people: ${message}`);
+  try {
+    const gone = await absentTalks(opts.index, deleted);
+    if (!gone.length) {
+      log('no deleted talk left the index, so nobody stops sharing');
+      return false;
+    }
+    const people = peopleTransport((method, path, body, o) => es(method, path, body, { ...o, key: process.env.ES_PEOPLE_API_KEY || undefined }));
+    const cleanup = createDeletedTalkCleanup({ people, indices: indicesFrom(process.env), log });
+    const r = await cleanup.unshareDeletedTalks(slug, gone);
+    log(`${r.unshared} profile${r.unshared === 1 ? '' : 's'} stopped sharing for the ${gone.length} deleted talk${gone.length === 1 ? '' : 's'}; ${r.profilesDeleted} deleted, left neither open to meet nor sharing${r.failed ? `; ${r.failed} failed` : ''}`);
+    return r.failed > 0;
+  } catch (e) {
+    log(`taking the deleted talks out of people's shared talks failed: ${e.message}`);
+    return true;
+  }
 }
 
 // Per document: absent -> index; same content_hash -> skip; same text_hash only -> bulk partial
@@ -392,10 +462,21 @@ async function main() {
 
   const results = [];
   const missing = [];
+  const refused = [];
+  const peopleFailed = [];
   let stopped = false;
   for (const ev of selected) {
     if (stopped) { missing.push(ev.slug); continue; }
     const r = await processEvent(ev);
+    if (r.refused) refused.push(ev.slug);
+    if (r.peopleFailed) peopleFailed.push(ev.slug);
+    // Refused by the shrink guard: nothing is written for this conference, not even its document.
+    if (r.refused && !opts.dryRun) {
+      console.log(`${ev.slug}  ${ev.name}  ${ev.start_date}..${ev.end_date}  ${r.conf.time_zone ?? "no time zone"}`);
+      for (const l of r.lines) console.log(l);
+      console.log('  status: unchanged (refused by the shrink guard)');
+      continue;
+    }
     // A hidden conference is written as unavailable only over a searchable result; a fetch or
     // index failure keeps its own reason, which also decides the exit code.
     if (Object.hasOwn(operator.hidden, ev.slug) && r.conf.status === 'searchable') {
@@ -415,13 +496,15 @@ async function main() {
   const unavailable = results.filter((c) => c.status !== 'searchable');
   console.log(`Searchable: ${results.length - unavailable.length}  Unavailable: ${unavailable.length}`);
   for (const c of unavailable) console.log(`  ${c.slug}: ${c.status_reason}`);
+  if (refused.length) console.log(`${opts.dryRun ? 'Would be refused' : 'Refused'} by the shrink guard (pass --allow-shrink if the schedule really shrank): ${refused.join(', ')}`);
+  if (peopleFailed.length) console.log(`Taking deleted talks out of people's shared talks failed for: ${peopleFailed.join(', ')}`);
   if (stopped) console.log(`Stopped at the embedding limit. Missing events: ${missing.join(', ')}`);
   console.log(`Network calls this run: ${networkCalls()}`);
 
   if (opts.report) writeJson(opts.report, { processed: results.map((c) => c.slug) });
 
   const errorReasons = new Set(['embedding_limit', 'partial_index', 'fetch_failed']);
-  return stopped || unavailable.some((c) => errorReasons.has(c.status_reason)) ? 2 : 0;
+  return stopped || refused.length || peopleFailed.length || unavailable.some((c) => errorReasons.has(c.status_reason)) ? 2 : 0;
 }
 
 try {

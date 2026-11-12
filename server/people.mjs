@@ -624,11 +624,17 @@ async function checkTopics(slug, ids, name, stored = []) {
   return kept.filter((id) => labels.has(id));
 }
 
+// The shared talk ids to store, as the Worker decides (worker/src/people/routes.js checkSharedTalks).
+// An id of another conference is rejected. An id of this conference that is not one of its talks is
+// dropped instead of rejected: a talk the device shared for can leave the schedule (a cancelled
+// session or a takedown, deleted by the next ingest, which also takes it out of every profile), and
+// the app sends its stored list with every write, so rejecting it would block every profile write
+// until the person stopped sharing for everything. The answer echoes the list that was stored.
 async function checkSharedTalks(slug, ids) {
-  if (!ids.length) return;
+  if (!ids.length) return ids;
   if (!ids.every((id) => id.startsWith(`${slug}:`))) throw bad('shared_talk_ids must be talks of this conference');
   const found = await talksById(slug, ids, []);
-  if (found.size !== ids.length) throw bad('shared_talk_ids contains an unknown talk');
+  return ids.filter((id) => found.has(id));
 }
 
 // The hash that tells whether a write changes the embedded text. The seed script uses it too.
@@ -1352,9 +1358,12 @@ async function putProfile(req, res) {
   const body = await jsonBody(req, PUT_KEYS);
   if (typeof body.open_to_meet !== 'boolean') throw bad('open_to_meet must be a boolean');
   const input = validateProfile(body.profile);
-  const shared = idList(body.shared_talk_ids, 'shared_talk_ids', 50, TALK_ID_RE);
+  const requested = idList(body.shared_talk_ids, 'shared_talk_ids', 50, TALK_ID_RE);
   const conf = await conferenceFor(body.event);
   const id = docId(conf.slug, device.profileId);
+  // Before the both-off check, as on the Worker: a write whose every shared talk left the schedule
+  // and that is not open to meet deletes the profile.
+  const shared = await checkSharedTalks(conf.slug, requested);
 
   for (let attempt = 1; ; attempt++) {
     const own = await ownDoc(conf.slug, device.profileId);
@@ -1371,7 +1380,6 @@ async function putProfile(req, res) {
     if (Date.parse(conf.visibleUntil) <= Date.now()) throw bad('conference has ended');
     profile.learn_topics = await checkTopics(conf.slug, profile.learn_topics, 'learn_topics', own.found ? own.source.learn_topics ?? [] : []);
     profile.speak_topics = await checkTopics(conf.slug, profile.speak_topics, 'speak_topics', own.found ? own.source.speak_topics ?? [] : []);
-    await checkSharedTalks(conf.slug, shared);
 
     const hash = textHash(profile);
     const common = {

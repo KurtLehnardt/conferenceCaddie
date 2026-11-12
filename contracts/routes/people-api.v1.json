@@ -27,7 +27,7 @@
       "query": [], "request": "ProfilePutRequest", "response": "ProfilePutResponse", "limits": ["people-write"], "capability": "people.enabled",
       "summary": "Create or update the device's profile at one conference, or delete it when open_to_meet is false and shared_talk_ids is empty.",
       "errors": [
-        { "status": 400, "error": "*", "when": "unknown topic or talk, a field over its cap, or a write that turns visibility on after the conference ended (\"conference has ended\")" },
+        { "status": 400, "error": "*", "when": "an unknown topic, a talk id of another conference or a malformed one (an unknown talk of this conference is dropped instead), a field over its cap, or a write that turns visibility on after the conference ended (\"conference has ended\")" },
         { "status": 409, "error": "*", "when": "the profile changed during the write (\"The profile changed at the same time; try again\")" }
       ]
     },
