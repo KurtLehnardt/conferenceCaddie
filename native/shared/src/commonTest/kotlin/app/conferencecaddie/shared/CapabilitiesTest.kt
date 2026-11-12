@@ -162,7 +162,8 @@ class CapabilitiesTest {
     fun keepUntilIsOnlyOnWhenTheBackendSaysTrueAndHasPresence() {
         val tier3 = Fixtures.capabilities("tier3-paid.json")
         assertTrue(Capabilities.effective(tier3).people.presenceKeepUntil)
-        assertFalse(Capabilities.effective(Fixtures.capabilities("tier2-free.json")).people.presenceKeepUntil)
+        assertTrue(Capabilities.effective(Fixtures.capabilities("tier2-free.json")).people.presenceKeepUntil, "the Worker takes until: keep too")
+        assertFalse(Capabilities.effective(tier3.with("people", "presence_keep_until", JsonPrimitive(false))).people.presenceKeepUntil, "an explicit false is off")
         assertFalse(Capabilities.Legacy.people.presenceKeepUntil, "the legacy server refuses until: keep")
         assertFalse(Capabilities.effective(tier3.with("people", "presence", JsonPrimitive(false))).people.presenceKeepUntil, "it needs presence")
         assertFalse(Capabilities.effective(tier3.with("people", "presence_keep_until", JsonPrimitive("yes"))).people.presenceKeepUntil)

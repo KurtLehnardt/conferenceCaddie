@@ -317,7 +317,19 @@ redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like
 clients; `CADDIE_ADMIN_SIG_VERSION=1` makes it sign v1, for a Worker from before v2. Its bearer
 mode is gone, and a current Worker answers a bearer with 404.
 
+The smoke's `keep1` and `keep2` run against the Worker too, where they printed SKIP before
+([Presence modes](#presence-modes)).
+
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
+
+## Presence modes
+
+The Worker's `PUT /api/presence` takes `until: 'hour'` (the default), `'day'` and `'keep'`, as tier
+3 does, and `GET /api/capabilities` says `people.presence_keep_until: true`. `'keep'` keeps the
+stored end of presence and its start, lowered to the end of the conference if that is earlier and
+never raised, so the native apps' Bluetooth writes, re-keys and position fixes no longer make
+someone visible for longer than they chose; without live presence it answers
+`400 presence_not_active` and writes nothing (`src/connect/presence.js`).
 
 ## Admin requests
 

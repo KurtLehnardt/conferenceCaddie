@@ -67,6 +67,7 @@ function server({ caps = TIER3, presence = (call) => json(200, { ok: true, zone:
 }
 const puts = () => calls.filter((c) => c.method === 'PUT' && c.path === '/api/presence');
 const withoutKeep = (doc) => ({ ...doc, people: Object.fromEntries(Object.entries(doc.people).filter(([k]) => k !== 'presence_keep_until')) });
+const keepFlag = (doc, value) => ({ ...doc, people: { ...doc.people, presence_keep_until: value } });
 
 beforeEach(() => {
   resetFake();
@@ -104,7 +105,8 @@ test('without the flag, or without a capabilities document, they send the mode a
   for (const [label, caps, mode, until] of [
     ['no flag, hour', withoutKeep(TIER3), 'hour', undefined],
     ['no flag, day', withoutKeep(TIER3), 'day', 'day'],
-    ['flag false', fixture('tier2-free.json'), 'day', 'day'],
+    // tier2-free.json says true since the Worker takes 'keep', so the false case is written out.
+    ['flag false', keepFlag(fixture('tier2-free.json'), false), 'day', 'day'],
     ['no document (404)', 404, 'hour', undefined],
     ['no document (503)', 503, 'day', 'day'],
   ]) {
