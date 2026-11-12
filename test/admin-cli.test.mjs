@@ -620,7 +620,7 @@ describe('SEC-12 audit log', () => {
     assert.equal(entry.result, 'warned');
     assert.deepEqual(entry.counts, { rows: 2, warnings: 1 });
     const help = await invoke(['-h']);
-    assert.match(help.stdout, /1 backend failure, or finished with warnings \(see stderr; audit counts\.warnings\)/);
+    assert.match(help.stdout, /1 backend failure, or finished with result warnings \(see stderr; audit counts\.warnings\)/);
   });
 
   test('appendAudit drops unknown keys and free text', async () => {

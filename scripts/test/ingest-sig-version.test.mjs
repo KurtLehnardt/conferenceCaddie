@@ -88,6 +88,34 @@ test('the workflow names CADDIE_ADMIN_SIG_VERSION only to warn that it was remov
   assert.deepEqual(warn.env, []);
 });
 
+// The expressions of the workflow: the body of every `${{ ... }}`, on one line or several, and the
+// value of every `if:` key that is not wrapped in `${{ }}`, which GitHub Actions also evaluates as an
+// expression. Each comes with the line it starts on.
+function expressions() {
+  const out = [];
+  for (const m of TEXT.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) out.push({ line: TEXT.slice(0, m.index).split('\n').length, body: m[1] });
+  for (const [i, line] of LINES.entries()) {
+    const m = /^\s*(?:-\s+)?if:\s*(.*)$/.exec(line);
+    if (m && !m[1].includes('${{')) out.push({ line: i + 1, body: m[1] });
+  }
+  return out;
+}
+
+test('no expression uses the whole vars context, which would carry CADDIE_ADMIN_SIG_VERSION without naming it', () => {
+  // `toJSON(vars)`, `vars[...]`, `vars.*` or `format('{0}', vars)` would pass every repository
+  // variable on, this one included, and the checks above look only for its name. Reading one
+  // variable as `vars.NAME` stays allowed. String literals are left out, so 'vars' in quotes does
+  // not count.
+  const problems = [];
+  const exprs = expressions();
+  assert.ok(exprs.some((e) => e.body.includes('vars.CADDIE_API_BASE')), 'the scan sees the expressions of the workflow');
+  for (const { line, body } of exprs) {
+    const code = body.replace(/'(?:[^']|'')*'/g, "''");
+    for (const m of code.matchAll(/(?<![.\w-])vars\b(?!\s*\.\s*[A-Za-z_])/g)) problems.push(`line ${line}: ${body.trim()}`);
+  }
+  assert.deepEqual(problems, []);
+});
+
 test('the warning step prints one GitHub warning that asks to delete the variable, without its value', () => {
   const warn = step(WARN_STEP);
   const r = spawnSync('bash', ['-c', warn.run], { encoding: 'utf8', env: { PATH: process.env.PATH, [VAR]: 'fake-stale-sig-version' } });

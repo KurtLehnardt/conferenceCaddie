@@ -80,9 +80,12 @@ jobs:
     # still share the runner and its workspace, so this narrows the exposure; it is not isolation.
     steps:
       # Step e of "Admin signature v2" in DECISIONS.md removed the repository variable
-      # CADDIE_ADMIN_SIG_VERSION, and no step reads it any more. A fork that still has it set gets
-      # this warning in the run's summary. The condition only checks whether the variable is set:
-      # its value is not passed to any environment and not printed.
+      # CADDIE_ADMIN_SIG_VERSION. No step receives it in its environment, and the `if:` condition
+      # of this step is the only expression in the workflow that refers to it. A fork that still
+      # has it set gets this warning in the run's summary. The condition only checks whether the
+      # variable is set, and this step's script does not print the value. The runner's debug log
+      # (enabled by setting ACTIONS_STEP_DEBUG to true as a secret or a variable, or by re-running
+      # a job with debug logging) expands the condition and so shows the value, which is not secret.
       - name: Warn about the removed signature variable
         if: vars.CADDIE_ADMIN_SIG_VERSION != ''
         run: |
