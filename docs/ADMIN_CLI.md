@@ -77,17 +77,20 @@ Optionally, if you put Cloudflare Access in front of `/admin/*` ([TIER2_CLOUDFLA
 
 ### The smoke test and the token file
 
-`scripts/smoke.mjs` takes the Worker's admin token from `ADMIN_TOKEN`, else from the first line of the file in `ADMIN_TOKEN_FILE`; a set but empty `ADMIN_TOKEN_FILE` means no token. With neither set, it reads the token file this tool reads, `<config dir>/admin-token`, by itself only when all three of these hold:
+`scripts/smoke.mjs` takes the Worker's admin token from `ADMIN_TOKEN`, else from the file in `ADMIN_TOKEN_FILE`; a set but empty `ADMIN_TOKEN_FILE` means no token. It reads a file with this tool's checks (mode 0600, the whole file trimmed), so the smoke and this tool always use the same key, and it never prints the token. With neither variable set, it reads the token file this tool reads, `<config dir>/admin-token`, by itself only when all four of these hold:
 
-- the origin of `API_BASE` (by default the origin of `BASE_URL`) is exactly the `api` of a tier 2 backend in your `config.json`;
+- the origin of `API_BASE` (by default the origin of `BASE_URL`) is exactly the `api` of a tier 2 backend in your `config.json`, an origin with no path;
+- that origin is not on this machine (a local Worker has its own token, in its `.dev.vars`);
 - the admin calls are signed (`SMOKE_ADMIN_AUTH=signed`, the default);
 - `SMOKE_API` is not `cloudrun`.
 
-For any other address, name the file with `ADMIN_TOKEN_FILE`, as the command that `stats health` prints does. The rule exists because a signed request is not bound to a host: whatever answers at `API_BASE` could replay it to your Worker within its five-minute window. The smoke reads that file with this tool's checks (mode 0600, the whole file trimmed) and never prints the token.
+For any other address, name the file with `ADMIN_TOKEN_FILE`, as the command that `stats health` prints does. Check `unav1`, which flips a conference on a local Worker, always needs `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`. The rule exists because a signed request is not bound to a host: whatever answers at `API_BASE` could replay it to your Worker within its five-minute window.
 
-If `<config dir>/admin-token` does not exist but `~/.config/conference-caddie/admin-token` does (the file that `node worker/scripts/setup-secrets.mjs` writes even when `XDG_CONFIG_HOME` or `CADDIE_ADMIN_HOME` moves your config directory), the smoke reads the old file and, once it has read it, prints one line that starts `NOTE admin token: <config dir>/admin-token does not exist, so the old path ~/.config/conference-caddie/admin-token was read. Move it to <config dir>/admin-token and leave a symlink at the old path` and gives the `ln -s` command, quoted for the shell, so that this tool, the smoke and `setup-secrets.mjs` share one file.
+If `<config dir>/admin-token` does not exist but `~/.config/conference-caddie/admin-token` does (the file that `node worker/scripts/setup-secrets.mjs` writes even when `XDG_CONFIG_HOME` moves your config directory), the smoke reads the old file, with two exceptions. It never does when `CADDIE_ADMIN_HOME` is set, because that names a separate setup, a fork's for example, whose Worker must never get the token at the old path. And when the old directory has its own `config.json`, that file must list the same origin as a tier 2 `api`; otherwise the smoke runs without a token and prints a note that starts `NOTE admin token: <config dir>/admin-token does not exist, and the old path ~/.config/conference-caddie/admin-token is not read`. When it does read the old file, it then prints one line that starts `NOTE admin token: <config dir>/admin-token does not exist, so the old path ~/.config/conference-caddie/admin-token was read. Move it to <config dir>/admin-token and leave a symlink at the old path` and gives the `ln -s` command, quoted for the shell, so that this tool, the smoke and `setup-secrets.mjs` share one file.
 
 If both files exist and are different files, the smoke reads the one in the config directory and prints a note that says `Do not delete either until you know which one the Worker accepts`, that `setup-secrets.mjs` writes the old path, and which of the two is newer by modification time. A token rotation writes the old path, so the newer token can be the one the smoke did not read. A symlinked `~/.config` or `conference-caddie` directory, or a hard link, makes the two paths one file, and then there is no note.
+
+A token file that cannot be used stops the smoke, and this tool, with a message that names the file and never the value: a mode wider than 0600, a directory on its path that cannot be searched (`cannot be reached`), a directory where the file should be (`is a directory`), or an empty file.
 
 ### First check
 
@@ -96,7 +99,7 @@ caddie-admin stats health                          # the default backend
 caddie-admin stats health --backend paid --json
 ```
 
-It reads the public health and capabilities endpoints and prints the backend's tier, the Bluetooth mode and the push flags, then the exact smoke command and the log-tail command for that backend. Those commands name variables and file paths, never values; run them by hand. On tier 2 the smoke command always names the token file this tool reads, quoted for a POSIX shell, for example `BASE_URL="https://<your worker>" SMOKE_API=worker ADMIN_TOKEN_FILE=~/'.config/conference-caddie/admin-token' node scripts/smoke.mjs`. A path under your home directory starts with `~/` outside the single quotes, so the shell expands it; any other path is single-quoted whole, with a `'` in it written `'\''`.
+It reads the public health and capabilities endpoints and prints the backend's tier, the Bluetooth mode and the push flags, then the exact smoke command and the log-tail command for that backend. Those commands name variables and file paths, never values; run them by hand. On tier 2 the smoke command always names the token file this tool reads, quoted for a POSIX shell, for example `BASE_URL='https://<your worker>' SMOKE_API=worker ADMIN_TOKEN_FILE=~/'.config/conference-caddie/admin-token' node scripts/smoke.mjs`. The address is single-quoted. A path under your home directory starts with `~/` outside the single quotes, so the shell expands it; any other path is single-quoted whole, with a `'` in it written `'\''`.
 
 ## How commands behave
 

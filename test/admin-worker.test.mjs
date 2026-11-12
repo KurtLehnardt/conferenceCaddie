@@ -2291,8 +2291,8 @@ describe('STAT-1 to STAT-3 stats', () => {
     assert.match(r.stdout, /^health=200 ok=true\ncapabilities=200 tier=2 ble_mode=off push_apns=false push_fcm=false\n/);
     // The file the CLI reads (CADDIE_ADMIN_HOME/admin-token here) is always named, single-quoted,
     // never a value.
-    assert.ok(r.stdout.includes(`smoke=BASE_URL="${stub.url}" SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(join(home, 'admin-token'))} node scripts/smoke.mjs`), r.stdout);
-    assert.ok(!r.stdout.includes('"~'), 'never a tilde inside double quotes');
+    assert.ok(r.stdout.includes(`smoke=BASE_URL='${stub.url}' SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(join(home, 'admin-token'))} node scripts/smoke.mjs`), r.stdout);
+    assert.ok(!r.stdout.split('\n').find((l) => l.startsWith('smoke=')).includes('"'), 'nothing double-quoted, so nothing in the line expands but a leading ~/');
     assert.ok(r.stdout.includes('logs=(cd worker && npx wrangler tail --format json) | node /path/to/scratch/tail-filter.mjs'), r.stdout);
     assert.match(r.stdout, /never run wrangler tail unfiltered/);
     const file = await invoke(['stats', 'health'], { env: { ADMIN_TOKEN_FILE: '/srv/caddie/admin-token' } });
@@ -2348,25 +2348,25 @@ describe('STAT-1 to STAT-3 stats', () => {
         env: () => ({}),
         configAt: configHome,
         tokenAt: (h) => join(configHome(h), 'admin-token'),
-        expect: () => `BASE_URL="${API}" SMOKE_API=worker ADMIN_TOKEN_FILE=~/'.config/conference-caddie/admin-token' node scripts/smoke.mjs`,
+        expect: () => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE=~/'.config/conference-caddie/admin-token' node scripts/smoke.mjs`,
       });
       await check('ADMIN_TOKEN_FILE under HOME with a space, a quote and a $: ~/ outside the quotes', {
         env: (h) => ({ ADMIN_TOKEN_FILE: join(h, "my dir", "it's $HOME", 'admin-token') }),
         configAt: configHome,
         tokenAt: (h) => join(h, "my dir", "it's $HOME", 'admin-token'),
-        expect: () => `BASE_URL="${API}" SMOKE_API=worker ADMIN_TOKEN_FILE=~/'my dir/it'\\''s $HOME/admin-token' node scripts/smoke.mjs`,
+        expect: () => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE=~/'my dir/it'\\''s $HOME/admin-token' node scripts/smoke.mjs`,
       });
       await check('XDG_CONFIG_HOME under HOME: its file is named, so any shell finds it', {
         env: (h) => ({ XDG_CONFIG_HOME: join(h, 'xdg') }),
         configAt: (h) => join(h, 'xdg', 'conference-caddie'),
         tokenAt: (h) => join(h, 'xdg', 'conference-caddie', 'admin-token'),
-        expect: () => `BASE_URL="${API}" SMOKE_API=worker ADMIN_TOKEN_FILE=~/'xdg/conference-caddie/admin-token' node scripts/smoke.mjs`,
+        expect: () => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE=~/'xdg/conference-caddie/admin-token' node scripts/smoke.mjs`,
       });
       await check('CADDIE_ADMIN_HOME outside HOME: an absolute single-quoted path', {
         env: (h) => ({ CADDIE_ADMIN_HOME: join(dirname(h), `cah ${n}`) }),
         configAt: (h) => join(dirname(h), `cah ${n}`),
         tokenAt: (h) => join(dirname(h), `cah ${n}`, 'admin-token'),
-        expect: (h) => `BASE_URL="${API}" SMOKE_API=worker ADMIN_TOKEN_FILE='${join(dirname(h), `cah ${n}`, 'admin-token')}' node scripts/smoke.mjs`,
+        expect: (h) => `BASE_URL='${API}' SMOKE_API=worker ADMIN_TOKEN_FILE='${join(dirname(h), `cah ${n}`, 'admin-token')}' node scripts/smoke.mjs`,
       });
     } finally {
       process.env.HOME = realHome;

@@ -11,7 +11,7 @@ import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adminTokenPaths, configuredWorkerOrigins, defaultAdminTokenFile, legacyAdminTokenFile, resolveAdminTokenFile, sameFile, shellPath } from '../scripts/lib/admin-token-file.mjs';
+import { adminTokenPaths, configuredWorkerOrigins, defaultAdminTokenFile, legacyAdminTokenFile, resolveAdminTokenFile, sameFile, shellPath, shellQuote } from '../scripts/lib/admin-token-file.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SMOKE = join(ROOT, 'scripts', 'smoke.mjs');
@@ -29,6 +29,11 @@ function put(file, text = `${FAKE}\n`) {
   writeFileSync(file, text, { mode: 0o600 });
 }
 
+const WORKER = 'https://caddie-smoke.example.test';
+// caddie-admin's config.json in `dir`, naming WORKER as a tier 2 backend unless `backends` says otherwise.
+function writeConfig(dir, backends = { live: { tier: 2, api: WORKER } }) {
+  put(join(dir, 'config.json'), JSON.stringify({ default: Object.keys(backends)[0], backends }));
+}
 const noteLines = (stdout) => stdout.split('\n').filter((l) => l.startsWith('NOTE admin token'));
 const asRoot = process.getuid?.() === 0;
 // A note must never tell the operator to remove a token file: the old path is where
@@ -45,10 +50,10 @@ describe('resolveAdminTokenFile', () => {
       for (const f of [legacy, join(xdg, 'conference-caddie', 'admin-token'), join(cah, 'admin-token')]) put(f);
       const explicit = join(home, 'elsewhere', 'token');
 
-      assert.deepEqual(resolveAdminTokenFile({ ADMIN_TOKEN_FILE: explicit, CADDIE_ADMIN_HOME: cah, XDG_CONFIG_HOME: xdg }, home), { file: explicit, note: null }, 'ADMIN_TOKEN_FILE wins, even when it does not exist');
-      assert.deepEqual(resolveAdminTokenFile({ CADDIE_ADMIN_HOME: cah, XDG_CONFIG_HOME: xdg }, home).file, join(cah, 'admin-token'));
-      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home).file, join(xdg, 'conference-caddie', 'admin-token'));
-      assert.deepEqual(resolveAdminTokenFile({}, home), { file: legacy, note: null });
+      assert.deepEqual(resolveAdminTokenFile({ ADMIN_TOKEN_FILE: explicit, CADDIE_ADMIN_HOME: cah, XDG_CONFIG_HOME: xdg }, { home }), { file: explicit, note: null }, 'ADMIN_TOKEN_FILE wins, even when it does not exist');
+      assert.deepEqual(resolveAdminTokenFile({ CADDIE_ADMIN_HOME: cah, XDG_CONFIG_HOME: xdg }, { home }).file, join(cah, 'admin-token'));
+      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }).file, join(xdg, 'conference-caddie', 'admin-token'));
+      assert.deepEqual(resolveAdminTokenFile({}, { home }), { file: legacy, note: null });
       assert.equal(defaultAdminTokenFile({}, home), legacy);
       assert.equal(legacyAdminTokenFile(home), legacy);
     } finally {
@@ -59,8 +64,8 @@ describe('resolveAdminTokenFile', () => {
   test('no file anywhere: no file and no note', () => {
     const home = tempHome();
     try {
-      assert.deepEqual(resolveAdminTokenFile({}, home), { file: null, note: null });
-      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: join(home, 'xdg') }, home), { file: null, note: null });
+      assert.deepEqual(resolveAdminTokenFile({}, { home }), { file: null, note: null });
+      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: join(home, 'xdg') }, { home }), { file: null, note: null });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -71,14 +76,54 @@ describe('resolveAdminTokenFile', () => {
     try {
       const legacy = join(home, '.config', 'conference-caddie', 'admin-token');
       put(legacy);
-      for (const env of [{ XDG_CONFIG_HOME: join(home, 'x dg') }, { CADDIE_ADMIN_HOME: join(home, 'cah') }]) {
-        const wanted = defaultAdminTokenFile(env, home);
-        const { file, note } = resolveAdminTokenFile(env, home);
-        assert.equal(file, legacy);
-        assert.equal(note, `NOTE admin token: ${wanted} does not exist, so the old path ${legacy} was read. Move it to ${wanted} and leave a symlink at the old path (ln -s ${shellPath(wanted, home)} ${shellPath(legacy, home)}), so caddie-admin and worker/scripts/setup-secrets.mjs use one file.`);
-        assert.ok(!note.includes(FAKE));
-        assert.doesNotMatch(note, NEVER_IN_A_NOTE);
-      }
+      const env = { XDG_CONFIG_HOME: join(home, 'x dg') };
+      const wanted = defaultAdminTokenFile(env, home);
+      const { file, note } = resolveAdminTokenFile(env, { home });
+      assert.equal(file, legacy);
+      assert.equal(note, `NOTE admin token: ${wanted} does not exist, so the old path ${legacy} was read. Move it to ${wanted} and leave a symlink at the old path (ln -s ${shellPath(wanted, home)} ${shellPath(legacy, home)}), so caddie-admin and worker/scripts/setup-secrets.mjs use one file.`);
+      assert.ok(!note.includes(FAKE));
+      assert.doesNotMatch(note, NEVER_IN_A_NOTE);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // N1: CADDIE_ADMIN_HOME is a separate setup (a fork's, say). Its config.json must never be paired
+  // with the production token at the old path, and the note must never say to move that token there.
+  test('CADDIE_ADMIN_HOME set (a fork home): never the old path, and no note', () => {
+    const home = tempHome();
+    try {
+      const legacy = join(home, '.config', 'conference-caddie', 'admin-token');
+      const fork = join(home, 'fork-home');
+      put(legacy, 'fake-PRODUCTION\n');
+      writeConfig(fork, { fork: { tier: 2, api: 'https://fork.example.test' } });
+      assert.deepEqual(resolveAdminTokenFile({ CADDIE_ADMIN_HOME: fork }, { home, apiOrigin: 'https://fork.example.test' }), { file: null, note: null });
+      assert.equal(adminTokenPaths({ CADDIE_ADMIN_HOME: fork }, home).legacy, null);
+      put(join(fork, 'admin-token'), 'fake-FORK\n');
+      assert.deepEqual(resolveAdminTokenFile({ CADDIE_ADMIN_HOME: fork }, { home, apiOrigin: 'https://fork.example.test' }), { file: join(fork, 'admin-token'), note: null }, 'no note about the production file either');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // N1: when the old directory has its own config.json, the fallback needs the run's origin there too.
+  test('the old directory has its own config.json: the old file only for an origin it lists as tier 2', () => {
+    const home = tempHome();
+    try {
+      const oldDir = join(home, '.config', 'conference-caddie');
+      const xdg = join(home, 'xdg');
+      put(join(oldDir, 'admin-token'), 'fake-PRODUCTION\n');
+      writeConfig(oldDir, { prod: { tier: 2, api: 'https://prod.example.test' } });
+      const env = { XDG_CONFIG_HOME: xdg };
+      assert.equal(resolveAdminTokenFile(env, { home, apiOrigin: 'https://prod.example.test' }).file, join(oldDir, 'admin-token'));
+      const refused = resolveAdminTokenFile(env, { home, apiOrigin: 'https://fork.example.test' });
+      assert.equal(refused.file, null);
+      assert.equal(refused.note, `NOTE admin token: ${join(xdg, 'conference-caddie', 'admin-token')} does not exist, and the old path ${join(oldDir, 'admin-token')} is not read, because ${join(oldDir, 'config.json')} does not list https://fork.example.test as a tier 2 api; set ADMIN_TOKEN_FILE to run with a token`);
+      assert.equal(resolveAdminTokenFile(env, { home }).file, null, 'no origin given: not read');
+      put(join(oldDir, 'config.json'), '{ not json');
+      assert.equal(resolveAdminTokenFile(env, { home, apiOrigin: 'https://prod.example.test' }).file, null, 'an unreadable old config.json fails closed');
+      rmSync(join(oldDir, 'config.json'));
+      assert.equal(resolveAdminTokenFile(env, { home, apiOrigin: 'https://fork.example.test' }).file, join(oldDir, 'admin-token'), 'no old config.json: the token-only old dir that setup-secrets.mjs writes');
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -94,12 +139,12 @@ describe('resolveAdminTokenFile', () => {
       put(current, 'fake-new\n');
       utimesSync(legacy, 1_700_000_000, 1_700_000_000);
       utimesSync(current, 1_800_000_000, 1_800_000_000);
-      const { file, note } = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home);
+      const { file, note } = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home });
       assert.equal(file, current);
       assert.equal(note, `NOTE admin token: read ${current}; the old path ${legacy} is a different file and is not read. Do not delete either until you know which one the Worker accepts: worker/scripts/setup-secrets.mjs writes ${legacy}. By modification time the newer is ${current}.`);
       assert.doesNotMatch(note, NEVER_IN_A_NOTE);
       utimesSync(legacy, 1_800_000_000, 1_800_000_000);
-      assert.match(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home).note, /Both have the same modification time\.$/);
+      assert.match(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }).note, /Both have the same modification time\.$/);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -117,7 +162,7 @@ describe('resolveAdminTokenFile', () => {
       put(legacy, 'fake-NEW-live\n');
       utimesSync(current, 1_700_000_000, 1_700_000_000);
       utimesSync(legacy, 1_800_000_000, 1_800_000_000);
-      const { file, note } = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home);
+      const { file, note } = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home });
       assert.equal(file, current, 'the order stays: the config dir first');
       assert.match(note, /Do not delete either until you know which one the Worker accepts/);
       assert.ok(note.endsWith(`By modification time the newer is ${legacy}.`), note);
@@ -140,23 +185,23 @@ describe('resolveAdminTokenFile', () => {
       put(join(curDir, 'admin-token'));
       chmodSync(curDir, 0o000);
       locked.push(curDir);
-      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home), { file: join(curDir, 'admin-token'), note: null });
+      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: join(curDir, 'admin-token'), note: null });
       chmodSync(curDir, 0o700);
       locked.pop();
       // c. the old dir cannot be searched and the config dir has no file: the old path, no note.
       rmSync(join(curDir, 'admin-token'));
       chmodSync(legacyDir, 0o000);
       locked.push(legacyDir);
-      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home), { file: join(legacyDir, 'admin-token'), note: null });
+      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: join(legacyDir, 'admin-token'), note: null });
       // b. the old dir cannot be searched and the config dir file is fine: that file, no note.
       put(join(curDir, 'admin-token'));
-      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home), { file: join(curDir, 'admin-token'), note: null });
+      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: join(curDir, 'admin-token'), note: null });
       chmodSync(legacyDir, 0o700);
       locked.pop();
       // j. a symlink loop at the config dir path: that path, no note.
       rmSync(join(curDir, 'admin-token'));
       symlinkSync(join(curDir, 'admin-token'), join(curDir, 'admin-token'));
-      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home), { file: join(curDir, 'admin-token'), note: null });
+      assert.deepEqual(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }), { file: join(curDir, 'admin-token'), note: null });
     } finally {
       for (const d of locked) chmodSync(d, 0o700);
       rmSync(home, { recursive: true, force: true });
@@ -169,7 +214,7 @@ describe('resolveAdminTokenFile', () => {
       const xdg = join(home, 'xdg');
       put(join(xdg, 'conference-caddie', 'admin-token'));
       symlinkSync(xdg, join(home, '.config'), 'dir');
-      const { file, note } = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home);
+      const { file, note } = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home });
       assert.equal(file, join(xdg, 'conference-caddie', 'admin-token'));
       assert.equal(note, null, 'a note here would point at the live token');
       // The other way round: XDG_CONFIG_HOME is the symlink.
@@ -177,7 +222,7 @@ describe('resolveAdminTokenFile', () => {
       try {
         put(join(other, '.config', 'conference-caddie', 'admin-token'));
         symlinkSync(join(other, '.config'), join(other, 'xdg-link'), 'dir');
-        assert.equal(resolveAdminTokenFile({ XDG_CONFIG_HOME: join(other, 'xdg-link') }, other).note, null);
+        assert.equal(resolveAdminTokenFile({ XDG_CONFIG_HOME: join(other, 'xdg-link') }, { home: other }).note, null);
       } finally {
         rmSync(other, { recursive: true, force: true });
       }
@@ -194,7 +239,7 @@ describe('resolveAdminTokenFile', () => {
       put(legacy);
       mkdirSync(cah);
       linkSync(legacy, join(cah, 'admin-token'));
-      assert.deepEqual(resolveAdminTokenFile({ CADDIE_ADMIN_HOME: cah }, home), { file: join(cah, 'admin-token'), note: null });
+      assert.deepEqual(resolveAdminTokenFile({ CADDIE_ADMIN_HOME: cah }, { home }), { file: join(cah, 'admin-token'), note: null });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -296,7 +341,7 @@ describe('adminTokenPaths', () => {
     assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: '', CADDIE_ADMIN_HOME: '', XDG_CONFIG_HOME: '' }, home), { path: legacy, legacy: null, explicit: false });
     const xdg = join(home, 'xdg');
     assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: '', CADDIE_ADMIN_HOME: '', XDG_CONFIG_HOME: xdg }, home), { path: join(xdg, 'conference-caddie', 'admin-token'), legacy, explicit: false });
-    assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: '', CADDIE_ADMIN_HOME: join(home, 'cah'), XDG_CONFIG_HOME: '' }, home), { path: join(home, 'cah', 'admin-token'), legacy, explicit: false });
+    assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: '', CADDIE_ADMIN_HOME: join(home, 'cah'), XDG_CONFIG_HOME: '' }, home), { path: join(home, 'cah', 'admin-token'), legacy: null, explicit: false }, 'CADDIE_ADMIN_HOME: never the old path');
     assert.equal(defaultAdminTokenFile({ ADMIN_TOKEN_FILE: join(home, 'x'), XDG_CONFIG_HOME: xdg }, home), join(xdg, 'conference-caddie', 'admin-token'), 'the default ignores ADMIN_TOKEN_FILE');
   }));
 
@@ -320,6 +365,8 @@ describe('shellPath', () => {
     assert.equal(shellPath('/home/opx/t', '/home/op'), "'/home/opx/t'", 'a sibling with the same prefix is not under home');
     assert.equal(shellPath('/home/op/t', '/home/op/'), "~/'t'");
     assert.equal(shellPath('/t', '/'), "'/t'", 'a home of / never turns every path into ~/');
+    assert.equal(shellQuote("https://a.example.test"), "'https://a.example.test'");
+    assert.equal(shellQuote("it's $HOME"), "'it'\\''s $HOME'");
   });
 
   test('bash reads the quoted word back as the same path', async () => {
@@ -353,10 +400,7 @@ function run(file, args, env) {
 
 // The real smoke, with nothing from this process's environment but PATH. BASE_URL is a name that
 // is never contacted: each run stops at a config check first.
-const WORKER = 'https://caddie-smoke.example.test';
 const smoke = (env) => run(process.execPath, [SMOKE], { BASE_URL: WORKER, SMOKE_API: 'worker', ...env });
-// caddie-admin's config.json in `dir`, naming WORKER as a tier 2 backend unless `backends` says otherwise.
-const writeConfig = (dir, backends = { live: { tier: 2, api: WORKER } }) => put(join(dir, 'config.json'), JSON.stringify({ default: Object.keys(backends)[0], backends }));
 
 describe('configuredWorkerOrigins', () => {
   test('the origins of the tier 2 backends; none without a valid config.json', () => withHome((home) => {
@@ -366,6 +410,8 @@ describe('configuredWorkerOrigins', () => {
     assert.deepEqual(configuredWorkerOrigins({ CADDIE_ADMIN_HOME: dir }), ['https://a.example.test', 'http://127.0.0.1:8787']);
     put(join(dir, 'config.json'), '{ not json');
     assert.deepEqual(configuredWorkerOrigins({ CADDIE_ADMIN_HOME: dir }), []);
+    writeConfig(dir, { a: { tier: 2, api: 'https://a.example.test/admin' }, b: { tier: 2, api: 'https://b.example.test/?x=1' }, c: { tier: 2, api: 'https://c.example.test/' } });
+    assert.deepEqual(configuredWorkerOrigins({ CADDIE_ADMIN_HOME: dir }), ['https://c.example.test'], 'an api with a path or a query is no Worker origin');
     writeConfig(dir, { a: { tier: 2, api: 'http://plain.example.test' } });
     assert.deepEqual(configuredWorkerOrigins({ CADDIE_ADMIN_HOME: dir }), [], 'plain http to another host is refused by loadConfig');
   }));
@@ -466,10 +512,79 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
       chmodSync(legacyDir, 0o000);
       const r = await smoke({ HOME: home, XDG_CONFIG_HOME: xdg });
       assert.equal(r.code, 1, r.stdout);
-      assert.ok(r.stdout.includes(`FAIL config: no credential: set ADMIN_TOKEN, or put it in ${join(legacyDir, 'admin-token')}`), r.stdout);
+      assert.ok(r.stdout.includes(`FAIL config: credential file ${join(legacyDir, 'admin-token')} cannot be reached: a directory on its path cannot be searched by this user`), r.stdout);
       assert.deepEqual(noteLines(r.stdout), []);
     } finally {
       chmodSync(legacyDir, 0o700);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // N1, the fork-home case: caddie-admin pointed at a fork's setup by CADDIE_ADMIN_HOME, with the
+  // production token still at the old path. The fork's config.json lists the fork's Worker; the
+  // production token must never sign for it, and no note may say to move it into the fork home.
+  test('a fork home (CADDIE_ADMIN_HOME) never pairs with the production token at the old path', async () => {
+    const home = tempHome();
+    try {
+      const fork = join(home, 'fork-home');
+      const FORK = 'https://fork-worker.example.test';
+      writeConfig(fork, { fork: { tier: 2, api: FORK } });
+      put(join(home, '.config', 'conference-caddie', 'admin-token'), 'fake-PRODUCTION-token-not-a-secret\n');
+      const r = await smoke({ HOME: home, CADDIE_ADMIN_HOME: fork, BASE_URL: FORK, SMOKE_TALKS: 'bogus' });
+      assert.equal(r.code, 1, r.stdout);
+      assert.ok(r.stdout.includes('FAIL config: SMOKE_TALKS must be bundle or data'), `no token was read\n${r.stdout}`);
+      assert.deepEqual(noteLines(r.stdout), []);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('an old config.json that does not list the origin: the old token is not read, and a note says why', async () => {
+    const home = tempHome();
+    try {
+      const oldDir = join(home, '.config', 'conference-caddie');
+      const xdg = join(home, 'xdg');
+      const FORK = 'https://fork-worker.example.test';
+      writeConfig(join(xdg, 'conference-caddie'), { fork: { tier: 2, api: FORK }, live: { tier: 2, api: WORKER } });
+      writeConfig(oldDir, { live: { tier: 2, api: WORKER } });
+      put(join(oldDir, 'admin-token'));
+      const fork = await smoke({ HOME: home, XDG_CONFIG_HOME: xdg, BASE_URL: FORK, SMOKE_TALKS: 'bogus' });
+      assert.ok(fork.stdout.includes('FAIL config: SMOKE_TALKS must be bundle or data'), fork.stdout);
+      assert.deepEqual(noteLines(fork.stdout), [`NOTE admin token: ${join(xdg, 'conference-caddie', 'admin-token')} does not exist, and the old path ${join(oldDir, 'admin-token')} is not read, because ${join(oldDir, 'config.json')} does not list ${FORK} as a tier 2 api; set ADMIN_TOKEN_FILE to run with a token`]);
+      const live = await smoke({ HOME: home, XDG_CONFIG_HOME: xdg, SMOKE_TALKS: 'bogus' });
+      assert.ok(live.stdout.includes(SHORT_FAIL), `both config files list it: read\n${live.stdout}`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('an old path that is a directory fails with a message that says so', async () => {
+    const home = tempHome();
+    try {
+      const xdg = join(home, 'xdg');
+      writeConfig(join(xdg, 'conference-caddie'));
+      mkdirSync(join(home, '.config', 'conference-caddie', 'admin-token'), { recursive: true, mode: 0o700 });
+      const r = await smoke({ HOME: home, XDG_CONFIG_HOME: xdg });
+      assert.equal(r.code, 1, r.stdout);
+      assert.ok(r.stdout.includes(`FAIL config: credential file ${join(home, '.config', 'conference-caddie', 'admin-token')} is a directory; the credential must be a file of mode 0600 at that path`), r.stdout);
+      assert.deepEqual(noteLines(r.stdout), []);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('a named ADMIN_TOKEN_FILE is read as caddie-admin reads it: the whole file trimmed', async () => {
+    const home = tempHome();
+    try {
+      // Two lines of 19 characters each: the first line alone would be too short to sign with, the
+      // whole file trimmed (39 characters with the newline between) is not, so a run that reads it
+      // gets past the length check to the bad SMOKE_TALKS.
+      put(join(home, 'named'), '  fake-line-one-12345\nfake-line-two-12345\n\n');
+      const r = await smoke({ HOME: home, ADMIN_TOKEN_FILE: join(home, 'named'), SMOKE_TALKS: 'bogus' });
+      assert.equal(r.code, 1, r.stdout);
+      assert.ok(!r.stdout.includes(SHORT_FAIL), r.stdout);
+      assert.ok(r.stdout.includes('FAIL config: SMOKE_TALKS must be bundle or data'), r.stdout);
+    } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -482,7 +597,7 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
     try {
       const dir = join(home, '.config', 'conference-caddie');
       const loose = join(dir, 'admin-token');
-      writeConfig(dir, { live: { tier: 2, api: WORKER }, paid: { tier: 3, es_url: 'https://es.example.test', api: 'https://run.example.test' }, local: { tier: 2, api: 'http://127.0.0.1:8787' } });
+      writeConfig(dir, { live: { tier: 2, api: WORKER }, paid: { tier: 3, es_url: 'https://es.example.test', api: 'https://run.example.test' }, local: { tier: 2, api: 'http://127.0.0.1:8787' }, pathy: { tier: 2, api: 'https://pathy.example.test/admin' } });
       put(loose);
       chmodSync(loose, 0o644);
       const READ = `FAIL config: credential file ${loose} has mode 0644`;
@@ -491,17 +606,20 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
         [{}, READ],
         [{ SMOKE_API: '' }, READ, 'same origin without SMOKE_API: the configured Worker'],
         [{ BASE_URL: 'https://app.example.test/conferenceCaddie', API_BASE: WORKER, SMOKE_API: '' }, READ, 'the app elsewhere, the API the configured Worker'],
-        [{ BASE_URL: 'http://127.0.0.1:8787' }, READ, 'a loopback Worker that is in config.json'],
+        [{ BASE_URL: 'http://127.0.0.1:8787' }, NOT_READ, 'a loopback Worker, even one in config.json: a local Worker has its own token'],
+        [{ BASE_URL: 'http://127.0.0.1:8787', SMOKE_TREAT_AS_REMOTE: '1' }, NOT_READ, 'SMOKE_TREAT_AS_REMOTE does not change that'],
         [{ BASE_URL: 'https://other.example.test' }, NOT_READ, 'a host not in config.json (a typo, a relay)'],
         [{ BASE_URL: `${WORKER}:8443` }, NOT_READ, 'another port is another origin'],
         [{ BASE_URL: 'http://caddie-smoke.example.test' }, NOT_READ, 'http is another origin'],
         [{ API_BASE: 'https://relay.example.test' }, NOT_READ, 'the app is the Worker but the API is not'],
         [{ BASE_URL: 'https://run.example.test' }, NOT_READ, 'a tier 3 api'],
+        [{ BASE_URL: 'https://pathy.example.test' }, NOT_READ, 'a tier 2 api with a path is no Worker origin'],
         [{ BASE_URL: 'http://127.0.0.1:9' }, NOT_READ, 'a loopback API not in config.json'],
         [{ SMOKE_API: 'cloudrun' }, NOT_READ],
         [{ SMOKE_ADMIN_AUTH: 'bearer' }, NOT_READ, 'bearer would send the token itself'],
         [{ ADMIN_TOKEN: FAKE }, SHORT_FAIL, 'ADMIN_TOKEN first'],
-        [{ ADMIN_TOKEN_FILE: join(home, 'missing') }, 'FAIL config: ADMIN_TOKEN_FILE cannot be read', 'then ADMIN_TOKEN_FILE'],
+        [{ ADMIN_TOKEN_FILE: join(home, 'missing') }, `FAIL config: no credential: set ADMIN_TOKEN, or put it in ${join(home, 'missing')}`, 'then ADMIN_TOKEN_FILE'],
+        [{ ADMIN_TOKEN_FILE: loose }, READ, 'a named file gets the same checks'],
         [{ ADMIN_TOKEN_FILE: '' }, NOT_READ, 'a set but empty ADMIN_TOKEN_FILE means no token'],
         [{ CADDIE_ADMIN_HOME: join(home, 'empty') }, NOT_READ, 'no config.json in the config dir'],
       ];
@@ -524,12 +642,17 @@ test('docs/ADMIN_CLI.md quotes the notes and the stats health smoke command as t
   const xdg = join(home, 'xdg');
   const wanted = join(xdg, 'conference-caddie', 'admin-token');
   put(legacy);
-  const fallback = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home).note
-    .replaceAll(wanted, '<config dir>/admin-token').replaceAll(legacy, '~/.config/conference-caddie/admin-token');
-  const quotedFallback = /`(NOTE admin token: [^`]+)`/.exec(doc)?.[1];
-  assert.ok(quotedFallback && fallback.startsWith(quotedFallback), `${quotedFallback}\n${fallback}`);
+  const placeholders = (note) => note.replaceAll(wanted, '<config dir>/admin-token').replaceAll(legacy, '~/.config/conference-caddie/admin-token');
+  const fallback = placeholders(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }).note);
+  writeConfig(dirname(legacy), { prod: { tier: 2, api: 'https://prod.example.test' } });
+  const refused = placeholders(resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home, apiOrigin: 'https://fork.example.test' }).note);
+  rmSync(join(dirname(legacy), 'config.json'));
+  const quoted = [...doc.matchAll(/`(NOTE admin token: [^`]+)`/g)].map((m) => m[1]);
+  assert.equal(quoted.length, 2, quoted.join('\n'));
+  assert.ok(refused.startsWith(quoted[0]), `${quoted[0]}\n${refused}`);
+  assert.ok(fallback.startsWith(quoted[1]), `${quoted[1]}\n${fallback}`);
   put(wanted);
-  const both = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home).note;
+  const both = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, { home }).note;
   assert.ok(doc.includes('`Do not delete either until you know which one the Worker accepts`') && both.includes('Do not delete either until you know which one the Worker accepts'));
-  assert.ok(doc.includes(`\`BASE_URL="https://<your worker>" SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(legacy, home)} node scripts/smoke.mjs\``));
+  assert.ok(doc.includes(`\`BASE_URL=${shellQuote('https://<your worker>')} SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(legacy, home)} node scripts/smoke.mjs\``));
 }));

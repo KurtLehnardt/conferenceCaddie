@@ -21,14 +21,17 @@
 //                        and the development origins in its ALLOWED_ORIGINS.
 //   SMOKE_DIST           the built web app the bundle scan reads, relative to the repository root.
 //                        Default web/dist-worker against the Worker on BASE_URL's origin, else web/dist.
-//   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token (the file's first line is used). A set
-//                        but empty ADMIN_TOKEN_FILE means no token. With neither set, a signed run whose
+//   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token. The file is read as caddie-admin reads
+//                        it (mode 0600, the whole file trimmed), so both use the same key. A set but
+//                        empty ADMIN_TOKEN_FILE means no token. With neither set, a signed run whose
 //                        API_BASE origin is exactly the api of a tier 2 backend in caddie-admin's
-//                        config.json reads the token file caddie-admin reads, with its checks (mode
-//                        0600, the whole file trimmed): <config dir>/admin-token, the config dir being
-//                        CADDIE_ADMIN_HOME, else $XDG_CONFIG_HOME/conference-caddie, else
-//                        ~/.config/conference-caddie. When that file does not exist, the old
-//                        ~/.config/conference-caddie/admin-token is read and a NOTE line says to move it.
+//                        config.json, and is not on this machine (a local Worker has its own token in
+//                        worker/.dev.vars), reads the token file caddie-admin reads:
+//                        <config dir>/admin-token, the config dir being CADDIE_ADMIN_HOME, else
+//                        $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie. When that
+//                        file does not exist and CADDIE_ADMIN_HOME is unset, the old
+//                        ~/.config/conference-caddie/admin-token is read, if the config.json beside it
+//                        (when there is one) lists that origin too, and a NOTE line says to move it.
 //                        Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. With a token the
 //                        three Elasticsearch helpers below are replaced by the Worker's test
 //                        fixtures: POST /admin/test/profile (the expired profile),
@@ -90,7 +93,7 @@
 //                        push.fcm with it. Unset, np2 passes when both are false and is skipped when
 //                        one is true, because the script cannot tell whether the backend should
 //                        hold that platform's key.
-//   SMOKE_UNAVAILABLE=<slug>  with an admin token and a local API: flip that conference to unavailable
+//   SMOKE_UNAVAILABLE=<slug>  with ADMIN_TOKEN or ADMIN_TOKEN_FILE and a local API: flip that conference to unavailable
 //                        for check unav1 (an owner can still delete) and restore it. Never against a
 //                        deployed Worker, because the conference would vanish from the app meanwhile.
 //   ES_URL and ES_PEOPLE_API_KEY (or ELASTISEARCH_API_KEY): used only against Cloud Run, and only
@@ -168,41 +171,52 @@ if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
   process.exit(1);
 }
 
-// The admin token comes from ADMIN_TOKEN, else the first line of the file ADMIN_TOKEN_FILE (set but
-// empty: no token), else the file caddie-admin reads (scripts/lib/admin-token-file.mjs:
-// <config dir>/admin-token, or the old ~/.config/conference-caddie/admin-token with a NOTE), read with
-// caddie-admin's own checks (readCredential: mode 0600, the whole file trimmed). That file is the
-// production Worker's token, and a signed request is not bound to a host: whoever receives one can
-// replay it to the Worker within the five-minute window. So the file is read only when API_BASE's
-// origin is exactly the api of a tier 2 backend in caddie-admin's config.json (loadConfig, which
-// requires https or http to this machine), the calls are signed (bearer would send the token itself)
-// and SMOKE_API is not cloudrun. Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. The token
-// is never printed; a NOTE about the file is printed only after it was read.
+// The admin token comes from ADMIN_TOKEN, else the file ADMIN_TOKEN_FILE (set but empty: no token),
+// else the file caddie-admin reads (scripts/lib/admin-token-file.mjs: <config dir>/admin-token, or
+// the old ~/.config/conference-caddie/admin-token with a NOTE). Files are read with caddie-admin's own
+// checks (readCredential: mode 0600, the whole file trimmed), so the smoke and the CLI use one key.
+// The default file is the production Worker's token, and a signed request is not bound to a host:
+// whoever receives one can replay it to the Worker within the five-minute window. So it is read only
+// when API_BASE's origin is exactly the api of a tier 2 backend in caddie-admin's config.json
+// (loadConfig: https or http to this machine, an origin with no path), that origin is not on this
+// machine (a local Worker has its own token in worker/.dev.vars), the calls are signed (bearer would
+// send the token itself) and SMOKE_API is not cloudrun. The old path is read only without
+// CADDIE_ADMIN_HOME and only if the config.json beside it, when there is one, lists the origin too
+// (resolveAdminTokenFile). Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. The token is never
+// printed; a NOTE about a file that was read is printed only after the read succeeded.
 const defaultTokenFileApplies = () => API_KIND_ENV !== 'cloudrun'
   && (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase() === 'signed'
+  && !isLoopbackHost(new URL(API_BASE).hostname)
   && configuredWorkerOrigins(process.env).includes(API_ORIGIN);
-function readAdminToken() {
-  if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN.trim();
-  const named = process.env.ADMIN_TOKEN_FILE;
-  if (named !== undefined) {
-    if (named === '') return '';
-    try {
-      return readFileSync(named, 'utf8').split('\n')[0].trim();
-    } catch {
-      console.log('FAIL config: ADMIN_TOKEN_FILE cannot be read');
-      process.exit(1);
-    }
-  }
-  if (!defaultTokenFileApplies()) return '';
-  const { file, note } = resolveAdminTokenFile(process.env);
-  if (!file) return '';
-  let token;
+function readTokenFile(file) {
   try {
-    token = readCredential({ env: { ADMIN_TOKEN_FILE: file }, ...CREDENTIAL_SOURCES[2] });
+    return readCredential({ env: { ADMIN_TOKEN_FILE: file }, ...CREDENTIAL_SOURCES[2] });
   } catch (err) {
     console.log(`FAIL config: ${err.message}`);
     process.exit(1);
   }
+}
+// Where the token came from: 'env', 'file' (ADMIN_TOKEN_FILE), 'default' (read by itself) or ''.
+let ADMIN_TOKEN_SOURCE = '';
+function readAdminToken() {
+  if (process.env.ADMIN_TOKEN) {
+    ADMIN_TOKEN_SOURCE = 'env';
+    return process.env.ADMIN_TOKEN.trim();
+  }
+  const named = process.env.ADMIN_TOKEN_FILE;
+  if (named !== undefined) {
+    if (named === '') return '';
+    ADMIN_TOKEN_SOURCE = 'file';
+    return readTokenFile(named);
+  }
+  if (!defaultTokenFileApplies()) return '';
+  const { file, note } = resolveAdminTokenFile(process.env, { apiOrigin: API_ORIGIN });
+  if (!file) {
+    if (note) console.log(note);
+    return '';
+  }
+  const token = readTokenFile(file);
+  ADMIN_TOKEN_SOURCE = 'default';
   if (note) console.log(note);
   return token;
 }
@@ -2770,8 +2784,10 @@ try {
 
   await check('unav1: an owner can delete while the conference is unavailable', async () => {
     const slug = process.env.SMOKE_UNAVAILABLE;
-    if (!slug || WRITE_MODE !== 'admin' || !LOCAL_API) {
-      skip('unav1: an owner can delete while the conference is unavailable', 'needs SMOKE_UNAVAILABLE=<slug>, an admin token and a local API');
+    // The token must be named (ADMIN_TOKEN or ADMIN_TOKEN_FILE): the one read by itself is the
+    // production Worker's, and is never read for a local API anyway.
+    if (!slug || WRITE_MODE !== 'admin' || !LOCAL_API || ADMIN_TOKEN_SOURCE === 'default') {
+      skip('unav1: an owner can delete while the conference is unavailable', 'needs SMOKE_UNAVAILABLE=<slug>, an admin token from ADMIN_TOKEN or ADMIN_TOKEN_FILE and a local API');
       return;
     }
     // A Worker with its fixtures gated off is a deployed one, whose conferences must not be flipped.
