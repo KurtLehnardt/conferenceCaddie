@@ -214,6 +214,31 @@ test('the User-Agent of the ingest has a neutral default and an environment over
   assert.doesNotMatch(read('scripts/lib/http.mjs'), /kurtlehnardt/i);
 });
 
+test('an invalid CADDIE_USER_AGENT (CRLF injection, control characters, non-ASCII, too long) falls back with one warning', () => {
+  const probe = (value) => spawnSync(process.execPath, ['-e', "import('./scripts/lib/http.mjs').then((m) => console.log(m.USER_AGENT))"], { cwd: ROOT, encoding: 'utf8', env: { PATH: process.env.PATH, CADDIE_USER_AGENT: value } });
+  const neutral = 'conference-caddie-ingest (+set CADDIE_USER_AGENT)';
+  for (const bad of ['ok\r\nX-Injected: 1', 'tab\there', 'bell\x07', 'caf\u00e9 (+x)', 'a'.repeat(201)]) {
+    const r = probe(bad);
+    assert.equal(r.stdout.trim(), neutral, JSON.stringify(bad));
+    assert.equal(r.stderr.trim().split('\n').length, 1, 'exactly one warning');
+    assert.match(r.stderr, /CADDIE_USER_AGENT ignored/);
+    assert.ok(!r.stderr.includes('Injected') && !r.stderr.includes('aaaa'), 'the rejected value must not be echoed');
+  }
+  const good = probe('ConferenceCaddie-ingest/0.2 (+https://github.com/example/fork)');
+  assert.equal(good.stdout.trim(), 'ConferenceCaddie-ingest/0.2 (+https://github.com/example/fork)');
+  assert.equal(good.stderr, '');
+  assert.equal(probe('a'.repeat(200)).stdout.trim(), 'a'.repeat(200));
+  assert.equal(probe('   ').stdout.trim(), neutral);
+  assert.equal(probe('   ').stderr, '');
+});
+
+test('ingest.yml keeps the exact current User-Agent for this repository', () => {
+  const y = read('.github/workflows/ingest.yml');
+  assert.ok(y.includes("CADDIE_USER_AGENT: ${{ vars.CADDIE_USER_AGENT || format('ConferenceCaddie-ingest/0.2 (+https://github.com/{0})', github.repository) }}"));
+  const notes = read('DATA_NOTES.md');
+  assert.ok(notes.includes('ConferenceCaddie-ingest/0.2 (+https://github.com/KurtLehnardt/conferenceCaddie)'), 'DATA_NOTES.md records the maintainer UA');
+});
+
 test('google-services.json is git-ignored', () => {
   const r = spawnSync('git', ['check-ignore', '-q', 'web/android/app/google-services.json'], { cwd: ROOT });
   assert.equal(r.status, 0);

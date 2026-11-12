@@ -16,7 +16,7 @@
 #   secret   CADDIE_ADMIN_TOKEN  the Worker's admin token (worker/scripts/setup-secrets.mjs sets it);
 #                                push-ingest.mjs signs every admin request with it and never sends it
 #   variable CADDIE_API_BASE     the Worker's URL (the app's URL too), for example https://conference-caddie.<subdomain>.workers.dev
-#   variable CADDIE_USER_AGENT   optional: the User-Agent of the schedule fetches, with your own contact
+#   variable CADDIE_USER_AGENT   optional: the User-Agent of the schedule fetches (default: ConferenceCaddie-ingest/0.2 naming this repository)
 # Optional, only when a Cloudflare Access application with a service token guards /admin/* (empty
 # by default; the client sends the two Access headers only when both are set):
 #   secret   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
@@ -72,8 +72,8 @@ jobs:
       ALLOW_SHRINK: ${{ inputs.allow_shrink }}
       ALLOW_EMPTY: ${{ inputs.allow_empty }}
       CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
-      # The User-Agent the discovery step sends (scripts/lib/http.mjs); empty means the neutral default.
-      CADDIE_USER_AGENT: ${{ vars.CADDIE_USER_AGENT }}
+      # The User-Agent the discovery step sends (scripts/lib/http.mjs): the variable, else this repository as the contact.
+      CADDIE_USER_AGENT: ${{ vars.CADDIE_USER_AGENT || format('ConferenceCaddie-ingest/0.2 (+https://github.com/{0})', github.repository) }}
     # The admin token and the optional Access token are set only in the environment of the two
     # steps that need them (the configuration check and the push), not the job's, so the discovery
     # step, which fetches third-party feeds, does not receive them in its environment. The steps
