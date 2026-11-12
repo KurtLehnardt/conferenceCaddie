@@ -1,0 +1,437 @@
+# Dependabot's Gradle updates change only version strings and never regenerate
+# native/gradle/verification-metadata.xml, so every native job on such a pull request fails dependency
+# verification until somebody regenerates the file (native/README.md, "Dependency verification").
+# This workflow does the regeneration in CI and leaves the push to a maintainer. It never pushes.
+#
+# Two jobs, because the build is untrusted:
+# - "regenerate" runs the documented --write-verification-metadata command on macOS, so the iOS
+#   artifacts are covered. In write mode Gradle verifies nothing, so the new versions' plugins and
+#   build logic run unverified there, and anything that job produces is untrusted: the written file,
+#   its outputs, its job summary. It uploads the written file and nothing else.
+# - "publish" runs no project code (no Gradle, no scripts from the pull request; its one checkout is the
+#   metadata file). It reads the uploaded file as data. It refuses the file unless the structure is
+#   exactly what Gradle writes, the <configuration> block unchanged and every added line in Gradle's
+#   format. Gradle's reader ignores namespaces and accepts elements anywhere, so anything looser could
+#   hide a checksum from this check. It reports every added component, every additional trusted
+#   checksum (<also-trust>) and every removed one. It checks each new SHA-256 against the file on Maven
+#   Central, Google's Maven repository or the Gradle Plugin Portal. It writes a diff that touches only
+#   native/gradle/verification-metadata.xml, uploads it, and prints the diff's SHA-256 in its job summary.
+#   That summary is the only one to trust.
+#
+# Permissions, the same for both jobs:
+# - The trigger is pull_request, never pull_request_target, so the run gets the pull request's own
+#   privileges.
+# - The workflow grants nothing and each job only contents: read: no write scope, no id-token, no
+#   environment. No step reads a secret.
+# - Checkouts keep no credentials. Gradle's cache is off, and this workflow saves no cache. Code in the
+#   build could still save to the pull request's own cache scope with the runner's token. Only that pull
+#   request's runs read that scope, and they have no secrets either; main's caches are out of reach.
+#
+# Every action is pinned to a full commit SHA; Dependabot (.github/dependabot.yml) proposes updates.
+name: Verification metadata for Dependabot
+
+on:
+  pull_request:
+    paths:
+      - 'native/**'
+
+permissions: {}
+
+concurrency:
+  group: dependabot-verification-metadata-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    name: Regenerate the verification metadata (untrusted build)
+    # Only pull requests that Dependabot opened, from a branch of this repository, and only runs that
+    # Dependabot started: a maintainer's push to the branch does not start another long macOS run, and
+    # a re-run keeps the original actor.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-26
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      # The pull request's own commit, not the merge with main, so the diff applies to its branch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platforms;android-37.0 build-tools;36.0.0 platform-tools'
+
+      # Gradle's cache stays off, so the file records everything a new machine downloads. With a warm
+      # cache, Gradle reuses parsed POMs and does not record their parent POMs and BOMs. The wrapper
+      # is validated (setup-gradle's default).
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
+
+      # Restored only, as on pull requests in native.yml. Kotlin/Native's toolchain is LLVM and the
+      # sysroots; the Kotlin/Native distribution itself is a Maven artifact, which Gradle still resolves
+      # and records. The pinned downloads are checked by SHA-256 in the build.
+      - name: Restore Kotlin/Native
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
+
+      - name: Restore the pinned downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/caches/caddie-pinned
+          key: caddie-pinned-${{ runner.os }}-${{ hashFiles('native/gradle/pinned-downloads.properties') }}
+
+      # The command of native/README.md, "Dependency verification". --continue keeps a failing test
+      # from stopping the tasks whose classpaths are resolved only when they run.
+      - name: Write the verification metadata
+        run: |
+          ./gradlew --continue --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help checkToolingFloors \
+            :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
+            :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
+            :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
+            :composeApp:iosArm64ResolveResourcesFromDependencies \
+            :composeApp:iosSimulatorArm64ResolveResourcesFromDependencies
+
+      # Gradle writes the file even when a task fails, so it is kept either way; "publish" says when
+      # this job did not succeed.
+      - name: Keep the written file
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: untrusted-verification-metadata
+          path: native/gradle/verification-metadata.xml
+          retention-days: 3
+
+  publish:
+    name: Check and publish the diff
+    needs: regenerate
+    if: ${{ !cancelled() && needs.regenerate.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      # Only the metadata file of the pull request's commit, to compare against. Nothing is run from it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          sparse-checkout: native/gradle/verification-metadata.xml
+          sparse-checkout-cone-mode: false
+
+      - name: Download the written file
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: untrusted-verification-metadata
+          path: ${{ runner.temp }}/untrusted
+
+      # Treats the written file as data. Gradle's own reader ignores namespaces and accepts elements
+      # anywhere, so the file is refused unless its structure is exactly what Gradle writes:
+      # - one configuration block, unchanged, then one components block;
+      # - components holding components, components holding artifacts, each artifact one sha256 and
+      #   any also-trust inside it; every element in Gradle's namespace, no other attribute, no
+      #   duplicate component or artifact;
+      # - every added line of the diff in the form Gradle's writer produces.
+      # Every new SHA-256 is compared with the published file. Exits 1 on any refusal or mismatch.
+      - name: Check the written file and build the diff
+        id: check
+        env:
+          BASE: native/gradle/verification-metadata.xml
+          UNTRUSTED: ${{ runner.temp }}/untrusted/verification-metadata.xml
+          OUT: ${{ runner.temp }}/out
+        run: |
+          mkdir -p "$OUT"
+          python3 - <<'PY'
+          import difflib, hashlib, json, os, re, sys, urllib.error, urllib.request
+          import xml.etree.ElementTree as ET
+
+          base_path, new_path, out = os.environ["BASE"], os.environ["UNTRUSTED"], os.environ["OUT"]
+          NS = "{https://schema.gradle.org/dependency-verification}"
+          XSI = "{http://www.w3.org/2001/XMLSchema-instance}schemaLocation"
+          COORD = re.compile(r"^[A-Za-z0-9._+-]+$")
+          HEX = re.compile(r"^[0-9a-f]{64}$")
+          REPOS = ["https://repo.maven.apache.org/maven2/", "https://dl.google.com/dl/android/maven2/",
+                   "https://plugins.gradle.org/m2/"]
+          MAX_FILE, MAX_ARTIFACT = 16 * 1024 * 1024, 1024 * 1024 * 1024
+          report, problems, warnings = [], [], []
+
+
+          class Refused(Exception):
+              pass
+
+
+          def read(path):
+              if os.path.getsize(path) > MAX_FILE:
+                  raise Refused("the file is larger than 16 MB")
+              with open(path, encoding="utf-8") as f:
+                  text = f.read()
+              if "<!DOCTYPE" in text or "<!ENTITY" in text:
+                  raise Refused("the file declares a DOCTYPE or an entity")
+              return text
+
+
+          def local(e, expected):
+              # Every element must be in Gradle's namespace and be the one expected here. Gradle's own reader
+              # ignores namespaces and accepts elements anywhere, so anything else could mean something to it
+              # that this check does not see.
+              if e.tag != NS + expected:
+                  raise Refused(f"unexpected element where {expected} belongs")
+
+
+          def attrs(e, allowed, required):
+              keys = set(e.attrib)
+              if not keys <= allowed or not required <= keys:
+                  raise Refused(f"unexpected attributes on a {e.tag.replace(NS, '')} element")
+
+
+          def load(text):
+              """The file's structure, refused unless it is exactly what Gradle writes."""
+              try:
+                  root = ET.fromstring(text)
+              except (ET.ParseError, RecursionError):
+                  raise Refused("the file is not well-formed XML")
+              local(root, "verification-metadata")
+              attrs(root, {XSI}, set())
+              kids = list(root)
+              if [k.tag for k in kids] != [NS + "configuration", NS + "components"]:
+                  raise Refused("the root must hold one configuration block and then one components block")
+              config, components = kids
+              comps = {}
+              for c in components:
+                  local(c, "component")
+                  attrs(c, {"group", "name", "version"}, {"group", "name", "version"})
+                  key = (c.get("group"), c.get("name"), c.get("version"))
+                  if not all(COORD.match(p) for p in key):
+                      raise Refused("a component name holds characters outside [A-Za-z0-9._+-]")
+                  if key in comps:
+                      raise Refused("a component appears twice")
+                  arts = {}
+                  for a in c:
+                      local(a, "artifact")
+                      attrs(a, {"name"}, {"name"})
+                      name = a.get("name")
+                      if not COORD.match(name):
+                          raise Refused("an artifact name holds characters outside [A-Za-z0-9._+-]")
+                      if name in arts:
+                          raise Refused("an artifact appears twice in one component")
+                      sums = list(a)
+                      if len(sums) != 1:
+                          raise Refused("an artifact must hold exactly one sha256 element")
+                      s = sums[0]
+                      local(s, "sha256")
+                      attrs(s, {"value", "origin", "reason"}, {"value"})
+                      values = [("sha256", s.get("value"))]
+                      for t in s:
+                          local(t, "also-trust")
+                          attrs(t, {"value"}, {"value"})
+                          values.append(("also-trust", t.get("value")))
+                      for _, v in values:
+                          if not HEX.match(v):
+                              raise Refused("a checksum is not a lowercase SHA-256")
+                      if (s.text or "").strip() or (s.tail or "").strip() or (a.text or "").strip():
+                          raise Refused("unexpected text inside an artifact")
+                      arts[name] = values
+                  comps[key] = arts
+              return comps, ET.tostring(config)
+
+
+          # Every line the diff adds must be one that Gradle's writer produces inside <components>.
+          ADDED_LINE = re.compile(
+              r'^(      <component group="[A-Za-z0-9._+-]+" name="[A-Za-z0-9._+-]+" version="[A-Za-z0-9._+-]+">'
+              r'|         <artifact name="[A-Za-z0-9._+-]+">'
+              r'|            <sha256 value="[0-9a-f]{64}" origin="Generated by Gradle"/?>'
+              r'|               <also-trust value="[0-9a-f]{64}"/>'
+              r'|            </sha256>|         </artifact>|      </component>)$')
+
+
+          def module_urls(g, n, v):
+              mapping = {}
+              for repo in REPOS:
+                  url = f"{repo}{g.replace('.', '/')}/{n}/{v}/{n}-{v}.module"
+                  try:
+                      with urllib.request.urlopen(url, timeout=60) as r:
+                          data = json.loads(r.read(4 * 1024 * 1024))
+                  except Exception:
+                      continue
+                  for variant in data.get("variants", []):
+                      for f in variant.get("files", []):
+                          if isinstance(f, dict) and COORD.match(str(f.get("name", ""))) and COORD.match(str(f.get("url", ""))):
+                              mapping[f["name"]] = f["url"]
+                  break
+              return mapping
+
+
+          def published_sha256(g, n, v, art, mapping):
+              for repo in REPOS:
+                  url = f"{repo}{g.replace('.', '/')}/{n}/{v}/{mapping.get(art, art)}"
+                  try:
+                      with urllib.request.urlopen(url, timeout=120) as r:
+                          h, size = hashlib.sha256(), 0
+                          while chunk := r.read(1024 * 1024):
+                              size += len(chunk)
+                              if size > MAX_ARTIFACT:
+                                  return None, "larger than 1 GB"
+                              h.update(chunk)
+                          return h.hexdigest(), repo
+                  except urllib.error.HTTPError as e:
+                      if e.code == 404:
+                          continue
+                      return None, f"HTTP {e.code} at {repo}"
+                  except Exception as e:
+                      return None, f"{type(e).__name__} at {repo}"
+              return None, "not found in Maven Central, Google's Maven repository or the Gradle Plugin Portal"
+
+
+          diff, added_components = "", []
+          try:
+              base_text, new_text = read(base_path), read(new_path)
+              base, base_cfg = load(base_text)
+              new, new_cfg = load(new_text)
+              if base_cfg != new_cfg:
+                  raise Refused("the configuration block changed (trusted artifacts, keys or verification switches)")
+              diff = "".join(difflib.unified_diff(
+                  base_text.splitlines(keepends=True), new_text.splitlines(keepends=True),
+                  fromfile="a/native/gradle/verification-metadata.xml", tofile="b/native/gradle/verification-metadata.xml"))
+              for line in diff.splitlines()[2:]:  # after the two file headers
+                  if line.startswith("+") and not ADDED_LINE.match(line[1:]):
+                      raise Refused("the diff adds a line that Gradle's writer does not produce")
+              added_components = sorted(":".join(k) for k in new if k not in base)
+              for key, arts in sorted(new.items()):
+                  old = base.get(key, {})
+                  for art, values in sorted(arts.items()):
+                      before = set(old.get(art, []))
+                      for kind, value in values:
+                          if (kind, value) in before:
+                              continue
+                          g, n, v = key
+                          line = f"{g}:{n}:{v} {art} ({kind}{', new component' if key not in base else ''})"
+                          got, where = published_sha256(g, n, v, art, module_urls(g, n, v))
+                          if got is None:
+                              warnings.append(f"{line}: not checked, {where}")
+                          elif got == value:
+                              report.append(f"MATCH     {line}: {where}")
+                          else:
+                              problems.append(f"{line}: the published file at {where} has SHA-256 {got}, not {value}")
+                          if kind == "also-trust":
+                              warnings.append(f"{line}: an additional trusted checksum. The published file differs from the one "
+                                              "already pinned. Find out why before accepting it")
+              for key, arts in sorted(base.items()):
+                  for art, values in sorted(arts.items()):
+                      for kind, value in values:
+                          if (kind, value) not in set(new.get(key, {}).get(art, [])):
+                              warnings.append(f"{':'.join(key)} {art}: {kind} removed")
+          except Refused as r:
+              problems.append(str(r))
+              diff = ""
+
+          # Everything that reaches the summary or the log is built from validated names, hex digits and this
+          # script's own words; strip anything else anyway.
+          clean = lambda s: re.sub(r"[^A-Za-z0-9._+:/ ,()'-]", "", s)
+          problems, warnings, report = [clean(p) for p in problems], [clean(w) for w in warnings], [clean(r) for r in report]
+          if diff and not problems:
+              with open(os.path.join(out, "verification-metadata.diff"), "w", encoding="utf-8") as f:
+                  f.write(diff)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"changed={'true' if diff and not problems else 'false'}\n")
+          with open(os.path.join(out, "result.json"), "w", encoding="utf-8") as f:
+              json.dump({"added": [clean(a) for a in added_components], "report": report, "warnings": warnings,
+                         "problems": problems, "sha256": hashlib.sha256(diff.encode()).hexdigest() if diff and not problems else ""}, f)
+          for p in problems:
+              print(f"::error::{p}")
+          sys.exit(1 if problems else 0)
+          PY
+
+      - name: Upload the diff
+        id: upload
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.changed == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verification-metadata-pr-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/out/verification-metadata.diff
+          retention-days: 14
+
+      # Prints only values that GitHub sets (numbers, the repository, job results) and the check's report,
+      # each cleaned to a small character set.
+      - name: Tell the maintainer how to apply it
+        if: ${{ !cancelled() }}
+        env:
+          OUT: ${{ runner.temp }}/out
+          BUILD_RESULT: ${{ needs.regenerate.result }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, re
+          e = os.environ
+          # The check already cleaned these strings; clean them again, so nothing outside this set reaches
+          # the summary whatever result.json holds.
+          clean = lambda v: re.sub(r"[^A-Za-z0-9._+:/ ,()'-]", "", str(v))
+          pr, run, repo = clean(e["PR_NUMBER"]), clean(e["RUN_ID"]), clean(e["REPO"])
+          name = f"verification-metadata-pr-{pr}"
+          print(f"## Verification metadata for pull request #{pr}\n")
+          print("This section, under the job \"Check and publish the diff\", is the one to trust. The regenerate job ran "
+                "the pull request's build and could have written anything into its own summary.\n")
+          try:
+              with open(os.path.join(e["OUT"], "result.json"), encoding="utf-8") as f:
+                  r = json.load(f)
+          except (OSError, ValueError):
+              print(f"The written file could not be checked ({clean(e['CHECK_OUTCOME'])}); see the log of this job.")
+              raise SystemExit(0)
+          if e["BUILD_RESULT"] != "success":
+              print(f"**The Gradle build did not succeed ({clean(e['BUILD_RESULT'])}), so the file may lack entries.** "
+                    "Read the regenerate job's log. A version that no pinned download matches (ONNX Runtime's iOS "
+                    "archive) or an API change in the update needs a fix by hand first.\n")
+          for p in r.get("problems", []):
+              print(f"- **Refused:** {clean(p)}")
+          if r.get("problems"):
+              print("\nDo not apply anything from this run.\n")
+              raise SystemExit(0)
+          for w in r.get("warnings", []):
+              print(f"- **Check:** {clean(w)}")
+          if r.get("warnings"):
+              print()
+          if r.get("added"):
+              print("Added components:\n\n```")
+              print("\n".join(clean(a) for a in r["added"]))
+              print("```\n")
+          if r.get("report"):
+              print("New checksums compared with the published files:\n\n```")
+              print("\n".join(clean(x) for x in r["report"]))
+              print("```\n")
+          sha = r.get("sha256", "")
+          if not re.fullmatch(r"[0-9a-f]{64}", sha):
+              print("No change to `native/gradle/verification-metadata.xml`.")
+          elif e["UPLOAD_OUTCOME"] != "success":
+              print(f"The diff was not uploaded ({clean(e['UPLOAD_OUTCOME'])}). An artifact named `{name}` from another job is not this one.")
+          else:
+              d = f"/tmp/{name}-{run}"
+              print("To apply it, from the repository root on a checkout of this pull request's branch:\n")
+              print("```sh")
+              print(f"gh run download {run} -R {repo} -n {name} -D {d} &&")
+              print(f"  echo '{sha}  {d}/verification-metadata.diff' | shasum -a 256 -c &&")
+              print(f"  git apply --include=native/gradle/verification-metadata.xml {d}/verification-metadata.diff &&")
+              print("  git status --short   # only native/gradle/verification-metadata.xml may be listed")
+              print("```\n")
+              print("Then review it as native/README.md (\"Dependency verification\") says: remove the entries that only "
+                    "the replaced versions needed, run a strict build, and push. Linux-only artifacts (AAPT2, the "
+                    "Kotlin/Native distribution for Linux) and what Xcode's build phase resolves are not in this "
+                    "diff; a Kotlin or AGP update needs those added from the first failing CI run.")
+          PY
