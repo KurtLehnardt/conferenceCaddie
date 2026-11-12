@@ -170,10 +170,10 @@ describe("until: 'keep'", () => {
     assert.deepEqual(doc(), before);
   });
 
-  test('a presence that runs out after the guarded read stores no new position or session', async () => {
+  test('a keep whose conflict re-read finds the presence run out is refused and stores nothing', async () => {
     const { device, cluster, id, doc } = setup({}, Date.now() + 2 * MIN);
-    // Another write lands after the first read, so the guarded write conflicts and reads again;
-    // by then the clock has passed the stored end.
+    // Another write lands after the first read, so the guarded write conflicts and the profile is
+    // read again; by then the clock has passed the stored end, and that re-read decides.
     cluster.after('get', 1, (c) => c.patch(INDEX.people, id, { spot_hidden: false }));
     const realNow = Date.now;
     cluster.after('get', 2, () => {

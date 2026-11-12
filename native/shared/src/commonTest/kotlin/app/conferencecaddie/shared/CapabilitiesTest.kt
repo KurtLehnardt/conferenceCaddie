@@ -42,7 +42,7 @@ class CapabilitiesTest {
     fun aCompleteV1DocumentIsItsOwnEffectiveFeatureSet() {
         for (name in listOf("tier2-free.json", "tier3-paid.json", "tier3-transition.json")) {
             val fixture = Fixtures.capabilities(name)
-            assertEquals(Fixtures.asWritten(fixture), Capabilities.effective(fixture).toJson(), name)
+            assertEquals(fixture, Capabilities.effective(fixture).toJson(), name)
         }
     }
 
@@ -60,7 +60,7 @@ class CapabilitiesTest {
 
     @Test
     fun legacyIsTheContractsLegacySet() {
-        assertEquals(Fixtures.asWritten(Fixtures.capabilities("legacy-effective.json")), Capabilities.Legacy.toJson())
+        assertEquals(Fixtures.capabilities("legacy-effective.json"), Capabilities.Legacy.toJson())
         assertEquals(Capabilities.Legacy, Capabilities.effective(Capabilities.Legacy.toJson()))
         assertEquals(Capabilities.BleMode.ServerRotate, Capabilities.Legacy.ble.mode)
         assertNull(Capabilities.Legacy.talks.bundleBase)

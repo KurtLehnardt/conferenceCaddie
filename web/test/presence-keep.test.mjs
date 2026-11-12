@@ -10,7 +10,7 @@ import './env.mjs';
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { calls, json, onFetch, requests, resetFake, settle } from './env.mjs';
+import { calls, deferred, json, onFetch, requests, resetFake, settle } from './env.mjs';
 import { effectiveCapabilities } from '../../contracts/js/capabilities.mjs';
 
 const SLUG = 'testconf-2099';
@@ -210,4 +210,142 @@ test('the flag is read by the contract rules, the same as the reference implemen
     assert.equal(offersKeepUntil(doc), want, JSON.stringify(doc)?.slice(0, 80));
   }
   assert.equal(offersKeepUntil(TIER3), true);
+});
+
+// The order of the writes: a write the person asks for (Extend, a zone) after a refused 'keep'
+// must still be recorded, and a turn-on answered after presence was turned off elsewhere must not
+// leave presence on at the server that the device does not show.
+
+/** The server's presence after the requests so far: on after a successful PUT, off after a DELETE. */
+function serverPresence() {
+  let on = true;
+  for (const c of calls) {
+    if (c.path.startsWith('/api/presence') && c.method === 'DELETE') on = false;
+    if (c.path === '/api/presence' && c.method === 'PUT' && c.ok) on = true;
+  }
+  return on;
+}
+
+/** Answers PUT /api/presence with `answer(call)` once `gate` resolves, and records the outcome. */
+function heldServer({ keepAnswer, until = new Date(Date.now() + 8 * 60 * MIN).toISOString(), gates = {} } = {}) {
+  onFetch(async (call) => {
+    if (call.path === '/api/capabilities') return json(200, TIER3);
+    if (call.method === 'PUT' && call.path === '/api/presence') {
+      const gate = gates[call.body.until ?? 'hour'];
+      if (gate) await gate.promise;
+      const res = call.body.until === 'keep' ? keepAnswer(call) : json(200, { ok: true, zone: call.body.zone, until: call.body.until ?? 'hour', presence_since: new Date().toISOString(), presence_until: until, located: false });
+      call.ok = res.status === 200;
+      return res;
+    }
+    return json(200, { ok: true });
+  });
+  return until;
+}
+
+test('Extend queued behind a refused keep is recorded: device and server both stay on', async () => {
+  presenceOn({ mode: 'day' });
+  const gate = deferred();
+  const until = heldServer({ keepAnswer: () => json(400, NOT_ACTIVE), gates: { keep: gate } });
+  const p = await fresh();
+  const off = p.sharePosition(SLUG, false); // the keep write, held in flight
+  await settle();
+  const ext = p.extend(SLUG); // the person taps Extend meanwhile
+  await settle();
+  gate.resolve(); // the keep is refused: presence had run out on the server
+  await off;
+  assert.equal(await ext, null);
+  await settle();
+  assert.deepEqual(puts().map((c) => c.body.until), ['keep', 'day']);
+  assert.equal(requests().includes('DELETE /api/presence'), false);
+  const s = await storage();
+  assert.equal(s.getPresence(SLUG).on, true, 'the Extend answer is recorded');
+  assert.equal(s.getPresence(SLUG).until, until);
+  assert.equal(serverPresence(), true);
+});
+
+test('a turn-on answered after another tab turned presence off tells the server: both end off', async () => {
+  presenceOn();
+  const gate = deferred();
+  heldServer({ gates: { hour: gate } });
+  const p = await fresh();
+  const s = await storage();
+  const unwatch = p.watchPresence(SLUG);
+  try {
+    const ext = p.extend(SLUG); // Extend's PUT is in flight
+    await settle();
+    // Another tab turns presence off: it writes the stored state, and this tab hears of it.
+    localStorage.setItem(`caddie.presence.v1.${SLUG}`, JSON.stringify({ ...JSON.parse(localStorage.getItem(`caddie.presence.v1.${SLUG}`)), on: false, zone: null, until: null }));
+    window.dispatchEvent(Object.assign(new Event('storage'), { key: `caddie.presence.v1.${SLUG}` }));
+    assert.equal(s.getPresence(SLUG).on, false);
+    gate.resolve(); // this tab's PUT lands after the other tab's DELETE
+    assert.equal(await ext, null);
+    await settle();
+    assert.deepEqual(requests(), ['PUT /api/presence', 'DELETE /api/presence'], 'fail closed: the server is told');
+    assert.equal(s.getPresence(SLUG).on, false, 'the answer is not recorded');
+    assert.equal(serverPresence(), false);
+  } finally {
+    unwatch();
+  }
+});
+
+test('a turn-on answered after this tab turned presence off ends off on both sides', async () => {
+  presenceOn();
+  const gate = deferred();
+  heldServer({ gates: { hour: gate } });
+  const p = await fresh();
+  const ext = p.extend(SLUG);
+  await settle();
+  const off = p.turnOff(SLUG);
+  gate.resolve();
+  await off;
+  await ext;
+  await settle();
+  assert.equal(requests()[0], 'PUT /api/presence');
+  assert.equal(requests().at(-1), 'DELETE /api/presence');
+  assert.equal((await storage()).getPresence(SLUG).on, false);
+  assert.equal(serverPresence(), false);
+});
+
+test('a turn-on queued behind the fail-closed delete is not undone by it', async () => {
+  presenceOn();
+  const gate = deferred();
+  heldServer({ gates: { hour: gate } });
+  const p = await fresh();
+  const s = await storage();
+  const unwatch = p.watchPresence(SLUG);
+  try {
+    const first = p.extend(SLUG);
+    await settle();
+    localStorage.setItem(`caddie.presence.v1.${SLUG}`, JSON.stringify({ ...JSON.parse(localStorage.getItem(`caddie.presence.v1.${SLUG}`)), on: false, zone: null, until: null }));
+    window.dispatchEvent(Object.assign(new Event('storage'), { key: `caddie.presence.v1.${SLUG}` }));
+    // The person turns presence on again here before the first answer comes back.
+    const again = p.turnOn(SLUG, 'Expo hall', '', 'hour');
+    gate.resolve();
+    await first;
+    assert.equal(await again, null);
+    await settle();
+    // The fail-closed delete was queued after the second turn-on; presence was on by its turn.
+    assert.deepEqual(requests(), ['PUT /api/presence', 'PUT /api/presence']);
+    assert.equal(s.getPresence(SLUG).on, true);
+    assert.equal(s.getPresence(SLUG).zone, 'Expo hall');
+  } finally {
+    unwatch();
+  }
+});
+
+test('a keep refused with another 400 reads the capabilities again, and position off is sent once more with the mode', async () => {
+  presenceOn({ mode: 'day' });
+  // A backend that no longer takes keep (rolled back), while the page still holds the flag.
+  heldServer({ keepAnswer: () => json(400, { error: "until must be 'hour' or 'day'" }) });
+  const p = await fresh();
+  await p.sharePosition(SLUG, false);
+  await settle();
+  assert.deepEqual(requests(), ['GET /api/capabilities', 'PUT /api/presence', 'PUT /api/presence']);
+  assert.deepEqual(puts().map((c) => c.body.until), ['keep', 'day'], 'the stored position is still cleared');
+  assert.equal(puts()[1].body.location, undefined);
+  assert.equal((await storage()).getPresence(SLUG).on, true);
+  // The flag is read again for the next write.
+  await p.sharePosition(SLUG, false);
+  await settle();
+  assert.equal(requests().filter((r) => r === 'GET /api/capabilities').length, 2);
 });

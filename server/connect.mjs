@@ -512,7 +512,8 @@ async function putPresence(req, res) {
     // read found and is refused when there is none or it has passed, so it never starts presence.
     // The write is guarded by this read's sequence number: when a delete, the purge or another
     // write changed the document in between, it is read and judged again, so 'keep' cannot bring
-    // back an end that is gone. Never past visible_until.
+    // back an end that is gone. Decided on this read: a 'keep' at the very edge may write back an
+    // end that passes before the write lands, which reads as off. Never past visible_until.
     const storedUntilMs = untilOf(me);
     const live = liveAt(me, now);
     if (mode === 'keep' && !live) throw presenceNotActive();
@@ -535,8 +536,6 @@ async function putPresence(req, res) {
     // because one nonce is one presence session.
     const session = body.ble === true ? mintBleSession(me.profile_id, now, untilMs) : null;
     const ble = session ? session.fields : body.ble === false || !live ? BLE_OFF : {};
-    // A 'keep' whose presence ran out while this was built stores no new position or session.
-    if (mode === 'keep' && !(untilMs > Date.now())) throw presenceNotActive();
     return { doc: { ...presence, ...ble }, presence, position, bleAnswer: session?.view ?? {}, held, storedSpot, since };
   }, { current });
   if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);

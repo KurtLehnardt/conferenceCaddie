@@ -129,6 +129,7 @@ import { configuredWorkerOrigins, resolveAdminTokenFile } from './lib/admin-toke
 import { CREDENTIAL_SOURCES, readCredential } from './admin/credentials.mjs';
 import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
+import { effectiveCapabilities } from '../contracts/js/capabilities.mjs';
 import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
 
@@ -2593,7 +2594,9 @@ try {
   // with the others, and its presence is ended here.
   const KEEP1 = "keep1: until 'keep' with ble:false keeps presence_until";
   const KEEP2 = "keep2: until 'keep' after DELETE /api/presence answers 400 presence_not_active";
-  const keepOffered = capsDoc?.people?.presence === true && capsDoc?.people?.presence_keep_until === true;
+  // By the consumer rules (docs/contracts/capabilities.md): the flag counts only with people
+  // enabled, reports and presence.
+  const keepOffered = capsDoc ? effectiveCapabilities(capsDoc).people.presence_keep_until : false;
   if (!keepOffered) {
     const why = !capsDoc ? 'no capabilities document'
       : IS_WORKER ? 'the Worker does not advertise people.presence_keep_until yet'

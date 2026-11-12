@@ -4,7 +4,7 @@
 import { apiFetch } from '../lib/apiBase';
 import { pausedMessage } from '../lib/pace';
 import { deleteCovers, getDevice } from './storage';
-import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceMode, PresenceUntil, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
+import type { CircleMembers, Inbox, MeetDetail, MeetState, PersonResult, Position, PresenceUntil, Recommendation, ReportKind, ReportReason, TopicHit, TopicRef } from './types';
 
 // The fields are assigned by hand rather than as constructor parameter properties, so Node can run
 // this file by stripping its types (web/test does).
@@ -322,10 +322,11 @@ export interface BleToken {
 
 /**
  * A presence write that also mints (ble: true) or clears (ble: false) the Bluetooth token. It is
- * the same write as putPresence, so it carries the current mode and the last position: a write
- * without them would shorten a day-long presence to an hour and clear the stored position.
+ * the same write as putPresence, so it carries the last position and either 'keep' (where the
+ * backend offers it) or the current mode: a write without them would clear the stored position, or
+ * shorten a day-long presence to an hour.
  */
-export function putPresenceBle(slug: string, zone: string, spot: string, ble: boolean, location: Position | null = null, until: PresenceMode = 'hour') {
+export function putPresenceBle(slug: string, zone: string, spot: string, ble: boolean, location: Position | null = null, until: PresenceUntil = 'hour') {
   if (deleteCovers(slug)) return deleteUnfinished();
   return call<{ ok: boolean; presence_until: string; ble?: BleToken }>('/api/presence', {
     method: 'PUT',
