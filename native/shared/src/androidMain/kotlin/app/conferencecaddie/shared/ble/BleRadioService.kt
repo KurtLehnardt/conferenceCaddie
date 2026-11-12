@@ -20,19 +20,28 @@ import java.util.UUID
  * ([BleInterrogation]), with an ongoing notification ([BleRadioNotification]) carrying a Stop action.
  * All Bluetooth calls go through [BleHardware].
  *
- * **Tokens and windows.** The payload is never stored here: every advertisement and every read asks
- * the session's [BlePayloadSource] for the payload of the window now, which the runtime derives from
- * the key with no network call. At every window start the two advertising sets are stopped and
- * started again with the new payload, so the stack draws a new address for them and the address
- * changes together with the token (docs/contracts/ble-tokens.md, mitigation 4). The runtime also
- * calls [AndroidBleRadio.refresh] then; the service does it by itself as well, because the runtime's
- * timers may not run while the phone sleeps.
+ * **Tokens and windows.** Every advertisement asks the session's [BlePayloadSource] for the payload
+ * of the window now, which the runtime derives from the key with no network call. At every window
+ * start the two advertising sets are stopped and started again with the new payload, so the stack
+ * draws a new address for them and the address changes together with the token
+ * (docs/contracts/ble-tokens.md, mitigation 4). The runtime also calls [AndroidBleRadio.refresh]
+ * then; the service does it by itself as well, because the runtime's timers may not run while the
+ * phone sleeps. A read of the token characteristic is answered with the payload the sets carry
+ * ([advertisedPayload]), not the payload of the window now: between a window's start and the restart
+ * of the sets (an alarm can be minutes late in Doze), a phone that connected through the old address
+ * still reads the old token, so no address is ever seen with two tokens. The server accepts the
+ * window before the current one.
  *
  * **One token per connection.** A phone that stayed connected to the GATT server across a window
  * change could read two tokens over one link and tie them together, which rotation is there to
  * prevent. Each connection is served only the payload it read first ([BleTokenReaders]); a read of
  * another is refused, and whenever the payload changes the connections that read an earlier one are
  * ended. Devices that never read the token (a watch bonded to this phone) are left alone.
+ *
+ * **No token to the phones this one connects to.** Android lets the peer of a connection this phone
+ * makes read the phone's name, and anything can advertise Caddie's service UUID to be connected to.
+ * A device this phone is reading, or has read and whose link has not ended yet, is refused the token
+ * ([BleOutboundLinks]), so no link carries both the name and the token.
  *
  * **Clocks.** The window boundary and the session's end ([BleRadioConfig.untilEpochMillis]) are
  * kept on the elapsed-realtime clock, which keeps counting while the phone sleeps; a Handler alone
@@ -46,8 +55,14 @@ import java.util.UUID
  * go out before the phone sleeps again.
  *
  * **Scanning.** The scan starts again at a refresh when it failed, and at every new window anyway,
- * because Android turns a scan that has run for 30 minutes into an opportunistic one that only hears
- * what other apps' scans hear. On Android 10 and 11 a scan gets results only while the app is in
+ * because Android lowers a scan that has run too long (AOSP ScanManager.regularScanTimeout), and a
+ * restart starts the count again. From Android 14 on the limit is 10 minutes: a filtered scan like
+ * this one then drops to SCAN_MODE_LOW_POWER (it is not stopped), and an unfiltered one becomes
+ * opportunistic, hearing only what other apps' scans hear. On Android 8 to 13 the limit is 30
+ * minutes and only a scan without filters, or with more than the controller can hold, becomes
+ * opportunistic. A batched scan (a report delay, where the controller batches) is never lowered.
+ * Windows are 10 minutes, so a scan restarted at each one is lowered at most for the moments an
+ * alarm comes late. On Android 10 and 11 a scan gets results only while the app is in
  * front (the location permission there is "while in use", and a `connectedDevice` service has no
  * location access of its own), so there it is never started again from the background, and after a
  * sticky restart in the background the notification says "Open Caddie to keep listening" until an
@@ -76,8 +91,9 @@ import java.util.UUID
  * **The notification.** Android 14 and newer let the person swipe the ongoing notification away,
  * which would hide the Stop action; while the service runs it is posted again.
  *
- * Declared in the application's manifest with `foregroundServiceType="connectedDevice"`, not
- * exported. Nothing here logs an address, a payload or a token.
+ * Declared with `foregroundServiceType="connectedDevice"`, not exported, in the application's
+ * Bluetooth manifest (androidApp/src/ble), which only builds with Bluetooth proximity on merge.
+ * Nothing here logs an address, a payload or a token.
  */
 class BleRadioService : Service() {
     private val main = Handler(Looper.getMainLooper())
@@ -91,8 +107,11 @@ class BleRadioService : Service() {
     private var interrogation: BleInterrogation? = null
     private var advertisedWindow = Long.MIN_VALUE
 
-    /** The payload the advertising sets carry now, or null while nothing is advertised. */
-    private var advertisedPayload: ByteArray? = null
+    /**
+     * The payload the advertising sets carry now, or null while nothing is advertised; what a read of
+     * the token characteristic is served. Read from a GATT binder thread too.
+     */
+    @Volatile private var advertisedPayload: ByteArray? = null
 
     /** The session's end on SystemClock.elapsedRealtime(). */
     private var deadlineElapsed = Long.MAX_VALUE
@@ -109,6 +128,9 @@ class BleRadioService : Service() {
 
     /** The connections that read the token, and which payload each was served; read from a GATT binder thread too. */
     private val readers = BleTokenReaders()
+
+    /** The devices this phone connects out to, which may not read the token; read from a GATT binder thread too. */
+    private val outbound = BleOutboundLinks()
 
     private val tick = Runnable { onTick() }
     private val pump = Runnable { interrogateNext() }
@@ -128,13 +150,20 @@ class BleRadioService : Service() {
     }
 
     /**
-     * Answers reads of the token characteristic, from a binder thread, with the payload of the window
-     * now, once per connection ([BleTokenReaders]).
+     * Answers reads of the token characteristic, from a binder thread, with the payload the sets
+     * advertise, once per connection ([BleTokenReaders]), and never to a device this phone connected
+     * out to ([BleOutboundLinks]).
      */
     private val reader = object : BleCharacteristicReader {
-        override fun read(device: String, offset: Int): BleGattAnswer = readers.answer(device, offset, payloadNow(active))
+        override fun read(device: String, offset: Int): BleGattAnswer {
+            if (outbound.refuses(device)) return BleGattAnswer(BleGattAnswer.READ_NOT_PERMITTED, null)
+            return readers.answer(device, offset, advertisedPayload)
+        }
 
-        override fun disconnected(device: String) = readers.disconnected(device)
+        override fun disconnected(device: String) {
+            readers.disconnected(device)
+            outbound.disconnected(device)
+        }
     }
 
     private val scanListener = object : BleScanListener {
@@ -341,6 +370,8 @@ class BleRadioService : Service() {
         if ((previous == null || !sameUuids) && !scan(s)) return
         if (previous == null || previous.config.nearRssi != s.config.nearRssi || !sameUuids) {
             hw.cancelInterrogation()
+            // The link being made, if any, is still refused the token until its end is reported.
+            outbound.cancelled()
             interrogation = BleInterrogation(s.config.nearRssi)
         }
         arm()
@@ -413,6 +444,7 @@ class BleRadioService : Service() {
         // This attempt replaces any retry still waiting.
         main.removeCallbacks(advertiseRetry)
         advertisedWindow = BleProtocol.windowAtMillis(r.clock())
+        outbound.windowStarted(advertisedWindow)
         val payload = payloadNow(s)
         // A connection that read another payload (an earlier window, or the key before) must not stay
         // connected into this one: its reads are refused already, and it is ended here.
@@ -492,7 +524,8 @@ class BleRadioService : Service() {
 
     /**
      * At a refresh: starts the scan again when it is not running, and at every [newWindow] anyway,
-     * because Android turns a scan that has run for 30 minutes into an opportunistic one. Never from
+     * because Android lowers a scan that has run too long (to SCAN_MODE_LOW_POWER after 10 minutes from
+     * Android 14 on; see the class comment) and a restart starts the count again. Never from
      * the background where the scan needs the app in front (Android 10 and 11): a scan started there
      * hears nothing, while one started with the app in front keeps hearing. Returns false when the
      * session has stopped because of it.
@@ -560,7 +593,11 @@ class BleRadioService : Service() {
         }
         val serviceUuid = UUID.fromString(s.config.serviceUuid)
         val characteristicUuid = UUID.fromString(s.config.characteristicUuid)
+        // Refused the token from now on: over this link the peer can read this phone's name.
+        outbound.connecting(candidate.address, BleProtocol.windowAtMillis(now))
         hw.interrogate(candidate.address, serviceUuid, characteristicUuid, INTERROGATION_TIMEOUT_MS) { result ->
+            // This phone has closed its side; the device stays refused until its link's end is reported.
+            outbound.finished(candidate.address)
             // A result for a session or policy that has since been replaced is dropped.
             if (active !== s || interrogation !== policy) return@interrogate
             val at = r.clock()
@@ -660,6 +697,7 @@ class BleRadioService : Service() {
         }
         hardware = null
         readers.clear()
+        outbound.clear()
         scanning = false
         advertisedWindow = Long.MIN_VALUE
         advertisedPayload = null
