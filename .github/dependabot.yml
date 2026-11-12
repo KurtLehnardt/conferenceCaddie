@@ -13,3 +13,13 @@ updates:
     directory: /native
     schedule:
       interval: weekly
+    ignore:
+      # Material3 moves with Compose Multiplatform, never alone: 1.13.0-beta02 belongs to CMP
+      # 1.13.0-beta02 and needs compileSdk 37.1. Bump it by hand with the plugin (DECISIONS.md).
+      - dependency-name: "org.jetbrains.compose.material3:material3"
+      # Kotlin 2.4.21 is documented for AGP up to 9.3.1 and Gradle up to 9.7.0; AGP 9.5 needs
+      # Gradle 9.6 or newer. Patch releases only until Kotlin supports the next minor.
+      - dependency-name: "agp"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "gradle-wrapper"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
