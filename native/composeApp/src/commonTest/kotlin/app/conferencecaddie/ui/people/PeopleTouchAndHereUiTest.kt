@@ -1,27 +1,23 @@
 package app.conferencecaddie.ui.people
 
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.SemanticsNodeInteraction
-import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.v2.runComposeUiTest
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.height
-import androidx.compose.ui.unit.width
+import app.conferencecaddie.ui.assertTouchTarget
 import app.conferencecaddie.ui.components.AppBarLabeledBack
 import app.conferencecaddie.ui.theme.CaddieTheme
-import app.conferencecaddie.ui.theme.PlatformTouchTarget
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 // Touch targets of at least the platform's minimum (48 dp on Android, 44 pt on iOS) on the
-// controls the review found short, the stable people slots, and the presence link that only offers.
+// controls the review found short, at the density the test device draws at, with no tolerance
+// (TouchTargetDensityUiTest checks them at other densities); the stable people slots; and the
+// presence link that only offers.
 @OptIn(ExperimentalTestApi::class)
 class PeopleTouchAndHereUiTest {
     private val rigs = ArrayList<U3Rig>()
@@ -30,14 +26,6 @@ class PeopleTouchAndHereUiTest {
 
     @AfterTest
     fun cleanUp() = rigs.forEach { it.close() }
-
-    private fun SemanticsNodeInteraction.assertTouchTarget() {
-        val b = getUnclippedBoundsInRoot()
-        // A tolerance for the rounding of dp to whole pixels at the simulator's density.
-        val min: Dp = PlatformTouchTarget - 0.1.dp
-        assertTrue(b.height >= min, "height ${b.height} is under $min")
-        assertTrue(b.width >= min, "width ${b.width} is under $min")
-    }
 
     @Test
     fun theSettingsBackHasAFullTouchTarget() = runComposeUiTest {
