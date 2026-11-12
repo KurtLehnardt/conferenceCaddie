@@ -25,6 +25,7 @@ these apps follow are in [`docs/NATIVE_PLAN.md`](../docs/NATIVE_PLAN.md).
 | `licenses/` | Licence texts of third-party material the apps ship: the lucide icons, the Apache 2.0 libraries, and the native code Skiko bundles into the iOS app (Skia, HarfBuzz, ICU and others). |
 | `scripts/third-party-notices.py` | Generates the notices Settings shows from the dependency graph and `licenses/`, and checks them in CI. |
 | `scripts/release-smoke.sh` | Starts the R8 release build on a device or emulator and checks it runs. |
+| `scripts/emulator-ci.sh` | The CI emulator job's SDK install with retries, its health check, and its retry of infrastructure failures only. |
 
 The structure follows the official JetBrains template for Android Gradle Plugin 9, where the
 Android application must be its own module and Kotlin Multiplatform modules use the
@@ -935,7 +936,11 @@ dependencies.
   model (its numbers go to the job summary), the app's instrumented tests and
   `scripts/release-smoke.sh` on the R8 release build, on an API 34 emulator started by
   `reactivecircus/android-emulator-runner`. The emulator's booted state is cached as a snapshot.
-  No secrets. The release APK is signed only after this job passes.
+  No secrets. The release APK is signed only after this job passes. The emulator and its system
+  image are downloaded with retries, and a run that fails on the emulator itself (it does not boot,
+  goes offline or dies) with no failed test runs once more on a cold-booted emulator; the retry is
+  an annotation and a section of the job summary. A failing test is never retried
+  (`scripts/emulator-ci.sh`).
 - **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
   the third-party notices check, and an unsigned simulator build of the Xcode project. The
   TestFlight jobs write the Release app's size, installed and zipped, and the signed IPA's size to
@@ -949,7 +954,8 @@ dependencies.
 
 Gradle's caches (the open-source basic provider of `setup-gradle`), Kotlin/Native's `~/.konan`, the
 pinned downloads (keyed on `gradle/pinned-downloads.properties` and the runner's OS) and the bundle
-builder's fp32 model (keyed on its revision) are cached. Pull requests only read the caches; `main` writes them. The `~/.konan` key is the hash
+builder's fp32 model (keyed on its revision) and the emulator's system image (keyed on its package
+and revision) are cached. Pull requests only read the caches; `main` writes them. The `~/.konan` key is the hash
 of the version catalog, with no fallback to older keys, so an old Kotlin/Native is never restored.
 The simulator job and the device link job each save their own `~/.konan` key (the latter has
 `-device-` in it), so they never race for one key. The simulator job is the only writer of the

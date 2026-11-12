@@ -278,6 +278,10 @@ jobs:
   # instrumented smoke test of the app (androidApp/src/androidTest) and a smoke test of the R8
   # release build (scripts/release-smoke.sh) on an Android emulator. No secrets; pull requests and
   # main. The release build here is signed with the runner's debug key, so the emulator accepts it.
+  # scripts/emulator-ci.sh keeps the machine's failures from failing the job: the SDK downloads are
+  # retried and the system image is cached, and a run that fails on the emulator itself (it did not
+  # boot, went offline or died) with no failed test runs once more on a cold-booted emulator. A
+  # failing test, or a failing release smoke test, is never retried.
   android-device-tests:
     name: UI tests on an Android emulator
     runs-on: ubuntu-latest
@@ -323,6 +327,37 @@ jobs:
       - name: Build the test APKs and the release APK
         run: ./gradlew :composeApp:assembleAndroidDeviceTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease
 
+      # The system image (about 1 GB) is cached by package and revision, so most runs download
+      # nothing: the most recently saved revision is restored, and the next step updates it when a
+      # newer one has been published. Pull requests only read the cache; main writes it.
+      - name: Name the system image cache
+        id: sysimg_name
+        run: bash scripts/emulator-ci.sh cache-name
+
+      - name: Restore the system image
+        id: sysimg
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.sysimg_name.outputs.dir }}
+          key: ${{ steps.sysimg_name.outputs.prefix }}
+          restore-keys: ${{ steps.sysimg_name.outputs.prefix }}
+
+      # The emulator and the system image of the emulator steps, each tried up to three times with a
+      # pause and the partial downloads deleted in between; sdkmanager checks every download's
+      # checksum. The emulator steps then find both up to date and download neither.
+      - name: Install the emulator and the system image
+        id: sdk
+        env:
+          SYSIMG_RESTORED_KEY: ${{ steps.sysimg.outputs.cache-matched-key }}
+        run: bash scripts/emulator-ci.sh install
+
+      - name: Save the system image
+        if: github.ref == 'refs/heads/main' && steps.sdk.outputs.key != '' && steps.sdk.outputs.key != steps.sysimg.outputs.cache-matched-key
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.sysimg_name.outputs.dir }}
+          key: ${{ steps.sdk.outputs.key }}
+
       # The emulator's booted state is cached as a snapshot, so most runs skip the cold boot. The
       # cache is keyed on the emulator settings and the month: the emulator and its system image
       # update without notice, and a snapshot they no longer accept is then rebuilt within a month.
@@ -341,21 +376,33 @@ jobs:
             ~/.android/adb*
           key: ${{ steps.avd_key.outputs.key }}
 
+      # If this emulator fails (it does not boot within 300 seconds), the next step deletes the AVD:
+      # nothing is saved, attempt 1 creates the AVD again with the same settings and cold-boots it,
+      # and the infrastructure retry below covers attempt 1. An emulator that hangs and ignores the
+      # request to quit keeps its step running until the job's time limit, which fails the job.
+      # Boots take under a minute (cold boots included); 300 seconds leaves room for the retry.
       - name: Create the emulator snapshot
+        id: avd_create
         if: steps.avd.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
           arch: x86_64
           target: default
           force-avd-creation: false
+          emulator-boot-timeout: 300
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
           working-directory: native
           script: echo "The emulator snapshot is ready."
 
+      - name: Discard the AVD whose snapshot failed
+        if: steps.avd_create.outcome == 'failure'
+        run: bash scripts/emulator-ci.sh discard-avd
+
       - name: Save the emulator snapshot
-        if: github.ref == 'refs/heads/main' && steps.avd.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.avd.outputs.cache-hit != 'true' && steps.avd_create.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -363,7 +410,14 @@ jobs:
             ~/.android/adb*
           key: ${{ steps.avd.outputs.cache-primary-key }}
 
+      # Attempt 1, from the snapshot, with the same 300-second boot limit, so a boot that hangs leaves
+      # time for the retry (which keeps the action's 600 seconds). Its failure does not end the job
+      # here: the next step decides whether it was an infrastructure failure, which alone is
+      # retried, and "Fail when the emulator tests failed" fails the job for every failure that is
+      # not retried or fails again.
       - name: Run the UI tests and the release smoke test on an emulator
+        id: emu1
+        continue-on-error: true
         # The release smoke test probes the server and bundles the app is built to use; they have no
         # default in the script. A fork sets the repository variables CADDIE_BACKEND and
         # CADDIE_BUNDLE_BASE; the fallbacks are the official values the app itself ships with
@@ -377,12 +431,64 @@ jobs:
           arch: x86_64
           target: default
           force-avd-creation: false
+          emulator-boot-timeout: 300
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: native
-          script: |
-            ./gradlew :composeApp:connectedAndroidDeviceTest :androidApp:connectedDebugAndroidTest
-            bash scripts/release-smoke.sh
+          script: bash scripts/emulator-ci.sh run 1
+
+      # Retries only when the emulator step failed before the tests, the emulator was not ready, or
+      # Gradle failed on adb's "device offline" or "closed" or a dead emulator with no failed test.
+      - name: Decide whether attempt 1 failed on infrastructure
+        id: triage
+        if: steps.emu1.outcome == 'failure'
+        run: bash scripts/emulator-ci.sh triage 1
+
+      # The one retry: every test and the release smoke test again, on a cold-booted emulator with
+      # wiped data, after what is left of the first emulator is stopped. Its failure fails the job.
+      - name: 'Infrastructure retry: the UI tests and the release smoke test on a cold-booted emulator'
+        id: emu2
+        if: steps.triage.outputs.retry == 'true'
+        env:
+          CADDIE_BACKEND: ${{ vars.CADDIE_BACKEND || 'https://conference-caddie-265846417372.us-west1.run.app' }}
+          CADDIE_BUNDLE_BASE: ${{ vars.CADDIE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/' }}
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          force-avd-creation: false
+          emulator-options: -no-snapshot-load -no-snapshot-save -wipe-data -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          working-directory: native
+          pre-emulator-launch-script: bash scripts/emulator-ci.sh cleanup
+          script: bash scripts/emulator-ci.sh run 2
+
+      # Diagnostics only: an upload that fails does not fail the job.
+      - name: Keep attempt 1's logs and reports
+        if: ${{ !cancelled() && steps.emu1.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-android-emulator-attempt-1
+          path: ${{ runner.temp }}/emu-attempt-1/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Attempt 1 failed and was not retried, or the retry did not pass.
+      - name: Fail when the emulator tests failed
+        if: ${{ !cancelled() && steps.emu1.outcome == 'failure' && steps.emu2.outcome != 'success' }}
+        env:
+          RETRIED: ${{ steps.triage.outputs.retry == 'true' }}
+        run: |
+          if [ "$RETRIED" = true ]; then
+            msg="Attempt 1 failed on infrastructure and the retry on a cold-booted emulator failed too."
+          else
+            msg="Attempt 1 failed and was not retried (see the step that decides on a retry)."
+          fi
+          echo "::error title=UI tests on an Android emulator failed::$msg"
+          printf '%s\n' "- $msg" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
       # EmbeddingDeviceTest measures the shipped model on the emulator; its numbers go to the summary.
       - name: Report the on-device embedding numbers
