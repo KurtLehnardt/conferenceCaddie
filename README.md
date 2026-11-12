@@ -110,7 +110,7 @@ npm run topics -- --event <slug>         # rebuild one event's topic list, for e
 node scripts/build-facets.mjs [<slug> ...]  # rebuild the track, room, speaker and tag names used for suggested chips; run it after ingesting
 ```
 
-Re-running is safe: unchanged talks are not re-embedded. Events on other platforms, or with no published schedule, appear in the switcher as "Schedule not available here yet". Per-conference topic fix-ups (rename, merge, remove) live in `data/topics/{slug}.json`; the shared stoplist is `config/topic-stoplist.txt`.
+Re-running is safe: unchanged talks are not re-embedded. Talks that left the schedule are deleted and leave the profiles that shared for them; a run that would delete more than 10 talks and more than 10% of a conference's talks is refused for that conference unless you pass `--allow-shrink`. Events on other platforms, or with no published schedule, appear in the switcher as "Schedule not available here yet". Per-conference topic fix-ups (rename, merge, remove) live in `data/topics/{slug}.json`; the shared stoplist is `config/topic-stoplist.txt`.
 
 For the API and index shapes, see [docs/CONTRACT.md](docs/CONTRACT.md). Design choices are recorded in [DECISIONS.md](DECISIONS.md). The plan for native Android and iOS apps, with deployment tiers that cost nothing to run, is in [docs/NATIVE_PLAN.md](docs/NATIVE_PLAN.md).
 

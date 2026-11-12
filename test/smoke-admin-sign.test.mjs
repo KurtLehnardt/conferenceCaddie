@@ -1,7 +1,7 @@
 // The admin-auth plumbing of scripts/smoke.mjs: with SMOKE_ADMIN_AUTH=signed every admin call
 // carries an X-Caddie-Admin header that verifies with scripts/lib/admin-sign.mjs and no
-// Authorization header; a retried admin call is signed afresh (a new nonce); the default, bearer,
-// sends Authorization: Bearer as before; and when the Worker's /admin/test/* fixtures answer 404
+// Authorization header, which is the default; a retried admin call is signed afresh (a new nonce);
+// SMOKE_ADMIN_AUTH=bearer sends Authorization: Bearer; and when the Worker's /admin/test/* fixtures answer 404
 // while GET /admin/stats works, the checks that need them print SKIP naming ADMIN_TEST_ROUTES.
 //
 // Run with `npm test`. The smoke runs as a child process against a loopback stub that answers
@@ -16,7 +16,9 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { capabilitiesDocument } from '../worker/src/capabilities.js';
 import { EMPTY_BODY_SHA256, verifyAdminSignature } from '../scripts/lib/admin-sign.mjs';
+import * as BLE from '../contracts/js/ble-token.mjs';
 
 const SMOKE = fileURLToPath(new URL('../scripts/smoke.mjs', import.meta.url));
 const TOKEN = 'smoke-test-admin-token-0123456789abcdef0123456789abcdef';
@@ -93,6 +95,9 @@ function runSmoke(port, extraEnv) {
       SMOKE_TALKS: 'data',
       SMOKE_BUNDLE_BASE: `http://127.0.0.1:${port}/bundles/`,
       SMOKE_UNAVAILABLE: PRIMARY,
+      // The loopback stub stands for a deployed Worker unless a test says otherwise (SMOKE_TREAT_AS_REMOTE is
+      // test-only): a gated fixture is a SKIP there and a FAIL with a hint against a local one.
+      SMOKE_TREAT_AS_REMOTE: '1',
       ...extraEnv,
     };
     const child = spawn(process.execPath, [SMOKE], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -118,8 +123,8 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     // The two runs are independent, each with its own stub, so they run at once.
     const [s, b] = await Promise.all([stubWorker({ authOk: signedOk }), stubWorker({ authOk: bearerOk })]);
     const [rs, rb] = await Promise.all([
-      runSmoke(s.port, { SMOKE_ADMIN_AUTH: 'signed' }),
-      runSmoke(b.port, {}),
+      runSmoke(s.port, {}),
+      runSmoke(b.port, { SMOKE_ADMIN_AUTH: 'bearer' }),
     ]);
     signed = { ...rs, requests: s.requests, server: s.server };
     bearer = { ...rb, requests: b.requests, server: b.server };
@@ -174,7 +179,7 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     assert.ok(bearerFailed && bearer.requests.some((r) => r !== bearerFailed && r.path === bearerFailed.path && bearerOk(r)));
   });
 
-  test('SMK-1: the default is bearer, which sends Authorization: Bearer and no X-Caddie-Admin', () => {
+  test('SMK-1: SMOKE_ADMIN_AUTH=bearer sends Authorization: Bearer and no X-Caddie-Admin', () => {
     const calls = adminCalls(bearer.requests, bearerOk);
     assert.ok(calls.length >= 3);
     for (const r of calls) {
@@ -226,6 +231,133 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   });
 });
 
+test('the default is signed: no SMOKE_ADMIN_AUTH sends X-Caddie-Admin and no Authorization', async () => {
+  const { server, requests, port } = await stubWorker({ authOk: signedOk });
+  try {
+    await runSmoke(port, {});
+    const calls = adminCalls(requests, signedOk);
+    assert.ok(calls.length >= 3);
+    assert.ok(requests.every((r) => r.authorization === null));
+  } finally {
+    server.close();
+  }
+});
+
+test('gated fixtures FAIL with the .dev.vars hint against a loopback API, and SKIP against a deployed one', async () => {
+  const { server, port } = await stubWorker({ authOk: signedOk });
+  try {
+    const local = await runSmoke(port, { SMOKE_TREAT_AS_REMOTE: '' });
+    const hint = 'set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (or run npm --prefix worker run dev-vars, which adds it when absent)';
+    for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
+      const fail = local.lines.find((l) => l.startsWith(`FAIL ${check}:`));
+      assert.ok(fail?.includes(hint), `${check} must FAIL with the hint:\n${local.lines.filter((l) => l.includes(`${check}:`)).join('\n')}`);
+      assert.ok(!skipLine(local.lines, check), `${check} must not SKIP against a loopback API`);
+    }
+    assert.ok(!local.lines.some((l) => l.includes('SMOKE_TREAT_AS_REMOTE')), 'no NOTE when the override is off');
+    const remote = await runSmoke(port, {});
+    assert.ok(remote.lines.includes('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed'), 'the override prints its NOTE');
+    for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
+      assert.ok(skipLine(remote.lines, check)?.includes('ADMIN_TEST_ROUTES'), `${check} must SKIP against a deployed Worker`);
+      assert.ok(!remote.lines.some((l) => l.startsWith(`FAIL ${check}:`)));
+    }
+  } finally {
+    server.close();
+  }
+});
+
+// A redirect on an API request (api(); the stub redirects /api/search) is never followed either: the target is never called and
+// the check FAILs naming 302.
+test('a 302 on an API request is a FAIL naming 302, never followed or retried', async () => {
+  const other = await stubWorker({ authOk: () => true });
+  const { server, port } = await stubWorker({ authOk: signedOk });
+  const base = server.listeners('request')[0];
+  server.removeAllListeners('request');
+  let searches = 0;
+  server.on('request', (req, res) => {
+    if (req.url.startsWith('/api/search')) {
+      searches++;
+      res.writeHead(302, { location: `http://127.0.0.1:${other.port}${req.url}` });
+      return res.end('moved');
+    }
+    return base(req, res);
+  });
+  try {
+    const run = await runSmoke(port, {});
+    assert.equal(other.requests.length, 0, 'the redirect target was called');
+    assert.ok(run.lines.some((l) => l.startsWith('FAIL ') && l.includes('answered 302')), 'a FAIL names 302');
+    assert.ok(!run.lines.some((l) => l.startsWith('NOTE ') && l.includes('/api/search')), 'no retry NOTE for the redirect');
+    assert.ok(searches > 0);
+  } finally {
+    server.close();
+    other.server.close();
+  }
+});
+
+// cap1 compares the Worker's bundle_base with the configured base (SMOKE_BUNDLE_BASE, then
+// CADDIE_BUNDLE_BASE, then the default), so a fork with its own TALKS_BUNDLE_BASE passes.
+describe('cap1 and the configured bundle base', { timeout: 120_000 }, () => {
+  const OWN = 'https://fork.example.github.io/caddie-fork/bundles/';
+  const OTHER = 'https://other.example.github.io/x/bundles/';
+  const DEFAULT = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+  async function run(advertised, env) {
+    const { server, port } = await stubWorker({ authOk: signedOk });
+    const base = server.listeners('request')[0];
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      if (req.url === '/api/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' });
+        return res.end(JSON.stringify(capabilitiesDocument({ TALKS_BUNDLE_BASE: advertised })));
+      }
+      return base(req, res);
+    });
+    try {
+      const r = await runSmoke(port, { SMOKE_BUNDLE_BASE: '', ...env });
+      return { ...r, cap1: r.lines.find((l) => /^(PASS|FAIL) cap1:/.test(l)) };
+    } finally {
+      server.close();
+    }
+  }
+  test('SMOKE_BUNDLE_BASE is the expected base', async () => {
+    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OWN });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+  });
+  test('CADDIE_BUNDLE_BASE is used when SMOKE_BUNDLE_BASE is not set', async () => {
+    const r = await run(OWN, { CADDIE_BUNDLE_BASE: OWN });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+  });
+  test('cap1 order: SMOKE_CAPS_BUNDLE_BASE, then CADDIE_BUNDLE_BASE, then an https SMOKE_BUNDLE_BASE', async () => {
+    const a = await run(OWN, { SMOKE_CAPS_BUNDLE_BASE: OWN, CADDIE_BUNDLE_BASE: OTHER, SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(a.cap1?.startsWith('PASS cap1:'), a.cap1);
+    const b = await run(OWN, { CADDIE_BUNDLE_BASE: OWN, SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(b.cap1?.startsWith('PASS cap1:'), b.cap1);
+  });
+  test('an http loopback SMOKE_BUNDLE_BASE does not make cap1 fail: the Worker advertises https', async () => {
+    const r = await run(DEFAULT, { SMOKE_BUNDLE_BASE: 'http://127.0.0.1:9/bundles/' });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+    const caps = await run(OWN, { SMOKE_BUNDLE_BASE: 'http://127.0.0.1:9/bundles/', SMOKE_CAPS_BUNDLE_BASE: OWN });
+    assert.ok(caps.cap1?.startsWith('PASS cap1:'), caps.cap1);
+  });
+  test('a base that differs from the Worker\'s FAILs cap1 naming bundle_base', async () => {
+    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(r.cap1?.startsWith('FAIL cap1:') && r.cap1.includes('bundle_base'), r.cap1);
+  });
+  test('with nothing configured the default is expected', async () => {
+    const r = await run(DEFAULT, {});
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+    const fork = await run(OWN, {});
+    assert.ok(fork.cap1?.startsWith('FAIL cap1:') && fork.cap1.includes('SMOKE_CAPS_BUNDLE_BASE'), fork.cap1);
+  });
+  test('the default base against a remote API prints one NOTE naming SMOKE_BUNDLE_BASE; a configured base prints none', async () => {
+    const note = (r) => r.lines.filter((l) => l.startsWith('NOTE the default bundle base is used against a remote API'));
+    const remote = await run(DEFAULT, {});
+    assert.equal(note(remote).length, 1);
+    assert.ok(note(remote)[0].includes('SMOKE_BUNDLE_BASE'));
+    assert.equal(note(await run(OWN, { SMOKE_BUNDLE_BASE: OWN })).length, 0);
+    assert.equal(note(await run(OWN, { CADDIE_BUNDLE_BASE: OWN })).length, 0);
+    assert.equal(note(await run(DEFAULT, { SMOKE_TREAT_AS_REMOTE: '' })).length, 0, 'a loopback API prints none');
+  });
+});
+
 test('SMOKE_ADMIN_AUTH refuses an unknown value before any request', async () => {
   const { server, requests, port } = await stubWorker({ authOk: () => false });
   try {
@@ -245,6 +377,222 @@ test('signed mode refuses a token shorter than 32 characters before any request'
     assert.equal(run.code, 1);
     assert.ok(run.stdout.includes('FAIL config: the admin token must have at least 32 characters'));
     assert.equal(requests.length, 0);
+  } finally {
+    server.close();
+  }
+});
+
+// SEC: an admin request never follows a redirect. The stub answers every /admin/ request with a 302
+// to a second loopback server (another origin); a followed redirect would carry X-Caddie-Admin and
+// the signed body there. The second server must never be called, the check must FAIL naming 302, and
+// the 3xx must never be retried (no NOTE line, and no second request for the same signed call).
+for (const [mode, ok] of [['signed', signedOk], ['bearer', bearerOk]]) {
+  test(`a 302 from the API on an admin request is a FAIL naming 302, never followed or retried (${mode})`, async () => {
+    const other = await stubWorker({ authOk: () => true });
+    const { server, requests, port } = await stubWorker({ authOk: ok });
+    const base = server.listeners('request')[0];
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      if (req.url.startsWith('/admin/') && (req.headers['x-caddie-admin'] || req.headers.authorization) && !req.headers.origin) {
+        requests.push({ method: req.method, path: req.url, signed: req.headers['x-caddie-admin'] ?? null, authorization: req.headers.authorization ?? null, origin: null, redirected: true });
+        res.writeHead(302, { location: `http://127.0.0.1:${other.port}${req.url}` });
+        return res.end('moved');
+      }
+      return base(req, res);
+    });
+    try {
+      const run = await runSmoke(port, { SMOKE_ADMIN_AUTH: mode });
+      assert.equal(other.requests.length, 0, `the redirect target was called: ${JSON.stringify(other.requests.map((r) => r.path))}`);
+      const fails = run.lines.filter((l) => l.startsWith('FAIL ') && /\b302\b/.test(l));
+      assert.ok(fails.length > 0, 'a FAIL line names 302');
+      assert.ok(run.lines.some((l) => l.startsWith('FAIL ') && l.includes('answered 302')), 'admin() fails naming 302');
+      assert.ok(!run.lines.some((l) => l.startsWith('NOTE ') && l.includes('(admin)')), 'no admin retry NOTE');
+      const redirected = requests.filter((r) => r.redirected && r.origin === null);
+      const nonces = redirected.map((r) => r.signed ?? r.authorization);
+      assert.ok(redirected.length > 0);
+      if (mode === 'signed') assert.equal(new Set(nonces).size, nonces.length, 'no signed header was sent twice');
+      assert.ok(!run.stdout.includes(TOKEN));
+    } finally {
+      server.close();
+      other.server.close();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Bluetooth checks (cap3, ble0 to ble3 and the key part of l) against a tier 3 stub: an
+// in-memory stand-in built on the reference implementation (contracts/js/ble-token.mjs) that mints
+// keys, keeps a w-1..w+1 token table, applies zone co-location and the caps, and answers 404 to
+// everything else. Its window is a day rather than 600 s, so ble3 never waits for a window boundary
+// in a test (cap3 then fails on window_s, which these tests do not look at).
+
+const BLE_WINDOW_S = 86_400;
+
+function stubTier3({ mode = 'derived-v1', fault = '' } = {}) {
+  const devices = new Map();
+  let lastKey = null;
+  const dev = (id) => {
+    if (!devices.has(id)) devices.set(id, { name: null, ref: createHash('sha256').update(String(id)).digest('hex').slice(0, 16), presence: null, caps: { entries: [] } });
+    return devices.get(id);
+  };
+  const iso = (ms) => new Date(ms).toISOString();
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      let body = {};
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { /* keep {} */ }
+      const url = new URL(req.url, 'http://stub');
+      const p = url.pathname;
+      const device = req.headers['x-caddie-device'] ?? '';
+      const now = Date.now();
+      if (p === '/api/health') return json(res, 200, { ok: true });
+      if (p === '/api/search' && req.method === 'POST') return json(res, 200, { results: [{ talk_id: `${PRIMARY}:circle`, title: CIRCLE_TALK_TITLE, conference: PRIMARY }] });
+      if (p === '/api/capabilities') {
+        return json(res, 200, {
+          api_version: 1, tier: 'paid', talks: { bundle_base: 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/', server_search: true },
+          people: { enabled: true, semantic: 'server', presence: true, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
+          ble: { mode, service_uuid: BLE.SERVICE_UUID, near_rssi: -75, window_s: BLE_WINDOW_S, sightings_min_interval_s: 10, colocation_required: true },
+          push: { apns: false, fcm: false, webpush: false }, imports: { github: 'server', schedule: 'server' },
+        });
+      }
+      if (p === '/api/people/profile' && req.method === 'PUT') {
+        dev(device).name = body.profile?.display_name ?? null;
+        return json(res, 200, { ok: true, ref: dev(device).ref, shared_talk_ids: [...new Set(body.shared_talk_ids ?? [])] });
+      }
+      if (p === '/api/presence' && req.method === 'PUT') {
+        const d = dev(device);
+        const out = { ok: true, zone: body.zone, spot: body.spot || null, spot_hidden: false, until: 'hour', presence_since: iso(now), presence_until: iso(now + 3_600_000), located: false };
+        if (body.ble === true) {
+          const key = randomBytes(32);
+          d.presence = { zone: body.zone, key, legacy: randomBytes(16).toString('base64url') };
+          out.ble = { token: d.presence.legacy, rotate_at: iso(now + 600_000) };
+          if (mode === 'derived-v1') {
+            out.ble_key = BLE.encodeKey(key);
+            out.ble_key_id = BLE.keyId(key);
+            lastKey = out.ble_key;
+          }
+        } else if (body.ble === false) {
+          d.presence = null;
+        } else if (d.presence) {
+          d.presence.zone = body.zone;
+        }
+        return json(res, 200, out);
+      }
+      if (p === '/api/presence' && req.method === 'DELETE') {
+        dev(device).presence = null;
+        // fault 'leak': the answer carries the last key minted, which only its own write may.
+        return json(res, 200, fault === 'leak' && lastKey ? { ok: true, note: lastKey } : { ok: true });
+      }
+      if (p === '/api/presence/sightings' && req.method === 'POST') {
+        const d = dev(device);
+        if (!d.presence) return json(res, 403, { error: 'ble_required' });
+        const w = BLE.windowOf(now / 1000, BLE_WINDOW_S);
+        const table = new Map();
+        for (const o of devices.values()) {
+          if (!o.presence) continue;
+          if (mode === 'derived-v1') for (const dw of [-1n, 0n, 1n]) table.set(BLE.encodeToken(BLE.deriveToken(o.presence.key, w + dw)), o);
+          table.set(o.presence.legacy, o);
+        }
+        const hits = [...new Set((body.sightings ?? []).map((s) => table.get(s.token)).filter((o) => o && o !== d))];
+        // fault '503': a report in which no token is known gets a 503, never a 200 naming nobody.
+        if (fault === '503' && hits.length === 0) return json(res, 503, { error: 'unavailable' });
+        // fault 'nocoloc': the co-location rule is missing, so a person in another zone resolves.
+        const near = hits.filter((o) => fault === 'nocoloc' || o.presence.zone === d.presence.zone).map((o) => ({ id: o.ref, o }));
+        const { kept, state } = BLE.applyCaps(near, d.caps, { nowMs: now, windowS: BLE_WINDOW_S });
+        d.caps = state;
+        const out = { nearby: kept.map(({ o }) => ({ ref: o.ref, display_name: o.name, evidence: 'x', speak_topics: [], zone: o.presence.zone })) };
+        if (mode === 'derived-v1') out.ble_key_id = BLE.keyId(d.presence.key);
+        return json(res, 200, out);
+      }
+      return json(res, 404, { error: 'Not found' });
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
+  });
+}
+
+// A tier 3 run: no admin token, SMOKE_API=cloudrun, and a loopback API unless remote is set, in
+// which case ble2 and ble3 skip as they would against a deployed service.
+const runTier3 = (port, { remote = false, ...env } = {}) => runSmoke(port, {
+  SMOKE_API: 'cloudrun',
+  ADMIN_TOKEN: '',
+  SMOKE_UNAVAILABLE: '',
+  SMOKE_TREAT_AS_REMOTE: remote ? '1' : '',
+  ...env,
+});
+const line = (lines, check) => lines.find((l) => /^(PASS|FAIL|SKIP) /.test(l) && l.slice(5).startsWith(`${check}:`));
+
+describe('scripts/smoke.mjs Bluetooth checks against a tier 3 stub', { timeout: 300_000 }, () => {
+  const stubs = [];
+  let ok;
+  let rotate;
+  let fail503;
+  let leak;
+  let nocoloc;
+  before(async () => {
+    const [a, b, c, d, e] = await Promise.all([
+      stubTier3({ mode: 'derived-v1' }),
+      stubTier3({ mode: 'server-rotate' }),
+      stubTier3({ mode: 'derived-v1', fault: '503' }),
+      stubTier3({ mode: 'derived-v1', fault: 'leak' }),
+      stubTier3({ mode: 'derived-v1', fault: 'nocoloc' }),
+    ]);
+    stubs.push(a, b, c, d, e);
+    [ok, rotate, fail503, leak, nocoloc] = await Promise.all([
+      runTier3(a.port, { SMOKE_BLE_MODE: 'derived-v1' }),
+      runTier3(b.port, { remote: true, SMOKE_BLE_MODE: 'derived-v1' }),
+      runTier3(c.port, {}),
+      runTier3(d.port, { remote: true }),
+      runTier3(e.port, {}),
+    ]);
+  });
+  after(() => {
+    for (const s of stubs) s.server.close();
+  });
+
+  test('a correct derived-v1 server passes ble0 to ble3 and the key part of l', () => {
+    for (const check of ['ble0', 'ble1', 'ble2', 'ble3', 'l']) {
+      const l = line(ok.lines, check);
+      assert.ok(l?.startsWith('PASS '), `${check}: ${l}`);
+    }
+    assert.match(line(ok.lines, 'l'), /Bluetooth keys only in the answers that minted them/);
+  });
+
+  test('server-rotate with SMOKE_BLE_MODE=derived-v1 FAILs ble0, and ble3 skips', () => {
+    assert.ok(line(rotate.lines, 'ble0')?.startsWith('FAIL '), line(rotate.lines, 'ble0'));
+    assert.match(line(rotate.lines, 'ble0'), /ble\.mode server-rotate, expected derived-v1/);
+    assert.ok(line(rotate.lines, 'ble3')?.startsWith('SKIP '));
+  });
+
+  test('a 503 to a sightings report is never read as "nobody"', () => {
+    const ble1 = line(fail503.lines, 'ble1');
+    const ble3 = line(fail503.lines, 'ble3');
+    assert.ok(ble1?.startsWith('FAIL ') && ble1.includes('503'), ble1);
+    assert.ok(ble3?.startsWith('FAIL '), ble3);
+    for (const what of ['the token of window -2: sightings gave 503', 'the token of window +2: sightings gave 503', 'after the re-key, the old key\'s token: sightings gave 503']) assert.ok(ble3.includes(what), `${what}: ${ble3}`);
+  });
+
+  test('ble2 FAILs when a person in another zone resolves (its probe is not hidden behind the cap)', () => {
+    const l = line(nocoloc.lines, 'ble2');
+    assert.ok(l?.startsWith('FAIL '), l);
+    assert.match(l, /a person in Expo hall resolved for a requester in Registration/);
+  });
+
+  test('check l FAILs when a minted Bluetooth key comes back in another response', () => {
+    const l = line(leak.lines, 'l');
+    assert.ok(l?.startsWith('FAIL '), l);
+    assert.match(l, /the Bluetooth key minted by BT-presence-ble in /);
+  });
+});
+
+test('SMOKE_BLE_MODE refuses an unknown value before any request', async () => {
+  const { server, port } = await stubTier3();
+  try {
+    const run = await runTier3(port, { SMOKE_BLE_MODE: 'bogus' });
+    assert.equal(run.code, 1);
+    assert.ok(run.lines.some((l) => l.startsWith('FAIL config: SMOKE_BLE_MODE must be')), run.stdout.slice(0, 400));
   } finally {
     server.close();
   }

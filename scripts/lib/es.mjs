@@ -8,11 +8,13 @@ export const hasKey = () => Boolean(API_KEY);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function es(method, path, body, { ndjson = false, timeout = 120_000 } = {}) {
+// key: another API key for this one request (the people key for the people indices); by default the
+// ingest key above.
+export async function es(method, path, body, { ndjson = false, timeout = 120_000, key = API_KEY } = {}) {
   const res = await fetch(esUrl() + path, {
     method,
     headers: {
-      Authorization: `ApiKey ${API_KEY}`,
+      Authorization: `ApiKey ${key}`,
       'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json',
     },
     body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),

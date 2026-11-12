@@ -7,8 +7,9 @@
 // The stand-in keeps documents per index with a sequence number each, evaluates the queries the
 // server sends (bool, term, terms, ids, exists, range with "now" date math, match_all), and
 // answers _doc, _create, _update, _search (with terms aggregations, and top_hits under a terms
-// bucket or on their own), _mget, _count, _bulk, _delete_by_query, _update_by_query (no script,
-// or the setup's expires_at backfill script), _mapping and index creation. Writes honour if_seq_no/if_primary_term the way Elasticsearch does:
+// bucket or on their own), _mget, _count, _bulk (also /_bulk with each action's _index, as the
+// ingest sends it), _refresh, _delete_by_query, _update_by_query (no script, or the setup's
+// expires_at backfill script), _mapping and index creation. Writes honour if_seq_no/if_primary_term the way Elasticsearch does:
 // a guarded delete or index of a missing document is a 409, and a Bulk action that combines
 // if_seq_no with retry_on_conflict fails the whole request with 400. A people search by retriever
 // (matches, nudges) finds nobody. Every call is logged with a tag (see tagOf),
@@ -254,6 +255,7 @@ export class FakeES {
   }
 
   tagOf(method, index, op, docKey, params, body) {
+    if (index === '_bulk') return 'bulk';
     const short = SHORT[index] ?? index;
     if (index === INDEX.people) {
       if (op === '_doc' && method === 'GET') return 'get';
@@ -290,9 +292,10 @@ export class FakeES {
     const [index, op, docKey] = parts;
     const params = url.searchParams;
     const tag = this.tagOf(method, index, op, docKey, params, rawBody);
+    const isBulk = op === '_bulk' || index === '_bulk';
     let body;
-    if (rawBody !== undefined && rawBody !== null && op !== '_bulk') body = JSON.parse(String(rawBody));
-    this.log.push({ tag, method, path: url.pathname, params: new URLSearchParams(params), body: op === '_bulk' ? String(rawBody) : body, headers });
+    if (rawBody !== undefined && rawBody !== null && !isBulk) body = JSON.parse(String(rawBody));
+    this.log.push({ tag, method, path: url.pathname, params: new URLSearchParams(params), body: isBulk ? String(rawBody) : body, headers });
     if (this.held?.tags.has(tag)) {
       const held = this.held;
       held.seen.add(tag);
@@ -325,6 +328,8 @@ export class FakeES {
       this.docs(index);
       return json({ acknowledged: true, index });
     }
+    if (index === '_bulk') return this.bulk(null, String(rawBody), tag, failure);
+    if (op === '_refresh') return json({ _shards: { total: 1, successful: 1, failed: 0 } });
     const docs = this.docs(index);
     if ((op === '_doc' || op === '_create') && (method === 'PUT' || method === 'POST')) {
       const existing = docs.get(docKey);
@@ -460,8 +465,9 @@ export class FakeES {
       return json({ error: { type: 'action_request_validation_exception', reason: 'compare and write operations can not be used with retry_on_conflict' } }, 400);
     }
     const forced = typeof failure === 'string' ? /^(item|partial)(\d+)$/.exec(failure) : null;
-    const docs = this.docs(index);
     const items = ops.map(({ type, meta, payload }, i) => {
+      // A Bulk request to /_bulk names the index in each action.
+      const docs = this.docs(meta._index ?? index);
       const result = (status) => ({ [type]: { _id: meta._id, status } });
       if (forced && (forced[1] === 'item' || i === ops.length - 1)) return result(Number(forced[2]));
       const doc = docs.get(meta._id);
@@ -474,12 +480,12 @@ export class FakeES {
       }
       if (type === 'create') {
         if (doc) return result(409);
-        this.put(index, meta._id, payload);
+        this.put(meta._index ?? index, meta._id, payload);
         return result(201);
       }
       if (type === 'index') {
         if (casFails) return result(409);
-        this.put(index, meta._id, payload);
+        this.put(meta._index ?? index, meta._id, payload);
         return result(doc ? 200 : 201);
       }
       if (type === 'update') {
@@ -491,7 +497,7 @@ export class FakeES {
           doc.seq = this.nextSeq++;
           if (concurrent > (meta.retry_on_conflict ?? 0)) return result(409);
         }
-        this.patch(index, meta._id, payload.doc ?? {});
+        this.patch(meta._index ?? index, meta._id, payload.doc ?? {});
         return result(200);
       }
       throw new Error(`fake Elasticsearch: unexpected bulk action ${type}`);

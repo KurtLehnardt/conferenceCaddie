@@ -13,15 +13,19 @@
 //                                       [--site-url <the Pages site's https address>]
 //   --app-url (or the environment variable CADDIE_APP_URL) must be an https URL with no user name,
 //   password, query or fragment; only its origin and path are used. An empty value means "not live".
-//   --site-url is the Pages site's own address (default: the official one). The links to its files
-//   are absolute, so they also work from the 404 page, which GitHub serves at any missing path.
+//   --site-url is the Pages site's own address (default: the environment variable CADDIE_SITE_URL,
+//   else the official one). The links to its files are absolute, so they also work from the 404 page,
+//   which GitHub serves at any missing path. Both variables are read when they are needed, not when
+//   the module is imported, as build-bundles.mjs reads its environment.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const KUBECON = 'kubecon-cloudnativecon-north-america-2026';
-const DEFAULT_SITE_URL = process.env.CADDIE_SITE_URL || 'https://kurtlehnardt.github.io/conferenceCaddie/';
+const OFFICIAL_SITE_URL = 'https://kurtlehnardt.github.io/conferenceCaddie/';
+// The site address when none is given: CADDIE_SITE_URL, else the official one.
+export const defaultSiteUrl = () => process.env.CADDIE_SITE_URL || OFFICIAL_SITE_URL;
 
 // The app's base URL without a trailing slash, or null for an empty value. Throws on a bad URL.
 export function normaliseAppUrl(value) {
@@ -40,7 +44,7 @@ export function normaliseAppUrl(value) {
 
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-export function landingPage(appUrl, siteUrl = DEFAULT_SITE_URL) {
+export function landingPage(appUrl, siteUrl = defaultSiteUrl()) {
   const app = appUrl ? escapeHtml(appUrl) : null;
   const site = normaliseAppUrl(siteUrl);
   if (!site) throw new Error('The site URL must not be empty.');
@@ -81,8 +85,8 @@ export function landingPage(appUrl, siteUrl = DEFAULT_SITE_URL) {
 `;
 }
 
-function parseArgs(argv) {
-  const out = { out: null, appUrl: process.env.CADDIE_APP_URL ?? '', siteUrl: DEFAULT_SITE_URL };
+export function parseArgs(argv) {
+  const out = { out: null, appUrl: process.env.CADDIE_APP_URL ?? '', siteUrl: defaultSiteUrl() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') out.out = argv[++i];

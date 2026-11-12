@@ -33,13 +33,16 @@
 //   SMOKE_ADMIN_AUTH     signed or bearer: how the admin calls authenticate. signed builds the
 //                        X-Caddie-Admin header of scripts/lib/admin-sign.mjs for every admin call, with a
 //                        fresh nonce and timestamp on each attempt, and sends no Authorization header;
-//                        bearer sends Authorization: Bearer <token>, the scheme of a Worker that has not
-//                        deployed the signed admin routes yet. Default bearer in this release; it flips to
-//                        signed once the Worker change is deployed, and the bearer path is then removed.
+//                        bearer sends Authorization: Bearer <token>, the scheme of a local or old Worker
+//                        that does not have the signed admin routes (a current Worker answers it 404).
+//                        Default signed. No admin request follows a redirect: a 3xx is a FAIL.
 //                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
 //                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
-//                        Worker) and the checks that need them (meter1, the expired profile, the aged
-//                        presence, unav1) print SKIP instead of FAIL.
+//                        Worker); against a loopback API (localhost, *.localhost, 127.0.0.0/8, 0.0.0.0, [::1], IPv4-mapped [::ffff:7f..:..]) that FAILs with a hint to set
+//                        ADMIN_TEST_ROUTES=1 in worker/.dev.vars. SMOKE_TREAT_AS_REMOTE=1 (test-only)
+//                        makes a loopback API count as deployed. Against a deployed Worker the checks
+//                        that need the fixtures (meter1, the expired profile, the aged presence,
+//                        unav1) print SKIP instead of FAIL.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -54,13 +57,23 @@
 //                        localhost or 127.0.0.1, which is loaded from the seed) reads the committed
 //                        data/ snapshot. Check bun1 compares every searchable conference with its bundle.
 //   SMOKE_BUNDLE_BASE    the talk bundle base for SMOKE_TALKS=bundle, an https URL ending in "/" (or
-//                        http://localhost or http://127.0.0.1 for a local test). Default https://kurtlehnardt.github.io/conferenceCaddie/bundles/.
+//                        http://localhost or http://127.0.0.1 for a local test). Falls back to CADDIE_BUNDLE_BASE, then
+//                        https://kurtlehnardt.github.io/conferenceCaddie/bundles/. Check cap1 compares the Worker's (https) bundle_base with
+//                        SMOKE_CAPS_BUNDLE_BASE, else CADDIE_BUNDLE_BASE, else this when it is https, else the default.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
-//   SMOKE_BLE=1          run the Bluetooth resolution checks (ble2) against a remote API. They put test
-//                        profiles with a specific match around, so they run by default only against a
-//                        local API (localhost or 127.0.0.1), never next to real attendees.
+//   SMOKE_BLE=1          run the Bluetooth resolution checks (ble2, ble3) against a remote API, Worker or
+//                        Cloud Run. They put test profiles with a specific match around, so they run by
+//                        default only against a loopback API (localhost, *.localhost, 127.0.0.0/8,
+//                        0.0.0.0, [::1], IPv4-mapped [::ffff:7f..:..]; SMOKE_TREAT_AS_REMOTE=1 makes it
+//                        count as deployed), never next to real attendees. ble1 is safe anywhere and
+//                        runs whenever cap1 or cap3 read a capabilities document; cap3 runs against
+//                        every backend but the Worker, which cap1 checks instead.
+//   SMOKE_BLE_MODE       the ble.mode this backend is expected to serve: derived-v1, server-rotate or
+//                        none. Check ble0 then compares the capabilities document with it, so a backend
+//                        that falls back to server-rotate (and makes ble3 skip) fails the run. Unset,
+//                        ble0 is skipped with the mode it found.
 //   SMOKE_NATIVE_PUSH    the native push platforms this backend is expected to push to: "none", or a
 //                        comma-separated list of apns and fcm. Check np2 then compares push.apns and
 //                        push.fcm with it. Unset, np2 passes when both are false and is skipped when
@@ -94,8 +107,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
+import { DEFAULT_BUNDLE_BASE } from '../worker/src/capabilities.js';
+import { primaryOver, emptyWindowSkip } from './lib/smoke-primary-over.mjs';
+import { conferenceForWorker } from './lib/smoke-conference-doc.mjs';
+import { isLoopbackHost } from './lib/loopback-host.mjs';
+import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
-import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
+import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
 
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
@@ -146,7 +164,7 @@ const ADMIN_TOKEN = readAdminToken();
 
 // How the admin calls authenticate (SMOKE_ADMIN_AUTH above). The signed scheme needs a key of at
 // least 32 characters, which the Worker requires of ADMIN_TOKEN anyway.
-const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'bearer').toLowerCase();
+const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase();
 if (!['signed', 'bearer'].includes(ADMIN_AUTH)) {
   console.log('FAIL config: SMOKE_ADMIN_AUTH must be signed or bearer');
   process.exit(1);
@@ -188,16 +206,32 @@ const DIST_DIR = process.env.SMOKE_DIST || (WORKER_SERVES_APP ? 'web/dist-worker
 // Where the expected talks of a conference come from (SMOKE_TALKS above). A Worker on this machine
 // is loaded from the committed data/, not from the schedules the ingest published, so it is compared
 // with data/ by default.
-const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+const LOCAL_API = isLoopbackHost(new URL(API_BASE).hostname);
 const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER && !LOCAL_API ? 'bundle' : 'data')).toLowerCase();
 if (!['bundle', 'data'].includes(TALKS_FROM)) {
   console.log('FAIL config: SMOKE_TALKS must be bundle or data');
   process.exit(1);
 }
-const BUNDLE_BASE = process.env.SMOKE_BUNDLE_BASE || process.env.CADDIE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+// The ble.mode the backend is expected to serve (SMOKE_BLE_MODE, check ble0), or '' to only report it.
+const BLE_MODES = ['derived-v1', 'server-rotate', 'none'];
+const BLE_MODE_EXPECTED = (process.env.SMOKE_BLE_MODE ?? '').trim().toLowerCase();
+if (BLE_MODE_EXPECTED && !BLE_MODES.includes(BLE_MODE_EXPECTED)) {
+  console.log(`FAIL config: SMOKE_BLE_MODE must be ${BLE_MODES.join(', ')}`);
+  process.exit(1);
+}
+// The base the bundles are read from: SMOKE_BUNDLE_BASE, then CADDIE_BUNDLE_BASE (the repository variable that
+// pages.yml reads), then the default. Check cap1 expects what the Worker advertises, which is always https:
+// SMOKE_CAPS_BUNDLE_BASE, then CADDIE_BUNDLE_BASE, then SMOKE_BUNDLE_BASE when it is https, then the default.
+// So a fork whose Worker sets its own TALKS_BUNDLE_BASE passes when the smoke is given the same base, and an
+// http loopback SMOKE_BUNDLE_BASE does not make cap1 fail.
+const BUNDLE_BASE_VAR = process.env.SMOKE_BUNDLE_BASE ? 'SMOKE_BUNDLE_BASE' : process.env.CADDIE_BUNDLE_BASE ? 'CADDIE_BUNDLE_BASE' : 'SMOKE_BUNDLE_BASE';
+const BUNDLE_BASE_CONFIGURED = process.env.SMOKE_BUNDLE_BASE || process.env.CADDIE_BUNDLE_BASE || '';
+const BUNDLE_BASE = BUNDLE_BASE_CONFIGURED || DEFAULT_BUNDLE_BASE;
+const CAPS_BASE_VAR = process.env.SMOKE_CAPS_BUNDLE_BASE ? 'SMOKE_CAPS_BUNDLE_BASE' : process.env.CADDIE_BUNDLE_BASE ? 'CADDIE_BUNDLE_BASE' : /^https:/.test(process.env.SMOKE_BUNDLE_BASE || '') ? 'SMOKE_BUNDLE_BASE' : null;
+const CAPS_BASE = (CAPS_BASE_VAR && process.env[CAPS_BASE_VAR]) || DEFAULT_BUNDLE_BASE;
 // https, or plain http to this machine for a local test.
 if (TALKS_FROM === 'bundle' && !/^https:\/\/[^\s?#]+\/$/.test(BUNDLE_BASE) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?\/$/.test(BUNDLE_BASE)) {
-  console.log('FAIL config: SMOKE_BUNDLE_BASE must be an https URL that ends in "/"');
+  console.log(`FAIL config: ${BUNDLE_BASE_VAR} must be an https URL that ends in "/"`);
   process.exit(1);
 }
 
@@ -291,6 +325,16 @@ function report(ok, name, detail = '') {
   if (!ok) failures++;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`);
 }
+// No credentialed request follows a redirect: one that carries a credential (the admin header, the device
+// header, an Elasticsearch ApiKey) would hand it to whatever host the Location names. A redirect is a
+// failure that names the status, and the retry loops rethrow it. 304 is not one.
+class RedirectError extends Error {}
+const isRedirect = (status) => [301, 302, 303, 307, 308].includes(status);
+async function failOnRedirect(res, what) {
+  if (!isRedirect(res.status)) return;
+  await res.body?.cancel();
+  throw new RedirectError(`${what} answered ${res.status}, a redirect; credentialed requests never follow redirects`);
+}
 function skip(name, why) {
   console.log(`SKIP ${name} (${why})`);
 }
@@ -309,6 +353,9 @@ async function check(name, fn) {
 const responses = [];
 // Page and admin responses, which the leak check scans for secret values only.
 const otherResponses = [];
+// Every Bluetooth key a presence write minted ({ key, label, response }): check l fails when one
+// appears in any response but the one that minted it.
+const mintedBleKeys = [];
 const headerText = (headers) => [...headers].map(([k, v]) => `${k}: ${v}`).join('\n');
 // Every search result seen, for the evidence check.
 const allResults = [];
@@ -350,8 +397,10 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: 'manual',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      await failOnRedirect(res, `${method} ${path.split('?')[0]} (${label || 'no label'})`);
       const text = await res.text();
       // A local server answers fast enough for the checks to outrun the per-address search limit
       // (60 per minute), so a 429 waits for its Retry-After and asks again. Only the rate-limit
@@ -396,6 +445,7 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       result = { status: res.status, json, headers: res.headers };
       break;
     } catch (err) {
+      if (err instanceof RedirectError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -454,8 +504,12 @@ async function admin(method, path, body) {
         method,
         headers,
         body: serialised,
+        redirect: 'manual',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      // A redirect is never followed: it would carry the admin credentials (and a signed body) to
+      // wherever the Location points. It is a failure, not a network error, so it is never retried.
+      await failOnRedirect(res, `${method} ${path.split('?')[0]} (admin)`);
       const text = await res.text();
       if (res.status >= 500 && attempt === 0) {
         retried++;
@@ -473,7 +527,7 @@ async function admin(method, path, body) {
       return { status: res.status, json, headers: res.headers };
     } catch (err) {
       // A request the signer refuses is a bug in this script, not a network failure: no retry.
-      if (err instanceof UsageError) throw err;
+      if (err instanceof UsageError || err instanceof RedirectError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -490,6 +544,19 @@ async function admin(method, path, body) {
 // GET /admin/stats answers 200 with the same credentials, the fixtures are gated; otherwise the
 // 404 is an auth or routing failure and the check fails as before.
 let fixturesGated = null;
+// Against a local Worker (localhost, 127.0.0.1, [::1]) a gated fixture is a configuration mistake of the
+// developer's .dev.vars, so it FAILs with a hint instead of a SKIP that hides it. A deployed Worker keeps
+// the SKIP. SMOKE_TREAT_AS_REMOTE=1 is test-only: it makes a loopback API count as deployed, so the
+// loopback stub of test/smoke-admin-sign.test.mjs can exercise the SKIP path.
+const API_IS_LOOPBACK = process.env.SMOKE_TREAT_AS_REMOTE !== '1' && LOCAL_API;
+if (IS_WORKER && !API_IS_LOOPBACK && !BUNDLE_BASE_CONFIGURED && !process.env.SMOKE_CAPS_BUNDLE_BASE) {
+  console.log('NOTE the default bundle base is used against a remote API: a Worker with its own TALKS_BUNDLE_BASE needs SMOKE_BUNDLE_BASE set to it (cap1 and the bundle checks compare against it)');
+}
+if (process.env.SMOKE_TREAT_AS_REMOTE === '1') console.log('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed');
+const FIXTURES_GATED_LOCAL_HINT = 'the Worker answers 404 to /admin/test/*: set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (or run npm --prefix worker run dev-vars, which adds it when absent)';
+function gatedFixtures() {
+  throw API_IS_LOOPBACK ? new Error(FIXTURES_GATED_LOCAL_HINT) : new SkipCheck(FIXTURES_GATED_WHY);
+}
 const FIXTURES_GATED_WHY = 'the Worker answers 404 to /admin/test/*: its fixtures are gated off; deploy it with ADMIN_TEST_ROUTES=1 to run this check';
 function noteFixtureAnswer(path, status) {
   if (!path.startsWith('/admin/test/') || fixturesGated !== null) return;
@@ -501,7 +568,7 @@ async function fixture(method, path, body) {
     const stats = await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`);
     fixturesGated = stats.status === 200;
   }
-  if (r.status === 404 && fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+  if (r.status === 404 && fixturesGated) gatedFixtures();
   return r;
 }
 
@@ -524,6 +591,7 @@ async function agePresence(device, who) {
   }
   const res = await fetch(`${esUrl()}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
     method: 'POST',
+    redirect: 'manual',
     headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
     body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${device.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -642,7 +710,7 @@ const names = (results) => (results ?? []).map((p) => p.display_name);
 // ---------------------------------------------------------------------------------------------
 // Conferences.
 
-const NOT_WORKER_WHY_EARLY = 'the API is not the Worker (Cloud Run sends no CORS headers)';
+const NOT_WORKER_WHY_EARLY = 'the API is not the Worker (Cloud Run serves the app and the API from one origin, and sends CORS headers only on /api/capabilities)';
 let conferences = [];
 await check('conf: GET /api/conferences lists the conferences', async () => {
   const { status, json } = await api('GET', '/api/conferences');
@@ -680,12 +748,42 @@ if (TALKS_FROM === 'data') {
   });
 }
 
-// The Worker's capabilities document (docs/contracts/capabilities.md), validated as a producer's,
-// in closed mode. Later checks read ble.mode from it.
+// The capabilities document of the Worker (cap1) or of the tier 3 server (cap3), validated as a
+// producer's (docs/contracts/capabilities.md), in closed mode. Later checks read ble.mode from it.
 let capsDoc = null;
 if (!IS_WORKER) {
-  skip('cap1: GET /api/capabilities serves a valid tier 2 document', NOT_WORKER_WHY_EARLY);
+  skip('cap1: GET /api/capabilities serves a valid tier 2 document', 'the API is not the Worker; cap3 checks the tier 3 document');
+  // The tier 3 server (Cloud Run) serves the same document with tier 'paid'. Push flags are checked
+  // for the schema only, because they change when native push is switched on.
+  await check('cap3: GET /api/capabilities serves a valid tier 3 document', async () => {
+    // A redirect is never followed: the document must come from the API itself.
+    const res = await fetch(`${API_BASE}/api/capabilities`, { redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (res.status >= 300 && res.status < 400) throw new Error(`status ${res.status}, a redirect (not followed)`);
+    const text = await res.text();
+    otherResponses.push({ label: 'capabilities', path: '/api/capabilities', text, headersText: headerText(res.headers) });
+    const problems = [];
+    if (res.status !== 200) throw new Error(`status ${res.status}`);
+    capsDoc = JSON.parse(text);
+    const v = validator('capabilities.v1')(capsDoc, { closed: true });
+    if (!v.valid) problems.push(`schema: ${v.errors.slice(0, 3).map((e) => `${e.path} ${e.message}`).join('; ')}`);
+    if (capsDoc.tier !== 'paid') problems.push(`tier ${capsDoc.tier}`);
+    const cc = res.headers.get('cache-control') ?? '';
+    if (!/public/.test(cc) || !/max-age=300/.test(cc)) problems.push(`Cache-Control ${cc}`);
+    if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
+    if (capsDoc.people?.enabled !== true || capsDoc.people?.reports !== true) problems.push(`people.enabled ${capsDoc.people?.enabled}, people.reports ${capsDoc.people?.reports}`);
+    const ble = capsDoc.ble ?? {};
+    if (!['derived-v1', 'server-rotate'].includes(ble.mode)) problems.push(`ble.mode ${ble.mode}`);
+    // The service UUID and the window are the same in both modes (server/capabilities.mjs).
+    if (ble.service_uuid !== 'e52c391c-b926-4856-9a38-d46c3c10c733') problems.push(`service_uuid ${ble.service_uuid}`);
+    if (ble.window_s !== 600) problems.push(`window_s ${ble.window_s}`);
+    if (ble.mode === 'derived-v1') {
+      if (ble.sightings_min_interval_s !== 10) problems.push(`sightings_min_interval_s ${ble.sightings_min_interval_s}`);
+      if (ble.colocation_required !== true) problems.push(`colocation_required ${ble.colocation_required}`);
+    }
+    report(problems.length === 0, 'cap3: GET /api/capabilities serves a valid tier 3 document', problems.length ? problems.join('; ') : `closed-mode valid, tier paid, ble.mode ${ble.mode}, people.semantic ${capsDoc.people?.semantic}`);
+  });
 } else {
+  skip('cap3: GET /api/capabilities serves a valid tier 3 document', 'the API is the Worker; cap1 checks its tier 2 document');
   await check('cap1: GET /api/capabilities serves a valid tier 2 document', async () => {
     const res = await fetch(`${API_BASE}/api/capabilities`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     const text = await res.text();
@@ -696,11 +794,24 @@ if (!IS_WORKER) {
     const v = validator('capabilities.v1')(capsDoc, { closed: true });
     if (!v.valid) problems.push(`schema: ${v.errors.slice(0, 3).map((e) => `${e.path} ${e.message}`).join('; ')}`);
     if (capsDoc.tier !== 'free') problems.push(`tier ${capsDoc.tier}`);
-    if (capsDoc.talks?.bundle_base !== 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/') problems.push(`bundle_base ${capsDoc.talks?.bundle_base}`);
+    if (capsDoc.talks?.bundle_base !== CAPS_BASE) problems.push(`bundle_base ${capsDoc.talks?.bundle_base}, the smoke expects ${CAPS_BASE} (${CAPS_BASE_VAR ? `from ${CAPS_BASE_VAR}` : 'the default'}; set SMOKE_CAPS_BUNDLE_BASE or CADDIE_BUNDLE_BASE to the Worker's TALKS_BUNDLE_BASE)`);
     if (!/public/.test(res.headers.get('cache-control') ?? '') || !/max-age=300/.test(res.headers.get('cache-control') ?? '')) problems.push(`Cache-Control ${res.headers.get('cache-control')}`);
     if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
     report(problems.length === 0, 'cap1: GET /api/capabilities serves a valid tier 2 document', problems.length ? problems.join('; ') : `closed-mode valid, ble.mode ${capsDoc.ble?.mode}, people.semantic ${capsDoc.people?.semantic}`);
   });
+}
+
+// ble0: the Bluetooth mode is the one SMOKE_BLE_MODE expects. cap3 accepts both derived-v1 and
+// server-rotate, and ble3 skips on server-rotate, so without an expectation a backend that lost its
+// keyring and fell back to server-rotate would pass the run.
+const BLE0 = 'ble0: ble.mode is the one SMOKE_BLE_MODE expects';
+if (!capsDoc) {
+  if (BLE_MODE_EXPECTED) report(false, BLE0, `SMOKE_BLE_MODE=${BLE_MODE_EXPECTED} but no capabilities document was read`);
+  else skip(BLE0, 'no capabilities document');
+} else if (!BLE_MODE_EXPECTED) {
+  skip(BLE0, `ble.mode is ${capsDoc.ble?.mode}; set SMOKE_BLE_MODE to check which mode to expect`);
+} else {
+  report(capsDoc.ble?.mode === BLE_MODE_EXPECTED, BLE0, capsDoc.ble?.mode === BLE_MODE_EXPECTED ? `ble.mode ${BLE_MODE_EXPECTED}` : `ble.mode ${capsDoc.ble?.mode}, expected ${BLE_MODE_EXPECTED}`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -823,7 +934,12 @@ if (!IS_WORKER) {
 } else {
   await check('adm1: the admin routes answer 404 without a valid token and send no CORS headers', async () => {
     const probe = async (label, headers) => {
-      const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      // Never follow a redirect with admin headers on it (see admin()); the probe fails naming the status.
+      if (isRedirect(res.status)) {
+        await res.body?.cancel();
+        return [`${label} gave ${res.status}, a redirect that was not followed`];
+      }
       const text = await res.text();
       otherResponses.push({ label: 'admin-probe', path: '/admin/stats', text, headersText: headerText(res.headers) });
       const bad = [];
@@ -966,8 +1082,28 @@ await check('e1: include_events adds co-located events and showcases, and nothin
   report(problems.length === 0, 'e1: include_events adds co-located events and showcases, and nothing else', problems.length ? problems.join('; ') : `${shown.length} events in "${track}", ${off.json.total} results off and ${on.json.total} on`);
 });
 
+// Once the primary conference's last talk has ended, For you and Happening now (which the server filters
+// with end > now) have nothing to return for it, so the checks that need upcoming talks print SKIP
+// instead of failing on "no results" or passing vacuously.
+const PRIMARY_OVER_WHY = 'no talk of the primary conference is still to come (the server only suggests talks whose end is after now)';
+let primaryOverSkips = 0;
+function skipIfPrimaryOver(passed = '') {
+  let talks;
+  try {
+    talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+  } catch {
+    return; // the talks could not be loaded (a bundle that is down): run the check, do not couple it to Pages
+  }
+  if (primaryOver(talks, Date.now())) {
+    primaryOverSkips++;
+    throw new SkipCheck(`${passed}${PRIMARY_OVER_WHY}`);
+  }
+}
+
 await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
   const bad = await search({ query: 'kubernetes', filters: { include_events: 'yes' } });
+  if (bad.status !== 400) throw new Error(`include_events: "yes" gave ${bad.status}, not 400`);
+  skipIfPrimaryOver('the boolean check passed (include_events "yes" gave 400); the For-you part: ');
   const ambient = new Set(readNdjson(PRIMARY).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
   const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['kubernetes', 'ebpf'], interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
   if (recs.status !== 200) throw new Error(`recommendations status ${recs.status}`);
@@ -1067,13 +1203,18 @@ await check('n1: Happening now is available exactly when the conference has talk
 await check('n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', async () => {
   const slack = 2 * 60_000;
   const at = Date.now();
+  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
+  if (bad.status !== 400) throw new Error(`happening_now: "yes" gave ${bad.status}, not 400`);
+  skipIfPrimaryOver('the boolean check passed (happening_now "yes" gave 400); the window part: ');
   const r = await search({ query: '', size: 50, filters: { happening_now: true } });
   const all = await search({ query: '', size: 1 });
-  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
   if (r.status !== 200 || all.status !== 200) throw new Error(`status ${r.status} and ${all.status}`);
   const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
   const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
   const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
+  // An empty window makes the bound vacuous. Skip only when the data agrees that none is in the window:
+  // an empty answer where the data expects talks is the failure the check is for (total >= expected below).
+  if (emptyWindowSkip(r.json.total, expected)) throw new SkipCheck('the boolean check passed (400); no talk is in progress or starting within 60 minutes, so the window has nothing to check');
   const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
   report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
 });
@@ -1236,8 +1377,14 @@ await check('o: /api/schedule returns only that conference\'s talks, with no oth
 const stoplist = readFileSync(join(ROOT, 'config', 'topic-stoplist.txt'), 'utf8').split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
 const topicsBySlug = new Map();
 for (const slug of [PRIMARY, ...EXTRA]) {
-  const { status, json } = await api('GET', `/api/topics?event=${encodeURIComponent(slug)}&size=150`);
-  topicsBySlug.set(slug, status === 200 ? json.topics ?? [] : []);
+  try {
+    const { status, json } = await api('GET', `/api/topics?event=${encodeURIComponent(slug)}&size=150`);
+    topicsBySlug.set(slug, status === 200 ? json.topics ?? [] : []);
+  } catch (err) {
+    if (!(err instanceof RedirectError)) throw err;
+    report(false, `topics: ${slug} lists its topics`, err.message);
+    topicsBySlug.set(slug, []);
+  }
 }
 
 await check('t: the topic list has Kubernetes, eBPF, a two-word topic and no filler', async () => {
@@ -1341,10 +1488,14 @@ function extractPdfText(pdf) {
 // The deployed import key cannot write any index at all; scripts/create-es-keys.mjs checks that.
 async function indexCounts() {
   const res = await fetch(`${esUrl()}/_cat/indices?format=json&h=index,docs.count&expand_wildcards=open`, {
+    redirect: 'manual',
     headers: { Authorization: `ApiKey ${process.env.ELASTISEARCH_API_KEY}` },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`index listing gave ${res.status}`);
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new Error(`index listing gave ${res.status}`);
+  }
   const rows = await res.json();
   return new Map(rows.filter((r) => !r.index.startsWith('.') && !r.index.startsWith('caddie-people')).map((r) => [r.index, r['docs.count']]));
 }
@@ -1522,6 +1673,7 @@ try {
   } else if (WRITE_MODE === 'es') {
     const res = await fetch(`${esUrl()}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'PUT',
+      redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event_id: PRIMARY,
@@ -1608,7 +1760,8 @@ try {
 
   await check('p7: expired profiles never appear', async () => {
     if (!expiredWritten) {
-      skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
+      if (fixturesGated && API_IS_LOOPBACK) report(false, 'p7: expired profiles never appear', FIXTURES_GATED_LOCAL_HINT);
+      else skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
       return;
     }
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
@@ -2121,17 +2274,29 @@ try {
   // Talks for you.
 
   await check('r1: For you puts talks with a wanted topic first and never an ended or marked one', async () => {
-    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interests: 'kernel level tracing and observability', interested_talk_ids: [], size: 20 }, { label: 'recs' });
+    const name = 'r1: For you puts talks with a wanted topic first and never an ended or marked one';
+    skipIfPrimaryOver();
+    // The topic is chosen now: the one with the most talks that have not ended (end after now, as the
+    // server decides it), and at least MIN_UPCOMING, because two are marked and one must remain.
+    const candidates = [];
+    for (const t of (topicsBySlug.get(PRIMARY) ?? []).slice(0, 12)) {
+      const r = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [t.topic_id], interested_talk_ids: [], size: 50 }, { label: 'recs' });
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      candidates.push({ topic_id: t.topic_id, label: t.label, upcoming: countUpcoming(r.json.results ?? [], t.topic_id, Date.now()) });
+    }
+    const topic = pickUpcomingTopic(candidates);
+    if (!topic) throw new SkipCheck(`none of the first 12 topics has ${MIN_UPCOMING} or more talks that have not ended`);
+    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: [], size: 20 }, { label: 'recs' });
     if (first.status !== 200) throw new Error(`status ${first.status}`);
     const marked = (first.json.results ?? []).slice(0, 2).map((r) => r.talk_id);
-    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interests: 'kernel level tracing and observability', interested_talk_ids: marked, size: 50 }, { label: 'recs' });
-    const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const results = second.json.results ?? [];
     const now = Date.now();
     const problems = [];
     if (!results.length) problems.push('no results');
-    const hasWanted = (r) => (r.topics ?? []).some((t) => t.topic_id === 'ebpf');
-    if (results[0] && !(hasWanted(results[0]) && results[0].why.topics.includes('eBPF'))) problems.push(`the first result "${results[0].title}" lacks eBPF`);
+    const hasWanted = (r) => (r.topics ?? []).some((t) => t.topic_id === topic.topic_id);
+    if (results[0] && !(hasWanted(results[0]) && results[0].why.topics.includes(topic.label))) problems.push(`the first result "${results[0].title}" lacks ${topic.label}`);
     const chipResults = chips.json.results ?? [];
     if (!chipResults.length || !chipResults.every(hasWanted)) problems.push('a chips-only result lacks the wanted topic');
     for (const r of [...results, ...chipResults]) {
@@ -2142,7 +2307,7 @@ try {
     const empty = await api('POST', '/api/recommendations', { event: PRIMARY, interested_talk_ids: [] }, { label: 'recs' });
     if (!(empty.status === 200 && empty.json.needs_profile === true)) problems.push('an empty profile does not get needs_profile');
     const unique = [...new Set(problems)];
-    report(unique.length === 0, 'r1: For you puts talks with a wanted topic first and never an ended or marked one', unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions, first "${results[0].title}"`);
+    report(unique.length === 0, name, unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions on ${topic.label} (${topic.upcoming} upcoming), first "${results[0].title}"`);
   });
 
   await check('r2: For you does not cross conferences', async () => {
@@ -2248,6 +2413,7 @@ try {
   });
 
   await check('r7: the learn and problems text alone returns talks with a relevant passage', async () => {
+    skipIfPrimaryOver();
     const r = await ask([], [], { interests: 'our GPU inference costs are too high', size: 10 });
     if (r.status !== 200) throw new Error(`status ${r.status}`);
     const results = r.json.results ?? [];
@@ -2267,6 +2433,7 @@ try {
   // for a conference to one copy (a preference), so the same request must always give the same
   // order. Many talks share a topic, so the tie is real for a single learn topic.
   await check('r8: the same For you request made five times returns the same talk order', async () => {
+    skipIfPrimaryOver();
     const topic = labelOf.has('ai') ? 'ai' : [...labelOf.keys()][0];
     if (!topic) {
       skip('r8: the same For you request made five times returns the same talk order', 'the conference has no topics');
@@ -2323,15 +2490,29 @@ try {
   });
 
   // Bluetooth. ble1 needs no match: a profile with only the common topic, so it is safe anywhere.
-  const tokenOf = (keyText, dw = 0) => encodeToken(deriveToken(decodeKey(keyText), windowOf(Date.now() / 1000) + BigInt(dw)));
+  // The window length comes from the capabilities document for every token and every wait below,
+  // with the contract's 600 s when there is none. Sightings are sent at -30 dBm, the strongest
+  // ble.near_rssi a server may be configured with (BLE_NEAR_RSSI is at most -30), so they always
+  // count as near.
+  const bleWindowS = () => capsDoc?.ble?.window_s ?? WINDOW_S;
+  const tokenOf = (keyText, dw = 0) => encodeToken(deriveToken(decodeKey(keyText), windowOf(Date.now() / 1000, bleWindowS()) + BigInt(dw)));
+  const BLE_RSSI = -30;
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // A presence write with ble:true. A key it mints is recorded with the write's label, which no
+  // other request uses, so check l can fail when that key appears in any other response.
+  const presenceBle = async (device, label, zone = ZONE_A) => {
+    const r = await api('PUT', '/api/presence', { event: PRIMARY, zone, spot: '', ble: true }, { device, label });
+    if (typeof r.json?.ble_key === 'string' && r.json.ble_key) mintedBleKeys.push({ key: r.json.ble_key, label, response: r.json });
+    return r;
+  };
   await check('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', async () => {
-    if (!IS_WORKER || !capsDoc) {
+    if (!capsDoc) {
       skip('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', 'no capabilities document');
       return;
     }
     const BT = newDevice();
     await putProfile(BT, PRIMARY, 'BT', { speak: [COMMON_TOPIC] }, { open: true });
-    const on = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: BT, label: 'BT-presence' });
+    const on = await presenceBle(BT, 'BT-presence-ble');
     const derived = capsDoc.ble?.mode === 'derived-v1';
     const problems = [];
     const pv = validator('people-api.v1', 'PresencePutResponse')(on.json, { closed: true });
@@ -2339,50 +2520,210 @@ try {
     if (derived && !(/^[A-Za-z0-9_-]{43}$/.test(on.json.ble_key ?? '') && /^[A-Za-z0-9_-]{11}$/.test(on.json.ble_key_id ?? ''))) problems.push('derived-v1 but no ble_key and ble_key_id');
     if (!derived && (on.json.ble_key || !on.json.ble?.token)) problems.push('server-rotate but no legacy token, or a key');
     const own = derived ? tokenOf(on.json.ble_key) : on.json.ble?.token;
-    const sight = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: -40 }, { token: crypto.randomBytes(16).toString('base64url'), rssi: -40 }] }, { device: BT, label: 'BT-sightings' });
+    const sight = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: BLE_RSSI }, { token: crypto.randomBytes(16).toString('base64url'), rssi: BLE_RSSI }] }, { device: BT, label: 'BT-sightings' });
     const sv = validator('people-api.v1', 'SightingsResponse')(sight.json, { closed: true });
     if (sight.status !== 200 || !sv.valid || (sight.json.nearby ?? []).length !== 0) problems.push(`own and unknown tokens gave ${sight.status} ${JSON.stringify(sight.json)}`);
     if (derived && sight.json.ble_key_id !== on.json.ble_key_id) problems.push('the sightings answer does not name the current key');
     const off = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: false }, { device: BT, label: 'BT-presence' });
-    const after = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: -40 }] }, { device: BT, label: 'BT-sightings' });
+    const after = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: BLE_RSSI }] }, { device: BT, label: 'BT-sightings' });
     if (off.status !== 200 || after.status !== 403 || after.json.error !== 'ble_required') problems.push(`after ble:false sightings gave ${after.status} ${JSON.stringify(after.json)}`);
     await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: BT, label: 'BT-presence' });
     report(problems.length === 0, 'ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', problems.length ? problems.join('; ') : `${capsDoc.ble?.mode}: ${derived ? 'key and key id once, ' : ''}own and unknown tokens resolve nobody, 403 ble_required after ble:false`);
   });
 
-  await check('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', async () => {
-    if (!IS_WORKER || !capsDoc || capsDoc.ble?.mode === 'none') {
-      skip('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', 'no Bluetooth on this backend');
+  const BLE2 = 'ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window';
+  await check(BLE2, async () => {
+    if (!capsDoc || capsDoc.ble?.mode === 'none') {
+      skip(BLE2, capsDoc ? 'ble.mode is none: no Bluetooth on this backend' : 'no capabilities document');
       return;
     }
-    if (!LOCAL_API && process.env.SMOKE_BLE !== '1') {
-      skip('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
+    if (!API_IS_LOOPBACK && process.env.SMOKE_BLE !== '1') {
+      skip(BLE2, 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
       return;
     }
     const derived = capsDoc.ble.mode === 'derived-v1';
     const word = `zqvble${runTag}`;
     const BR = newDevice();
-    await putProfile(BR, PRIMARY, 'BR', { interests: `${word} glimmering quabbit rigs` }, { open: true });
-    await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: BR, label: 'BR-presence' });
-    const tokens = [];
     const around = [BR];
-    for (let i = 0; i < 12; i++) {
-      const d = newDevice();
-      around.push(d);
-      await putProfile(d, PRIMARY, `BN${i}`, { expertise: `tuned ${word} glimmering quabbit rigs ${i}` }, { open: true });
-      const p = await api('PUT', '/api/presence', { event: PRIMARY, zone: i === 11 ? ZONE_F : ZONE_A, spot: '', ble: true }, { device: d, label: `BN${i}-presence` });
-      tokens.push(derived ? tokenOf(p.json.ble_key) : p.json.ble?.token);
-    }
-    const near = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: -50 })) }, { device: BR, label: 'BR-sightings' });
-    const far = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: -40 }] }, { device: BR, label: 'BR-sightings' });
-    for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble2-presence' });
-    const nearby = near.json.nearby ?? [];
     const problems = [];
-    if (near.status !== 200) problems.push(`sightings gave ${near.status}`);
-    if (nearby.length !== 10) problems.push(`${nearby.length} of 11 co-located matches returned, expected the cap of 10`);
-    if (nearby.some((p) => p.zone !== ZONE_A)) problems.push('a same-zone person came without the zone');
-    if ((far.json.nearby ?? []).length !== 0) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
-    report(problems.length === 0, 'ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', problems.length ? problems.join('; ') : `${capsDoc.ble.mode}: 10 of 11 co-located matches, zone shown, another zone resolves nobody`);
+    try {
+      const setup = [];
+      const brPut = await putProfile(BR, PRIMARY, 'BR', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+      const brOn = await presenceBle(BR, 'BR-presence-ble');
+      if (brPut.status !== 200 || brOn.status !== 200) setup.push(`BR: profile ${brPut.status}, presence ${brOn.status}`);
+      else if (derived && !brOn.json.ble_key_id) setup.push('BR: the presence write gave no ble_key_id');
+      // BN11 is in another zone. It is made first, and the other-zone probe below waits until 31 s
+      // after its presence write, so a token table either holds it or is old enough to be rebuilt
+      // on its unknown token: its "resolves nobody" is then the co-location rule, not a table that
+      // lacks it.
+      const tokens = new Array(12);
+      let bn11At = 0;
+      for (const i of [11, ...Array.from({ length: 11 }, (_, k) => k)]) {
+        const d = newDevice();
+        around.push(d);
+        const put = await putProfile(d, PRIMARY, `BN${i}`, { expertise: `tuned ${word} glimmering quabbit rigs ${i}` }, { open: true });
+        const p = await presenceBle(d, `BN${i}-presence-ble`, i === 11 ? ZONE_F : ZONE_A);
+        if (i === 11) bn11At = Date.now();
+        tokens[i] = derived ? (p.json.ble_key ? tokenOf(p.json.ble_key) : null) : p.json.ble?.token;
+        if (put.status !== 200 || p.status !== 200 || !tokens[i]) setup.push(`BN${i}: profile ${put.status}, presence ${p.status}${tokens[i] ? '' : `, no ${derived ? 'key' : 'token'}`}`);
+      }
+      if (setup.length) throw new Error(`setup failed: ${setup.slice(0, 3).join('; ')}`);
+      // An answer counts only as a 200, which on derived-v1 also names the requester's key id.
+      const unansweredFor = (keyId) => (r) => (r.status !== 200 || (derived && r.json.ble_key_id !== keyId)
+        ? `sightings gave ${r.status}${r.status === 200 ? ' without the requester\'s ble_key_id' : ''}` : null);
+      const unanswered = unansweredFor(brOn.json.ble_key_id);
+      const report11 = () => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: BLE_RSSI })) }, { device: BR, label: 'BR-sightings' });
+      // A token table is cached per instance (tier 3 runs up to two) and rebuilt on an unknown token
+      // only once it is older than 30 seconds, so the ten may come back over several answers. Ask
+      // again every 5 s for up to 45 s while fewer than ten come back; stop at any answer that does
+      // not count. No answer may ever name more than ten.
+      let near = await report11();
+      let most = (near.json.nearby ?? []).length;
+      for (const until = Date.now() + 45_000; !unanswered(near) && (near.json.nearby ?? []).length < 10 && Date.now() < until;) {
+        await pause(5000);
+        near = await report11();
+        most = Math.max(most, (near.json.nearby ?? []).length);
+      }
+      const nearby = near.json.nearby ?? [];
+      if (unanswered(near)) problems.push(unanswered(near));
+      else {
+        if (most > 10) problems.push(`an answer named ${most} people, over the cap of 10`);
+        if (nearby.length !== 10) problems.push(`${nearby.length} of 11 co-located matches returned, expected the cap of 10`);
+        if (nearby.some((p) => p.zone !== ZONE_A)) problems.push('a same-zone person came without the zone');
+      }
+      // Co-location, from a fresh requester BRF in ZONE_A with BR's interests: BR has used up its ten
+      // new people for this window, so the cap alone would drop BN11 there. BRF reports BN11 (in
+      // ZONE_F) together with BN0 (in ZONE_A) and asks again until BN0 comes back, which shows the
+      // answer resolved the tokens; no answer may ever name BN11.
+      const BRF = newDevice();
+      around.push(BRF);
+      const brfPut = await putProfile(BRF, PRIMARY, 'BRF', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+      const brfOn = await presenceBle(BRF, 'BRF-presence-ble');
+      if (brfPut.status !== 200 || brfOn.status !== 200 || (derived && !brfOn.json.ble_key_id)) {
+        problems.push(`the other-zone probe's requester: profile ${brfPut.status}, presence ${brfOn.status}${derived && !brfOn.json.ble_key_id ? ', no ble_key_id' : ''}`);
+      } else {
+        await pause(Math.max(0, bn11At + 31_000 - Date.now()));
+        const unansweredF = unansweredFor(brfOn.json.ble_key_id);
+        const reportFar = () => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: BLE_RSSI }, { token: tokens[0], rssi: BLE_RSSI }] }, { device: BRF, label: 'BRF-sightings' });
+        const bn0 = testName('BN0');
+        const bn11 = testName('BN11');
+        let farSeen = false;
+        let far = await reportFar();
+        if (!unansweredF(far) && (far.json.nearby ?? []).some((p) => p.display_name === bn11)) farSeen = true;
+        for (const until = Date.now() + 45_000; !unansweredF(far) && !(far.json.nearby ?? []).some((p) => p.display_name === bn0) && Date.now() < until;) {
+          await pause(5000);
+          far = await reportFar();
+          if (!unansweredF(far) && (far.json.nearby ?? []).some((p) => p.display_name === bn11)) farSeen = true;
+        }
+        if (unansweredF(far)) problems.push(`for the person in ${ZONE_F}: ${unansweredF(far)}`);
+        else if (!(far.json.nearby ?? []).some((p) => p.display_name === bn0)) problems.push(`the other-zone probe never resolved BN0 in ${ZONE_A} within 45 s`);
+        if (farSeen) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
+      }
+    } finally {
+      for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble2-presence' }).catch(() => {});
+    }
+    report(problems.length === 0, BLE2, problems.length ? problems.join('; ') : `${capsDoc.ble.mode}: 10 of 11 co-located matches, zone shown, another zone resolves nobody`);
+  });
+
+  // ble3: windows and re-keying, end to end (derived-v1 only). The server resolves a token of the
+  // window before, the current one and the next, and none further off; a presence write without ble
+  // keeps the session; one with ble:true mints a new key, and the old key's tokens stop resolving.
+  const BLE3 = 'ble3: derived tokens resolve in windows w-1, w and w+1 only, and a re-key replaces the key';
+  await check(BLE3, async () => {
+    if (!capsDoc || capsDoc.ble?.mode !== 'derived-v1') {
+      skip(BLE3, capsDoc ? `ble.mode is ${capsDoc.ble?.mode}, not derived-v1` : 'no capabilities document');
+      return;
+    }
+    if (!API_IS_LOOPBACK && process.env.SMOKE_BLE !== '1') {
+      skip(BLE3, 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
+      return;
+    }
+    const word = `zqvbtt${runTag}`;
+    const R3 = newDevice();
+    const T3 = newDevice();
+    const around = [R3, T3];
+    const problems = [];
+    try {
+      const rp = await putProfile(R3, PRIMARY, 'BQ', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+      const tp = await putProfile(T3, PRIMARY, 'BU', { expertise: `tuned ${word} glimmering quabbit rigs` }, { open: true });
+      const rOn = await presenceBle(R3, 'BQ-presence-ble');
+      const first = await presenceBle(T3, 'BU-presence-ble1');
+      const firstAt = Date.now();
+      const setup = [['the requester\'s profile write', rp], ['the target\'s profile write', tp], ['the requester\'s presence write', rOn], ['the target\'s presence write', first]]
+        .filter(([, r]) => r.status !== 200).map(([what, r]) => `${what} gave ${r.status}`);
+      if (!setup.length && !(rOn.json.ble_key_id && first.json.ble_key && first.json.ble_key_id)) setup.push('a presence write with ble:true gave no key or no ble_key_id');
+      if (setup.length) throw new Error(`setup failed: ${setup.join('; ')}`);
+      const keyOld = first.json.ble_key;
+      const target = testName('BU');
+      const sign = (dw) => `${dw >= 0 ? '+' : ''}${dw}`;
+      // Every answer below counts only as a 200 that names the requester's key id; anything else is
+      // reported as it is, never read as "nobody". The api helper waits out the per-device limit.
+      const who = async (token) => {
+        const r = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token, rssi: BLE_RSSI }] }, { device: R3, label: 'BQ-sightings' });
+        return { status: r.status, keyId: r.json?.ble_key_id, names: (r.json?.nearby ?? []).map((p) => p.display_name) };
+      };
+      const unanswered = (a) => (a.status !== 200 || a.keyId !== rOn.json.ble_key_id
+        ? `sightings gave ${a.status}${a.status === 200 ? ' without the requester\'s ble_key_id' : ''}` : null);
+      // A token table is cached per instance (tier 3 runs up to two) and rebuilt on an unknown token
+      // only once it is older than 30 seconds, so a check that expects the target asks again every
+      // 5 s for up to 45 s. A check that expects nobody asks once. Each returns what went wrong, or null.
+      const resolves = async (token, what) => {
+        const until = Date.now() + 45_000;
+        for (;;) {
+          const a = await who(token);
+          if (unanswered(a)) return `${what}: ${unanswered(a)}`;
+          if (a.names.includes(target)) return null;
+          if (Date.now() >= until) return `${what} did not resolve within 45 s`;
+          await pause(5000);
+        }
+      };
+      const resolvesNobody = async (token, what) => {
+        const a = await who(token);
+        if (unanswered(a)) return `${what}: ${unanswered(a)}`;
+        return a.names.length ? `${what} resolved ${a.names.length} people` : null;
+      };
+      const note = (problem) => { if (problem) problems.push(problem); };
+      // Each part takes up to about two minutes. If a window boundary fell inside one, the server's
+      // w-1..w+1 table would move under the tokens and the check would fail although the server is
+      // right. So each part first waits for the next window when less than 150 s of this one is left.
+      const waitForWindow = async () => {
+        const windowS = bleWindowS();
+        const left = windowS - (Math.floor(Date.now() / 1000) % windowS);
+        if (left < 150) await pause((left + 2) * 1000);
+      };
+      await waitForWindow();
+      // (a) windows w-1, w, w+1 resolve the target; w-2 and w+2 resolve nobody.
+      for (const dw of [0, -1, 1]) note(await resolves(tokenOf(keyOld, dw), `the token of window ${sign(dw)}`));
+      // Not before 31 s after the target's presence write: a token table that lacks the target is then
+      // old enough to be rebuilt on these unknown tokens, so "nobody" is the window rule, not a table
+      // that never held the target.
+      await pause(Math.max(0, firstAt + 31_000 - Date.now()));
+      for (const dw of [-2, 2]) note(await resolvesNobody(tokenOf(keyOld, dw), `the token of window ${sign(dw)}`));
+      // (b) and (c) run in one window, so the table that (b) leaves cached still holds the old key's
+      // token when (c) asks about it right after the re-key.
+      await waitForWindow();
+      // (b) a presence write without ble keeps the session: no key in the answer, same token works.
+      const quiet = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: T3, label: 'BU-presence' });
+      if (quiet.status !== 200 || quiet.json.ble_key) problems.push(`a presence write without ble gave ${quiet.status}${quiet.json.ble_key ? ' and a key' : ''}`);
+      note(await resolves(tokenOf(keyOld), 'after a presence write without ble, the current token'));
+      // (c) re-key: a new key and key id; the old key's token resolves nobody at once (the cached
+      // entry is refused by the server's check of the stored nonce); the target's sightings answer
+      // names the new id; the new key's token resolves the target.
+      const second = await presenceBle(T3, 'BU-presence-ble2');
+      const keyNew = second.json.ble_key;
+      if (second.status !== 200 || !keyNew) {
+        throw new Error([...problems, `the re-key gave ${second.status} without a key`].join('; '));
+      }
+      if (keyNew === keyOld || second.json.ble_key_id === first.json.ble_key_id) problems.push('the re-key returned the old key or key id');
+      note(await resolvesNobody(tokenOf(keyOld), 'after the re-key, the old key\'s token'));
+      const own = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: crypto.randomBytes(16).toString('base64url'), rssi: BLE_RSSI }] }, { device: T3, label: 'BU-sightings' });
+      if (own.status !== 200) problems.push(`the target's sightings gave ${own.status}`);
+      else if (own.json.ble_key_id !== second.json.ble_key_id) problems.push('the target\'s sightings answer does not name the new key id');
+      note(await resolves(tokenOf(keyNew), 'the new key\'s token'));
+    } finally {
+      for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble3-presence' }).catch(() => {});
+    }
+    report(problems.length === 0, BLE3, problems.length ? problems.join('; ') : 'w-1, w and w+1 resolve, w-2 and w+2 do not; a presence write without ble keeps the key; a re-key gives a new key and id, the old key resolves nobody at once and the new one resolves');
   });
 
   await check('unav1: an owner can delete while the conference is unavailable', async () => {
@@ -2392,16 +2733,16 @@ try {
       return;
     }
     // A Worker with its fixtures gated off is a deployed one, whose conferences must not be flipped.
-    if (fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+    if (fixturesGated) gatedFixtures();
     const doc = JSON.parse(readFileSync(join(ROOT, 'data', slug, 'conference.json'), 'utf8'));
     const U = newDevice();
     await putProfile(U, slug, 'U', {}, { open: true });
-    const flip = await admin('PUT', '/admin/conferences', { conferences: [{ ...doc, status: 'unavailable', status_reason: 'fetch_failed' }] });
+    const flip = await admin('PUT', '/admin/conferences', { conferences: [{ ...conferenceForWorker(doc), status: 'unavailable', status_reason: 'fetch_failed' }] });
     const write = await api('PUT', '/api/people/profile', { event: slug, profile: profileBody(slug, 'U'), open_to_meet: true, shared_talk_ids: [] }, { device: U, label: 'U-put' });
     const presence = await api('DELETE', `/api/presence?event=${slug}`, undefined, { device: U, label: 'U-presence' });
     const del = await api('DELETE', `/api/people/profile?event=${slug}`, undefined, { device: U, label: 'U-delete' });
     const stats = await admin('GET', `/admin/stats?event=${slug}`);
-    const restore = await admin('PUT', '/admin/conferences', { conferences: [doc] });
+    const restore = await admin('PUT', '/admin/conferences', { conferences: [conferenceForWorker(doc)] });
     const problems = [];
     if (flip.status !== 200) problems.push(`flip gave ${flip.status}`);
     if (write.status !== 400) problems.push(`a profile write while unavailable gave ${write.status}`);
@@ -2431,6 +2772,7 @@ try {
   } else if (expiredWritten) {
     const res = await fetch(`${esUrl()}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'DELETE',
+      redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}` },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }).catch(() => null);
@@ -2680,6 +3022,14 @@ if (!WORKER_SERVES_APP) {
     // A non-sharer and anonymous callers see no contact details at all.
     if (['N-members', 'anon-members', 'public-counts', 'C-matches', 'recs'].includes(r.label) && /linkedin_url|contact_note/.test(r.text)) hits.push(`contact fields in ${r.label}`);
   }
+  // A Bluetooth key reaches only the device whose presence write minted it, in that write's answer
+  // (ble1, ble2 and ble3 record each one with its write).
+  for (const m of mintedBleKeys) {
+    for (const r of [...responses, ...otherResponses]) {
+      if (r.json === m.response) continue;
+      if (`${r.text}\n${r.headersText}`.includes(m.key)) hits.push(`the Bluetooth key minted by ${m.label} in ${r.label} ${r.path}`);
+    }
+  }
   const unique = [...new Set(hits)];
   // l trusts the shared talks each accepted profile write sent; the server must have echoed
   // exactly that list and, read back through the app's own API, must have stored it.
@@ -2690,7 +3040,7 @@ if (!WORKER_SERVES_APP) {
     ...(echoChecked > 0 && storedChecked === 0 ? ['no stored profile was read back'] : []),
   ];
   report(l0Problems.length === 0, 'l0: every accepted profile write echoes and stores the shared talks it sent', l0Problems.length ? l0Problems.join('; ') : `${echoChecked} writes checked, ${storedChecked} talks read back`);
-  report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked${IS_WORKER ? `, plus ${otherResponses.length} page and admin responses` : ''}`);
+  report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked${IS_WORKER ? `, plus ${otherResponses.length} page and admin responses` : ''}${mintedBleKeys.length ? `, ${mintedBleKeys.length} Bluetooth keys only in the answers that minted them` : ''}`);
 }
 
 {
@@ -2731,6 +3081,7 @@ if (!WORKER_SERVES_APP) {
   }
 }
 
+if (primaryOverSkips > 0) console.log(`NOTE ${primaryOverSkips} check${primaryOverSkips === 1 ? '' : 's'} skipped because every talk of the primary conference has ended; set SMOKE_CONFERENCE to a conference that is still running to run them`);
 if (process.env.SMOKE_STRICT === '1') {
   report(retried === 0, 'strict: no request answered 5xx or failed on its first attempt', retried ? `${retried} did; see the NOTE lines above` : 'none needed a retry');
 }
