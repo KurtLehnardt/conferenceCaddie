@@ -111,9 +111,14 @@ import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bun
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const REQUEST_TIMEOUT_MS = 30000;
-const PRIMARY = process.env.SMOKE_CONFERENCE || 'kubecon-cloudnativecon-north-america-2026';
+const PRIMARY = process.env.SMOKE_CONFERENCE || process.env.CADDIE_SMOKE_CONFERENCE || 'kubecon-cloudnativecon-north-america-2026';
 const EXTRA = (process.env.SMOKE_EXTRA ?? 'mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026').split(',').map((s) => s.trim()).filter(Boolean);
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+// ES_URL has no default (a fork's key must not reach another cluster); read when a request needs it.
+const esUrl = () => {
+  const url = String(process.env.ES_URL || '').trim().replace(/\/+$/, '');
+  if (!url) throw new Error('Set ES_URL.');
+  return url;
+};
 const ES_WRITE_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY || '';
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 
@@ -566,7 +571,7 @@ async function agePresence(device, who) {
     if (r.status !== 200) throw new Error(`aging ${who}'s presence gave ${r.status}`);
     return;
   }
-  const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
+  const res = await fetch(`${esUrl()}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
     method: 'POST',
     redirect: 'manual',
     headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
@@ -1421,7 +1426,7 @@ function extractPdfText(pdf) {
 // profiles at any moment (the import's key cannot touch it). Needs ELASTISEARCH_API_KEY.
 // The deployed import key cannot write any index at all; scripts/create-es-keys.mjs checks that.
 async function indexCounts() {
-  const res = await fetch(`${ES_URL}/_cat/indices?format=json&h=index,docs.count&expand_wildcards=open`, {
+  const res = await fetch(`${esUrl()}/_cat/indices?format=json&h=index,docs.count&expand_wildcards=open`, {
     redirect: 'manual',
     headers: { Authorization: `ApiKey ${process.env.ELASTISEARCH_API_KEY}` },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1605,7 +1610,7 @@ try {
       if (!expiredWritten) report(false, 'p1b: the expired test profile is written', `status ${r.status}`);
     });
   } else if (WRITE_MODE === 'es') {
-    const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
+    const res = await fetch(`${esUrl()}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'PUT',
       redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/json' },
@@ -2530,7 +2535,7 @@ try {
   if (expiredWritten && WRITE_MODE === 'admin') {
     await admin('DELETE', `/admin/test/profile?event=${encodeURIComponent(PRIMARY)}&profile_id=${encodeURIComponent(expiredProfileId)}`).catch(() => {});
   } else if (expiredWritten) {
-    const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
+    const res = await fetch(`${esUrl()}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'DELETE',
       redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}` },

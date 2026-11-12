@@ -3,7 +3,7 @@
 //
 // Usage: node scripts/topics.mjs --event <slug> [--dry-run] [--allow-empty] [--allow-shrink]
 //        [--talks-index name] [--topics-index name] [--work-index name]
-// Env:   ES_URL (default: the Elastic Cloud deployment), and an admin-capable key in ES_ADMIN_API_KEY,
+// Env:   ES_URL (required, no default), and an admin-capable key in ES_ADMIN_API_KEY,
 //        ELASTISEARCH_API_KEY or ES_API_KEY (the topics step writes, so the read-only key is not enough).
 //
 // How it works:
@@ -28,10 +28,10 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { candidatesWithTargets, checkNotShrinking, checkWorkIndexCount } from './lib/topics-candidates.mjs';
+import { candidatesWithTargets, checkNotShrinking, checkWorkIndexCount, commonCasing, rankTopics } from './lib/topics-candidates.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_ADMIN_API_KEY || process.env.ELASTISEARCH_API_KEY || process.env.ES_API_KEY;
 if (!API_KEY) {
   console.error('Set ELASTISEARCH_API_KEY (or ES_ADMIN_API_KEY). The topics step writes, so it needs a key with write access.');
@@ -80,7 +80,7 @@ const COLLAPSE_COVERAGE = 0.75;
 const CANDIDATES = 400; // the aggregation returns more than the cap so fix-ups can remove some
 
 async function es(method, urlPath, body, ndjson = false) {
-  const res = await fetch(ES_URL + urlPath, {
+  const res = await fetch(esUrlOrExit() + urlPath, {
     method,
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json' },
     body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),
@@ -297,12 +297,8 @@ async function main() {
     // with their aliases (mergeTargets, as in scripts/lib/topics.mjs buildTopics). No candidate
     // at all means no topics; checkNotWiping then refuses to replace a stored list with that.
     const candidates = candidatesWithTargets({ termBuckets, aliasBuckets, talkTerms: talkTerms.values(), merge: fixups.merge });
-    const labelOf = (term) => {
-      const m = casings.get(term);
-      if (!m) return term;
-      // Most common casing; ties go to the casing that has a capital letter, then alphabetical.
-      return [...m.entries()].sort((a, b) => b[1] - a[1] || Number(/[A-Z]/.test(b[0])) - Number(/[A-Z]/.test(a[0])) || a[0].localeCompare(b[0]))[0][0];
-    };
+    // Most common casing; ties go to the casing that has a capital letter, then by code unit.
+    const labelOf = (term) => (casings.has(term) ? commonCasing(casings.get(term)) : term);
 
     // Fix-ups. A merge never creates a target that occurs in no title: the target must be a candidate,
     // and a target below three talks is one when its aliases bring it to three.
@@ -364,9 +360,9 @@ async function main() {
       for (const set of talkTerms.values()) if ([...t.members].some((m) => set.has(m))) count++;
       topics.push({ topic_id: id, label: t.label, aliases: [...t.aliases].sort(), talk_count: count, members: t.members });
     }
-    topics.sort((a, b) => b.talk_count - a.talk_count || a.label.localeCompare(b.label) || a.topic_id.localeCompare(b.topic_id));
-    topics.splice(MAX_TOPICS);
-    topics.forEach((t, i) => { t.rank = i + 1; });
+    // Most talks first, then label, then topic id, by the comparator the bundle builder and the
+    // Worker's ingest use (compareTopics), not ICU's localeCompare.
+    rankTopics(topics, MAX_TOPICS);
 
     const stored = await es('POST', `/${topicsIndex}/_search`, {
       size: 10000,

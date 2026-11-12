@@ -18,7 +18,7 @@
 
 import { PRESENCE_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete } from '../server/people-shared.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const MEETS_INDEX = process.env.ES_PEOPLE_MEETS_INDEX || 'caddie-people-meets';
@@ -35,7 +35,7 @@ if (!API_KEY) {
 }
 
 async function es(method, path, body, ndjson = false) {
-  const res = await fetch(`${ES_URL}${path}`, {
+  const res = await fetch(`${esUrlOrExit()}${path}`, {
     method,
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json' },
     body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),
@@ -52,7 +52,7 @@ async function es(method, path, body, ndjson = false) {
 // A realtime read of one people document (GET, so the search's refresh interval does not delay
 // it): { found, source, seqNo, primaryTerm }.
 async function getProfile(id) {
-  const res = await fetch(`${ES_URL}/${enc(PEOPLE_INDEX)}/_doc/${enc(id)}?_source_includes=open_to_meet,shared_talk_ids`, {
+  const res = await fetch(`${esUrlOrExit()}/${enc(PEOPLE_INDEX)}/_doc/${enc(id)}?_source_includes=open_to_meet,shared_talk_ids`, {
     headers: { Authorization: `ApiKey ${API_KEY}` },
     signal: AbortSignal.timeout(60_000),
   });
@@ -94,7 +94,7 @@ for (;;) {
     for (const [name, field] of [[MEETS_INDEX, 'participants'], [PUSH_INDEX, 'profile_id'], [NUDGES_INDEX, 'profile_ids']]) {
       await es('POST', `/${enc(name)}/_delete_by_query?conflicts=proceed&ignore_unavailable=true`, { query: of(field) });
     }
-    const res = await fetch(`${ES_URL}/${enc(PEOPLE_INDEX)}/_doc/${enc(h._id)}?if_seq_no=${own.seqNo}&if_primary_term=${own.primaryTerm}&refresh=wait_for`, {
+    const res = await fetch(`${esUrlOrExit()}/${enc(PEOPLE_INDEX)}/_doc/${enc(h._id)}?if_seq_no=${own.seqNo}&if_primary_term=${own.primaryTerm}&refresh=wait_for`, {
       method: 'DELETE',
       headers: { Authorization: `ApiKey ${API_KEY}` },
       signal: AbortSignal.timeout(60_000),
