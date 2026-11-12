@@ -9,6 +9,7 @@
     "enabled": true,
     "semantic": "server",
     "presence": true,
+    "presence_keep_until": true,
     "gps_bands": true,
     "meets": true,
     "circles": true,
