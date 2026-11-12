@@ -92,10 +92,6 @@ test('the shrink guard needs more than 10 topics and more than 10% fewer', () =>
   assert.throws(() => checkNotShrinking(1, 100, {}), /Refusing to shrink/);
 });
 
-// A committed no-op: "don't-have" can never be a topic id (an apostrophe), so the script ignores it
-// with a warning. Reported to the owner of the data instead of changed here.
-const KNOWN_INVALID = new Set(["kubecon-cloudnativecon-north-america-2026.json:don't-have"]);
-
 test('every data/topics fixup file is well formed', () => {
   const dir = new URL('../../data/topics/', import.meta.url);
   const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
@@ -106,7 +102,7 @@ test('every data/topics fixup file is well formed', () => {
     const mg = fx.merge ?? {};
     const canonicals = new Set(Object.values(mg));
     const ids = [...Object.keys(mg), ...Object.values(mg), ...(fx.remove ?? []), ...Object.keys(fx.rename ?? {})];
-    for (const id of ids) assert.ok(TOPIC_ID.test(id) || KNOWN_INVALID.has(`${f}:${id}`), `${f}: ${JSON.stringify(id)} is not a valid topic id`);
+    for (const id of ids) assert.ok(TOPIC_ID.test(id), `${f}: ${JSON.stringify(id)} is not a valid topic id`);
     for (const id of fx.remove ?? []) assert.ok(!Object.keys(mg).includes(id) && !canonicals.has(id), `${f}: ${id} is both removed and merged`);
     for (const [alias, canonical] of Object.entries(mg)) {
       assert.ok(text(alias) && text(canonical), `${f}: ${JSON.stringify([alias, canonical])} must be non-empty strings`);

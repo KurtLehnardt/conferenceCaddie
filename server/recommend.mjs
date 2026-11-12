@@ -31,7 +31,7 @@ import { take, clientIp } from './ratelimit.mjs';
 import { conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { ES_URL } from './es-url.mjs';
 const ES_API_KEY = process.env.ES_API_KEY || '';
 const ES_PEOPLE_API_KEY = process.env.ES_PEOPLE_API_KEY || '';
 const TALKS_INDEX = process.env.ES_INDEX || 'caddie-talks';

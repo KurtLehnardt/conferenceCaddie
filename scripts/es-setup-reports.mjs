@@ -2,7 +2,7 @@
 // mappings. Run it after scripts/es-setup-people.mjs.
 //
 // Usage: node scripts/es-setup-reports.mjs [index] [--alias name] [--people name] [--meets name]
-// Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY;
+// Env:   ES_URL (required, no default), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY;
 //        ES_PEOPLE_INDEX (default caddie-people) and ES_PEOPLE_MEETS_INDEX (default
 //        caddie-people-meets) name the indices whose mappings are extended, unless --people or
 //        --meets says otherwise.
@@ -17,7 +17,7 @@
 
 import { chooseAlias } from './lib/alias.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -49,7 +49,7 @@ for (const name of [index, alias, peopleIndex, meetsIndex]) {
 async function es(method, path, body) {
   let res;
   try {
-    res = await fetch(ES_URL + path, {
+    res = await fetch(esUrlOrExit() + path, {
       method,
       headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),

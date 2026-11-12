@@ -73,6 +73,24 @@ describe('createProfileDelete', () => {
     assert.deepEqual(payload, { doc: mod.HIDE_FOR_DELETE });
   });
 
+  test('a guarded delete hides with if_seq_no, keeps the profile on a conflict and checks its guard', async () => {
+    const seen = [];
+    const answer = (status) => async (method, path, body) => {
+      seen.push({ method, path, body });
+      return { status: 200, json: { items: [{ update: { status } }] } };
+    };
+    const kept = mod.createProfileDelete({ ...deps, people: answer(409) });
+    assert.equal(await kept.deleteProfileAndConnections('ev', 'pid', { guard: { seqNo: 7, primaryTerm: 2 } }), 'kept');
+    assert.equal(seen.length, 1, 'nothing after the refused hide');
+    assert.deepEqual(JSON.parse(seen[0].body.split('\n')[0]), { update: { _id: 'ev:pid', if_seq_no: 7, if_primary_term: 2 } });
+    const gone = mod.createProfileDelete({ ...deps, people: answer(404) });
+    assert.equal(await gone.deleteProfileAndConnections('ev', 'pid', { guard: { seqNo: 7, primaryTerm: 2 } }), 'gone');
+    for (const guard of [{}, { seqNo: 7 }, { seqNo: '7', primaryTerm: 2 }]) {
+      await assert.rejects(() => kept.deleteProfileAndConnections('ev', 'pid', { guard }), TypeError);
+    }
+    assert.equal(seen.length, 2, 'a bad guard sends nothing');
+  });
+
   test('a failed step throws the injected error class', async () => {
     class Boom extends Error {}
     const people = async (method, path) => (path.includes('_bulk') ? { status: 200, json: { items: [{ update: { status: 500 } }] } } : { status: 200, json: {} });

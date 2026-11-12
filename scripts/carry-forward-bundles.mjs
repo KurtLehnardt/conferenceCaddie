@@ -11,22 +11,25 @@
 //
 // Usage: node scripts/carry-forward-bundles.mjs [--out dist-pages]
 //                                               [--base-url https://kurtlehnardt.github.io/conferenceCaddie/bundles/]
-// The live index is <base-url>conferences.json. A 404 there (the first deploy) is not an error:
+// Without --base-url the base is the environment variable CADDIE_BUNDLE_BASE, else the official one.
+// The variable is read when the arguments are parsed, not when the module is imported, as
+// build-bundles.mjs reads its environment. The live index is <base-url>conferences.json. A 404 there (the first deploy) is not an error:
 // there is nothing to carry forward. Any other failure to read it is an error, because deploying
 // without the previous directories could break clients mid-download.
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readConferenceIndex } from '../contracts/js/bundle.mjs';
 
-const DEFAULT_BASE = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+const OFFICIAL_BASE = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
 const PATH_RE = /^[a-z0-9][a-z0-9-]{0,99}\/[0-9a-f]{16}\/$/;
 const FILE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TIMEOUT_MS = 60_000;
 
-function parseArgs(argv) {
-  const opts = { out: 'dist-pages', baseUrl: DEFAULT_BASE };
+export function parseArgs(argv) {
+  const opts = { out: 'dist-pages', baseUrl: process.env.CADDIE_BUNDLE_BASE || OFFICIAL_BASE };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = argv[i + 1];
@@ -84,10 +87,20 @@ async function main() {
   return 0;
 }
 
-main().then(
-  (code) => { process.exitCode = code; },
-  (err) => {
-    console.error(err.message);
-    process.exitCode = 1;
-  },
-);
+// Run as a script (also through a symlink), not when a test imports it.
+const isMain = () => {
+  try {
+    return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+};
+if (isMain()) {
+  main().then(
+    (code) => { process.exitCode = code; },
+    (err) => {
+      console.error(err.message);
+      process.exitCode = 1;
+    },
+  );
+}

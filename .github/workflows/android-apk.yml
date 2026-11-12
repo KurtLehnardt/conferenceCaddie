@@ -37,7 +37,7 @@ jobs:
       release_apk: ${{ steps.release_apk.outputs.file }}
     env:
       # The API origin the native app talks to. The bundled web app is the same as the PWA.
-      VITE_API_ORIGIN: https://conference-caddie-265846417372.us-west1.run.app
+      VITE_API_ORIGIN: ${{ vars.CADDIE_BACKEND || 'https://conference-caddie-265846417372.us-west1.run.app' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
