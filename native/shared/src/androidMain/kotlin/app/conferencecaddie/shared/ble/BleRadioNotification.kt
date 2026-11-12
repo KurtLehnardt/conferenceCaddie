@@ -16,7 +16,9 @@ import app.conferencecaddie.shared.NotificationTapKey
  * The ongoing notification of [BleRadioService], which Android requires of a foreground service and
  * which says what the phone is doing: its own low-importance channel (no sound, no badge), a Stop
  * action, and a tap that opens the people screen showing who is around. The words are the Capacitor
- * app's (web/android/app/src/main/res/values/strings.xml), except [OPEN_TO_LISTEN]. Dismissing it,
+ * app's (web/android/app/src/main/res/values/strings.xml), except [OPEN_TO_LISTEN] and the second
+ * sentence of [TEXT]: the Capacitor app said nothing about the person is sent, but a phone this one
+ * connects to can read its Bluetooth name, as from any Bluetooth device. Dismissing it,
  * which Android 14 and newer allow, tells the service, which posts it again.
  */
 internal object BleRadioNotification {
@@ -26,7 +28,9 @@ internal object BleRadioNotification {
     const val CHANNEL_NAME = "Finding people near you"
     const val CHANNEL_DESCRIPTION = "Shown while Conference Caddie looks for matching people nearby over Bluetooth."
     const val TITLE = "Conference Caddie is finding people near you"
-    const val TEXT = "Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth."
+    const val TEXT =
+        "Your phone broadcasts a random code and listens for others. No profile details are sent over Bluetooth; " +
+            "nearby devices may see your phone's Bluetooth name, as with any Bluetooth device."
     const val STOP = "Stop"
 
     /**

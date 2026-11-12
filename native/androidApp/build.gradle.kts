@@ -35,6 +35,19 @@ if (missingSigningVariables.isNotEmpty() && missingSigningVariables.size < signi
 val hasReleaseSigning = missingSigningVariables.isEmpty()
 val unsignedRelease = providers.gradleProperty("caddie.unsignedRelease").orNull == "true"
 
+// Native Bluetooth proximity is gated per build (DECISIONS.md, phase 4): on in every debug build, off
+// in release builds until the exit test on real phones has passed. -Pcaddie.bleEnabled=true turns it
+// on in a release build too, an optimised build for that exit test only. One switch drives both the
+// BuildConfig flag and the Bluetooth manifest (src/ble/AndroidManifest.xml), so a build either has
+// the whole feature or declares none of it.
+val bleInRelease = when (val value = providers.gradleProperty("caddie.bleEnabled").orNull) {
+    null, "false" -> false
+    "true" -> true
+    else -> throw GradleException("caddie.bleEnabled must be true or false, not \"$value\".")
+}
+
+fun bleEnabledFor(buildType: String?): Boolean = buildType == "debug" || (buildType == "release" && bleInRelease)
+
 // CI sets CADDIE_VERSION_CODE to 1000 + the workflow run number, which keeps every native build
 // above the Capacitor app's versionCode. Local builds use 1.
 val caddieVersionCode = providers.environmentVariable("CADDIE_VERSION_CODE").orNull?.let { value ->
@@ -109,20 +122,20 @@ android {
         }
     }
 
-    // CADDIE_BLE_ENABLED is the release gate of native Bluetooth proximity (DECISIONS.md, phase 4):
-    // on in debug builds, off in release builds until the exit test on real phones has passed. Off,
+    // CADDIE_BLE_ENABLED is the release gate of native Bluetooth proximity (bleEnabledFor above). Off,
     // the app creates no Bluetooth platform at all (AndroidPeopleServices.create), so the feature is
-    // hidden even where the backend offers it, and nothing restarts the radio.
+    // hidden even where the backend offers it, nothing restarts the radio, and the manifest declares
+    // no Bluetooth permission and no BleRadioService (androidComponents below).
     buildFeatures {
         buildConfig = true
     }
 
     buildTypes {
         getByName("debug") {
-            buildConfigField("boolean", "CADDIE_BLE_ENABLED", "true")
+            buildConfigField("boolean", "CADDIE_BLE_ENABLED", bleEnabledFor("debug").toString())
         }
         getByName("release") {
-            buildConfigField("boolean", "CADDIE_BLE_ENABLED", "false")
+            buildConfigField("boolean", "CADDIE_BLE_ENABLED", bleEnabledFor("release").toString())
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -192,15 +205,90 @@ abstract class CheckOnnxRuntimeManifest : DefaultTask() {
     }
 }
 
+/**
+ * Fails when the merged manifest of a variant disagrees with its Bluetooth gate (bleEnabledFor). With
+ * the gate off (a release build without -Pcaddie.bleEnabled=true) it must declare no Bluetooth
+ * permission, no FOREGROUND_SERVICE_CONNECTED_DEVICE, no Bluetooth hardware and no BleRadioService,
+ * whatever a library adds; with it on it must declare the service and the permissions the radio
+ * needs. Runs with every assemble.
+ */
+abstract class CheckBluetoothManifest : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val manifest: RegularFileProperty
+
+    @get:Input
+    abstract val bleEnabled: Property<Boolean>
+
+    @get:OutputFile
+    abstract val report: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val android = "http://schemas.android.com/apk/res/android"
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        }
+        val doc = factory.newDocumentBuilder().parse(manifest.get().asFile)
+        fun names(tag: String) = doc.getElementsByTagName(tag).let { list ->
+            (0 until list.length).map { (list.item(it) as org.w3c.dom.Element).getAttributeNS(android, "name") }
+        }
+        val service = "app.conferencecaddie.shared.ble.BleRadioService"
+        val permissions = names("uses-permission")
+        val bluetooth = permissions
+            .filter { it.startsWith("android.permission.BLUETOOTH") || it == "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" }
+            .map { "the permission $it" } +
+            names("uses-feature").filter { it.startsWith("android.hardware.bluetooth") }.map { "the feature $it" } +
+            names("service").filter { it == service }.map { "the service $it" }
+        val file = manifest.get().asFile.name
+        if (bleEnabled.get()) {
+            val needed = listOf(
+                "android.permission.BLUETOOTH_ADVERTISE",
+                "android.permission.BLUETOOTH_SCAN",
+                "android.permission.BLUETOOTH_CONNECT",
+                "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
+            ).filter { it !in permissions }.map { "the permission $it" } +
+                listOf(service).filter { it !in names("service") }.map { "the service $it" }
+            if (needed.isNotEmpty()) {
+                throw GradleException(
+                    "Bluetooth proximity is on in this build, but the merged manifest lacks ${needed.joinToString(" and ")}. " +
+                        "They are declared in src/ble/AndroidManifest.xml.",
+                )
+            }
+            report.get().asFile.writeText("Bluetooth on: ${bluetooth.size} Bluetooth entries in $file.\n")
+        } else {
+            if (bluetooth.isNotEmpty()) {
+                throw GradleException(
+                    "Bluetooth proximity is off in this build (CADDIE_BLE_ENABLED), but the merged manifest has " +
+                        "${bluetooth.joinToString(" and ")}. Only src/ble/AndroidManifest.xml may declare them, and it is " +
+                        "merged only where Bluetooth is on.",
+                )
+            }
+            report.get().asFile.writeText("Bluetooth off: no Bluetooth entries in $file.\n")
+        }
+    }
+}
+
 androidComponents {
     onVariants { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
-        val check = tasks.register<CheckOnnxRuntimeManifest>("check${name}OnnxRuntimeManifest") {
+        val ble = bleEnabledFor(variant.buildType)
+        // The Bluetooth manifest joins the variant's own manifests only where the feature is on.
+        if (ble) variant.sources.manifests.addStaticManifestFile("src/ble/AndroidManifest.xml")
+        val onnxCheck = tasks.register<CheckOnnxRuntimeManifest>("check${name}OnnxRuntimeManifest") {
             group = "verification"
             description = "Checks that the ${variant.name} manifest has no ONNX Runtime component and no ACCESS_NETWORK_STATE."
             manifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
             report.set(layout.buildDirectory.file("reports/onnxruntime-manifest/${variant.name}.txt"))
         }
-        tasks.matching { it.name == "assemble$name" || it.name == "check" }.configureEach { dependsOn(check) }
+        val bluetoothCheck = tasks.register<CheckBluetoothManifest>("check${name}BluetoothManifest") {
+            group = "verification"
+            description = "Checks that the ${variant.name} manifest declares Bluetooth exactly when CADDIE_BLE_ENABLED is on."
+            manifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+            bleEnabled.set(ble)
+            report.set(layout.buildDirectory.file("reports/bluetooth-manifest/${variant.name}.txt"))
+        }
+        tasks.matching { it.name == "assemble$name" || it.name == "check" }.configureEach { dependsOn(onnxCheck, bluetoothCheck) }
     }
 }

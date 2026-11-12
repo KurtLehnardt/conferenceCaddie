@@ -251,7 +251,8 @@ class BleServiceLifecycleTest {
         assertEquals(NotificationManager.IMPORTANCE_LOW, channel.importance)
         assertEquals("Conference Caddie is finding people near you", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
         assertEquals(
-            "Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth.",
+            "Your phone broadcasts a random code and listens for others. No profile details are sent over Bluetooth; " +
+                "nearby devices may see your phone's Bluetooth name, as with any Bluetooth device.",
             n.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
         )
         assertTrue(n.flags and Notification.FLAG_FOREGROUND_SERVICE != 0)
@@ -343,12 +344,52 @@ class BleServiceLifecycleTest {
         assertArrayEquals(payload(7).copyOfRange(5, 17), tail.value)
         assertEquals(0, reader.read(PHONE, 17).value!!.size)
         assertEquals(BleGattAnswer.INVALID_OFFSET, reader.read(PHONE, 18).status)
-        // The payload of the moment, not the one advertised at the start, for a connection that has
-        // read nothing yet.
+        // The payload the sets advertise, not the payload of the moment: a new one is served only once
+        // the sets carry it, so a reader always gets the token of the address it connected through.
         source.payload = payload(8)
-        assertArrayEquals(payload(8), reader.read(OTHER_PHONE, 0).value)
+        assertArrayEquals(payload(7), reader.read(OTHER_PHONE, 0).value)
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(payload(8)) == true })
+        assertArrayEquals(payload(8), reader.read(THIRD_PHONE, 0).value)
+        // Nothing advertised (no key for a moment): nothing served.
         source.payload = null
-        assertEquals(BleGattAnswer.FAILURE, reader.read(THIRD_PHONE, 0).status)
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising == null })
+        assertEquals(BleGattAnswer.FAILURE, reader.read(WATCH, 0).status)
+    }
+
+    @Test
+    fun aReadBeforeTheSetsRestartAtANewWindowGetsTheAdvertisedToken() {
+        // The radio's clock, moved by the test: 30 seconds into window 2990520.
+        var now = BleProtocol.windowStartMillis(2990520L) + 30_000L
+        radio.clock = { now }
+        val source = BlePayloadSource { BleProtocol.encodePayload(ByteArray(16) { (BleProtocol.windowAtMillis(now) % 100).toByte() }) }
+        showApp()
+        radio.start(config(untilEpochMillis = now + 3_600_000L), source, Events())
+        assertTrue(waitFor { fake.advertising != null })
+        val reader = fake.reader!!
+        val first = source.payloadNow()!!
+        assertArrayEquals(first, reader.read(PHONE, 0).value)
+
+        // The next window has started, but the sets have not been restarted yet (the alarm can be
+        // minutes late in Doze): they still carry the old token at the old address, and that is what
+        // is served, to the phone that read it already and to one that connects now. The server still
+        // accepts it, and no address is seen with two tokens.
+        now = BleProtocol.windowStartMillis(2990521L) + 5L
+        val second = source.payloadNow()!!
+        assertFalse(first.contentEquals(second))
+        assertArrayEquals(first, fake.advertising)
+        assertArrayEquals(first, reader.read(PHONE, 0).value)
+        assertArrayEquals(first, reader.read(OTHER_PHONE, 0).value)
+        assertTrue(fake.disconnectedClients.isEmpty())
+
+        // The sets restart with the new token: both connections that read the old one are ended, and
+        // the new token is served from then on.
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(second) == true })
+        assertEquals(setOf(PHONE, OTHER_PHONE), fake.disconnectedClients.toSet())
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PHONE, 0).status)
+        assertArrayEquals(second, reader.read(THIRD_PHONE, 0).value)
     }
 
     @Test
@@ -367,24 +408,21 @@ class BleServiceLifecycleTest {
         assertArrayEquals(first, reader.read(PHONE, 0).value)
         assertArrayEquals("reading again in the same window is fine", first, reader.read(PHONE, 0).value)
 
-        // The window changes while the phone stays connected: it may not read the new token over the
-        // same link, which would tie the two together.
+        // The window changes and the sets restart with the new token while the phone stays connected:
+        // its connection is ended, and the watch's (which never asked for the token) is not.
         now = BleProtocol.windowStartMillis(2990521L) + 5L
         val second = source.payloadNow()!!
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(second) == true })
+        assertEquals(listOf(PHONE), fake.disconnectedClients.toList())
+        assertFalse(WATCH in fake.disconnectedClients)
+        // Still connected (the stack has not reported the end yet), it may not read the new token over
+        // the same link, which would tie the two together.
         val refused = reader.read(PHONE, 0)
         assertEquals(BleGattAnswer.READ_NOT_PERMITTED, refused.status)
         assertNull(refused.value)
         // A phone that connects now reads the new one.
         assertArrayEquals(second, reader.read(OTHER_PHONE, 0).value)
-
-        // At the refresh for the new window its connection is ended; the other phone's (which read
-        // this window's token) and the watch's are not.
-        radio.refresh()
-        assertTrue(waitFor { fake.advertising?.contentEquals(second) == true })
-        assertEquals(listOf(PHONE), fake.disconnectedClients.toList())
-        assertFalse(WATCH in fake.disconnectedClients)
-        // Still connected (the stack has not reported the end yet): still refused.
-        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PHONE, 0).status)
 
         // Once its connection has ended, the phone connects again through the new advertisement and
         // reads the new token like any other phone.
@@ -394,6 +432,90 @@ class BleServiceLifecycleTest {
         radio.refresh()
         instrumentation.waitForIdleSync()
         assertEquals(listOf(PHONE), fake.disconnectedClients.toList())
+    }
+
+    @Test
+    fun aDeviceThisPhoneConnectsToMayNotReadItsToken() {
+        // The radio's clock, moved by the test: 30 seconds into window 2990520.
+        var now = BleProtocol.windowStartMillis(2990520L) + 30_000L
+        radio.clock = { now }
+        val source = BlePayloadSource { BleProtocol.encodePayload(ByteArray(16) { (BleProtocol.windowAtMillis(now) % 100).toByte() }) }
+        val events = Events()
+        showApp()
+        radio.start(config(untilEpochMillis = now + 3_600_000L), source, events)
+        assertTrue(waitFor { fake.advertising != null })
+        val reader = fake.reader!!
+
+        // Something advertises Caddie's public service UUID without a token, so this phone connects
+        // to read it. Over that link the peer can read this phone's Bluetooth name, so it may not read
+        // the token as well: refused from the moment the connection starts.
+        onMain { fake.scanListener!!.onAdvertisements(listOf(ad(PROBE, -50, advertisesService = true))) }
+        assertTrue(waitFor { fake.interrogated.toList() == listOf(PROBE) })
+        val refused = reader.read(PROBE, 0)
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, refused.status)
+        assertNull(refused.value)
+        // A link end reported while the connection is being made may be an earlier link's: still refused.
+        reader.disconnected(PROBE)
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PROBE, 0).status)
+        // Other phones read as always.
+        assertArrayEquals(source.payloadNow(), reader.read(OTHER_PHONE, 0).value)
+
+        // The read is over and this phone closes its side, but until the stack reports the end of the
+        // link the peer is still refused, in this window and in the next.
+        onMain { fake.pendingRead!!(BleReadResult.NotFound) }
+        instrumentation.waitForIdleSync()
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PROBE, 0).status)
+        now = BleProtocol.windowStartMillis(2990521L) + 5L
+        val second = source.payloadNow()!!
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(second) == true })
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PROBE, 0).status)
+
+        // Once the link has ended, a new connection from that address (an iPhone uses one address for
+        // both roles) is served like any other: it reaches this phone through its own advertisement,
+        // which does not give the name away.
+        reader.disconnected(PROBE)
+        assertArrayEquals(second, reader.read(PROBE, 0).value)
+        assertTrue(events.stopped.isEmpty())
+    }
+
+    @Test
+    fun aDeviceWhoseLinkEndIsNeverReportedIsRefusedUntilTheNextWindowEnds() {
+        var now = BleProtocol.windowStartMillis(2990520L) + 30_000L
+        radio.clock = { now }
+        val source = BlePayloadSource { BleProtocol.encodePayload(ByteArray(16) { (BleProtocol.windowAtMillis(now) % 100).toByte() }) }
+        showApp()
+        radio.start(config(untilEpochMillis = now + 3_600_000L), source, Events())
+        assertTrue(waitFor { fake.advertising != null })
+        val reader = fake.reader!!
+        onMain { fake.scanListener!!.onAdvertisements(listOf(ad(PROBE, -50, advertisesService = true))) }
+        assertTrue(waitFor { fake.interrogated.toList() == listOf(PROBE) })
+        // The connection fails, and the stack never reports the end of a link.
+        onMain { fake.pendingRead!!(BleReadResult.Failed) }
+        instrumentation.waitForIdleSync()
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PROBE, 0).status)
+
+        // Refused through the next window ...
+        now = BleProtocol.windowStartMillis(2990521L) + 5L
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(source.payloadNow()) == true })
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PROBE, 0).status)
+        // ... and forgotten after it, when this phone's side has long been closed.
+        now = BleProtocol.windowStartMillis(2990522L) + 5L
+        val third = source.payloadNow()!!
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(third) == true })
+        assertArrayEquals(third, reader.read(PROBE, 0).value)
+    }
+
+    @Test
+    fun iPhonesMayNotFindThisPhoneOnEveryAndroidVersionForNow() {
+        // Android 14 and newer offer the connectable set, but whether iPhones find it is not checked on
+        // a phone yet, so the screens say that they may not, as on Android 13 and older.
+        fake.connectable = true
+        assertTrue(radio.hiddenFromIphones)
+        fake.connectable = false
+        assertTrue(radio.hiddenFromIphones)
     }
 
     @Test
@@ -433,7 +555,8 @@ class BleServiceLifecycleTest {
         instrumentation.waitForIdleSync()
         assertEquals(2, fake.scanStarts)
 
-        // A new window starts it again even while it runs (Android downgrades a scan after 30 minutes).
+        // A new window starts it again even while it runs (Android lowers a scan that has run too long,
+        // after 10 minutes from Android 14 on).
         now = BleProtocol.windowStartMillis(2990521L) + 5L
         source.payload = payload(4)
         radio.refresh()
@@ -659,6 +782,34 @@ class BleServiceLifecycleTest {
             radio.processExits = { listOf(BleProcessExit(startedAt - 60_000L, userRequested = true)) }
             assertFalse(radio.takeUserStoppedApp())
             radio.processExits = { listOf(BleProcessExit(System.currentTimeMillis() + 1_000L, userRequested = true)) }
+            assertTrue(radio.takeUserStoppedApp())
+        } finally {
+            val editor = prefs.edit().remove("exits_checked_at")
+            if (saved != null) editor.putLong("exits_checked_at", saved)
+            editor.commit()
+        }
+    }
+
+    @Test
+    fun aForceStopFromBeforeTheRadioLastStartedDoesNotCount() {
+        val prefs = context.getSharedPreferences("caddie_ble_radio", Context.MODE_PRIVATE)
+        val saved = prefs.all["exits_checked_at"] as Long?
+        try {
+            // Looked long ago. Since then the person force-stopped the app while Bluetooth was off, and
+            // nothing asked about it.
+            prefs.edit().putLong("exits_checked_at", 1_000L).commit()
+            val forceStop = System.currentTimeMillis() - 60_000L
+            radio.processExits = { listOf(BleProcessExit(forceStop, userRequested = true)) }
+            // Then the person turns Bluetooth on, and later the radio stops.
+            startRunning(Source(payload(1)), Events())
+            radio.stop()
+            assertTrue(waitFor { !serviceRunning() })
+            // That force stop came before this start: it does not stop the session at the next restore.
+            assertFalse(radio.takeUserStoppedApp())
+            // One after the start still counts.
+            radio.processExits = {
+                listOf(BleProcessExit(System.currentTimeMillis() + 1_000L, userRequested = true), BleProcessExit(forceStop, userRequested = true))
+            }
             assertTrue(radio.takeUserStoppedApp())
         } finally {
             val editor = prefs.edit().remove("exits_checked_at")
@@ -1182,12 +1333,16 @@ class BleServiceLifecycleTest {
         const val WAKE_LOCK_TAG = "caddie:bluetooth-report"
 
         /** BleRadioNotification.TEXT. */
-        const val TEXT = "Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth."
+        const val TEXT = "Your phone broadcasts a random code and listens for others. No profile details are sent over Bluetooth; " +
+            "nearby devices may see your phone's Bluetooth name, as with any Bluetooth device."
 
         /** Addresses of devices connected to this phone's GATT server. */
         const val PHONE = "5A:00:00:00:00:01"
         const val OTHER_PHONE = "5A:00:00:00:00:02"
         const val THIRD_PHONE = "5A:00:00:00:00:03"
         const val WATCH = "C0:00:00:00:00:09"
+
+        /** A device advertising Caddie's service UUID without a token, which this phone connects to. */
+        const val PROBE = "6B:00:00:00:00:01"
     }
 }
