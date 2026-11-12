@@ -331,6 +331,7 @@ class CaddieCore(
     // search, or For you with learn text), not at every start, and is guarded by embedderMutex.
     // embedderGeneration counts the loads and releases, so a state written for one of them is
     // dropped once another has happened; releaseRequested is a release asked for during a load.
+    // embedderJob is the load in progress until it has recorded its result.
     @kotlin.concurrent.Volatile
     private var embedder: Embedder? = null
     private var loader: (suspend () -> Embedder?)? = null
@@ -418,7 +419,15 @@ class CaddieCore(
             unwanted != null -> SemanticState.Idle
             else -> SemanticState.Ready
         }
-        publishSemantic(generation) { next }
+        embedderMutex.withLock {
+            // The load is over here, a little before this job ends. Without this, a search made as
+            // soon as the state below is seen could find the job still active and start no load,
+            // and a release asked for now would be kept and drop the next load's model.
+            embedderJob = null
+            releaseRequested = false
+            // Queued under the lock, so it runs before the state of a load started after this one.
+            publishSemantic(generation) { next }
+        }
     }
 
     // Publishes the embedder's state for [generation], unless a later load or release has happened.
