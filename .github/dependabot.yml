@@ -13,6 +13,28 @@ updates:
     directory: /native
     schedule:
       interval: weekly
+    # The build tools' floors in native/build.gradle.kts (DECISIONS.md, "Security floors for the native
+    # build's tools") are dependencies to Dependabot too. Bouncy Castle's three jars must stay on one
+    # release, so version updates move them in one pull request. A security update raises only the jars
+    # its alerts name (the security group only batches alerts that arrive together), so its pull request
+    # must raise the other jars by hand; checkToolingFloors fails while they differ. The other floors
+    # share a weekly pull request, since each such pull request needs the verification metadata
+    # regenerated and the emulator job (the only place the test platform's Netty and Guava run) to pass.
+    groups:
+      bouncycastle:
+        patterns: ["org.bouncycastle:*"]
+      bouncycastle-security:
+        applies-to: security-updates
+        patterns: ["org.bouncycastle:*"]
+      tooling-floors:
+        patterns:
+          - "io.netty:netty-bom"
+          - "com.google.guava:guava"
+          - "org.bitbucket.b_c:jose4j"
+          - "org.jdom:jdom2"
+          - "io.opentelemetry:opentelemetry-api"
+          - "org.apache.commons:commons-lang3"
+          - "org.apache.httpcomponents:httpclient"
     ignore:
       # Ignores every version of this artifact, not only pre-releases. Material3 moves with
       # Compose Multiplatform, never alone (1.13.0-beta02 belongs to CMP 1.13.0-beta02 and needs
@@ -28,3 +50,22 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "gradle-wrapper"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Floors of the build tools. These rules hold back version updates only: a security update
+      # ignores update-types and ignore-all rules, so it may move a floor to a new line (Netty 4.2,
+      # Guava 34), and its pull request must pass the emulator job like any other. Never add
+      # "versions:" to these rules; a version range would hold back security updates as well.
+      # grpc-netty (the test platform's gRPC) is built on Netty 4.1, so the BOM stays on 4.1. AGP is
+      # built on Guava 33, bundletool on jose4j 0.9 (a 0.x minor can break) and the Kotlin plugin's
+      # Swift export on OpenTelemetry 1. Commons Lang, JDOM and HttpClient need no rule: a Commons
+      # Lang 4 or HttpClient 5 has other coordinates, and JDOM 2.0.6.1 is the last release of its line.
+      - dependency-name: "io.netty:netty-bom"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "com.google.guava:guava"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.bitbucket.b_c:jose4j"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "io.opentelemetry:opentelemetry-api"
+        update-types: ["version-update:semver-major"]
+      # Not a security floor: it only keeps the plugin classpath from going back to 2.5.8, so version
+      # updates never propose newer releases.
+      - dependency-name: "org.checkerframework:checker-qual"

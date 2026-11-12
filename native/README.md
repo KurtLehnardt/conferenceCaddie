@@ -762,11 +762,11 @@ build the people controller.
 
 `gradle/verification-metadata.xml` holds the SHA-256 of every dependency and plugin the build
 resolves, and Gradle refuses an artifact whose checksum is missing or different. After changing a
-version in `gradle/libs.versions.toml` (Dependabot's Gradle updates included), regenerate it on a
-Mac, so the iOS artifacts are covered, and review the diff:
+version in `gradle/libs.versions.toml` or a floor in `build.gradle.kts` (Dependabot's Gradle updates
+included), regenerate it on a Mac, so the iOS artifacts are covered, and review the diff:
 
 ```sh
-./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
+./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help checkToolingFloors \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
   :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
   :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
@@ -776,6 +776,14 @@ Mac, so the iOS artifacts are covered, and review the diff:
 
 Then build the iOS app once with `xcodebuild` (see above), since Xcode's build phase resolves a few
 more artifacts; if it reports a missing checksum, add the task it names to the command.
+
+`checkToolingFloors` resolves the tool classpaths that only Android Lint, the device tests and Swift
+export use, so their artifacts are covered too. Those classpaths get security floors from the root
+`build.gradle.kts`: a dependency of a build tool that Dependabot reports is raised there, never in the
+version catalog (DECISIONS.md, "Security floors for the native build's tools"). The task fails when a
+floor no longer applies, for example because a plugin renamed one of the configurations, when any
+resolvable configuration resolves a floored module below its floor, and when Bouncy Castle's three jars
+are not on one release.
 
 Files that are not Maven artifacts (the query model, its vocabulary and ONNX Runtime's iOS archive)
 are pinned in `gradle/pinned-downloads.properties` by URL, size and SHA-256 instead. When ONNX
