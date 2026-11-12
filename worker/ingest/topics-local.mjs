@@ -331,9 +331,10 @@ async function main() {
   const talks = readEventTalks(args.event);
   let admin = null;
   if (args.api) {
-    const token = readAdminToken();
+    const api = normalizeApiBase(args.api);
+    const token = readAdminToken({ apiOrigin: new URL(api).origin });
     if (!token) throw new UsageError('--api needs ADMIN_TOKEN (or ADMIN_TOKEN_FILE).');
-    admin = adminClient(normalizeApiBase(args.api), token);
+    admin = adminClient(api, token);
   }
   // This command only reads, so an empty rebuilt list is reported rather than refused.
   const result = await resolveTopics(talks, { slug: args.event, admin, rebuild: args['rebuild-topics'], allowEmpty: true });

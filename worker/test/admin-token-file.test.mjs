@@ -13,7 +13,7 @@ import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, write
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adminTokenFile, adminTokenFileToRead, sameFile } from '../ingest/admin-token-file.mjs';
+import { adminTokenFile, adminTokenFileToRead, ignoredOldNote, sameFile } from '../ingest/admin-token-file.mjs';
 import { readAdminToken } from '../ingest/lib.mjs';
 import { configDir } from '../../scripts/admin/config.mjs';
 
@@ -50,9 +50,10 @@ describe('adminTokenFile: the resolution order', () => {
     assert.equal(adminTokenFile({ ADMIN_TOKEN_FILE: 'rel/token' }, home).path, resolve('rel/token'));
   });
 
-  test('then $CADDIE_ADMIN_HOME/admin-token, over XDG_CONFIG_HOME', () => {
+  // With CADDIE_ADMIN_HOME set there is no fallback to the old place (scripts/lib/admin-token-file.mjs).
+  test('then $CADDIE_ADMIN_HOME/admin-token, over XDG_CONFIG_HOME, with no old place', () => {
     assert.deepEqual(adminTokenFile({ CADDIE_ADMIN_HOME: '/c', XDG_CONFIG_HOME: '/x' }, home), {
-      path: '/c/admin-token', legacy: '/scratch/home/.config/conference-caddie/admin-token',
+      path: '/c/admin-token', legacy: null,
     });
   });
 
@@ -101,15 +102,15 @@ describe('adminTokenFileToRead: the fallback to the old place, and whether the f
   test('reads the new file when it exists, trusted and with no note when the old one holds the same token', (t) => {
     const s = scratch(t);
     s.put(s.old, `${TOKEN}\n`);
-    const file = s.put(join(s.dir, 'c', 'admin-token'), TOKEN);
-    assert.deepEqual(adminTokenFileToRead({ CADDIE_ADMIN_HOME: join(s.dir, 'c') }, s.home), { path: file, value: TOKEN, note: null, legacy: s.old, trusted: true, doubt: null });
+    const file = s.put(join(s.dir, 'x', 'conference-caddie', 'admin-token'), TOKEN);
+    assert.deepEqual(adminTokenFileToRead({ XDG_CONFIG_HOME: join(s.dir, 'x') }, s.home), { path: file, value: TOKEN, note: null, legacy: s.old, trusted: true, doubt: null });
   });
 
   test('reads the new file when the old one holds a different token, not trusted, with a note that names both paths and not the values', (t) => {
     const s = scratch(t);
     s.put(s.old, OTHER);
-    const file = s.put(join(s.dir, 'c', 'admin-token'), TOKEN);
-    const got = adminTokenFileToRead({ CADDIE_ADMIN_HOME: join(s.dir, 'c') }, s.home);
+    const file = s.put(join(s.dir, 'x', 'conference-caddie', 'admin-token'), TOKEN);
+    const got = adminTokenFileToRead({ XDG_CONFIG_HOME: join(s.dir, 'x') }, s.home);
     assert.deepEqual(shape(got), { path: file, value: TOKEN, legacy: s.old, trusted: false });
     assert.equal(got.note, `Note: the admin token file ${file} and the file at its old place ${s.old} hold different tokens; ${file} is used. Set ADMIN_TOKEN_FILE to the other file to use that one instead.`);
     assert.equal(got.doubt, `the token file ${file} and the file at its old place ${s.old} hold different tokens, so it is not clear which one is this deployment's`);
@@ -120,8 +121,8 @@ describe('adminTokenFileToRead: the fallback to the old place, and whether the f
     const s = scratch(t);
     s.put(s.old, OTHER);
     chmodSync(s.old, 0o000);
-    const file = s.put(join(s.dir, 'c', 'admin-token'), `${TOKEN}\n`);
-    const got = adminTokenFileToRead({ CADDIE_ADMIN_HOME: join(s.dir, 'c') }, s.home);
+    const file = s.put(join(s.dir, 'x', 'conference-caddie', 'admin-token'), `${TOKEN}\n`);
+    const got = adminTokenFileToRead({ XDG_CONFIG_HOME: join(s.dir, 'x') }, s.home);
     assert.deepEqual(shape(got), { path: file, value: TOKEN, legacy: s.old, trusted: false });
     assert.equal(got.note, `Note: the admin token file ${file} is used, but the file at its old place ${s.old} exists and cannot be read, so the two cannot be compared; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`);
     assert.equal(got.doubt, `the file at the old place ${s.old} of the token file ${file} exists and cannot be read, so it is not clear which one holds this deployment's token`);
@@ -227,21 +228,22 @@ describe('readAdminToken', () => {
     assert.equal(read({ ADMIN_TOKEN: '', ADMIN_TOKEN_FILE: named, CADDIE_ADMIN_HOME: caddie, XDG_CONFIG_HOME: xdg }), 'named-token');
     assert.equal(read({}), 'old-token');
     assert.deepEqual(w.lines, [], 'no note for ADMIN_TOKEN_FILE or for the old place itself');
-    // The old file holds a different token, so each of these says which file is used.
+    // With CADDIE_ADMIN_HOME the old file is not read, and one note says so; with XDG_CONFIG_HOME
+    // the old file holds a different token, so the note says which file is used.
     assert.equal(read({ CADDIE_ADMIN_HOME: caddie, XDG_CONFIG_HOME: xdg }), 'caddie-token');
     assert.equal(read({ XDG_CONFIG_HOME: xdg }), 'xdg-token');
     assert.equal(w.lines.length, 2, w.lines.join('\n'));
-    assert.ok(w.lines[0].includes(`${join(caddie, 'admin-token')} is used`) && w.lines[0].includes(s.old), w.lines[0]);
+    assert.equal(w.lines[0], ignoredOldNote(join(caddie, 'admin-token'), s.old));
     assert.ok(w.lines[1].includes(`${join(xdg, 'conference-caddie', 'admin-token')} is used`) && w.lines[1].includes(s.old), w.lines[1]);
   });
 
   test('reads the new file when the old one holds a different token, with one note that holds neither value', (t) => {
     const s = scratch(t);
     s.put(s.old, `${OTHER}\n`);
-    const caddie = join(s.dir, 'caddie');
-    s.put(join(caddie, 'admin-token'), `${TOKEN}\n`);
+    const xdg = join(s.dir, 'xdg');
+    s.put(join(xdg, 'conference-caddie', 'admin-token'), `${TOKEN}\n`);
     const w = quiet(t);
-    assert.equal(readAdminToken({ env: { CADDIE_ADMIN_HOME: caddie }, home: s.home, warn: w.warn }), TOKEN);
+    assert.equal(readAdminToken({ env: { XDG_CONFIG_HOME: xdg }, home: s.home, warn: w.warn }), TOKEN);
     assert.equal(w.lines.length, 1);
     assert.match(w.lines[0], /hold different tokens/);
     assertNoPartOf(TOKEN, w.lines[0], 'the note');
@@ -249,32 +251,40 @@ describe('readAdminToken', () => {
     // The same token in both files is no news.
     s.put(s.old, TOKEN);
     const quietAgain = quiet(t);
-    assert.equal(readAdminToken({ env: { CADDIE_ADMIN_HOME: caddie }, home: s.home, warn: quietAgain.warn }), TOKEN);
+    assert.equal(readAdminToken({ env: { XDG_CONFIG_HOME: xdg }, home: s.home, warn: quietAgain.warn }), TOKEN);
     assert.deepEqual(quietAgain.lines, []);
   });
 
   test('falls back to the old file when the default one is missing, with one note that never holds the value', (t) => {
     const s = scratch(t);
     s.put(s.old, `${TOKEN}\n`);
-    for (const env of [{ XDG_CONFIG_HOME: join(s.dir, 'xdg') }, { CADDIE_ADMIN_HOME: join(s.dir, 'caddie') }]) {
-      const w = quiet(t);
-      assert.equal(readAdminToken({ env, home: s.home, warn: w.warn }), TOKEN, JSON.stringify(env));
-      assert.equal(w.lines.length, 1);
-      assert.ok(w.lines[0].includes(s.old) && /if that file holds this deployment's token, move it to /.test(w.lines[0]), w.lines[0]);
-      assertNoPartOf(TOKEN, w.lines.join('\n'), 'the note');
-    }
+    const w = quiet(t);
+    assert.equal(readAdminToken({ env: { XDG_CONFIG_HOME: join(s.dir, 'xdg') }, home: s.home, warn: w.warn }), TOKEN);
+    assert.equal(w.lines.length, 1);
+    assert.ok(w.lines[0].includes(s.old) && /if that file holds this deployment's token, move it to /.test(w.lines[0]), w.lines[0]);
+    assertNoPartOf(TOKEN, w.lines.join('\n'), 'the note');
+  });
+
+  test('never falls back with CADDIE_ADMIN_HOME set: the old file is not read, and one note names both paths', (t) => {
+    const s = scratch(t);
+    s.put(s.old, `${TOKEN}\n`);
+    const caddie = join(s.dir, 'caddie');
+    const w = quiet(t);
+    assert.equal(readAdminToken({ env: { CADDIE_ADMIN_HOME: caddie }, home: s.home, warn: w.warn }), '');
+    assert.deepEqual(w.lines, [ignoredOldNote(join(caddie, 'admin-token'), s.old)]);
+    assertNoPartOf(TOKEN, w.lines.join('\n'), 'the note');
   });
 
   test('reads the new file when the old one cannot be read, with one note that names both paths', { skip: AS_ROOT && 'root can read a file at mode 000' }, (t) => {
     const s = scratch(t);
     s.put(s.old, OTHER);
     chmodSync(s.old, 0o000);
-    const caddie = join(s.dir, 'caddie');
-    s.put(join(caddie, 'admin-token'), `${TOKEN}\n`);
+    const xdg = join(s.dir, 'xdg');
+    const file = s.put(join(xdg, 'conference-caddie', 'admin-token'), `${TOKEN}\n`);
     const w = quiet(t);
-    assert.equal(readAdminToken({ env: { CADDIE_ADMIN_HOME: caddie }, home: s.home, warn: w.warn }), TOKEN);
+    assert.equal(readAdminToken({ env: { XDG_CONFIG_HOME: xdg }, home: s.home, warn: w.warn }), TOKEN);
     assert.equal(w.lines.length, 1);
-    assert.ok(w.lines[0].includes(join(caddie, 'admin-token')) && w.lines[0].includes(s.old) && /cannot be read/.test(w.lines[0]), w.lines[0]);
+    assert.ok(w.lines[0].includes(file) && w.lines[0].includes(s.old) && /cannot be read/.test(w.lines[0]), w.lines[0]);
     assertNoPartOf(TOKEN, w.lines[0], 'the note');
   });
 
@@ -298,5 +308,89 @@ describe('readAdminToken', () => {
     assert.equal(r.stdout, String(TOKEN.length));
     assert.equal(r.stderr, `Note: the admin token file is not at ${join(xdg, 'conference-caddie', 'admin-token')}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, so the file at its old place ${s.old} was read instead; if that file holds this deployment's token, move it to ${join(xdg, 'conference-caddie', 'admin-token')}, or set ADMIN_TOKEN_FILE to it.\n`);
     assertNoPartOf(TOKEN, r.stderr, 'stderr');
+  });
+});
+
+// No fallback to the old place with CADDIE_ADMIN_HOME set, and the config.json check of the
+// fallback when the caller knows the API origin: the rules of scripts/lib/admin-token-file.mjs.
+describe('adminTokenFileToRead: CADDIE_ADMIN_HOME and the old directory\'s config.json', () => {
+  const ORIGIN = 'https://caddie.example';
+  const config = (api) => JSON.stringify({ backends: { live: { tier: 2, api } } });
+
+  test('with CADDIE_ADMIN_HOME set and both files there, the new file is read and trusted, the old one is not read, and one note names both paths', (t) => {
+    const s = scratch(t);
+    s.put(s.old, OTHER);
+    const caddie = join(s.dir, 'caddie');
+    const file = s.put(join(caddie, 'admin-token'), `${TOKEN}\n`);
+    const got = adminTokenFileToRead({ CADDIE_ADMIN_HOME: caddie }, s.home);
+    assert.deepEqual(got, { path: file, value: TOKEN, note: ignoredOldNote(file, s.old), legacy: null, trusted: true, doubt: null });
+    assert.equal(got.note, `Note: CADDIE_ADMIN_HOME is set, so the admin token file is ${file}; the file at the old place ${s.old} is not read or changed, because there is no fallback to the old place with CADDIE_ADMIN_HOME set.`);
+    for (const value of [TOKEN, OTHER]) assertNoPartOf(value, got.note, 'the note');
+  });
+
+  test('with CADDIE_ADMIN_HOME set and only the old file there, nothing is read and the result is not trusted', (t) => {
+    const s = scratch(t);
+    s.put(s.old, TOKEN);
+    const caddie = join(s.dir, 'caddie');
+    const file = join(caddie, 'admin-token');
+    const got = adminTokenFileToRead({ CADDIE_ADMIN_HOME: caddie }, s.home);
+    assert.deepEqual(got, {
+      path: file,
+      value: null,
+      note: ignoredOldNote(file, s.old),
+      legacy: null,
+      trusted: false,
+      doubt: `there is no token file at ${file}, and the file at the old place ${s.old} is not read, because there is no fallback to the old place with CADDIE_ADMIN_HOME set`,
+    });
+  });
+
+  test('with CADDIE_ADMIN_HOME set and no old file, there is no note', (t) => {
+    const s = scratch(t);
+    const caddie = join(s.dir, 'caddie');
+    const file = s.put(join(caddie, 'admin-token'), TOKEN);
+    assert.deepEqual(adminTokenFileToRead({ CADDIE_ADMIN_HOME: caddie }, s.home), { path: file, value: TOKEN, note: null, legacy: null, trusted: true, doubt: null });
+  });
+
+  test('the fallback with an API origin: read when the old directory has no config.json or lists the origin, refused when its config.json does not', (t) => {
+    const s = scratch(t);
+    s.put(s.old, TOKEN);
+    const xdg = join(s.dir, 'xdg');
+    const file = join(xdg, 'conference-caddie', 'admin-token');
+    const env = { XDG_CONFIG_HOME: xdg };
+    // No config.json in the old directory: the fallback as before.
+    assert.deepEqual(shape(adminTokenFileToRead(env, s.home, { apiOrigin: ORIGIN })), { path: s.old, value: TOKEN, legacy: s.old, trusted: false });
+    // A config.json that lists the origin as a tier 2 api: the fallback as before.
+    const oldConfig = s.put(join(s.home, '.config', 'conference-caddie', 'config.json'), config(ORIGIN));
+    assert.deepEqual(shape(adminTokenFileToRead(env, s.home, { apiOrigin: ORIGIN })), { path: s.old, value: TOKEN, legacy: s.old, trusted: false });
+    // A config.json that lists another origin: the old file is not read.
+    s.put(oldConfig, config('https://other.example'));
+    const got = adminTokenFileToRead(env, s.home, { apiOrigin: ORIGIN });
+    assert.deepEqual(shape(got), { path: file, value: null, legacy: s.old, trusted: false });
+    assert.equal(got.note, `Note: the admin token file is not at ${file}, its default place under XDG_CONFIG_HOME, and the file at its old place ${s.old} is not read, because ${oldConfig} does not list ${ORIGIN} as a tier 2 api; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`);
+    assertNoPartOf(TOKEN, `${got.note}\n${got.doubt}`, 'the note and the doubt');
+    // A config.json that is not valid lists nothing.
+    s.put(oldConfig, '{');
+    assert.equal(adminTokenFileToRead(env, s.home, { apiOrigin: ORIGIN }).value, null);
+    // Without an origin there is no such check.
+    assert.equal(adminTokenFileToRead(env, s.home).value, TOKEN);
+    // The check is for the fallback only: a new file is read whatever the old config.json says.
+    s.put(file, OTHER);
+    assert.equal(adminTokenFileToRead(env, s.home, { apiOrigin: ORIGIN }).value, OTHER);
+  });
+
+  test('readAdminToken with an API origin prints the refusal as one line and returns nothing', (t) => {
+    const s = scratch(t);
+    s.put(s.old, TOKEN);
+    s.put(join(s.home, '.config', 'conference-caddie', 'config.json'), config('https://other.example'));
+    const lines = [];
+    const env = { XDG_CONFIG_HOME: join(s.dir, 'xdg') };
+    assert.equal(readAdminToken({ env, home: s.home, warn: (line) => lines.push(line), apiOrigin: ORIGIN }), '');
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /is not read, because .* does not list https:\/\/caddie\.example as a tier 2 api/);
+    assertNoPartOf(TOKEN, lines.join('\n'), 'the note');
+    const listed = [];
+    s.put(join(s.home, '.config', 'conference-caddie', 'config.json'), config(ORIGIN));
+    assert.equal(readAdminToken({ env, home: s.home, warn: (line) => listed.push(line), apiOrigin: ORIGIN }), TOKEN);
+    assert.match(listed[0], /was read instead/);
   });
 });

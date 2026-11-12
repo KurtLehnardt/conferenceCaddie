@@ -159,12 +159,15 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    `~/.config` when `XDG_CONFIG_HOME` is unset; an empty variable counts as unset. With neither
    variable set that is `~/.config/conference-caddie/admin-token`, which was the only default
    before. `readAdminToken` in `worker/ingest/lib.mjs` follows the same rule
-   (`worker/ingest/admin-token-file.mjs`). If you set `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` and
-   your token is still in `~/.config/conference-caddie/admin-token`, a script that reads the token
-   file and finds none at the new place reads the old one and prints one line on stderr that names
-   both paths and says, if that file holds this deployment's token, to move it to the new place or
-   set `ADMIN_TOKEN_FILE` to it (with `CADDIE_ADMIN_HOME` keeping a second deployment apart, the old
-   place may hold the other deployment's token). When both files exist and hold different tokens,
+   (`worker/ingest/admin-token-file.mjs`). If you set `XDG_CONFIG_HOME` and your token is still in
+   `~/.config/conference-caddie/admin-token`, a script that reads the token file and finds none at
+   the new place reads the old one and prints one line on stderr that names both paths and says,
+   if that file holds this deployment's token, to move it to the new place or set
+   `ADMIN_TOKEN_FILE` to it. There is no fallback when `CADDIE_ADMIN_HOME` is set, because it names
+   a separate setup: the old file is then never read, and a script that finds it prints one line
+   that names both paths. The ingest, migration and topics scripts, which know the `--api` origin,
+   also skip the fallback when the old directory has a `config.json` that does not list that origin
+   as a tier 2 `api`, as the smoke does. When both files exist and hold different tokens,
    or the old one exists and cannot be read, it reads the new one and prints one line that names
    both paths (never the values). The script writes only the new place, says so in one line when
    the old file still exists, and never deletes it. Two paths that lead to one file through a

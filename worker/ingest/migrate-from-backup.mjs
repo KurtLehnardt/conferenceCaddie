@@ -288,7 +288,7 @@ export async function run(argv, { client = adminClient, readToken = readAdminTok
     const bad = only.filter((t) => !TABLES.includes(t));
     if (bad.length) throw new UsageError(`Unknown table in --only: ${bad.join(', ')}. Known: ${TABLES.join(', ')}.`);
     const dryRun = args['dry-run'];
-    const token = readToken();
+    const token = readToken({ apiOrigin: new URL(api).origin });
     if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to migrate, or pass --dry-run.');
 
     const p = plan(backup, { include: new Set(only), includeReal: args['include-real'] });

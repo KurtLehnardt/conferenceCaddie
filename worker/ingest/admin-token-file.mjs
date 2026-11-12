@@ -1,78 +1,87 @@
-// Where the Worker's admin token file is. One rule for the scripts that read it (readAdminToken in
-// worker/ingest/lib.mjs, for the ingest, migration and topics scripts) and the one that writes it
-// (worker/scripts/setup-secrets.mjs), so the two cannot drift apart. The default follows the config
-// directory of the caddie-admin CLI (configDir in scripts/admin/config.mjs), so the CLI, these
-// scripts and setup-secrets.mjs use the same file:
+// The Worker scripts' trust policy over the admin token file. Where the file is, and whether two
+// paths are one file, come from scripts/lib/admin-token-file.mjs (adminTokenPaths and sameFile),
+// which the smoke and the caddie-admin CLI use too, so the Worker scripts and that side cannot
+// drift apart. This module adds only what the Worker scripts need on top: each file read once, the
+// note a reader prints, and whether the file read can be trusted. It is used by readAdminToken in
+// worker/ingest/lib.mjs (for the ingest, migration and topics scripts) and by
+// worker/scripts/setup-secrets.mjs, which writes the file.
+//
+// The path is the one adminTokenPaths gives:
 //   1. ADMIN_TOKEN_FILE, when it is set and not empty;
 //   2. $CADDIE_ADMIN_HOME/admin-token, when CADDIE_ADMIN_HOME is set and not empty;
 //   3. $XDG_CONFIG_HOME/conference-caddie/admin-token, with ~/.config in place of XDG_CONFIG_HOME
 //      when it is unset or empty.
-// (readAdminToken checks the ADMIN_TOKEN variable before any file.) configDir treats no platform
-// specially, so neither does this; on Windows the CLI reads ADMIN_TOKEN only and no file at all
-// (scripts/admin/credentials.mjs), which is about reading, not about where the file is.
+// (readAdminToken checks the ADMIN_TOKEN variable before any file.)
 //
 // Before this rule the default was always ~/.config/conference-caddie/admin-token. An operator who
-// has CADDIE_ADMIN_HOME or XDG_CONFIG_HOME set may still have the token there, so a reader that finds
-// no file at the default but one at the old place reads the old one and gets a one-line note that
-// names both paths, never the value, and says what to do if that file holds this deployment's token
-// (with CADDIE_ADMIN_HOME keeping a second deployment apart, it may hold the other one's). When both
-// files exist and hold different tokens, or the old one exists and cannot be read, the new one is
-// read, with a one-line note that names both paths (never the values). That fallback and those notes
-// are for the default only: a file named by ADMIN_TOKEN_FILE is read as it is, or not at all.
+// has XDG_CONFIG_HOME set may still have the token there, so a reader that finds no file at the
+// default but one at the old place reads the old one and gets a one-line note that names both
+// paths, never the value. When the caller knows the API origin it is about to use and the old
+// directory has its own config.json, that config must list the origin as a tier 2 api, or the old
+// file is not read, as in the smoke. When both files exist and hold different tokens, or the old
+// one exists and cannot be read, the new one is read, with a one-line note that names both paths
+// (never the values).
 //
-// The file read is trusted only when ADMIN_TOKEN_FILE names it, when the old place holds no
-// different file, or when both hold the same token. In every other state (the fallback, two files
-// with different tokens, an old file that cannot be read) a reader may still read it, with its
-// note, but setup-secrets.mjs pushes nothing from it and offers no recipe that would make it the
-// only admin token: it stops and says to set ADMIN_TOKEN_FILE to the file that holds this
-// deployment's token.
+// There is no fallback with CADDIE_ADMIN_HOME set, because it names a separate setup (a fork's,
+// say) whose token is never the old file. When the old file exists then, it is not read, and a
+// reader gets one note that names both paths. There is no fallback with ADMIN_TOKEN_FILE set
+// either: the file it names is read as it is, or not at all.
 //
-// The two places are one file when the paths lead to it through a symbolic link, for example when
-// ~/.config is a link to $XDG_CONFIG_HOME, or ~/.config/conference-caddie a link to
-// $CADDIE_ADMIN_HOME, or when one is a hard link to the other. Then there is no old place: no note, no
-// fallback, and no "delete the old one" from setup-secrets.mjs, which would delete the only copy.
-// Node built-ins only.
+// The file read is trusted only when ADMIN_TOKEN_FILE names it, when the resolved default is the
+// only candidate (no old file, or CADDIE_ADMIN_HOME set and the default exists), or when the old
+// file is proven the same file or holds the same token. In every other state (the fallback, two
+// files with different tokens, an old file that cannot be read, CADDIE_ADMIN_HOME set with only the
+// old file there) a reader may still read what it read, with its note, but setup-secrets.mjs
+// pushes nothing from it and offers no recipe that would make it the only admin token: it stops
+// and says to set ADMIN_TOKEN_FILE to the file that holds this deployment's token.
+//
+// sameFile answers "proven the same" only. Its false is never taken as proof that two paths are
+// different files, so nothing here says to delete or move a file because of it. Node built-ins and
+// scripts/lib/admin-token-file.mjs only.
 
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
+import { adminTokenPaths, configuredWorkerOrigins, legacyAdminTokenFile, sameFile } from '../../scripts/lib/admin-token-file.mjs';
 
-// The absolute path with every symbolic link resolved. A path that does not exist (yet) is resolved
-// through its nearest existing ancestor, so a linked directory counts before the file is there.
-function realPath(path) {
-  try {
-    return realpathSync(path);
-  } catch {
-    const parent = dirname(path);
-    return parent === path ? path : join(realPath(parent), basename(path));
-  }
-}
+export { sameFile };
 
-// Whether two absolute paths name one file: the same device and inode when both exist (which also
-// covers a hard link), else the same path once symbolic links are resolved. The numbers are compared
-// as bigints, since a large file ID (on Windows, say) does not fit a double exactly.
-export function sameFile(a, b) {
-  if (a === b) return true;
-  let first;
-  let second;
-  try {
-    first = statSync(a, { bigint: true });
-    second = statSync(b, { bigint: true });
-  } catch {
-    return realPath(a) === realPath(b);
-  }
-  return first.dev === second.dev && first.ino === second.ino;
-}
-
-// { path, legacy }: path is the file to read and write; legacy is the old default place when it is
-// a different file and ADMIN_TOKEN_FILE is unset, else null. Whether the two are one file is decided
-// at the time of the call, from the file system.
+// { path, legacy }: path is the file to read and write; legacy is the old default place when it
+// may be a different file that a reader falls back to (adminTokenPaths: never with ADMIN_TOKEN_FILE
+// or CADDIE_ADMIN_HOME set, and never when it is proven the same file), else null. It is decided at
+// the time of the call, from the file system. Two equal path strings are one path even when
+// sameFile cannot stat them (a directory that cannot be searched), so an operator with no variable
+// set never has an old place.
 export function adminTokenFile(env = process.env, home = homedir()) {
-  if (env.ADMIN_TOKEN_FILE) return { path: resolve(env.ADMIN_TOKEN_FILE), legacy: null };
-  const dir = env.CADDIE_ADMIN_HOME || join(env.XDG_CONFIG_HOME || join(home, '.config'), 'conference-caddie');
-  const path = resolve(dir, 'admin-token');
-  const old = resolve(home, '.config', 'conference-caddie', 'admin-token');
-  return { path, legacy: sameFile(old, path) ? null : old };
+  const { path, legacy } = adminTokenPaths(env, home);
+  return { path, legacy: legacy === path ? null : legacy };
+}
+
+// Whether something may be at path: a stat that finds it, or one that fails for any other reason
+// than "no such file" (a directory that cannot be searched). Reads nothing.
+function present(path) {
+  try {
+    statSync(path);
+    return true;
+  } catch (err) {
+    return err.code !== 'ENOENT' && err.code !== 'ENOTDIR';
+  }
+}
+
+// The old default place ~/.config/conference-caddie/admin-token when CADDIE_ADMIN_HOME is set (and
+// ADMIN_TOKEN_FILE is not), something is there, and it is not proven the same file as path: the
+// file that is never read in that case, which a caller names in one note. Else null.
+export function ignoredOldTokenFile(env = process.env, home = homedir(), path = adminTokenFile(env, home).path) {
+  if (env.ADMIN_TOKEN_FILE || !env.CADDIE_ADMIN_HOME) return null;
+  const old = legacyAdminTokenFile(home);
+  if (old === path || sameFile(path, old) || !present(old)) return null;
+  return old;
+}
+
+// The one note about the old file that is not read with CADDIE_ADMIN_HOME set. It names both paths
+// and never a value.
+export function ignoredOldNote(path, old) {
+  return `Note: CADDIE_ADMIN_HOME is set, so the admin token file is ${path}; the file at the old place ${old} is not read or changed, because there is no fallback to the old place with CADDIE_ADMIN_HOME set.`;
 }
 
 // { exists, value }: value is the trimmed contents of the file, or null when it cannot be read; exists
@@ -85,26 +94,74 @@ function readOnce(path) {
   }
 }
 
+// The config.json of the old directory when it exists (or cannot be checked) and does not list
+// apiOrigin as a tier 2 api, else null: the rule of resolveAdminTokenFile in
+// scripts/lib/admin-token-file.mjs, so one setup's config never sends another setup's token.
+function oldConfigRefuses(legacy, apiOrigin) {
+  const oldDir = dirname(legacy);
+  const config = join(oldDir, 'config.json');
+  if (!present(config)) return null;
+  return configuredWorkerOrigins({ CADDIE_ADMIN_HOME: oldDir }).includes(apiOrigin) ? null : config;
+}
+
 // { path, value, note, legacy, trusted, doubt }: the file a reader should read and its trimmed
-// contents (null when it cannot be read), the note to print on stderr (else null), and the old
-// default place when it is a different file that exists (else null). Each file is read once, and
-// value is the very contents that were compared, so a caller that pushes it pushes what was
-// checked. trusted is false in the fallback (path is then the old place, because nothing is at the
-// new one), when both files hold different tokens, and when the old file exists and cannot be read
-// while the new one can; doubt is then a clause that names both paths and says why, for a caller
-// that refuses to go on, else null. No value is ever part of a note or of doubt.
-export function adminTokenFileToRead(env = process.env, home = homedir()) {
+// contents (null when it cannot be read or is not read), the note to print on stderr (else null),
+// and the old default place when it is a fallback candidate that exists (else null). Each file is
+// read once, and value is the very contents that were compared, so a caller that pushes it pushes
+// what was checked. trusted is false in the fallback (path is then the old place, because nothing
+// is at the new one), when the fallback is refused by the old directory's config.json, when both
+// files hold different tokens, when the old file exists and cannot be read while the new one can,
+// and when CADDIE_ADMIN_HOME is set, the new file is missing and the old one is there; doubt is
+// then a clause that names both paths and says why, for a caller that refuses to go on, else null.
+// No value is ever part of a note or of doubt.
+//
+// apiOrigin, when given, is the origin of the API the caller is about to send the token to: the
+// fallback to the old file then needs the old directory's config.json, if it has one, to list it
+// as a tier 2 api. Without it there is no such check (setup-secrets.mjs knows no origin, and
+// refuses the fallback anyway).
+export function adminTokenFileToRead(env = process.env, home = homedir(), { apiOrigin } = {}) {
   const { path, legacy } = adminTokenFile(env, home);
   const current = readOnce(path);
-  const old = legacy ? readOnce(legacy) : { exists: false, value: null };
-  const result = { path, value: current.value, note: null, legacy: old.exists ? legacy : null, trusted: true, doubt: null };
-  if (!old.exists) return result;
+  const result = { path, value: current.value, note: null, legacy: null, trusted: true, doubt: null };
+
+  const ignored = ignoredOldTokenFile(env, home, path);
+  if (ignored) {
+    const note = ignoredOldNote(path, ignored);
+    if (current.exists) return { ...result, note };
+    return {
+      ...result,
+      note,
+      trusted: false,
+      doubt: `there is no token file at ${path}, and the file at the old place ${ignored} is not read, because there is no fallback to the old place with CADDIE_ADMIN_HOME set`,
+    };
+  }
+
+  if (!legacy || !present(legacy)) return result;
   if (!current.exists) {
+    const refusedBy = apiOrigin === undefined ? null : oldConfigRefuses(legacy, apiOrigin);
+    if (refusedBy) {
+      return {
+        ...result,
+        legacy,
+        note: `Note: the admin token file is not at ${path}, its default place under XDG_CONFIG_HOME, and the file at its old place ${legacy} is not read, because ${refusedBy} does not list ${apiOrigin} as a tier 2 api; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`,
+        trusted: false,
+        doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, only one at its old place ${legacy}, which is not read because ${refusedBy} does not list ${apiOrigin} as a tier 2 api`,
+      };
+    }
+  }
+  const old = readOnce(legacy);
+  if (!old.exists) return result;
+  result.legacy = legacy;
+  if (!current.exists) {
+    // The new file is missing and the old one is there, so the two are different places: the
+    // advice to move the old file rests on that, not on sameFile.
     return {
       ...result,
       path: legacy,
       value: old.value,
-      note: `Note: the admin token file is not at ${path}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, so the file at its old place ${legacy} was read instead; if that file holds this deployment's token, move it to ${path}, or set ADMIN_TOKEN_FILE to it.`,
+      note: old.value === null
+        ? null
+        : `Note: the admin token file is not at ${path}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, so the file at its old place ${legacy} was read instead; if that file holds this deployment's token, move it to ${path}, or set ADMIN_TOKEN_FILE to it.`,
       trusted: false,
       doubt: `there is no token file at ${path}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${legacy}, which may hold another deployment's token`,
     };

@@ -244,7 +244,9 @@ async function main() {
   const api = normalizeApiBase(args.api);
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
   const dryRun = args['dry-run'];
-  const token = readAdminToken();
+  // The origin lets readAdminToken check a fallback to the old token file against caddie-admin's
+  // config.json there, as the smoke does.
+  const token = readAdminToken({ apiOrigin: new URL(api).origin });
   if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to push, or pass --dry-run.');
 
   const ingestReport = args['events-from'] ? JSON.parse(readFileSync(args['events-from'], 'utf8')) : null;
