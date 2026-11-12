@@ -424,19 +424,24 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
     val zone = state.presence.zone
     if (!state.presence.on || !state.presence.confirmPending || zone == null) return
     val c = Caddie.colors
-    val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var picking by rememberSaveable { mutableStateOf(false) }
     var other by rememberSaveable { mutableStateOf("") }
     val zones = state.zones
     val likely = state.likelyZones
 
+    // On the app's scope, not this row's: the answer ends the question, and the controller publishes
+    // that before confirmZone returns, so the row can leave the composition (cancelling a scope of its
+    // own) before the answer comes back, and "Now in {zone}" would never show.
     fun answer(z: String) {
         if (busy || z.isEmpty()) return
-        scope.launch {
-            busy = true
-            val err = host.controller.confirmZone(z)
-            busy = false
+        busy = true
+        host.scope.launch {
+            val err = try {
+                host.controller.confirmZone(z)
+            } finally {
+                busy = false
+            }
             if (err != null) {
                 host.showToast(err)
             } else {

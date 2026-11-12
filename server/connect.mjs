@@ -20,7 +20,9 @@
 // - Presence lives on the people document and is written with a Bulk partial update of its own
 //   fields only, so it never re-runs the embedding model. It ends 60 minutes after it was turned
 //   on, or with until: 'day' at the end of the conference day, at the latest at the end of the
-//   conference.
+//   conference. until: 'keep' keeps the stored end, so a write that only changes Bluetooth (or the
+//   zone, spot or position) never makes someone visible for longer than they chose; it needs live
+//   presence (400 presence_not_active otherwise) and never starts it.
 // - A position is optional: rounded to 5 decimals, dropped when its accuracy is worse than 200 m,
 //   dropped too when it implies the device moved faster than 7 m/s since its previous fix of the
 //   last ten minutes, cleared with presence. It is stored with the centre of its ~100 m cell
@@ -90,6 +92,7 @@ const profileRequired = () => new HttpError(403, { error: 'profile_required' });
 const blocked = () => new HttpError(403, { error: 'blocked' });
 const notFound = () => new HttpError(404, { error: 'not_found' });
 const presenceRequired = () => new HttpError(403, { error: 'presence_required', message: "Turn on 'Around and up for a conversation' first." });
+const presenceNotActive = () => new HttpError(400, { error: 'presence_not_active', message: "until: 'keep' needs presence that is on; turn it on with 'hour' or 'day'." });
 const notAround = () => new HttpError(409, { error: 'not_around', message: "They're not around right now." });
 
 // The write and read rate limits of people.mjs, so the buckets are shared. Each returns the device.
@@ -427,10 +430,16 @@ async function blocks(req, res, url) {
 // Presence.
 
 const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until', 'ble']);
-const PRESENCE_MODES = new Set(['hour', 'day']);
+// 'keep' keeps the stored presence_until; it never starts presence (putPresence).
+const PRESENCE_MODES = new Set(['hour', 'day', 'keep']);
 const LOCATION_KEYS = new Set(['lat', 'lon', 'accuracy']);
 
 const NO_POSITION = { presence_location: null, presence_accuracy: null, presence_cell: null, presence_located_at: null };
+
+// The stored end of a person's presence in ms (NaN when there is none), and whether it is live at
+// nowMs. isAround (people.mjs) is the same test against the clock of the moment.
+const untilOf = (p) => (typeof p?.presence_until === 'string' ? Date.parse(p.presence_until) : NaN);
+const liveAt = (p, nowMs) => untilOf(p) > nowMs;
 
 // The optional position of a presence write: { lat, lon, accuracy } with accuracy in metres.
 // Returns { presence_location: { lat, lon }, presence_accuracy } rounded to 5 decimals and whole
@@ -474,12 +483,23 @@ async function putPresence(req, res) {
   const body = await jsonBody(req, PRESENCE_KEYS);
   if (typeof body.zone !== 'string') throw bad('zone must be a string');
   const zone = body.zone.trim();
-  const { text: spot, pending: spotPending } = await line(body.spot, 'spot', SPOT_MAX);
-  const location = locationFields(body.location);
+  // The mode and ble are checked before the spot line goes to the filter (and the classifier).
   const mode = body.until === undefined || body.until === null ? 'hour' : body.until;
-  if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour' or 'day'");
+  if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour', 'day' or 'keep'");
   if (body.ble !== undefined && typeof body.ble !== 'boolean') throw bad('ble must be a boolean');
-  const conf = await conferenceFor(body.event);
+  const location = locationFields(body.location);
+  // 'keep' needs live presence, which needs the profile: it is read first, so a 'keep' without
+  // live presence is refused before the filter runs. The guarded write below starts from this read.
+  let conf = null;
+  let current = null;
+  if (mode === 'keep') {
+    conf = await conferenceFor(body.event);
+    current = await authenticated(device, conf.slug);
+    if (!current || current.open_to_meet !== true) throw profileRequired();
+    if (!liveAt(current, Date.now())) throw presenceNotActive();
+  }
+  const { text: spot, pending: spotPending } = await line(body.spot, 'spot', SPOT_MAX);
+  conf ??= await conferenceFor(body.event);
   // Guarded by the sequence number of the profile read (updateOwnProfile), so a presence write
   // that read the profile just before a delete hid it cannot bring presence back on the hidden
   // document: the write conflicts, the profile is read again and is no longer there.
@@ -488,12 +508,20 @@ async function putPresence(req, res) {
     if (!(await zonesFor(conf.slug)).has(zone)) throw bad("zone must be one of the conference's zones");
     const now = Date.now();
     // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
-    // the client's zone confirmation does the safeguarding instead. Never past visible_until.
-    const span = mode === 'day' ? dayBounds(now, conf.timeZone).end : now + PRESENCE_MS;
+    // the client's zone confirmation does the safeguarding instead. 'keep' writes back the end this
+    // read found and is refused when there is none or it has passed, so it never starts presence.
+    // The write is guarded by this read's sequence number: when a delete, the purge or another
+    // write changed the document in between, it is read and judged again, so 'keep' cannot bring
+    // back an end that is gone. Decided on this read: a 'keep' at the very edge may write back an
+    // end that passes before the write lands, which reads as off. Never past visible_until.
+    const storedUntilMs = untilOf(me);
+    const live = liveAt(me, now);
+    if (mode === 'keep' && !live) throw presenceNotActive();
+    const span = mode === 'keep' ? storedUntilMs : mode === 'day' ? dayBounds(now, conf.timeZone).end : now + PRESENCE_MS;
     const untilMs = Math.min(span, Date.parse(conf.visibleUntil));
     if (untilMs <= now) throw bad('conference has ended');
-    // Turning it on again while it is on extends it; since keeps the first time.
-    const since = isAround(me) && typeof me.presence_since === 'string' ? me.presence_since : iso(now);
+    // Turning it on again while it is on extends it ('hour', 'day'); since keeps the first time.
+    const since = live && typeof me.presence_since === 'string' ? me.presence_since : iso(now);
     // A spot line hidden after reports stays off until the operator unhides it.
     const storedSpot = me.spot_hidden === true ? null : spot;
     // A write without a usable position clears any stored one, so the presence is zone-only again;
@@ -507,9 +535,9 @@ async function putPresence(req, res) {
     // it was, except that one starting a new presence session clears whatever an ended one left,
     // because one nonce is one presence session.
     const session = body.ble === true ? mintBleSession(me.profile_id, now, untilMs) : null;
-    const ble = session ? session.fields : body.ble === false || !isAround(me) ? BLE_OFF : {};
+    const ble = session ? session.fields : body.ble === false || !live ? BLE_OFF : {};
     return { doc: { ...presence, ...ble }, presence, position, bleAnswer: session?.view ?? {}, held, storedSpot, since };
-  });
+  }, { current });
   if (held) await classifierReport(conf.slug, 'spot', refFor(conf.slug, me.profile_id), me.profile_id);
   // A profile save that could not embed its text kept it in the pending fields (people.mjs); the
   // owner's next presence write embeds it once that works again. It never fails the presence.

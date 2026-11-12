@@ -24,6 +24,11 @@ import kotlinx.serialization.json.int
 class PeopleContractTest {
     private val strict = Json
 
+    // The capabilities whose optional examples (a fixture example's "requires") this client sends.
+    // An example for one it does not send is left out, so an optional addition to the contract can
+    // land before the app implements it; until: "keep" is implemented, so its examples run.
+    private val capabilitiesSent = setOf("people.presence_keep_until")
+
     private class Route(val method: String, val path: String, val auth: Boolean = true)
 
     private val routes = mapOf(
@@ -99,6 +104,7 @@ class PeopleContractTest {
     @Test
     fun everyExampleGoesThroughTheClient() = runTest {
         var examples = 0
+        var optional = 0
         for (file in fixtureFiles()) {
             val doc = Fixtures.json(file) as JsonObject
             val route = (doc["route"] as JsonPrimitive).content
@@ -113,6 +119,9 @@ class PeopleContractTest {
                 val meetId = (request["path_params"] as? JsonObject)?.get("meet_id")?.let { (it as JsonPrimitive).content }
                 val header = ((request["headers"] as? JsonObject)?.get("X-Caddie-Device") as? JsonPrimitive)?.content
 
+                val requires = (example["requires"] as? JsonPrimitive)?.content
+                if (requires != null && requires !in capabilitiesSent) continue
+                if (requires != null) optional++
                 if (name == "an unknown key is refused") {
                     // A key the schema does not name cannot even be put into a request: the server's 400 cannot happen.
                     assertFailsWith<Exception> { decodeRequest(ProfilePutRequest.serializer(), body) }
@@ -152,6 +161,7 @@ class PeopleContractTest {
             }
         }
         assertTrue(examples >= 40, "$examples examples")
+        assertEquals(3, optional, "the until: \"keep\" examples went through the client")
     }
 
     @Test

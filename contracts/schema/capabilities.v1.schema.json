@@ -49,6 +49,7 @@
           "enum": ["server", "client", "off"]
         },
         "presence": { "description": "PUT and DELETE /api/presence and the around_now view.", "type": "boolean" },
+        "presence_keep_until": { "description": "PUT /api/presence takes until: 'keep', which keeps the stored presence_until instead of starting the hour or day again (docs/contracts/people-api.md). Optional; missing is false. Clients send 'keep' only when this is true.", "type": "boolean" },
         "gps_bands": { "description": "The optional position with presence, proximity bands and the distance inside an active meet.", "type": "boolean" },
         "meets": { "description": "Ask to talk shop, Wave, the meet inbox and the meet screen.", "type": "boolean" },
         "circles": { "description": "Per-talk sharing, circle counts and circle members.", "type": "boolean" },

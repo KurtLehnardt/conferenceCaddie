@@ -58,7 +58,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, withTopics, withoutOperatorKeys } from './lib.mjs';
+import { ROOT, TALK_BATCH, UsageError, adminClient, adminSignVersion, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, withTopics, withoutOperatorKeys } from './lib.mjs';
 import { resolveTopics, loadStoplist } from './topics-local.mjs';
 import { buildFacets, countByKind } from './facets-local.mjs';
 import { MODEL } from '../../contracts/js/bundle.mjs';
@@ -242,9 +242,16 @@ async function main() {
   const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty'], values: ['api', 'report', 'events-from'], multi: ['event'] });
   reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
+  // CADDIE_ADMIN_SIG_VERSION is checked here, before anything is read or fetched, and not only when
+  // the admin client is created: a dry run without a token and a run with no conference to push
+  // create no client, and a bad value should stop every run at once rather than after the work.
+  if (adminSignVersion() === 1) console.warn('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). Remove the setting once v2 works again: the Worker refuses v1 after step (d).');
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
   const dryRun = args['dry-run'];
-  const token = readAdminToken();
+  // The origin lets readAdminToken check a fallback to the old token file against caddie-admin's
+  // config.json there, as the smoke does. api is the canonical origin from normalizeApiBase, the
+  // same origin adminClient signs v2 for, so the token file is checked for the origin it signs.
+  const token = readAdminToken({ apiOrigin: api });
   if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to push, or pass --dry-run.');
 
   const ingestReport = args['events-from'] ? JSON.parse(readFileSync(args['events-from'], 'utf8')) : null;

@@ -159,12 +159,19 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    `~/.config` when `XDG_CONFIG_HOME` is unset; an empty variable counts as unset. With neither
    variable set that is `~/.config/conference-caddie/admin-token`, which was the only default
    before. `readAdminToken` in `worker/ingest/lib.mjs` follows the same rule
-   (`worker/ingest/admin-token-file.mjs`). If you set `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` and
-   your token is still in `~/.config/conference-caddie/admin-token`, a script that reads the token
-   file and finds none at the new place reads the old one and prints one line on stderr that names
-   both paths and says, if that file holds this deployment's token, to move it to the new place or
-   set `ADMIN_TOKEN_FILE` to it (with `CADDIE_ADMIN_HOME` keeping a second deployment apart, the old
-   place may hold the other deployment's token). When both files exist and hold different tokens,
+   (`worker/ingest/admin-token-file.mjs`). If you set `XDG_CONFIG_HOME` and your token is still in
+   `~/.config/conference-caddie/admin-token`, a script that reads the token file and finds none at
+   the new place reads the old one and prints one line on stderr that names both paths and says,
+   if that file holds this deployment's token, to move it to the new place and leave a symlink at
+   the old path, or set `ADMIN_TOKEN_FILE` to it. There is no fallback when `CADDIE_ADMIN_HOME` is
+   set, because it names a separate setup: the old file is then never read, and a script that
+   finds it prints one line that names both paths. When `ADMIN_TOKEN_FILE` names the old file
+   itself while `CADDIE_ADMIN_HOME` is set, that file is used, because `ADMIN_TOKEN_FILE` comes
+   first, and the scripts print one line that says it is the token file of a setup without
+   `CADDIE_ADMIN_HOME`. The ingest, migration and topics scripts, which know the `--api` origin,
+   also skip the fallback when the old directory has a `config.json` that does not list that origin
+   as a tier 2 `api`, as the smoke does. The origin they check is the one `normalizeApiBase`
+   returns, which is the origin the v2 signature binds. When both files exist and hold different tokens,
    or the old one exists and cannot be read, it reads the new one and prints one line that names
    both paths (never the values). The script writes only the new place, says so in one line when
    the old file still exists, and never deletes it. Two paths that lead to one file through a
@@ -173,8 +180,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    `--only-missing` skips names the Worker already has. It sets a missing `CADDIE_ADMIN_TOKEN`
    from the token file, and `--rotate-admin-token` prints its recipe for an unfinished rotation
    from it, only when the file is trusted: `ADMIN_TOKEN_FILE` names it, no different file is at
-   the old place, or both hold the same token. In each of the other cases (the fallback to the old
-   file, two files with different tokens, an old file that cannot be read) the script stops with
+   the old place, or both hold the same token; with `CADDIE_ADMIN_HOME` set, the file there is
+   trusted when it exists, whatever the old place holds. In each of the other cases (the fallback
+   to the old file, two files with different tokens, an old file that cannot be read, only the old
+   file with `CADDIE_ADMIN_HOME` set) the script stops with
    exit 1, changes nothing, names both paths and says to set `ADMIN_TOKEN_FILE` to the file that
    holds this deployment's token; do that and run it again. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.
@@ -219,8 +228,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    ```
 
    Setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place, so if a note from step 2
-   named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's
-   token, move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
+   named the old `~/.config/conference-caddie/admin-token` under `XDG_CONFIG_HOME` and that file
+   holds this deployment's token, first move it to the new place and leave a symlink at the old
+   path (`ln -s <new path> ~/.config/conference-caddie/admin-token`), or point `ADMIN_TOKEN_FILE`
+   at it. With `CADDIE_ADMIN_HOME` set the old file belongs to another setup: leave it in place.
 
    Conferences, talks, topics and facets are copied as they are, so topic ids stay identical.
    Only sample profiles are copied by default (`--include-real` copies the others too); presence,
@@ -273,8 +284,10 @@ node scripts/smoke.mjs
 ```
 
 As in deploy step 3, setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place: if a note
-named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's token,
-move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
+named the old `~/.config/conference-caddie/admin-token` under `XDG_CONFIG_HOME` and that file holds
+this deployment's token, first move it to the new place and leave a symlink at the old path
+(`ln -s <new path> ~/.config/conference-caddie/admin-token`), or point `ADMIN_TOKEN_FILE` at it.
+With `CADDIE_ADMIN_HOME` set the old file belongs to another setup: leave it in place.
 
 `BASE_URL` is the app, and the API defaults to the same origin. The admin token makes it a Worker
 run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures (see
@@ -299,11 +312,10 @@ deploy replaces the Worker's variables with those of `wrangler.toml`. Never set 
 `wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
 deleted it.
 
-The smoke signs its admin calls by default (`SMOKE_ADMIN_AUTH=signed`, since #67;
-[Admin requests](#admin-requests)), and none of them follows a redirect: a 3xx is a FAIL.
-`SMOKE_ADMIN_AUTH=bearer` sends the token as `Authorization: Bearer` instead. It is only for a
-Worker, local or deployed, built from before signed admin requests; a current Worker answers a
-bearer with 404.
+The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
+redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like the Worker-side
+clients; `CADDIE_ADMIN_SIG_VERSION=1` makes it sign v1, for a Worker from before v2. Its bearer
+mode is gone, and a current Worker answers a bearer with 404.
 
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
 
@@ -388,7 +400,7 @@ A Worker from before signed admin requests reads only the bearer, and the client
 on send only the signature, so rolling the Worker back means rolling the clients back too: run
 `push-ingest.mjs`, `migrate-from-backup.mjs`, `topics-local.mjs` and `moderation.mjs` from the
 commit before the merge (and revert the merge on `main`, so the weekly ingest sends the bearer
-again), and run the smoke with `SMOKE_ADMIN_AUTH=bearer`. Otherwise every ingest and moderation call
+again), and run the smoke from that commit too, since the current smoke has no bearer mode. Otherwise every ingest and moderation call
 gets a 404 that looks like a wrong token. The `admin_nonces` table and its index stay in the objects
 and are harmless to the older code, which never reads them. After a rollback the conference objects
 stay at `schema_version` 3, so the next schema change must use version 4: a later change that bumps
@@ -418,8 +430,31 @@ clock check are the same for both versions, and v1 and v2 nonces share the table
 
 The move to v2 is in four steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
 a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
-Worker refuses v1. Until step c every client still signs v1, so deploying step b changes nothing
-for them.
+Worker refuses v1. Deploying step b changed nothing for the clients, which then still signed v1.
+
+From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
+so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and
+the `/admin/embed-pending` calls they make. Each signs the origin of its `--api` base. That base
+is read with `canonicalOrigin` from `scripts/lib/admin-origin.mjs` before anything else, so it must
+be the Worker's origin and nothing more: a plain `https://` URL (`http://` for `localhost`,
+`127.0.0.1` and `[::1]` only) in printable ASCII, with no path, query, fragment, user name,
+password, backslash, `%` or `,`, and an internationalised host in its punycode (`xn--`) form. A
+base the URL parser would otherwise map to another host, such as one with a full-width dot or a
+percent-encoded character, is refused as a usage error before any request is signed.
+`CADDIE_ADMIN_SIG_VERSION` is the rollback: set it to `1` in the environment of a local run, or
+set the repository variable of the same name to `1` for the CI ingest (`.github/workflows/ingest.yml`
+passes it to the push step), and the clients sign v1 again. Unset or empty means v2, and any other
+value is a usage error when the client is created, before anything is sent; `push-ingest.mjs`
+and `migrate-from-backup.mjs` check it before anything else, also in a dry run, and the
+workflow's first step refuses it without printing it. The rollback works
+only while the Worker still accepts v1: step d will make the Worker refuse v1, and it removes the
+variable from the clients and the workflow in the same change. `scripts/moderation.mjs` (the
+deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
+`caddie-admin` command to use.
+
+Step c does not yet cover every client. The `caddie-admin` CLI (`scripts/admin/`) and
+`scripts/smoke.mjs` still sign v1 and move to v2 in their own step-c change. Step d must wait
+until both of them sign v2, because a Worker that refuses v1 would refuse them too.
 
 Two optional Worker variables decide what is accepted. Neither is set in `wrangler.toml` today.
 
@@ -563,9 +598,12 @@ supported client for reviewing, undoing and confirming hides is the `caddie-admi
 `~/.config/conference-caddie` unless `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` says otherwise; the
 file must have mode 0600, as `setup-secrets.mjs` writes it). `setup-secrets.mjs` writes the token to
 that same default file (deploy step 2). The CLI has no fallback to the old
-`~/.config/conference-caddie/admin-token`, so if your token is still there while either variable is
-set, move it to the new place, as the note of the Worker scripts says, or point `ADMIN_TOKEN_FILE`
-at it. On Windows the CLI reads no token file at all, only `ADMIN_TOKEN`. The Worker's origin is
+`~/.config/conference-caddie/admin-token`, so if your token is still there while `XDG_CONFIG_HOME`
+is set, move it to the new place and leave a symlink at the old path, as the note of the Worker
+scripts says, or point `ADMIN_TOKEN_FILE` at it. With `CADDIE_ADMIN_HOME` set, the old file belongs
+to another setup (the one without the variable) and must not be moved: a shell without the
+variable would lose its token, and this setup would take that setup's token for its own. Put this
+setup's token at `$CADDIE_ADMIN_HOME/admin-token`, or point `ADMIN_TOKEN_FILE` at it. On Windows the CLI reads no token file at all, only `ADMIN_TOKEN`. The Worker's origin is
 the `api` of a tier 2 backend in the CLI's `config.json`, in the same directory. If you have no
 `config.json` yet, the first command below creates it; otherwise add the `"worker"` entry to its
 `backends` by hand, and either set `"default": "worker"` or pass `--backend worker` to each command
