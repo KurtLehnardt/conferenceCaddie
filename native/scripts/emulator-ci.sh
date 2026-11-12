@@ -102,14 +102,7 @@ install_package() {
   local pkg=$1 sdkmanager=$2 try log
   for try in $(seq 1 "$TRIES"); do
     log="$TMP_ROOT/emu-sdkmanager-$try.log"
-    # SCRATCH (reverted before merge): try 1 of the system image leaves a partial download in .temp
-    # and uses a bad package name.
-    local name=$pkg
-    if [ "$try" -eq 1 ] && [ "$pkg" = "$SYSTEM_IMAGE" ]; then
-      mkdir -p "$(sdk_root)/.temp/PackageOperation99"; echo junk > "$(sdk_root)/.temp/PackageOperation99/partial.zip"
-      name="$pkg-scratch-bad-name"
-    fi
-    if "$sdkmanager" --install "$name" --channel="$CHANNEL" < /dev/null > "$log" 2>&1; then
+    if "$sdkmanager" --install "$pkg" --channel="$CHANNEL" < /dev/null > "$log" 2>&1; then
       echo "$pkg is installed and up to date (try $try of $TRIES)."
       if [ "$try" -gt 1 ]; then
         echo "::warning title=Android SDK download retried::$pkg was installed on try $try of $TRIES."
@@ -121,7 +114,6 @@ install_package() {
     # Without the progress bars.
     tr '\r' '\n' < "$log" | grep -vE '^[[:space:]]*(\[[= ]*\].*)?$' | tail -n 15 || true
     delete_partial_downloads
-    echo "SCRATCH: after the deletion, .temp is: $(ls -A "$(sdk_root)/.temp" 2>&1 || true)"
     if [ "$try" -lt "$TRIES" ]; then
       echo "Trying again in $((try * 30)) seconds."
       sleep $((try * 30))
@@ -140,9 +132,6 @@ cmd_install() {
   local sdkmanager dir rev
   sdkmanager=$(sdkmanager_bin)
   dir=$(sysimg_dir)
-  # SCRATCH (reverted before merge): a system image directory without package.xml, as a partial
-  # cache restore would leave.
-  mkdir -p "$dir"; echo junk > "$dir/system.img"
   delete_partial_downloads
   if [ -f "$dir/package.xml" ]; then
     echo "The system image is here (restored from the cache); sdkmanager only checks for an update."
@@ -234,13 +223,6 @@ cmd_run() {
   set -e
   echo "$status" > "$dir/gradle.exit"
   if [ "$status" -ne 0 ]; then
-    # SCRATCH (reverted before merge): the emulator dies right after the failing test, so attempt 1
-    # also has an infrastructure signal.
-    if [ "$attempt" = 1 ]; then
-      echo "SCRATCH: killing the emulator process"
-      pkill -9 -f "$EMULATOR_PROCESS" || true
-      sleep 2
-    fi
     record_device "$dir"
     keep_results "$dir"
     return "$status"
