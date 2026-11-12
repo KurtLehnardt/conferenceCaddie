@@ -3,10 +3,8 @@ package app.conferencecaddie
 import android.app.Activity
 import android.app.Application
 import android.content.ComponentCallbacks2
-import android.content.pm.ApplicationInfo
-import app.conferencecaddie.shared.AndroidPeopleServices
-import app.conferencecaddie.shared.ble.AndroidBleRadio
 import android.os.Bundle
+import app.conferencecaddie.shared.ble.AndroidBleRadio
 import app.conferencecaddie.shared.core.AndroidCore
 import app.conferencecaddie.shared.embed.OnnxRuntimeTelemetry
 
@@ -20,14 +18,12 @@ class CaddieApplication : Application() {
         // model can be loaded. openEncoder refuses to start ONNX Runtime without it.
         OnnxRuntimeTelemetry.disableForProcess()
         // When the system restarts the Bluetooth service in a new process (it is sticky), nothing
-        // else has created the people features: this creates them as MainActivity does, and their
-        // runtime restores the Bluetooth session and starts the radio again. Opening the database is
-        // deferred to its own thread, so this is quick on the main thread.
-        AndroidBleRadio.onSystemRestart = { context ->
-            val isDebugBuild = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-            AndroidCore.get(context, allowLocalHttp = isDebugBuild)
-            AndroidCore.people(context, AndroidPeopleServices.create(context, R.drawable.ic_stat_caddie), allowLocalHttp = isDebugBuild)
-        }
+        // else has created the people features: this creates them through CaddiePeople, the one
+        // place MainActivity and the background nudge job get them from, so the process never builds
+        // a second set of platform services and the nudge scheduler starts as it would with the app.
+        // Their runtime restores the Bluetooth session and starts the radio again. Opening the
+        // database is deferred to its own thread, so this is quick on the main thread.
+        AndroidBleRadio.onSystemRestart = { context -> CaddiePeople.controller(context) }
         // The background nudge job starts a cold process with no activity and needs to know that.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {

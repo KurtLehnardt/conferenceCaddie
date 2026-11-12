@@ -204,6 +204,13 @@ interface BleRadio {
 
     /** Stops advertising, scanning and any connection. Safe to call when not running. */
     fun stop()
+
+    /**
+     * The runtime will report pending sightings at [epochMillis] (epoch milliseconds). A platform
+     * that suspends the app soon after a Bluetooth event (iOS) keeps it running until a little after
+     * then where it can, so the report goes out inside the same wake. Does nothing by default.
+     */
+    fun keepAwakeUntil(epochMillis: Long) {}
 }
 
 /** Bluetooth proximity's platform services; null in [app.conferencecaddie.shared.PeopleServices] where there is no radio. */
