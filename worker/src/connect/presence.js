@@ -95,9 +95,15 @@ function implausibleJump(prev, next, nowMs) {
 }
 
 // The caller's live, conference-wide visible profile, else 403 profile_required.
+// authenticate reads the cached person before it awaits the secret check, and the people cache can
+// be dropped and rebuilt in that gap (a talks finalize does that), so the person is read from the
+// cache again once the check is done. A write then never acts on a stale copy, such as one that
+// still holds a presence that a DELETE /api/presence removed in the gap. A row for the profile that
+// no longer carries the secret hash that was checked is not the caller's, so it is profile_required.
 async function visibleProfile(ctx, device) {
-  const me = await ctx.store.authenticate(device);
-  if (!me || !me.open_to_meet) throw profileRequired();
+  const checked = await ctx.store.authenticate(device);
+  const me = checked ? ctx.store.person(checked.profile_id) : null;
+  if (!me || me.secret_hash !== checked.secret_hash || !ctx.store.isLive(me) || !me.open_to_meet) throw profileRequired();
   return me;
 }
 
@@ -113,9 +119,10 @@ async function putPresence(ctx, req) {
   const location = parseLocation(body.location);
   const store = ctx.store;
   // 'keep' needs live presence, which needs the profile: it is read first, so a 'keep' without
-  // live presence is refused before the filter and before anything is written. From the profile
-  // read on nothing awaits, so the read of the current presence and the write that follows
-  // cannot interleave with another request, and a presence ended in between is never brought back.
+  // live presence is refused before the filter and before anything is written. visibleProfile
+  // reads the person again after its last await, and nothing awaits from there to the write, so
+  // the read of the current presence and the write that follows cannot interleave with another
+  // request, and a presence ended in between is never brought back.
   let me = null;
   if (mode === 'keep') {
     me = await visibleProfile(ctx, device);
@@ -126,8 +133,9 @@ async function putPresence(ctx, req) {
   if (!store.zones().has(zone)) throw bad("zone must be one of the conference's zones");
   const now = Date.now();
   const around = store.isAround(me);
-  // Checked again on the clock of this write: only synchronous code ran since the first check, but
-  // an end that passed in that millisecond is still presence_not_active, not 'conference has ended'.
+  // Checked again on the clock of this write. On Workers the clock does not move while synchronous
+  // code runs, so this agrees with the first check there; where the clock does move (Node), an end
+  // reached in between answers presence_not_active instead of reading the end of no presence below.
   if (mode === 'keep' && !(around && me.presence.until_ms > now)) throw presenceNotActive();
   const cur = around ? me.presence : null;
   const end = Number.isFinite(ctx.conf.visible_until_ms) ? ctx.conf.visible_until_ms : Infinity;

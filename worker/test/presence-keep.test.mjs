@@ -282,6 +282,109 @@ test("'keep' after the end of the conference is refused as the conference having
   });
 });
 
+test("'keep' without presence is refused before the spot line goes to the filter", { skip }, async () => {
+  await withFixedClock(T0, async () => {
+    const s = await setup();
+    s.writes.length = 0;
+    // A spot line the filter rejects (the control character goes before the filter, as in
+    // admin-routes.test.mjs). Refused for want of presence, not as filtered, so the app ends
+    // presence on the device instead of sending the write again with the mode.
+    const res = await s.put({ until: 'keep', spot: 'fu\u0000ck', location: HERE, ble: true });
+    assert.equal(res.status, 400);
+    assert.deepEqual(res.json, NOT_ACTIVE);
+    assert.deepEqual(s.rows(), []);
+    assert.equal(s.location(), null);
+    assert.deepEqual(s.writes, []);
+  });
+});
+
+test("'keep' whose presence ends between the first live check and the write is still presence_not_active", { skip }, async () => {
+  await withFixedClock(T0, async (at) => {
+    const s = await setup();
+    assert.equal((await s.put({ until: 'hour', location: HERE, ble: true })).status, 200);
+    const before = s.row();
+    const placeBefore = s.location();
+
+    at(T0 + 30 * MIN);
+    // The zone check runs after the first live check; the clock moves to the end of presence there.
+    const store = s.obj.store;
+    const zones = store.zones;
+    store.zones = function zonesAtTheEnd() {
+      at(before.until_ms);
+      return zones.call(this);
+    };
+    s.writes.length = 0;
+    try {
+      const res = await s.put({ until: 'keep', location: NEAR, ble: true });
+      assert.equal(res.status, 400);
+      assert.deepEqual(res.json, NOT_ACTIVE);
+    } finally {
+      store.zones = zones;
+    }
+    assert.deepEqual(s.row(), before);
+    assert.deepEqual(s.location(), placeBefore);
+    assert.deepEqual(s.writes, []);
+  });
+});
+
+test("'keep' acts on the person as stored, not on a copy cached before the secret check", { skip }, async () => {
+  await withFixedClock(T0, async (at) => {
+    const s = await setup();
+    assert.equal((await s.put({ until: 'hour', ble: true })).status, 200);
+    const id = s.row().profile_id;
+
+    at(T0 + 10 * MIN);
+    // While authenticate awaits the secret check, the people cache is dropped (as a talks
+    // finalize does) and presence is turned off (what DELETE /api/presence does). The person that
+    // authenticate read before its await still holds the old presence.
+    const store = s.obj.store;
+    const authenticate = store.authenticate;
+    store.authenticate = async function authenticateWithAGap(device) {
+      store.authenticate = authenticate;
+      const p = await authenticate.call(this, device);
+      store.invalidatePeople();
+      store.clearPresence(id);
+      s.writes.length = 0;
+      return p;
+    };
+    s.writes.length = 0;
+    try {
+      const res = await s.put({ until: 'keep', location: HERE });
+      assert.equal(res.status, 400);
+      assert.deepEqual(res.json, NOT_ACTIVE);
+    } finally {
+      store.authenticate = authenticate;
+    }
+    assert.deepEqual(s.rows(), [], 'the presence that was turned off is not brought back');
+    assert.equal(s.location(), null);
+    assert.deepEqual(s.writes, [], 'nothing wrote the presence table after it was turned off');
+  });
+});
+
+test("a kept Bluetooth token never outlives a kept end that the end of the conference lowers", { skip }, async () => {
+  // 23:55 on the first day: the hour runs to 00:55 and the legacy token to 00:05 on the second day.
+  const start = Date.UTC(2099, 5, 1, 23, 55, 0);
+  await withFixedClock(start, async (at) => {
+    const s = await setup();
+    const on = await s.put({ until: 'hour', ble: true });
+    assert.equal(on.status, 200);
+    assert.equal(s.row().ble_token_until_ms, start + 10 * MIN);
+
+    // The operator shortens the conference to one day: it is now visible until 23:59:59 that day.
+    await putConference(s.obj, '2099-06-01');
+    const cap = Date.parse('2099-06-01T23:59:59Z');
+
+    at(start + 1 * MIN);
+    const kept = await s.put({ until: 'keep', location: HERE });
+    assert.equal(kept.status, 200);
+    assert.equal(kept.json.presence_until, iso(cap));
+    const row = s.row();
+    assert.equal(row.until_ms, cap);
+    assert.ok(row.ble_token, 'the session is kept');
+    assert.equal(row.ble_token_until_ms, cap, 'its token ends with the lowered end');
+  });
+});
+
 test('an unknown mode names keep', { skip }, async () => {
   await withFixedClock(T0, async () => {
     const s = await setup();
