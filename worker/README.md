@@ -638,7 +638,10 @@ answered a 503 other than `daily_limit` (or a 5xx, or no answer), so a retried r
 unretire that the operator ran in between, and a repeated unretire can undo a removal. After any
 overlap, check the conference's state (`GET /api/conferences` lists it only while the directory
 has its row, and a signed `GET /admin/stats?event=<slug>` answers `400 conference is not
-available` once it is removed) and run the operation you intended again.
+available` once it is removed) and run the operation you intended again. Neither check can tell a
+live conference from one whose directory row exists while its object is still marked as removed,
+which is what an unretire that answered 502 or 503 and was not repeated leaves: both list the
+conference and answer the stats. So repeat an unretire until it answers 200.
 
 ## Logs and CPU
 

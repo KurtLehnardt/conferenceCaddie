@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { upsertConferences, planPush, pushEvent, conferenceForWorker } from '../../worker/ingest/push-ingest.mjs';
-import { send as migrate, plan as migrationPlan, summary as migrationSummary } from '../../worker/ingest/migrate-from-backup.mjs';
+import { send as migrate, plan as migrationPlan, summary as migrationSummary, run as migrationRun } from '../../worker/ingest/migrate-from-backup.mjs';
 import { loadStoplist } from '../../worker/ingest/topics-local.mjs';
 
 // A stand-in for the admin routes that records every call and answers PUT /admin/conferences with
@@ -216,6 +216,55 @@ test('the migration never sends an unretire key from a backup conference documen
     const { admin, calls } = recordingAdmin([]);
     await migrate(p, admin);
     assert.deepEqual(calls.map((c) => [c.url, c.body.conferences.some((d) => 'unretire' in d)]), [['/admin/conferences', false]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the migration\'s run() returns its exit code: 3 after a skip as not available, 0 after only removed ones, 2 when a request failed, 1 on a usage error', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'caddie-backup-'));
+  try {
+    const ndjson = (rows) => `${rows.map((d) => JSON.stringify(d)).join('\n')}\n`;
+    writeFileSync(join(dir, 'caddie-conferences-v1.ndjson'), ndjson(['kept-2099', 'gone-2099', 'bare-2099'].map((slug) => ({ _id: slug, slug, status: 'searchable' }))));
+    writeFileSync(join(dir, 'caddie-topics-v1.ndjson'), ndjson(['kept-2099', 'gone-2099', 'bare-2099'].map((slug) => ({ _id: `${slug}:k8s`, topic_id: 'k8s', conference: slug, rank: 1 }))));
+    const argv = ['--backup', dir, '--api', 'https://caddie.example', '--only', 'conferences,topics'];
+    // A client that answers like recordingAdmin, with gone-2099 skipped as removed, and calls
+    // fail(method, url) first, which may throw.
+    const runWith = async (fail = () => {}, extra = []) => {
+      const out = [];
+      const client = (api, token) => {
+        assert.deepEqual([api, token], ['https://caddie.example', 'not-a-real-token']);
+        const { admin } = recordingAdmin(['gone-2099']);
+        return async (method, url, body) => {
+          fail(method, url);
+          return admin(method, url, body);
+        };
+      };
+      const code = await migrationRun([...argv, ...extra], { client, readToken: () => 'not-a-real-token', log: (l) => out.push(l), error: (l) => out.push(`error: ${l}`) });
+      return { code, out };
+    };
+    const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+    const removedOnly = await runWith();
+    assert.equal(removedOnly.code, 0, 'only a removed conference was skipped');
+    assert.equal(removedOnly.out.at(-1), 'Done.');
+
+    const unavailable = await runWith((method, url) => {
+      if (url === '/admin/topics?event=bare-2099') throw httpError(400, `${method} /admin/topics: status 400 (conference is not available)`);
+    });
+    assert.equal(unavailable.code, 3);
+    assert.ok(unavailable.out.some((l) => l.includes('bare-2099') && l.includes('not available')));
+
+    const failed = await runWith((method, url) => {
+      if (url === '/admin/topics?event=kept-2099') throw httpError(502, `${method} /admin/topics: status 502 (Service is temporarily unavailable)`);
+    });
+    assert.equal(failed.code, 2);
+    assert.ok(failed.out.at(-1).startsWith('error: PUT /admin/topics: status 502'));
+
+    const dry = await runWith(() => assert.fail('a dry run sends nothing'), ['--dry-run']);
+    assert.equal(dry.code, 0);
+    const usage = await migrationRun(['--api', 'https://caddie.example'], { client: () => assert.fail('nothing is sent'), readToken: () => '', log: () => {}, error: () => {} });
+    assert.equal(usage, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

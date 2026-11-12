@@ -270,38 +270,40 @@ export function summary({ retired, unavailable }) {
   return { lines, code: 0 };
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'include-real'], values: ['backup', 'api', 'only'] });
-  if (!args.backup) throw new UsageError('--backup <dir> is required.');
-  const api = normalizeApiBase(args.api);
-  const backup = resolve(args.backup);
-  if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
+// The whole run, from the command-line arguments to the exit code of the header, which it returns
+// instead of setting, so a test can check it. The admin client, the token reader and the output
+// can be replaced for a test; by default they are the real ones.
+export async function run(argv, { client = adminClient, readToken = readAdminToken, log = console.log, error = console.error } = {}) {
+  try {
+    const args = parseArgs(argv, { flags: ['dry-run', 'include-real'], values: ['backup', 'api', 'only'] });
+    if (!args.backup) throw new UsageError('--backup <dir> is required.');
+    const api = normalizeApiBase(args.api);
+    const backup = resolve(args.backup);
+    if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
 
-  const only = args.only ? args.only.split(',').map((s) => s.trim()).filter(Boolean) : TABLES;
-  const bad = only.filter((t) => !TABLES.includes(t));
-  if (bad.length) throw new UsageError(`Unknown table in --only: ${bad.join(', ')}. Known: ${TABLES.join(', ')}.`);
-  const dryRun = args['dry-run'];
-  const token = readAdminToken();
-  if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to migrate, or pass --dry-run.');
+    const only = args.only ? args.only.split(',').map((s) => s.trim()).filter(Boolean) : TABLES;
+    const bad = only.filter((t) => !TABLES.includes(t));
+    if (bad.length) throw new UsageError(`Unknown table in --only: ${bad.join(', ')}. Known: ${TABLES.join(', ')}.`);
+    const dryRun = args['dry-run'];
+    const token = readToken();
+    if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to migrate, or pass --dry-run.');
 
-  const p = plan(backup, { include: new Set(only), includeReal: args['include-real'] });
-  for (const line of describePlan(p, { dryRun, includeReal: args['include-real'] })) console.log(line);
-  if (dryRun) {
-    console.log('Dry run: nothing was sent.');
-    return 0;
+    const p = plan(backup, { include: new Set(only), includeReal: args['include-real'] });
+    for (const line of describePlan(p, { dryRun, includeReal: args['include-real'] })) log(line);
+    if (dryRun) {
+      log('Dry run: nothing was sent.');
+      return 0;
+    }
+    const result = await send(p, client(api, token));
+    const end = summary(result);
+    for (const line of [...result.lines, ...end.lines]) log(line);
+    return end.code;
+  } catch (e) {
+    error(e.message);
+    return e instanceof UsageError ? 1 : 2;
   }
-  const result = await send(p, adminClient(api, token));
-  const end = summary(result);
-  for (const line of [...result.lines, ...end.lines]) console.log(line);
-  return end.code;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().then(
-    (code) => { process.exitCode = code; },
-    (e) => {
-      console.error(e.message);
-      process.exitCode = e instanceof UsageError ? 1 : 2;
-    },
-  );
+  run(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }

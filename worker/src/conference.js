@@ -375,22 +375,33 @@ export class ConferenceDO extends DurableObject {
       // fan-out, such as one that left the Worker before the removal, is refused. An unretire is
       // taken only when it came after the last wipe by that order; an earlier one lost to the
       // removal (409 unretire_superseded, which the Worker answers as unretire_incomplete, so the
-      // client's repeat, with a new number, wins).
+      // client's repeat, with a new number, wins). Of two unretires that both came after the last
+      // wipe, the higher number is the later one: when this object already took a higher one, the
+      // lower one's fan-out answers 200 and writes nothing, so it cannot put its document over the
+      // later unretire's. The object is live then (no wipe was taken after the higher unretire, or
+      // wipe_seq would be above this number), so there is nothing left for it to do.
       if (this.retiredAt !== null && !unretired) return json(409, { error: 'conference_retired' });
       let superseded = false;
+      let overtaken = false;
       const doc = { ...body.doc, route_prefix: body.route_prefix };
       this.state.storage.transactionSync(() => {
         if (unretired && !(body.unretired > this.#seqOf('wipe_seq'))) {
           superseded = true;
           return;
         }
+        if (unretired && body.unretired < this.#seqOf('unretire_seq')) {
+          overtaken = true;
+          return;
+        }
         this.exec("INSERT INTO meta (k, v) VALUES ('conference', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(doc));
         if (unretired) {
           this.exec("DELETE FROM meta WHERE k = 'retired_at'");
-          if (body.unretired > this.#seqOf('unretire_seq')) this.exec("INSERT INTO meta (k, v) VALUES ('unretire_seq', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(body.unretired));
+          // Not below the stored number (checked above), so unretire_seq only grows.
+          this.exec("INSERT INTO meta (k, v) VALUES ('unretire_seq', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(body.unretired));
         }
       });
       if (superseded) return json(409, { error: 'unretire_superseded' });
+      if (overtaken) return json(200, { ok: true });
       if (unretired) this.retiredAt = null;
       this.#setConf(doc);
       return json(200, { ok: true });

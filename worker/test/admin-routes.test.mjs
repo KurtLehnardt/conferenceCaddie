@@ -1473,18 +1473,27 @@ describe('review round 3: the later of a removal and an unretire wins (the order
     assert.deepEqual(look(ctx), LIVE);
   });
 
-  test('an unretire fan-out whose number is not above the last wipe is refused; a wipe whose number is below the last unretire is refused and deletes nothing', async () => {
-    const ctx = realEnv();
-    await withConferences(ctx);
-    const o = ctx.obj();
-    const ann = await person(o, { name: 'Ann' });
+  // Calls an object's fan-out and wipe directly, as the directory and the Worker do, with the
+  // order numbers given.
+  function numbered(o, slug = SLUG) {
     const ts = String(Math.floor(Date.now() / 1000));
-    const fanOut = (unretired) => o.fetch(new Request('https://do.internal/internal/conference', {
-      method: 'PUT', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG }, body: JSON.stringify({ doc: conf(SLUG), route_prefix: 'abcdef', unretired }),
+    const fanOut = (unretired, doc = conf(slug)) => o.fetch(new Request('https://do.internal/internal/conference', {
+      method: 'PUT', headers: { 'content-type': 'application/json', 'x-caddie-slug': slug }, body: JSON.stringify({ doc, route_prefix: 'abcdef', unretired }),
     }));
     const wipe = (seq) => o.fetch(new Request('https://do.internal/internal/wipe', {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': newId(), 'x-caddie-admin-ts': ts }, body: JSON.stringify({ seq }),
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-caddie-slug': slug, 'x-caddie-admin-nonce': newId(), 'x-caddie-admin-ts': ts }, body: JSON.stringify({ seq }),
     }));
+    return { fanOut, wipe };
+  }
+  const seqRows = (db) => rows(db, "SELECT k, v FROM meta WHERE k IN ('wipe_seq', 'unretire_seq') ORDER BY k");
+
+  test('an unretire fan-out whose number is not above the last wipe is refused; a wipe whose number is below the last unretire is refused and deletes nothing', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG, OTHER]);
+    const o = ctx.obj();
+    const db = ctx.db(`conference:${SLUG}`);
+    const ann = await person(o, { name: 'Ann' });
+    const { fanOut, wipe } = numbered(o);
     for (const bad of [true, 0, -1, 1.5, '7']) assert.equal((await fanOut(bad)).status, 400, JSON.stringify(bad));
     assert.equal((await fanOut(10)).status, 200);
     const refused = await wipe(9);
@@ -1492,13 +1501,64 @@ describe('review round 3: the later of a removal and an unretire wins (the order
     assert.equal(o.store.person(ann.profile_id)?.display_name, 'Ann', 'the refused wipe deleted nothing');
     assert.equal(o.retiredAt, null);
     assert.equal((await wipe(11)).status, 200);
-    const late = await fanOut(10);
+    // A refused unretire writes nothing: the marker and the (wiped) conference row stay as they
+    // are in storage, and a new instance on the same storage still holds the conference as removed.
+    const markedMeta = "SELECT k, v FROM meta WHERE k IN ('retired_at', 'conference', 'wipe_seq', 'unretire_seq') ORDER BY k";
+    const before = rows(db, markedMeta);
+    assert.deepEqual(before.map((r) => r.k), ['retired_at', 'unretire_seq', 'wipe_seq'], 'the wipe left the marker and no conference row');
+    const late = await fanOut(10, conf(SLUG, { name: 'late' }));
     assert.deepEqual([late.status, await late.json()], [409, { error: 'unretire_superseded' }]);
+    assert.deepEqual(rows(db, markedMeta), before, 'the refused unretire changed no meta row');
+    const fresh = new ConferenceDO(ctx.states.get(`conference:${SLUG}`), { EMBED_FAKE: '1' });
+    assert.equal(fresh.retiredAt, Number(before.find((r) => r.k === 'retired_at').v), 'a new instance reads the marker');
+    assert.equal(fresh.conf, null);
+    const plain = await numbered(fresh).fanOut(undefined);
+    assert.deepEqual([plain.status, await plain.json()], [409, { error: 'conference_retired' }], 'a new instance refuses a plain fan-out');
     assert.equal((await fanOut(11)).status, 409, 'equal is not later');
     assert.notEqual(o.retiredAt, null);
     assert.equal((await fanOut(12)).status, 200);
     assert.equal(o.retiredAt, null);
-    assert.deepEqual(rows(ctx.db(`conference:${SLUG}`), "SELECT k, v FROM meta WHERE k IN ('wipe_seq', 'unretire_seq') ORDER BY k"), [{ k: 'unretire_seq', v: '12' }, { k: 'wipe_seq', v: '11' }]);
+    assert.deepEqual(seqRows(db), [{ k: 'unretire_seq', v: '12' }, { k: 'wipe_seq', v: '11' }]);
+    // unretire_seq only grows: a lower unretire after a higher one leaves it, so a wipe between
+    // the two numbers is still refused.
+    assert.equal((await fanOut(20)).status, 200);
+    assert.equal((await fanOut(15)).status, 200, 'an unretire overtaken by a later one answers 200');
+    assert.deepEqual(seqRows(db), [{ k: 'unretire_seq', v: '20' }, { k: 'wipe_seq', v: '11' }]);
+    const between = await wipe(18);
+    assert.deepEqual([between.status, await between.json()], [409, { error: 'removal_superseded' }]);
+    assert.equal(o.retiredAt, null);
+
+    // wipe_seq only grows: a lower wipe after a higher one (a retried earlier removal) leaves it, so
+    // an unretire between the two numbers is still refused.
+    const other = numbered(ctx.obj(OTHER), OTHER);
+    const otherDb = ctx.db(`conference:${OTHER}`);
+    assert.equal((await other.wipe(11)).status, 200);
+    assert.equal((await other.wipe(9)).status, 200);
+    assert.deepEqual(seqRows(otherDb), [{ k: 'wipe_seq', v: '11' }]);
+    const stale = await other.fanOut(10);
+    assert.deepEqual([stale.status, await stale.json()], [409, { error: 'unretire_superseded' }]);
+    assert.notEqual(ctx.obj(OTHER).retiredAt, null);
+  });
+
+  test('of two overlapping unretires, the lower-numbered fan-out landing second keeps the higher one\'s document', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    const o = ctx.obj();
+    const db = ctx.db(`conference:${SLUG}`);
+    const { fanOut, wipe } = numbered(o);
+    assert.equal((await wipe(5)).status, 200);
+    // U1 took 6 and U2 took 7 in the directory; U2's fan-out reaches the object first.
+    assert.equal((await fanOut(7, conf(SLUG, { name: 'U2' }))).status, 200);
+    assert.equal(o.retiredAt, null);
+    const u1 = await fanOut(6, conf(SLUG, { name: 'U1' }));
+    assert.deepEqual([u1.status, await u1.json()], [200, { ok: true }], 'the overtaken unretire succeeds, so the Worker does not answer unretire_incomplete');
+    assert.equal(JSON.parse(rows(db, "SELECT v FROM meta WHERE k = 'conference'")[0].v).name, 'U2', 'the stored document is U2\'s');
+    assert.equal(o.conf.name, 'U2', 'the loaded document is U2\'s');
+    assert.deepEqual(rows(db, "SELECT k FROM meta WHERE k = 'retired_at'"), []);
+    assert.deepEqual(seqRows(db), [{ k: 'unretire_seq', v: '7' }, { k: 'wipe_seq', v: '5' }]);
+    // A repeat of U2's own fan-out (the same number) still writes, as before.
+    assert.equal((await fanOut(7, conf(SLUG, { name: 'U2 again' }))).status, 200);
+    assert.equal(o.conf.name, 'U2 again');
   });
 
   test('objects and a directory from before the sequence read it as 0: the first removal and unretire work as before', async () => {
