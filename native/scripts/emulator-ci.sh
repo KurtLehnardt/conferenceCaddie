@@ -5,8 +5,8 @@
 #   cache-name   Names the system image's cache: its directory and the key prefix (step outputs
 #                `dir` and `prefix`).
 #   install      Installs the emulator and the system image that the emulator steps use. Each
-#                package is tried up to three times, with a pause, and the partial downloads are
-#                deleted between tries. sdkmanager checks every download against its checksum and
+#                package is tried up to three times, each try limited to five minutes, with a
+#                pause, and the partial downloads are deleted between tries. sdkmanager checks every download against its checksum and
 #                nothing here turns that off. Writes the cache key of the installed system image's
 #                revision (step output `key`).
 #   run N        Attempt N, the script of reactivecircus/android-emulator-runner: checks that the
@@ -40,6 +40,8 @@ ARCH=x86_64
 CHANNEL=0
 SYSTEM_IMAGE="system-images;android-$API;$TARGET;$ARCH"
 TRIES=3
+# A normal download of the system image takes under a minute; a try that stalls is stopped.
+TRY_SECONDS=300
 HEALTH_SECONDS=120
 SERIAL="${ANDROID_SERIAL:-emulator-5554}"
 # The action's default AVD name, which the emulator steps keep.
@@ -48,7 +50,8 @@ TMP_ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 # The emulator's QEMU process (qemu-system-x86_64, or its -headless variant).
 EMULATOR_PROCESS='qemu-system-'
 
-sdk_root() { printf '%s' "${ANDROID_HOME:?ANDROID_HOME is not set}"; }
+sdk_root() { printf '%s' "$ANDROID_HOME"; }
+require_sdk() { : "${ANDROID_HOME:?ANDROID_HOME is not set}"; }
 sysimg_dir() { printf '%s/system-images/android-%s/%s/%s' "$(sdk_root)" "$API" "$TARGET" "$ARCH"; }
 key_prefix() { printf 'android-sysimg-%s-android-%s-%s-%s-r' "${RUNNER_OS:-local}" "$API" "$TARGET" "$ARCH"; }
 attempt_dir() { printf '%s/emu-attempt-%s' "$TMP_ROOT" "$1"; }
@@ -99,16 +102,21 @@ delete_partial_downloads() {
 }
 
 install_package() {
-  local pkg=$1 sdkmanager=$2 try log
+  local pkg=$1 sdkmanager=$2 try log status
   for try in $(seq 1 "$TRIES"); do
     log="$TMP_ROOT/emu-sdkmanager-$try.log"
-    if "$sdkmanager" --install "$pkg" --channel="$CHANNEL" < /dev/null > "$log" 2>&1; then
+    status=0
+    timeout --kill-after=15 "$TRY_SECONDS" "$sdkmanager" --install "$pkg" --channel="$CHANNEL" < /dev/null > "$log" 2>&1 || status=$?
+    if [ "$status" -eq 0 ]; then
       echo "$pkg is installed and up to date (try $try of $TRIES)."
       if [ "$try" -gt 1 ]; then
         echo "::warning title=Android SDK download retried::$pkg was installed on try $try of $TRIES."
         summary "- Android SDK: \`$pkg\` was installed on try $try of $TRIES."
       fi
       return 0
+    fi
+    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+      echo "sdkmanager did not finish within $TRY_SECONDS seconds."
     fi
     echo "sdkmanager could not install $pkg (try $try of $TRIES). Its last lines:"
     # Without the progress bars.
@@ -124,14 +132,22 @@ install_package() {
 }
 
 cmd_cache_name() {
+  require_sdk
   output dir "$(sysimg_dir)"
   output prefix "$(key_prefix)"
 }
 
 cmd_install() {
   local sdkmanager dir rev
+  require_sdk
   sdkmanager=$(sdkmanager_bin)
   dir=$(sysimg_dir)
+  # On CI the runner has no system image, so one that is here without a restored cache key was left
+  # by a restore that failed part way (actions/cache warns and keeps what it extracted).
+  if [ "${GITHUB_ACTIONS:-}" = true ] && [ -z "${SYSIMG_RESTORED_KEY:-}" ] && [ -d "$dir" ]; then
+    echo "Deleting $dir, which no cache restore completed."
+    rm -rf "$dir"
+  fi
   delete_partial_downloads
   if [ -f "$dir/package.xml" ]; then
     echo "The system image is here (restored from the cache); sdkmanager only checks for an update."
@@ -336,7 +352,9 @@ avd_home() { printf '%s' "${ANDROID_AVD_HOME:-$HOME/.android/avd}"; }
 
 stop_emulator() {
   local deadline=$((SECONDS + 30))
-  # The emulator step asked its emulator to quit (adb emu kill), which a hung emulator ignores.
+  # The emulator step asks its emulator to quit (adb emu kill) and ends once it has. This stops a
+  # process left behind. An emulator that ignores the request keeps its step running until the
+  # job's time limit, which fails the job, so this cannot help there.
   while emulator_alive && [ "$SECONDS" -lt "$deadline" ]; do sleep 2; done
   if emulator_alive; then
     echo "The previous emulator is still running; killing it."
@@ -357,7 +375,7 @@ cmd_discard_avd() {
   stop_emulator
   rm -rf "$(avd_home)/$AVD_NAME.avd" "$(avd_home)/$AVD_NAME.ini"
   echo "::warning title=Emulator snapshot not made::The emulator that makes the snapshot failed, so the snapshot is neither saved nor used. Attempt 1 creates the AVD again and cold-boots it."
-  summary "- The emulator that makes the snapshot failed; the snapshot was neither saved nor used, and attempt 1 cold-booted a new AVD with the same settings."
+  summary "- The emulator that makes the snapshot failed; the snapshot is neither saved nor used, and attempt 1 creates the AVD again with the same settings and cold-boots it."
 }
 
 case "${1:-}" in

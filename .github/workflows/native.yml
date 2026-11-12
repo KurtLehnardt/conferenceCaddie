@@ -347,6 +347,8 @@ jobs:
       # checksum. The emulator steps then find both up to date and download neither.
       - name: Install the emulator and the system image
         id: sdk
+        env:
+          SYSIMG_RESTORED_KEY: ${{ steps.sysimg.outputs.cache-matched-key }}
         run: bash scripts/emulator-ci.sh install
 
       - name: Save the system image
@@ -374,9 +376,11 @@ jobs:
             ~/.android/adb*
           key: ${{ steps.avd_key.outputs.key }}
 
-      # If this emulator fails (it did not boot), the next step deletes the AVD: nothing is saved,
-      # attempt 1 creates the AVD again with the same settings and cold-boots it, and the
-      # infrastructure retry below covers attempt 1.
+      # If this emulator fails (it does not boot within 300 seconds), the next step deletes the AVD:
+      # nothing is saved, attempt 1 creates the AVD again with the same settings and cold-boots it,
+      # and the infrastructure retry below covers attempt 1. An emulator that hangs and ignores the
+      # request to quit keeps its step running until the job's time limit, which fails the job.
+      # Boots take under a minute (cold boots included); 300 seconds leaves room for the retry.
       - name: Create the emulator snapshot
         id: avd_create
         if: steps.avd.outputs.cache-hit != 'true'
@@ -387,6 +391,7 @@ jobs:
           arch: x86_64
           target: default
           force-avd-creation: false
+          emulator-boot-timeout: 300
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
           working-directory: native
@@ -405,9 +410,11 @@ jobs:
             ~/.android/adb*
           key: ${{ steps.avd.outputs.cache-primary-key }}
 
-      # Attempt 1, from the snapshot. Its failure does not end the job here: the next step decides
-      # whether it was an infrastructure failure, which alone is retried, and "Fail when the emulator
-      # tests failed" fails the job for every failure that is not retried or fails again.
+      # Attempt 1, from the snapshot, with the same 300-second boot limit, so a boot that hangs leaves
+      # time for the retry (which keeps the action's 600 seconds). Its failure does not end the job
+      # here: the next step decides whether it was an infrastructure failure, which alone is
+      # retried, and "Fail when the emulator tests failed" fails the job for every failure that is
+      # not retried or fails again.
       - name: Run the UI tests and the release smoke test on an emulator
         id: emu1
         continue-on-error: true
@@ -424,6 +431,7 @@ jobs:
           arch: x86_64
           target: default
           force-avd-creation: false
+          emulator-boot-timeout: 300
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: native
