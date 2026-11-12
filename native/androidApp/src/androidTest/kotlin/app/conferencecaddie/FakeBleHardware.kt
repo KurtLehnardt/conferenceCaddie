@@ -24,6 +24,9 @@ class FakeBleHardware : BleHardware {
     /** Every payload advertising was started with, in order. */
     val advertised = CopyOnWriteArrayList<ByteArray>()
 
+    /** Every call to start advertising, refused ones included. */
+    @Volatile var advertiseAttempts = 0
+
     /** The payload being advertised now, or null when advertising is stopped. */
     @Volatile var advertising: ByteArray? = null
     @Volatile var advertisingUuid: UUID? = null
@@ -57,6 +60,7 @@ class FakeBleHardware : BleHardware {
     }
 
     override fun startAdvertising(serviceUuid: UUID, payload: ByteArray, onFailed: () -> Unit): BleHardwareStatus {
+        advertiseAttempts++
         if (advertiseStatus != BleHardwareStatus.Ok) return advertiseStatus
         advertised += payload.copyOf()
         advertising = payload.copyOf()

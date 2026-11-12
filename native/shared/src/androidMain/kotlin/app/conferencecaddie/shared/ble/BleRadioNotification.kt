@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import app.conferencecaddie.shared.AndroidNotifier
+import app.conferencecaddie.shared.NUDGE_NOTIFICATION_LINK
 import app.conferencecaddie.shared.NotificationTapKey
 
 /**
@@ -27,8 +28,11 @@ internal object BleRadioNotification {
     const val TEXT = "Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth."
     const val STOP = "Stop"
 
-    /** Where a tap on the notification leads: the people screen with who is around. */
-    const val DEEP_LINK = "caddie://people?around=1"
+    /**
+     * Where a tap on the notification leads: the people screen with who is around, the nudge's link,
+     * which the activity's tap allowlist already accepts (NotificationLinks.kt).
+     */
+    const val DEEP_LINK = NUDGE_NOTIFICATION_LINK
 
     /** The web's accent blue, which tints the small icon, as AndroidNotifier does. */
     private const val ACCENT = 0xFF2457D6.toInt()

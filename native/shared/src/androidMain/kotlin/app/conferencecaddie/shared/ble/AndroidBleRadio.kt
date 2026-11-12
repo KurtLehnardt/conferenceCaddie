@@ -1,12 +1,14 @@
 package app.conferencecaddie.shared.ble
 
 import android.Manifest
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import app.conferencecaddie.shared.AndroidPermissions
 
 /**
@@ -19,6 +21,18 @@ import app.conferencecaddie.shared.AndroidPermissions
  * new [start] switches it in place, and a system restart of the service ([onSystemRestart]) waits for
  * the runtime to call [start] again. Everything the service does happens on the main thread; the
  * methods here may be called from any thread and hand their work to it.
+ *
+ * **Starting from the background.** Android 12 and newer refuse to start a foreground service while
+ * the app is in the background, which is where a cold start by the background nudge job restores the
+ * session. Such a start is not a stop: the session is kept, the runtime is not told, and the start is
+ * tried again when an activity of the app starts ([resumeDeferred]) or a service the system restarted
+ * attaches.
+ *
+ * **Stop with nothing running.** The notification's Stop can arrive while no session is running in
+ * the service: during the grace after a system restart, or from a notification left over in a new
+ * process. The radio then remembers the Stop for [restartGraceMillis] and stops the next session the
+ * runtime starts with [BleStopReason.User], so the runtime turns Bluetooth proximity off as the
+ * person asked.
  *
  * Permissions: on Android 12 and newer "Nearby devices" (BLUETOOTH_SCAN, BLUETOOTH_ADVERTISE and
  * BLUETOOTH_CONNECT, the scan declared as never used for location); on Android 8 to 11 the location
@@ -51,6 +65,18 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
     /** The clock of token windows and the deadline, in epoch milliseconds. The instrumented tests move it; nothing else sets it. */
     @Volatile var clock: () -> Long = System::currentTimeMillis
 
+    /**
+     * Starts [BleRadioService] for the foreground. The instrumented tests replace it to play
+     * Android's refusal of a start from the background; nothing else sets it.
+     */
+    @Volatile var startService: (Intent) -> Unit = { app.startForegroundService(it) }
+
+    /**
+     * Whether a permission is granted. The instrumented tests replace it, because revoking a
+     * permission ends the app's process; nothing else sets it.
+     */
+    @Volatile var permissionGranted: (String) -> Boolean = { app.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
     /** What the runtime started: kept for the process, so the service can read it whenever it starts. */
     internal class Session(val config: BleRadioConfig, val source: BlePayloadSource, val events: BleRadioEvents)
 
@@ -68,6 +94,12 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
     /** A start intent was sent and the service has not attached yet. */
     private var serviceStarting = false
 
+    /** A session whose service Android refused to start from the background; main thread. */
+    private var deferred: Session? = null
+
+    /** A Stop that found no session: honoured by the next [deliver] until this SystemClock.elapsedRealtime(); main thread. */
+    private var userStopUntil = Long.MIN_VALUE
+
     override val supported: Boolean
         get() {
             val hw = hardware
@@ -82,7 +114,7 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
     override val running: Boolean get() = started
 
     override fun access(): BleAccess {
-        val missing = PERMISSIONS.filter { app.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        val missing = PERMISSIONS.filterNot { permissionGranted(it) }
         if (missing.isEmpty()) return BleAccess.Granted
         if (!asked()) return BleAccess.NotAsked
         // Asked before: the prompt still shows when Android wants a rationale (refused once). With no
@@ -95,8 +127,11 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
 
     override suspend fun requestAccess(): BleAccess {
         if (access() == BleAccess.Granted) return BleAccess.Granted
-        prefs.edit().putBoolean(KEY_ASKED, true).apply()
-        AndroidPermissions.request(*PERMISSIONS.toTypedArray())
+        val answer = AndroidPermissions.request(*PERMISSIONS.toTypedArray())
+        // Only an answer from the system counts as having asked, as in AndroidLocationProvider. With
+        // no activity attached, or a prompt dismissed without a choice, the answer is empty; taking
+        // that as asked would read as refused for good once an activity says no rationale is due.
+        if (answer.isNotEmpty()) prefs.edit().putBoolean(KEY_ASKED, true).apply()
         return access()
     }
 
@@ -135,34 +170,87 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
         }
         // A service still starting stops itself when it finds no session (after startForeground,
         // which a service started for the foreground must call whatever happens).
-        main.post { service?.stopQuietly() }
+        main.post {
+            deferred = null
+            service?.stopQuietly()
+        }
+    }
+
+    /**
+     * Tries again to start the service for a session Android refused to start from the background,
+     * if there is one. The application calls it whenever one of its activities starts, which puts
+     * the app in the foreground. Any thread.
+     */
+    fun resumeDeferred() {
+        main.post {
+            val d = deferred ?: return@post
+            deferred = null
+            deliver(d)
+        }
     }
 
     /** Hands [s] to the running service, or starts the service for it. Main thread. */
     private fun deliver(s: Session) {
         if (session !== s) return
+        if (userStopUntil != Long.MIN_VALUE) {
+            val stop = SystemClock.elapsedRealtime() < userStopUntil
+            userStopUntil = Long.MIN_VALUE
+            if (stop) {
+                // The person tapped Stop while nothing ran; this is the session the runtime restored.
+                stopped(s, BleStopReason.User)
+                service?.stopQuietly()
+                return
+            }
+        }
         val running = service
         when {
             running != null -> running.apply(s)
             serviceStarting -> Unit // The service reads the session when it starts.
             else -> try {
-                app.startForegroundService(Intent(app, BleRadioService::class.java).setAction(BleRadioService.ACTION_START))
+                startService(Intent(app, BleRadioService::class.java).setAction(BleRadioService.ACTION_START))
                 serviceStarting = true
+                deferred = null
             } catch (e: IllegalStateException) {
-                // ForegroundServiceStartNotAllowedException: Android 12 and newer refuse a start
-                // from the background.
-                stopped(s, BleStopReason.System)
+                if (refusedInBackground(e)) {
+                    // Android 12 and newer refuse a start from the background. The session stays
+                    // (the runtime would otherwise drop its key and record), and the start is tried
+                    // again once the app is in the foreground or the system restarts the service.
+                    deferred = s
+                } else {
+                    stopped(s, BleStopReason.System)
+                }
             } catch (e: SecurityException) {
                 stopped(s, BleStopReason.PermissionLost)
             }
         }
     }
 
+    /** Android 12 and newer's refusal to start a foreground service from the background. */
+    private fun refusedInBackground(e: IllegalStateException): Boolean =
+        Build.VERSION.SDK_INT >= 31 && e is ForegroundServiceStartNotAllowedException
+
     // --- Called by the service, on the main thread ------------------------------------------------
 
     internal fun attach(service: BleRadioService) {
         this.service = service
         serviceStarting = false
+        // The service reads the session itself, a deferred one included.
+        deferred = null
+    }
+
+    /**
+     * The notification's Stop arrived at a service running no session. A session the service has not
+     * taken up yet stops with [BleStopReason.User] now; otherwise the next session the runtime starts
+     * within [restartGraceMillis] does.
+     */
+    internal fun userStopWithoutSession() {
+        val s = session
+        if (s != null) {
+            deferred = null
+            stopped(s, BleStopReason.User)
+            return
+        }
+        userStopUntil = SystemClock.elapsedRealtime() + restartGraceMillis
     }
 
     internal fun detach(service: BleRadioService) {
@@ -206,7 +294,7 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
         }
 
         /** The process's radio if something has created it. */
-        internal fun existing(): AndroidBleRadio? = instance
+        fun existing(): AndroidBleRadio? = instance
 
         /** True when the device has Bluetooth LE and an adapter, so the radio is worth creating at all. */
         fun isSupported(context: Context): Boolean = AndroidBleHardware(context).present()
