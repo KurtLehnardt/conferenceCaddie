@@ -48,4 +48,5 @@ export { usePresenceWatch } from './presence';
 export { forgetPush, resyncPush } from './push';
 export { useInboxWatch, useInboxCount } from './connect';
 export { useProfileName } from './storage';
+export { ProfileButton, showsPeopleActions } from './profileEntry';
 export type { ConferenceLike, InterestedProp, TalkLike } from './types';

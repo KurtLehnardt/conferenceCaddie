@@ -83,6 +83,27 @@ export function tabHash(tab: Tab, params: TabParams = {}): string {
   return `#/${tab}${qs ? `?${qs}` : ''}`;
 }
 
+/** Where Back on the profile editor leads, and what it is called there. */
+export interface ProfileBack {
+  href: string;
+  /** True when the history entry behind this one is that screen, so Back can pop it. */
+  pops: boolean;
+  label: 'People' | 'Settings';
+}
+
+/**
+ * Back on the profile editor returns to the People screen when the profile was opened from there,
+ * through the Profile button in its app bar or one of its prompts. Otherwise it goes to Settings, as
+ * before: from the Settings row, from another screen, and after a reload or a deep link, when the
+ * screen behind is not known. #/here/{zone} is never the screen Back leads to, because it turns
+ * presence on.
+ */
+export function profileBack(prev: Route | null, slug: string | null): ProfileBack {
+  const behind = prev && prev.slug === slug ? prev.tab : null;
+  if (behind === 'people') return { href: '#/people', pops: true, label: 'People' };
+  return { href: '#/settings', pops: behind === 'settings', label: 'Settings' };
+}
+
 /**
  * Changes the current tab's view or day in the URL without a history entry. The entry's state is
  * kept, because the history record in trail.ts numbers each entry there.

@@ -17,6 +17,7 @@ import {
   decodeParam,
   defaultConference,
   goToConference,
+  profileBack,
   readRoute,
   replaceConference,
   replaceTabParams,
@@ -47,10 +48,12 @@ import {
   PeopleIMet,
   PeopleIWatch,
   PeopleScreen,
+  ProfileButton,
   ProfileScreen,
   onInterestedChanged,
   registerPeopleUi,
   resyncPush,
+  showsPeopleActions,
   startDeleteRetries,
   useInboxCount,
   useInboxWatch,
@@ -474,14 +477,16 @@ export function App() {
   const interestedIds = new Set(talks.map((t) => t.talk_id));
   const base = slug ? appPath(`e/${encodeURIComponent(slug)}`) : '';
   const isTabScreen = isTab(tab);
+  // Requests and Profile sit in the People screen's app bar, for a conference that can be searched.
+  const peopleActions = showsPeopleActions(tab, !!searchable);
   const navTab = tab === 'here' || tab === 'inbox' || tab === 'meet' ? 'people' : tab;
 
   // Back pops history when the previous screen is the one Back leads to, so the browser's Back
   // button and this one agree. Otherwise it links there, for a deep link or a reload.
   const prev = prevRoute.current;
-  const backTo =
+  const backTo: { href: string; pops: boolean; label?: string } =
     tab === 'profile'
-      ? { href: '#/settings', pops: prev?.slug === slug && prev?.tab === 'settings' }
+      ? profileBack(prev, slug)
       : {
           href: lastTabScreen.current?.slug === slug ? tabHash(lastTabScreen.current.tab, lastTabScreen.current.params) : '#/people',
           pops: prev?.slug === slug && isTab(prev.tab) && prev.tab !== 'here',
@@ -490,7 +495,7 @@ export function App() {
     <a
       class={tab === 'profile' ? 'appbar-back-labeled' : 'icon-btn appbar-back'}
       href={backTo.href}
-      aria-label={tab === 'profile' ? 'Back to Settings' : 'Back'}
+      aria-label={tab === 'profile' ? `Back to ${backTo.label}` : 'Back'}
       onClick={(e) => {
         if (!backTo.pops || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();
@@ -500,7 +505,7 @@ export function App() {
       {tab === 'profile' ? (
         <>
           <ChevronLeft size={24} aria-hidden="true" />
-          <span>Settings</span>
+          <span>{backTo.label}</span>
         </>
       ) : (
         <ArrowLeft size={22} aria-hidden="true" />
@@ -535,7 +540,7 @@ export function App() {
           items={[{ label: 'Clear list', destructive: true, disabled: !talks.length, onSelect: clearInterested }]}
         />
       )}
-      {isTabScreen && (tab === 'people' || tab === 'here') && searchable && (
+      {isTabScreen && peopleActions && (
         <a class="icon-btn appbar-inbox" href="#/inbox" aria-label={inboxCount ? `Requests, ${inboxCount} new` : 'Requests'}>
           <Inbox size={24} aria-hidden="true" />
           {inboxCount > 0 && (
@@ -545,6 +550,7 @@ export function App() {
           )}
         </a>
       )}
+      {isTabScreen && peopleActions && <ProfileButton />}
       {isTabScreen && (
         <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">
           <Settings size={24} aria-hidden="true" />
