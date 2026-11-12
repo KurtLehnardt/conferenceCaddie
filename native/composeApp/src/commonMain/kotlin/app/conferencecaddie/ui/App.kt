@@ -84,9 +84,17 @@ import app.conferencecaddie.ui.shell.rememberShellNavigation
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.CaddieTheme
+import kotlinx.coroutines.delay
 
 /** The tabs a backend with these capabilities gets, in the tab bar's order (the web's order). */
 fun visibleTabs(peopleEnabled: Boolean): List<Tab> = Tab.entries.filter { it != Tab.People || peopleEnabled }
+
+/**
+ * How long the tab bar waits for the capabilities on a first start before it shows the tabs it
+ * has. People comes first, as on the web, so if it arrived after the tabs were drawn every other
+ * tab would move from under a finger: a tap meant for Search would land on For you.
+ */
+const val TABS_WAIT_MS = 2_000L
 
 /**
  * The root of the UI on both platforms: the web app's shell. An app bar with the conference
@@ -127,6 +135,15 @@ fun App(
     val selected = picked ?: tabs.first()
     val tabSelected = picked ?: tabs.first().takeIf { state.tabsKnown }
     val page = navigation.top
+    // The tab bar keeps its place but draws no tab until it is known whether People is among them
+    // (on a first start, and while the people controller opens its records), or until TABS_WAIT_MS
+    // has passed, so no tab moves once the person can see it.
+    var tabsWaitOver by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(TABS_WAIT_MS)
+        tabsWaitOver = true
+    }
+    val tabsShown = state.tabsKnown || tabsWaitOver
     // A server typed in Settings waits here for the same confirmation a link gets.
     var typedServer by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -172,7 +189,7 @@ fun App(
         CompositionLocalProvider(LocalShellNavigator provides navigation) {
             BoxWithConstraints(Modifier.fillMaxSize().background(Caddie.colors.bg)) {
                 val wide = maxWidth >= Caddie.dimens.wideLayoutMinWidth
-                val navItems = tabs.map { tab -> navItem(tab, state) }
+                val navItems = if (tabsShown) tabs.map { tab -> navItem(tab, state) } else emptyList()
                 // Requests and Meet up belong to People, as on the web; Settings and Profile to no tab.
                 val navSelected = when (page) {
                     null -> tabSelected
@@ -244,7 +261,9 @@ fun App(
                                     items = navItems,
                                     selected = navSelected,
                                     onSelect = onNavSelect,
-                                    modifier = Modifier.onSizeChanged { navBarHeight = with(density) { it.height.toDp() } },
+                                    modifier = Modifier
+                                        .testTag(if (state.tabsKnown) "tabs-known" else "tabs-pending")
+                                        .onSizeChanged { navBarHeight = with(density) { it.height.toDp() } },
                                 )
                             }
                         }
