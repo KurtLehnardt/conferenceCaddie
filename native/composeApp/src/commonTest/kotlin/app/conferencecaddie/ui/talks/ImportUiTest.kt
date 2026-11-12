@@ -1,5 +1,6 @@
 package app.conferencecaddie.ui.talks
 
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -17,8 +18,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.BackendUrl
@@ -119,6 +121,32 @@ class ImportUiTest {
         waitFor(tag = "import-sheet")
     }
 
+    /**
+     * Finds the talks in the pasted text. The keyboard comes up on its own time once the text field
+     * has focus and shortens the sheet, so a tap at where Find talks was a moment ago can land on
+     * the keyboard instead (seen on a busy emulator). The button is brought into view, then clicked
+     * through its own action, not through a tap at a place on the screen.
+     */
+    private fun ComposeUiTest.findTalks() {
+        onNodeWithTag("import-find").performScrollTo().assertIsEnabled().performSemanticsAction(SemanticsActions.OnClick)
+    }
+
+    /**
+     * Waits until [tag]'s bounds have stayed the same for two frames in a row, so the keyboard has
+     * stopped moving the sheet, for a test that taps the button where it is on the screen.
+     */
+    private fun ComposeUiTest.waitForStillBounds(tag: String) {
+        var last = onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        var still = 0
+        waitUntil(timeoutMillis = 20_000) {
+            mainClock.advanceTimeByFrame()
+            val now = onNodeWithTag(tag).getUnclippedBoundsInRoot()
+            still = if (now == last) still + 1 else 0
+            last = now
+            still >= 2
+        }
+    }
+
     @Test
     fun pastedTextFindsTheTalksAndMarksTheStrongOnes() = runComposeUiTest {
         start()
@@ -129,8 +157,7 @@ class ImportUiTest {
         onNodeWithTag("import-paste-toggle").performClick()
         waitFor(tag = "import-find").assertIsNotEnabled()
         onNodeWithTag("import-paste").performTextReplacement(schedule)
-        // The keyboard can cover the button on a short screen; bring it into view first.
-        onNodeWithTag("import-find").performScrollTo().assertIsEnabled().performClick()
+        findTalks()
 
         // Two exact titles ticked, the similar title left for the person to check.
         waitFor(tag = "import-review")
@@ -213,7 +240,7 @@ class ImportUiTest {
         openImport()
         onNodeWithTag("import-paste-toggle").performClick()
         onNodeWithTag("import-paste").performTextReplacement("Rust for embedded devices\n\nWriting drivers in safe Rust\n")
-        onNodeWithTag("import-find").performScrollTo().performClick()
+        findTalks()
         waitFor(tag = "import-review")
         assertEquals(Strings.Import.noneFound("Alpha Conference") + Strings.Import.unmatched(2), summary())
         waitFor(tag = "import-switch").performClick()
@@ -284,7 +311,9 @@ class ImportUiTest {
         openImport()
         onNodeWithTag("import-paste-toggle").performScrollTo().performClick()
         onNodeWithTag("import-paste").performScrollTo().performTextReplacement(schedule)
-        onNodeWithTag("import-find").performScrollTo().performClick()
+        // A real tap here, once the sheet has stopped moving: the other tests click through the action.
+        waitForStillBounds("import-find")
+        onNodeWithTag("import-find").performScrollTo().assertIsDisplayed().performClick()
         waitFor(tag = "import-review")
         // The footer's buttons stay on screen however long the review is.
         onNodeWithTag("import-mark").assertIsDisplayed().performClick()

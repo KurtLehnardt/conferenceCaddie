@@ -178,6 +178,7 @@ class EmbedderStateTest {
         core.releaseEmbedder().join()
         gate.complete(Unit)
         core.until { it.semantic == SemanticState.Idle }
+        // The model is closed after its Idle is queued, outside the embedder's lock.
         withContext(Dispatchers.Default) { withTimeout(20_000) { while (loads.closed == 0) delay(10) } }
         assertEquals(1, loads.closed, "the model loaded during the release is closed")
         assertEquals(1, loads.attempts)
@@ -185,6 +186,70 @@ class EmbedderStateTest {
 
         // The next text search loads it again.
         core.search(SearchRequest(query = "kubernetes"))
+        core.until { it.semantic == SemanticState.Ready }
+        assertEquals(2, loads.attempts)
+    }
+
+    private suspend fun <T> CompletableDeferred<T>.awaitWithin(): T = withContext(Dispatchers.Default) { withTimeout(20_000) { await() } }
+
+    /**
+     * A load's job ends a moment after its state is published. A text search made in that moment,
+     * once the pause after a failure has passed, loads the model again. The load's job is held
+     * there with a test hook.
+     */
+    @Test
+    fun aSearchMadeAsALoadEndsCanLoadAgain() = runTest {
+        val core = core()
+        val ending = CompletableDeferred<Unit>()
+        val end = CompletableDeferred<Unit>()
+        core.afterEmbedderLoad = { if (ending.complete(Unit)) end.await() }
+        val loads = Loads(failures = 1)
+        core.useEmbedder(loads::load)
+        core.until { it.semantic == SemanticState.Idle }
+
+        core.search(SearchRequest(query = "kubernetes"))
+        core.until { it.semantic == SemanticState.Unavailable }
+        ending.awaitWithin()
+        // The failed load's job has not ended yet; the pause after the failure has passed.
+        time += (CaddieCore.RETRY_FIRST_MS + 1).milliseconds
+        core.search(SearchRequest(query = "kubernetes"))
+        core.until { it.semantic == SemanticState.Loading || it.semantic == SemanticState.Ready }
+        assertEquals(2, loads.attempts, "the second search loads the model again")
+        end.complete(Unit)
+        core.until { it.semantic == SemanticState.Ready }
+    }
+
+    /**
+     * A release just after a load has kept its model, before the load's Ready is written: the Ready
+     * is dropped for the release, and the state settles on Idle rather than staying on Loading.
+     * The publishes of the state are held with a test hook until both are queued.
+     */
+    @Test
+    fun aReleaseBeforeALoadsReadyIsWrittenSettlesOnIdle() = runTest {
+        val core = core()
+        val gate = CompletableDeferred<Unit>()
+        val loads = Loads(failures = 0, gate = gate)
+        core.useEmbedder(loads::load)
+        core.until { it.semantic == SemanticState.Idle }
+        core.search(SearchRequest(query = "kubernetes"))
+        core.until { it.semantic == SemanticState.Loading }
+
+        val publishes = CompletableDeferred<Unit>()
+        core.beforeSemanticPublish = { publishes.await() }
+        val loaded = CompletableDeferred<Unit>()
+        core.afterEmbedderLoad = { loaded.complete(Unit) }
+        gate.complete(Unit)
+        loaded.awaitWithin()
+        // The load has kept its model and queued its Ready, which waits; the release comes now.
+        core.releaseEmbedder().join()
+        assertEquals(1, loads.closed)
+        publishes.complete(Unit)
+        core.until { it.semantic == SemanticState.Idle }
+        core.awaitIdle()
+        assertEquals(SemanticState.Idle, core.state.value.semantic)
+
+        // The next text search loads the model again.
+        core.search(SearchRequest(query = "pods"))
         core.until { it.semantic == SemanticState.Ready }
         assertEquals(2, loads.attempts)
     }

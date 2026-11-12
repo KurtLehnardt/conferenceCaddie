@@ -2,7 +2,9 @@ package app.conferencecaddie
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -21,8 +23,14 @@ class MainActivitySmokeTest {
     @get:Rule
     val compose = createAndroidComposeRule<MainActivity>()
 
+    @OptIn(ExperimentalTestApi::class)
     @Test
     fun theShellStartsAndNavigates() {
+        // The app asks the real backend for its capabilities. The tab bar draws its tabs once it
+        // knows whether People comes first, or after a wait; until it knows, a People tab could
+        // still arrive and move the others, so the taps below wait for the tabs to be known.
+        compose.waitUntilAtLeastOneExists(hasTestTag("tabs-known"), timeoutMillis = 60_000)
+        compose.waitForIdle()
         compose.onNodeWithTag("tab-For you").assertIsDisplayed()
         compose.onNodeWithTag("tab-Search").assertIsDisplayed()
         compose.onNodeWithTag("tab-Interested").assertIsDisplayed()

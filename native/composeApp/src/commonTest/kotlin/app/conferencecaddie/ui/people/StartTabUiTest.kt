@@ -14,6 +14,7 @@ import app.conferencecaddie.shared.core.CaddieCore
 import app.conferencecaddie.shared.db.CaddieDatabase
 import app.conferencecaddie.shared.net.Http
 import app.conferencecaddie.shared.people.PeopleAvailability
+import app.conferencecaddie.ui.TABS_WAIT_MS
 import app.conferencecaddie.ui.shell.Tab
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.talks.CaddieApp
@@ -33,9 +34,10 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.files.SystemTemporaryDirectory
 
 // The tab the app opens on when the capabilities arrive after the first screen, as on a first start
-// against a tier 3 server with nothing stored: the shell draws its tabs before it knows that People
-// is offered. No tab is selected until then; People opens once it appears, unless the person picked
-// a tab first, and then their tab stays. CaddieApp over a real CaddieCore on TestBackend (people features on), whose capabilities
+// against a tier 3 server with nothing stored: the shell does not know yet that People is offered.
+// The tab bar draws no tab until then (People comes first and would move the others), or until
+// TABS_WAIT_MS has passed; People opens once it appears, unless the person picked a tab after the
+// wait, and then their tab stays. CaddieApp over a real CaddieCore on TestBackend (people features on), whose capabilities
 // document is held back, and a PeopleController on the fake People server. Runs on the iOS simulator
 // and on Android.
 //
@@ -91,11 +93,12 @@ class StartTabUiTest {
         setContent { TestPhone { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) } }
         waitForIdle()
 
-        // Nothing is known yet: there is no People tab, and no tab is picked for the person, so the
-        // app does not open on For you only to move to People a moment later.
+        // Nothing is known yet: the tab bar is there but draws no tab, so no tab moves under a
+        // finger and the app does not open on For you only to move to People a moment later.
+        onNodeWithTag("tabs-pending").assertExists()
         onNodeWithTag("tab-${Strings.Tabs.PEOPLE}").assertDoesNotExist()
-        onNodeWithTag("tab-${Strings.Tabs.FOR_YOU}").assertIsNotSelected()
-        onNodeWithTag("tab-${Strings.Tabs.SEARCH}").assertIsNotSelected()
+        onNodeWithTag("tab-${Strings.Tabs.FOR_YOU}").assertDoesNotExist()
+        onNodeWithTag("tab-${Strings.Tabs.SEARCH}").assertDoesNotExist()
 
         capabilitiesSent.complete(Unit)
         waitForTag("tab-${Strings.Tabs.PEOPLE}")
@@ -111,12 +114,16 @@ class StartTabUiTest {
     }
 
     @Test
-    fun aTabPickedBeforeTheCapabilitiesArriveStaysPicked() = runComposeUiTest {
+    fun aTabPickedAfterTheWaitStaysPickedWhenTheCapabilitiesArrive() = runComposeUiTest {
         setContent { TestPhone { CaddieApp(core, isDebugBuild = false, appVersion = "test", people = controller) } }
         waitForIdle()
-        onNodeWithTag("tab-${Strings.Tabs.PEOPLE}").assertDoesNotExist()
+        onNodeWithTag("tab-${Strings.Tabs.SEARCH}").assertDoesNotExist()
 
-        // The person taps Search while the app is still asking the server what it offers.
+        // The server is slow: after the wait the tab bar shows the tabs it has, and the person taps
+        // Search while the app is still asking the server what it offers.
+        mainClock.advanceTimeBy(TABS_WAIT_MS)
+        waitForTag("tab-${Strings.Tabs.SEARCH}")
+        onNodeWithTag("tab-${Strings.Tabs.PEOPLE}").assertDoesNotExist()
         onNodeWithTag("tab-${Strings.Tabs.SEARCH}").performClick()
         onNodeWithTag("tab-${Strings.Tabs.SEARCH}").assertIsSelected()
 

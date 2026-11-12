@@ -6,7 +6,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import app.conferencecaddie.shared.core.BundleState
 import app.conferencecaddie.shared.people.ConferenceWindow
 import app.conferencecaddie.shared.search.ForYou

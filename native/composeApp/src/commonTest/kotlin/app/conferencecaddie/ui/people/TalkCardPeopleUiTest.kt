@@ -11,8 +11,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.TestDevice
@@ -68,14 +69,9 @@ class TalkCardPeopleUiTest {
     private fun ComposeUiTest.assertNoControls(talkId: String) =
         onAllNodes(hasTestTag("talk-people-$talkId"), useUnmergedTree = true).assertCountEquals(0)
 
-    /** The circle-count requests the fake has had so far (copied with a retry, as the controller adds to the log from its own thread). */
-    private fun countRequests(): List<Set<String>> {
-        while (true) {
-            val copy = runCatching { f.server.requests.toList() }.getOrNull() ?: continue
-            return copy.filter { it.method == "POST" && it.path == "/api/circles/counts" }
-                .map { r -> (r.body!!["talk_ids"] as JsonArray).map { it.jsonPrimitive.content }.toSet() }
-        }
-    }
+    /** The circle-count requests the fake has had so far. */
+    private fun countRequests(): List<Set<String>> =
+        f.server.requests("POST", "/api/circles/counts").map { r -> (r.body!!["talk_ids"] as JsonArray).map { it.jsonPrimitive.content }.toSet() }
 
     @Test
     fun searchResultsCarryThePeopleControls() = runComposeUiTest {
@@ -164,8 +160,12 @@ class TalkCardPeopleUiTest {
             }
         }
         u1WaitForTag("search-results")
+        // Card by card, by key: each scroll moves one card further. A search by node goes back to
+        // the top and pages down again for every card that is not composed yet, so walking 43
+        // cards that way does quadratic work, which took over a minute on a busy CI simulator.
         for (id in ids) {
-            onNodeWithTag("search-results", useUnmergedTree = true).performScrollToNode(hasTestTag("talk-$id"))
+            onNodeWithTag("search-results", useUnmergedTree = true).performScrollToKey(id)
+            onNodeWithTag("talk-$id", useUnmergedTree = true).assertExists()
         }
         // The last card has its count, so the controls read what the one request brought.
         waitInCard(hasText(u1CountLabel(1)) and hasAnyAncestor(hasTestTag("talk-people-${ids.last()}")))

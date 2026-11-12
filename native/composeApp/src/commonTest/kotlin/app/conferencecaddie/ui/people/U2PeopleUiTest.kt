@@ -27,7 +27,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.InMemorySecureStore
@@ -93,7 +93,7 @@ internal class U2Rig {
     private val http = ApiHttp { method, url, headers, body, timeoutMs, maxBytes ->
         val crafted = matches
         if (crafted != null && method == "POST" && url.substringBefore('?').endsWith("/api/people/matches")) {
-            server.requests += RecordedRequest(method, url, headers, body?.decodeToString())
+            server.record(RecordedRequest(method, url, headers, body?.decodeToString()))
             HttpResponse(200, crafted().encodeToByteArray(), headers = mapOf("content-type" to "application/json"))
         } else {
             server.send(method, url, headers, body, timeoutMs, maxBytes)

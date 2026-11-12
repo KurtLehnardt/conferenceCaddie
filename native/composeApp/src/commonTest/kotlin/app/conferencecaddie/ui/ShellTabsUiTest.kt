@@ -3,11 +3,18 @@ package app.conferencecaddie.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.v2.runComposeUiTest
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.ui.shell.SampleData
 import app.conferencecaddie.ui.shell.ShellState
@@ -81,5 +88,49 @@ class ShellTabsUiTest {
         request = ShellRequest(id = 2, tab = Tab.Interested)
         waitForIdle()
         onNodeWithTag("tab-Interested").assertIsSelected()
+    }
+
+    /**
+     * On a first start the tab bar draws no tab until the capabilities say whether People comes
+     * first. A person aims at Search where the bar first shows it, a little left of its middle, and
+     * the capabilities may arrive after the first frame: the tap still opens Search. When the tabs
+     * were drawn at once, the three tabs became four and that spot was For you.
+     */
+    @Test
+    fun aTapOnSearchStaysOnSearchWhenTheCapabilitiesArriveAfterTheFirstFrame() = runComposeUiTest {
+        mainClock.autoAdvance = false
+        var current by mutableStateOf(state(Capabilities.None).copy(tabsKnown = false))
+        setContent { TestDevice(DpSize(360.dp, 640.dp)) { App(current) } }
+        mainClock.advanceTimeByFrame()
+        fun searchBounds() = onAllNodesWithTag("tab-Search").fetchSemanticsNodes().firstOrNull()?.boundsInRoot
+        // Where Search is first drawn, if it is drawn before the capabilities arrive.
+        var aim = searchBounds()
+        onNodeWithTag("tabs-pending").assertExists()
+
+        current = state(tier3)
+        mainClock.advanceTimeByFrame()
+        mainClock.advanceTimeByFrame()
+        onNodeWithTag("tabs-known").assertExists()
+        if (aim == null) aim = searchBounds()
+        val at = aim!!
+        onRoot().performTouchInput { click(Offset(at.left + at.width / 4, at.center.y)) }
+        mainClock.advanceTimeByFrame()
+        onNodeWithTag("tab-Search").assertIsSelected()
+        onNodeWithTag("tab-People").assertExists()
+    }
+
+    /** A first start whose capabilities do not come shows the tabs it has after [TABS_WAIT_MS]. */
+    @Test
+    fun theTabsShowAfterAWaitWhenTheCapabilitiesDoNotCome() = runComposeUiTest {
+        mainClock.autoAdvance = false
+        setContent { App(state(Capabilities.None).copy(tabsKnown = false)) }
+        mainClock.advanceTimeByFrame()
+        onNodeWithTag("tab-Search").assertDoesNotExist()
+        mainClock.advanceTimeBy(TABS_WAIT_MS)
+        mainClock.advanceTimeByFrame()
+        onNodeWithTag("tab-For you").assertExists()
+        onNodeWithTag("tab-Search").assertExists()
+        onNodeWithTag("tab-Interested").assertExists()
+        onNodeWithTag("tab-People").assertDoesNotExist()
     }
 }
