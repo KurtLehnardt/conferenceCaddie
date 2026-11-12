@@ -336,6 +336,27 @@ class U1ProfileUiTest {
     }
 
     @Test
+    fun whatTryAgainDidShowsAfterTheBannerHasGone() = runComposeUiTest {
+        showProfile()
+        type("profile-name", "Jordan Rivera")
+        onNodeWithText(visibleLabel).performScrollTo().performClick()
+        u1WaitOrDump("visible") { f.server.me(f.slug) != null && f.controller.state.value.visibility.openToMeet }
+        f.server.failNextDeletes(1, status = 503)
+        onNodeWithTag("profile-delete").performScrollTo().performClick()
+        onNodeWithTag("profile-delete-now").performScrollTo().performClick()
+        u1WaitForTag("profile-pending-delete")
+
+        // Try again finishes the delete, which takes the banner away as it is published; the action
+        // is held there, before it returns.
+        val held = HeldAction(f.controller) { !f.controller.state.value.deletes.unfinished }
+        onNodeWithTag("profile-try-again").performScrollTo().performClick()
+        u1WaitOrDump("the delete to be held") { held.hasArrived }
+        u1WaitGone(hasTestTag("profile-pending-delete"))
+        held.release()
+        u1WaitForText(DELETED_MESSAGE)
+    }
+
+    @Test
     fun anUnfinishedRemovalFromThisConferenceNamesIt() = runComposeUiTest {
         showProfile()
         type("profile-name", "Jordan Rivera")

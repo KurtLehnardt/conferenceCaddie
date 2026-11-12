@@ -310,6 +310,7 @@ private fun PersonAction(person: Person, state: PeopleUiState, host: PeopleHost)
     val sameZone = around && PeoplePrivacy.inMyZone(person, state.presence)
     val watched = state.watch.any { it.ref == ref }
     var waving by remember(ref) { mutableStateOf(false) }
+    var toggling by remember(ref) { mutableStateOf(false) }
 
     ActionsRow(Modifier.padding(top = 2.dp)) {
         when {
@@ -359,9 +360,18 @@ private fun PersonAction(person: Person, state: PeopleUiState, host: PeopleHost)
             features.presence -> CaddieButton(
                 if (watched) PeopleStrings.WATCHING else PeopleStrings.WATCH,
                 {
-                    host.scope.launch {
-                        val on = host.controller.toggleWatch(ref, name)
-                        host.showToast(if (on) PeopleStrings.watchOn(name) else PeopleStrings.stoppedWatching(name))
+                    // Set before the launch, as waving: a second tap in the same frame would turn
+                    // the watch straight back.
+                    if (!toggling) {
+                        toggling = true
+                        host.scope.launch {
+                            val on = try {
+                                host.controller.toggleWatch(ref, name)
+                            } finally {
+                                toggling = false
+                            }
+                            host.showToast(if (on) PeopleStrings.watchOn(name) else PeopleStrings.stoppedWatching(name))
+                        }
                     }
                 },
                 Modifier.semantics { toggleableState = ToggleableState(watched) },
