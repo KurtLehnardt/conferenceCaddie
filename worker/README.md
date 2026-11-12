@@ -133,16 +133,31 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<6 random letters>` when the variable is unset
    or that name is taken; an account that already has a subdomain keeps it, whatever the variable
    says, and an answer that neither names a subdomain nor says there is none stops the script before
-   anything is created), builds the web app in Worker mode into `web/dist-worker/`, checks that none
-   of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES` is a secret of the Worker ([Signature
-   v2](#signature-v2), [Smoke](#smoke); it refuses to deploy when one is, or when it cannot tell),
-   then runs `npx wrangler deploy`, which uploads the app with the Worker. It prints only the
-   subdomain and the app URL, which is also the API's base. Until step 2 has run, the admin routes
-   answer 404, because admin fails closed without `ADMIN_TOKEN`.
+   anything is created, as described below), builds the web app in Worker mode into
+   `web/dist-worker/`, checks that none of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES`
+   is a secret of the Worker ([Signature v2](#signature-v2), [Smoke](#smoke); it refuses to deploy
+   when one is, or when it cannot tell), then runs `npx wrangler deploy`, which uploads the app with
+   the Worker. It prints only the subdomain and the app URL, which is also the API's base. Until
+   step 2 has run, the admin routes answer 404, because admin fails closed without `ADMIN_TOKEN`.
 
    If the token cannot read or create the subdomain (HTTP 403 from the subdomain API), create it
    once in the Cloudflare dashboard (Workers & Pages, Overview, `workers.dev` subdomain) and run the
    script again. `bash worker/scripts/deploy.sh --subdomain-only` checks only this step.
+
+   The subdomain step fails closed, because a PUT on an account that already has a subdomain could
+   rename it and break every client of the old URL. Only two kinds of answer from
+   `GET /workers/subdomain` mean that the account has none: a 200 with `success` true and a `null`
+   subdomain, and an answer at HTTP 200, 400 or 404 that is not a success, does not name a
+   subdomain, and whose first error code is Cloudflare's 10007 (the pinned wrangler reads only the
+   first error code, and treats 10007 there as "no subdomain"). A 401 or 403 deploys anyway,
+   without creating one, and stops with `--subdomain-only`; no answer at all stops the script; any
+   other answer stops it with "Could not read the workers.dev subdomain", the HTTP status and
+   Cloudflare's error codes. Only a PUT answered 409 or 400 (the name is taken or not valid) is
+   followed by another PUT, with a random fallback name, up to four attempts. After any other
+   failed PUT, other than 401 or 403 which stop with the blocker, the script reads the subdomain
+   once more (after a 5xx, a 404, no answer or a 200 that is not a success) and uses it when the
+   answer names one, since the PUT may have gone through, and otherwise stops with the statuses and
+   error codes. If the step keeps failing, create the subdomain in the dashboard as above.
 
 2. **Install the secrets.**
 
