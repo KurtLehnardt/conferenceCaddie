@@ -34,6 +34,9 @@ import app.conferencecaddie.shared.ble.BleRadioState
 import app.conferencecaddie.shared.ble.BleReadResult
 import app.conferencecaddie.shared.ble.BleStopReason
 import app.conferencecaddie.shared.ble.BleWakeups
+import app.conferencecaddie.shared.core.AndroidCore
+import app.conferencecaddie.shared.net.KtorHttp
+import app.conferencecaddie.shared.people.PeopleContext
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -47,6 +50,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -59,6 +63,8 @@ import org.junit.runner.RunWith
  * Bluetooth and notification permissions are granted through the instrumentation and never revoked
  * (revoking one ends the app's process). Starting a foreground service needs the app in front on
  * Android 12 and newer, so every start happens with MainActivity shown.
+ *
+ * The app's own people features share the process's one radio ([letTheAppsRuntimeRestoreFirst]).
  */
 @RunWith(AndroidJUnit4::class)
 class BleServiceLifecycleTest {
@@ -1319,30 +1325,75 @@ class BleServiceLifecycleTest {
         override fun shouldShowRationale(permission: String) = rationale
     }
 
-    private companion object {
-        const val ONGOING_ID = 4101
+    companion object {
+        /**
+         * The app's people features drive the same radio, through their Bluetooth runtime. MainActivity
+         * creates them, and once the core has the backend's capabilities (fetched over the network on a
+         * new install) the runtime restores: on this test phone it resumes nothing and stops the radio
+         * (BleRuntime.restore). That happens once per process, at a moment set by the network, so it
+         * would land inside whichever test first shows MainActivity and end that test's session. The
+         * class has the restore happen before any test instead.
+         */
+        @BeforeClass
+        @JvmStatic
+        fun letTheAppsRuntimeRestoreFirst() {
+            val context: Context = ApplicationProvider.getApplicationContext()
+            // The same core and controller MainActivity uses; creating them starts the capabilities fetch.
+            val people = CaddiePeople.controller(context)
+            val core = AndroidCore.get(context, CaddiePeople.allowLocalHttp(context))
+            val until = SystemClock.uptimeMillis() + RESTORE_TIMEOUT_MS
+            var applied: PeopleContext? = null
+            while (true) {
+                // Null while the capabilities load, which can take minutes on a network that never answers.
+                val next = PeopleContext.fromCore(core.state.value)
+                if (next != null && next == applied) break
+                assertTrue("the app's capabilities load", SystemClock.uptimeMillis() < until)
+                if (next == null) {
+                    Thread.sleep(50)
+                    continue
+                }
+                // The controller applies one context at a time and restores Bluetooth with the first
+                // one that names the backend, so once this returns the restore has run, whether this
+                // call or the controller's own following of the core got there first. It is applied
+                // again until it is the core's latest, so the controller is not left on an older one.
+                runBlocking { people.updateContext(next) }
+                applied = next
+            }
+            // A session whose records could not be opened would be tried again on a timer, and restore
+            // then, in the middle of a test. Opened now, or the class fails here.
+            assertTrue("the app's people records open", runBlocking { people.retrySession() })
+        }
+
+        /**
+         * The longest the capabilities may take: five requests one after another, each with up to a
+         * minute before it times out. Discovery asks the backend for /api/capabilities and
+         * /capabilities.json, and /api/health after a legacy 404, then the fallback for its two.
+         */
+        private const val RESTORE_TIMEOUT_MS = 5 * KtorHttp.REQUEST_TIMEOUT_MS
+
+        private const val ONGOING_ID = 4101
 
         /** BleRadioService.ACTION_STOP, internal to the shared module. */
-        const val STOP_ACTION = "app.conferencecaddie.ble.STOP"
+        private const val STOP_ACTION = "app.conferencecaddie.ble.STOP"
 
         /** BleRadioService.ACTION_TICK and ACTION_REPORT_DUE, internal to the shared module. */
-        const val TICK_ACTION = "app.conferencecaddie.ble.TICK"
-        const val REPORT_ACTION = "app.conferencecaddie.ble.REPORT_DUE"
+        private const val TICK_ACTION = "app.conferencecaddie.ble.TICK"
+        private const val REPORT_ACTION = "app.conferencecaddie.ble.REPORT_DUE"
 
         /** AndroidBleWakeups' wake lock. */
-        const val WAKE_LOCK_TAG = "caddie:bluetooth-report"
+        private const val WAKE_LOCK_TAG = "caddie:bluetooth-report"
 
         /** BleRadioNotification.TEXT. */
-        const val TEXT = "Your phone broadcasts a random code and listens for others. No profile details are sent over Bluetooth; " +
+        private const val TEXT = "Your phone broadcasts a random code and listens for others. No profile details are sent over Bluetooth; " +
             "nearby devices may see your phone's Bluetooth name, as with any Bluetooth device."
 
         /** Addresses of devices connected to this phone's GATT server. */
-        const val PHONE = "5A:00:00:00:00:01"
-        const val OTHER_PHONE = "5A:00:00:00:00:02"
-        const val THIRD_PHONE = "5A:00:00:00:00:03"
-        const val WATCH = "C0:00:00:00:00:09"
+        private const val PHONE = "5A:00:00:00:00:01"
+        private const val OTHER_PHONE = "5A:00:00:00:00:02"
+        private const val THIRD_PHONE = "5A:00:00:00:00:03"
+        private const val WATCH = "C0:00:00:00:00:09"
 
         /** A device advertising Caddie's service UUID without a token, which this phone connects to. */
-        const val PROBE = "6B:00:00:00:00:01"
+        private const val PROBE = "6B:00:00:00:00:01"
     }
 }
