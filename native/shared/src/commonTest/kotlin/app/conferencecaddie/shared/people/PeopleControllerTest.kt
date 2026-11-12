@@ -134,20 +134,26 @@ class PeopleControllerTest {
         assertTrue(c.state.value.sessionFailed)
         assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
         assertEquals(ProfileSync.GENERIC_MESSAGE, c.setTopics(ebpf, emptyList()))
-        assertEquals("", c.state.value.profile.displayName)
 
-        // Once they open, both are kept and say nothing.
+        // Once they open, nothing of those was kept; edits now are, and say nothing.
         kv.failReads = false
         assertTrue(c.retrySession())
+        assertEquals("", c.state.value.profile.displayName)
+        assertEquals(emptyList(), c.state.value.topics.learn)
         assertNull(c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
         assertNull(c.setTopics(ebpf, emptyList()))
         assertEquals("Caddie Native Test A", c.state.value.profile.displayName)
         assertEquals(ebpf, c.state.value.topics.learn)
 
-        // Records that cannot be written: the generic line, not an exception and not silence.
+        // Records that cannot be written: the generic line, not an exception and not silence, and
+        // the edit is not held either, so nothing sends or shows it later.
         kv.failWrites = true
         assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(about = "Not kept.") })
+        assertEquals("", c.state.value.profile.about)
         kv.failWrites = false
+        assertNull(c.setTopics(emptyList(), ebpf))
+        assertEquals("", c.state.value.profile.about, "a later write does not carry the edit that failed")
+        assertEquals("Caddie Native Test A", c.state.value.profile.displayName)
 
         // A backend without people features: the web's "does not offer that".
         c.updateContext(h.context(PEOPLE_ON.copy(people = PEOPLE_ON.people.copy(enabled = false))))

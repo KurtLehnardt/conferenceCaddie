@@ -229,10 +229,12 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
         private set
 
     /**
-     * The tab whose screen the shell drew last, under any pages: [tab], or the first tab offered
-     * while none was asked for. [App] keeps it current, so a page opened over a tab screen knows
-     * which one it is even before the person picked a tab.
+     * The tab whose screen shows under any pages: [tab], or the first tab offered while none was
+     * asked for. [App] keeps it current after each composition and [selectTab] at once, so a page
+     * opened over a tab screen knows which one it is, even before the person picked a tab and in the
+     * frame a tab was picked. Set and read on any thread (the people actions move the shell).
      */
+    @kotlin.concurrent.Volatile
     internal var shownTab: Tab? = null
 
     /** The page showing, or null on a tab screen. */
@@ -249,6 +251,7 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
     override fun selectTab(tab: Tab) {
         pages = emptyList()
         this.tab = tab
+        shownTab = tab
     }
 
     override fun openSettings() = openPage(ShellPage.Settings)
@@ -282,6 +285,15 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
     }
 
     /**
+     * Opens Profile for a link (a `caddie://` link, a notification, a launch option): like the web
+     * after a deep link, its Back leads to Settings, whatever tab showed when the link came.
+     */
+    fun openProfileFromLink() {
+        openPage(PeoplePage.Profile)
+        profileFrom = null
+    }
+
+    /**
      * Another conference was selected: Profile's Back no longer names the tab it was opened over,
      * which showed the other conference, and leads to Settings, as the web's does.
      */
@@ -302,6 +314,9 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
             is PeoplePage.Meet -> "meet:${page.meetId}"
         }
 
+        /** Where Profile was opened from, kept among the pages so a list without it reads as before. */
+        private const val FROM = "from:"
+
         private fun decode(value: String): ShellPage? = when {
             value == "settings" -> ShellPage.Settings
             value == "profile" -> PeoplePage.Profile
@@ -312,14 +327,20 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
 
         private fun tabNamed(name: String): Tab? = Tab.entries.firstOrNull { it.name == name }
 
-        /** Saves the tab, the switcher, where Profile was opened from and the pages as strings, which every platform can keep. */
+        /**
+         * Saves the tab, the switcher, the pages and where Profile was opened from ("from:People"
+         * after the pages, which [decode] passes over) as strings, which every platform can keep.
+         */
         val Saver: Saver<ShellNavigation, Any> = listSaver(
-            save = { nav -> listOf(nav.tab?.name ?: "", nav.switcherOpen.toString(), nav.profileFrom?.name ?: "") + nav.pages.map(::encode) },
+            save = { nav ->
+                listOf(nav.tab?.name ?: "", nav.switcherOpen.toString()) + nav.pages.map(::encode) + listOfNotNull(nav.profileFrom?.let { FROM + it.name })
+            },
             restore = { saved ->
                 ShellNavigation(tabNamed(saved[0])).apply {
                     switcherOpen = saved[1] == "true"
-                    profileFrom = tabNamed(saved[2])
-                    pages = saved.drop(3).mapNotNull(::decode)
+                    val rest = saved.drop(2)
+                    pages = rest.mapNotNull(::decode)
+                    profileFrom = rest.firstOrNull { it.startsWith(FROM) }?.let { tabNamed(it.removePrefix(FROM)) }
                 }
             },
         )

@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.semantics
 import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.ui.components.LocalNarrowLayout
 import app.conferencecaddie.ui.components.LocalWideLayout
+import app.conferencecaddie.ui.components.isNarrowerThan
 import app.conferencecaddie.ui.components.NavRail
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -207,8 +208,9 @@ fun App(
                 // The tab bar's height, so the keyboard inset below the content does not count it twice.
                 var navBarHeight by remember { mutableStateOf(0.dp) }
                 val density = LocalDensity.current
+                val narrow = isNarrowerThan(constraints.maxWidth, Caddie.dimens.fullAppBarMinWidth, density)
                 // One tree for both layouts, so a screen keeps its state when the window changes width.
-                CompositionLocalProvider(LocalWideLayout provides wide, LocalNarrowLayout provides (maxWidth < Caddie.dimens.narrowAppBarMaxWidth)) {
+                CompositionLocalProvider(LocalWideLayout provides wide, LocalNarrowLayout provides narrow) {
                     Row(Modifier.fillMaxSize()) {
                         if (wide) NavRail(navItems, navSelected, onNavSelect)
                         Column(

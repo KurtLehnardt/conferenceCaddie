@@ -132,9 +132,9 @@ fun ProfileButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
  * again", which asks the controller to open them now.
  */
 @Composable
-internal fun PeopleSessionFailed(host: PeopleHost) {
+internal fun PeopleSessionFailed(host: PeopleHost, modifier: Modifier = Modifier) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).testTag("people-session-failed"),
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).testTag("people-session-failed"),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -441,8 +441,9 @@ fun rememberPeopleUi(
 
 /**
  * Shows [route]. Requests and Meet up open over the People tab, so Back returns there; Profile opens
- * over whatever shows, as from Settings on the web; a zone opens People with the presence setup on
- * that zone, which turns nothing on until the person taps "I'm around" (PresenceControls).
+ * over whatever shows, with its Back to Settings, as after a deep link on the web; a zone opens
+ * People with the presence setup on that zone, which turns nothing on until the person taps "I'm
+ * around" (PresenceControls).
  */
 private fun route(route: AppLink.PeopleRoute, host: PeopleHost, navigation: ShellNavigation) {
     when (route) {
@@ -455,7 +456,8 @@ private fun route(route: AppLink.PeopleRoute, host: PeopleHost, navigation: Shel
             navigation.selectTab(Tab.People)
             host.openMeet(route.meetId)
         }
-        AppLink.PeopleRoute.Profile -> host.openProfile()
+        // As on the web after a deep link, its Back leads to Settings.
+        AppLink.PeopleRoute.Profile -> navigation.openProfileFromLink()
         is AppLink.PeopleRoute.Here -> host.openPeople(PeopleRequest(hereZone = route.zone))
     }
 }

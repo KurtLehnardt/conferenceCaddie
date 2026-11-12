@@ -49,6 +49,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
@@ -170,8 +172,15 @@ fun SwitcherButton(name: String, onClick: () -> Unit, modifier: Modifier = Modif
  */
 val LocalWideLayout = staticCompositionLocalOf { false }
 
-/** True in a window narrower than 360 dp (CaddieDimens.narrowAppBarMaxWidth), where the app bar has the least room. */
+/** True in a window narrower than 360 dp (CaddieDimens.fullAppBarMinWidth), where the app bar has the least room. */
 val LocalNarrowLayout = staticCompositionLocalOf { false }
+
+/**
+ * True when a window [widthPx] wide is narrower than [minWidth] at [density], compared in whole
+ * pixels as layout sizes are, so a window exactly [minWidth] wide never reads as narrower by a
+ * rounding.
+ */
+fun isNarrowerThan(widthPx: Int, minWidth: Dp, density: Density): Boolean = widthPx < with(density) { minWidth.roundToPx() }
 
 /** One destination of the tab bar. */
 data class NavItem<T>(val id: T, val label: String, val icon: LucideIcon, val badge: Int = 0, val accessibilityLabel: String? = null)

@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui.people
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.ComposeUiTest
@@ -24,6 +25,9 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import app.conferencecaddie.shared.AppLink
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.InMemorySecureStore
@@ -51,6 +55,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -68,6 +74,7 @@ class ProfileEntryUiTest {
 
     @AfterTest
     fun cleanUp() {
+        owner.viewModelStore.clear()
         scope.cancel()
     }
 
@@ -83,7 +90,29 @@ class ProfileEntryUiTest {
 
         override suspend fun get(key: String): String? = if (failReads) error("records unreadable") else inner.get(key)
 
-        override suspend fun set(key: String, value: String?) = if (failWrites) error("disk I/O error") else inner.set(key, value)
+        /** While set, a write that fails waits for it first, as a slow disk does. */
+        @kotlin.concurrent.Volatile
+        var slowFailure: CompletableDeferred<Unit>? = null
+
+        override suspend fun set(key: String, value: String?) {
+            if (failWrites) {
+                slowFailure?.await()
+                error("disk I/O error")
+            }
+            inner.set(key, value)
+        }
+    }
+
+    /** People records whose first reads wait for [open], as records still being read do. */
+    private class SlowKeyValue(private val inner: PeopleKeyValue) : PeopleKeyValue {
+        val open = CompletableDeferred<Unit>()
+
+        override suspend fun get(key: String): String? {
+            open.await()
+            return inner.get(key)
+        }
+
+        override suspend fun set(key: String, value: String?) = inner.set(key, value)
     }
 
     private fun controller(kv: PeopleKeyValue) =
@@ -101,10 +130,21 @@ class ProfileEntryUiTest {
         appVersion = "test",
     )
 
+    /** The activity's ViewModelStore, which a re-creation keeps (the people layer's PeopleRetained lives there). */
+    private val owner = object : ViewModelStoreOwner {
+        override val viewModelStore = ViewModelStore()
+    }
+
+    /** The toasts the shell was asked to show, on the UI thread. */
+    private val toasts = ArrayList<String>()
+
+    /** The people host of the composition that shows now. */
+    private var host: PeopleHost? = null
+
     /**
      * The app's shell with the People layer on [controller], on a phone of [size] that is [online],
      * at [conference], with the shell's [request] (states, so a test can change them); [restoration]
-     * draws it when a test re-creates it.
+     * draws it when a test re-creates it, under [owner] as the activity's store.
      */
     private fun ComposeUiTest.showApp(
         controller: PeopleController,
@@ -116,10 +156,15 @@ class ProfileEntryUiTest {
     ): () -> ShellNavigation {
         lateinit var nav: ShellNavigation
         val content: @Composable () -> Unit = {
-            nav = rememberShellNavigation()
-            val ui = rememberPeopleUi(controller, nav, talks, online.value, true, null, { _, _, _ -> }, {}, {}, request.value)!!
-            val tabs = TabContent(people = ui.tab, appBarActions = ui.appBarActions, peoplePage = ui.page, settingsPeople = ui.settings)
-            TestDevice(size) { App(ui.shellState(shellState(online.value, conference.value)), content = tabs, navigation = nav, request = request.value) }
+            CompositionLocalProvider(LocalViewModelStoreOwner provides owner) {
+                nav = rememberShellNavigation()
+                // Called on the UI thread, as the shell's toast is.
+                val showToast: (String, String?, (() -> Unit)?) -> Unit = { message, _, _ -> toasts += message }
+                val ui = rememberPeopleUi(controller, nav, talks, online.value, true, null, showToast, {}, {}, request.value)!!
+                host = ui.host
+                val tabs = TabContent(people = ui.tab, appBarActions = ui.appBarActions, peoplePage = ui.page, settingsPeople = ui.settings)
+                TestDevice(size) { App(ui.shellState(shellState(online.value, conference.value)), content = tabs, navigation = nav, request = request.value) }
+            }
         }
         if (restoration != null) restoration.setContent(content) else setContent(content)
         return { nav }
@@ -136,12 +181,14 @@ class ProfileEntryUiTest {
      * touch bounds, which minimumInteractiveComponentSize() widens around a 44 dp icon button drawn
      * at the web's size.
      */
-    private fun ComposeUiTest.assertTouchTarget(node: SemanticsNodeInteraction) {
-        val bounds = node.fetchSemanticsNode().touchBoundsInRoot
+    private fun assertTouchTarget(node: SemanticsNodeInteraction) {
+        val semantics = node.fetchSemanticsNode()
+        val bounds = semantics.touchBoundsInRoot
         // Compose's own bounds assertions allow half a dp for the rounding to whole pixels at the
-        // test phone's density.
+        // test phone's density, which is the node's own (TestDevice lowers it on a small emulator),
+        // not the window's.
         val min: Dp = PlatformTouchTarget - 0.5.dp
-        with(density) {
+        with(semantics.layoutInfo.density) {
             assertTrue(bounds.height.toDp() >= min, "touch height ${bounds.height.toDp()} is under $min")
             assertTrue(bounds.width.toDp() >= min, "touch width ${bounds.width.toDp()} is under $min")
         }
@@ -310,14 +357,37 @@ class ProfileEntryUiTest {
         val nav = showApp(controller, request = request)
         waitForTag("people-home")
         request.value = ShellRequest(1, tab = Tab.People, people = AppLink.PeopleRoute.Here("Hallway"))
-        waitForTag("people-home")
+        // The link's setup panel, on its zone, and the request taken.
+        waitForTag("presence-setup")
+        waitUntil(timeoutMillis = 20_000) {
+            onAllNodes(hasText("Hallway") and hasAnyAncestor(hasTestTag("presence-zone")), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        waitUntil(timeoutMillis = 20_000) { host?.request == null }
         onNodeWithTag("profile-button").performClick()
         waitForTag("profile-name")
         onNodeWithTag("tab-People").assertIsSelected()
         onNodeWithContentDescription(backToPeople).performClick()
         waitForTag("people-home")
         runOnIdle { assertEquals(emptyList(), nav().pages) }
+        // Nothing asks for the zone again, and presence stays off until "I'm around".
+        runOnIdle { assertEquals(null, host?.request) }
         assertFalse(controller.state.value.presence.on, "Back to People turns no presence on")
+    }
+
+    @Test
+    fun aProfileLinkOpensProfileWithItsBackToSettings() = runComposeUiTest {
+        // caddie://e/{slug}#/profile (a link, a notification): as on the web after a deep link, Back
+        // leads to Settings, whichever tab showed when the link came.
+        val request = mutableStateOf<ShellRequest?>(null)
+        val nav = showApp(namedController(), request = request)
+        waitForTag("people-home")
+        request.value = ShellRequest(1, tab = Tab.People, people = AppLink.PeopleRoute.Profile)
+        waitForTag("profile-name")
+        onNodeWithContentDescription(backToPeople).assertDoesNotExist()
+        onNodeWithTag("tab-People").assertIsNotSelected()
+        onNodeWithContentDescription(Strings.AppBar.BACK_TO_SETTINGS).performClick()
+        waitForTag("settings-screen")
+        runOnIdle { assertEquals(listOf(PeoplePage.Profile, ShellPage.Settings), nav().pages) }
     }
 
     @Test
@@ -381,17 +451,101 @@ class ProfileEntryUiTest {
         waitForTag("profile-name")
 
         kv.failWrites = true
-        onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer.")
+        onNodeWithTag("profile-about-me").performScrollTo().typeText("+1 555 0100")
         waitForText(PeopleCommonStrings.NOT_SAVED)
         onNodeWithTag("profile-save-status").assert(hasText(PeopleCommonStrings.NOT_SAVED))
-        onNodeWithTag("profile-about-me").assert(hasText("Platform engineer."))
+        onNodeWithTag("profile-about-me").assert(hasText("+1 555 0100"))
+        // Nothing holds it but the field: the controller, which a later write or the server's copy
+        // reads, still has the profile as it was.
+        assertEquals("", controller.state.value.profile.about)
 
-        // The next edit, once the records take it, saves both and the message goes.
+        // Taken out again before anything was saved: the field and the controller agree once more,
+        // and nothing brings it back once the records take writes.
+        onNodeWithTag("profile-about-me").performScrollTo().typeText("")
+        waitUntil(timeoutMillis = 20_000) { onAllNodes(hasText(PeopleCommonStrings.NOT_SAVED)).fetchSemanticsNodes().isEmpty() }
+        kv.failWrites = false
+        onNodeWithTag("profile-name").performScrollTo().typeText("Jordan Rivera B")
+        waitUntil(timeoutMillis = 20_000) { controller.state.value.profile.displayName == "Jordan Rivera B" }
+        assertEquals("", controller.state.value.profile.about)
+
+        // An edit that fails, then the next one once the records take it: both are saved and the
+        // message goes.
+        kv.failWrites = true
+        onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer.")
+        waitForText(PeopleCommonStrings.NOT_SAVED)
         kv.failWrites = false
         onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer, SRE.")
         waitUntil(timeoutMillis = 20_000) { controller.state.value.profile.about == "Platform engineer, SRE." }
         waitUntil(timeoutMillis = 20_000) { onAllNodes(hasText(PeopleCommonStrings.NOT_SAVED)).fetchSemanticsNodes().isEmpty() }
-        assertEquals("Jordan Rivera", controller.state.value.profile.displayName)
+        assertEquals("Jordan Rivera B", controller.state.value.profile.displayName)
+    }
+
+    @Test
+    fun anEditThatWasNotSavedOutlivesARecreationAndLeavingSaysSoOnce() = runComposeUiTest {
+        val kv = FlakyKeyValue()
+        val controller = namedController(kv)
+        val restoration = Restoration(this)
+        val nav = showApp(controller, restoration)
+        waitForTag("people-home")
+        onNodeWithTag("profile-button").performClick()
+        waitForTag("profile-name")
+
+        // Not saved: after the activity is re-created the text is still in its field, with the message.
+        kv.failWrites = true
+        onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer.")
+        waitForText(PeopleCommonStrings.NOT_SAVED)
+        restoration.emulateSaveAndRestore()
+        waitForTag("profile-name")
+        onNodeWithTag("profile-about-me").assert(hasText("Platform engineer."))
+        onNodeWithTag("profile-save-status").assert(hasText(PeopleCommonStrings.NOT_SAVED))
+
+        // An edit whose answer comes after Profile was left: one toast says it was not saved.
+        val slow = CompletableDeferred<Unit>()
+        kv.slowFailure = slow
+        onNodeWithTag("profile-about-me").performScrollTo().typeText("Platform engineer, SRE.")
+        onNodeWithContentDescription(backToPeople).performClick()
+        waitForTag("people-home")
+        runOnIdle { assertEquals(emptyList(), toasts.toList()) }
+        slow.complete(Unit)
+        waitUntil(timeoutMillis = 20_000) { runOnIdle { toasts.isNotEmpty() } }
+        runOnIdle { assertEquals(listOf(PeopleCommonStrings.NOT_SAVED), toasts.toList()) }
+
+        // Opened again, the text is still there and goes with the next edit once the records take it.
+        onNodeWithTag("profile-button").performClick()
+        waitForTag("profile-name")
+        onNodeWithTag("profile-about-me").assert(hasText("Platform engineer, SRE."))
+        kv.failWrites = false
+        onNodeWithTag("profile-contact").performScrollTo().typeText("@jordan")
+        waitUntil(timeoutMillis = 20_000) { controller.state.value.profile.about == "Platform engineer, SRE." }
+        assertEquals("@jordan", controller.state.value.profile.contactNote)
+        runOnIdle { assertEquals(listOf<ShellPage>(PeoplePage.Profile), nav().pages) }
+    }
+
+    @Test
+    fun profileShowsNothingToEditUntilTheRecordsAreRead() = runComposeUiTest {
+        // A name stored by an earlier run.
+        val records = MemoryKeyValue()
+        controller(records).also { c ->
+            runBlocking {
+                c.updateContext(peopleContext())
+                check(c.updateProfile { it.copy(displayName = "Jordan Rivera") } == null)
+            }
+            c.close()
+        }
+        // This run's records are still being read when Profile shows (after the process was ended,
+        // say): no field to type over the empty profile with.
+        val kv = SlowKeyValue(records)
+        val controller = controller(kv)
+        scope.launch { controller.updateContext(peopleContext()) }
+        val nav = showApp(controller)
+        runOnIdle { nav().openPage(PeoplePage.Profile) }
+        waitForTag("profile-loading")
+        onNodeWithTag("profile-name").assertDoesNotExist()
+
+        kv.open.complete(Unit)
+        waitForTag("profile-name")
+        onNodeWithTag("profile-name").assert(hasText("Jordan Rivera"))
+        onNodeWithTag("profile-loading").assertDoesNotExist()
     }
 
     @Test

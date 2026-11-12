@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui.people
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -88,14 +89,22 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
     // People tab shows nothing meanwhile): a draft typed over the empty profile would replace the
     // stored one once they open.
     if (state.sessionFailed) {
-        PeopleSessionFailed(host)
+        PeopleSessionFailed(host, modifier)
         return
     }
-    if (state.availability == PeopleAvailability.Loading) return
+    if (state.availability == PeopleAvailability.Loading) {
+        Box(modifier.fillMaxSize().testTag("profile-loading"))
+        return
+    }
 
     val controller = host.controller
     val scroll = rememberScrollState()
-    val editor = remember(controller) { ProfileEditor(controller, state.profile, state.topics) }
+    // Kept in the host's memory, so an edit that was not saved is still here after the activity's
+    // re-creation or when Profile is opened again; it takes what the controller holds now unless it
+    // has such an edit.
+    val editor = remember(host, state.backend) {
+        host.profileEditor(state.backend) { ProfileEditor(controller, state.profile, state.topics) }.also { it.adopt(state.profile, state.topics) }
+    }
     // A change the user did not type (a delete clearing the device, another conference's topics)
     // replaces what the fields show, once every edit has reached the controller.
     LaunchedEffect(editor, state.profile, state.topics) { editor.adopt(state.profile, state.topics) }
@@ -122,10 +131,13 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
 
     // Edits are handed to the controller on the app's scope, so leaving the screen at once still
     // saves the last keystroke. An edit the controller could not keep stays in its field and the
-    // save status says so ([ProfileEditor.error]); once the screen has left, a toast says so. Every
-    // keystroke is handed over, in order (ProfileEditor.push), so none waits behind launchOnce.
+    // save status says so ([ProfileEditor.error]); once the screen has left, one toast says so.
+    // Every keystroke is handed over, in order (ProfileEditor.push), so none waits behind launchOnce.
     fun save() {
-        host.scope.launch { editor.push()?.let { m -> answer(m) {} } }
+        host.scope.launch {
+            val message = editor.push() ?: return@launch
+            if (!shown.value && editor.tellOnce()) host.showMessage(message)
+        }
     }
 
     fun edit(change: (ProfileDraft) -> ProfileDraft) {
@@ -345,7 +357,7 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
 
 /** The profile's free-text fields as the user typed them. */
 @Immutable
-private data class ProfileDraft(
+internal data class ProfileDraft(
     val displayName: String = "",
     val about: String = "",
     val interests: String = "",
@@ -375,7 +387,7 @@ private data class ProfileDraft(
  * and goes with the next push.
  */
 @Stable
-private class ProfileEditor(private val controller: PeopleController, profile: Profile, topics: ConferenceTopics) {
+internal class ProfileEditor(private val controller: PeopleController, profile: Profile, topics: ConferenceTopics) {
     var fields by mutableStateOf(ProfileDraft.of(profile))
     var topics by mutableStateOf(topics)
 
@@ -385,6 +397,17 @@ private class ProfileEditor(private val controller: PeopleController, profile: P
     private var sentFields = fields
     private var sentTopics = topics
     private val mutex = Mutex()
+
+    // Whether a toast has said that an edit was not saved since the last one that was.
+    @kotlin.concurrent.Volatile
+    private var told = false
+
+    /** True the first time it is asked after an edit was not saved, for the one toast that says so. */
+    fun tellOnce(): Boolean {
+        if (told) return false
+        told = true
+        return true
+    }
 
     /** Takes what the controller holds now, unless an edit has not reached it yet. */
     fun adopt(profile: Profile, topics: ConferenceTopics) {
@@ -412,6 +435,7 @@ private class ProfileEditor(private val controller: PeopleController, profile: P
             sentTopics = t
         }
         error = null
+        told = false
         null
     }
 
