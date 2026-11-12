@@ -2,6 +2,7 @@ package app.conferencecaddie
 
 import android.Manifest
 import android.app.ActivityManager
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
@@ -16,6 +17,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import app.conferencecaddie.FakeBleHardware.Companion.ad
+import app.conferencecaddie.shared.AndroidPermissions
 import app.conferencecaddie.shared.ble.AndroidBleRadio
 import app.conferencecaddie.shared.ble.BleAccess
 import app.conferencecaddie.shared.ble.BleGattAnswer
@@ -33,6 +35,7 @@ import app.conferencecaddie.shared.ble.BleStopReason
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -40,6 +43,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -66,6 +70,8 @@ class BleServiceLifecycleTest {
     private var savedGrace = 0L
     private lateinit var savedClock: () -> Long
     private var savedHook: ((Context) -> Unit)? = null
+    private lateinit var savedStartService: (Intent) -> Unit
+    private lateinit var savedPermissionGranted: (String) -> Boolean
     private var scenario: ActivityScenario<MainActivity>? = null
 
     private val nearRssi = -75
@@ -154,6 +160,8 @@ class BleServiceLifecycleTest {
         savedGrace = radio.restartGraceMillis
         savedClock = radio.clock
         savedHook = AndroidBleRadio.onSystemRestart
+        savedStartService = radio.startService
+        savedPermissionGranted = radio.permissionGranted
         radio.hardware = fake
     }
 
@@ -166,6 +174,8 @@ class BleServiceLifecycleTest {
         radio.restartGraceMillis = savedGrace
         radio.clock = savedClock
         AndroidBleRadio.onSystemRestart = savedHook
+        radio.startService = savedStartService
+        radio.permissionGranted = savedPermissionGranted
         scenario?.close()
         scenario = null
         // A tapped notification may have opened another MainActivity; none is left for the next test.
@@ -550,7 +560,221 @@ class BleServiceLifecycleTest {
         assertTrue(events.stopped.isEmpty())
     }
 
+    @Test
+    fun aStopDuringTheRestartGraceStopsTheRestoredSessionWithUser() {
+        // Nothing restores the session yet: the runtime is still opening the database.
+        AndroidBleRadio.onSystemRestart = {}
+        radio.restartGraceMillis = 10_000L
+        showApp()
+        context.startForegroundService(Intent(context, BleRadioService::class.java))
+        assertTrue(waitFor { serviceInForeground() && ongoing() != null })
+        // The person taps Stop in the notification of the restarted service.
+        ongoing()!!.actions.single().actionIntent.send()
+        assertTrue(waitFor { !serviceRunning() })
+        assertFalse(radio.running)
+
+        // The runtime restores its session: it stops at once with User, so the runtime turns
+        // Bluetooth proximity off and tells the server, as a Stop in a running service would.
+        val events = Events()
+        radio.start(config(), Source(payload(1)), events)
+        assertTrue(waitFor { events.stopped.isNotEmpty() })
+        assertEquals(listOf(BleStopReason.User), events.stopped.toList())
+        assertFalse(radio.running)
+        assertTrue("nothing was advertised", fake.advertised.isEmpty())
+        Thread.sleep(500)
+        assertFalse(serviceRunning())
+
+        // The Stop counts once: the next start runs.
+        val again = Events()
+        startRunning(Source(payload(2)), again)
+        assertTrue(again.stopped.isEmpty())
+    }
+
+    @Test
+    fun aStopWithNoServiceCountsForTheGraceOnly() {
+        showApp()
+        // A Stop from a notification left over in a process where no service runs.
+        val stop = Intent(context, BleRadioService::class.java).setAction(STOP_ACTION)
+        radio.restartGraceMillis = 10_000L
+        context.startService(stop)
+        Thread.sleep(1_000)
+        assertTrue(waitFor { !serviceRunning() })
+        val events = Events()
+        radio.start(config(), Source(payload(1)), events)
+        assertTrue(waitFor { events.stopped.isNotEmpty() })
+        assertEquals(listOf(BleStopReason.User), events.stopped.toList())
+
+        // Past the grace, a Stop that found nothing is forgotten.
+        radio.restartGraceMillis = 300L
+        context.startService(stop)
+        Thread.sleep(1_500)
+        assertTrue(waitFor { !serviceRunning() })
+        val later = Events()
+        startRunning(Source(payload(2)), later)
+        Thread.sleep(500)
+        assertTrue(later.stopped.isEmpty())
+        assertTrue(radio.running)
+    }
+
+    @Test
+    fun aStartRefusedInTheBackgroundWaitsForTheForeground() {
+        assumeTrue("Android 12 and newer refuse a start from the background", Build.VERSION.SDK_INT >= 31)
+        val refusals = AtomicInteger()
+        // What Android 12 and newer do when a cold start in the background (the nudge job) restores
+        // a session: refuse the foreground service.
+        radio.startService = {
+            refusals.incrementAndGet()
+            throw ForegroundServiceStartNotAllowedException("refused in the background (test)")
+        }
+        val events = Events()
+        radio.start(config(), Source(payload(1)), events)
+        assertTrue(waitFor { refusals.get() == 1 })
+        Thread.sleep(500)
+        assertTrue("a refusal in the background is not a stop", events.stopped.isEmpty())
+        assertTrue(radio.running)
+        assertFalse(serviceRunning())
+
+        // Still in the background: still waiting.
+        radio.resumeDeferred()
+        assertTrue(waitFor { refusals.get() == 2 })
+        assertTrue(events.stopped.isEmpty())
+
+        // An activity starts (CaddieApplication tells the radio): the service starts for the session.
+        radio.startService = savedStartService
+        showApp()
+        assertTrue(waitFor { fake.advertising != null && serviceInForeground() })
+        assertArrayEquals(payload(1), fake.advertising)
+        assertTrue(events.stopped.isEmpty())
+        assertEquals(2, refusals.get())
+    }
+
+    @Test
+    fun anotherStartFailureStillStopsWithSystem() {
+        radio.startService = { throw IllegalStateException("not a background refusal (test)") }
+        val events = Events()
+        radio.start(config(), Source(payload(1)), events)
+        assertTrue(waitFor { events.stopped.isNotEmpty() })
+        assertEquals(listOf(BleStopReason.System), events.stopped.toList())
+        assertFalse(radio.running)
+    }
+
+    @Test
+    fun startsAndStopsInQuickSuccessionNeverStopBeforeTheForeground() {
+        // A stop posted between the service's creation and its start command used to stop it before
+        // startForeground, which Android punishes by ending the app (and this test run with it).
+        showApp()
+        val events = Events()
+        repeat(8) { i ->
+            radio.start(config(), Source(payload(i)), events)
+            if (i > 0) Thread.sleep(i * 4L)
+            radio.stop()
+        }
+        assertTrue(waitFor { !serviceRunning() })
+        assertTrue(events.stopped.isEmpty())
+        startRunning(Source(payload(20)), events)
+        assertTrue(events.stopped.isEmpty())
+    }
+
+    @Test
+    fun swipingTheAppFromRecentsLeavesTheServiceRunning() {
+        // In the app's own task, as the launcher starts it, so removing the task is a swipe.
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val activity = instrumentation.startActivitySync(launch)
+        val events = Events()
+        val source = Source(payload(1))
+        radio.start(config(), source, events)
+        assertTrue(waitFor { fake.advertising != null && serviceInForeground() })
+        context.getSystemService(ActivityManager::class.java).appTasks.forEach { it.finishAndRemoveTask() }
+        assertTrue(waitFor { activity.isDestroyed })
+        Thread.sleep(2_000)
+        assertTrue(serviceInForeground())
+        assertTrue(radio.running)
+        assertArrayEquals(payload(1), fake.advertising)
+        assertNotNull(fake.scanListener)
+        assertNotNull(ongoing())
+        assertTrue(events.stopped.isEmpty())
+    }
+
+    @Test
+    fun aRefusedRefreshIsTriedOnceMore() {
+        val source = Source(payload(1))
+        val events = Events()
+        startRunning(source, events)
+
+        // The stack refuses the new sets once: a second later they are tried again, and run.
+        fake.advertiseStatus = BleHardwareStatus.Failed
+        source.payload = payload(2)
+        val before = fake.advertiseAttempts
+        radio.refresh()
+        assertTrue(waitFor { fake.advertiseAttempts > before })
+        fake.advertiseStatus = BleHardwareStatus.Ok
+        assertTrue(waitFor { fake.advertising?.contentEquals(payload(2)) == true })
+        assertTrue(events.stopped.isEmpty())
+        assertTrue(radio.running)
+
+        // A set the controller gives up on after a refresh accepted it is tried again too.
+        source.payload = payload(3)
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(payload(3)) == true })
+        onMain { fake.onAdvertiseFailed!!() }
+        assertTrue(waitFor { fake.advertised.count { it.contentEquals(payload(3)) } == 2 })
+        assertTrue(events.stopped.isEmpty())
+
+        // Refused again on the retry: the session ends as before.
+        fake.advertiseStatus = BleHardwareStatus.Failed
+        source.payload = payload(4)
+        val attempts = fake.advertiseAttempts
+        radio.refresh()
+        assertTrue(waitFor { events.stopped.isNotEmpty() })
+        assertEquals(listOf(BleStopReason.AdvertiseFailed), events.stopped.toList())
+        assertEquals(attempts + 2, fake.advertiseAttempts)
+        assertTrue(waitFor { !serviceRunning() })
+    }
+
+    @Test
+    fun askingWithNoAnswerFromTheSystemIsNotAsking() {
+        val prefs = context.getSharedPreferences("caddie_permissions", Context.MODE_PRIVATE)
+        val saved = prefs.all.filterKeys { it == "ble_asked" || it == "location_asked" }
+        prefs.edit().remove("ble_asked").remove("location_asked").commit()
+        radio.permissionGranted = { false }
+        // A host attached and detached again leaves none attached, as when no activity exists.
+        val gone = host(rationale = false) {}
+        AndroidPermissions.attach(gone)
+        AndroidPermissions.detach(gone, finishing = true)
+        val dismissed = host(rationale = false) { AndroidPermissions.deliver(emptyMap()) }
+        val refused = host(rationale = false) { asked -> AndroidPermissions.deliver(asked.associateWith { false }) }
+        try {
+            assertEquals(BleAccess.NotAsked, radio.access())
+            // No activity: nothing was shown, so nothing was asked.
+            assertEquals(BleAccess.NotAsked, runBlocking { radio.requestAccess() })
+            // An activity now says no rationale is due, as Android says of a permission never
+            // asked for: the state is still "not asked", not "refused for good".
+            AndroidPermissions.attach(dismissed)
+            assertEquals(BleAccess.NotAsked, radio.access())
+            // A prompt dismissed without a choice answers nothing: still not asked.
+            assertEquals(BleAccess.NotAsked, runBlocking { radio.requestAccess() })
+            // A real answer counts: refused with no rationale due is refused for good.
+            AndroidPermissions.attach(refused)
+            assertEquals(BleAccess.Blocked, runBlocking { radio.requestAccess() })
+        } finally {
+            AndroidPermissions.detach(dismissed, finishing = false)
+            AndroidPermissions.detach(refused, finishing = false)
+            val editor = prefs.edit().remove("ble_asked").remove("location_asked")
+            saved.forEach { (k, v) -> editor.putBoolean(k, v as Boolean) }
+            editor.commit()
+        }
+    }
+
+    /** A stand-in for the activity's permission host. */
+    private fun host(rationale: Boolean, onLaunch: (List<String>) -> Unit) = object : AndroidPermissions.Host {
+        override fun launch(permissions: Array<String>) = onLaunch(permissions.toList())
+        override fun shouldShowRationale(permission: String) = rationale
+    }
+
     private companion object {
         const val ONGOING_ID = 4101
+
+        /** BleRadioService.ACTION_STOP, internal to the shared module. */
+        const val STOP_ACTION = "app.conferencecaddie.ble.STOP"
     }
 }

@@ -93,17 +93,17 @@ object IosSelfTest {
     /**
      * What Core Bluetooth does in this process. The app's radio ([IosBleRadio.shared]) treats the
      * simulator as unsupported and never creates a manager there; this check also drives a radio
-     * that creates its managers anyway, with the restore identifiers (which Core Bluetooth accepts
-     * only from an app that declares the Bluetooth background modes), so the line records what the
-     * simulator's Core Bluetooth really reports, and that asking, starting and stopping neither
-     * hang nor crash. On a device it reports the device's Bluetooth instead; run it there only
-     * while the app's own radio is off, since both would use the same restore identifiers.
+     * that creates its managers anyway, so the line records what the simulator's Core Bluetooth
+     * really reports, and that asking, starting and stopping neither hang nor crash. The probe never
+     * asks for state restoration: two managers with the same restore identifier in one process
+     * misuse the API, and the app's own radio may hold them. On a device it reports the device's
+     * Bluetooth instead.
      */
     suspend fun bleRadio(): String {
         val app = IosBleRadio.shared
         val failures = mutableListOf<String>()
         if (runningInSimulator() && (app.supported || app.state() != BleRadioState.Unsupported)) failures += "the app's radio is not unsupported in the simulator"
-        val probe = IosBleRadio(simulator = false, restoration = true)
+        val probe = IosBleRadio(simulator = false, restoration = false)
         val before = probe.access()
         val after = withTimeoutOrNull(10.seconds) { probe.requestAccess() } ?: return "failed: requestAccess did not return within 10 s (access was $before)"
         val state = probe.state()

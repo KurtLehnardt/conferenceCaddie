@@ -41,7 +41,14 @@ import java.util.UUID
  * **Stopping.** The service stops for good at the session's end ([BleStopReason.System]), when
  * Bluetooth is switched off, when the Stop action is tapped, when advertising fails or a permission
  * is missing, and when the runtime calls [AndroidBleRadio.stop]; every stop but the last is reported
- * through [BleRadioEvents.onStopped]. Swiping the app from Recents does not stop it.
+ * through [BleRadioEvents.onStopped]. Swiping the app from Recents does not stop it. A failure to
+ * restart the advertising sets at a window change is tried once more a second later
+ * ([ADVERTISE_RETRY_MS]) before it ends the session, because the stack refuses a set now and then
+ * while it is still taking the previous one down.
+ *
+ * **Starting.** A service started for the foreground calls startForeground before it attaches to the
+ * radio, so nothing the radio posts in between (a stop, a finished session) can stop it before
+ * Android has seen it in the foreground, which Android punishes by ending the app.
  *
  * **Restarts.** The service is sticky: tokens are derived, so a service the system restarted after
  * ending the process advertises current tokens, and the session's end still applies (the 11-minute
@@ -75,6 +82,7 @@ class BleRadioService : Service() {
     private val tick = Runnable { onTick() }
     private val pump = Runnable { interrogateNext() }
     private val graceStop = Runnable { if (active == null) stopQuietly() }
+    private val advertiseRetry = Runnable { retryAdvertising() }
 
     private val tickReceiver = object : BroadcastReceiver() {
         // The alarm manager holds a wake lock until this returns, so the steps it takes complete.
@@ -118,7 +126,8 @@ class BleRadioService : Service() {
         } else {
             registerReceiver(tickReceiver, filter)
         }
-        AndroidBleRadio.existing()?.let { attachTo(it) }
+        // Not attached to the radio yet: onStartCommand attaches once the service is in the
+        // foreground, so nothing the radio posts in between can stop it before startForeground.
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -130,15 +139,34 @@ class BleRadioService : Service() {
         }
         when (intent?.action) {
             ACTION_STOP -> {
-                // The notification's Stop action: only a running service shows it.
+                // The notification's Stop action.
                 val s = active
-                if (s != null) finish(s, BleStopReason.User) else stopQuietly()
+                if (s != null) {
+                    finish(s, BleStopReason.User)
+                } else {
+                    // No session here: the grace after a system restart, or a notification left
+                    // over in a new process. The Stop still counts: the radio stops the session the
+                    // runtime restores. When nothing has created the people features yet, the hook
+                    // creates them, so the runtime restores the session and hears of the Stop.
+                    if (AndroidBleRadio.existing() == null) AndroidBleRadio.onSystemRestart?.invoke(applicationContext)
+                    AndroidBleRadio.existing()?.userStopWithoutSession()
+                    teardown()
+                    // Only when nothing started the service after this Stop: a start for the
+                    // foreground already on its way must reach startForeground before the service
+                    // stops, or Android ends the app. That start then finds no session and stops.
+                    if (stopSelfResult(startId)) {
+                        leaving = true
+                        radio?.detach(this)
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    }
+                }
                 return START_NOT_STICKY
             }
             ACTION_START -> {
-                val r = AndroidBleRadio.existing()?.also { attachTo(it) }
-                // A start for the foreground must call startForeground whatever happens next.
+                // A start for the foreground must call startForeground whatever happens next, and
+                // before the service attaches to the radio (see onCreate).
                 val refused = enterForeground()
+                val r = AndroidBleRadio.existing()?.also { attachTo(it) }
                 val s = r?.session
                 when {
                     refused != null -> {
@@ -153,15 +181,21 @@ class BleRadioService : Service() {
                 // No intent: the system restarted the service after ending the process. (An intent
                 // without an action, which nothing in the app sends, is taken the same way.)
                 if (active != null) return START_STICKY
-                // The hook creates the process's people features, or finds them when they exist.
-                AndroidBleRadio.onSystemRestart?.invoke(applicationContext)
-                val r = AndroidBleRadio.existing()?.also { attachTo(it) }
+                // In the foreground first: the hook can take a while, and a service restarted for the
+                // foreground must call startForeground in time.
+                val icon = AndroidBleRadio.existing()?.notificationIcon
                 if (enterForeground() != null) {
                     // Android 12 and newer may refuse a foreground service to an app in the
-                    // background; the runtime's start then fails the same way and hears of it.
+                    // background. The session's record stays, and the app restores it when it opens.
                     stopQuietly()
                     return START_NOT_STICKY
                 }
+                // The hook creates the process's people features, or finds them when they exist.
+                AndroidBleRadio.onSystemRestart?.invoke(applicationContext)
+                val r = AndroidBleRadio.existing()?.also { attachTo(it) }
+                // The notification went up before the radio existed, with the application's icon:
+                // shown again with the radio's monochrome one.
+                if (r != null && r.notificationIcon != icon) enterForeground()
                 val s = r?.session
                 if (s != null) {
                     apply(s)
@@ -201,9 +235,9 @@ class BleRadioService : Service() {
         r.attach(this)
     }
 
-    /** Starts the foreground state; returns why it was refused, or null. */
+    /** Starts the foreground state (or shows its notification again); returns why it was refused, or null. */
     private fun enterForeground(): BleStopReason? {
-        val icon = radio?.notificationIcon ?: applicationInfo.icon
+        val icon = (radio ?: AndroidBleRadio.existing())?.notificationIcon ?: applicationInfo.icon
         val notification = BleRadioNotification.build(this, icon)
         return try {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -290,7 +324,7 @@ class BleRadioService : Service() {
             arm()
             return
         }
-        if (advertise(s)) arm()
+        if (advertise(s, mayRetry = true)) arm()
     }
 
     /** [AndroidBleRadio.stop]: ends everything without telling the runtime, which asked for it. */
@@ -303,11 +337,15 @@ class BleRadioService : Service() {
 
     /**
      * (Re)starts both advertising sets with the payload of now, which also gives them a new address.
-     * Returns false when the session has stopped because of it.
+     * Returns false when the session has stopped because of it. With [mayRetry] (a refresh, not the
+     * session's first start), a refusal by the stack is tried once more after [ADVERTISE_RETRY_MS]
+     * before it ends the session.
      */
-    private fun advertise(s: AndroidBleRadio.Session): Boolean {
+    private fun advertise(s: AndroidBleRadio.Session, mayRetry: Boolean = false): Boolean {
         val hw = hardware ?: return false
         val r = radio ?: return false
+        // This attempt replaces any retry still waiting.
+        main.removeCallbacks(advertiseRetry)
         advertisedWindow = BleProtocol.windowAtMillis(r.clock())
         val payload = payloadNow(s)
         if (payload == null) {
@@ -319,19 +357,43 @@ class BleRadioService : Service() {
         }
         advertisedPayload = payload
         val status = hw.startAdvertising(UUID.fromString(s.config.serviceUuid), payload) {
-            active?.takeIf { it === s }?.let { finish(it, BleStopReason.AdvertiseFailed) }
+            if (active !== s || leaving) return@startAdvertising
+            if (mayRetry) advertiseAgainLater() else finish(s, BleStopReason.AdvertiseFailed)
         }
         val reason = when (status) {
             BleHardwareStatus.Ok -> null
             BleHardwareStatus.NoPermission -> BleStopReason.PermissionLost
             BleHardwareStatus.Off -> BleStopReason.BluetoothOff
-            BleHardwareStatus.Failed -> BleStopReason.AdvertiseFailed
+            BleHardwareStatus.Failed -> if (mayRetry) {
+                advertiseAgainLater()
+                return true
+            } else {
+                BleStopReason.AdvertiseFailed
+            }
         }
         if (reason != null) {
             finish(s, reason)
             return false
         }
         return true
+    }
+
+    /**
+     * The stack refused to restart the sets at a refresh: nothing is advertised for a moment (the
+     * scan and the GATT server go on), and the sets are tried once more after [ADVERTISE_RETRY_MS].
+     */
+    private fun advertiseAgainLater() {
+        hardware?.stopAdvertising()
+        advertisedPayload = null
+        main.removeCallbacks(advertiseRetry)
+        main.postDelayed(advertiseRetry, ADVERTISE_RETRY_MS)
+    }
+
+    /** The one retry after a refused refresh: a second refusal ends the session, as at the start. */
+    private fun retryAdvertising() {
+        val s = active ?: return
+        if (leaving || pastDeadline(s)) return
+        if (advertise(s, mayRetry = false)) arm()
     }
 
     /** The session's payload now, or null; a failing key store must not take the service down. */
@@ -451,6 +513,7 @@ class BleRadioService : Service() {
         main.removeCallbacks(tick)
         main.removeCallbacks(pump)
         main.removeCallbacks(graceStop)
+        main.removeCallbacks(advertiseRetry)
         alarms.cancel(tickAlarm)
         hardware?.let { hw ->
             hw.cancelInterrogation()
@@ -483,5 +546,8 @@ class BleRadioService : Service() {
         private const val INTERROGATION_TIMEOUT_MS = 5_000L
 
         private const val DEFAULT_RESTART_GRACE_MS = 30_000L
+
+        /** A refresh the stack refused is tried once more after this long. */
+        private const val ADVERTISE_RETRY_MS = 1_000L
     }
 }

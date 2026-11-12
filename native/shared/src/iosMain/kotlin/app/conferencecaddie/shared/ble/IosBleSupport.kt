@@ -256,3 +256,54 @@ internal class GattReads<P>(
         private const val MINUTE_MS = 60_000L
     }
 }
+
+/**
+ * Discoveries that arrive after a relaunch for Bluetooth, before the common runtime has started the
+ * radio (the very discovery iOS relaunched the app for, typically): kept, at most [cap] of them, so
+ * the radio can take them up once it runs instead of losing them. One per phone (by its Core
+ * Bluetooth identifier), the latest; when full, the oldest phone makes room. Used on the radio's
+ * queue only.
+ */
+internal class HeldDiscoveries<T>(private val cap: Int = MAX_HELD_DISCOVERIES) {
+    private val held = LinkedHashMap<String, T>()
+
+    /** The number held. */
+    val size: Int get() = held.size
+
+    /** Holds [item], heard from the phone [id], in place of anything held for it before. */
+    fun add(id: String, item: T) {
+        held.remove(id)
+        if (held.size >= cap) held.remove(held.keys.first())
+        held[id] = item
+    }
+
+    /** Everything held, oldest first, and holds nothing afterwards. */
+    fun drain(): List<T> {
+        val all = held.values.toList()
+        held.clear()
+        return all
+    }
+
+    /** Drops everything held (the radio stopped, or the restoration's grace ended). */
+    fun clear() = held.clear()
+}
+
+/** Discoveries held after a relaunch, at most. */
+internal const val MAX_HELD_DISCOVERIES = 16
+
+/**
+ * How long after [now] the radio's next tick is due (all in epoch milliseconds): at most
+ * [scanRestartMillis] (the scan restarts that often), at the session's end [untilEpochMillis], and
+ * just after the next token window starts ([windowMarginMillis] late, so the tick sees the new
+ * window), never sooner than [minMillis].
+ */
+internal fun tickDelayMillis(
+    now: Long,
+    untilEpochMillis: Long,
+    scanRestartMillis: Long,
+    windowMarginMillis: Long,
+    minMillis: Long,
+): Long {
+    val nextWindow = BleProtocol.windowStartMillis(BleProtocol.windowAtMillis(now) + 1)
+    return minOf(scanRestartMillis, untilEpochMillis - now, nextWindow - now + windowMarginMillis).coerceAtLeast(minMillis)
+}
