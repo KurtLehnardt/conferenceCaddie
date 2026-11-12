@@ -20,7 +20,14 @@
 #   2. Build the web app in Worker mode (npm --prefix web run build:worker: base "/", same-origin
 #      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
 #      wrangler.toml, so the app ships with the Worker.
-#   3. npx wrangler deploy from worker/ (the wrangler version pinned in worker/package.json).
+#   3. GET /accounts/{account}/workers/scripts/{name}/secrets, with the name from worker/wrangler.toml,
+#      and refuse to deploy while ADMIN_SIG_MIN or ADMIN_ORIGIN is a secret of the Worker (DECISIONS.md,
+#      "Admin signature v2", step d). The check reads the secrets' names only; Cloudflare does not
+#      return their values, and the script prints only which of the two names it found. A 404 with
+#      Cloudflare's error code 10007 means the Worker does not exist yet (a first deploy) and passes.
+#      Any other answer (a 403, a 5xx, no answer, a body that cannot be read) refuses to deploy, so a
+#      check that could not run never passes.
+#   4. npx wrangler deploy from worker/ (the wrangler version pinned in worker/package.json).
 #      Its output goes to a temporary file that is deleted on exit; only the URL is printed.
 #
 # Output is the subdomain name and the app URL (which is also the API's base) only. On a failure
@@ -77,9 +84,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 # cf_api METHOD PATH [JSON BODY] writes the response body to $WORK/resp.json and prints the HTTP
 # status. The Authorization header is fed to curl as a config line on standard input; printf is a
-# shell builtin, so the token never appears in any process's arguments.
+# shell builtin, so the token never appears in any process's arguments. The previous response is
+# removed first, so an answer with no body is never read as the one before it.
 cf_api() {
   local method="$1" path="$2" body="${3:-}"
+  rm -f "$WORK/resp.json"
   local args=(-sS -K - -X "$method" -o "$WORK/resp.json" -w '%{http_code}' --max-time 30)
   if [ -n "$body" ]; then
     args+=(-H 'Content-Type: application/json' --data "$body")
@@ -105,6 +114,11 @@ json_field() {
 # Cloudflare's error codes and messages, which never contain the token.
 api_errors() {
   json_field '(r.errors || []).map((e) => `${e.code}: ${e.message}`).join("; ") || "no error details"'
+}
+
+# Cloudflare's numeric error codes alone, without the messages.
+api_codes() {
+  json_field '(Array.isArray(r.errors) ? r.errors : []).map((e) => e && e.code).filter((c) => Number.isInteger(c)).join(", ") || "none"'
 }
 
 random_suffix() {
@@ -195,8 +209,6 @@ if [ ! -f "$WEB_DIR/dist-worker/index.html" ] || [ ! -f "$WEB_DIR/dist-worker/_h
 fi
 echo "Built the web app into web/dist-worker."
 
-# 3. Deploy with the wrangler pinned in worker/package.json. Its output can list bindings and
-# variables, so it is kept in a temporary file and only the URL is printed.
 cd "$WORKER_DIR"
 if [ ! -d node_modules ]; then
   if ! npm ci --no-audit --no-fund >"$WORK/npm.log" 2>&1; then
@@ -205,6 +217,53 @@ if [ ! -d node_modules ]; then
     exit 1
   fi
 fi
+
+# 3. Refuse to deploy while ADMIN_SIG_MIN or ADMIN_ORIGIN is a secret of the Worker. Security
+# warning: a secret survives every deploy and the repository does not show it, so a leftover
+# ADMIN_SIG_MIN secret of "1" would override the source default ("2" since step d) and keep the v1
+# admin signature, and its replay window, open; a leftover ADMIN_ORIGIN secret could list another
+# deployment's origin. Both settings belong in [vars] of worker/wrangler.toml, committed. Only the
+# names are read: Cloudflare returns each secret's name and type, never its value, and the script
+# prints only which of the two names it found. A check that cannot run refuses to deploy.
+# The name goes into the request's path, so it is checked like the subdomain above.
+worker_name="$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' wrangler.toml | head -n 1)"
+worker_name_re='^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+if ! [[ "$worker_name" =~ $worker_name_re ]]; then
+  echo "Refusing to deploy: could not read the Worker's name from worker/wrangler.toml, so its secrets cannot be checked." >&2
+  exit 1
+fi
+status="$(cf_api GET "/workers/scripts/$worker_name/secrets")"
+if [ "$status" = "200" ]; then
+  # "none", the matched names separated by spaces, or empty when the body is not a successful list
+  # of named secrets.
+  found="$(json_field 'r.success === true && Array.isArray(r.result) && r.result.every((s) => s && typeof s.name === "string") ? (r.result.map((s) => s.name).filter((n, i, all) => (n === "ADMIN_SIG_MIN" || n === "ADMIN_ORIGIN") && all.indexOf(n) === i).sort().join(" ") || "none") : ""')"
+  if [ -z "$found" ]; then
+    echo "Refusing to deploy: the list of the Worker's secrets could not be read (HTTP 200, Cloudflare error codes: $(api_codes)), so the check that neither ADMIN_SIG_MIN nor ADMIN_ORIGIN is a secret did not run. Run this script again." >&2
+    exit 1
+  fi
+  if [ "$found" != "none" ]; then
+    for name in $found; do
+      echo "Refusing to deploy: $name is set as a secret on the Worker $worker_name." >&2
+    done
+    echo "A secret survives every deploy and overrides what the source and worker/wrangler.toml say, so a leftover ADMIN_SIG_MIN of \"1\" would keep the v1 admin signature and its replay window open, and a leftover ADMIN_ORIGIN could accept requests signed for another deployment." >&2
+    for name in $found; do
+      echo "Remove it with: cd worker && npx wrangler secret delete $name" >&2
+    done
+    echo "Then, if the setting is still needed, commit its value in [vars] of worker/wrangler.toml (worker/README.md, Signature v2), and run this script again." >&2
+    exit 1
+  fi
+elif [ "$status" = "404" ] && [[ ", $(api_codes), " == *", 10007, "* ]]; then
+  echo "Note: the Worker $worker_name does not exist yet (a first deploy), so it has no secrets to check." >&2
+else
+  if [ "$status" = "000" ]; then
+    echo "Could not reach api.cloudflare.com to list the Worker's secrets." >&2
+  fi
+  echo "Refusing to deploy: listing the Worker's secrets by name failed (HTTP $status, Cloudflare error codes: $(api_codes)), so the check that neither ADMIN_SIG_MIN nor ADMIN_ORIGIN is a secret did not run. Run this script again; if it keeps failing, give the token the account permission \"Workers Scripts: Edit\" (which includes reading the names of a Worker's secrets)." >&2
+  exit 1
+fi
+
+# 4. Deploy with the wrangler pinned in worker/package.json. Its output can list bindings and
+# variables, so it is kept in a temporary file and only the URL is printed.
 
 # redact_tail FILE prints the last lines of FILE with the token and account id values replaced.
 redact_tail() {
@@ -233,7 +292,6 @@ if ! npx --yes wrangler deploy </dev/null >"$WORK/deploy.log" 2>&1; then
   exit 1
 fi
 
-worker_name="$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' wrangler.toml | head -n 1)"
 url="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' "$WORK/deploy.log" | head -n 1 || true)"
 if [ -z "$url" ] && [ -n "$subdomain" ]; then
   url="https://${worker_name:-conference-caddie}.$subdomain.workers.dev"
