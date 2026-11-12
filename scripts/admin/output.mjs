@@ -11,9 +11,9 @@
 
 // U+0000-U+0008 and U+000A-U+001F (C0 but tab), U+007F (DEL), U+0080-U+009F (C1), U+061C (Arabic
 // letter mark), U+200E and U+200F (LRM, RLM), U+202A-U+202E (embeddings and overrides), U+2066-U+2069
-// (isolates).
-const HUMAN_UNSAFE_RE = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F؜‎‏‪-‮⁦-⁩]/g;
-const JSON_UNSAFE_RE = /[\u007F-\u009F؜‎‏‪-‮⁦-⁩]/g;
+// (isolates). Written as escapes, so the source holds no invisible character.
+const HUMAN_UNSAFE_RE = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const JSON_UNSAFE_RE = /[\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
 // Human text: each control character shown as \u{XX}.
 export function escapeControls(text) {

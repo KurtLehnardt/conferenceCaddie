@@ -972,7 +972,8 @@ describe('SEC terminal output: control characters in user text are escaped', () 
           assert.match(r.stdout, /\\u001b\]52;c;aGk=\\u0007/);
           assert.match(r.stdout, /\\u202e/);
           assert.match(r.stdout, /\\u009b/);
-          assert.ok(!r.stdout.includes('\\n"') || true);
+          assert.match(r.stdout, /\\nnext/, 'the newline as a JSON escape');
+          assert.equal(r.stdout.trimEnd().split('\n').length, 1, 'one JSON line');
         } else {
           assert.match(r.stdout, /Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} \\u\{1B\}\[2J \\u\{202E\}evil\\u\{202C\} \\u\{9B\}31m\\u\{A\}next/);
           assert.ok(!/\nnext/.test(r.stdout), 'a newline in a value does not add a line');

@@ -146,6 +146,8 @@ function stubWorker() {
     }
     if (path === '/admin/stats' && event === null) {
       if (method !== 'GET') return [405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' }];
+      // Any query key is a 400, so a misspelt event= never answers the totals instead.
+      if (url.search !== '') return [400, { error: `Unknown parameter: ${[...sp.keys()][0] ?? ''}` }];
       return [200, state.account];
     }
     if (!/^[a-z0-9][a-z0-9-]{0,119}$/.test(event ?? '')) return [400, { error: 'event must be a conference slug' }];
@@ -742,22 +744,30 @@ describe('ATT-8, ATT-9 block and unblock', () => {
     assert.match(none.stderr, /has no operator block at testconf-2099/);
     const dryNone = await invoke(['attendees', 'unblock', '--event', EVENT, p.ref]);
     assert.match(dryNone.stdout, /has no operator block/);
-    // The four answers: no_operator_block after a lost attempt is "already unblocked" (exit 0);
-    // not_found stays exit 4 even on a retry; found:true is an unblock; found:false removed a
-    // stale report of a deleted profile.
+    // The four answers: after a lost attempt any 404 is "already unblocked" (exit 0), whether
+    // no_operator_block (the block went) or not_found (a deleted profile's stale report went);
+    // found:true is an unblock; found:false removed a stale report of a deleted profile.
     p.reporters.push({ id: 'operator', reason: 'operator' });
     p.hidden = true;
     stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
     const lost = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, p.ref], p.ref));
     assert.equal(lost.code, 0, lost.stderr);
     assert.equal(admins(lost.requests).length, 2);
-    assert.match(lost.stdout, /the operator block of .*: already unblocked \(a retried request answered 404/);
+    assert.match(lost.stdout, /the operator block of .*: already unblocked or never there \(a retried request answered 404/);
     assert.equal(lost.audit.at(-1).result, 'ok');
     assert.equal(p.reporters.length, 0);
-    stub.forced.push({ status: 503, body: { error: 'lost' } });
+    // A deleted profile's stale report removed by a lost attempt: the retry answers not_found.
+    stub.state.staleOperatorReports.add('0123456789abcdef');
+    stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
+    const staleLost = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, '0123456789abcdef'], '0123456789abcdef'));
+    assert.equal(staleLost.code, 0, 'not_found after a lost attempt is "already unblocked"');
+    assert.equal(admins(staleLost.requests).length, 2);
+    assert.ok(!stub.state.staleOperatorReports.has('0123456789abcdef'), 'the lost attempt did the work');
+    assert.match(staleLost.stdout, /the operator block of 0123456789abcdef: already unblocked or never there/);
+    assert.deepEqual(staleLost.audit.at(-1).counts, { reports: 0 });
     const noPerson = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, '0123456789abcdef'], '0123456789abcdef'));
-    assert.equal(noPerson.code, 4, 'not_found on a retry is still exit 4');
-    assert.equal(admins(noPerson.requests).length, 2);
+    assert.equal(noPerson.code, 4, 'not_found on a first attempt is exit 4');
+    assert.equal(admins(noPerson.requests).length, 1);
     stub.state.staleOperatorReports.add('fedcba9876543210');
     const stale = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, 'fedcba9876543210'], 'fedcba9876543210'));
     assert.equal(stale.code, 0, stale.stderr);
@@ -1073,8 +1083,18 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     assert.equal(again.audit.at(-1).result, 'ok');
     // After the wipe the object refuses admin requests until an unretire; the message says so.
     const search = await invoke(['attendees', 'search', '--event', EVENT, '--name', 'x']);
-    assert.equal(search.code, 1);
+    assert.equal(search.code, 4);
     assert.match(search.stderr, /the Worker does not route testconf-2099 \(no conference, or it was removed; after a removal run conferences unretire --event testconf-2099 and then conferences refresh\)/);
+    // A write is answered the same (400 "conference is not available"): exit 4, the unretire
+    // hint, one request and no retry.
+    const hide = await invoke(confirmed(['moderation', 'hide', '--event', EVENT, 'profile:0123456789abcdef', '--reason', 'spam'], 'profile:0123456789abcdef'));
+    assert.equal(hide.code, 4);
+    assert.equal(admins(hide.requests).length, 1);
+    assert.match(hide.stderr, /^caddie-admin: POST \/admin\/moderation: the Worker does not route testconf-2099 \(no conference, or it was removed; after a removal run conferences unretire --event testconf-2099 and then conferences refresh\)\n$/);
+    assert.equal(hide.audit.at(-1).result, 'not_found');
+    const statsAfter = await invoke(['stats', 'counts', '--event', EVENT]);
+    assert.equal(statsAfter.code, 4);
+    assert.match(statsAfter.stderr, /run conferences unretire --event testconf-2099 and then conferences refresh/);
   });
 
   test('a removal that stopped between its steps exits 1 naming the step, is not retried blind, and leaves the local files alone', async () => {
@@ -1290,6 +1310,8 @@ describe('SEC terminal output: control characters in user text are escaped', () 
           assert.match(r.stdout, /\\u001b\]52;c;aGk=\\u0007/, 'C0 as JSON escapes');
           assert.match(r.stdout, /\\u202e/);
           assert.match(r.stdout, /\\u009b/);
+          assert.match(r.stdout, /\\nnext/, 'the newline as a JSON escape');
+          assert.equal(r.stdout.trimEnd().split('\n').length, 1, 'one JSON line');
         } else {
           assert.match(r.stdout, /Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} \\u\{1B\}\[2J \\u\{202E\}evil\\u\{202C\} \\u\{9B\}31m\\u\{A\}next/);
           assert.equal(r.stdout.trimEnd().split('\n').length, argv[1] === 'view' ? 4 : argv[1] === 'queue' ? 4 : 2, 'a newline in a value does not add a line');

@@ -32,7 +32,8 @@
 // http for localhost only; no path). Every admin request is signed with the token (X-Caddie-Admin,
 // scripts/lib/admin-sign.mjs), re-signed on each retry, and never follows a redirect. The Worker
 // answers 404 to a missing target and to a refused signature alike, and the CLI says so. A 404
-// after a retried delete, unhide or unblock reads as "already done" and exits 0 with a note.
+// after a retried delete, unhide or unblock reads as "already done" and exits 0 with a note. A
+// conference the Worker does not route (never added, or removed) exits 4 and names the unretire.
 // `conferences add` and `refresh` start the ingest workflow with `gh workflow run ingest.yml`;
 // `moderation purge-expired` and `moderation rules` exit 5 (the cron purges; the word list is
 // compiled into the Worker). When CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are both set,

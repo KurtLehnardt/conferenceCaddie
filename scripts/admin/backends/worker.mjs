@@ -16,9 +16,10 @@
 // - A 404 from the Worker means "not found" or "the signature was refused", and the Worker does not
 //   say which; every not-found message says so. After a retry of a delete or an unhide (an attempt
 //   whose answer was lost may have done the work), a 404 reads as "already done", and after a
-//   retried unblock a 404 no_operator_block reads as "already unblocked"; the command succeeds
-//   with a note. A removal run again is a success too (already_retired_at), and a removal that
-//   stopped between its steps (removal_incomplete) says which step and asks for another run.
+//   retried unblock any 404 reads as "already unblocked"; the command succeeds with a note. A
+//   removal run again is a success too (already_retired_at), and a removal that stopped between
+//   its steps (removal_incomplete) says which step and asks for another run. A conference the
+//   Worker does not route (400 "conference is not available") is exit 4 with the unretire hint.
 // - Query values stay inside the signer's charset: slugs, refs, integers, ISO instants in Z form
 //   and comma lists; free text travels base64url-encoded under q64. Flags that change what a
 //   handler does (unretire) travel in the JSON body, never in the query.
@@ -80,6 +81,13 @@ class WorkerNotFoundError extends NotFoundError {
   }
 }
 
+// A conference the Worker does not route (400 "conference is not available", or a stats read that
+// answers it): exit 4, with the repair after a removal.
+function unrouted(slug, where = null) {
+  const s = typeof slug === 'string' && SLUG_RE.test(slug) ? slug : null;
+  return new NotFoundError(`${where ? `${where}: ` : ''}the Worker does not route ${s ?? 'this conference'} (no conference, or it was removed; after a removal run conferences unretire --event ${s ?? '<slug>'} and then conferences refresh)`);
+}
+
 // The optional Cloudflare Access service token: both variables set, or nothing. Sent on admin
 // requests only; never printed, logged or audited.
 function accessHeaders(env) {
@@ -128,9 +136,10 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
   // ---- transport ----
 
   // One signed admin request. Resolves to { status, json, retried }; throws WorkerNotFoundError on
-  // 404, AdminError on any other failure. Network failures, 429 and 5xx are retried with a fresh
-  // signature; a 503 daily_limit and a redirect are not.
-  async function admin(method, path, body, { okStatuses = [] } = {}) {
+  // 404, NotFoundError on a conference the Worker does not route, AdminError on any other failure.
+  // Network failures, 429 and 5xx are retried with a fresh signature; a 503 daily_limit and a
+  // redirect are not.
+  async function admin(method, path, body) {
     const where = `${method} ${path.split('?')[0]}`;
     const payload = body === undefined ? undefined : JSON.stringify(body);
     let lastError = 'no attempt';
@@ -177,7 +186,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       } catch {
         json = {};
       }
-      if (res.ok || okStatuses.includes(res.status)) return { status: res.status, json: json && typeof json === 'object' ? json : {}, retried };
+      if (res.ok) return { status: res.status, json: json && typeof json === 'object' ? json : {}, retried };
       lastError = `${where}: ${describe(res.status, json)}`;
       lastStatus = res.status;
       lastJson = json;
@@ -199,10 +208,10 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         throw new AdminError(`${where}: removal incomplete at step ${step} (status ${res.status}; retired ${json.retired === true}, wiped ${json.wiped === true}${cause}); ${hint}`);
       }
       // A conference the Worker does not route: never added, or removed (its object refuses admin
-      // requests after a wipe until an unretire puts the directory row back).
+      // requests after a wipe until an unretire puts the directory row back). Exit 4, as every
+      // other absent conference.
       if (res.status === 400 && json?.error === 'conference is not available') {
-        const slug = /[?&]event=([a-z0-9-]+)/.exec(path)?.[1];
-        throw new AdminError(`${where}: the Worker does not route ${slug ?? 'this conference'} (no conference, or it was removed; after a removal run conferences unretire --event ${slug ?? '<slug>'} and then conferences refresh)`);
+        throw unrouted(/[?&]event=([a-z0-9-]+)/.exec(path)?.[1], where);
       }
       if (res.status === 404) throw new WorkerNotFoundError(where, { code: typeof json?.error === 'string' ? json.error : null, retried });
       if (res.status === 401) {
@@ -342,8 +351,16 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
 
   // The per-table counts of a conference, or null when the Worker does not route the slug.
   async function statsOf(event) {
-    const { status, json } = await admin('GET', `/admin/stats?${q({ event })}`, undefined, { okStatuses: [400] });
-    if (status === 400) return null;
+    try {
+      return await statsRaw(event);
+    } catch (err) {
+      if (err instanceof NotFoundError && !(err instanceof WorkerNotFoundError)) return null;
+      throw err;
+    }
+  }
+
+  async function statsRaw(event) {
+    const { json } = await admin('GET', `/admin/stats?${q({ event })}`);
     const counts = {};
     for (const key of STAT_KEYS) if (json[key] !== undefined) counts[key] = int(json[key]);
     const u = json.usage && typeof json.usage === 'object' ? json.usage : {};
@@ -439,11 +456,13 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       try {
         ({ json } = await admin('POST', `/admin/people/block?${q({ event })}`, { ref, action }));
       } catch (err) {
-        // The four unblock answers: no_operator_block is exit 4, or "already unblocked" when a
-        // retried attempt may have removed it; not_found (no person, no stale report) is exit 4.
-        if (options.unblock && isNotFound(err) && err.workerCode === 'no_operator_block') {
-          if (err.retried) return { counts: { reports: 0 }, note: 'already_unblocked', summary: `the operator block of ${ref}: already unblocked (a retried request answered 404; the first attempt may have succeeded)` };
-          throw new NotFoundError(`${ref} has no operator block at ${event}`);
+        // The unblock answers: after a retry any 404 is "already unblocked", exit 0, because the
+        // lost attempt may have removed the block (no_operator_block next) or a deleted profile's
+        // stale report (not_found next). On a first attempt no_operator_block and not_found
+        // (no person, no stale report) are exit 4.
+        if (options.unblock && isNotFound(err)) {
+          if (err.retried) return { counts: { reports: 0 }, note: 'already_unblocked', summary: `the operator block of ${ref}: already unblocked or never there (a retried request answered 404; the first attempt may have succeeded)` };
+          if (err.workerCode === 'no_operator_block') throw new NotFoundError(`${ref} has no operator block at ${event}`);
         }
         throw isNotFound(err) ? notFound(`profile ${ref} at ${event}`, err) : err;
       }
@@ -542,8 +561,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
 
     async purgeReports({ event, mode }) {
       if (mode === 'dry-run') {
-        const stats = await statsOf(event);
-        if (!stats) throw new NotFoundError(`the Worker does not route ${event} (no conference, or it was removed)`);
+        const stats = await statsRaw(event);
         return { counts: { reports: stats.counts.reports ?? 0 }, summary: `would ask the Worker to delete the reports of ${event} made before its end (${plural(stats.counts.reports ?? 0, 'report')} on file; the Worker refuses before the end)` };
       }
       const { json } = await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'purge' });
@@ -632,8 +650,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
 
     async counts({ event }) {
       if (event !== undefined) {
-        const stats = await statsOf(event);
-        if (!stats) throw new NotFoundError(`the Worker does not route ${event} (no conference, or it was removed)`);
+        const stats = await statsRaw(event);
         return { items: Object.entries(stats.counts).map(([table, n]) => ({ table, count: n })), counts: stats.counts, summary: `rows of ${event} per table` };
       }
       const { day, usage, holds } = await accountStats();
