@@ -33,13 +33,16 @@
 //   SMOKE_ADMIN_AUTH     signed or bearer: how the admin calls authenticate. signed builds the
 //                        X-Caddie-Admin header of scripts/lib/admin-sign.mjs for every admin call, with a
 //                        fresh nonce and timestamp on each attempt, and sends no Authorization header;
-//                        bearer sends Authorization: Bearer <token>, the scheme of a Worker that has not
-//                        deployed the signed admin routes yet. Default bearer in this release; it flips to
-//                        signed once the Worker change is deployed, and the bearer path is then removed.
+//                        bearer sends Authorization: Bearer <token>, the scheme of a local or old Worker
+//                        that does not have the signed admin routes (a current Worker answers it 404).
+//                        Default signed. No admin request follows a redirect: a 3xx is a FAIL.
 //                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
 //                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
-//                        Worker) and the checks that need them (meter1, the expired profile, the aged
-//                        presence, unav1) print SKIP instead of FAIL.
+//                        Worker); against a loopback API (localhost, *.localhost, 127.0.0.0/8, 0.0.0.0, [::1], IPv4-mapped [::ffff:7f..:..]) that FAILs with a hint to set
+//                        ADMIN_TEST_ROUTES=1 in worker/.dev.vars. SMOKE_TREAT_AS_REMOTE=1 (test-only)
+//                        makes a loopback API count as deployed. Against a deployed Worker the checks
+//                        that need the fixtures (meter1, the expired profile, the aged presence,
+//                        unav1) print SKIP instead of FAIL.
 //   SMOKE_CONFERENCE     the primary conference, default kubecon-cloudnativecon-north-america-2026.
 //   SMOKE_EXTRA          comma-separated extra conferences, default
 //                        mcp-dev-summit-nairobi-2026,pytorch-day-japan-2026.
@@ -54,14 +57,17 @@
 //                        localhost or 127.0.0.1, which is loaded from the seed) reads the committed
 //                        data/ snapshot. Check bun1 compares every searchable conference with its bundle.
 //   SMOKE_BUNDLE_BASE    the talk bundle base for SMOKE_TALKS=bundle, an https URL ending in "/" (or
-//                        http://localhost or http://127.0.0.1 for a local test). Default https://kurtlehnardt.github.io/conferenceCaddie/bundles/.
+//                        http://localhost or http://127.0.0.1 for a local test). Falls back to CADDIE_BUNDLE_BASE, then
+//                        https://kurtlehnardt.github.io/conferenceCaddie/bundles/. Check cap1 compares the Worker's (https) bundle_base with
+//                        SMOKE_CAPS_BUNDLE_BASE, else CADDIE_BUNDLE_BASE, else this when it is https, else the default.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
 //   SMOKE_BLE=1          run the Bluetooth resolution checks (ble2, ble3) against a remote API, Worker or
 //                        Cloud Run. They put test profiles with a specific match around, so they run by
-//                        default only against an API on this machine (the loopback hosts localhost,
-//                        127.0.0.1 and [::1]), never next to real attendees. ble1 is safe anywhere and
+//                        default only against a loopback API (localhost, *.localhost, 127.0.0.0/8,
+//                        0.0.0.0, [::1], IPv4-mapped [::ffff:7f..:..]; SMOKE_TREAT_AS_REMOTE=1 makes it
+//                        count as deployed), never next to real attendees. ble1 is safe anywhere and
 //                        runs whenever cap1 or cap3 read a capabilities document; cap3 runs against
 //                        every backend but the Worker, which cap1 checks instead.
 //   SMOKE_BLE_MODE       the ble.mode this backend is expected to serve: derived-v1, server-rotate or
@@ -101,6 +107,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
+import { DEFAULT_BUNDLE_BASE } from '../worker/src/capabilities.js';
+import { primaryOver, emptyWindowSkip } from './lib/smoke-primary-over.mjs';
+import { conferenceForWorker } from './lib/smoke-conference-doc.mjs';
+import { isLoopbackHost } from './lib/loopback-host.mjs';
+import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
@@ -148,7 +159,7 @@ const ADMIN_TOKEN = readAdminToken();
 
 // How the admin calls authenticate (SMOKE_ADMIN_AUTH above). The signed scheme needs a key of at
 // least 32 characters, which the Worker requires of ADMIN_TOKEN anyway.
-const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'bearer').toLowerCase();
+const ADMIN_AUTH = (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase();
 if (!['signed', 'bearer'].includes(ADMIN_AUTH)) {
   console.log('FAIL config: SMOKE_ADMIN_AUTH must be signed or bearer');
   process.exit(1);
@@ -190,7 +201,7 @@ const DIST_DIR = process.env.SMOKE_DIST || (WORKER_SERVES_APP ? 'web/dist-worker
 // Where the expected talks of a conference come from (SMOKE_TALKS above). A Worker on this machine
 // is loaded from the committed data/, not from the schedules the ingest published, so it is compared
 // with data/ by default.
-const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+const LOCAL_API = isLoopbackHost(new URL(API_BASE).hostname);
 const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER && !LOCAL_API ? 'bundle' : 'data')).toLowerCase();
 if (!['bundle', 'data'].includes(TALKS_FROM)) {
   console.log('FAIL config: SMOKE_TALKS must be bundle or data');
@@ -203,10 +214,19 @@ if (BLE_MODE_EXPECTED && !BLE_MODES.includes(BLE_MODE_EXPECTED)) {
   console.log(`FAIL config: SMOKE_BLE_MODE must be ${BLE_MODES.join(', ')}`);
   process.exit(1);
 }
-const BUNDLE_BASE = process.env.SMOKE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+// The base the bundles are read from: SMOKE_BUNDLE_BASE, then CADDIE_BUNDLE_BASE (the repository variable that
+// pages.yml reads), then the default. Check cap1 expects what the Worker advertises, which is always https:
+// SMOKE_CAPS_BUNDLE_BASE, then CADDIE_BUNDLE_BASE, then SMOKE_BUNDLE_BASE when it is https, then the default.
+// So a fork whose Worker sets its own TALKS_BUNDLE_BASE passes when the smoke is given the same base, and an
+// http loopback SMOKE_BUNDLE_BASE does not make cap1 fail.
+const BUNDLE_BASE_VAR = process.env.SMOKE_BUNDLE_BASE ? 'SMOKE_BUNDLE_BASE' : process.env.CADDIE_BUNDLE_BASE ? 'CADDIE_BUNDLE_BASE' : 'SMOKE_BUNDLE_BASE';
+const BUNDLE_BASE_CONFIGURED = process.env.SMOKE_BUNDLE_BASE || process.env.CADDIE_BUNDLE_BASE || '';
+const BUNDLE_BASE = BUNDLE_BASE_CONFIGURED || DEFAULT_BUNDLE_BASE;
+const CAPS_BASE_VAR = process.env.SMOKE_CAPS_BUNDLE_BASE ? 'SMOKE_CAPS_BUNDLE_BASE' : process.env.CADDIE_BUNDLE_BASE ? 'CADDIE_BUNDLE_BASE' : /^https:/.test(process.env.SMOKE_BUNDLE_BASE || '') ? 'SMOKE_BUNDLE_BASE' : null;
+const CAPS_BASE = (CAPS_BASE_VAR && process.env[CAPS_BASE_VAR]) || DEFAULT_BUNDLE_BASE;
 // https, or plain http to this machine for a local test.
 if (TALKS_FROM === 'bundle' && !/^https:\/\/[^\s?#]+\/$/.test(BUNDLE_BASE) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?\/$/.test(BUNDLE_BASE)) {
-  console.log('FAIL config: SMOKE_BUNDLE_BASE must be an https URL that ends in "/"');
+  console.log(`FAIL config: ${BUNDLE_BASE_VAR} must be an https URL that ends in "/"`);
   process.exit(1);
 }
 
@@ -300,6 +320,16 @@ function report(ok, name, detail = '') {
   if (!ok) failures++;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`);
 }
+// No credentialed request follows a redirect: one that carries a credential (the admin header, the device
+// header, an Elasticsearch ApiKey) would hand it to whatever host the Location names. A redirect is a
+// failure that names the status, and the retry loops rethrow it. 304 is not one.
+class RedirectError extends Error {}
+const isRedirect = (status) => [301, 302, 303, 307, 308].includes(status);
+async function failOnRedirect(res, what) {
+  if (!isRedirect(res.status)) return;
+  await res.body?.cancel();
+  throw new RedirectError(`${what} answered ${res.status}, a redirect; credentialed requests never follow redirects`);
+}
 function skip(name, why) {
   console.log(`SKIP ${name} (${why})`);
 }
@@ -362,8 +392,10 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: 'manual',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      await failOnRedirect(res, `${method} ${path.split('?')[0]} (${label || 'no label'})`);
       const text = await res.text();
       // A local server answers fast enough for the checks to outrun the per-address search limit
       // (60 per minute), so a 429 waits for its Retry-After and asks again. Only the rate-limit
@@ -408,6 +440,7 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       result = { status: res.status, json, headers: res.headers };
       break;
     } catch (err) {
+      if (err instanceof RedirectError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -466,8 +499,12 @@ async function admin(method, path, body) {
         method,
         headers,
         body: serialised,
+        redirect: 'manual',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      // A redirect is never followed: it would carry the admin credentials (and a signed body) to
+      // wherever the Location points. It is a failure, not a network error, so it is never retried.
+      await failOnRedirect(res, `${method} ${path.split('?')[0]} (admin)`);
       const text = await res.text();
       if (res.status >= 500 && attempt === 0) {
         retried++;
@@ -485,7 +522,7 @@ async function admin(method, path, body) {
       return { status: res.status, json, headers: res.headers };
     } catch (err) {
       // A request the signer refuses is a bug in this script, not a network failure: no retry.
-      if (err instanceof UsageError) throw err;
+      if (err instanceof UsageError || err instanceof RedirectError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -502,6 +539,19 @@ async function admin(method, path, body) {
 // GET /admin/stats answers 200 with the same credentials, the fixtures are gated; otherwise the
 // 404 is an auth or routing failure and the check fails as before.
 let fixturesGated = null;
+// Against a local Worker (localhost, 127.0.0.1, [::1]) a gated fixture is a configuration mistake of the
+// developer's .dev.vars, so it FAILs with a hint instead of a SKIP that hides it. A deployed Worker keeps
+// the SKIP. SMOKE_TREAT_AS_REMOTE=1 is test-only: it makes a loopback API count as deployed, so the
+// loopback stub of test/smoke-admin-sign.test.mjs can exercise the SKIP path.
+const API_IS_LOOPBACK = process.env.SMOKE_TREAT_AS_REMOTE !== '1' && LOCAL_API;
+if (IS_WORKER && !API_IS_LOOPBACK && !BUNDLE_BASE_CONFIGURED && !process.env.SMOKE_CAPS_BUNDLE_BASE) {
+  console.log('NOTE the default bundle base is used against a remote API: a Worker with its own TALKS_BUNDLE_BASE needs SMOKE_BUNDLE_BASE set to it (cap1 and the bundle checks compare against it)');
+}
+if (process.env.SMOKE_TREAT_AS_REMOTE === '1') console.log('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed');
+const FIXTURES_GATED_LOCAL_HINT = 'the Worker answers 404 to /admin/test/*: set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (or run npm --prefix worker run dev-vars, which adds it when absent)';
+function gatedFixtures() {
+  throw API_IS_LOOPBACK ? new Error(FIXTURES_GATED_LOCAL_HINT) : new SkipCheck(FIXTURES_GATED_WHY);
+}
 const FIXTURES_GATED_WHY = 'the Worker answers 404 to /admin/test/*: its fixtures are gated off; deploy it with ADMIN_TEST_ROUTES=1 to run this check';
 function noteFixtureAnswer(path, status) {
   if (!path.startsWith('/admin/test/') || fixturesGated !== null) return;
@@ -513,7 +563,7 @@ async function fixture(method, path, body) {
     const stats = await admin('GET', `/admin/stats?event=${encodeURIComponent(PRIMARY)}`);
     fixturesGated = stats.status === 200;
   }
-  if (r.status === 404 && fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+  if (r.status === 404 && fixturesGated) gatedFixtures();
   return r;
 }
 
@@ -536,6 +586,7 @@ async function agePresence(device, who) {
   }
   const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
     method: 'POST',
+    redirect: 'manual',
     headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
     body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${device.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -736,7 +787,7 @@ if (!IS_WORKER) {
     const v = validator('capabilities.v1')(capsDoc, { closed: true });
     if (!v.valid) problems.push(`schema: ${v.errors.slice(0, 3).map((e) => `${e.path} ${e.message}`).join('; ')}`);
     if (capsDoc.tier !== 'free') problems.push(`tier ${capsDoc.tier}`);
-    if (capsDoc.talks?.bundle_base !== 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/') problems.push(`bundle_base ${capsDoc.talks?.bundle_base}`);
+    if (capsDoc.talks?.bundle_base !== CAPS_BASE) problems.push(`bundle_base ${capsDoc.talks?.bundle_base}, the smoke expects ${CAPS_BASE} (${CAPS_BASE_VAR ? `from ${CAPS_BASE_VAR}` : 'the default'}; set SMOKE_CAPS_BUNDLE_BASE or CADDIE_BUNDLE_BASE to the Worker's TALKS_BUNDLE_BASE)`);
     if (!/public/.test(res.headers.get('cache-control') ?? '') || !/max-age=300/.test(res.headers.get('cache-control') ?? '')) problems.push(`Cache-Control ${res.headers.get('cache-control')}`);
     if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
     report(problems.length === 0, 'cap1: GET /api/capabilities serves a valid tier 2 document', problems.length ? problems.join('; ') : `closed-mode valid, ble.mode ${capsDoc.ble?.mode}, people.semantic ${capsDoc.people?.semantic}`);
@@ -876,7 +927,12 @@ if (!IS_WORKER) {
 } else {
   await check('adm1: the admin routes answer 404 without a valid token and send no CORS headers', async () => {
     const probe = async (label, headers) => {
-      const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      // Never follow a redirect with admin headers on it (see admin()); the probe fails naming the status.
+      if (isRedirect(res.status)) {
+        await res.body?.cancel();
+        return [`${label} gave ${res.status}, a redirect that was not followed`];
+      }
       const text = await res.text();
       otherResponses.push({ label: 'admin-probe', path: '/admin/stats', text, headersText: headerText(res.headers) });
       const bad = [];
@@ -1019,8 +1075,28 @@ await check('e1: include_events adds co-located events and showcases, and nothin
   report(problems.length === 0, 'e1: include_events adds co-located events and showcases, and nothing else', problems.length ? problems.join('; ') : `${shown.length} events in "${track}", ${off.json.total} results off and ${on.json.total} on`);
 });
 
+// Once the primary conference's last talk has ended, For you and Happening now (which the server filters
+// with end > now) have nothing to return for it, so the checks that need upcoming talks print SKIP
+// instead of failing on "no results" or passing vacuously.
+const PRIMARY_OVER_WHY = 'no talk of the primary conference is still to come (the server only suggests talks whose end is after now)';
+let primaryOverSkips = 0;
+function skipIfPrimaryOver(passed = '') {
+  let talks;
+  try {
+    talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+  } catch {
+    return; // the talks could not be loaded (a bundle that is down): run the check, do not couple it to Pages
+  }
+  if (primaryOver(talks, Date.now())) {
+    primaryOverSkips++;
+    throw new SkipCheck(`${passed}${PRIMARY_OVER_WHY}`);
+  }
+}
+
 await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
   const bad = await search({ query: 'kubernetes', filters: { include_events: 'yes' } });
+  if (bad.status !== 400) throw new Error(`include_events: "yes" gave ${bad.status}, not 400`);
+  skipIfPrimaryOver('the boolean check passed (include_events "yes" gave 400); the For-you part: ');
   const ambient = new Set(readNdjson(PRIMARY).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
   const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['kubernetes', 'ebpf'], interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
   if (recs.status !== 200) throw new Error(`recommendations status ${recs.status}`);
@@ -1120,13 +1196,18 @@ await check('n1: Happening now is available exactly when the conference has talk
 await check('n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', async () => {
   const slack = 2 * 60_000;
   const at = Date.now();
+  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
+  if (bad.status !== 400) throw new Error(`happening_now: "yes" gave ${bad.status}, not 400`);
+  skipIfPrimaryOver('the boolean check passed (happening_now "yes" gave 400); the window part: ');
   const r = await search({ query: '', size: 50, filters: { happening_now: true } });
   const all = await search({ query: '', size: 1 });
-  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
   if (r.status !== 200 || all.status !== 200) throw new Error(`status ${r.status} and ${all.status}`);
   const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
   const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
   const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
+  // An empty window makes the bound vacuous. Skip only when the data agrees that none is in the window:
+  // an empty answer where the data expects talks is the failure the check is for (total >= expected below).
+  if (emptyWindowSkip(r.json.total, expected)) throw new SkipCheck('the boolean check passed (400); no talk is in progress or starting within 60 minutes, so the window has nothing to check');
   const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
   report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
 });
@@ -1289,8 +1370,14 @@ await check('o: /api/schedule returns only that conference\'s talks, with no oth
 const stoplist = readFileSync(join(ROOT, 'config', 'topic-stoplist.txt'), 'utf8').split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
 const topicsBySlug = new Map();
 for (const slug of [PRIMARY, ...EXTRA]) {
-  const { status, json } = await api('GET', `/api/topics?event=${encodeURIComponent(slug)}&size=150`);
-  topicsBySlug.set(slug, status === 200 ? json.topics ?? [] : []);
+  try {
+    const { status, json } = await api('GET', `/api/topics?event=${encodeURIComponent(slug)}&size=150`);
+    topicsBySlug.set(slug, status === 200 ? json.topics ?? [] : []);
+  } catch (err) {
+    if (!(err instanceof RedirectError)) throw err;
+    report(false, `topics: ${slug} lists its topics`, err.message);
+    topicsBySlug.set(slug, []);
+  }
 }
 
 await check('t: the topic list has Kubernetes, eBPF, a two-word topic and no filler', async () => {
@@ -1394,10 +1481,14 @@ function extractPdfText(pdf) {
 // The deployed import key cannot write any index at all; scripts/create-es-keys.mjs checks that.
 async function indexCounts() {
   const res = await fetch(`${ES_URL}/_cat/indices?format=json&h=index,docs.count&expand_wildcards=open`, {
+    redirect: 'manual',
     headers: { Authorization: `ApiKey ${process.env.ELASTISEARCH_API_KEY}` },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`index listing gave ${res.status}`);
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new Error(`index listing gave ${res.status}`);
+  }
   const rows = await res.json();
   return new Map(rows.filter((r) => !r.index.startsWith('.') && !r.index.startsWith('caddie-people')).map((r) => [r.index, r['docs.count']]));
 }
@@ -1575,6 +1666,7 @@ try {
   } else if (WRITE_MODE === 'es') {
     const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'PUT',
+      redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event_id: PRIMARY,
@@ -1661,7 +1753,8 @@ try {
 
   await check('p7: expired profiles never appear', async () => {
     if (!expiredWritten) {
-      skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
+      if (fixturesGated && API_IS_LOOPBACK) report(false, 'p7: expired profiles never appear', FIXTURES_GATED_LOCAL_HINT);
+      else skip('p7: expired profiles never appear', fixturesGated ? FIXTURES_GATED_WHY : NO_WRITE_WHY);
       return;
     }
     const m = await api('POST', '/api/people/matches', { event: PRIMARY, interested_talk_ids: [T] }, { device: A, label: 'A-matches' });
@@ -2174,17 +2267,29 @@ try {
   // Talks for you.
 
   await check('r1: For you puts talks with a wanted topic first and never an ended or marked one', async () => {
-    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interests: 'kernel level tracing and observability', interested_talk_ids: [], size: 20 }, { label: 'recs' });
+    const name = 'r1: For you puts talks with a wanted topic first and never an ended or marked one';
+    skipIfPrimaryOver();
+    // The topic is chosen now: the one with the most talks that have not ended (end after now, as the
+    // server decides it), and at least MIN_UPCOMING, because two are marked and one must remain.
+    const candidates = [];
+    for (const t of (topicsBySlug.get(PRIMARY) ?? []).slice(0, 12)) {
+      const r = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [t.topic_id], interested_talk_ids: [], size: 50 }, { label: 'recs' });
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      candidates.push({ topic_id: t.topic_id, label: t.label, upcoming: countUpcoming(r.json.results ?? [], t.topic_id, Date.now()) });
+    }
+    const topic = pickUpcomingTopic(candidates);
+    if (!topic) throw new SkipCheck(`none of the first 12 topics has ${MIN_UPCOMING} or more talks that have not ended`);
+    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: [], size: 20 }, { label: 'recs' });
     if (first.status !== 200) throw new Error(`status ${first.status}`);
     const marked = (first.json.results ?? []).slice(0, 2).map((r) => r.talk_id);
-    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interests: 'kernel level tracing and observability', interested_talk_ids: marked, size: 50 }, { label: 'recs' });
-    const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['ebpf'], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const results = second.json.results ?? [];
     const now = Date.now();
     const problems = [];
     if (!results.length) problems.push('no results');
-    const hasWanted = (r) => (r.topics ?? []).some((t) => t.topic_id === 'ebpf');
-    if (results[0] && !(hasWanted(results[0]) && results[0].why.topics.includes('eBPF'))) problems.push(`the first result "${results[0].title}" lacks eBPF`);
+    const hasWanted = (r) => (r.topics ?? []).some((t) => t.topic_id === topic.topic_id);
+    if (results[0] && !(hasWanted(results[0]) && results[0].why.topics.includes(topic.label))) problems.push(`the first result "${results[0].title}" lacks ${topic.label}`);
     const chipResults = chips.json.results ?? [];
     if (!chipResults.length || !chipResults.every(hasWanted)) problems.push('a chips-only result lacks the wanted topic');
     for (const r of [...results, ...chipResults]) {
@@ -2195,7 +2300,7 @@ try {
     const empty = await api('POST', '/api/recommendations', { event: PRIMARY, interested_talk_ids: [] }, { label: 'recs' });
     if (!(empty.status === 200 && empty.json.needs_profile === true)) problems.push('an empty profile does not get needs_profile');
     const unique = [...new Set(problems)];
-    report(unique.length === 0, 'r1: For you puts talks with a wanted topic first and never an ended or marked one', unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions, first "${results[0].title}"`);
+    report(unique.length === 0, name, unique.length ? unique.slice(0, 3).join('; ') : `${results.length} suggestions on ${topic.label} (${topic.upcoming} upcoming), first "${results[0].title}"`);
   });
 
   await check('r2: For you does not cross conferences', async () => {
@@ -2301,6 +2406,7 @@ try {
   });
 
   await check('r7: the learn and problems text alone returns talks with a relevant passage', async () => {
+    skipIfPrimaryOver();
     const r = await ask([], [], { interests: 'our GPU inference costs are too high', size: 10 });
     if (r.status !== 200) throw new Error(`status ${r.status}`);
     const results = r.json.results ?? [];
@@ -2320,6 +2426,7 @@ try {
   // for a conference to one copy (a preference), so the same request must always give the same
   // order. Many talks share a topic, so the tie is real for a single learn topic.
   await check('r8: the same For you request made five times returns the same talk order', async () => {
+    skipIfPrimaryOver();
     const topic = labelOf.has('ai') ? 'ai' : [...labelOf.keys()][0];
     if (!topic) {
       skip('r8: the same For you request made five times returns the same talk order', 'the conference has no topics');
@@ -2423,7 +2530,7 @@ try {
       skip(BLE2, capsDoc ? 'ble.mode is none: no Bluetooth on this backend' : 'no capabilities document');
       return;
     }
-    if (!LOCAL_API && process.env.SMOKE_BLE !== '1') {
+    if (!API_IS_LOOPBACK && process.env.SMOKE_BLE !== '1') {
       skip(BLE2, 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
       return;
     }
@@ -2489,7 +2596,7 @@ try {
       skip(BLE3, capsDoc ? `ble.mode is ${capsDoc.ble?.mode}, not derived-v1` : 'no capabilities document');
       return;
     }
-    if (!LOCAL_API && process.env.SMOKE_BLE !== '1') {
+    if (!API_IS_LOOPBACK && process.env.SMOKE_BLE !== '1') {
       skip(BLE3, 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
       return;
     }
@@ -2583,16 +2690,16 @@ try {
       return;
     }
     // A Worker with its fixtures gated off is a deployed one, whose conferences must not be flipped.
-    if (fixturesGated) throw new SkipCheck(FIXTURES_GATED_WHY);
+    if (fixturesGated) gatedFixtures();
     const doc = JSON.parse(readFileSync(join(ROOT, 'data', slug, 'conference.json'), 'utf8'));
     const U = newDevice();
     await putProfile(U, slug, 'U', {}, { open: true });
-    const flip = await admin('PUT', '/admin/conferences', { conferences: [{ ...doc, status: 'unavailable', status_reason: 'fetch_failed' }] });
+    const flip = await admin('PUT', '/admin/conferences', { conferences: [{ ...conferenceForWorker(doc), status: 'unavailable', status_reason: 'fetch_failed' }] });
     const write = await api('PUT', '/api/people/profile', { event: slug, profile: profileBody(slug, 'U'), open_to_meet: true, shared_talk_ids: [] }, { device: U, label: 'U-put' });
     const presence = await api('DELETE', `/api/presence?event=${slug}`, undefined, { device: U, label: 'U-presence' });
     const del = await api('DELETE', `/api/people/profile?event=${slug}`, undefined, { device: U, label: 'U-delete' });
     const stats = await admin('GET', `/admin/stats?event=${slug}`);
-    const restore = await admin('PUT', '/admin/conferences', { conferences: [doc] });
+    const restore = await admin('PUT', '/admin/conferences', { conferences: [conferenceForWorker(doc)] });
     const problems = [];
     if (flip.status !== 200) problems.push(`flip gave ${flip.status}`);
     if (write.status !== 400) problems.push(`a profile write while unavailable gave ${write.status}`);
@@ -2622,6 +2729,7 @@ try {
   } else if (expiredWritten) {
     const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'DELETE',
+      redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}` },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }).catch(() => null);
@@ -2930,6 +3038,7 @@ if (!WORKER_SERVES_APP) {
   }
 }
 
+if (primaryOverSkips > 0) console.log(`NOTE ${primaryOverSkips} check${primaryOverSkips === 1 ? '' : 's'} skipped because every talk of the primary conference has ended; set SMOKE_CONFERENCE to a conference that is still running to run them`);
 if (process.env.SMOKE_STRICT === '1') {
   report(retried === 0, 'strict: no request answered 5xx or failed on its first attempt', retried ? `${retried} did; see the NOTE lines above` : 'none needed a retry');
 }

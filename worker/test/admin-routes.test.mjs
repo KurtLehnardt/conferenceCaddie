@@ -1527,6 +1527,13 @@ describe('review round 3: the later of a removal and an unretire wins (the order
     const between = await wipe(18);
     assert.deepEqual([between.status, await between.json()], [409, { error: 'removal_superseded' }]);
     assert.equal(o.retiredAt, null);
+    // The superseded check comes before the overtaken one: after a wipe above the last unretire, an
+    // unretire below both is refused as superseded (409), not answered 200 as overtaken, so the
+    // object keeps its marker and the Worker reports the unretire as incomplete.
+    assert.equal((await wipe(25)).status, 200);
+    const behindBoth = await fanOut(15);
+    assert.deepEqual([behindBoth.status, await behindBoth.json()], [409, { error: 'unretire_superseded' }]);
+    assert.notEqual(o.retiredAt, null);
 
     // wipe_seq only grows: a lower wipe after a higher one (a retried earlier removal) leaves it, so
     // an unretire between the two numbers is still refused.
@@ -1572,6 +1579,163 @@ describe('review round 3: the later of a removal and an unretire wins (the order
     ok(await send(ctx, 'PUT', '/admin/conferences', unretireBody()));
     await assertState(ctx, 'live', 'first unretire');
     assert.deepEqual(rows(ctx.db('directory:global'), "SELECT k, v FROM meta WHERE k = 'order_seq' OR k LIKE 'unretired_seq:%' ORDER BY k"), [{ k: 'order_seq', v: '2' }, { k: `unretired_seq:${SLUG}`, v: '2' }]);
+  });
+});
+
+describe('the expect_status precondition on PUT /admin/conferences', { skip }, () => {
+  const NEW = 'new-fixture-2099';
+  const directoryDb = (ctx) => ctx.db('directory:global');
+  const docOf = (ctx, slug) => {
+    const r = rows(directoryDb(ctx), 'SELECT doc FROM conferences WHERE slug = ?', slug)[0];
+    return r ? JSON.parse(r.doc) : null;
+  };
+  const statusOf = (ctx, slug) => rows(directoryDb(ctx), 'SELECT status FROM conferences WHERE slug = ?', slug)[0]?.status ?? null;
+  const orderRows = (ctx) => rows(directoryDb(ctx), "SELECT k, v FROM meta WHERE k = 'order_seq' OR k LIKE 'unretired_seq:%' ORDER BY k");
+  // Every row of every table but the nonces (each request records one), order numbers included,
+  // so a refused request is seen to change nothing at all: rows, tombstones, meta and objects.
+  function stored(ctx, slugs) {
+    const one = (db) => Object.fromEntries(tablesOf(db).filter((t) => t !== 'admin_nonces').map((t) => [t, rows(db, `SELECT * FROM ${t}`).map((r) => JSON.stringify(r, (k, v) => (v instanceof Uint8Array ? [...v] : v))).sort()]));
+    return { directory: one(directoryDb(ctx)), ...Object.fromEntries(slugs.map((s) => [s, one(ctx.db(`conference:${s}`))])) };
+  }
+  const fanOuts = (ctx) => ctx.CONFERENCE.calls.filter((c) => new URL(c.req.url).pathname === '/internal/conference').length;
+  const put = (ctx, conferences) => send(ctx, 'PUT', '/admin/conferences', { conferences });
+  // Sends a request that must be refused and asserts that it changed nothing and reached no object.
+  async function refused(ctx, conferences, slugs) {
+    const before = stored(ctx, slugs);
+    const sent = fanOuts(ctx);
+    const r = await put(ctx, conferences);
+    assert.deepEqual(stored(ctx, slugs), before, 'the refused request changed the stored state');
+    assert.equal(fanOuts(ctx), sent, 'the refused request sent a fan-out');
+    return pair(r);
+  }
+
+  test('a matching value is applied; the key is never stored or fanned out; a retry of the applied request mismatches', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG, OTHER]);
+    const sent = ctx.CONFERENCE.calls.length;
+    const body = [{ ...conf(SLUG, { status: 'unavailable' }), expect_status: 'searchable' }, { ...conf(NEW), expect_status: null }, conf(OTHER, { name: 'renamed' })];
+    const applied = await put(ctx, body);
+    assert.deepEqual(pair(applied), [200, { upserted: 3, searchable: 2, synced: 3, skipped_retired: [] }]);
+    assert.deepEqual([statusOf(ctx, SLUG), statusOf(ctx, NEW), docOf(ctx, OTHER).name], ['unavailable', 'searchable', 'renamed']);
+    for (const slug of [SLUG, NEW, OTHER]) {
+      assert.ok(!('expect_status' in docOf(ctx, slug)), `${slug}: the key is not stored in the directory`);
+      assert.ok(!('expect_status' in ctx.obj(slug).conf.doc), `${slug}: the key is not stored in the object`);
+    }
+    const bodies = await Promise.all(ctx.CONFERENCE.calls.slice(sent).filter((c) => new URL(c.req.url).pathname === '/internal/conference').map((c) => c.req.clone().text()));
+    assert.equal(bodies.length, 3);
+    assert.ok(bodies.every((b) => !b.includes('expect_status')), 'no fan-out carries the key');
+    // The same request again, as adminClient would send it when the first answer was lost: the rows
+    // now hold the statuses the first attempt set, so it mismatches, and the answer says so.
+    const retried = await refused(ctx, body, [SLUG, OTHER, NEW]);
+    assert.deepEqual(retried, [409, { error: 'status_mismatch', mismatched: [{ slug: SLUG, expected: 'searchable', actual: 'unavailable' }, { slug: NEW, expected: null, actual: 'searchable' }] }]);
+  });
+
+  test('a mismatch answers 409 with the exact shape and writes nothing: row, tombstone, meta and object unchanged, no number taken', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG, OTHER]);
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    assert.deepEqual(orderRows(ctx), [{ k: 'order_seq', v: '1' }]);
+    // An unretire that expects a row the completed removal deleted: refused whole, so the matching
+    // document of OTHER is not applied, the tombstone stays and the object keeps its marker.
+    const r = await refused(ctx, [{ ...conf(OTHER, { name: 'renamed' }), expect_status: 'searchable' }, { ...conf(SLUG), unretire: true, expect_status: 'searchable' }], [SLUG, OTHER]);
+    assert.deepEqual(r, [409, { error: 'status_mismatch', mismatched: [{ slug: SLUG, expected: 'searchable', actual: null }] }]);
+    assert.deepEqual(rows(directoryDb(ctx), 'SELECT slug FROM retired').map((x) => x.slug), [SLUG]);
+    assert.deepEqual(orderRows(ctx), [{ k: 'order_seq', v: '1' }], 'the mismatch took no number of the order sequence');
+    assert.notEqual(ctx.obj().retiredAt, null);
+    // A mismatch against a stored row reports the row's status.
+    const row = await refused(ctx, [{ ...conf(OTHER, { name: 'renamed' }), expect_status: 'unavailable' }], [SLUG, OTHER]);
+    assert.deepEqual(row, [409, { error: 'status_mismatch', mismatched: [{ slug: OTHER, expected: 'unavailable', actual: 'searchable' }] }]);
+    // The unretire that expects no row takes the next number, 2, as if the mismatch had not run.
+    const back = await put(ctx, [{ ...conf(SLUG), unretire: true, expect_status: null }]);
+    assert.deepEqual(pair(back), [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
+    assert.deepEqual(orderRows(ctx), [{ k: 'order_seq', v: '2' }, { k: `unretired_seq:${SLUG}`, v: '2' }]);
+    assert.deepEqual([statusOf(ctx, SLUG), rows(directoryDb(ctx), 'SELECT slug FROM retired'), ctx.obj().retiredAt], ['searchable', [], null]);
+    assert.ok(!('expect_status' in docOf(ctx, SLUG)) && !('unretire' in docOf(ctx, SLUG)));
+  });
+
+  test('null matches only when there is no row', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG]);
+    const r = await refused(ctx, [{ ...conf(SLUG, { name: 'renamed' }), expect_status: null }], [SLUG]);
+    assert.deepEqual(r, [409, { error: 'status_mismatch', mismatched: [{ slug: SLUG, expected: null, actual: 'searchable' }] }]);
+    // A status string never matches a missing row.
+    const missing = await refused(ctx, [{ ...conf(NEW), expect_status: 'unavailable' }], [SLUG]);
+    assert.deepEqual(missing, [409, { error: 'status_mismatch', mismatched: [{ slug: NEW, expected: 'unavailable', actual: null }] }]);
+    assert.equal(statusOf(ctx, NEW), null);
+    ok(await put(ctx, [{ ...conf(NEW, { status: 'unavailable' }), expect_status: null }]));
+    assert.equal(statusOf(ctx, NEW), 'unavailable');
+  });
+
+  test('a batch where one document mismatches applies none of it; every mismatch is listed in batch order', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG, OTHER]);
+    const batch = [
+      { ...conf(SLUG, { name: 'a', status: 'unavailable' }), expect_status: 'searchable' },
+      { ...conf(OTHER, { name: 'b' }), expect_status: 'unavailable' },
+      conf(NEW),
+      { ...conf(SLUG, { name: 'c' }), expect_status: 'draft' },
+    ];
+    const r = await refused(ctx, batch, [SLUG, OTHER]);
+    assert.deepEqual(r, [409, { error: 'status_mismatch', mismatched: [{ slug: OTHER, expected: 'unavailable', actual: 'searchable' }, { slug: SLUG, expected: 'draft', actual: 'searchable' }] }]);
+    assert.deepEqual([docOf(ctx, SLUG).name, docOf(ctx, OTHER).name, docOf(ctx, NEW)], [SLUG, OTHER, null]);
+  });
+
+  test('a value that is neither a non-empty string nor null is 400 and writes nothing, with or without unretire', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG]);
+    for (const value of ['', 0, 1, true, false, {}, [], ['searchable']]) {
+      for (const extra of [{}, { unretire: true }]) {
+        const r = await refused(ctx, [conf(NEW), { ...conf(SLUG, { name: 'renamed' }), ...extra, expect_status: value }], [SLUG]);
+        assert.deepEqual(r, [400, { error: 'expect_status must be a non-empty string or null' }], JSON.stringify([value, extra]));
+      }
+    }
+    assert.equal(docOf(ctx, NEW), null);
+  });
+
+  test('a key that differs from expect_status or unretire only in letter case or surrounding whitespace is 400, names the key and writes nothing', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG]);
+    const cases = [
+      ['Expect_Status', 'searchable', 'expect_status'],
+      ['expect_status ', 'unavailable', 'expect_status'],
+      [' EXPECT_STATUS\t', null, 'expect_status'],
+      ['Unretire', true, 'unretire'],
+      ['unretire ', true, 'unretire'],
+      ['\nUNRETIRE', false, 'unretire'],
+    ];
+    for (const [key, value, canonical] of cases) {
+      // Also on a document whose slug is not valid, which the upsert would otherwise skip.
+      for (const doc of [conf(SLUG, { name: 'renamed' }), { slug: 'Not A Slug' }]) {
+        const r = await refused(ctx, [conf(NEW), { ...doc, [key]: value }], [SLUG]);
+        assert.deepEqual(r, [400, { error: `the key must be written exactly as ${canonical}` }], JSON.stringify(key));
+      }
+    }
+    assert.equal(docOf(ctx, NEW), null);
+    // The keys as they must be written are still taken, and keys that only contain them are documents' own.
+    ok(await put(ctx, [{ ...conf(SLUG, { name: 'renamed' }), expect_status: 'searchable', unretire: false, expect_status_note: 'x', unretired: 'y' }]));
+    assert.deepEqual([docOf(ctx, SLUG).name, docOf(ctx, SLUG).expect_status_note, docOf(ctx, SLUG).unretired, 'expect_status' in docOf(ctx, SLUG)], ['renamed', 'x', 'y', false]);
+  });
+
+  test('after a removal that did not finish, the row is still there: its stored status matches, null does not, and a match without unretire is skipped, not applied', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG]);
+    const env = { ...ctx.env, CONFERENCE: failOnce(ctx.CONFERENCE, (p) => p === '/internal/wipe') };
+    const removal = await call(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.deepEqual([removal.status, removal.json.error], [502, 'removal_incomplete']);
+    assert.deepEqual([rows(directoryDb(ctx), 'SELECT slug FROM retired').map((x) => x.slug), statusOf(ctx, SLUG)], [[SLUG], 'searchable']);
+    // null means no row, and the row is still there.
+    const none = await refused(ctx, [{ ...conf(SLUG), unretire: true, expect_status: null }], [SLUG]);
+    assert.deepEqual(none, [409, { error: 'status_mismatch', mismatched: [{ slug: SLUG, expected: null, actual: 'searchable' }] }]);
+    // The stored status matches, but without unretire the tombstone wins: 200 with the slug under
+    // skipped_retired, and nothing was applied.
+    const before = stored(ctx, [SLUG]);
+    const skippedOnly = await put(ctx, [{ ...conf(SLUG, { name: 'renamed' }), expect_status: 'searchable' }]);
+    assert.deepEqual(pair(skippedOnly), [200, { upserted: 0, searchable: 0, synced: 0, skipped_retired: [SLUG] }]);
+    assert.deepEqual(stored(ctx, [SLUG]), before);
+    // With unretire and the stored status, the unretire is applied and the tombstone goes.
+    const back = await put(ctx, [{ ...conf(SLUG, { name: 'renamed' }), unretire: true, expect_status: 'searchable' }]);
+    assert.deepEqual(pair(back), [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
+    assert.deepEqual([docOf(ctx, SLUG).name, rows(directoryDb(ctx), 'SELECT slug FROM retired'), ctx.obj().retiredAt], ['renamed', [], null]);
   });
 });
 

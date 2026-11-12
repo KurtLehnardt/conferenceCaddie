@@ -132,11 +132,12 @@ export function workerTalks(slug, talks, takedowns) {
 /**
  * The conference document as PUT /admin/conferences gets it: without the `unretire` key, so a run
  * of the ingest (in CI or by hand) can never bring back a conference the operator removed, whatever
- * a committed conference.json holds; and with its counts recomputed when takedowns dropped talks.
+ * a committed conference.json holds; without the `expect_status` key, the operator's precondition,
+ * which an ingest run never sends; and with its counts recomputed when takedowns dropped talks.
  * `prepared` is the conference's workerTalks() result, or undefined.
  */
 export function conferenceForWorker(conf, prepared) {
-  const { unretire, ...doc } = conf;
+  const { unretire, expect_status, ...doc } = conf;
   return prepared?.dropped ? { ...doc, counts: countsAfterTakedowns(doc.counts ?? {}, prepared.talks) } : doc;
 }
 
