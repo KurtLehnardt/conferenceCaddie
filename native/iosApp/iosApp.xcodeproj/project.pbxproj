@@ -92,6 +92,7 @@
 				7555FF77242A565900829871 /* Sources */,
 				B92378962B6B1156000C7307 /* Frameworks */,
 				7555FF79242A565900829871 /* Resources */,
+				A1C0FFEE0000000000000010 /* Drop the Bluetooth background modes without Bluetooth */,
 			);
 			buildRules = (
 			);
@@ -171,6 +172,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "if [ \"YES\" = \"$OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED\" ]; then\n  echo \"Skipping Gradle build task invocation due to OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED environment variable set to \\\"YES\\\"\"\n  # The TestFlight signing job builds with a framework and Compose resources that a job without\n  # secrets built. It passes the resources here, and they go where the Compose plugin puts them.\n  if [ -n \"$CADDIE_PREBUILT_COMPOSE_RESOURCES\" ]; then\n    set -e\n    dest=\"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/compose-resources\"\n    rm -rf \"$dest\"\n    mkdir -p \"$dest\"\n    ditto \"$CADDIE_PREBUILT_COMPOSE_RESOURCES\" \"$dest\"\n  fi\n  exit 0\nfi\ncd \"$SRCROOT/..\"\n./gradlew :composeApp:embedAndSignAppleFrameworkForXcode\n";
+		};
+		A1C0FFEE0000000000000010 /* Drop the Bluetooth background modes without Bluetooth */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Drop the Bluetooth background modes without Bluetooth";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Native Bluetooth is off in this build (CADDIE_BLE_ENABLED is not YES), so the built app must\n# not declare the Bluetooth background modes either (App Review guideline 2.5.4). The two entries\n# leave the built Info.plist, and UIBackgroundModes with them once it is empty. iosApp/Info.plist\n# keeps them, so every build with CADDIE_BLE_ENABLED=YES has them: Debug, and a Release build\n# given CADDIE_BLE_ENABLED=YES on the command line for the device exit test.\nset -eu\nif [ \"${CADDIE_BLE_ENABLED:-}\" = \"YES\" ]; then\n  exit 0\nfi\nplist=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\nbuddy=/usr/libexec/PlistBuddy\nif [ ! -f \"$plist\" ]; then\n  echo \"error: no built Info.plist at $plist\" >&2\n  exit 1\nfi\ncount=0\nwhile \"$buddy\" -c \"Print :UIBackgroundModes:$count\" \"$plist\" >/dev/null 2>&1; do\n  count=$((count + 1))\ndone\ni=$((count - 1))\nwhile [ \"$i\" -ge 0 ]; do\n  mode=$(\"$buddy\" -c \"Print :UIBackgroundModes:$i\" \"$plist\")\n  case \"$mode\" in\n    bluetooth-central|bluetooth-peripheral) \"$buddy\" -c \"Delete :UIBackgroundModes:$i\" \"$plist\" ;;\n  esac\n  i=$((i - 1))\ndone\nif \"$buddy\" -c \"Print :UIBackgroundModes\" \"$plist\" >/dev/null 2>&1 && ! \"$buddy\" -c \"Print :UIBackgroundModes:0\" \"$plist\" >/dev/null 2>&1; then\n  \"$buddy\" -c \"Delete :UIBackgroundModes\" \"$plist\"\nfi\n# Fail the build rather than ship a background mode the build does not use.\nif \"$buddy\" -c \"Print :UIBackgroundModes\" \"$plist\" 2>/dev/null | grep -q \"bluetooth-\"; then\n  echo \"error: the Bluetooth background modes are still in $plist\" >&2\n  exit 1\nfi\n";
+			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
 

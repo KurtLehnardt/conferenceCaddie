@@ -51,7 +51,9 @@ internal const val BLE_ENABLED_KEY = "CADDIE_BLE_ENABLED"
 /**
  * True when this build may run Bluetooth proximity: the app's Info.plist has [BLE_ENABLED_KEY] set to
  * `YES`. The key comes from the build setting of the same name, `YES` for Debug and `NO` for Release
- * until the Phase 4 exit test on real phones has passed. Anything else (the key missing, as in a test
- * process, or the setting left undefined) means no.
+ * until the Phase 4 exit test on real phones has passed; an optimised build for that test is a
+ * Release build given `CADDIE_BLE_ENABLED=YES` on the xcodebuild command line. Anything else (the
+ * key missing, as in a test process, or the setting left undefined) means no, and such a build also
+ * leaves the Bluetooth background modes out of its Info.plist.
  */
 internal fun bleEnabledInBuild(value: Any? = NSBundle.mainBundle.objectForInfoDictionaryKey(BLE_ENABLED_KEY)): Boolean = value == "YES"

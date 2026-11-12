@@ -67,7 +67,8 @@ import platform.darwin.dispatch_walltime
  *   restarts every [SCAN_RESTART_MS] and at each window change, because Core Bluetooth reports a
  *   phone only once per scan: without it a phone first heard far away would never be heard again
  *   when it comes near.
- * - **Background.** The app declares `bluetooth-central` and `bluetooth-peripheral`, and both
+ * - **Background.** The app declares `bluetooth-central` and `bluetooth-peripheral` (only in builds
+ *   with `CADDIE_BLE_ENABLED` YES: a build phase removes them from the others), and both
  *   managers ask for state restoration ([CENTRAL_RESTORE_ID], [PERIPHERAL_RESTORE_ID]), so iOS keeps
  *   advertising and scanning while the app is suspended, wakes it for discoveries and read
  *   requests, and relaunches it after it ended the app. On such a launch [IosBle.restoreAfterLaunch]
