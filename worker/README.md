@@ -418,8 +418,25 @@ clock check are the same for both versions, and v1 and v2 nonces share the table
 
 The move to v2 is in four steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
 a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
-Worker refuses v1. Until step c every client still signs v1, so deploying step b changes nothing
-for them.
+Worker refuses v1. Deploying step b changed nothing for the clients, which then still signed v1.
+
+From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
+so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and
+the `/admin/embed-pending` calls they make. Each signs the origin of its `--api` base. That base
+is read with `canonicalOrigin` from `scripts/lib/admin-origin.mjs` before anything else, so it must
+be the Worker's origin and nothing more: a plain `https://` URL (`http://` for `localhost`,
+`127.0.0.1` and `[::1]` only) in printable ASCII, with no path, query, fragment, user name,
+password, backslash, `%` or `,`, and an internationalised host in its punycode (`xn--`) form. A
+base the URL parser would otherwise map to another host, such as one with a full-width dot or a
+percent-encoded character, is refused as a usage error before any request is signed.
+`CADDIE_ADMIN_SIG_VERSION` is the rollback: set it to `1` in the environment of a local run, or
+set the repository variable of the same name to `1` for the CI ingest (`.github/workflows/ingest.yml`
+passes it to the push step), and the clients sign v1 again. Unset or empty means v2, and any other
+value is a usage error when the client is created, before anything is sent. The rollback works
+only while the Worker still accepts v1: step d will make the Worker refuse v1, and it removes the
+variable from the clients and the workflow in the same change. `scripts/moderation.mjs` (the
+deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
+`caddie-admin` command to use.
 
 Two optional Worker variables decide what is accepted. Neither is set in `wrangler.toml` today.
 
