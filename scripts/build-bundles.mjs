@@ -105,7 +105,7 @@ export class UsageError extends Error {}
 /** Parses the command line. Throws UsageError with a one-line reason. */
 export function parseArgs(argv) {
   const opts = {
-    out: DEFAULT_OUT, only: null, baseUrl: DEFAULT_BASE_URL, offline: false, noModelDownload: false, check: false, smoke: false,
+    out: DEFAULT_OUT, only: null, baseUrl: process.env.CADDIE_BUNDLE_BASE || DEFAULT_BASE_URL, offline: false, noModelDownload: false, check: false, smoke: false,
     reuseFrom: undefined, publisherName: PUBLISHER.name, takedown: PUBLISHER.takedown, live: null, liveSince: null, fresh: [],
   };
   for (let i = 0; i < argv.length; i++) {

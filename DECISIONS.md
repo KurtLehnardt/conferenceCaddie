@@ -864,6 +864,16 @@ The tier 3 fixes for sec-1 and cor-6 of `REVIEW_NOTES_FREE.md`, which the Worker
 - **Reasons.** `reasonsFor` in `server/people.mjs` closes a reason with a period only when its inserted title, passage or evidence does not already end in `.`, `?`, `!` or an ellipsis (closing quotes, brackets and highlight tags after it allowed), with the Worker's expression.
 - **Validation.** `npm test` (`test/`, `worker/test/` and `scripts/test/`) runs 584 tests, all passing, on Node 26 and Node 22, and the web tests pass. The smoke is run against tier 3 after the merge and the deploy.
 
+## Fork-proofing of the scripts and the server (2026-11-11)
+
+PR A2 of the caddie-admin design. A fork must not send its Elasticsearch key, or its probes, to the maintainer's resources.
+
+- **No default `ES_URL`.** The scripts read it when a request is made (`scripts/lib/es-url.mjs`), so `--dry-run`, `--no-fetch` and `--list` runs, which make no request, still need neither it nor a key (`ingest.yml` relies on this). The server refuses to start without it (`server/es-url.mjs`, imported first by `server/index.mjs`, after the pattern of `server/capabilities.mjs`).
+- **`deploy.sh` config.** `GC_PROJECT`, `ES_URL` and `CADDIE_BUNDLE_BASE` are required, `GC_REGION` defaults to `us-west1`. They come from the environment or from an optional `~/.config/conference-caddie/deploy.env` (path override `CADDIE_DEPLOY_ENV`), which is parsed as text and never executed; the environment wins. Every value is validated before the first gcloud call, and the script prints the project, region, `ES_URL`, bundle base and the source of the settings before it deploys. The maintainer's values live in that local file, not in the repository.
+- **The server's `DEFAULT_BUNDLE_BASE` stays.** `TALKS_BUNDLE_BASE` falls back to the maintainer's public bundle address when unset, for tests and local development; `deploy.sh` always passes it. The Worker has the same constant (peer-owned).
+- **Deviations from DOC-1 and DOC-7 of the requirements.** The grep test (`scripts/test/fork-values.test.mjs`) looks for the cluster id, the project id, the project number (which is also in the Cloud Run address and the service-account email) and the `krlehnardt.workers.dev` host. It does not yet cover `krlehnardt` and `kurtlehnardt` in general: the GitHub address appears in contract fixtures, schema ids, native strings and the peer's `pages.yml`, and is public. And `docs/` is allow-listed as a whole, together with the README, the decisions and the review notes, until `docs/FORK.md` lands and holds the exact list. Two CI files and the two Kotlin constants of the official app are allow-listed by name.
+- **Test data.** `scripts/ingest.mjs` takes `CADDIE_DATA_DIR`, so a test runs on a temporary copy of the data instead of rewriting tracked files; the time zone tables still come from the repository.
+
 ## Tier 3 merge targets and the work index (2026-11-11)
 
 - **Tier 3 applies the merge-target rule.** `scripts/topics.mjs` counts merge targets as well as aliases and adds the targets that reach three talks with their aliases through `mergeTargets` (via `scripts/lib/topics-candidates.mjs`, which a test runs). `--dry-run` prints the topic list as JSON on stdout (notes go to stderr) and writes nothing to the topics or talks index.

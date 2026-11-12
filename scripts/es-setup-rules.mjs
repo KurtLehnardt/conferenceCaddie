@@ -1,7 +1,7 @@
 // Creates the filter rules index (a percolator) and points its alias at it.
 //
 // Usage: node scripts/es-setup-rules.mjs [index] [--recreate] [--alias name]
-// Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.
+// Env:   ES_URL (required, no default), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.
 //
 // The index defaults to caddie-people-rules-v1 and its alias to caddie-people-rules. The name
 // must stay caddie-people-rules*: the deployed server reads it with the people key, which covers
@@ -22,7 +22,7 @@
 
 import { chooseAlias } from './lib/alias.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -55,7 +55,7 @@ if (!index.startsWith('caddie-people-rules') || (alias && !alias.startsWith('cad
 }
 
 async function es(method, path, body) {
-  const res = await fetch(ES_URL + path, {
+  const res = await fetch(esUrlOrExit() + path, {
     method,
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

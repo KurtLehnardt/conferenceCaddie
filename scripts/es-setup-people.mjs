@@ -2,7 +2,7 @@
 //
 // Usage: node scripts/es-setup-people.mjs [index] [--recreate] [--alias name] [--lexical-only]
 //                                         [--inference-id id]
-// Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY,
+// Env:   ES_URL (required, no default), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY,
 //        ES_CONFERENCES_INDEX (default caddie-conferences, read for the blocks' expires_at),
 //        ES_INFERENCE_ID (default inference endpoint for the semantic_text fields).
 //
@@ -37,7 +37,7 @@
 
 import { visibleUntil } from '../server/people-shared.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -84,7 +84,7 @@ const siblingAlias = (kind) => (alias ? `${alias}-${kind}` : '');
 const CONFERENCES_INDEX = process.env.ES_CONFERENCES_INDEX || 'caddie-conferences';
 
 async function es(method, path, body) {
-  const res = await fetch(ES_URL + path, {
+  const res = await fetch(esUrlOrExit() + path, {
     method,
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

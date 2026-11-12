@@ -34,14 +34,24 @@ The older Cloud Run address, https://conference-caddie-265846417372.us-west1.run
 
 ```sh
 npm ci && npm --prefix web ci
-export ES_URL="https://<your-deployment>.es.io:443"   # required: the scripts default to the maintainer's cluster otherwise
+export ES_URL="https://<your-deployment>.es.io:443"   # required, no default: the scripts and the server refuse to run without it
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run es:setup         # talks, conferences, topics
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run people:setup     # people, presence, meets, blocks
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run ingest -- --event kubecon-cloudnativecon-north-america-2026
 npm run deploy                                                          # Cloud Run; see the checklist for every step
 ```
 
-Set `ES_URL` before running any of the scripts, because they fall back to the maintainer's Elasticsearch cluster and would send your API key there. `scripts/deploy.sh` hard-codes `PROJECT`, `REGION` and `ES_URL` for the maintainer's deployment (the service name comes from `SERVICE`, default `conference-caddie`), so edit `PROJECT`, `REGION` and `ES_URL` in that file before you run `npm run deploy`.
+`ES_URL` has no default. A script that makes an Elasticsearch request exits with "Set ES_URL." when it is unset (`--dry-run`, `--no-fetch` and `--list` runs make no request and need neither it nor a key), and the server (`server/es-url.mjs`) does not start without it, so your API keys can never be sent to somebody else's cluster. `npm run deploy` (`scripts/deploy.sh`) reads its settings from the environment, or from an optional file of `KEY=VALUE` lines at `~/.config/conference-caddie/deploy.env` (override the path with `CADDIE_DEPLOY_ENV`; the environment wins over the file, and the script prints which one it used before it calls gcloud; it checks every value first):
+
+| Variable | Meaning |
+|---|---|
+| `GC_PROJECT` | Google Cloud project id. Required. Also read by `scripts/create-es-keys.mjs`, `scripts/vapid-keys.mjs` and `scripts/ble-master.mjs`. |
+| `GC_REGION` | Cloud Run region. Default `us-west1`. |
+| `ES_URL` | The Elasticsearch address. Required. Passed to the service as `ES_URL`. |
+| `CADDIE_BUNDLE_BASE` | The published talk bundles' base URL, an https URL ending in `/`. Required by `deploy.sh`. Passed to the service as `TALKS_BUNDLE_BASE` (the server's own built-in default stays for tests and local development). |
+| `SERVICE` | Cloud Run service name. Default `conference-caddie`. |
+
+Other maintainer-specific addresses are read from the environment too: `CADDIE_APP_URL` (or `APP_URL`) for `scripts/make-dummy-people.mjs`, `CADDIE_BUNDLE_BASE`, `CADDIE_SITE_URL` and `CADDIE_SMOKE_CONFERENCE` for the bundle, landing-page and smoke scripts, and `CADDIE_BACKEND` plus `CADDIE_BUNDLE_BASE` for `native/scripts/release-smoke.sh`. `scripts/test/fork-values.test.mjs` fails when the maintainer's cluster id, project id, Cloud Run address or `workers.dev` host appears in code outside a short allow-list of documents and CI files.
 
 [docs/OPERATOR_CHECKLIST.md](docs/OPERATOR_CHECKLIST.md) lists every setup step in order (reports, moderation rules, push keys, the smoke test), with the environment variables each one reads.
 

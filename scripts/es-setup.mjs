@@ -10,7 +10,7 @@
 //       Points the alias at the index in one atomic _aliases call, removing every index it
 //       pointed at before, and prints the before and after.
 //
-// Env: ES_URL (default: the Elastic Cloud deployment), ES_API_KEY or ELASTISEARCH_API_KEY,
+// Env: ES_URL (required, no default), ES_API_KEY or ELASTISEARCH_API_KEY,
 //      ES_SETUP_INDEX (default talks index), ES_ALIAS (default alias for the talks index),
 //      ES_INFERENCE_ID (default inference endpoint for the semantic_text field).
 //
@@ -25,7 +25,7 @@
 
 import { chooseAlias } from './lib/alias.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_API_KEY || process.env.ELASTISEARCH_API_KEY;
 if (!API_KEY) {
   console.error('Set ES_API_KEY or ELASTISEARCH_API_KEY.');
@@ -60,7 +60,7 @@ const flagWithOptionalValue = (name) => {
 };
 
 async function es(method, path, body) {
-  const res = await fetch(ES_URL + path, {
+  const res = await fetch(esUrlOrExit() + path, {
     method,
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
