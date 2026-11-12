@@ -195,11 +195,41 @@ describe('CLI-2 output', () => {
     const err = await invoke(['stats', 'usage'], { behavior: throwing(new NotFoundError(`gone ${hostile}`)) });
     assert.ok(clean(err.stderr));
     assert.match(err.stderr, /^caddie-admin: gone Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} /);
-    assert.equal(err.stderr.trimEnd().split('\n').length, 1, 'one line, so the newline in the message is escaped before the first-line cut');
+    // The message is redacted, then escaped as a whole: its newline becomes \u{A}, so it is one
+    // line and the text after the newline is still there.
+    assert.equal(err.stderr.trimEnd().split('\n').length, 1, 'one line: the newline in the message is escaped');
+    assert.match(err.stderr, /\\u\{A\}next\n$/, 'nothing after the newline is lost');
     const errJson = await invoke(['stats', 'usage', '--json'], { behavior: throwing(new NotFoundError(`gone ${hostile}`)) });
     assert.ok(clean(errJson.stderr));
     assert.equal(JSON.parse(errJson.stderr).message, `gone ${hostile}`);
     assert.equal(readFileSync(join(home, 'audit.jsonl'), 'utf8').includes('Eve'), false, 'no free text in the audit');
+  });
+});
+
+describe('SEC terminal output: format characters, separators, tags and the backslash', () => {
+  // U+2028 (line separator), U+FEFF (byte-order mark), U+200B (zero-width space), U+E0041 (a tag
+  // character, outside the BMP), U+00AD (soft hyphen), a backslash before text that looks like an
+  // escape, a joiner between letters, and an emoji ZWJ sequence (woman, joiner, laptop).
+  const cp = (...points) => String.fromCodePoint(...points);
+  const EMOJI = cp(0x1f469, 0x200d, 0x1f4bb);
+  const hostile = `a${cp(0x2028)}b${cp(0xfeff)}c${cp(0x200b)}d${cp(0xe0041)}e${cp(0xad)}f\\u{1B}g A${cp(0x200d)}B ${EMOJI}`;
+  const raw = [0x2028, 0xfeff, 0x200b, 0xe0041, 0xad].map((p) => cp(p));
+
+  test('human output shows each as \\u{XX}, a backslash as \\\\, and keeps the joiner only inside an emoji sequence', async () => {
+    const r = await invoke(['stats', 'usage'], { behavior: () => ({ items: [{ name: hostile }], summary: 'done' }) });
+    assert.equal(r.code, 0, r.stderr);
+    for (const c of raw) assert.ok(!r.stdout.includes(c), `U+${c.codePointAt(0).toString(16)} printed raw`);
+    const line = r.stdout.split('\n')[0];
+    assert.equal(line, `name=a\\u{2028}b\\u{FEFF}c\\u{200B}d\\u{E0041}e\\u{AD}f\\\\u{1B}g A\\u{200D}B ${EMOJI}`);
+    assert.ok(!line.includes(`A${cp(0x200d)}B`), 'a joiner between letters is escaped');
+  });
+
+  test('--json writes them as \\uXXXX escapes, a surrogate pair above U+FFFF, and parses to the same text', async () => {
+    const r = await invoke(['stats', 'usage', '--json'], { behavior: () => ({ items: [{ name: hostile }], summary: 'done' }) });
+    assert.equal(r.code, 0, r.stderr);
+    for (const c of [...raw, cp(0x200d)]) assert.ok(!r.stdout.includes(c), `U+${c.codePointAt(0).toString(16)} printed raw`);
+    assert.match(r.stdout, /a\\u2028b\\ufeffc\\u200bd\\udb40\\udc41e\\u00adf\\\\u\{1B\}g A\\u200dB /);
+    assert.equal(JSON.parse(r.stdout).result.items[0].name, hostile, 'the same text once parsed');
   });
 });
 
@@ -584,6 +614,11 @@ describe('SEC-12 audit log', () => {
     });
     const entry = JSON.parse(auditLines().at(-1));
     assert.deepEqual(entry, { ts: '2026-11-11T10:00:00.000Z', command: 'stats usage', mode: 'dry-run', result: 'ok', counts: { rows: 2 }, flags: ['text', 'all'] });
+    // A result note is kept only as one of the enum values.
+    appendAudit(home, { command: 'conferences remove', result: 'ok', note: 'earlier_attempt_may_have_run' });
+    assert.equal(JSON.parse(auditLines().at(-1)).note, 'earlier_attempt_may_have_run');
+    appendAudit(home, { command: 'conferences remove', result: 'ok', note: 'already_done_soon' });
+    assert.equal(JSON.parse(auditLines().at(-1)).note, undefined);
   });
 
   test('failures are audited too, with the failure result and the short error code, never the message', async () => {

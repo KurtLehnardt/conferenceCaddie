@@ -1,9 +1,10 @@
 // Append-only audit log of the caddie-admin CLI: one JSON object per line in <dir>/audit.jsonl.
 //
 // Only whitelisted keys are written, and a string is kept only when it has the shape of its key
-// (an enum member, an id, a slug, a failure's short code). Free text cannot reach the file: --note, the --name search text,
-// the rules test line, display names, profile text, contact fields, keys, tokens and URLs all
-// fail those shapes or have no key at all.
+// (an enum member, an id, a slug, a failure's short code). Free text cannot reach the file: --note,
+// the --name search text, the rules test line, display names, profile text, contact fields, keys,
+// tokens and URLs all fail those shapes or have no key at all. The `note` key is the result's
+// note, one of NOTES, never the --note text.
 
 import { chmodSync, closeSync, fstatSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,6 +14,9 @@ const MODES = ['dry-run', 'run'];
 // 'warned': the command did its work but reported warnings (counts.warnings says how many).
 const RESULTS = ['ok', 'warned', 'failed', 'not_found', 'unsupported', 'refused'];
 const FLAGS = ['text', 'contact', 'include-hidden', 'show-content', 'all', 'allow-shrink', 'purge-local'];
+// What a successful result may add: work found done already, or counts that can be short because
+// an earlier attempt whose answer was lost may have done more (scripts/admin/backends/worker.mjs).
+const NOTES = ['already_deleted', 'already_unhidden', 'already_unblocked', 'already_retired', 'earlier_attempt_may_have_run'];
 const BACKEND_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 const COMMAND_RE = /^[a-z-]{1,30} [a-z-]{1,30}$/;
 const REF_RE = /^[0-9a-f]{16}$/;
@@ -38,6 +42,7 @@ export function sanitizeAudit(entry) {
   if (REASONS.includes(e.reason)) out.reason = e.reason;
   if (MODES.includes(e.mode)) out.mode = e.mode;
   if (RESULTS.includes(e.result)) out.result = e.result;
+  if (NOTES.includes(e.note)) out.note = e.note;
   if (out.result && out.result !== 'ok' && out.result !== 'warned' && typeof e.error === 'string' && ERROR_CODE_RE.test(e.error)) out.error = e.error;
   if (e.counts && typeof e.counts === 'object' && !Array.isArray(e.counts)) {
     const counts = {};

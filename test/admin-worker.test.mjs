@@ -15,12 +15,16 @@
 // - SEC-4, SEC-13, SEC-15, SEC-16, CLI-8, CONF-13: signing, re-signing on a retry, no redirect,
 //   the optional Access headers, no body on GET and DELETE, the query-key allow-list;
 // - ATT-1 to ATT-4, ATT-7, ATT-9, ATT-10: search (q64), view with the privacy rule, delete, block
-//   and unblock, and the 404-after-retry rule (PEER-6);
+//   and unblock, and the 404-after-retry rule (PEER-6): a 404 is "already done" only after an
+//   attempt that may have run (a 5xx, a reset once connected), and only with a target code;
+//   "Not found" is a refusal, exit 4, and a 2xx must carry a JSON object ("ok": true for writes);
 // - MOD-2, MOD-4, MOD-5, MOD-6, MOD-7: queue, hide, unhide, delete, purge-reports, and exit 5 for
 //   purge-expired and rules;
 // - CONF-1, CONF-3, CONF-4, CONF-7, CONF-8, CONF-12: list, add and refresh through gh, hide and
 //   unhide through PUT /admin/conferences, remove through DELETE /admin/conference, unretire with
-//   the flag in the body;
+//   the flag on the document, refused for a typo or for a slug the Worker lists with another status;
+// - the stand-in models the failed-signature limiter, 415 without Content-Type, the moderation
+//   body key rule and a listed conference whose object was wiped;
 // - STAT-1 to STAT-3: counts, usage and health, with the smoke and log commands naming variables.
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
@@ -83,12 +87,19 @@ function stubWorker() {
     usage: { day: '2026-11-11', requests: 120, rows_read: 900, rows_written: 30, pace: 1.5 },
     account: { day: '2026-11-11', usage: { [EVENT]: { requests: 120, rows_read: 900, rows_written: 30 }, [OTHER]: { requests: 7, rows_read: 10, rows_written: 1 } }, holds: { [EVENT]: true } },
     conferenceEnded: false,
+    // Conferences the directory still lists whose object was wiped (a removal an unretire
+    // overtook): reads answer 200 with nothing, writes 400 "conference is not available".
+    wipedObjects: new Set(),
+    // The failed-signature limiter: from 10 refused signatures on, every admin request, a validly
+    // signed one included, answers 404 "Not found" (worker/src/index.js adminAuth).
+    failedSignatures: 0,
   };
   const requests = [];
   const nonces = new Set();
   const problems = [];
-  // Answers to force on the next admin requests, in order: { status, body, act } where act runs
-  // the handler for its side effects before the forced answer is sent (an answer that was lost).
+  // Answers to force on the next admin requests, in order: { status, body, headers, act,
+  // pathWithQuery } where act runs the handler for its side effects before the forced answer is
+  // sent (an answer that was lost), and pathWithQuery, when given, waits for that request.
   const forced = [];
 
   const personCounts = (p) => ({
@@ -120,6 +131,8 @@ function stubWorker() {
       for (const d of b.conferences) {
         if (state.retired.has(d.slug) && d.unretire !== true) { skipped.push(d.slug); continue; }
         state.retired.delete(d.slug);
+        // The fan-out of an unretire clears the object's removal marker.
+        if (d.unretire === true) state.wipedObjects.delete(d.slug);
         const { unretire, ...doc } = d;
         state.puts.push(doc);
         const i = state.conferences.findIndex((c) => c.slug === doc.slug);
@@ -152,6 +165,15 @@ function stubWorker() {
     }
     if (!/^[a-z0-9][a-z0-9-]{0,119}$/.test(event ?? '')) return [400, { error: 'event must be a conference slug' }];
     if (!state.conferences.some((c) => c.slug === event)) return [400, { error: 'conference is not available' }];
+    if (state.wipedObjects.has(event)) {
+      // A wiped object without its document (worker/src/conference.js): it takes no admin write,
+      // and reads see it empty.
+      if (method !== 'GET') return [400, { error: 'conference is not available' }];
+      if (path === '/admin/stats') return [200, { ...Object.fromEntries(Object.keys(state.tables).map((k) => [k, 0])), usage: state.usage }];
+      if (path === '/admin/people/search') return sp.has('ref') ? [404, { error: 'not_found' }] : [200, { people: [], matched: 0 }];
+      if (path === '/admin/people/view') return [404, { error: 'not_found' }];
+      if (path === '/admin/moderation') return [200, { hidden: [], reports: [] }];
+    }
     if (path === '/admin/stats') return [200, { ...state.tables, usage: state.usage }];
     if (path === '/admin/people/search') {
       const keys = [...sp.keys()];
@@ -224,6 +246,12 @@ function stubWorker() {
     if (path === '/admin/moderation' && method === 'POST') {
       const b = parsed();
       if (!b) return [400, { error: 'bad json' }];
+      // readJson's key rule (worker/src/lib/http.js): a key outside action, kind and id is a 400.
+      const extra = Object.keys(b).find((k) => !['action', 'kind', 'id'].includes(k));
+      if (extra !== undefined) {
+        problems.push(`POST /admin/moderation: unknown body key ${extra}`);
+        return [400, { error: `Unknown key: ${extra}` }];
+      }
       if (b.action === 'purge') {
         if (!state.conferenceEnded) return [200, { ok: true, purged: 0, ends_at: '2099-12-31T23:59:59.000Z' }];
         let purged = 0;
@@ -283,9 +311,13 @@ function stubWorker() {
       // body on GET and DELETE, the body hash, then the nonce.
       if (req.headers.authorization !== undefined) problems.push(`${record.method} ${record.path}: an Authorization header was sent`);
       if (req.headers.origin !== undefined) problems.push(`${record.method} ${record.path}: an Origin header was sent`);
+      // The failed-signature limiter is peeked before the signature is checked: once it is empty,
+      // every request is refused, a valid one included.
+      if (state.failedSignatures >= 10) return json(res, 404, { error: 'Not found' });
       const v = verifyAdminSignature({ headerValue: req.headers['x-caddie-admin'] ?? null, method: req.method, pathWithQuery: record.pathWithQuery, keys: [TOKEN] });
       record.nonce = v.nonce ?? null;
       if (!v.ok) {
+        if (v.reason === 'signature') state.failedSignatures += 1;
         problems.push(`${record.method} ${record.pathWithQuery}: signature ${v.reason}`);
         return json(res, 404, { error: 'Not found' });
       }
@@ -296,7 +328,13 @@ function stubWorker() {
       }
       if (nonces.has(v.nonce)) return json(res, 401, { error: 'admin_replay' });
       nonces.add(v.nonce);
-      const force = forced.shift();
+      // A body goes with Content-Type: application/json, or readJson answers 415.
+      if (body.length > 0 && (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+        problems.push(`${record.method} ${record.path}: a body without Content-Type: application/json`);
+        return json(res, 415, { error: 'Content-Type must be application/json' });
+      }
+      const at = forced.findIndex((f) => f.pathWithQuery === undefined || f.pathWithQuery === record.pathWithQuery);
+      const force = at >= 0 ? forced.splice(at, 1)[0] : undefined;
       if (force) {
         if (force.act) handle(req.method, url, body);
         record.forced = force.status;
@@ -350,7 +388,7 @@ function auditLines() {
 // Runs main() with the real adapter factory against the stand-in. `spawn` records child processes
 // instead of starting them. Every run checks the token leaks nowhere and the stand-in saw no bad
 // request.
-async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false } = {}) {
+async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false, fetch = realFetch } = {}) {
   const spawned = [];
   const spawn = (file, args, options) => {
     spawned.push({ file, args, options });
@@ -367,7 +405,7 @@ async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false } 
     isTTY: false,
     now: () => new Date(),
     spawn,
-    fetch: realFetch,
+    fetch,
   });
   const stdout = out.text();
   const stderr = err.text();
@@ -392,6 +430,21 @@ async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false } 
     assert.equal(child.options?.env?.ADMIN_TOKEN, undefined, 'the child environment has no ADMIN_TOKEN');
   }
   return { code, stdout, stderr, audit: auditLines(), requests, spawned, json: () => JSON.parse(stdout) };
+}
+
+// A fetch whose first calls fail as a network error with the given codes, then the real one. With
+// `after`, a failing call first reaches the stand-in (the request runs) and then fails, as a
+// connection that broke before the answer came back.
+function flakyFetch(codes, { after = false } = {}) {
+  const queue = [...codes];
+  return async (url, init) => {
+    const code = queue.shift();
+    if (code === undefined) return realFetch(url, init);
+    if (after) await (await realFetch(url, init)).text();
+    const err = new TypeError('fetch failed');
+    err.cause = Object.assign(new Error(code), { code });
+    throw err;
+  };
 }
 
 const confirmed = (argv, target) => [...argv, '--yes', '--confirm', target];
@@ -442,7 +495,7 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
     const gone = await invoke(['stats', 'counts', '--event', EVENT]);
     assert.equal(gone.code, 4);
     assert.equal(admins(gone.requests).length, 1, 'a 404 is not retried');
-    assert.match(gone.stderr, /not found, or the admin signature was refused \(the Worker answers 404 to both/);
+    assert.match(gone.stderr, /refused: check the admin key, the failed-signature rate limit or the route/);
   });
 
   test('a 503 daily_limit, an admin_skew and an admin_replay stop at once with a clear message', async () => {
@@ -515,9 +568,18 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
   test('a wrong token is a 404 from the Worker, reported as not found or refused', async () => {
     const r = await invoke(['stats', 'counts', '--event', EVENT], { env: { ADMIN_TOKEN: 'wrong-token-0123456789-abcdefghijklmnopqrstuvwxyz' }, tolerateProblems: true });
     assert.equal(r.code, 4);
-    assert.match(r.stderr, /not found, or the admin signature was refused/);
+    assert.match(r.stderr, /refused: check the admin key, the failed-signature rate limit or the route \(the Worker answers 404 "Not found" to each\)/);
     assert.deepEqual(stub.problems.map((p) => p.split(': ').at(-1)), ['signature signature']);
     stub.problems.length = 0;
+  });
+
+  test('the failed-signature limiter refuses even a valid signature: exit 4, "refused", no retry', async () => {
+    stub.state.failedSignatures = 10;
+    const r = await invoke(['stats', 'counts', '--event', EVENT]);
+    assert.equal(r.code, 4);
+    assert.equal(admins(r.requests).length, 1);
+    assert.match(r.stderr, /refused: check the admin key, the failed-signature rate limit or the route/);
+    assert.equal(r.audit.at(-1).result, 'not_found');
   });
 });
 
@@ -573,7 +635,7 @@ describe('ATT-1, ATT-2 attendees search', () => {
     assert.deepEqual(r.json().result.items.map((i) => i.display_name), ['Ann Lee']);
     const missing = await invoke(['attendees', 'search', '--event', EVENT, '--ref', '0123456789abcdef']);
     assert.equal(missing.code, 4);
-    assert.match(missing.stderr, /profile 0123456789abcdef at testconf-2099: not found, or the admin signature was refused/);
+    assert.match(missing.stderr, /profile 0123456789abcdef at testconf-2099: no such target \(the Worker answered not_found\)/);
     assert.equal(missing.audit.at(-1).result, 'not_found');
   });
 });
@@ -677,7 +739,7 @@ describe('ATT-7, ATT-10 attendees delete and the 404-after-retry rule', () => {
   test('a 404 on the first attempt is exit 4; a 404 after a lost answer is "already done" and exit 0', async () => {
     const gone = await invoke(confirmed(['attendees', 'delete', '--event', EVENT, '0123456789abcdef'], '0123456789abcdef'));
     assert.equal(gone.code, 4);
-    assert.match(gone.stderr, /not found, or the admin signature was refused/);
+    assert.match(gone.stderr, /no such target/);
     const p = person('Lost Answer');
     // The first attempt does the work but its answer is lost (a 503); the retry sees 404.
     stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
@@ -685,11 +747,54 @@ describe('ATT-7, ATT-10 attendees delete and the 404-after-retry rule', () => {
     assert.equal(r.code, 0, r.stderr);
     assert.equal(admins(r.requests).length, 2);
     assert.ok(!stub.state.people.has(p.ref));
-    assert.match(r.stdout, /profile .*: already done or never existed \(a retried request answered 404; the first attempt may have succeeded\)/);
+    assert.match(r.stdout, /profile .*: already done \(an earlier attempt may have run and its answer was lost; the retry answered not_found\)/);
     assert.equal(r.audit.at(-1).result, 'ok');
+    assert.equal(r.audit.at(-1).note, 'already_deleted');
     assert.deepEqual(r.audit.at(-1).counts, { profile: 0 });
     const asJson = await invoke(confirmed(['moderation', 'delete', '--event', EVENT, `profile:${p.ref}`, '--json'], `profile:${p.ref}`));
     assert.equal(asJson.code, 4, 'a plain 404 stays exit 4');
+  });
+
+  test('a 404 counts as done only after an attempt that may have run, and only with a target code', async () => {
+    const typo = '0123456789abcdef';
+    const del = (ref, opts) => invoke(confirmed(['attendees', 'delete', '--event', EVENT, ref], ref), opts);
+    // A 429 is the limiter's, before any handler: the not_found after it is exit 4.
+    stub.forced.push({ status: 429, body: { error: 'Too many requests' }, headers: { 'retry-after': '0' } });
+    const limited = await del(typo);
+    assert.equal(limited.code, 4);
+    assert.equal(admins(limited.requests).length, 2);
+    assert.match(limited.stderr, /no such target/);
+    // A refused connection never sent the request: exit 4.
+    const refused = await del(typo, { fetch: flakyFetch(['ECONNREFUSED']) });
+    assert.equal(refused.code, 4);
+    assert.equal(admins(refused.requests).length, 1, 'the refused attempt never reached the stand-in');
+    // A typo'd ref after a DNS failure, a connect timeout or a TLS error: exit 4, for a delete and an unblock.
+    for (const code of ['ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'CERT_HAS_EXPIRED']) {
+      const failed = await del(typo, { fetch: flakyFetch([code]) });
+      assert.equal(failed.code, 4, code);
+      assert.equal(failed.audit.at(-1).result, 'not_found', code);
+    }
+    const unblock = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, typo], typo), { fetch: flakyFetch(['ENOTFOUND']) });
+    assert.equal(unblock.code, 4);
+    // A 503 may have run the handler, but a "Not found" refusal after it is still exit 4.
+    const p = person('Refused Later');
+    stub.forced.push({ status: 503, body: { error: 'lost' } }, { status: 404, body: { error: 'Not found' } });
+    const notFound = await del(p.ref);
+    assert.equal(notFound.code, 4);
+    assert.match(notFound.stderr, /refused: check the admin key, the failed-signature rate limit or the route/);
+    assert.ok(stub.state.people.has(p.ref));
+    assert.equal(notFound.audit.at(-1).result, 'not_found');
+    // A 503 whose attempt did the work, then not_found: exit 0 with the note.
+    stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
+    const done = await del(p.ref);
+    assert.equal(done.code, 0, done.stderr);
+    assert.equal(done.audit.at(-1).note, 'already_deleted');
+    // A reset once connected (the request ran, its answer was lost) counts too.
+    const q = person('Reset Answer');
+    const reset = await del(q.ref, { fetch: flakyFetch(['ECONNRESET'], { after: true }) });
+    assert.equal(reset.code, 0, reset.stderr);
+    assert.ok(!stub.state.people.has(q.ref));
+    assert.match(reset.stdout, /already done/);
   });
 });
 
@@ -744,16 +849,18 @@ describe('ATT-8, ATT-9 block and unblock', () => {
     assert.match(none.stderr, /has no operator block at testconf-2099/);
     const dryNone = await invoke(['attendees', 'unblock', '--event', EVENT, p.ref]);
     assert.match(dryNone.stdout, /has no operator block/);
-    // The four answers: after a lost attempt any 404 is "already unblocked" (exit 0), whether
-    // no_operator_block (the block went) or not_found (a deleted profile's stale report went);
-    // found:true is an unblock; found:false removed a stale report of a deleted profile.
+    // The four answers: after an attempt that may have run (here a 503 whose attempt did the
+    // work), a 404 no_operator_block (the block went) or not_found (a deleted profile's stale
+    // report went) is "already unblocked" (exit 0); found:true is an unblock; found:false removed
+    // a stale report of a deleted profile.
     p.reporters.push({ id: 'operator', reason: 'operator' });
     p.hidden = true;
     stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
     const lost = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, p.ref], p.ref));
     assert.equal(lost.code, 0, lost.stderr);
     assert.equal(admins(lost.requests).length, 2);
-    assert.match(lost.stdout, /the operator block of .*: already unblocked or never there \(a retried request answered 404/);
+    assert.match(lost.stdout, /the operator block of .*: already unblocked \(an earlier attempt may have run and its answer was lost; the retry answered no_operator_block\)/);
+    assert.equal(lost.audit.at(-1).note, 'already_unblocked');
     assert.equal(lost.audit.at(-1).result, 'ok');
     assert.equal(p.reporters.length, 0);
     // A deleted profile's stale report removed by a lost attempt: the retry answers not_found.
@@ -763,7 +870,7 @@ describe('ATT-8, ATT-9 block and unblock', () => {
     assert.equal(staleLost.code, 0, 'not_found after a lost attempt is "already unblocked"');
     assert.equal(admins(staleLost.requests).length, 2);
     assert.ok(!stub.state.staleOperatorReports.has('0123456789abcdef'), 'the lost attempt did the work');
-    assert.match(staleLost.stdout, /the operator block of 0123456789abcdef: already unblocked or never there/);
+    assert.match(staleLost.stdout, /the operator block of 0123456789abcdef: already unblocked \(.*the retry answered not_found\)/);
     assert.deepEqual(staleLost.audit.at(-1).counts, { reports: 0 });
     const noPerson = await invoke(confirmed(['attendees', 'unblock', '--event', EVENT, '0123456789abcdef'], '0123456789abcdef'));
     assert.equal(noPerson.code, 4, 'not_found on a first attempt is exit 4');
@@ -833,7 +940,7 @@ describe('MOD-2, MOD-4, MOD-7 moderation queue, hide, unhide, delete, purge-repo
     assert.equal(stub.requests.length, admins(dry.requests).length + admins(hideP.requests).length + admins(hideS.requests).length, 'no request for the meet');
 
     const dryUn = await invoke(['moderation', 'unhide', '--event', EVENT, `profile:${p.ref}`]);
-    assert.match(dryUn.stdout, /would clear the hidden flag of profile .* and remove 1 report/);
+    assert.match(dryUn.stdout, /would clear the hidden flag of profile .* and remove up to 1 report, those of this profile/);
     assert.equal(p.hidden, true);
     const unhide = await invoke(confirmed(['moderation', 'unhide', '--event', EVENT, `profile:${p.ref}`], `profile:${p.ref}`));
     assert.equal(unhide.code, 0, unhide.stderr);
@@ -864,8 +971,9 @@ describe('MOD-2, MOD-4, MOD-7 moderation queue, hide, unhide, delete, purge-repo
     assert.equal(lost.code, 0, lost.stderr);
     assert.equal(admins(lost.requests).length, 2);
     assert.ok(!stub.state.staleOperatorReports.has('0123456789abcdef'), 'the lost attempt did the work');
-    assert.match(lost.stdout, /the hidden flag of profile 0123456789abcdef: already done or never existed/);
+    assert.match(lost.stdout, /the hidden flag of profile 0123456789abcdef: already done \(an earlier attempt may have run/);
     assert.equal(lost.audit.at(-1).result, 'ok');
+    assert.equal(lost.audit.at(-1).note, 'already_unhidden');
     assert.deepEqual(lost.audit.at(-1).counts, { reports: 0 });
   });
 
@@ -904,6 +1012,38 @@ describe('MOD-2, MOD-4, MOD-7 moderation queue, hide, unhide, delete, purge-repo
     assert.match(run.stdout, /deleted 3 reports of testconf-2099/);
     assert.deepEqual(run.audit.at(-1).counts, { reports: 3 });
     assert.equal((await invoke(['moderation', 'purge-reports', '--event', 'nosuch-2099'])).code, 4);
+  });
+
+  test('a retried purge says an earlier attempt may have deleted more, and audits the note', async () => {
+    seedModeration();
+    stub.state.conferenceEnded = true;
+    stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
+    const r = await invoke(confirmed(['moderation', 'purge-reports', '--event', EVENT], EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /deleted 0 reports of testconf-2099 made before its end; an earlier attempt may have run and deleted more \(its answer was lost\), so the count can be short/);
+    assert.equal(r.audit.at(-1).note, 'earlier_attempt_may_have_run');
+  });
+
+  test('a 2xx without a JSON object, or a write without "ok": true, is exit 1 and never success', async () => {
+    const p = person('Odd Answer');
+    stub.forced.push({ status: 200, body: { done: true } });
+    const del = await invoke(confirmed(['moderation', 'delete', '--event', EVENT, `profile:${p.ref}`], `profile:${p.ref}`));
+    assert.equal(del.code, 1);
+    assert.match(del.stderr, /POST \/admin\/moderation: status 200 without "ok": true; the request may have taken effect/);
+    assert.equal(del.audit.at(-1).result, 'failed');
+    stub.forced.push({ status: 200, body: 'oops' });
+    const block = await invoke(confirmed(['attendees', 'block', '--event', EVENT, p.ref, '--reason', 'spam'], p.ref));
+    assert.equal(block.code, 1);
+    assert.match(block.stderr, /POST \/admin\/people\/block: status 200 without a JSON object/);
+    stub.forced.push({ status: 200, body: [1, 2] });
+    const search = await invoke(['attendees', 'search', '--event', EVENT, '--name', 'Odd']);
+    assert.equal(search.code, 1, 'a read too');
+    seedConferenceFiles(EVENT);
+    stub.forced.push({ status: 200, body: { deleted: { talks: 3 }, directory: 1, retired: true } });
+    const remove = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(remove.code, 1);
+    assert.match(remove.stderr, /DELETE \/admin\/conference: status 200 without "ok": true/);
+    assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'searchable', 'the local files are left alone');
   });
 });
 
@@ -1084,17 +1224,31 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     // After the wipe the object refuses admin requests until an unretire; the message says so.
     const search = await invoke(['attendees', 'search', '--event', EVENT, '--name', 'x']);
     assert.equal(search.code, 4);
-    assert.match(search.stderr, /the Worker does not route testconf-2099 \(no conference, or it was removed; after a removal run conferences unretire --event testconf-2099 and then conferences refresh\)/);
+    assert.match(search.stderr, /the Worker does not route testconf-2099 or takes no admin write for it; check the slug; if it was removed, run conferences unretire --event testconf-2099 and then conferences refresh/);
     // A write is answered the same (400 "conference is not available"): exit 4, the unretire
     // hint, one request and no retry.
     const hide = await invoke(confirmed(['moderation', 'hide', '--event', EVENT, 'profile:0123456789abcdef', '--reason', 'spam'], 'profile:0123456789abcdef'));
     assert.equal(hide.code, 4);
     assert.equal(admins(hide.requests).length, 1);
-    assert.match(hide.stderr, /^caddie-admin: POST \/admin\/moderation: the Worker does not route testconf-2099 \(no conference, or it was removed; after a removal run conferences unretire --event testconf-2099 and then conferences refresh\)\n$/);
+    assert.match(hide.stderr, /^caddie-admin: POST \/admin\/moderation: the Worker does not route testconf-2099 or takes no admin write for it; check the slug; if it was removed, run conferences unretire --event testconf-2099 and then conferences refresh\n$/);
     assert.equal(hide.audit.at(-1).result, 'not_found');
+    assert.equal(hide.audit.at(-1).error, 'conference_unavailable');
+    const hideJson = await invoke(confirmed(['moderation', 'hide', '--event', EVENT, 'profile:0123456789abcdef', '--reason', 'spam', '--json'], 'profile:0123456789abcdef'));
+    assert.equal(hideJson.code, 4);
+    assert.equal(JSON.parse(hideJson.stderr).error, 'conference_unavailable');
     const statsAfter = await invoke(['stats', 'counts', '--event', EVENT]);
     assert.equal(statsAfter.code, 4);
     assert.match(statsAfter.stderr, /run conferences unretire --event testconf-2099 and then conferences refresh/);
+  });
+
+  test('a retried removal says an earlier attempt may have deleted more, and audits the note', async () => {
+    seedConferenceFiles(EVENT);
+    stub.forced.push({ status: 503, body: { error: 'lost' }, act: true });
+    const r = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(admins(r.requests).length, 2);
+    assert.match(r.stdout, /it was retired already, at .*; an earlier attempt may have run and deleted more \(its answer was lost\), so these counts can be short/);
+    assert.equal(r.audit.at(-1).note, 'earlier_attempt_may_have_run');
   });
 
   test('a removal that stopped between its steps exits 1 naming the step, is not retried blind, and leaves the local files alone', async () => {
@@ -1137,8 +1291,8 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
     const dry = await invoke(['conferences', 'unretire', '--event', EVENT]);
     assert.equal(dry.code, 0, dry.stderr);
-    assert.equal(stub.requests.length, 0);
-    assert.match(dry.stdout, /would send testconf-2099 to PUT \/admin\/conferences with "unretire": true in the body/);
+    assert.deepEqual(dry.requests.map((x) => `${x.method} ${x.path}`), ['GET /api/conferences'], 'the preview reads the public listing only');
+    assert.match(dry.stdout, /would unretire testconf-2099: sending searchable \(Worker now not listed\) to PUT \/admin\/conferences with "unretire": true on the document/);
     assert.ok(stub.state.retired.has(EVENT));
     const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
     assert.equal(r.code, 0, r.stderr);
@@ -1152,7 +1306,7 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     assert.equal(doc.status_reason, null, 'the local document as it is (seeded searchable)');
     assert.ok(!stub.state.retired.has(EVENT), 'the tombstone is gone');
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
-    assert.match(r.stdout, /sent testconf-2099 with unretire: true; the Worker dropped its tombstone \(upserted 1\); commit data\/conference-operator\.json; run conferences refresh --event testconf-2099 next/);
+    assert.match(r.stdout, /unretired testconf-2099: sent searchable \(Worker was not listed\) with unretire: true; the Worker dropped its tombstone \(upserted 1\); commit data\/conference-operator\.json; run conferences refresh --event testconf-2099 next/);
     assert.deepEqual(r.audit.at(-1).counts, { upserted: 1, searchable: 1, synced: 1 });
     // On tier 2 a second unretire is sent again (the repair path), with no local entry to drop.
     const again = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
@@ -1163,7 +1317,9 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
 
   test('unretire of an unavailable local document renders the counts as the Worker returns them (synced 1, searchable 0)', async () => {
     seedConferenceFiles(EVENT, { status: 'unavailable', statusReason: 'operator_removed' });
+    // A removed conference: a tombstone, and no row in the directory's listing.
     stub.state.retired.add(EVENT);
+    stub.state.conferences = stub.state.conferences.filter((c) => c.slug !== EVENT);
     writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
     const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT, '--json'], EVENT));
     assert.equal(r.code, 0, r.stderr);
@@ -1226,17 +1382,42 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     // The field order of the answer does not matter.
     stub.forced.push({ status: 409, body: { deleted: {}, wiped: true, retired: false, step: 'directory', error: 'removal_superseded' } });
     assert.match((await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT))).stderr, /an unretire ran during the removal/);
-    // A wipe that lost to a newer unretire answers the same with step "wipe": the same guidance,
-    // nothing done on its own.
-    stub.forced.push({ status: 409, body: { error: 'removal_superseded', step: 'wipe', retired: false, wiped: false } });
-    const wipe = await invoke(confirmed(['conferences', 'remove', '--event', EVENT, '--purge-local'], EVENT));
-    assert.equal(wipe.code, 1);
-    assert.equal(admins(wipe.requests).length, 1);
-    assert.match(wipe.stderr, /choose one: finish the removal with `caddie-admin conferences remove --event testconf-2099 --purge-local --yes --confirm testconf-2099`, or restore the conference with `caddie-admin conferences unretire --event testconf-2099 --yes --confirm testconf-2099` \(DELETE \/admin\/conference: an unretire overtook the removal at step wipe \(status 409\)\)/);
-    assert.ok(!/run the removal again/.test(wipe.stderr));
+    // --purge-local is carried into the "finish" command, and nothing is purged locally.
+    stub.forced.push({ status: 409, body: superseded });
+    const purge = await invoke(confirmed(['conferences', 'remove', '--event', EVENT, '--purge-local'], EVENT));
+    assert.equal(purge.code, 1);
+    assert.equal(admins(purge.requests).length, 1);
+    assert.match(purge.stderr, /finish the removal with `caddie-admin conferences remove --event testconf-2099 --purge-local --yes --confirm testconf-2099`/);
     assert.ok(existsSync(join(root, 'data', EVENT, 'talks.ndjson')), 'nothing purged locally');
     assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
-    assert.equal(wipe.audit.at(-1).error, 'removal_superseded');
+  });
+
+  test('after a superseded removal the conference is listed but its object is wiped: reads are empty, writes exit 4, and the unretire repairs it', async () => {
+    seedConferenceFiles(EVENT);
+    const p = person('Kept Person');
+    stub.forced.push({ status: 409, body: { error: 'removal_superseded', step: 'directory', retired: false, wiped: true, deleted: { people: 1 } } });
+    const removed = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(removed.code, 1);
+    // What the Worker holds then: the directory row (the unretire's), and a wiped object.
+    stub.state.wipedObjects.add(EVENT);
+    const search = await invoke(['attendees', 'search', '--event', EVENT, '--name', 'Kept', '--json']);
+    assert.equal(search.code, 0, search.stderr);
+    assert.deepEqual(search.json().result.counts, { matched: 0, shown: 0 });
+    const hide = await invoke(confirmed(['moderation', 'hide', '--event', EVENT, `profile:${p.ref}`, '--reason', 'spam'], `profile:${p.ref}`));
+    assert.equal(hide.code, 4);
+    assert.equal(hide.audit.at(-1).error, 'conference_unavailable');
+    assert.match(hide.stderr, /check the slug; if it was removed, run conferences unretire --event testconf-2099/);
+    // The repair: no local removed entry (the removal never finished here), and the local document
+    // has the status the Worker lists, so the unretire is sent.
+    const dry = await invoke(['conferences', 'unretire', '--event', EVENT]);
+    assert.equal(dry.code, 0, dry.stderr);
+    assert.match(dry.stdout, /would unretire testconf-2099: sending searchable \(Worker now searchable\)/);
+    const repair = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(repair.code, 0, repair.stderr);
+    assert.match(repair.stdout, /unretired testconf-2099: sent searchable \(Worker was searchable\)/);
+    assert.ok(!stub.state.wipedObjects.has(EVENT), 'the unretire cleared the removal marker');
+    const after = await invoke(confirmed(['moderation', 'hide', '--event', EVENT, `profile:${p.ref}`, '--reason', 'spam'], `profile:${p.ref}`));
+    assert.equal(after.code, 0, after.stderr);
   });
 
   test('unretire sends the flag on the document and only `conferences` at the top level; the stand-in refuses any other top-level key, as the Worker does', async () => {
@@ -1280,6 +1461,38 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     const r = await invoke(confirmed(['conferences', 'unretire', '--event', OTHER], OTHER));
     assert.equal(r.code, 0, r.stderr);
     assert.deepEqual(JSON.parse(admins(r.requests)[0].body), { conferences: [{ slug: OTHER, unretire: true }] });
+  });
+
+  test('an unretire is refused for a typo (no removed entry, no local document) and for a slug the Worker lists with another status', async () => {
+    const typo = await invoke(confirmed(['conferences', 'unretire', '--event', 'testconf-2098'], 'testconf-2098'));
+    assert.equal(typo.code, 4);
+    assert.match(typo.stderr, /testconf-2098 has no removed entry in data\/conference-operator\.json and no data\/testconf-2098\/conference\.json; check the slug/);
+    assert.equal(stub.requests.length, 0, 'nothing sent, not even a read');
+    // Live as searchable while the local document is hidden: the unretire would take it offline.
+    seedConferenceFiles(EVENT, { status: 'unavailable', statusReason: 'operator_hidden' });
+    for (const argv of [['conferences', 'unretire', '--event', EVENT], confirmed(['conferences', 'unretire', '--event', EVENT], EVENT)]) {
+      const live = await invoke(argv);
+      assert.equal(live.code, 1);
+      assert.match(live.stderr, /testconf-2099 is listed on the Worker as searchable, and the unretire would send it as unavailable \(operator_hidden\); refused, because that would change a live conference/);
+      assert.deepEqual(admins(live.requests), [], 'no PUT');
+      assert.equal(live.audit.at(-1).error, 'unretire_refused');
+    }
+    // The same with a removed entry recorded locally: the live listing still wins.
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
+    const recorded = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(recorded.code, 1);
+    assert.deepEqual(Object.keys(operatorFile().removed), [EVENT], 'the entry stays');
+    // The slug alone (no local document) would be stored as unavailable: refused for a live one.
+    rmSync(join(root, 'data', EVENT, 'conference.json'));
+    const bare = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(bare.code, 1);
+    assert.match(bare.stderr, /would send it as unavailable; refused/);
+    // A listing without a conferences array is an error, never "not listed".
+    const broken = async (url, init) => (String(url).endsWith('/api/conferences') ? new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }) : realFetch(url, init));
+    const odd = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT), { fetch: broken });
+    assert.equal(odd.code, 1);
+    assert.match(odd.stderr, /GET \/api\/conferences: the answer holds no conferences list/);
+    assert.deepEqual(stub.state.puts, [], 'no document was ever sent');
   });
 });
 
@@ -1363,6 +1576,18 @@ describe('STAT-1 to STAT-3 stats', () => {
     stub.state.account = { day: null, usage: {}, holds: {} };
     const none = await invoke(['stats', 'usage']);
     assert.match(none.stdout, /0 conferences metered on no day yet \(the cron has not run\)/);
+  });
+
+  test('usage stops at the first per-conference failure other than an unrouted conference, with its exit code', async () => {
+    stub.forced.push({ pathWithQuery: `/admin/stats?event=${EVENT}`, status: 401, body: { error: 'admin_skew' } });
+    const skew = await invoke(['stats', 'usage']);
+    assert.equal(skew.code, 1);
+    assert.match(skew.stderr, /clock is more than five minutes/);
+    assert.deepEqual(admins(skew.requests).map((x) => x.pathWithQuery), ['/admin/stats', `/admin/stats?event=${EVENT}`], 'nothing after the failure');
+    stub.forced.push({ pathWithQuery: `/admin/stats?event=${OTHER}`, status: 404, body: { error: 'Not found' } });
+    const refused = await invoke(['stats', 'usage']);
+    assert.equal(refused.code, 4);
+    assert.match(refused.stderr, /refused: check the admin key/);
   });
 
   test('health reads the public routes unsigned and prints the smoke and log commands with variable names and paths, never a value', async () => {

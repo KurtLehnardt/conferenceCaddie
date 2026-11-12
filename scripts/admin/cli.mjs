@@ -456,6 +456,16 @@ function foreignError(raw) {
   return error;
 }
 
+// Every string of a result, keys included, with the credential redacted, before the result is
+// rendered: the escaping in output.mjs (JSON's or the backslash rule) could otherwise turn a
+// credential into a form the redactor would not find.
+function redactDeep(value, redact) {
+  if (typeof value === 'string') return redact(value);
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v, redact));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [redact(k), redactDeep(v, redact)]));
+  return value;
+}
+
 function auditResult(error) {
   if (error instanceof ConfirmError) return 'refused';
   if (error instanceof NotFoundError) return 'not_found';
@@ -488,12 +498,14 @@ export async function main(argv, deps = {}) {
   } catch (raw) {
     // A UsageError of the signer or another module carries its own exitCode (an integer of 1 or
     // more); anything else is 1. The code names the exit codes this CLI defines.
-    // A message can echo a value a backend answered with, so it is escaped like any output.
+    // A message can echo a value a backend answered with, so, like every output, it is redacted
+    // first and then escaped; a newline in it is escaped too, so it stays one line and nothing
+    // after the newline is lost.
     const error = raw instanceof AdminError ? raw : foreignError(raw);
     const message = redact(error.message);
     stderr.write(json
       ? `${escapeJsonControls(JSON.stringify({ ok: false, error: error.code, message }))}\n`
-      : `caddie-admin: ${escapeControls(message.split('\n')[0])}\n`);
+      : `caddie-admin: ${escapeControls(message)}\n`);
     return error.exitCode;
   }
 }
@@ -582,16 +594,16 @@ async function run(argv, ctx) {
       prompt: d.prompt,
     });
     const adapter = d.createAdapter(backend, { credential, env, spawn: d.spawn, fetch: d.fetch, now: d.now });
-    const result = (await adapter[command.method]({ ...args, mode })) ?? {};
+    const result = redactDeep((await adapter[command.method]({ ...args, mode })) ?? {}, redact);
     const warnings = Array.isArray(result.warnings) ? result.warnings : [];
-    writeAudit({ mode, result: warnings.length ? 'warned' : 'ok', counts: warnings.length ? { ...(result.counts ?? {}), warnings: warnings.length } : result.counts });
+    writeAudit({ mode, result: warnings.length ? 'warned' : 'ok', note: result.note, counts: warnings.length ? { ...(result.counts ?? {}), warnings: warnings.length } : result.counts });
     const text = values.json
       ? renderJson({ command: commandName, backend: backend.name, tier: backend.tier, mode, result })
       : renderHuman({ command: commandName, mode, result });
     stdout.write(redact(text));
     // A command that did its work but reports warnings (for example a delete whose best-effort
     // second pass failed) says so on stderr and exits 1, so a script notices.
-    for (const warning of warnings) stderr.write(redact(`caddie-admin: warning: ${escapeControls(warning)}\n`));
+    for (const warning of warnings) stderr.write(`caddie-admin: warning: ${escapeControls(redact(warning))}\n`);
     return warnings.length ? 1 : 0;
   } catch (error) {
     writeAudit({ mode, result: auditResult(error), error: error?.code });

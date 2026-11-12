@@ -13,13 +13,23 @@
 // - A redirect is never followed: the response is refused as soon as its status arrives, its body
 //   is cancelled, and nothing is retried (fetch would carry the signed header and the optional
 //   Access secret to another origin).
-// - A 404 from the Worker means "not found" or "the signature was refused", and the Worker does not
-//   say which; every not-found message says so. After a retry of a delete or an unhide (an attempt
-//   whose answer was lost may have done the work), a 404 reads as "already done", and after a
-//   retried unblock any 404 reads as "already unblocked"; the command succeeds with a note. A
-//   removal run again is a success too (already_retired_at), and a removal that stopped between
+// - The Worker tells its two 404s apart by the body: {"error": "Not found"} is a refusal (a refused
+//   signature, the failed-signature limiter, an unknown route, a missing nonce), and "not_found"
+//   or "no_operator_block" is a missing target. Both are exit 4, each with its own message.
+// - An attempt "may have run" only when the Worker may have executed it: it answered a 5xx other
+//   than daily_limit, the connection timed out or was reset after it was up, or the body of a 2xx
+//   could not be read. A failure to connect (refused, DNS, connect timeout, TLS) and a 429 never
+//   count. Only after such an attempt does a retried delete or unhide that answers 404 not_found,
+//   or a retried unblock that answers not_found or no_operator_block, read as "already done"
+//   (exit 0 with a note); a "Not found" refusal never does. A retried purge or removal says that
+//   an earlier attempt may have done more than the counts show.
+// - A removal run again is a success too (already_retired_at), and a removal that stopped between
 //   its steps (removal_incomplete) says which step and asks for another run. A conference the
-//   Worker does not route (400 "conference is not available") is exit 4 with the unretire hint.
+//   Worker does not route (400 "conference is not available") is exit 4 with the code
+//   conference_unavailable.
+// - Every 2xx must carry a JSON object, and the writes that answer "ok" (POST /admin/moderation,
+//   POST /admin/people/block, DELETE /admin/conference) must answer "ok": true; anything else is
+//   exit 1, never taken for success.
 // - Query values stay inside the signer's charset: slugs, refs, integers, ISO instants in Z form
 //   and comma lists; free text travels base64url-encoded under q64. Flags that change what a
 //   handler does (unretire) travel in the JSON body, never in the query.
@@ -51,6 +61,17 @@ const STAT_KEYS = ['talks', 'topics', 'facets', 'people', 'shared_talks', 'prese
 
 const LOOPBACK = ['localhost', '127.0.0.1', '[::1]'];
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// The 404 codes of a missing target (worker/src/admin.js); any other 404 is a refusal.
+const TARGET_CODES = new Set(['not_found', 'no_operator_block']);
+// Network failures after which the request may have reached the Worker and run: a timeout, or a
+// reset or closed socket once the connection was up. Any other code (ECONNREFUSED, ENOTFOUND,
+// EAI_AGAIN, UND_ERR_CONNECT_TIMEOUT, a TLS error, an unknown one) counts as never sent, so a later
+// 404 is never taken for work done.
+const MAY_HAVE_RUN_CODES = new Set(['ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+const mayHaveRunAfter = (err) => err?.name === 'TimeoutError' || MAY_HAVE_RUN_CODES.has(err?.cause?.code) || MAY_HAVE_RUN_CODES.has(err?.code);
+// The note of a result whose counts may be short, because an earlier attempt may have done more.
+const EARLIER = 'earlier_attempt_may_have_run';
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const int = (v) => (Number.isInteger(v) ? v : Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
 const bool = (v) => v === true;
@@ -70,22 +91,29 @@ function describe(status, json) {
   return code ? `status ${status} (${code})` : `status ${status}`;
 }
 
-// The not-found answer of the Worker: a missing target or a refused signature, and the Worker does
-// not say which (design 5.3). `retried` is set when an earlier attempt of the same request was
-// sent and its answer never came back, so the work may have been done already.
+// A 404 of the Worker. `missing` when its code names a missing target (not_found,
+// no_operator_block); otherwise a refusal, which the Worker answers {"error": "Not found"} to a
+// refused signature, the failed-signature limiter, an unknown route and a missing nonce alike.
+// `mayHaveRun` is set when an earlier attempt of the same request may have run on the Worker.
 class WorkerNotFoundError extends NotFoundError {
-  constructor(what, { code = null, retried = false } = {}) {
-    super(`${what}: not found, or the admin signature was refused (the Worker answers 404 to both; a refused signature means the token, not the clock)`);
+  constructor(what, { code = null, mayHaveRun = false } = {}) {
+    const missing = TARGET_CODES.has(code);
+    super(missing
+      ? `${what}: no such target (the Worker answered ${code})`
+      : `${what}: refused: check the admin key, the failed-signature rate limit or the route (the Worker answers 404 "Not found" to each)`);
     this.workerCode = code;
-    this.retried = retried;
+    this.missing = missing;
+    this.mayHaveRun = mayHaveRun;
   }
 }
 
-// A conference the Worker does not route (400 "conference is not available", or a stats read that
-// answers it): exit 4, with the repair after a removal.
+// A conference the Worker does not route or will not write to (400 "conference is not available":
+// never added, a typo, or removed): exit 4 with its own code.
 function unrouted(slug, where = null) {
   const s = typeof slug === 'string' && SLUG_RE.test(slug) ? slug : null;
-  return new NotFoundError(`${where ? `${where}: ` : ''}the Worker does not route ${s ?? 'this conference'} (no conference, or it was removed; after a removal run conferences unretire --event ${s ?? '<slug>'} and then conferences refresh)`);
+  const err = new NotFoundError(`${where ? `${where}: ` : ''}the Worker does not route ${s ?? 'this conference'} or takes no admin write for it; check the slug; if it was removed, run conferences unretire --event ${s ?? '<slug>'} and then conferences refresh`);
+  err.code = 'conference_unavailable';
+  return err;
 }
 
 // The optional Cloudflare Access service token: both variables set, or nothing. Sent on admin
@@ -135,18 +163,20 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
 
   // ---- transport ----
 
-  // One signed admin request. Resolves to { status, json, retried }; throws WorkerNotFoundError on
-  // 404, NotFoundError on a conference the Worker does not route, AdminError on any other failure.
-  // Network failures, 429 and 5xx are retried with a fresh signature; a 503 daily_limit and a
-  // redirect are not.
-  async function admin(method, path, body) {
+  // One signed admin request. Resolves to { status, json, mayHaveRun } where json is the answer's
+  // JSON object and mayHaveRun says an earlier attempt may have run on the Worker; throws
+  // WorkerNotFoundError on 404, NotFoundError (conference_unavailable) on a conference the Worker
+  // does not route, AdminError on any other failure. Network failures, 429 and 5xx are retried with
+  // a fresh signature; a 503 daily_limit and a redirect are not. With expectOk, a 2xx must carry
+  // "ok": true.
+  async function admin(method, path, body, { expectOk = false } = {}) {
     const where = `${method} ${path.split('?')[0]}`;
     const payload = body === undefined ? undefined : JSON.stringify(body);
     let lastError = 'no attempt';
     let lastStatus = 0;
     let lastJson = null;
+    let mayHaveRun = false;
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
-      const retried = attempt > 0;
       let signed;
       try {
         signed = signAdminRequest({ method, path, base: api, body: payload, key: credential, now: now().getTime() });
@@ -164,6 +194,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (err) {
+        if (mayHaveRunAfter(err)) mayHaveRun = true;
         lastError = networkError(err);
         if (attempt < RETRIES) await sleep(250 * 2 ** attempt);
         continue;
@@ -176,23 +207,33 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       try {
         text = await res.text();
       } catch (err) {
+        // A 2xx ran; only its answer was lost.
+        if (res.ok) mayHaveRun = true;
         lastError = networkError(err);
         if (attempt < RETRIES) await sleep(250 * 2 ** attempt);
         continue;
       }
-      let json = {};
+      let parsed = null;
       try {
-        json = text ? JSON.parse(text) : {};
+        parsed = text ? JSON.parse(text) : null;
       } catch {
-        json = {};
+        parsed = null;
       }
-      if (res.ok) return { status: res.status, json: json && typeof json === 'object' ? json : {}, retried };
+      if (res.ok) {
+        // A success that does not say so is not taken for one: the request may have run, so the
+        // operator checks before running it again.
+        if (!isPlainObject(parsed)) throw new AdminError(`${where}: status ${res.status} without a JSON object; the request may have taken effect, check before running it again`);
+        if (expectOk && parsed.ok !== true) throw new AdminError(`${where}: status ${res.status} without "ok": true; the request may have taken effect, check before running it again`);
+        return { status: res.status, json: parsed, mayHaveRun };
+      }
+      const json = isPlainObject(parsed) ? parsed : {};
       lastError = `${where}: ${describe(res.status, json)}`;
       lastStatus = res.status;
       lastJson = json;
-      // An unretire ran during the removal: the directory row was kept and the object stays
-      // wiped. removeConference turns this into the two commands the operator chooses between.
-      if (json?.error === 'removal_superseded' || (json?.error === 'removal_incomplete' && (res.status === 409 || json.cause === 'removal_superseded'))) {
+      // An unretire ran during the removal (409 at step 3, the directory row): the row was kept and
+      // the object stays wiped. removeConference turns this into the two commands the operator
+      // chooses between.
+      if (json.error === 'removal_superseded') {
         const superseded = new AdminError(`${where}: an unretire overtook the removal at step ${typeof json.step === 'string' && /^[a-z_]{1,20}$/.test(json.step) ? json.step : 'directory'} (status ${res.status})`);
         superseded.code = 'removal_superseded';
         superseded.status = res.status;
@@ -200,7 +241,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       }
       // A removal that stopped between its steps (tombstone, wipe, directory row): the next run
       // finishes it, so the operator is told to run it again rather than the client retrying blind.
-      if (json?.error === 'removal_incomplete') {
+      if (json.error === 'removal_incomplete') {
         const step = typeof json.step === 'string' && /^[a-z_]{1,20}$/.test(json.step) ? json.step : 'unknown';
         const cause = typeof json.cause === 'string' && /^[A-Za-z0-9_ .:,'-]{1,120}$/.test(json.cause) ? `; cause: ${json.cause}` : '';
         const after = Number(res.headers.get('retry-after'));
@@ -210,17 +251,20 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       // A conference the Worker does not route: never added, or removed (its object refuses admin
       // requests after a wipe until an unretire puts the directory row back). Exit 4, as every
       // other absent conference.
-      if (res.status === 400 && json?.error === 'conference is not available') {
+      if (res.status === 400 && json.error === 'conference is not available') {
         throw unrouted(/[?&]event=([a-z0-9-]+)/.exec(path)?.[1], where);
       }
-      if (res.status === 404) throw new WorkerNotFoundError(where, { code: typeof json?.error === 'string' ? json.error : null, retried });
+      if (res.status === 404) throw new WorkerNotFoundError(where, { code: typeof json.error === 'string' ? json.error : null, mayHaveRun });
       if (res.status === 401) {
-        const code = json?.error;
+        const code = json.error;
         if (code === 'admin_skew') throw new AdminError(`${lastError}: this machine's clock is more than five minutes from the Worker's`);
         if (code === 'admin_replay') throw new AdminError(`${lastError}: the Worker saw this nonce before`);
         throw new AdminError(lastError);
       }
-      if (res.status === 503 && json?.error === 'daily_limit') throw new AdminError(`${lastError}: the account's daily limit is reached; try again after 00:00 UTC`);
+      if (res.status === 503 && json.error === 'daily_limit') throw new AdminError(`${lastError}: the account's daily limit is reached; try again after 00:00 UTC`);
+      // A 5xx may have run the handler (a 502 from a route that threw half way, a platform error
+      // after the handler); a 429 is the limiter's, before any handler.
+      if (res.status >= 500) mayHaveRun = true;
       if (res.status === 429 || res.status >= 500) {
         const after = Number(res.headers.get('retry-after'));
         if (attempt < RETRIES) await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 30) * 1000 : 250 * 2 ** attempt);
@@ -252,13 +296,13 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
 
   const q = (params) => Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join('&');
 
-  // The not-found of a target by its ref or id, with the Worker's double meaning spelled out.
-  const notFound = (what, err) => new WorkerNotFoundError(what, { code: err?.workerCode ?? null, retried: err?.retried ?? false });
+  // The not-found of a target by its ref or id, named for the operator.
+  const notFound = (what, err) => new WorkerNotFoundError(what, { code: err?.workerCode ?? null, mayHaveRun: err?.mayHaveRun ?? false });
   const isNotFound = (err) => err instanceof WorkerNotFoundError;
 
-  // A 404 after a retried write of a delete, an unhide or an unblock: the lost attempt may have
-  // done the work, so the command succeeds and says so (PEER-6).
-  const alreadyDone = (err, what) => (isNotFound(err) && err.retried ? `${what}: already done or never existed (a retried request answered 404; the first attempt may have succeeded)` : null);
+  // A 404 not_found of a delete or an unhide after an attempt that may have run: that attempt may
+  // have done the work, so the command succeeds and says so (PEER-6). A refusal never does.
+  const alreadyDone = (err, what) => (isNotFound(err) && err.workerCode === 'not_found' && err.mayHaveRun ? `${what}: already done (an earlier attempt may have run and its answer was lost; the retry answered not_found)` : null);
 
   // ---- people reads ----
 
@@ -310,10 +354,13 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
 
   // ---- conferences ----
 
+  // The Worker's public listing. An answer without a conferences array is an error, never an empty
+  // list: the unretire check reads "not listed" from it.
   async function conferenceList() {
     const { status, json } = await publicGet('/api/conferences');
     if (status !== 200) throw new AdminError(`GET /api/conferences failed with status ${status}`);
-    return (Array.isArray(json.conferences) ? json.conferences : []).filter((c) => c && typeof c.slug === 'string');
+    if (!Array.isArray(json.conferences)) throw new AdminError('GET /api/conferences: the answer holds no conferences list');
+    return json.conferences.filter((c) => c && typeof c.slug === 'string');
   }
 
   // Sends the rewritten local conference document (and nothing else of the batch answer is
@@ -354,7 +401,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     try {
       return await statsRaw(event);
     } catch (err) {
-      if (err instanceof NotFoundError && !(err instanceof WorkerNotFoundError)) return null;
+      if (err instanceof NotFoundError && err.code === 'conference_unavailable') return null;
       throw err;
     }
   }
@@ -433,7 +480,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         return { counts, summary: `would delete profile ${ref} at ${event} and what goes with it (blocks others made and reports stay): ${what}` };
       }
       try {
-        await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'delete', kind: 'profile', id: ref });
+        await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'delete', kind: 'profile', id: ref }, { expectOk: true });
       } catch (err) {
         const done = alreadyDone(err, `profile ${ref}`);
         if (done) return { counts: { profile: 0 }, note: 'already_deleted', summary: done };
@@ -454,14 +501,13 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       const action = options.unblock ? 'unblock' : 'block';
       let json;
       try {
-        ({ json } = await admin('POST', `/admin/people/block?${q({ event })}`, { ref, action }));
+        ({ json } = await admin('POST', `/admin/people/block?${q({ event })}`, { ref, action }, { expectOk: true }));
       } catch (err) {
-        // The unblock answers: after a retry any 404 is "already unblocked", exit 0, because the
-        // lost attempt may have removed the block (no_operator_block next) or a deleted profile's
-        // stale report (not_found next). On a first attempt no_operator_block and not_found
-        // (no person, no stale report) are exit 4.
-        if (options.unblock && isNotFound(err)) {
-          if (err.retried) return { counts: { reports: 0 }, note: 'already_unblocked', summary: `the operator block of ${ref}: already unblocked or never there (a retried request answered 404; the first attempt may have succeeded)` };
+        // The unblock answers: after an attempt that may have run, a 404 no_operator_block (the
+        // block went) or not_found (a deleted profile's stale report went) is "already unblocked",
+        // exit 0. Otherwise both are exit 4, and a "Not found" refusal always is.
+        if (options.unblock && isNotFound(err) && err.missing) {
+          if (err.mayHaveRun) return { counts: { reports: 0 }, note: 'already_unblocked', summary: `the operator block of ${ref}: already unblocked (an earlier attempt may have run and its answer was lost; the retry answered ${err.workerCode})` };
           if (err.workerCode === 'no_operator_block') throw new NotFoundError(`${ref} has no operator block at ${event}`);
         }
         throw isNotFound(err) ? notFound(`profile ${ref} at ${event}`, err) : err;
@@ -515,7 +561,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         return { counts: { reports: reportCounts(p).total }, summary: `would ${already ? 'keep' : 'set'} ${kind} ${id} hidden with an operator report (${plural(reportCounts(p).total, 'report')} on file)` };
       }
       try {
-        await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'hide', kind, id });
+        await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'hide', kind, id }, { expectOk: true });
       } catch (err) {
         throw isNotFound(err) ? notFound(`${kind} ${id} at ${event}`, err) : err;
       }
@@ -527,11 +573,13 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         if (kind === 'meet') return { summary: `would clear the hidden flag of meet ${id} and remove its reports (tier 2 has no preview read of a meet)` };
         const p = await viewRaw(event, id, []);
         const reports = reportCounts(p).total;
-        return { counts: { reports }, summary: `would clear the hidden flag of ${kind} ${id} and remove ${plural(reports, 'report')} (every report of the person, on tier 2)` };
+        // The view counts every report of the person (profile, spot line and meets); the unhide
+        // removes only those of this target.
+        return { counts: { reports }, summary: `would clear the hidden flag of ${kind} ${id} and remove up to ${plural(reports, 'report')}, those of this ${kind}` };
       }
       let json;
       try {
-        ({ json } = await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'unhide', kind, id }));
+        ({ json } = await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'unhide', kind, id }, { expectOk: true }));
       } catch (err) {
         const done = alreadyDone(err, `the hidden flag of ${kind} ${id}`);
         if (done) return { counts: { reports: 0 }, note: 'already_unhidden', summary: done };
@@ -550,7 +598,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         return { counts: { spot: 1 }, summary: `would clear the spot line of ${id} and keep it hidden` };
       }
       try {
-        await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'delete', kind, id });
+        await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'delete', kind, id }, { expectOk: true });
       } catch (err) {
         const done = alreadyDone(err, `${kind} ${id}`);
         if (done) return { counts: { [kind]: 0 }, note: 'already_deleted', summary: done };
@@ -564,10 +612,11 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         const stats = await statsRaw(event);
         return { counts: { reports: stats.counts.reports ?? 0 }, summary: `would ask the Worker to delete the reports of ${event} made before its end (${plural(stats.counts.reports ?? 0, 'report')} on file; the Worker refuses before the end)` };
       }
-      const { json } = await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'purge' });
+      const { json, mayHaveRun } = await admin('POST', `/admin/moderation?${q({ event })}`, { action: 'purge' }, { expectOk: true });
       const purged = int(json.purged);
       if (typeof json.ends_at === 'string') throw new AdminError(`${event} ends at ${json.ends_at}; nothing is purged before that`);
-      return { counts: { reports: purged }, summary: `deleted ${plural(purged, 'report')} of ${event} made before its end` };
+      const earlier = mayHaveRun ? '; an earlier attempt may have run and deleted more (its answer was lost), so the count can be short' : '';
+      return { counts: { reports: purged }, ...(mayHaveRun ? { note: EARLIER } : {}), summary: `deleted ${plural(purged, 'report')} of ${event} made before its end${earlier}` };
     },
 
     async purgeExpired() {
@@ -618,8 +667,9 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         return { counts: stats.counts, summary: `would wipe ${slug} from the Worker: ${what}; directory row 1, and leave a retired tombstone` };
       }
       let json;
+      let mayHaveRun = false;
       try {
-        ({ json } = await admin('DELETE', `/admin/conference?${q({ event: slug })}`));
+        ({ json, mayHaveRun } = await admin('DELETE', `/admin/conference?${q({ event: slug })}`, undefined, { expectOk: true }));
       } catch (err) {
         // The CLI does not act on its own after a superseded removal: the operator chooses
         // between finishing the removal and restoring the conference, with the same flags.
@@ -639,13 +689,30 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       // A removal run again (for example after a lost answer) finds the tombstone already there:
       // already_retired_at is an ISO instant then, and null otherwise.
       const already = typeof json.already_retired_at === 'string' && Number.isFinite(Date.parse(json.already_retired_at)) ? ` (it was retired already, at ${new Date(json.already_retired_at).toISOString()})` : '';
-      return { counts, ...(already ? { note: 'already_retired' } : {}), summary: `wiped ${slug} from the Worker${what ? `: ${what}` : ' (nothing was left to delete)'}; tombstone ${json.retired === true ? 'left' : 'not confirmed'}${already}, so the weekly ingest skips it until conferences unretire` };
+      const earlier = mayHaveRun ? '; an earlier attempt may have run and deleted more (its answer was lost), so these counts can be short' : '';
+      const note = mayHaveRun ? EARLIER : already ? 'already_retired' : null;
+      return { counts, ...(note ? { note } : {}), summary: `wiped ${slug} from the Worker${what ? `: ${what}` : ' (nothing was left to delete)'}; tombstone ${json.retired === true ? 'left' : 'not confirmed'}${already}, so the weekly ingest skips it until conferences unretire${earlier}` };
     },
 
+    // The document goes out with "unretire": true, which the Worker accepts for any slug, removed
+    // or live. So the Worker's own listing is read first: a slug it lists must keep its status
+    // (the repair after removal_superseded, unretire_incomplete or removal_incomplete, where the
+    // row is still listed), and a different status is refused, because the unretire would change a
+    // live conference (DECISIONS.md, caddie-admin C1).
     async unretireConference({ slug, doc, mode }) {
-      if (mode === 'dry-run') return { backend: 'worker', summary: `would send ${slug} to PUT /admin/conferences with "unretire": true in the body, dropping the Worker's tombstone` };
+      const current = (await conferenceList()).find((c) => c.slug === slug) ?? null;
+      const statusOf = (s) => (s === 'searchable' ? 'searchable' : 'unavailable');
+      const sending = statusOf(doc.status);
+      const wanted = `${sending}${typeof doc.status_reason === 'string' && /^[a-z_]{1,40}$/.test(doc.status_reason) ? ` (${doc.status_reason})` : ''}`;
+      const live = current ? statusOf(current.status) : 'not listed';
+      if (current && live !== sending) {
+        const refused = new AdminError(`${slug} is listed on the Worker as ${live}, and the unretire would send it as ${wanted}; refused, because that would change a live conference (use conferences hide, unhide or refresh to change its status, or update the local data/${slug}/conference.json first)`);
+        refused.code = 'unretire_refused';
+        throw refused;
+      }
+      if (mode === 'dry-run') return { backend: 'worker', summary: `would unretire ${slug}: sending ${wanted} (Worker now ${live}) to PUT /admin/conferences with "unretire": true on the document, dropping the Worker's tombstone` };
       const counts = await putConference(slug, doc, { unretire: true });
-      return { backend: 'worker', counts, summary: `sent ${slug} with unretire: true; the Worker dropped its tombstone (upserted ${counts.upserted})` };
+      return { backend: 'worker', counts, summary: `unretired ${slug}: sent ${wanted} (Worker was ${live}) with unretire: true; the Worker dropped its tombstone (upserted ${counts.upserted})` };
     },
 
     async counts({ event }) {
@@ -663,8 +730,9 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       const items = [];
       const total = { requests: 0, rows_read: 0, rows_written: 0 };
       for (const [slug, u] of Object.entries(usage)) {
-        // The pace lives in each conference's own meter; a conference the Worker no longer routes has none.
-        const own = await statsOf(slug).catch(() => null);
+        // The pace lives in each conference's own meter; a conference the Worker no longer routes
+        // has none (null). Any other failure stops the command with its own exit code.
+        const own = await statsOf(slug);
         items.push({ conference: slug, requests: u.requests, rows_read: u.rows_read, rows_written: u.rows_written, pace: own?.usage.pace ?? null, holds: holds.has(slug) });
         for (const k of Object.keys(total)) total[k] += u[k];
       }

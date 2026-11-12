@@ -3,28 +3,72 @@
 //
 // Every printed value may be user text (a display name, with --text the profile text), and a
 // terminal acts on control characters: an OSC 52 sequence in a display name writes the operator's
-// clipboard, CSI 2J clears the screen, and a bidi override makes a line read backwards. So every
-// value is escaped before it is written: C0 controls (except tab; a newline inside a cell too),
-// DEL, C1 controls and the bidi controls are shown as \u{XX}. In JSON, JSON.stringify escapes C0
-// already; DEL, C1 and the bidi controls become \uXXXX escapes, which leaves the JSON the same
-// document. The audit log takes no free text at all (audit.mjs).
+// clipboard, CSI 2J clears the screen, a bidi override makes a line read backwards, and invisible
+// format characters make two names look alike or carry hidden text. So every value is escaped
+// before it is written. The audit log takes no free text at all (audit.mjs).
+//
+// What is escaped: every control (\p{Cc}: C0, DEL and C1) but tab, every format character
+// (\p{Cf}: the bidi controls, the zero-width space and joiners, the soft hyphen, the byte-order
+// mark, the tag characters U+E0000-U+E007F and the rest), the line and paragraph separators
+// (\p{Zl}, \p{Zp}) and, in human output, a lone surrogate and the backslash itself, so a name that
+// holds the text "\u{1B}" cannot pass for an escaped ESC.
+// - Human output shows each as \u{XX} (the code point in hex) and a backslash as \\. One exception,
+//   for readable names: the zero-width joiner U+200D is kept inside an emoji ZWJ sequence (a
+//   pictograph, optionally U+FE0F or a skin tone, the joiner, a pictograph), so a name that ends in
+//   the "woman technologist" emoji prints as the person wrote it. A joiner anywhere else, between
+//   letters for example, is escaped. The joiner moves no cursor and changes no direction; inside
+//   such a sequence it only selects the combined glyph.
+// - JSON: JSON.stringify escapes C0, the backslash and lone surrogates already; every other match
+//   becomes \uXXXX escapes of its UTF-16 units (a surrogate pair for a code point above U+FFFF), so
+//   the JSON parses to the same document. The joiner is escaped there too; its escape parses back
+//   to the same text. An object inside a human line prints as its JSON, escaped the JSON way.
+// Every pattern here is written with escapes, so this file holds no invisible character.
 
-// U+0000-U+0008 and U+000A-U+001F (C0 but tab), U+007F (DEL), U+0080-U+009F (C1), U+061C (Arabic
-// letter mark), U+200E and U+200F (LRM, RLM), U+202A-U+202E (embeddings and overrides), U+2066-U+2069
-// (isolates). Written as escapes, so the source holds no invisible character.
-const HUMAN_UNSAFE_RE = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
-const JSON_UNSAFE_RE = /[\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const HUMAN_UNSAFE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\\]/gu;
+const JSON_UNSAFE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const PICTOGRAPH_RE = /^\p{Extended_Pictographic}$/u;
+const EMOJI_TAIL_RE = /^[\u{FE0F}\u{1F3FB}-\u{1F3FF}]$/u;
+const ZWJ = String.fromCharCode(0x200d);
 
-// Human text: each control character shown as \u{XX}.
+// The code point that ends just before index i of text, or null.
+function codePointBefore(text, i) {
+  if (i <= 0) return null;
+  const low = text.charCodeAt(i - 1);
+  if (low >= 0xdc00 && low <= 0xdfff && i >= 2) {
+    const high = text.charCodeAt(i - 2);
+    if (high >= 0xd800 && high <= 0xdbff) return text.slice(i - 2, i);
+  }
+  return text[i - 1];
+}
+
+// The joiner at index i of text sits inside an emoji ZWJ sequence.
+function emojiJoiner(text, i) {
+  const next = text.codePointAt(i + 1);
+  if (next === undefined || !PICTOGRAPH_RE.test(String.fromCodePoint(next))) return false;
+  let before = codePointBefore(text, i);
+  if (before !== null && EMOJI_TAIL_RE.test(before)) before = codePointBefore(text, i - before.length);
+  return before !== null && PICTOGRAPH_RE.test(before);
+}
+
+// Human text: each unsafe character shown as \u{XX}, a backslash as \\.
 export function escapeControls(text) {
-  return String(text).replace(HUMAN_UNSAFE_RE, (c) => `\\u{${c.codePointAt(0).toString(16).toUpperCase()}}`);
+  return String(text).replace(HUMAN_UNSAFE_RE, (c, i, all) => {
+    if (c === '\t') return c;
+    if (c === '\\') return '\\\\';
+    if (c === ZWJ && emojiJoiner(all, i)) return c;
+    return `\\u{${c.codePointAt(0).toString(16).toUpperCase()}}`;
+  });
 }
 
 // A serialised JSON document: the characters JSON.stringify leaves in place become \uXXXX escapes
-// inside their string literals (every match is a single UTF-16 unit inside a string, because the
-// structural characters of JSON are ASCII).
+// of their UTF-16 units inside their string literals (the structural characters of JSON are ASCII,
+// so every match is inside a string).
 export function escapeJsonControls(serialised) {
-  return String(serialised).replace(JSON_UNSAFE_RE, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return String(serialised).replace(JSON_UNSAFE_RE, (c) => {
+    let out = '';
+    for (let k = 0; k < c.length; k++) out += `\\u${c.charCodeAt(k).toString(16).padStart(4, '0')}`;
+    return out;
+  });
 }
 
 export function renderJson({ command, backend, tier, mode, result }) {
@@ -33,7 +77,8 @@ export function renderJson({ command, backend, tier, mode, result }) {
 
 function cell(value) {
   if (value === null || value === undefined) return '-';
-  if (typeof value === 'object') return escapeControls(JSON.stringify(value));
+  // An object prints as its JSON, escaped as JSON (its backslashes are already JSON escapes).
+  if (typeof value === 'object') return escapeJsonControls(JSON.stringify(value));
   return escapeControls(String(value));
 }
 
