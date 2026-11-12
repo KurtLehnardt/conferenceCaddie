@@ -256,9 +256,19 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
       const requestUrl = `${CUSTOM}/admin/stats?event=${SLUG}`;
       const cfg = adminConfig(envFor(c.setting, c), requestUrl);
       if (c.setting === 'ADMIN_ORIGIN') {
-        if (c.expect.mode === 'invalid') assert.deepEqual(cfg, { ok: false, invalid: 'ADMIN_ORIGIN' });
-        else if (c.expect.mode === 'fallback') assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: [CUSTOM] });
-        else assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: c.expect.origins });
+        // Under the rollback setting ADMIN_SIG_MIN "1" as well: an invalid ADMIN_ORIGIN is invalid
+        // configuration for v1 too, though a v1 header carries no origin.
+        const rollback = adminConfig({ ...envFor(c.setting, c), ADMIN_SIG_MIN: '1' }, requestUrl);
+        if (c.expect.mode === 'invalid') {
+          assert.deepEqual(cfg, { ok: false, invalid: 'ADMIN_ORIGIN' });
+          assert.deepEqual(rollback, { ok: false, invalid: 'ADMIN_ORIGIN' });
+        } else if (c.expect.mode === 'fallback') {
+          assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: [CUSTOM] });
+          assert.deepEqual(rollback, { ok: true, allowedVersions: [1, 2], origins: [CUSTOM] });
+        } else {
+          assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: c.expect.origins });
+          assert.deepEqual(rollback, { ok: true, allowedVersions: [1, 2], origins: c.expect.origins });
+        }
       } else {
         assert.equal(c.setting, 'ADMIN_SIG_MIN');
         if (c.expect.allowed_versions === null) assert.deepEqual(cfg, { ok: false, invalid: 'ADMIN_SIG_MIN' });
@@ -564,26 +574,32 @@ describe('the Worker\'s admin routes under signature v2', { skip }, () => {
     ];
     assert.ok(invalid.length >= 25);
     const routes = [...adminRoutes.map((r) => [r.method, r.path]), ['PUT', '/admin/conferences'], ['GET', '/admin/stats'], ['GET', '/admin/no-such-route']];
-    for (const [setting, raw] of invalid) {
-      const { env, received } = stubEnv({ [setting]: raw, ADMIN_TEST_ROUTES: '1' });
+    // An invalid ADMIN_ORIGIN refuses every admin request, v1 included, so each one also runs under
+    // the rollback setting ADMIN_SIG_MIN "1": with the default, v1 is refused anyway, and only "1"
+    // shows that a v1 request, which carries no origin, is not let past an invalid ADMIN_ORIGIN.
+    const runs = invalid.flatMap(([setting, raw]) => [[setting, raw, {}], ...(setting === 'ADMIN_ORIGIN' ? [[setting, raw, { ADMIN_SIG_MIN: '1' }]] : [])]);
+    for (const [setting, raw, extra] of runs) {
+      const { env, received } = stubEnv({ [setting]: raw, ADMIN_TEST_ROUTES: '1', ...extra });
       const ip = freshIp();
+      const label = `${setting}=${JSON.stringify(raw)}${extra.ADMIN_SIG_MIN ? ' with ADMIN_SIG_MIN "1"' : ''}`;
       for (const [method, path] of routes) {
         for (const version of [1, 2]) {
           const body = method === 'GET' || method === 'DELETE' ? undefined : '{}';
           const r = await call(env, signedRequest(method, `${path}?event=${SLUG}`, { version, body, ip }).req);
-          const why = `${setting}=${JSON.stringify(raw)} v${version} ${method} ${path}`;
+          const why = `${label} v${version} ${method} ${path}`;
           assert.deepEqual([r.status, r.json, r.reads, r.hmac, r.compare], [404, NOT_FOUND, [], 0, 0], why);
           assert.deepEqual(r.logs, [`admin config invalid: ${setting}`], why);
         }
       }
       // An unsigned request is refused the same way.
       const bare = await call(env, new Request(`${CUSTOM}${STATS}`, { headers: { 'CF-Connecting-IP': ip } }));
-      assert.deepEqual([bare.status, bare.logs], [404, [`admin config invalid: ${setting}`]]);
-      assert.equal(received.length, 0);
+      assert.deepEqual([bare.status, bare.logs], [404, [`admin config invalid: ${setting}`]], label);
+      assert.equal(received.length, 0, label);
       // None of those took a token: with the setting fixed, the same address is served at once.
-      const fixed = await call(stubEnv().env, signedRequest('GET', STATS, { ip }).req);
-      assert.deepEqual([fixed.status, fixed.logs.filter(configLine)], [200, []], `${setting}=${JSON.stringify(raw)}: the bucket was charged`);
+      const fixed = await call(stubEnv(extra).env, signedRequest('GET', STATS, { ip }).req);
+      assert.deepEqual([fixed.status, fixed.logs.filter(configLine)], [200, []], `${label}: the bucket was charged`);
     }
+    assert.ok(runs.length > invalid.length);
     // The public API does not read either setting.
     const { env } = stubEnv({ ADMIN_ORIGIN: ',', ADMIN_SIG_MIN: '' });
     const health = await call(env, new Request(`${CUSTOM}/api/health`, { headers: { 'CF-Connecting-IP': freshIp() } }));
@@ -615,11 +631,15 @@ describe('the Worker\'s admin routes under signature v2', { skip }, () => {
 
   // The route-level proof that the source default is what the Worker uses: ADMIN_SIG_MIN is absent
   // from the environment, so only WORKER_DEFAULT_SIG_MIN can refuse the v1 header, and the same
-  // header is accepted under "1", so it is a valid one.
+  // header is accepted under "1", so it is a valid one. The null case reaches the constant only
+  // through the ?? in adminConfig(): parseAdminSigMin(null) is invalid configuration, so a reader
+  // that dropped the constant would answer 404 to the v2 request below as well, and this test would
+  // fail. Missing and undefined alone could not show that, because parseAdminSigMin(undefined) also
+  // reads an absent setting as [2].
   test('ADMIN_SIG_MIN absent refuses a valid v1 header as malformed, without an HMAC or a charge; v2 passes', async () => {
-    for (const vars of [{}, { ADMIN_SIG_MIN: undefined }]) {
+    for (const vars of [{}, { ADMIN_SIG_MIN: undefined }, { ADMIN_SIG_MIN: null }]) {
       const { env, received } = stubEnv(vars);
-      assert.equal(env.ADMIN_SIG_MIN, undefined);
+      assert.equal(env.ADMIN_SIG_MIN ?? undefined, undefined);
       const ip = freshIp();
       // Twelve refusals from one address: more than the ten failures that would empty its bucket.
       for (let i = 0; i < 12; i++) {
