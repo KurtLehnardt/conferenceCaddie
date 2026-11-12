@@ -734,12 +734,13 @@ presence card's push switch and as the Bluetooth group in Settings.
   an hour, shared with the in-app nudges. It resumes after the system restarted the process.
 - **Android.** `AndroidBleRadio` runs `BleRadioService`, a foreground service of type
   `connectedDevice` with its own ongoing notification ("Conference Caddie is finding people near
-  you", with Stop). It advertises an extended set with the payload as service data and a legacy
-  connectable set with the service UUID, serves the payload from a GATT server, restarts both sets
-  at every window so the address changes with the token, scans for the service UUID and for Apple
-  manufacturer data, and connects to read the token from phones that do not send it in their
-  advertisement (`ble/BleInterrogation.kt`: at most six reads a minute, one at a time, each address
-  once per window). It is `START_STICKY` and keeps running when the app is swiped from Recents.
+  you", with Stop). It advertises an extended set with the payload as service data and, on Android
+  14 and newer only, a non-discoverable legacy connectable set with the service UUID and a GATT
+  server that serves the advertised payload (before Android 14 a connected peer could read the
+  phone's name), restarts the sets at every window so the address changes with the token, scans for
+  the service UUID and for the iOS overflow area, and connects to read the token from phones that do
+  not send it in their advertisement (`ble/BleInterrogation.kt`: at most six reads a minute, one at
+  a time, each address once per window), never serving its own token over a link it opened. It is `START_STICKY` and keeps running when the app is swiped from Recents.
   Keys are non-exportable HMAC keys in the Android Keystore (`AndroidBleKeyStore`).
 - **iOS.** `IosBleRadio` uses Core Bluetooth from Kotlin, with state restoration and the
   `bluetooth-central` and `bluetooth-peripheral` background modes. It advertises the service UUID
@@ -761,6 +762,26 @@ presence card's push switch and as the Bluetooth group in Settings.
   phones, two backgrounded iPhones, the overflow area seen from Android, the address change per
   window, Doze timing and battery are measured on real phones (`docs/NATIVE_PLAN.md`, Phase 4 exit
   criteria).
+- **Release gate.** Release builds ship without native Bluetooth until the exit test below passes:
+  `CADDIE_BLE_ENABLED` is on in Android debug builds and the iOS Debug configuration and off in
+  release builds, which then declare no Bluetooth permission, service or background mode at all
+  (DECISIONS.md, "Native apps phase 4", review rounds 1 and 2). Turning it on for release is a
+  one-line change of each flag after the exit test.
+- **Exit-test builds.** The exit test runs on optimised release builds with Bluetooth on, built only
+  for it and never published: Android `./gradlew -Pcaddie.bleEnabled=true :androidApp:assembleRelease`
+  (R8 on, `CADDIE_BLE_ENABLED` true, the Bluetooth manifest entries merged in); iOS
+  `xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -configuration Release CADDIE_BLE_ENABLED=YES ...`
+  (the Release configuration with the flag on and the Bluetooth background modes kept).
+- **Exit test** (`docs/NATIVE_PLAN.md`, Phase 4), on those builds and real phones: two hours in a
+  pocket with the screen off and the app swiped from Recents (discovery continues past ten minutes
+  on Android; a strong match within 3 m notifies within one sightings interval plus 30 seconds);
+  the iOS S1 matrix; the battery drain per hour (target 3 % or less); a brief encounter (two phones
+  near each other for under a minute are reported); and the **name check**: from another phone,
+  connect to each test phone over GATT while it runs Bluetooth proximity (and let it connect out
+  to a phone advertising the service UUID) and record which Bluetooth device name, if any, the
+  peer can read, for an Android 14 or newer phone, an Android 13 or older phone and an iPhone.
+  Whether iPhones find an Android 14 phone's non-discoverable connectable set is recorded too; until
+  then Android shows "iPhones may not find this phone, but it still finds them." on every version.
 
 ## Privacy
 
@@ -777,11 +798,15 @@ presence card's push switch and as the Bluetooth group in Settings.
   Bluetooth proximity adds `BLUETOOTH_SCAN` (declared `neverForLocation`: no position is derived
   from what the scan hears), `BLUETOOTH_ADVERTISE` and `BLUETOOTH_CONNECT` on Android 12 and newer,
   `BLUETOOTH` and `BLUETOOTH_ADMIN` up to Android 11 (where a scan also needs the location
-  permission, asked only when the person turns Bluetooth on), and `FOREGROUND_SERVICE` with
-  `FOREGROUND_SERVICE_CONNECTED_DEVICE`. `android.hardware.bluetooth_le` is not required.
+  permission, asked only when the person turns Bluetooth on), `FOREGROUND_SERVICE` with
+  `FOREGROUND_SERVICE_CONNECTED_DEVICE`, and `WAKE_LOCK` for the short wake around a report.
+  `android.hardware.bluetooth_le` is not required. These come from `androidApp/src/ble/AndroidManifest.xml`,
+  merged into debug builds and, with `-Pcaddie.bleEnabled=true`, into the exit-test release build
+  only: a release build without the flag declares no Bluetooth at all.
 - iOS: `Info.plist` has `NSLocationWhenInUseUsageDescription`, `NSBluetoothAlwaysUsageDescription`
   and the `bluetooth-central` and `bluetooth-peripheral` background modes (Bluetooth proximity
-  only; there is still no background location); notifications need no usage text. `iosApp/iosApp.entitlements` requests Push Notifications.
+  only; there is still no background location; a build phase removes the two modes whenever
+  `CADDIE_BLE_ENABLED` is not YES, as in the Release configuration); notifications need no usage text. `iosApp/iosApp.entitlements` requests Push Notifications.
 - iOS: `iosApp/iosApp/PrivacyInfo.xcprivacy` declares no tracking and no tracking domains. Its
   collected data is what the people features send to the official backend, all linked to the
   profile, none for tracking, all for the app's function: name, other user contact info, other
