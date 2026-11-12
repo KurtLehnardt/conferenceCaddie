@@ -9,12 +9,15 @@ export interface Conference {
   time_zone: string | null;
   location: { city?: string; region?: string; country?: string; virtual?: boolean } | null;
   status: 'searchable' | 'unavailable';
-  official_schedule_url: string;
+  /** Null for a conference without an official schedule page, such as the demo conference. */
+  official_schedule_url: string | null;
   source: string;
   has_level: boolean;
   track_group: string | null;
   tag_groups: string[];
   talk_count: number;
+  /** True marks a demo conference with invented talks and speakers; read it with isDemo() (components/demo.ts). */
+  demo?: boolean;
 }
 
 export interface ConferencesResponse {
@@ -106,7 +109,8 @@ export interface Talk {
   topics?: TopicRef[];
   speaker_profiles?: SpeakerProfile[];
   slides_url: string | null;
-  url: string;
+  /** The talk's official page; null when it has none, as a demo conference's talks do. */
+  url: string | null;
   /** "ambient" marks a co-located event or showcase; absent or "talk" is a talk. */
   kind?: string;
 }

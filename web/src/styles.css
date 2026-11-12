@@ -1874,3 +1874,62 @@ mark {
   font-size: 0.875rem;
   color: var(--text-2, #6b7280);
 }
+
+/* The Demo pill of a demo conference (components/demo.ts): the same pill as the people screens'
+   "Sample" pill (.pp-sample in people/people.css), set beside the text it labels. */
+.demo-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 2px 10px;
+  border: 1px solid var(--accent-ink);
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* The pill and its note in one row, at the top of every screen of a demo conference. */
+.demo-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px var(--gutter) 0;
+}
+
+.demo-note-text {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* A demo note inside a sheet, such as Import my schedule, already sits in the sheet's padding. */
+.sheet-body > .demo-note {
+  margin: 0;
+}
+
+/* The row above a talk card's title, and the pill after a page title or a conference name. */
+.card-demo {
+  margin: 0 0 6px;
+}
+
+.appbar-title > .demo-pill {
+  margin-left: 8px;
+}
+
+.conf-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conf-row-static:hover {
+  background: transparent;
+}

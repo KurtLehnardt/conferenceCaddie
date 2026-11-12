@@ -7,6 +7,7 @@ import type { Facets, SearchFilters, SearchRequest, SearchResponse, TagFacet } f
 import { EMPTY_FILTERS } from '../types';
 import {
   MOCK_CONFERENCES,
+  MOCK_DEMO_REQUESTER_REF,
   MOCK_PEOPLE,
   MOCK_REQUESTER_REF,
   MOCK_TALKS,
@@ -669,7 +670,7 @@ function route(method: string, path: string, query: URLSearchParams, headers: He
     const since = c.presence[key]?.since ?? new Date(now).toISOString();
     c.presence[key] = { zone, spot, since, until, location };
     // Once per session: a sample person asks to talk shop a few seconds after presence goes on.
-    const requester = personByRef(conf.slug, MOCK_REQUESTER_REF);
+    const requester = personByRef(conf.slug, MOCK_REQUESTER_REF) ?? personByRef(conf.slug, MOCK_DEMO_REQUESTER_REF);
     if (requester && !c.seeded.includes(key) && !blockedEitherWay(c, conf.slug, id, requester.ref)) {
       c.seeded.push(key);
       c.meets.push({

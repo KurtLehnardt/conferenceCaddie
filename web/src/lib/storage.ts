@@ -16,7 +16,8 @@ function isInterested(v: unknown, slug: string): v is InterestedTalk {
     typeof t.title === 'string' &&
     typeof t.start === 'string' &&
     typeof t.end === 'string' &&
-    typeof t.url === 'string' &&
+    // A demo conference's talks have no official page, so their url is null.
+    (typeof t.url === 'string' || t.url === null) &&
     Array.isArray(t.speakers) &&
     Array.isArray(t.tags)
   );

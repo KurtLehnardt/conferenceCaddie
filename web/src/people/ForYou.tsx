@@ -208,7 +208,7 @@ export function ForYouRow({
                 <button
                   type="button"
                   class="pp-mini"
-                  onClick={() => (onOpenTalk ? onOpenTalk(asTalk(rec)) : window.open(rec.url, '_blank', 'noopener'))}
+                  onClick={() => (onOpenTalk ? onOpenTalk(asTalk(rec)) : rec.url && window.open(rec.url, '_blank', 'noopener'))}
                 >
                   <span class="pp-mini-title">{rec.title}</span>
                   <span class="pp-mini-when">{formatWhen(conference, rec.start)}</span>
@@ -284,10 +284,12 @@ export function ForYouScreen({
                   )}
                 </div>
                 <TalkPeopleControls conference={conference} talk={rec} interested={on} circleCount={rec.circle_count} />
-                <a class="link" href={rec.url} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink size={16} aria-hidden="true" />
-                  Add to my schedule on the official site
-                </a>
+                {rec.url && (
+                  <a class="link" href={rec.url} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink size={16} aria-hidden="true" />
+                    Add to my schedule on the official site
+                  </a>
+                )}
               </article>
             );
           })}
