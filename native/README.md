@@ -846,7 +846,7 @@ version in `gradle/libs.versions.toml` or a floor in `build.gradle.kts` (Dependa
 included), regenerate it on a Mac, so the iOS artifacts are covered, and review the diff:
 
 ```sh
-./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help checkToolingFloors \
+./gradlew --continue --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help checkToolingFloors \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
   :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
   :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
@@ -857,22 +857,39 @@ included), regenerate it on a Mac, so the iOS artifacts are covered, and review 
 Then build the iOS app once with `xcodebuild` (see above), since Xcode's build phase resolves a few
 more artifacts; if it reports a missing checksum, add the task it names to the command.
 
+`--continue` keeps a failing test from stopping the tasks whose classpaths are resolved only when they
+run (R8, the links, the test platform).
+
 On a pull request that Dependabot opens, `.github/workflows/dependabot-verification-metadata.yml`
-runs this command on macOS, with Gradle's cache off so that parent POMs and BOMs are recorded too.
-The change to the file goes up as the artifact `verification-metadata-pr-<number>`, and the job
-summary lists the added components and the two commands that apply them to a checkout of the pull
-request's branch:
+runs this command for you. It has two jobs:
+
+- **Regenerate** runs the command on macOS, with Gradle's cache off so that parent POMs and BOMs are
+  recorded too. In write mode Gradle verifies nothing, so the update's code runs unverified in this
+  job. Treat everything it produces as untrusted, its job summary included.
+- **Check and publish the diff** runs no project code. It reads the written file as data and refuses
+  it when the `<configuration>` block changed. It reports every added component, every additional
+  trusted checksum (`<also-trust>`, which Gradle adds when a published file differs from the pinned
+  one) and every removed checksum. It compares each new SHA-256 with the file on Maven Central,
+  Google's Maven repository or the Gradle Plugin Portal, and fails on a mismatch. It uploads a diff
+  that touches only this file as the artifact `verification-metadata-pr-<number>`, and its job
+  summary prints the commands that apply it. Those commands include the diff's SHA-256:
 
 ```sh
-gh run download <run id> -R KurtLehnardt/conferenceCaddie -n verification-metadata-pr-<number> -D /tmp/vm
-git apply /tmp/vm/verification-metadata.diff
+gh run download <run id> -R KurtLehnardt/conferenceCaddie -n verification-metadata-pr-<number> -D /tmp/<name>-<run id>
+echo '<sha256>  /tmp/<name>-<run id>/verification-metadata.diff' | shasum -a 256 -c
+git apply --include=native/gradle/verification-metadata.xml /tmp/<name>-<run id>/verification-metadata.diff
+git status --short   # only native/gradle/verification-metadata.xml may be listed
 ```
 
-Review the result as above before you push it: check the new checksums (against Maven Central's
-own files, for example), remove the entries that only the replaced versions needed, and run a strict
-build. The workflow cannot push and has no secrets. Its token can only read the repository, and the
-trigger is `pull_request`, never `pull_request_target`. When the command fails, for example because
-an ONNX Runtime update has no pinned iOS archive yet, the summary says so and any diff is incomplete.
+Then review it as above before you push it: remove the entries that only the replaced versions
+needed, and run a strict build. The diff does not cover the Linux-only artifacts (AAPT2, the
+Kotlin/Native distribution for Linux) or what Xcode's build phase resolves. A Kotlin or AGP update
+still needs those added from the first CI run that fails.
+
+Neither job can push, and neither has a secret: the trigger is `pull_request`, never
+`pull_request_target`, and each job's token can only read the repository. When the build fails, for
+example because an ONNX Runtime update has no pinned iOS archive yet, the summary says that the file
+may lack entries.
 
 `checkToolingFloors` resolves the tool classpaths that only Android Lint, the device tests and Swift
 export use, so their artifacts are covered too. Those classpaths get security floors from the root
