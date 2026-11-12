@@ -37,12 +37,16 @@ const hmacHex = (key, text) => createHmac('sha256', Buffer.from(key.trim(), 'utf
 const canonicalV1 = ({ method, pathWithQuery, bodySha256, ts, nonce }) => `caddie-admin-v1\n${method}\n${pathWithQuery}\n${bodySha256}\n${ts}\n${nonce}\n`;
 const canonicalV2 = ({ method, pathWithQuery, bodySha256, ts, nonce, origin }) => `caddie-admin-v2\n${method}\n${pathWithQuery}\n${bodySha256}\n${ts}\n${nonce}\n${origin}\n`;
 // The origin rule, written out here: trim; printable ASCII only; a literal http:// or https://
-// prefix in any case; no "@" and no backslash; then an http: or https: URL with path "/" and no
-// query, fragment, user name or password, whose .origin is the result.
+// prefix in any case; no "@", backslash, "%" or ","; the whole value a scheme, "//", a host of
+// letters, digits, "." and "-" or a bracketed IPv6 address, an optional port and an optional "/";
+// then an http: or https: URL with path "/" and no query, fragment, user name or password, whose
+// .origin is the result.
+const ALLOW_SRC = '^https?:\\/\\/(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:.]+\\])(?::[0-9]*)?\\/?$';
 function originOf(value) {
   if (typeof value !== 'string') return null;
   const text = value.trim();
-  if (!/^[\x21-\x7e]+$/.test(text) || !/^https?:\/\//i.test(text) || /[@\\]/.test(text)) return null;
+  if (!/^[\x21-\x7e]+$/.test(text) || !/^https?:\/\//i.test(text) || /[@\\%,]/.test(text)) return null;
+  if (!new RegExp(ALLOW_SRC, 'i').test(text)) return null;
   let u;
   try {
     u = new URL(text);
@@ -53,6 +57,19 @@ function originOf(value) {
   if (u.pathname !== '/' || u.search || u.hash || u.username || u.password) return null;
   return u.origin;
 }
+
+// The Worker's ADMIN_ORIGIN: unset, or empty after trimming, is the request-URL fallback; else a
+// comma list, every entry through originOf, duplicates dropped; one refused entry is invalid.
+function adminOriginOf(raw) {
+  if (raw === undefined) return { mode: 'fallback', origins: [] };
+  if (raw.trim() === '') return { mode: 'fallback', origins: [] };
+  const origins = raw.split(',').map(originOf);
+  if (origins.some((o) => o === null)) return { mode: 'invalid', origins: [] };
+  return { mode: 'list', origins: [...new Set(origins)] };
+}
+
+// The Worker's ADMIN_SIG_MIN: unset or exactly "1" is [1, 2], exactly "2" is [2], else invalid.
+const sigMinOf = (raw) => (raw === undefined || raw === '1' ? [1, 2] : raw === '2' ? [2] : null);
 
 // How many constant-time comparisons a verifier makes for a verify case: none when it stops before
 // the HMAC (malformed or not-allowed version, bodyless rule, no usable key), else one per usable
@@ -224,6 +241,7 @@ export function buildFixture() {
   v({ id: 'v-v1-header-over-v2-canonical', title: 'A v1 header whose signature is over the v2 canonical string: signature', note: 'The signature of get-stats with "v2" changed to "v1".', header: `v1 ${TS} ${getStats.nonce} ${EMPTY} ${getStats.sig}`, ...getArgs, expect: failExpect('signature') });
   v({ id: 'v-v1-ok-during-migration', title: 'A valid v1 header verifies while both versions are allowed (step b)', header: v1Get.header, ...getArgs, expect: okExpect(EMPTY, 1) });
   v({ id: 'v-v1-not-origin-bound', title: 'A v1 header verifies whatever the expected origins are: v1 binds no origin, hence step d', header: v1Get.header, ...getArgs, expectedOrigins: [WORKERS_DEV], expect: okExpect(EMPTY, 1) });
+  v({ id: 'v-v1-two-origins', title: 'A valid v1 header with two expected origins: one comparison per key, since v1 binds no origin', header: v1Get.header, ...getArgs, expectedOrigins: [PROD, WORKERS_DEV], expect: okExpect(EMPTY, 1) });
   v({ id: 'v-v1-refused-min-2', title: 'A valid v1 header with allowed_versions [2] (ADMIN_SIG_MIN=2): malformed', header: v1Get.header, ...getArgs, allowedVersions: [2], expect: failExpect('malformed') });
   v({ id: 'v-v2-refused-v1-only', title: 'A valid v2 header with allowed_versions [1] (a verifier before step b): malformed', note: 'No expected origins are needed when 2 is not allowed.', header: getStats.header, ...getArgs, allowedVersions: [1], expectedOrigins: undefined, expect: failExpect('malformed') });
 
@@ -284,6 +302,7 @@ export function buildFixture() {
   r({ id: 'reject-v2-base-fullwidth', title: 'Full-width letters, which the URL parser would map to ASCII', input: { base: 'https://\uff43\uff41\uff44\uff44\uff49\uff45.example' }, reject: 'url' });
   r({ id: 'reject-v2-base-no-slashes', title: 'https:host without the two slashes', input: { base: 'https:caddie.example' }, reject: 'url' });
   r({ id: 'reject-v2-base-backslash', title: 'A backslash, which the URL parser reads as "/"', input: { base: 'https://caddie.example\\' }, reject: 'url' });
+  r({ id: 'reject-v2-base-percent', title: 'A percent-encoded dot in the host, which the URL parser would decode', input: { base: 'https://caddie%2Eexample' }, reject: 'url' });
   r({ id: 'reject-v2-base-empty-userinfo', title: 'An empty userinfo ("@" before the host)', input: { base: 'https://@caddie.example' }, reject: 'url' });
   r({ id: 'reject-v2-base-with-path', title: 'A base with a path (as in v1)', input: { base: 'https://caddie.example/prefix' }, reject: 'url' });
   r({ id: 'reject-v2-base-not-url', title: 'A base that is not a URL (as in v1)', input: { base: 'caddie.example' }, reject: 'url' });
@@ -335,6 +354,7 @@ export function buildFixture() {
   entry('reject-verify-origins-fullwidth', 'An entry in full-width letters', 'https://\uff43\uff41\uff44\uff44\uff49\uff45.example');
   entry('reject-verify-origins-unicode', 'An internationalised entry in its Unicode form', 'https://B\u00fccher.example');
   entry('reject-verify-origins-no-slashes', 'An entry written https:host', 'https:caddie.example');
+  entry('reject-verify-origins-percent', 'An entry with a percent-encoded ideographic full stop (U+3002), which the URL parser would read as caddie.example.evil.example', 'https://caddie.example%E3%80%82evil.example');
   entry('reject-verify-origins-backslash', 'An entry with backslashes for slashes', 'https:\\\\caddie.example');
   const sigMin = 'A Worker has no list of versions: its equivalent is an ADMIN_SIG_MIN other than unset, "1" or "2" (worker_admin_sig_min).';
   rv({ id: 'reject-verify-versions-empty', title: 'Node API only: no allowed version', note: sigMin, nodeApiOnly: true, allowedVersions: [], expectedOrigins: [PROD], reject: 'version' });
@@ -350,7 +370,8 @@ export function buildFixture() {
   o('origin-default-port-http', 'Port 80 on http: is dropped', 'http://caddie.example:80', 'http://caddie.example');
   o('origin-other-port', 'Port 80 on https: stays', 'https://caddie.example:80', 'https://caddie.example:80');
   o('origin-trailing-slash', 'A trailing "/" is not a path', 'https://caddie.example/', PROD);
-  o('origin-empty-query-fragment', 'An empty "?" and "#" leave nothing', 'https://caddie.example/?#', PROD);
+  o('origin-refused-empty-query-fragment', 'An empty "?" and "#": refused by the allowlist (accepted before it; flipped on purpose, as no origin needs them)', 'https://caddie.example/?#', null);
+  o('origin-empty-port', 'An empty port after ":" is no port', 'https://caddie.example:', PROD);
   o('origin-surrounding-spaces', 'Surrounding whitespace is trimmed first (String.prototype.trim)', ' https://caddie.example ', PROD);
   o('origin-surrounding-tab-newline', 'A surrounding tab and newline are trimmed too', '\thttps://caddie.example\n', PROD);
   o('origin-workers-dev', 'A workers.dev hostname', WORKERS_DEV, WORKERS_DEV);
@@ -381,6 +402,16 @@ export function buildFixture() {
   o('origin-refused-wss', 'wss: is not an origin the Worker serves admin requests on', 'wss://caddie.example', null);
   o('origin-refused-file', 'file: has the opaque origin "null"', 'file:///', null);
   o('origin-refused-null', 'The string "null"', 'null', null);
+  o('origin-refused-percent-fullwidth', 'A percent-encoded full-width letter (the URL parser would decode and map it to "c")', 'https://%EF%BD%83addie.example', null);
+  o('origin-refused-percent-unicode', 'A percent-encoded Unicode host (the URL parser would decode it and give its punycode)', 'https://b%C3%BCcher.example', null);
+  o('origin-refused-percent-ideographic-stop', 'A percent-encoded U+3002 (the URL parser would read caddie.example.evil.example)', 'https://caddie.example%E3%80%82evil.example', null);
+  o('origin-refused-percent-dot', 'A percent-encoded dot, %2E', 'https://caddie%2Eexample', null);
+  o('origin-refused-percent-zero-width', 'A percent-encoded zero-width space (the URL parser would drop it)', 'https://cad%E2%80%8Bdie.example', null);
+  o('origin-refused-comma', 'A comma, the ADMIN_ORIGIN separator (the URL parser would accept it in a host)', 'https://caddie.example,evil.example', null);
+  o('origin-refused-triple-slash', 'Three slashes (the URL parser would skip the empty host)', 'https:///caddie.example', null);
+  o('origin-refused-dot-path', 'A dot path (the URL parser would normalise it to "/")', 'https://caddie.example/.', null);
+  o('origin-refused-dot-dot-path', 'A dot-dot path', 'https://caddie.example/..', null);
+  o('origin-refused-encoded-dot-path', 'An encoded dot path, /%2e', 'https://caddie.example/%2e', null);
   o('origin-refused-request-url', 'A request URL with a path is not an origin value', `${PROD}${statsPath}`, null, {
     note: 'canonicalOrigin(request.url) is null for any request with a path. A Worker whose ADMIN_ORIGIN is unset or empty takes new URL(request.url).origin instead, given here as request_url_origin, without canonicalOrigin.',
     requestUrlOrigin: PROD,
@@ -394,8 +425,9 @@ export function buildFixture() {
       'Header: "v2 <ts> <nonce> <bodySha256> <sig>", single spaces, matching header_re: the v1 field grammar with "v2" in front (ts has no leading zero, nonce is 22 base64url characters, bodySha256 and sig are lowercase hex).',
       'Canonical string, UTF-8, exactly seven lines, each followed by one "\\n" (LF, so the string ends with "\\n"; no other separator, no "\\r"): line 1 "caddie-admin-v2"; line 2 the method in upper case; line 3 new URL(path, base).pathname + search; line 4 bodySha256 as in the header; line 5 ts as in the header; line 6 nonce; line 7 the origin. That is canonical_format. sig is the lowercase hex HMAC-SHA256 of it. v1 has the same layout with "caddie-admin-v1" on line 1 and no line 7, so no v1 string equals a v2 string.',
       'The origin is not in the header. The client signs the origin of its base; the verifier holds a list of expected origins, normalises each the same way, drops duplicates and tries every (key, origin) pair, running every comparison. A signature made for an origin outside the list fails as "signature", with no reason of its own (Worker: 404).',
-      'Origin values are read strictly by both sides (origin_rule, the "origin" cases): after trimming, printable ASCII only, a literal http:// or https:// prefix in any case, no "@" and no backslash, then new URL(x) must be an http: or https: URL with path "/" or none and no query, fragment, user name or password, and the value is new URL(x).origin (lowercase scheme and host, the default port dropped). An internationalised host is written in its punycode form; its Unicode form is refused.',
-      'On the Worker (worker_admin_origin, worker_admin_sig_min): ADMIN_ORIGIN, when set, is the comma list of expected origins; when it is unset or empty, the expected origin is new URL(request.url).origin. Only a set ADMIN_ORIGIN with a refused entry, or an ADMIN_SIG_MIN other than unset, "1" or "2", is invalid configuration, which answers 404 to every admin request, v1 included, with no failed-auth charge.',
+      'Origin values are read strictly by both sides (origin_rule, the "origin" cases): after trimming, printable ASCII only, a literal http:// or https:// prefix in any case, no "@", backslash, "%" or ",", the whole value matching origin_allow_re (a scheme, "//", a host of letters, digits, "." and "-" or a bracketed IPv6 address, an optional port, an optional final "/"), then new URL(x) must be an http: or https: URL with path "/" or none and no query, fragment, user name or password, and the value is new URL(x).origin (lowercase scheme and host, the default port dropped). An internationalised host is written in its punycode form; its Unicode form is refused.',
+      'On the Worker (worker_admin_origin, worker_admin_sig_min): ADMIN_ORIGIN, when set, is the comma list of expected origins; when it is unset, or empty after trimming, the expected origin is new URL(request.url).origin. ADMIN_SIG_MIN is matched exactly. Only a set ADMIN_ORIGIN with a refused entry, or an ADMIN_SIG_MIN other than unset, "1" or "2", is invalid configuration, which answers 404 to every admin request, v1 included, with no failed-auth charge.',
+      'worker_config_cases give the expected reading of raw ADMIN_ORIGIN and ADMIN_SIG_MIN values (raw absent means unset): parseAdminOrigin and parseAdminSigMin in scripts/lib/admin-origin.mjs, which has no imports, are the reference implementation.',
       'Four kinds of case. "sign": signer input with version 2 and the exact origin, canonical string and header it must produce; same_header_as names a case whose header must be identical. "verify": what the verifier answers for a header given the keys it holds, its allowed_versions, its expected_origins (absent means none were given) and its clock; expect.version is the header\'s version, expect.origin the expected origin that matched (v2 only), and expect.compares the number of constant-time comparisons made (no early exit). "reject": input refused before anything is sent or checked; call "sign" is signAdminRequest(input), call "verify" is verifyAdminSignature() refusing its own settings whatever the header. A reject case with node_api_only true has no Worker equivalent (see its note); the others are a set ADMIN_ORIGIN holding a refused entry. "origin": the normalisation of one value; origin null means refused.',
     ].join(' '),
     version: 'v2',
@@ -405,9 +437,13 @@ export function buildFixture() {
     canonical_format: 'caddie-admin-v2\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n<origin>\\n',
     v1_header_re: HEADER_RE_V1_SRC,
     v1_canonical_format: 'caddie-admin-v1\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n',
-    origin_rule: 'x is a string; t = x.trim() (String.prototype.trim); t matches ^[\\x21-\\x7e]+$ (printable ASCII) and ^https?:// (case-insensitive) and holds no "@" and no "\\"; new URL(t) has protocol http: or https:, pathname "/", and empty search, hash, username and password; the result is new URL(t).origin. Anything else is refused.',
-    worker_admin_origin: 'ADMIN_ORIGIN set (non-empty after trimming): split on ",", apply origin_rule to each entry, drop duplicates; any refused entry, including the empty one a trailing comma leaves, is invalid configuration (404 for every admin request, v1 included, no failed-auth charge). ADMIN_ORIGIN unset or empty: the expected origins are [new URL(request.url).origin], computed without origin_rule. List only hostnames that route to this Worker, never another deployment\'s origin.',
-    worker_admin_sig_min: 'ADMIN_SIG_MIN unset or "1": allowed_versions [1, 2]. "2": allowed_versions [2]. Any other value is invalid configuration (404 for every admin request, no failed-auth charge).',
+    origin_rule: 'x is a string; t = x.trim() (String.prototype.trim); t matches ^[\\x21-\\x7e]+$ (printable ASCII) and ^https?:// (case-insensitive), holds no "@", "\\", "%" or "," (origin_forbidden_re), and matches origin_allow_re (case-insensitive; it implies the three checks before it); new URL(t) has protocol http: or https:, pathname "/", and empty search, hash, username and password; the result is new URL(t).origin. Anything else is refused.',
+    origin_chars_re: '^[\\x21-\\x7e]+$',
+    origin_prefix_re: '^https?:\\/\\/',
+    origin_forbidden_re: '[@\\\\%,]',
+    origin_allow_re: ALLOW_SRC,
+    worker_admin_origin: 'ADMIN_ORIGIN set (non-empty after trimming): split on ",", apply origin_rule to each entry, drop duplicates (mode "list"); any refused entry, including the empty one a stray comma leaves, is invalid configuration (mode "invalid": 404 for every admin request, v1 included, no failed-auth charge). ADMIN_ORIGIN unset, or empty after trimming (mode "fallback"): the expected origins are [new URL(request.url).origin], computed without origin_rule. List only hostnames that route to this Worker, never another deployment\'s origin.',
+    worker_admin_sig_min: 'ADMIN_SIG_MIN unset, or exactly "1": allowed_versions [1, 2]. Exactly "2": allowed_versions [2]. Any other value, the empty string, surrounding whitespace and "02" included, is invalid configuration (allowed_versions null: 404 for every admin request, no failed-auth charge). The match is exact because a loose reading would fail open at step d.',
     origin_protocols: ['http:', 'https:'],
     query_re: '^[A-Za-z0-9_.:=&,-]*$',
     path_re: '^\\/(?:[A-Za-z0-9_.-]+\\/)*[A-Za-z0-9_.-]*$',
@@ -442,7 +478,34 @@ export function buildFixture() {
       ts: 'sign: as in v1',
     },
     cases,
+    worker_config_cases: workerConfigCases(),
   };
+}
+
+function workerConfigCases() {
+  const out = [];
+  const origin = (id, title, raw) => out.push({ id, setting: 'ADMIN_ORIGIN', title, ...(raw === undefined ? { unset: true } : { raw }), expect: adminOriginOf(raw) });
+  origin('admin-origin-unset', 'Unset: the request-URL fallback', undefined);
+  origin('admin-origin-empty', 'The empty string: the request-URL fallback', '');
+  origin('admin-origin-spaces', 'Spaces only: empty after trimming, the request-URL fallback', '  ');
+  origin('admin-origin-comma', 'A lone comma: two empty entries, invalid', ',');
+  origin('admin-origin-trailing-comma', 'A trailing comma: an empty entry, invalid', `${PROD},`);
+  origin('admin-origin-one', 'One origin', PROD);
+  origin('admin-origin-two-mixed', 'Two origins of one Worker in mixed case with spaces and a default port', ` HTTPS://Caddie.Example:443 , ${WORKERS_DEV.toUpperCase()} `);
+  origin('admin-origin-duplicates', 'Two spellings of one origin: listed once', `${PROD},https://CADDIE.example/`);
+  origin('admin-origin-percent', 'An entry with "%": invalid', `${PROD},https://caddie%2Eexample`);
+  origin('admin-origin-path', 'An entry with a path: invalid', `${PROD}/admin`);
+  const sigMin = (id, title, raw) => out.push({ id, setting: 'ADMIN_SIG_MIN', title, ...(raw === undefined ? { unset: true } : { raw }), expect: { allowed_versions: sigMinOf(raw) } });
+  sigMin('sig-min-unset', 'Unset: v1 and v2', undefined);
+  sigMin('sig-min-1', '"1": v1 and v2', '1');
+  sigMin('sig-min-2', '"2": v2 only', '2');
+  sigMin('sig-min-empty', 'The empty string: invalid, never read as unset', '');
+  sigMin('sig-min-leading-space', '" 2": invalid', ' 2');
+  sigMin('sig-min-leading-zero', '"02": invalid', '02');
+  sigMin('sig-min-v2', '"v2": invalid', 'v2');
+  sigMin('sig-min-3', '"3": invalid', '3');
+  sigMin('sig-min-newline', '"2" with a trailing newline: invalid', '2\n');
+  return out;
 }
 
 // JSON with two-space indentation and a final newline, every non-ASCII character escaped, as in

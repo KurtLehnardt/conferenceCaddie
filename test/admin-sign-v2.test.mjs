@@ -20,13 +20,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import crypto from 'node:crypto';
+import * as signModule from '../scripts/lib/admin-sign.mjs';
+import * as originModule from '../scripts/lib/admin-origin.mjs';
 import {
   BODYLESS_METHODS, DEFAULT_SIGN_VERSION, EMPTY_BODY_SHA256, HEADER_NAME, HEADER_RE, HEADER_RE_V2, MIN_KEY_LENGTH, NONCE_RE, PATH_RE, QUERY_RE, SKEW_SECONDS, UsageError, VERSION, VERSION_V2,
-  bodyMatches, canonicalOrigin, canonicalString, canonicalStringV2, parseAdminHeader, parseVersionedAdminHeader, signAdminRequest, verifyAdminSignature,
+  ORIGIN_ALLOW_RE, ORIGIN_CHARS_RE, ORIGIN_FORBIDDEN_RE, ORIGIN_PREFIX_RE, SIG_VERSION_ENV,
+  bodyMatches, canonicalOrigin, canonicalString, canonicalStringV2, parseAdminHeader, parseAdminOrigin, parseAdminSigMin, parseVersionedAdminHeader, signAdminRequest, signVersionFromEnv, verifyAdminSignature,
 } from '../scripts/lib/admin-sign.mjs';
 import { FIXTURE_URL, buildFixture, serialise } from './fixtures/admin-sign.v2.gen.mjs';
 
 const MODULE_URL = new URL('../scripts/lib/admin-sign.mjs', import.meta.url);
+const ORIGIN_MODULE_URL = new URL('../scripts/lib/admin-origin.mjs', import.meta.url);
 const fixtureText = readFileSync(FIXTURE_URL, 'utf8');
 const fixture = JSON.parse(fixtureText);
 const v1 = JSON.parse(readFileSync(new URL('./fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
@@ -48,13 +52,19 @@ async function webCryptoHmacHex(key, text) {
 }
 const webCryptoSha256Hex = async (bytes) => hex(await crypto.subtle.digest('SHA-256', bytes));
 
-// The origin rule (the fixture's origin_rule), written out here rather than taken from the module.
+// The origin rule (the fixture's origin_rule), written the way a port would: the regexes compiled
+// from the fixture's strings, not taken from the module.
+const RAW_ORIGIN_CHARS = new RegExp(fixture.origin_chars_re);
+const RAW_ORIGIN_PREFIX = new RegExp(fixture.origin_prefix_re, 'i');
+const RAW_ORIGIN_FORBIDDEN = new RegExp(fixture.origin_forbidden_re);
+const RAW_ORIGIN_ALLOW = new RegExp(fixture.origin_allow_re, 'i');
 function portOrigin(value) {
   if (typeof value !== 'string') return null;
   const text = value.trim();
-  if (!/^[\x21-\x7e]+$/.test(text)) return null;
-  if (!/^https?:\/\//i.test(text)) return null;
-  if (text.includes('@') || text.includes('\\')) return null;
+  if (!RAW_ORIGIN_CHARS.test(text)) return null;
+  if (!RAW_ORIGIN_PREFIX.test(text)) return null;
+  if (RAW_ORIGIN_FORBIDDEN.test(text)) return null;
+  if (!RAW_ORIGIN_ALLOW.test(text)) return null;
   let u;
   try {
     u = new URL(text);
@@ -159,16 +169,23 @@ describe('the v2 fixture file states the scheme the module implements', () => {
       assert.ok(fixture.about.includes(phrase), `about names: ${phrase}`);
     }
     assert.ok(fixture.origin_rule.includes('^[\\x21-\\x7e]+$') && fixture.origin_rule.includes('^https?://') && fixture.origin_rule.includes('no "@"'));
-    assert.ok(fixture.worker_admin_origin.includes('unset or empty: the expected origins are [new URL(request.url).origin], computed without origin_rule'));
+    assert.ok(fixture.worker_admin_origin.includes('unset, or empty after trimming (mode "fallback"): the expected origins are [new URL(request.url).origin], computed without origin_rule'));
+    assert.ok(fixture.worker_admin_sig_min.includes('The match is exact because a loose reading would fail open at step d'));
+    // The origin regexes in the fixture are the module's, flags included.
+    assert.equal(fixture.origin_chars_re, ORIGIN_CHARS_RE.source);
+    assert.equal(fixture.origin_prefix_re, ORIGIN_PREFIX_RE.source);
+    assert.equal(fixture.origin_forbidden_re, ORIGIN_FORBIDDEN_RE.source);
+    assert.equal(fixture.origin_forbidden_re, '[@\\\\%,]');
+    assert.equal(fixture.origin_allow_re, ORIGIN_ALLOW_RE.source);
+    assert.deepEqual([ORIGIN_CHARS_RE.flags, ORIGIN_PREFIX_RE.flags, ORIGIN_FORBIDDEN_RE.flags, ORIGIN_ALLOW_RE.flags], ['', 'i', '', 'i']);
     assert.ok(fixture.worker_admin_origin.includes('never another deployment\'s origin'));
-    assert.ok(fixture.worker_admin_sig_min.includes('Any other value is invalid configuration'));
     assert.ok(fixture.verify_reasons.signature.includes('a wrong origin is this reason'));
     assert.ok(fixture.verify_reasons.malformed.includes('not in allowed_versions'));
   });
 
   test('the reject codes are exactly the codes the module throws', () => {
     const codes = Object.keys(fixture.reject_reasons).filter((k) => !k.startsWith('_')).sort();
-    const source = readFileSync(MODULE_URL, 'utf8');
+    const source = readFileSync(MODULE_URL, 'utf8') + readFileSync(ORIGIN_MODULE_URL, 'utf8');
     const thrown = [...new Set([...source.matchAll(/new UsageError\([\s\S]*?, '([a-z_]+)'\);/g)].map((m) => m[1]))].sort();
     assert.deepEqual(codes, thrown);
     assert.ok(rejectCases.every((c) => codes.includes(c.reject) && ['sign', 'verify'].includes(c.call)));
@@ -204,6 +221,8 @@ describe('the v2 fixture file states the scheme the module implements', () => {
       'get-stats-workers-dev', 'v-first-of-four-pairs', 'origin-refused-tab', 'origin-refused-newline', 'origin-refused-fullwidth', 'origin-refused-no-slashes',
       'origin-refused-backslash-scheme', 'origin-refused-backslash-end', 'origin-refused-empty-userinfo', 'origin-refused-unicode',
       'reject-verify-origins-tab', 'reject-verify-origins-newline', 'reject-verify-origins-fullwidth', 'reject-verify-origins-no-slashes', 'reject-verify-origins-backslash', 'reject-verify-origins-empty-userinfo',
+      'reject-v2-base-percent', 'reject-verify-origins-percent', 'v-v1-two-origins', 'origin-refused-empty-query-fragment',
+      'origin-refused-percent-fullwidth', 'origin-refused-percent-unicode', 'origin-refused-percent-ideographic-stop', 'origin-refused-percent-dot', 'origin-refused-comma',
       'reject-v2-base-tab', 'reject-v2-base-fullwidth', 'reject-v2-base-no-slashes', 'reject-v2-base-backslash', 'reject-v2-base-empty-userinfo', 'reject-v2-base-unicode',
     ]) {
       assert.ok(byId[id], `missing case ${id}`);
@@ -502,11 +521,120 @@ describe('origin cases: the normalisation both sides apply', () => {
       }
     })());
     assert.ok(lax.length >= 8, `${lax.length}`);
-    for (const id of ['origin-refused-tab', 'origin-refused-newline', 'origin-refused-fullwidth', 'origin-refused-no-slashes', 'origin-refused-backslash-scheme', 'origin-refused-backslash-end', 'origin-refused-empty-userinfo', 'origin-refused-unicode']) {
+    for (const id of ['origin-refused-tab', 'origin-refused-newline', 'origin-refused-fullwidth', 'origin-refused-no-slashes', 'origin-refused-backslash-scheme', 'origin-refused-backslash-end', 'origin-refused-empty-userinfo', 'origin-refused-unicode',
+      'origin-refused-percent-fullwidth', 'origin-refused-percent-unicode', 'origin-refused-percent-ideographic-stop', 'origin-refused-percent-dot', 'origin-refused-percent-zero-width', 'origin-refused-triple-slash', 'origin-refused-dot-path', 'origin-refused-encoded-dot-path']) {
       assert.ok(lax.some((c) => c.id === id), id);
     }
     assert.equal(new URL(byId['origin-refused-newline'].input).origin, 'https://caddie.example.evil.example');
     assert.equal(new URL(byId['origin-refused-fullwidth'].input).origin, 'https://caddie.example');
+    // Percent-encoding: the URL parser decodes a host and then maps it.
+    assert.equal(new URL(byId['origin-refused-percent-ideographic-stop'].input).origin, 'https://caddie.example.evil.example');
+    assert.equal(new URL(byId['origin-refused-percent-fullwidth'].input).origin, 'https://caddie.example');
+    assert.equal(new URL(byId['origin-refused-percent-unicode'].input).origin, 'https://xn--bcher-kva.example');
+    assert.equal(new URL(byId['origin-refused-percent-zero-width'].input).origin, 'https://caddie.example');
+    assert.equal(new URL(byId['origin-refused-percent-dot'].input).origin, 'https://caddie.example');
+  });
+
+  test('the allowlist alone refuses everything the three named checks refuse', () => {
+    for (const c of originCases) {
+      const t = c.input.trim();
+      if (!ORIGIN_CHARS_RE.test(t) || !ORIGIN_PREFIX_RE.test(t) || ORIGIN_FORBIDDEN_RE.test(t)) assert.doesNotMatch(t, ORIGIN_ALLOW_RE, c.id);
+    }
+  });
+});
+
+describe('scripts/lib/admin-origin.mjs: imports nothing, so the Worker can use it as it is', () => {
+  test('the module has no import of any kind and touches no Node global', () => {
+    const source = readFileSync(ORIGIN_MODULE_URL, 'utf8');
+    const code = source.replace(/\/\/.*$/gm, '');
+    assert.doesNotMatch(code, /\bimport\s*[\s{*'"(]/, 'no static or dynamic import');
+    assert.doesNotMatch(code, /\bexport\s*(?:\*|\{[^}]*\})\s*from\b/, 'no re-export from another module');
+    assert.doesNotMatch(source, /['"]node:/, 'no node: specifier anywhere');
+    assert.doesNotMatch(code, /\brequire\s*\(/);
+    assert.doesNotMatch(code, /\b(?:Buffer|process|globalThis|__dirname|__filename)\b/);
+    assert.ok(/^[\x00-\x7f]*$/.test(source));
+  });
+
+  test('admin-sign.mjs re-exports every export of admin-origin.mjs, as the same objects', () => {
+    const names = Object.keys(originModule).sort();
+    assert.deepEqual(names, ['ORIGIN_ALLOW_RE', 'ORIGIN_CHARS_RE', 'ORIGIN_FORBIDDEN_RE', 'ORIGIN_PREFIX_RE', 'SIG_VERSION_ENV', 'UsageError', 'canonicalOrigin', 'parseAdminOrigin', 'parseAdminSigMin', 'signVersionFromEnv']);
+    for (const name of names) assert.equal(signModule[name], originModule[name], name);
+    // The signer's own UsageErrors are instances of the one class.
+    assert.throws(() => signAdminRequest({ method: 'GET', path: '/admin/stats', base: 'https://caddie.example', key: 'short' }), (e) => e instanceof originModule.UsageError);
+  });
+});
+
+describe('worker_config_cases: the Worker reads ADMIN_ORIGIN and ADMIN_SIG_MIN exactly so', () => {
+  const configCases = fixture.worker_config_cases;
+  test('the cases cover the agreed values', () => {
+    const raws = (setting) => configCases.filter((c) => c.setting === setting).map((c) => (c.unset ? undefined : c.raw));
+    for (const raw of [undefined, '', '  ', ',', 'https://caddie.example,']) assert.ok(raws('ADMIN_ORIGIN').includes(raw), JSON.stringify(raw));
+    assert.ok(raws('ADMIN_ORIGIN').some((r) => typeof r === 'string' && r.includes('%')));
+    assert.ok(raws('ADMIN_ORIGIN').some((r) => typeof r === 'string' && r !== r.trim() && r !== r.toLowerCase()));
+    for (const raw of [undefined, '1', '2', '', ' 2', '02', 'v2', '3', '2\n']) assert.ok(raws('ADMIN_SIG_MIN').includes(raw), JSON.stringify(raw));
+    for (const c of configCases) assert.equal('raw' in c, !c.unset, c.id);
+    const ids = configCases.map((c) => c.id);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+
+  for (const c of configCases) {
+    test(`${c.id}: ${c.title}`, () => {
+      const raw = c.unset ? undefined : c.raw;
+      if (c.setting === 'ADMIN_ORIGIN') {
+        assert.deepEqual(parseAdminOrigin(raw), c.expect);
+        // A list is what the Node verifier takes as expectedOrigins.
+        if (c.expect.mode === 'list') assert.deepEqual(c.expect.origins, [...new Set(raw.split(',').map(portOrigin))]);
+      } else {
+        assert.deepEqual(parseAdminSigMin(raw), c.expect.allowed_versions);
+      }
+    });
+  }
+
+  test('the parsers on values an environment never holds', () => {
+    assert.deepEqual(parseAdminOrigin(null), { mode: 'fallback', origins: [] });
+    for (const raw of [42, {}, ['https://caddie.example'], true]) assert.deepEqual(parseAdminOrigin(raw), { mode: 'invalid', origins: [] });
+    for (const raw of [null, 1, 2, ['2'], true, '2 ', '\t2', '+2', '2.0', 'two']) assert.equal(parseAdminSigMin(raw), null, JSON.stringify(raw));
+  });
+
+  test('a parsed ADMIN_ORIGIN list and ADMIN_SIG_MIN drive the Node verifier', () => {
+    const c = byId['v-origin-list-second-matches'];
+    const origins = parseAdminOrigin(`${fixture.origins.custom_domain}, ${fixture.origins.workers_dev}`);
+    assert.equal(origins.mode, 'list');
+    const r = verifyAdminSignature(moduleArgs(c, { expectedOrigins: origins.origins, allowedVersions: parseAdminSigMin('2') }));
+    assert.equal(r.ok, true);
+    assert.equal(r.origin, fixture.origins.workers_dev);
+    const v1 = byId['v-v1-ok-during-migration'];
+    assert.equal(verifyAdminSignature(moduleArgs(v1, { allowedVersions: parseAdminSigMin('2') })).reason, 'malformed');
+    assert.equal(verifyAdminSignature(moduleArgs(v1, { allowedVersions: parseAdminSigMin(undefined) })).ok, true);
+  });
+});
+
+describe('signVersionFromEnv: the client override of the signed version (steps c to d)', () => {
+  test('unset or empty is 2; exactly "1" or "2" is that version', () => {
+    assert.equal(SIG_VERSION_ENV, 'CADDIE_ADMIN_SIG_VERSION');
+    assert.equal(signVersionFromEnv({}), 2);
+    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: undefined }), 2);
+    // GitHub Actions passes an undefined repository variable as the empty string.
+    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: '' }), 2);
+    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: '1' }), 1);
+    assert.equal(signVersionFromEnv({ [SIG_VERSION_ENV]: '2' }), 2);
+    assert.equal(signVersionFromEnv({ OTHER: '1' }), 2);
+  });
+
+  test('anything else is a UsageError "version" (exit 2), never a silent default', () => {
+    for (const raw of [' 1', '1 ', '01', 'v1', 'v2', '3', '0', '2\n', 'one', ' ', 'true']) {
+      assert.throws(() => signVersionFromEnv({ [SIG_VERSION_ENV]: raw }), (e) => e instanceof UsageError && e.code === 'version' && e.exitCode === 2, JSON.stringify(raw));
+    }
+    for (const env of [undefined, null, 'CADDIE_ADMIN_SIG_VERSION=1']) assert.throws(() => signVersionFromEnv(env), TypeError);
+  });
+
+  test('its result signs with signAdminRequest', () => {
+    const c = byId['get-stats'];
+    for (const [raw, version] of [['1', 1], ['2', 2], ['', 2]]) {
+      const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, key: c.key, now: c.ts * 1000, nonce: c.nonce, version: signVersionFromEnv({ [SIG_VERSION_ENV]: raw }) });
+      assert.equal(parseVersionedAdminHeader(r.header).version, version);
+      if (version === 2) assert.equal(r.header, c.header);
+    }
   });
 });
 
@@ -565,6 +693,7 @@ describe('mutation checks: the vectors catch a canonical string that loses a lin
       try {
         const file = join(dir, 'admin-sign.mjs');
         writeFileSync(file, source.replace(from, to));
+        writeFileSync(join(dir, 'admin-origin.mjs'), readFileSync(ORIGIN_MODULE_URL, 'utf8'));
         const m = await import(pathToFileURL(file).href);
         const wrong = [];
         for (const c of verifyCases) {
@@ -588,6 +717,7 @@ describe('mutation checks: the vectors catch a canonical string that loses a lin
       try {
         const file = join(dir, 'admin-sign.mjs');
         writeFileSync(file, source.replace(from, to));
+        writeFileSync(join(dir, 'admin-origin.mjs'), readFileSync(ORIGIN_MODULE_URL, 'utf8'));
         const m = await import(pathToFileURL(file).href);
         for (const c of signCases) {
           const r = m.signAdminRequest({ method: c.method, path: c.path, base: c.base, body: c.body, key: c.key, now: c.ts * 1000, nonce: c.nonce, version: 2 });

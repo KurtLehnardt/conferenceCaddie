@@ -49,10 +49,19 @@
 // normalised the same way, and tries each. A signature made for any other origin fails as
 // "signature", with no reason of its own. Both sides read an origin value strictly
 // (canonicalOrigin): printable ASCII, a literal http:// or https:// prefix, nothing but a host and
-// a port. The signer signs v1 unless asked for v2, and the verifier accepts only v1 unless told
-// otherwise; the migration is in DECISIONS.md ("Admin signature v2").
+// a port. The origin rules, the Worker's ADMIN_ORIGIN and ADMIN_SIG_MIN readers and the client's
+// version override live in scripts/lib/admin-origin.mjs, which has no imports so the Worker can
+// use it as it is; this module re-exports them. The signer signs v1 unless asked for v2, and the
+// verifier accepts only v1 unless told otherwise; the migration is in DECISIONS.md ("Admin
+// signature v2").
 
 import { createHash, createHmac, randomBytes, timingSafeEqual as nodeTimingSafeEqual } from 'node:crypto';
+import { UsageError, canonicalOrigin } from './admin-origin.mjs';
+
+export {
+  ORIGIN_ALLOW_RE, ORIGIN_CHARS_RE, ORIGIN_FORBIDDEN_RE, ORIGIN_PREFIX_RE, SIG_VERSION_ENV, UsageError,
+  canonicalOrigin, parseAdminOrigin, parseAdminSigMin, signVersionFromEnv,
+} from './admin-origin.mjs';
 
 export const VERSION = 'v1';
 export const VERSION_V2 = 'v2';
@@ -77,24 +86,6 @@ export const MIN_KEY_LENGTH = 32;
 // other hash before it computes anything.
 export const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE']);
 const METHOD_RE = /^[A-Z]{3,10}$/;
-// The schemes a v2 origin may have: anything else (file:, data:, a custom scheme) has the opaque
-// origin "null" or is not something the Worker serves.
-const ORIGIN_PROTOCOLS = new Set(['http:', 'https:']);
-// An origin value, after trimming: printable ASCII only, starting with a literal "http://" or
-// "https://" (in any case), with no "@" and no backslash anywhere.
-const ORIGIN_CHARS_RE = /^[\x21-\x7e]+$/;
-const ORIGIN_PREFIX_RE = /^https?:\/\//i;
-const ORIGIN_FORBIDDEN_RE = /[@\\]/;
-
-// A request the signer refuses before anything is sent: the caller's mistake, exit code 2 in the CLI.
-export class UsageError extends Error {
-  constructor(message, code = 'usage') {
-    super(message);
-    this.name = 'UsageError';
-    this.code = code;
-    this.exitCode = 2;
-  }
-}
 
 export const sha256Hex = (bytes) => createHash('sha256').update(bytes).digest('hex');
 export const hmacSha256Hex = (key, text) => createHmac('sha256', key).update(text, 'utf8').digest('hex');
@@ -116,33 +107,6 @@ export function canonicalString({ method, pathWithQuery, bodySha256, ts, nonce }
 // the v1 order with the same "\n" after each, then the origin, also followed by "\n".
 export function canonicalStringV2({ method, pathWithQuery, bodySha256, ts, nonce, origin }) {
   return `caddie-admin-v2\n${String(method).toUpperCase()}\n${pathWithQuery}\n${bodySha256}\n${ts}\n${nonce}\n${origin}\n`;
-}
-
-// The origin a v2 signature binds, read strictly from a string: surrounding whitespace is
-// trimmed; then any character outside printable ASCII (a tab or newline inside, a full-width or
-// other non-ASCII character, all of which the URL parser would strip or map silently), a value
-// that does not start with a literal "http://" or "https://" ("https:host" and "https:\\host"
-// parse too), and any "@" (userinfo, even an empty one) or backslash (which the parser reads as
-// "/") are refused. The rest must parse as an http: or https: URL with path "/" or none and no
-// query, fragment, user name or password, and the result is new URL(value).origin. Returns null
-// for anything else, including a URL object and a request URL with a path (a Worker that falls
-// back to its request's own origin takes new URL(request.url).origin, not this). Examples:
-// "HTTPS://Caddie.Example:443/" gives "https://caddie.example"; "https://caddie.example:8443"
-// keeps its port; an internationalised host is accepted in its punycode form only;
-// "https://caddie.example." keeps its trailing dot and is another origin.
-export function canonicalOrigin(value) {
-  if (typeof value !== 'string') return null;
-  const text = value.trim();
-  if (!ORIGIN_CHARS_RE.test(text) || !ORIGIN_PREFIX_RE.test(text) || ORIGIN_FORBIDDEN_RE.test(text)) return null;
-  let u;
-  try {
-    u = new URL(text);
-  } catch {
-    return null;
-  }
-  if (!ORIGIN_PROTOCOLS.has(u.protocol)) return null;
-  if (u.pathname !== '/' || u.search !== '' || u.hash !== '' || u.username !== '' || u.password !== '') return null;
-  return u.origin;
 }
 
 // The trimmed key bytes, or a UsageError when the key is missing or too short.
@@ -209,7 +173,7 @@ export function signAdminRequest({ method, path, base, body, key, now, nonce, ve
     return { header: `${VERSION} ${ts} ${n} ${bodySha256} ${sig}`, url: url.href, pathWithQuery, method: METHOD, bodySha256, ts, nonce: n, canonical };
   }
   const origin = canonicalOrigin(base);
-  if (origin === null) throw new UsageError('A v2 admin signature needs a base that is a plain http:// or https:// origin in printable ASCII, with no user name, password or backslash.', 'url');
+  if (origin === null) throw new UsageError('A v2 admin signature needs a base that is a plain http:// or https:// origin in printable ASCII, with an internationalised host in its punycode (xn--) form, and no user name, password, backslash, "%" or ",".', 'url');
   const canonical = canonicalStringV2({ method: METHOD, pathWithQuery, bodySha256, ts, nonce: n, origin });
   const sig = hmacSha256Hex(keyBuf, canonical);
   return { header: `${VERSION_V2} ${ts} ${n} ${bodySha256} ${sig}`, url: url.href, pathWithQuery, method: METHOD, bodySha256, ts, nonce: n, canonical, version: 2, origin };
@@ -249,7 +213,7 @@ function verifierVersions(allowedVersions) {
 function verifierOrigins(expectedOrigins) {
   const origins = Array.isArray(expectedOrigins) ? expectedOrigins.map(canonicalOrigin) : [];
   if (origins.length === 0 || origins.includes(null)) {
-    throw new UsageError('A verifier that accepts v2 needs expectedOrigins: a non-empty list of plain http:// or https:// origins in printable ASCII, with no path, query, fragment, credentials or backslash.', 'expected_origins');
+    throw new UsageError('A verifier that accepts v2 needs expectedOrigins: a non-empty list of plain http:// or https:// origins in printable ASCII, each internationalised host in its punycode (xn--) form, with no path, query, fragment, credentials, backslash, "%" or ",".', 'expected_origins');
   }
   return [...new Set(origins)];
 }
