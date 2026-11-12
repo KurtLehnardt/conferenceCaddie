@@ -1,9 +1,9 @@
 // Command tree, argument parsing, help, exit codes and the run loop of the caddie-admin CLI.
 // main() returns the exit code and never calls process.exit, so tests can call it in-process.
 //
-// Exit codes: 0 success, 1 backend or request failure, or finished with warnings (see stderr; audit
-// counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported on
-// this tier.
+// Exit codes: 0 success, 1 backend or request failure, or finished with result warnings (see stderr;
+// audit counts.warnings), 2 usage, 3 confirmation missing or refused, 4 not found, 5 not supported
+// on this tier. The warnings sig_version_removed and audit_not_written leave the exit code unchanged.
 
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';

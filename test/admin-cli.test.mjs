@@ -813,8 +813,10 @@ describe('round-1 fixes', () => {
     assert.match(wide.stderr, /api must be the Worker's origin as plain ASCII/);
     assert.equal(wide.prompted, false);
     assert.equal(wide.calls.length, 0);
+    assert.equal(wide.audit, '');
     // A value the removed override used to refuse with exit 2 now reaches the credential (none
-    // here: refused) like no value at all, with no prompt.
+    // here: refused) like no value at all, with no prompt. The missing credential stops the run
+    // before anything is written to the audit log, so the refused delete leaves no audit line.
     writeConfig({ default: 't2', backends: { t2: { tier: 2, api: 'https://api.example.test' } } });
     for (const raw of [undefined, '', '1', '2', '3', ' 2', 'v1']) {
       const r = await run(raw === undefined ? {} : { CADDIE_ADMIN_SIG_VERSION: raw });
@@ -822,6 +824,7 @@ describe('round-1 fixes', () => {
       assert.ok(!r.stderr.includes('must be exactly'), r.stderr);
       assert.equal(r.prompted, false, 'no prompt');
       assert.equal(r.calls.length, 0);
+      assert.equal(r.audit, '', JSON.stringify(raw));
     }
     // Tier 3 does not sign, so the variable means nothing there.
     writeConfig({ default: 't3', backends: { t3: { tier: 3, es_url: 'https://es.example.test' } } });

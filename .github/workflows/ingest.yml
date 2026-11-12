@@ -79,6 +79,15 @@ jobs:
     # step, which fetches third-party feeds, does not receive them in its environment. The steps
     # still share the runner and its workspace, so this narrows the exposure; it is not isolation.
     steps:
+      # Step e of "Admin signature v2" in DECISIONS.md removed the repository variable
+      # CADDIE_ADMIN_SIG_VERSION, and no step reads it any more. A fork that still has it set gets
+      # this warning in the run's summary. The condition only checks whether the variable is set:
+      # its value is not passed to any environment and not printed.
+      - name: Warn about the removed signature variable
+        if: vars.CADDIE_ADMIN_SIG_VERSION != ''
+        run: |
+          echo "::warning::The repository variable CADDIE_ADMIN_SIG_VERSION was removed in step e of the admin signature migration (DECISIONS.md, \"Admin signature v2\") and is ignored: every admin request is signed with v2. Delete the repository variable."
+
       - name: Check the configuration
         id: config
         env:

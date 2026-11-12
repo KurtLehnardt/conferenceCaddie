@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMMAND_TREE } from '../admin/cli.mjs';
+import { SIG_VERSION_REMOVED_WARNING } from '../lib/admin-origin.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -249,15 +250,16 @@ test('the CLI messages quoted in ADMIN_CLI.md exist in scripts/admin', () => {
     'refused, because that would change a live conference',
     'which is not one status a directory row stores (',
     'so this command cannot tell what to expect; refused, nothing was sent',
-    // The warning code and text for the removed CADDIE_ADMIN_SIG_VERSION (step e of "Admin signature
-    // v2"; the text is SIG_VERSION_REMOVED_WARNING in scripts/lib/admin-origin.mjs) and the strict
-    // reading of a tier 2 api (step c).
+    // The warning code for the removed CADDIE_ADMIN_SIG_VERSION (step e of "Admin signature v2")
+    // and the strict reading of a tier 2 api (step c).
     'sig_version_removed',
-    'was removed in step e of the admin signature migration (DECISIONS.md, "Admin signature v2") and is ignored: every admin request is signed with v2; unset it',
     "api must be the Worker's origin as plain ASCII",
   ];
   assert.deepEqual(quoted.filter((q) => !sources.includes(q)), [], 'quoted in the test list but not printed by the CLI');
   assert.deepEqual(quoted.filter((q) => !doc.includes(q)), [], 'printed by the CLI but not quoted in ADMIN_CLI.md');
+  // The warning text itself is quoted whole, in backticks, so a change to any word of the quote or
+  // of SIG_VERSION_REMOVED_WARNING in scripts/lib/admin-origin.mjs fails here.
+  assert.ok(doc.includes(`\`${SIG_VERSION_REMOVED_WARNING}\``), 'ADMIN_CLI.md does not quote SIG_VERSION_REMOVED_WARNING whole, in backticks');
   for (const q of ['config not readable', 'only the owner may read it', 'is not removed']) assert.ok(doc.includes(q) && sources.includes(q.replace(/^config not readable$/, 'not readable')), `ADMIN_CLI.md or the CLI lost: ${q}`);
 });
 
