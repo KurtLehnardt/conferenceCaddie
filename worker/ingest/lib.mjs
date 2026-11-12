@@ -137,14 +137,28 @@ export function normalizeApiBase(api) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // A short, safe description of a failed response: the status and, when the body is a JSON object
-// whose `error` is a short plain code, that code. Never any other part of the body.
+// whose `error` is a short plain code, that code, with its `cause` when that is one too. For an
+// answer that lists `unretire_failed` (PUT /admin/conferences, unretire_incomplete), the slugs of
+// that list (well-formed slugs only, at most 20 named) and the directory's `upserted` count, so the
+// operator sees which conferences were not unretired and that the rest of the batch was applied.
+// Never any other part of the body.
+const SHORT_CODE = /^[A-Za-z0-9_ .:-]{1,60}$/;
 function describe(status, text) {
-  let code = '';
+  let body = null;
   try {
-    const e = JSON.parse(text)?.error;
-    if (typeof e === 'string' && /^[A-Za-z0-9_ .:-]{1,60}$/.test(e)) code = e;
+    body = JSON.parse(text);
   } catch { /* not JSON */ }
-  return code ? `status ${status} (${code})` : `status ${status}`;
+  const code = typeof body?.error === 'string' && SHORT_CODE.test(body.error) ? body.error : '';
+  if (!code) return `status ${status}`;
+  const cause = typeof body.cause === 'string' && SHORT_CODE.test(body.cause) ? `, cause ${body.cause}` : '';
+  let out = `status ${status} (${code}${cause})`;
+  if (Array.isArray(body.unretire_failed)) {
+    const slugs = [...new Set(body.unretire_failed.filter((s) => typeof s === 'string' && isSlug(s)))];
+    const named = slugs.slice(0, 20).join(', ') + (slugs.length > 20 ? ` and ${slugs.length - 20} more` : '');
+    const upserted = Number.isSafeInteger(body.upserted) ? `; the rest of the batch was applied (upserted ${body.upserted})` : '';
+    out += `: not unretired, the object did not take the document: ${named || '(none named)'}${upserted}`;
+  }
+  return out;
 }
 
 // A redirect answer of a fetch made with redirect: 'manual': the 3xx itself (Node), or an
@@ -172,9 +186,11 @@ export function accessHeaders(env = process.env) {
 // leaves this process; no Authorization header is sent. It retries network failures, 429 and 5xx
 // up to `retries` times (honouring Retry-After), signing each attempt afresh: a nonce is
 // single-use on the Worker and the timestamp must be within five minutes of its clock, so a retry
-// is a new request, which every admin route handles idempotently, with one exception: POST
-// /admin/moderation with action "delete" answers 404 when the target is already gone, so a delete
-// whose first answer was lost reports 404 on the retry. It stops at once on a 503
+// is a new request, which every admin route handles idempotently, with three exceptions: on POST
+// /admin/moderation, action "delete" answers 404 when the target is already gone and action
+// "unhide" of a target that no longer exists answers 404 once its reports are gone, and POST
+// /admin/people/block with action "unblock" answers 404 once the operator report is gone; each,
+// when its first answer was lost, reports 404 on the retry. It stops at once on a 503
 // daily_limit, because retrying cannot help before the quota resets. Any other status throws an
 // AdminError that carries the status. A redirect is never followed and is an AdminError at once,
 // not retried: fetch drops only Authorization on a cross-origin redirect, so following one would

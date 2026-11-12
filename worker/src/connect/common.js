@@ -5,6 +5,7 @@
 import { HttpError, bad, isPlainObject, text, REF_RE } from '../lib/http.js';
 import { requireDevice } from '../lib/device.js';
 import { moderate } from './moderation.js';
+import { stripControls } from '../lib/text.js';
 
 // The per-minute buckets of server/people.mjs LIMITS. The keys are the same as today's, so the
 // buckets are shared with the people routes that use the same names.
@@ -63,7 +64,8 @@ export function refOf(body) {
 // on the free stack (there is no classifier), so pending is always false; the field stays so the
 // stored shape and the responses are those of today.
 export function line(value, name, max) {
-  const t = text(value, name, max);
+  // Control characters go before the filter sees the line, so none can split a listed word.
+  const t = text(stripControls(value), name, max);
   if (!t) return { text: null, pending: false };
   const verdict = moderate(t);
   if (verdict.outcome === 'reject') throw new HttpError(400, verdict.body);
