@@ -6,7 +6,9 @@
 //
 // The script runs with --subdomain-only, which stops after step 1, and with a stand-in for curl
 // first on its PATH, so nothing reaches Cloudflare and no real token is involved (the one passed is
-// a placeholder). The build and `wrangler deploy` steps are not run here.
+// a placeholder). The build and `wrangler deploy` steps are not run here: the runs without
+// --subdomain-only all stop in step 1, and stand-ins for npm and npx, which record the call and
+// fail, make sure that a script that got past step 1 neither builds nor deploys.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -53,6 +55,14 @@ fs.writeFileSync(opt('-o'), JSON.stringify(answer.body));
 process.stdout.write(String(answer.code));
 `;
 
+// npm and npx: record the call and fail, so that a run that gets past step 1 stops there.
+const TOOL = `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+fs.appendFileSync(process.env.STUB_DIR + '/calls.log', JSON.stringify({ tool: path.basename(process.argv[1]), args: process.argv.slice(2) }) + '\\n');
+process.exit(1);
+`;
+
 function world(t, responses) {
   const dir = mkdtempSync(join(tmpdir(), 'caddie-deploy-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -60,10 +70,11 @@ function world(t, responses) {
   mkdirSync(bin);
   writeFileSync(join(bin, 'curl'), CURL, { mode: 0o755 });
   chmodSync(join(bin, 'curl'), 0o755);
+  for (const tool of ['npm', 'npx']) writeFileSync(join(bin, tool), TOOL, { mode: 0o755 });
   writeFileSync(join(dir, 'responses.json'), JSON.stringify(responses));
   return {
     dir,
-    run(env = {}) {
+    run(env = {}, args = ['--subdomain-only']) {
       const childEnv = {
         PATH: `${bin}:${process.env.PATH}`,
         TMPDIR: dir,
@@ -73,7 +84,7 @@ function world(t, responses) {
         ...env,
       };
       for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
-      const r = spawnSync('bash', [SCRIPT, '--subdomain-only'], { env: childEnv, encoding: 'utf8', timeout: 60_000 });
+      const r = spawnSync('bash', [SCRIPT, ...args], { env: childEnv, encoding: 'utf8', timeout: 60_000 });
       return { status: r.status, stdout: r.stdout, stderr: r.stderr, text: `${r.stdout}\n${r.stderr}` };
     },
     calls() {
@@ -145,11 +156,11 @@ test('a 404 with error code 10007 also means that the account has none, and only
   }
 });
 
-test('error code 10007 means none at HTTP 200, 400 or 404 when the answer is not a success, as wrangler reads it', (t) => {
+test('error code 10007 means none at HTTP 200, 400 or 404 when it is the first code of an answer that is not a success, as wrangler reads it', (t) => {
   const cases = [
     ['400 with 10007', { code: 400, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.not_found' }], result: null } }],
     ['200 not a success, with 10007', { code: 200, body: { success: false, errors: [{ code: 10007, message: 'not found' }], result: null } }],
-    ['404 with 10007 among others', { code: 404, body: { success: false, errors: [{ code: 10000 }, { code: 10007 }] } }],
+    ['404 with 10007 first, then another code', { code: 404, body: { success: false, errors: [{ code: 10007 }, { code: 10000 }] } }],
   ];
   for (const [why, get] of cases) {
     const w = world(t, { get, put: [{ echo: true }] });
@@ -158,11 +169,14 @@ test('error code 10007 means none at HTTP 200, 400 or 404 when the answer is not
     assert.deepEqual(puts(w), ['my-conf-caddie'], why);
     assert.match(r.stdout, /^workers\.dev subdomain: my-conf-caddie$/m, why);
   }
-  // Code 10007 at any other status, or beside success true, is not "no subdomain": no PUT.
+  // Code 10007 at any other status, after another code (wrangler's APIError carries only
+  // errors[0].code), beside success true, or beside a named subdomain is not "no subdomain": no PUT.
   for (const get of [
     { code: 500, body: { success: false, errors: [{ code: 10007 }] } },
     { code: 409, body: { success: false, errors: [{ code: 10007 }] } },
     { code: 200, body: { success: true, errors: [{ code: 10007 }], result: {} } },
+    { code: 404, body: { success: false, errors: [{ code: 10000 }, { code: 10007 }] } },
+    { code: 200, body: { success: false, errors: [{ code: 10007 }], result: { subdomain: 'live-sub' } } },
   ]) {
     const bad = world(t, { get, put: [{ echo: true }] });
     const rb = bad.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
@@ -217,6 +231,51 @@ test('any other failed PUT is never followed by a second PUT: the subdomain is r
       assert.doesNotMatch(rn.stdout, /workers\.dev subdomain:/, why);
     }
   }
+});
+
+test('four PUTs answered 409 stop the script: no fifth PUT, no subdomain printed, no build and no deploy', (t) => {
+  const taken = { code: 409, body: { success: false, errors: [{ code: 10000, message: 'taken' }] } };
+  for (const args of [['--subdomain-only'], []]) {
+    const why = args.join(' ') || 'full run';
+    const w = world(t, { ...NONE, put: [taken] });
+    const r = w.run({ CADDIE_WORKERS_SUBDOMAIN: 'taken-name' }, args);
+    assert.equal(r.status, 1, `${why}: ${r.text}`);
+    const asked = puts(w);
+    assert.equal(asked.length, 4, `${why}: exactly four PUTs`);
+    assert.equal(asked[0], 'taken-name');
+    for (const name of asked.slice(1)) assert.match(name, /^conference-caddie-[a-z]{6}$/, why);
+    assert.match(r.stderr, /^Could not create a workers\.dev subdomain after 4 attempts\.$/m, why);
+    assert.doesNotMatch(r.stdout, /workers\.dev subdomain:/, why);
+    assert.deepEqual(w.calls().filter((c) => c.tool), [], `${why}: no build and no deploy`);
+  }
+});
+
+test('a PUT answered 401 or 403 stops with the blocker: one PUT, no second read', (t) => {
+  for (const code of [401, 403]) {
+    const w = world(t, { ...NONE, put: [{ code, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } }, { echo: true }] });
+    const r = w.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
+    assert.equal(r.status, 1, `${code}: ${r.text}`);
+    assert.deepEqual(puts(w), ['my-conf-caddie'], `${code}: exactly one PUT`);
+    assert.equal(w.calls().filter((c) => c.method === 'GET').length, 1, `${code}: a single GET`);
+    assert.match(r.stderr, new RegExp(`Creating the workers\\.dev subdomain failed with HTTP ${code}`));
+    assert.match(r.stderr, /^Blocker: .*Workers & Pages, Overview, workers\.dev subdomain/m);
+    assert.doesNotMatch(r.stdout, /workers\.dev subdomain:/);
+  }
+});
+
+test('a refused name, then a PUT answered 502, then a read that names the subdomain: two PUTs, and the script continues', (t) => {
+  const w = world(t, {
+    get: [NONE.get, { code: 200, body: { success: true, result: { subdomain: 'made-by-the-502' } } }],
+    put: [{ code: 409, body: { success: false, errors: [{ code: 10000, message: 'taken' }] } }, { code: 502, body: { success: false, errors: [{ code: 10013 }] } }, { echo: true }],
+  });
+  const r = w.run({ CADDIE_WORKERS_SUBDOMAIN: 'taken-name' });
+  assert.equal(r.status, 0, r.text);
+  const asked = puts(w);
+  assert.equal(asked.length, 2, 'two PUTs');
+  assert.equal(asked[0], 'taken-name');
+  assert.match(asked[1], /^conference-caddie-[a-z]{6}$/);
+  assert.equal(w.calls().filter((c) => c.method === 'GET').length, 2, 'read once more after the 502');
+  assert.match(r.stdout, /^workers\.dev subdomain: made-by-the-502$/m);
 });
 
 test('a name that is not a subdomain is refused before any request is made', (t) => {

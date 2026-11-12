@@ -237,10 +237,10 @@ test('--subdomain-only stops before the check and the deploy', (t) => {
 });
 
 test('a subdomain answer that cannot be read stops the script: no PUT, no build, no deploy', (t) => {
-  // Only a successful answer with a null subdomain, or an answer that is not a success and carries
-  // error code 10007 at HTTP 200, 400 or 404, means that the account has no subdomain yet
-  // (deploy-subdomain.test.mjs). Anything else that does not name the subdomain must not lead to a
-  // PUT, which could rename an existing subdomain.
+  // Only a successful answer with a null subdomain, or an answer at HTTP 200, 400 or 404 that is
+  // not a success, does not name a subdomain and has error code 10007 first, means that the account
+  // has no subdomain yet (deploy-subdomain.test.mjs). Anything else that does not name the
+  // subdomain must not lead to a PUT, which could rename an existing subdomain.
   const cases = [
     ['200 with body null', { code: 200, body: 'null' }, /HTTP 200, error codes: none\)/],
     ['200 with body {}', { code: 200, body: {} }, /HTTP 200, error codes: none\)/],

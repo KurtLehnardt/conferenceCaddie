@@ -17,15 +17,16 @@
 #      want, lowercase letters, digits and hyphens), and when it is unset, or the name is taken, use
 #      conference-caddie-<6 random lowercase letters>. An account that already has a subdomain keeps
 #      it, whatever the variable says. Only two kinds of answer mean "no subdomain yet": a
-#      successful answer whose subdomain is null, and an answer that is not a success and carries
-#      Cloudflare's error code 10007 at HTTP 200, 400 or 404 (the pinned wrangler reads code 10007
-#      the same way). Any other answer that does not name the subdomain stops the script without a
-#      PUT, because a PUT on an account that has a subdomain could rename it; a 401 or 403 deploys
-#      anyway, without a PUT, and stops with --subdomain-only. Only a PUT answered 409 or 400 (the
-#      name is taken or not valid) is followed by another PUT, with a random fallback name. After
-#      any other failed PUT the script reads the subdomain once more and uses it when the answer
-#      names one, and otherwise stops, because the PUT may have created it and a second PUT could
-#      rename it.
+#      successful answer whose subdomain is null, and an answer at HTTP 200, 400 or 404 that is not
+#      a success, does not name a subdomain, and whose first error code is Cloudflare's 10007 (the
+#      pinned wrangler reads only the first error code, and treats 10007 there as "no subdomain").
+#      Any other answer that does not name the subdomain stops the script without a PUT, because a
+#      PUT on an account that has a subdomain could rename it; a 401 or 403 deploys anyway, without
+#      a PUT, and stops with --subdomain-only. Only a PUT answered 409 or 400 (the name is taken or
+#      not valid) is followed by another PUT, with a random fallback name. After any other failed
+#      PUT, other than 401 or 403 which stop with the blocker, the script reads the subdomain once
+#      more and uses it when the answer names one, and otherwise stops, because the PUT may have
+#      created it and a second PUT could rename it.
 #   2. Build the web app in Worker mode (npm --prefix web run build:worker: base "/", same-origin
 #      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
 #      wrangler.toml, so the app ships with the Worker.
@@ -149,11 +150,12 @@ blocker() {
 }
 
 # 1. The workers.dev subdomain. A subdomain is created only on an answer that says the account has
-# none: a 200 with success true and a null subdomain, or an answer whose success is not true and
-# whose errors include Cloudflare's code 10007, at HTTP 200, 400 or 404 (the pinned wrangler,
-# getWorkersDevSubdomainInternal, reads code 10007 as "no subdomain" whatever the status). Every
-# other answer that does not name the subdomain stops here, without a PUT, because a PUT on an
-# account that already has a subdomain could rename it and break every client of the old URL.
+# none: a 200 with success true and a null subdomain, or an answer at HTTP 200, 400 or 404 whose
+# success is not true, which does not name a subdomain, and whose first error code is Cloudflare's
+# 10007 (the pinned wrangler, getWorkersDevSubdomainInternal, reads 10007 as "no subdomain"
+# whatever the status, and its APIError carries only the first error code). Every other answer
+# that does not name the subdomain stops here, without a PUT, because a PUT on an account that
+# already has a subdomain could rename it and break every client of the old URL.
 subdomain=""
 unreadable=0
 create=0
@@ -169,10 +171,10 @@ subdomain_state() {
     json_field 'r.success === true && r.result !== null && typeof r.result === "object" && !Array.isArray(r.result) ? (typeof r.result.subdomain === "string" && r.result.subdomain !== "" ? "set:" + r.result.subdomain : (r.result.subdomain === null ? "none" : "")) : ""'
   fi
 }
-# no_subdomain_error is "true" when the last answer was not a success and its errors include code
-# 10007.
+# no_subdomain_error is "true" when the last answer was not a success, does not name a subdomain,
+# and its first error code is 10007, the one code wrangler reads.
 no_subdomain_error() {
-  json_field 'r.success !== true && (Array.isArray(r.errors) ? r.errors : []).some((e) => e && e.code === 10007)'
+  json_field 'r.success !== true && Array.isArray(r.errors) && r.errors.length > 0 && r.errors[0] !== null && typeof r.errors[0] === "object" && r.errors[0].code === 10007 && !(r.result !== null && typeof r.result === "object" && typeof r.result.subdomain === "string" && r.result.subdomain !== "")'
 }
 status="$(cf_api GET /workers/subdomain)"
 state="$(subdomain_state "$status")"
@@ -180,6 +182,7 @@ if [ -n "$state" ]; then
   case "$state" in
     set:*) subdomain="${state#set:}" ;;
     none) create=1 ;;
+    *) subdomain_unreadable "$status" ;;
   esac
 elif { [ "$status" = "200" ] || [ "$status" = "400" ] || [ "$status" = "404" ]; } \
   && [ "$(no_subdomain_error)" = "true" ]; then

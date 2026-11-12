@@ -147,16 +147,17 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    The subdomain step fails closed, because a PUT on an account that already has a subdomain could
    rename it and break every client of the old URL. Only two kinds of answer from
    `GET /workers/subdomain` mean that the account has none: a 200 with `success` true and a `null`
-   subdomain, and an answer that is not a success and carries Cloudflare's error code 10007 at HTTP
-   200, 400 or 404 (the pinned wrangler reads code 10007 the same way). A 401 or 403 deploys
-   anyway, without creating one, and stops with `--subdomain-only`; no answer at all stops the
-   script; any other answer stops it with "Could not read the workers.dev subdomain", the HTTP
-   status and Cloudflare's error codes. Only a PUT answered 409 or 400 (the name is taken or not
-   valid) is followed by another PUT, with a random fallback name. After any other failed PUT (a
-   5xx, a 404, no answer, a 200 that is not a success) the script reads the subdomain once more and
-   uses it when the answer names one, since the PUT may have gone through, and otherwise stops with
-   the statuses and error codes. If the step keeps failing, create the subdomain in the dashboard as
-   above.
+   subdomain, and an answer at HTTP 200, 400 or 404 that is not a success, does not name a
+   subdomain, and whose first error code is Cloudflare's 10007 (the pinned wrangler reads only the
+   first error code, and treats 10007 there as "no subdomain"). A 401 or 403 deploys anyway,
+   without creating one, and stops with `--subdomain-only`; no answer at all stops the script; any
+   other answer stops it with "Could not read the workers.dev subdomain", the HTTP status and
+   Cloudflare's error codes. Only a PUT answered 409 or 400 (the name is taken or not valid) is
+   followed by another PUT, with a random fallback name, up to four attempts. After any other
+   failed PUT, other than 401 or 403 which stop with the blocker, the script reads the subdomain
+   once more (after a 5xx, a 404, no answer or a 200 that is not a success) and uses it when the
+   answer names one, since the PUT may have gone through, and otherwise stops with the statuses and
+   error codes. If the step keeps failing, create the subdomain in the dashboard as above.
 
 2. **Install the secrets.**
 
