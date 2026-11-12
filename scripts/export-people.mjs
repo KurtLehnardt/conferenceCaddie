@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 // state marks a pending delete).
 import { PENDING_DELETE_QUERY } from '../server/people-shared.mjs';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const PEOPLE_INDEX = process.env.ES_PEOPLE_INDEX || 'caddie-people';
 const PAGE = 1000;
@@ -39,7 +39,7 @@ if (!slug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug) || args.length !== 2) {
 }
 
 async function search(body) {
-  const res = await fetch(`${ES_URL}/${PEOPLE_INDEX}/_search`, {
+  const res = await fetch(`${esUrlOrExit()}/${PEOPLE_INDEX}/_search`, {
     method: 'POST',
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

@@ -1,7 +1,7 @@
 // Generates the VAPID key pair that signs Web Push nudges and writes it to two files, then prints
 // the operator's steps to store both in Secret Manager. Neither key value is ever printed.
 //
-// Usage: node scripts/vapid-keys.mjs [--dir path]
+// Usage: GC_PROJECT=<project id> node scripts/vapid-keys.mjs [--dir path]
 //
 // The files are vapid-public.key and vapid-private.key in --dir (default: the current directory).
 // *.key is git-ignored. The public key is not a secret (every browser receives it), but keeping it
@@ -15,6 +15,11 @@ import path from 'node:path';
 const args = process.argv.slice(2);
 const dirIndex = args.indexOf('--dir');
 const dir = path.resolve(dirIndex === -1 ? '.' : args[dirIndex + 1] || '.');
+const project = process.env.GC_PROJECT;
+if (!project) {
+  console.error('Set GC_PROJECT to your Google Cloud project id.');
+  process.exit(1);
+}
 const publicFile = path.join(dir, 'vapid-public.key');
 const privateFile = path.join(dir, 'vapid-private.key');
 
@@ -39,7 +44,6 @@ fs.mkdirSync(dir, { recursive: true });
 fs.writeFileSync(publicFile, keys.publicKey, { mode: 0o600 });
 fs.writeFileSync(privateFile, keys.privateKey, { mode: 0o600 });
 
-const project = 'project-9205d6eb-366e-4844-b77';
 console.log(`Wrote the VAPID key pair to:
   ${publicFile}
   ${privateFile}

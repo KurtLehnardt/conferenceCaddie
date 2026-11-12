@@ -46,7 +46,7 @@ export const FILTERED = { error: 'filtered', message: 'That was held back by the
 export const HELD = { error: 'held', message: 'Waiting for the filter; it will appear shortly.' };
 
 // Rules (percolator). ES_URL and the people key are the same values people.mjs uses.
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { ES_URL } from './es-url.mjs';
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';
 const RULES_INDEX = process.env.ES_RULES_INDEX || 'caddie-people-rules';
 const RULES_TIMEOUT_MS = 3000;

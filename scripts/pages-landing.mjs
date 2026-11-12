@@ -21,7 +21,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const KUBECON = 'kubecon-cloudnativecon-north-america-2026';
-const DEFAULT_SITE_URL = 'https://kurtlehnardt.github.io/conferenceCaddie/';
+const DEFAULT_SITE_URL = process.env.CADDIE_SITE_URL || 'https://kurtlehnardt.github.io/conferenceCaddie/';
 
 // The app's base URL without a trailing slash, or null for an empty value. Throws on a bad URL.
 export function normaliseAppUrl(value) {
