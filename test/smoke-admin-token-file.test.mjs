@@ -7,7 +7,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -515,3 +515,21 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
     }
   });
 });
+
+// docs/ADMIN_CLI.md quotes the notes and the printed command; the quotes must stay what the code
+// writes, with the absolute paths of a home of ~ standing in for the placeholders.
+test('docs/ADMIN_CLI.md quotes the notes and the stats health smoke command as the code writes them', () => withHome((home) => {
+  const doc = readFileSync(join(ROOT, 'docs', 'ADMIN_CLI.md'), 'utf8');
+  const legacy = join(home, '.config', 'conference-caddie', 'admin-token');
+  const xdg = join(home, 'xdg');
+  const wanted = join(xdg, 'conference-caddie', 'admin-token');
+  put(legacy);
+  const fallback = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home).note
+    .replaceAll(wanted, '<config dir>/admin-token').replaceAll(legacy, '~/.config/conference-caddie/admin-token');
+  const quotedFallback = /`(NOTE admin token: [^`]+)`/.exec(doc)?.[1];
+  assert.ok(quotedFallback && fallback.startsWith(quotedFallback), `${quotedFallback}\n${fallback}`);
+  put(wanted);
+  const both = resolveAdminTokenFile({ XDG_CONFIG_HOME: xdg }, home).note;
+  assert.ok(doc.includes('`Do not delete either until you know which one the Worker accepts`') && both.includes('Do not delete either until you know which one the Worker accepts'));
+  assert.ok(doc.includes(`\`BASE_URL="https://<your worker>" SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(legacy, home)} node scripts/smoke.mjs\``));
+}));

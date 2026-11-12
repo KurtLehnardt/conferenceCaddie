@@ -60,7 +60,7 @@ The credential is a secret and is never in `config.json`. For each tier the tool
 | 2 (the Worker) | `ADMIN_TOKEN` | the path in `ADMIN_TOKEN_FILE` | `<config dir>/admin-token` |
 | 3 (Elasticsearch) | `ELASTISEARCH_API_KEY` | the path in `ES_ADMIN_KEY_FILE` | `<config dir>/es-admin-key` |
 
-The tier 2 file is the one that `node worker/scripts/setup-secrets.mjs` already wrote when you installed the Worker's secrets ([TIER2_CLOUDFLARE.md](fork/TIER2_CLOUDFLARE.md)), so on tier 2 there is nothing more to do. That script writes `~/.config/conference-caddie/admin-token` (or the path in `ADMIN_TOKEN_FILE`) whatever `CADDIE_ADMIN_HOME` and `XDG_CONFIG_HOME` say, so if either of them moves your config directory, set `ADMIN_TOKEN_FILE` to that file for the CLI too. For tier 3 the credential is the **operator key**, a limited Elasticsearch key that is restricted to the `caddie-*` indices and holds no security privilege. Do not use your setup or superuser key here. `scripts/create-es-keys.mjs --operator` mints it and writes it to the default file with mode 0600, without printing it ([TIER3_GCP_ELASTIC.md](fork/TIER3_GCP_ELASTIC.md#the-operator-key)). If you have a key from elsewhere, store it without echoing it. Like the script, this never overwrites a key file that exists; move an old one away first (see [Key rotation](#key-rotation)):
+The tier 2 file is the one that `node worker/scripts/setup-secrets.mjs` already wrote when you installed the Worker's secrets ([TIER2_CLOUDFLARE.md](fork/TIER2_CLOUDFLARE.md)), so on tier 2 there is nothing more to do. That script writes `~/.config/conference-caddie/admin-token` (or the path in `ADMIN_TOKEN_FILE`) whatever `CADDIE_ADMIN_HOME` and `XDG_CONFIG_HOME` say, so if either of them moves your config directory, set `ADMIN_TOKEN_FILE` to that file for the CLI too (the smoke test falls back to that file by itself and says so; see [The smoke test and the token file](#the-smoke-test-and-the-token-file)). For tier 3 the credential is the **operator key**, a limited Elasticsearch key that is restricted to the `caddie-*` indices and holds no security privilege. Do not use your setup or superuser key here. `scripts/create-es-keys.mjs --operator` mints it and writes it to the default file with mode 0600, without printing it ([TIER3_GCP_ELASTIC.md](fork/TIER3_GCP_ELASTIC.md#the-operator-key)). If you have a key from elsewhere, store it without echoing it. Like the script, this never overwrites a key file that exists; move an old one away first (see [Key rotation](#key-rotation)):
 
 ```sh
 (
@@ -75,6 +75,20 @@ Values are trimmed. A credential file whose mode allows anyone but its owner to 
 
 Optionally, if you put Cloudflare Access in front of `/admin/*` ([TIER2_CLOUDFLARE.md](fork/TIER2_CLOUDFLARE.md#optional-cloudflare-access-in-front-of-admin)), the tool sends the two Access headers when both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, and never logs them.
 
+### The smoke test and the token file
+
+`scripts/smoke.mjs` takes the Worker's admin token from `ADMIN_TOKEN`, else from the first line of the file in `ADMIN_TOKEN_FILE`; a set but empty `ADMIN_TOKEN_FILE` means no token. With neither set, it reads the token file this tool reads, `<config dir>/admin-token`, by itself only when all three of these hold:
+
+- the origin of `API_BASE` (by default the origin of `BASE_URL`) is exactly the `api` of a tier 2 backend in your `config.json`;
+- the admin calls are signed (`SMOKE_ADMIN_AUTH=signed`, the default);
+- `SMOKE_API` is not `cloudrun`.
+
+For any other address, name the file with `ADMIN_TOKEN_FILE`, as the command that `stats health` prints does. The rule exists because a signed request is not bound to a host: whatever answers at `API_BASE` could replay it to your Worker within its five-minute window. The smoke reads that file with this tool's checks (mode 0600, the whole file trimmed) and never prints the token.
+
+If `<config dir>/admin-token` does not exist but `~/.config/conference-caddie/admin-token` does (the file that `node worker/scripts/setup-secrets.mjs` writes even when `XDG_CONFIG_HOME` or `CADDIE_ADMIN_HOME` moves your config directory), the smoke reads the old file and, once it has read it, prints one line that starts `NOTE admin token: <config dir>/admin-token does not exist, so the old path ~/.config/conference-caddie/admin-token was read. Move it to <config dir>/admin-token and leave a symlink at the old path` and gives the `ln -s` command, quoted for the shell, so that this tool, the smoke and `setup-secrets.mjs` share one file.
+
+If both files exist and are different files, the smoke reads the one in the config directory and prints a note that says `Do not delete either until you know which one the Worker accepts`, that `setup-secrets.mjs` writes the old path, and which of the two is newer by modification time. A token rotation writes the old path, so the newer token can be the one the smoke did not read. A symlinked `~/.config` or `conference-caddie` directory, or a hard link, makes the two paths one file, and then there is no note.
+
 ### First check
 
 ```sh
@@ -82,7 +96,7 @@ caddie-admin stats health                          # the default backend
 caddie-admin stats health --backend paid --json
 ```
 
-It reads the public health and capabilities endpoints and prints the backend's tier, the Bluetooth mode and the push flags, then the exact smoke command and the log-tail command for that backend. Those commands name variables, never values; run them by hand.
+It reads the public health and capabilities endpoints and prints the backend's tier, the Bluetooth mode and the push flags, then the exact smoke command and the log-tail command for that backend. Those commands name variables and file paths, never values; run them by hand. On tier 2 the smoke command always names the token file this tool reads, quoted for a POSIX shell, for example `BASE_URL="https://<your worker>" SMOKE_API=worker ADMIN_TOKEN_FILE=~/'.config/conference-caddie/admin-token' node scripts/smoke.mjs`. A path under your home directory starts with `~/` outside the single quotes, so the shell expands it; any other path is single-quoted whole, with a `'` in it written `'\''`.
 
 ## How commands behave
 
@@ -210,7 +224,7 @@ caddie-admin stats health
 
 - `counts --event <slug>` prints document counts per index on tier 3 and row counts per table on tier 2. Without `--event` it prints totals per index (tier 3) or requests per conference for the day (tier 2).
 - `usage` on tier 2 prints, per conference and in total, the day, requests, rows read, rows written and the pace, which tells you how close you are to the Free plan's limits. On tier 3 it prints cluster health and the document counts and sizes of the indices, from `_cluster/health` and `_cat/indices`. These need the cluster actions `cluster:monitor/health` and `cluster:monitor/state` and the index privilege `monitor` on `caddie-*`, which the operator key holds (it does not hold the named cluster privilege `monitor`, which would also cover inference).
-- `health` prints the tier, the Bluetooth mode and the push flags from `GET /api/capabilities` and the health status, then the exact commands: the smoke test, and the log-tail command for this backend (on tier 2 `wrangler tail` through a filter, never unfiltered; on tier 3 a `gcloud logging read` of the service's errors).
+- `health` prints the tier, the Bluetooth mode and the push flags from `GET /api/capabilities` and the health status, then the exact commands: the smoke test (on tier 2 with `ADMIN_TOKEN_FILE` naming the token file, see [First check](#first-check)), and the log-tail command for this backend (on tier 2 `wrangler tail` through a filter, never unfiltered; on tier 3 a `gcloud logging read` of the service's errors).
 
 ## The audit log
 
