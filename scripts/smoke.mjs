@@ -22,8 +22,8 @@
 //   SMOKE_DIST           the built web app the bundle scan reads, relative to the repository root.
 //                        Default web/dist-worker against the Worker on BASE_URL's origin, else web/dist.
 //   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token (the file's first line is used). With
-//                        neither set, a run against a deployed Worker (SMOKE_API=worker, or API_BASE on
-//                        another origin; not a loopback API) reads the file caddie-admin reads:
+//                        neither set, a signed run against a deployed Worker (SMOKE_API=worker, or
+//                        API_BASE on another origin; not a loopback API) reads the file caddie-admin reads:
 //                        <config dir>/admin-token, the config dir being CADDIE_ADMIN_HOME, else
 //                        $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie. When that
 //                        file does not exist, the old ~/.config/conference-caddie/admin-token is read
@@ -166,11 +166,14 @@ if (API_KIND_ENV && !['worker', 'cloudrun'].includes(API_KIND_ENV)) {
 // first line of the file caddie-admin reads (scripts/lib/admin-token-file.mjs: <config dir>/admin-token,
 // or the old ~/.config/conference-caddie/admin-token with a NOTE). That last file is the deployed
 // Worker's token, so it is read only when the run is known to target a Worker without it
-// (SMOKE_API=worker, or API_BASE on another origin than BASE_URL) and the API is not on this machine
+// (SMOKE_API=worker, or API_BASE on another origin than BASE_URL), the API is not on this machine
 // (a local Worker has its own token in worker/.dev.vars; SMOKE_TREAT_AS_REMOTE=1 counts it as
-// remote). A Cloud Run run, or a local one, never picks it up by itself. The token is never printed.
+// remote), and the admin calls are signed (SMOKE_ADMIN_AUTH=signed, the default), so a token nobody
+// named never leaves this machine; bearer needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. A Cloud Run run,
+// or a local one, never picks it up by itself. The token is never printed.
 const DEFAULT_TOKEN_FILE_APPLIES = (API_KIND_ENV ? API_KIND_ENV === 'worker' : CROSS_ORIGIN_API)
-  && (process.env.SMOKE_TREAT_AS_REMOTE === '1' || !isLoopbackHost(new URL(API_BASE).hostname));
+  && (process.env.SMOKE_TREAT_AS_REMOTE === '1' || !isLoopbackHost(new URL(API_BASE).hostname))
+  && (process.env.SMOKE_ADMIN_AUTH || 'signed').toLowerCase() === 'signed';
 function readAdminToken() {
   if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN.trim();
   if (!process.env.ADMIN_TOKEN_FILE && !DEFAULT_TOKEN_FILE_APPLIES) return '';

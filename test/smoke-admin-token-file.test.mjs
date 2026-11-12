@@ -228,29 +228,32 @@ describe('scripts/smoke.mjs reads the admin token file caddie-admin reads', { ti
   });
 
   // A directory where the token file should be cannot be read: a run that reads the default file
-  // stops with "cannot be read", and one that does not stops at the bad SMOKE_ADMIN_AUTH instead.
-  // Neither sends a request.
-  test('precedence and scope: ADMIN_TOKEN, then ADMIN_TOKEN_FILE, then the default file, and that only for a deployed Worker', async () => {
+  // stops with "cannot be read", and one that does not stops at the bad SMOKE_TALKS checked after
+  // the token instead. Neither sends a request.
+  test('precedence and scope: ADMIN_TOKEN, then ADMIN_TOKEN_FILE, then the default file, and that only for a signed run against a deployed Worker', async () => {
     const home = tempHome();
     try {
       const unreadable = join(home, '.config', 'conference-caddie', 'admin-token');
       mkdirSync(unreadable, { recursive: true });
       const READ = `FAIL config: the admin token file ${unreadable} cannot be read`;
-      const NOT_READ = 'FAIL config: SMOKE_ADMIN_AUTH must be signed or bearer';
+      const NOT_READ = 'FAIL config: SMOKE_TALKS must be bundle or data';
       const cases = [
         [{}, READ],
-        [{ SMOKE_ADMIN_AUTH: 'basic' }, READ],
+        [{ SMOKE_ADMIN_AUTH: 'signed' }, READ],
         [{ ADMIN_TOKEN: FAKE }, SHORT_FAIL],
         [{ ADMIN_TOKEN_FILE: join(home, 'missing') }, 'FAIL config: ADMIN_TOKEN_FILE cannot be read'],
         [{ SMOKE_API: '', API_BASE: 'https://api.caddie-smoke.example.test' }, READ],
-        [{ SMOKE_API: 'cloudrun', SMOKE_ADMIN_AUTH: 'basic' }, NOT_READ],
-        [{ SMOKE_API: '', SMOKE_ADMIN_AUTH: 'basic' }, NOT_READ],
-        [{ BASE_URL: 'http://127.0.0.1:9', SMOKE_ADMIN_AUTH: 'basic' }, NOT_READ],
-        [{ BASE_URL: 'http://localhost:9', API_BASE: 'http://127.0.0.1:9', SMOKE_API: '', SMOKE_ADMIN_AUTH: 'basic' }, NOT_READ],
         [{ BASE_URL: 'http://127.0.0.1:9', SMOKE_TREAT_AS_REMOTE: '1' }, READ],
+        [{ SMOKE_API: 'cloudrun' }, NOT_READ],
+        [{ SMOKE_API: '' }, NOT_READ],
+        [{ BASE_URL: 'http://127.0.0.1:9' }, NOT_READ],
+        [{ BASE_URL: 'http://localhost:9', API_BASE: 'http://127.0.0.1:9', SMOKE_API: '' }, NOT_READ],
+        // Bearer would send the token itself, so a file nobody named is never used for it.
+        [{ SMOKE_ADMIN_AUTH: 'bearer' }, NOT_READ],
+        [{ SMOKE_ADMIN_AUTH: 'bearer', ADMIN_TOKEN_FILE: join(home, 'missing') }, 'FAIL config: ADMIN_TOKEN_FILE cannot be read'],
       ];
       for (const [env, expected] of cases) {
-        const r = await smoke({ HOME: home, ...env });
+        const r = await smoke({ HOME: home, SMOKE_TALKS: 'bogus', ...env });
         assert.equal(r.code, 1, `${JSON.stringify(env)}: ${r.stdout}`);
         assert.ok(r.stdout.includes(expected), `${JSON.stringify(env)}: expected ${expected}\n${r.stdout}`);
       }
