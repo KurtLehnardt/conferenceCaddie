@@ -102,7 +102,6 @@ private fun TalkPeopleBody(
 ) {
     if (!state.features.circles) return
     val controller = host.controller
-    val scope = rememberCoroutineScope()
     val vis = state.visibility
     val shared = talkId in vis.sharedTalkIds
     var refresh by remember(talkId) { mutableIntStateOf(0) }
@@ -111,6 +110,11 @@ private fun TalkPeopleBody(
     var busy by remember(talkId) { mutableStateOf(false) }
     var message by remember(talkId) { mutableStateOf<String?>(null) }
     var open by rememberSaveable(talkId) { mutableStateOf(startOpen) }
+    // Sharing runs on the app's scope (PeopleHost.scope), not one of this card's own: the talk card
+    // can be scrolled out of its list or the screen left while the write is under way, and a message
+    // this card shows itself then goes in a toast. busy is set before the launch, so a second tap in
+    // the same frame starts nothing.
+    val shown = rememberInComposition()
 
     // The count is cached by the controller for a minute and dropped when this device's share changes.
     LaunchedEffect(controller, talkId, shared, refresh) {
@@ -123,14 +127,18 @@ private fun TalkPeopleBody(
             message = ProfileStrings.SHARE_LIMIT
             return
         }
-        scope.launch {
-            busy = true
-            message = null
-            val err = controller.shareForTalk(talkId, on)
-            busy = false
+        if (busy) return
+        busy = true
+        message = null
+        host.scope.launch {
+            val err = try {
+                controller.shareForTalk(talkId, on)
+            } finally {
+                busy = false
+            }
             notice = false
             if (err != null) {
-                message = err
+                if (shown.value) message = err else host.showToast(err)
             } else {
                 refresh++
                 if (!on) open = false
@@ -319,6 +327,9 @@ fun ShareAllControls(talkIds: List<String>, state: PeopleUiState, host: PeopleHo
     val controller = host.controller
     val scope = rememberCoroutineScope()
     val vis = state.visibility
+    // As TalkPeopleBody: the actions run on the app's scope, a message goes in a toast once this card
+    // has left, and busy is set before the launch.
+    val shown = rememberInComposition()
     val sharedHere = talkIds.count { it in vis.sharedTalkIds }
     val allShared = sharedHere == talkIds.size
     var busy by remember { mutableStateOf(false) }
@@ -326,13 +337,19 @@ fun ShareAllControls(talkIds: List<String>, state: PeopleUiState, host: PeopleHo
     var message by remember { mutableStateOf<String?>(null) }
 
     fun run(action: suspend () -> String?) {
-        scope.launch {
-            busy = true
-            message = null
-            val err = action()
-            busy = false
+        if (busy) return
+        busy = true
+        message = null
+        host.scope.launch {
+            val err = try {
+                action()
+            } finally {
+                busy = false
+            }
             notice = null
-            if (err != null) message = err
+            if (err != null) {
+                if (shown.value) message = err else host.showToast(err)
+            }
         }
     }
 

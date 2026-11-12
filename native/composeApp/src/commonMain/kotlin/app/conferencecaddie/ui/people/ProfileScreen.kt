@@ -49,6 +49,7 @@ import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -145,7 +146,7 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
         verticalArrangement = Arrangement.spacedBy(PeopleScreenGap),
     ) {
         SaveStatus(state.sync)
-        PendingDeleteBanner(state, host, onResult = { deleteMessage = it })
+        PendingDeleteBanner(state, host, scope, onResult = { deleteMessage = it })
         if (state.visibility.hiddenForOwner) {
             PeopleBanner(LucideIcon.EyeOff, Modifier.testTag("profile-hidden-banner"), announce = true) {
                 Text(boldLead(ProfileStrings.HIDDEN_TITLE, ProfileStrings.HIDDEN_COPY))
@@ -435,10 +436,9 @@ private fun SharedTalksRow(count: Int, enabled: Boolean, onStop: () -> Unit) {
  * and says "may already be hidden" for a conference's delete.
  */
 @Composable
-private fun PendingDeleteBanner(state: PeopleUiState, host: PeopleHost, onResult: (String) -> Unit) {
+private fun PendingDeleteBanner(state: PeopleUiState, host: PeopleHost, scope: CoroutineScope, onResult: (String) -> Unit) {
     val d = state.deletes
     if (!d.unfinished) return
-    val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     val all = d.deleteAll
     // As the web words it: "{n} conferences", this conference's name, or "another conference".
@@ -449,11 +449,20 @@ private fun PendingDeleteBanner(state: PeopleUiState, host: PeopleHost, onResult
         else -> ProfileStrings.ANOTHER_CONFERENCE
     }
 
+    // On the profile screen's scope ([scope]), not one of the banner's own: a delete that finishes
+    // takes the banner away as it publishes, before the action returns, which would cancel the
+    // banner's scope and lose the result the Delete card shows. busy is set before the launch, so a
+    // second tap in the same frame starts nothing.
     fun run(action: suspend () -> String?) {
+        if (busy) return
+        busy = true
         scope.launch {
-            busy = true
-            action()?.let(onResult)
-            busy = false
+            val result = try {
+                action()
+            } finally {
+                busy = false
+            }
+            result?.let(onResult)
         }
     }
 

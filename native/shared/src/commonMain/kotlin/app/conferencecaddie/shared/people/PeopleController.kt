@@ -118,6 +118,15 @@ class PeopleController(
     /** Opens this app's page in the system settings ([PeopleServices.systemSettings]), or null where the platform has none. */
     val systemSettings: SystemSettings? get() = services.systemSettings
 
+    /**
+     * Test hook, which does nothing in the app. It runs at the end of every action a screen calls
+     * (each write, as [write] runs it), after the action has published what it changed and before
+     * its caller hears back. A UI test sets it to hold an action at that moment, when the screens
+     * already show the outcome (a row the answer removes is gone) and the caller is still waiting.
+     */
+    @kotlin.concurrent.Volatile
+    var beforeActionReturns: suspend () -> Unit = {}
+
     private var context: PeopleContext? = null
     @kotlin.concurrent.Volatile
     private var session: Session? = null
@@ -845,7 +854,7 @@ class PeopleController(
 
     private suspend fun <T> write(failed: T, block: suspend () -> T): T {
         if (currentCoroutineContext()[Owner]?.controller === this) return guarded(failed, block)
-        return scope.async { guarded(failed, block) }.await()
+        return scope.async { guarded(failed, block).also { beforeActionReturns() } }.await()
     }
 
     /** Runs a read on the serial dispatcher; it stops when its caller is cancelled. Failures as in [write]. */

@@ -1,11 +1,13 @@
 package app.conferencecaddie.ui.people
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import app.conferencecaddie.shared.AppLink
@@ -379,4 +381,27 @@ sealed interface PeopleLaunch {
             }
         }
     }
+}
+
+/**
+ * Whether the composable that remembered it ([rememberInComposition]) is still in the composition.
+ * An action that runs on [PeopleHost.scope] reads it when its answer comes, from any thread: an
+ * outcome its composable would show itself (an error under a form) goes in a toast instead once the
+ * composable has left (scrolled away, or another tab), so it is not lost.
+ */
+internal class InComposition {
+    @kotlin.concurrent.Volatile
+    var value: Boolean = false
+        internal set
+}
+
+/** An [InComposition] that is true from when this composable enters the composition until it leaves. */
+@Composable
+internal fun rememberInComposition(): InComposition {
+    val shown = remember { InComposition() }
+    DisposableEffect(shown) {
+        shown.value = true
+        onDispose { shown.value = false }
+    }
+    return shown
 }

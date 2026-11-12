@@ -121,28 +121,56 @@ private sealed interface PushPanel {
 fun PushControls(state: PeopleUiState, host: PeopleHost, variant: PushVariant, modifier: Modifier = Modifier) {
     if (!state.push.available) return
     val controller = host.controller
-    val scope = rememberCoroutineScope()
     val push = state.push
     val settings = variant == PushVariant.Settings
     var panel by remember { mutableStateOf<PushPanel?>(null) }
     var busy by remember { mutableStateOf(false) }
+    // Turning push on runs on the app's scope (PeopleHost.scope), not one of this control's own: the
+    // presence card it sits in can be scrolled away or the tab left while the system's prompt is up,
+    // and a backend without native push takes the control away as it answers. A hint this control
+    // shows itself goes in a toast once it has left. busy is set before the launch, so a second tap
+    // in the same frame starts nothing.
+    val shown = rememberInComposition()
 
-    fun finish() {
-        scope.launch {
-            busy = true
-            val outcome = controller.enablePush()
-            busy = false
-            panel = when (outcome) {
-                PushOutcome.On -> {
-                    host.showToast(ConnectStrings.NUDGES_ON)
-                    null
-                }
-                PushOutcome.Denied -> PushPanel.Denied
-                PushOutcome.Unavailable -> PushPanel.Hint(ConnectStrings.PUSH_UNAVAILABLE)
-                PushOutcome.ProfileNeeded -> PushPanel.Hint(ConnectStrings.PUSH_PROFILE_NEEDED)
-                PushOutcome.DeleteUnfinished -> PushPanel.Hint(PeopleError.DELETE_UNFINISHED_MESSAGE)
-                is PushOutcome.Failed -> PushPanel.Hint(ConnectStrings.PUSH_FAILED)
+    fun show(outcome: PushOutcome) {
+        val next = when (outcome) {
+            PushOutcome.On -> {
+                host.showToast(ConnectStrings.NUDGES_ON)
+                null
             }
+            PushOutcome.Denied -> PushPanel.Denied
+            // Push is not available any more, so this control goes: always a toast.
+            PushOutcome.Unavailable -> {
+                host.showToast(ConnectStrings.PUSH_UNAVAILABLE)
+                null
+            }
+            PushOutcome.ProfileNeeded -> PushPanel.Hint(ConnectStrings.PUSH_PROFILE_NEEDED)
+            PushOutcome.DeleteUnfinished -> PushPanel.Hint(PeopleError.DELETE_UNFINISHED_MESSAGE)
+            is PushOutcome.Failed -> PushPanel.Hint(ConnectStrings.PUSH_FAILED)
+        }
+        when {
+            shown.value -> panel = next
+            next == PushPanel.Denied -> host.showToast(ConnectStrings.PUSH_DENIED)
+            next is PushPanel.Hint -> host.showToast(next.text)
+            else -> Unit
+        }
+    }
+
+    /** Turns push on; with [noticeFirst], records first that the notice was shown. */
+    fun turnOn(noticeFirst: Boolean) {
+        if (busy) return
+        busy = true
+        host.scope.launch {
+            val outcome = try {
+                if (noticeFirst) {
+                    controller.markPushNoticeSeen()
+                    panel = null
+                }
+                controller.enablePush()
+            } finally {
+                busy = false
+            }
+            show(outcome)
         }
     }
 
@@ -152,16 +180,10 @@ fun PushControls(state: PeopleUiState, host: PeopleHost, variant: PushVariant, m
             if (push.on) host.scope.launch { controller.disablePush() }
             return
         }
-        if (!push.noticeSeen) panel = PushPanel.Notice else finish()
+        if (!push.noticeSeen) panel = PushPanel.Notice else turnOn(noticeFirst = false)
     }
 
-    fun acceptNotice() {
-        scope.launch {
-            controller.markPushNoticeSeen()
-            panel = null
-            finish()
-        }
-    }
+    fun acceptNotice() = turnOn(noticeFirst = true)
 
     val pending = panel == PushPanel.Notice || busy
     // .pp-push-panel: 10 dp between its parts, 6 dp below; in Settings inset 16 dp, 12 dp below.
