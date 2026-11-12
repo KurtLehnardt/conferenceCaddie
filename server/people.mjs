@@ -366,7 +366,7 @@ let conferencesCache = null; // { at, promise }
 async function fetchConferences() {
   const { json } = await readOnly('POST', withPreference(`${idx(CONFERENCES_INDEX)}/_search`, CONFERENCES_PREFERENCE), {
     size: 500,
-    _source: ['slug', 'status', 'end_date', 'time_zone'],
+    _source: ['slug', 'status', 'end_date', 'time_zone', 'demo'],
     query: { match_all: {} },
   });
   const map = new Map();
@@ -387,12 +387,13 @@ function conferences() {
 }
 
 
-// Returns { slug, visibleUntil, timeZone } for a searchable conference, or throws 400.
+// Returns { slug, visibleUntil, timeZone, demo } for a searchable conference, or throws 400. demo is
+// true for the demo conference (invented data), whose pushes say so (server/nudge.mjs).
 export async function conferenceFor(slug) {
   if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw bad('event must be a conference slug');
   const conf = (await conferences()).get(slug);
   if (!conf || conf.status !== 'searchable' || !conf.end_date) throw bad('conference is not available');
-  return { slug, visibleUntil: visibleUntil(conf.end_date, conf.time_zone), timeZone: conf.time_zone || null };
+  return { slug, visibleUntil: visibleUntil(conf.end_date, conf.time_zone), timeZone: conf.time_zone || null, demo: conf.demo === true };
 }
 
 const topicsCache = new Map(); // slug -> { at, promise }

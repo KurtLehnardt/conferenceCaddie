@@ -452,3 +452,31 @@ describe('push nudge with native push', () => {
     assert.equal(fake.pushes[0].headers['apns-expiration'], String(Math.floor(now / 1000) + 600));
   });
 });
+
+// The demo conference (invented data) labels every push it causes, on every channel, so a demo push
+// is never taken for a real conference's; a real conference's pushes are unchanged (above).
+describe('push nudge about the demo conference', () => {
+  test('every channel says Demo: the Web Push title and body, and the native demo alert', async () => {
+    const { NATIVE_ALERT_DEMO, APNS_BODY_DEMO } = await import('../server/native-push.mjs');
+    const { DEMO_TITLE } = await import('../server/nudge.mjs');
+    const tApns = apnsToken();
+    const vFcm = fcmToken();
+    const { t, me } = await pair({ web: true, apns: tApns }, { web: true, fcm: vFcm });
+    await nudgeAfterPresence(me, { ...CONF, demo: true }, pinned());
+    const words = new Map(fake.pushes.map((p) => [addressOf(p), wordsOf(p)]));
+    assert.equal(words.size, 4, 'both people, every channel');
+    const web = words.get(`web:https://fcm.googleapis.com/fcm/send/${t.profileId}`);
+    assert.equal(web.title, DEMO_TITLE);
+    assert.equal(web.title, 'Conference Caddie (Demo)');
+    assert.match(web.body, /^Demo: someone who's worked on .+ is in Hall A right now$/);
+    const DEMO_ALERT = { title: NATIVE_ALERT_DEMO.title, body: NATIVE_ALERT_DEMO.body, link: NATIVE_ALERT_DEMO.deepLink };
+    assert.match(DEMO_ALERT.title, /Demo/);
+    assert.match(DEMO_ALERT.body, /^Demo conference: /);
+    assert.equal(DEMO_ALERT.link, ALERT.link);
+    for (const address of [`apns:${tApns}`, `fcm:${vFcm}`]) assert.deepEqual(words.get(address), DEMO_ALERT, address);
+    const apns = fake.pushes.find((p) => p.platform === 'apns');
+    assert.equal(JSON.stringify(apns.payload), APNS_BODY_DEMO);
+    const nativeText = JSON.stringify(fake.pushes.filter((p) => p.platform).map((p) => p.payload));
+    for (const leak of ['Hall A', 'eBPF', EVENT]) assert.ok(!nativeText.includes(leak), `${leak} reached a native push`);
+  });
+});

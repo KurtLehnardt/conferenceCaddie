@@ -229,6 +229,17 @@ export const CONFERENCE_FIELDS = Object.freeze([
   'slug', 'name', 'start_date', 'end_date', 'time_zone', 'location', 'status', 'official_schedule_url', 'source', 'has_level', 'track_group', 'tag_groups', 'talk_count',
 ]);
 
+/**
+ * The public fields of a conference: CONFERENCE_FIELDS, plus demo: true for the demo conference
+ * (invented data, docs/contracts/talk-bundle.md "The demo marker"). The marker is present only on a
+ * demo conference and only with the value true, so every other entry keeps exactly its earlier bytes.
+ */
+export function publicConferenceFields(conference) {
+  const out = pick(conference, CONFERENCE_FIELDS);
+  if (conference?.demo === true) out.demo = true;
+  return out;
+}
+
 const pick = (o, fields) => Object.fromEntries(fields.map((f) => [f, o[f] ?? null]));
 // By the instant start names (offsets can differ within one conference across a DST change), then talk_id.
 const byStartThenId = (a, b) => Date.parse(a.start) - Date.parse(b.start) || (a.talk_id < b.talk_id ? -1 : a.talk_id > b.talk_id ? 1 : 0);
@@ -301,7 +312,7 @@ export function buildBundle({ conference, talks, topics, vectors, attribution })
   const vectorBytes = encodeVectors(rowIds.map((id) => rowsById.get(id)));
   const bundle = {
     bundle_version: BUNDLE_VERSION,
-    conference: pick(conference, CONFERENCE_FIELDS),
+    conference: publicConferenceFields(conference),
     attribution: attributionFor(conference, attribution),
     model: { ...MODEL },
     vectors: { file: VECTOR_FILE, dtype: 'int8', dims: DIMS, count: rowIds.length, quantization: QUANTIZATION, rows: rowIds },

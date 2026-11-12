@@ -23,6 +23,13 @@
 //      CADDIE_DATA_DIR (optional) reads and writes the conferences and raw files there instead of data/.
 // Operator file: data/conference-operator.json (written by caddie-admin conferences hide/remove/unretire).
 // A removed slug is skipped; a hidden slug is written as unavailable (operator_hidden) and keeps its talks.
+// The demo conference (config/demo-conference.json, scripts/lib/demo-conference.mjs): when it is switched
+// on, "--event <its slug>" builds it from the generator for yesterday, today and tomorrow in its zone,
+// with no network call, and indexes it like any other conference (the operator file applies to it too).
+// --all-upcoming never includes it, because its dates roll every day and the weekly run of the Linux
+// Foundation events cannot keep them current; .github/workflows/demo-conference.yml refreshes it.
+// CADDIE_DEMO_CONFIG names another configuration file and CADDIE_DEMO_TODAY (YYYY-MM-DD) pins its
+// "today", for tests and previews.
 //
 // Deleted talks, as the Worker's finalize handles them (worker/src/admin.js finalizeTalks; the
 // details are in scripts/lib/dropped-talks.mjs):
@@ -56,6 +63,7 @@ import { hasKey, es, existingHashes, runBulk } from './lib/es.mjs';
 import { esUrl } from './lib/es-url.mjs';
 import { shrinkRefusal, peopleTransport, createDeletedTalkCleanup } from './lib/dropped-talks.mjs';
 import { indicesFrom } from './admin/backends/es.mjs';
+import { readDemoConfig, buildDemo, demoToday } from './lib/demo-conference.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // Where the conferences and raw downloads are read and written. CADDIE_DATA_DIR points a test at a
@@ -170,6 +178,7 @@ function loadOperatorFile() {
 
 // Returns { conf, summary, stop } where stop is true when the embedding limit was hit.
 async function processEvent(ev) {
+  if (ev.demo) return processDemoEvent(ev);
   const rawDir = join(dataDir, 'raw', ev.slug);
   const outDir = join(dataDir, ev.slug);
   const lines = [];
@@ -272,7 +281,26 @@ async function processEvent(ev) {
   if (built.cancelled.length) lines.push(`  dropped ${built.cancelled.length} cancelled session${built.cancelled.length === 1 ? '' : 's'}: ${built.cancelled.join(', ')}`);
   const m = built.mapping;
   lines.push(`  groups: track "${m.track_group}", level ${m.level_group ? `"${m.level_group}"` : 'none'}, tags [${m.tag_groups.join(', ')}], hidden [${m.hidden_groups.join(', ')}], slides question ${m.slides_question ? `"${m.slides_question}"` : 'none'}`);
+  return indexBuilt(ev, conf, built, lines);
+}
 
+// The demo conference: the generator's documents for the window around today in its zone, then the
+// same plan, shrink guard, talk file, index writes and topics as a fetched conference. Its talk ids
+// are the same every day (scripts/lib/demo-conference.mjs), so a daily run updates times in place and
+// deletes nothing.
+async function processDemoEvent(ev) {
+  const { conference, docs, counts, mapping } = ev.demo;
+  const conf = { ...conference, status: 'unavailable', status_reason: null, raw_fetched_at: new Date().toISOString() };
+  const lines = [
+    `  demo: invented schedule for ${conf.start_date}..${conf.end_date} (${conf.time_zone}), ${counts.sessions} sessions (talk ${counts.talk}, ambient ${counts.ambient}, break ${counts.break}, housekeeping ${counts.housekeeping})`,
+  ];
+  return indexBuilt(ev, conf, { docs, counts, mapping }, lines);
+}
+
+// Plans the built talks against the index, applies the shrink guard, writes the talk file and the
+// index, and cleans up the people of deleted talks. Returns { conf, lines, stop, refused, peopleFailed }.
+async function indexBuilt(ev, conf, built, lines) {
+  const outDir = join(dataDir, ev.slug);
   // Plan against what the index already holds, so unchanged sessions are never re-embedded.
   let existing = null;
   if (!opts.dryRun) {
@@ -448,19 +476,50 @@ async function main() {
     }
   }
 
-  const listPath = join(dataDir, 'raw/lf-events-upcoming.json');
-  const listRaw = await getRaw(LF_LIST_URL, listPath);
-  if (listRaw.error) fail(`Fetching the LF event list failed: ${listRaw.error}`);
-  let events;
+  // The demo conference is generated, never fetched: a run for it alone reads no event list.
+  let demo;
   try {
-    events = deriveEvents(JSON.parse(listRaw.text));
+    demo = readDemoConfig(root);
   } catch (e) {
     fail(e.message);
   }
+  const demoWanted = mode[0] === '--event' && opts.events.includes(demo.slug);
+  if (demoWanted && !demo.enabled) {
+    fail(`${demo.slug} is the demo conference, which is switched off. Set "enabled": true in config/demo-conference.json to switch it on (docs/ADMIN_CLI.md, "The demo conference").`);
+  }
+  const lfWanted = opts.events.filter((s) => s !== demo.slug);
+
+  let events = [];
+  if (mode[0] !== '--event' || lfWanted.length) {
+    const listPath = join(dataDir, 'raw/lf-events-upcoming.json');
+    const listRaw = await getRaw(LF_LIST_URL, listPath);
+    if (listRaw.error) fail(`Fetching the LF event list failed: ${listRaw.error}`);
+    try {
+      events = deriveEvents(JSON.parse(listRaw.text));
+    } catch (e) {
+      fail(e.message);
+    }
+  }
+
+  // The generated documents for today in the demo's zone (or CADDIE_DEMO_TODAY).
+  const demoEvent = () => {
+    let built;
+    try {
+      built = buildDemo(demo, demoToday(demo));
+    } catch (e) {
+      fail(e.message);
+    }
+    const c = built.conference;
+    return { slug: c.slug, name: c.name, start_date: c.start_date, end_date: c.end_date, location: c.location, demo: built };
+  };
 
   if (mode[0] === '--list') {
     for (const ev of events) {
       console.log(`${ev.slug} | ${ev.start_date}..${ev.end_date} | ${locationLabel(ev.location)} | schedule: ${ev.cta_schedule_url ? 'yes' : 'no'}`);
+    }
+    if (demo.enabled) {
+      const ev = demoEvent();
+      console.log(`${ev.slug} | ${ev.start_date}..${ev.end_date} | ${locationLabel(ev.location)} | schedule: generated (the demo conference; only with --event)`);
     }
     return 0;
   }
@@ -469,12 +528,14 @@ async function main() {
   let selected;
   if (mode[0] === '--event') {
     const known = new Set(events.map((e) => e.slug));
-    const unknown = opts.events.filter((s) => !known.has(s));
+    const unknown = lfWanted.filter((s) => !known.has(s));
     if (unknown.length) fail(`Not in the upcoming LF list: ${unknown.join(', ')}. Run --list to see the slugs.`);
-    const wanted = new Set(opts.events);
+    const wanted = new Set(lfWanted);
     selected = events.filter((e) => wanted.has(e.slug)); // list order
+    if (demoWanted) selected.push(demoEvent());
   } else {
-    selected = events;
+    // Never the demo conference, and never an event listed under its slug.
+    selected = events.filter((e) => e.slug !== demo.slug);
   }
   selected = selected.filter((ev) => {
     if (!Object.hasOwn(operator.removed, ev.slug)) return true;

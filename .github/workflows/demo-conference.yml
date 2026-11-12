@@ -1,0 +1,123 @@
+# Keeps the demo conference current: its invented talks are always yesterday, today and tomorrow in
+# its time zone (config/demo-conference.json, scripts/lib/demo-conference.mjs), so its dates and talk
+# times change every day. It is off unless config/demo-conference.json says "enabled": true, and then
+# this workflow does nothing at all beyond reading that file and the live conferences.json.
+#
+# Every three hours (the runs are idempotent, and a day's first run after midnight in any zone falls
+# before 04:00 there, ahead of the first talk at 07:00):
+# - check: reads the switch and the operator file (scripts/demo-conference.mjs status) and compares
+#   the live talk bundles with today's window. No secret.
+# - elasticsearch (tier 3): when the demo is on and the repository holds the variable CADDIE_ES_URL
+#   and the secret CADDIE_DEMO_ES_API_KEY, runs scripts/ingest.mjs --event <demo slug> --skip-topics
+#   against Elasticsearch. The talk ids never change, so the run moves times in place: no talk is
+#   re-embedded or deleted, and nobody's shared talks change. The key is the narrow one that
+#   scripts/create-es-keys.mjs --demo mints (read, write and maintenance on caddie-talks* and
+#   caddie-conferences* only; no people index). Without the two settings the job only logs a notice.
+#   The first index of the demo, with its topics and facets, is the operator's
+#   `caddie-admin conferences add --event <demo slug>` (docs/ADMIN_CLI.md, "The demo conference").
+# - pages: when the live bundles are stale (the demo is on and missing or dated another day, or it is
+#   off, hidden or removed and still listed), calls pages.yml, which regenerates the demo for today and
+#   publishes it with the vectors already published (demo_refresh), or drops it.
+# The Worker (tier 2) is not refreshed here.
+#
+# GitHub disables scheduled workflows after 60 days without repository activity; run this one by
+# hand to enable it again.
+name: Demo conference
+
+on:
+  schedule:
+    - cron: '23 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-conference
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.status.outputs.enabled }}
+      slug: ${{ steps.status.outputs.slug }}
+      stale: ${{ steps.status.outputs.stale }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The bundle base as pages.yml works it out: the repository variables CADDIE_SITE_URL and
+      # CADDIE_BUNDLE_BASE when set, else https://<owner, lowercased>.github.io/<repository>/bundles/.
+      - name: Compare the switch with the live bundles
+        id: status
+        env:
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          SITE_URL_OVERRIDE: ${{ vars.CADDIE_SITE_URL }}
+          BUNDLE_BASE_OVERRIDE: ${{ vars.CADDIE_BUNDLE_BASE }}
+        run: |
+          set -euo pipefail
+          name="${REPOSITORY#*/}"
+          owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          site="${SITE_URL_OVERRIDE:-https://$owner.github.io/$name/}"
+          case "$site" in */) ;; *) site="$site/" ;; esac
+          bundles="${BUNDLE_BASE_OVERRIDE:-${site}bundles/}"
+          case "$bundles" in */) ;; *) bundles="$bundles/" ;; esac
+          node scripts/demo-conference.mjs status --live "$bundles"
+
+  elasticsearch:
+    needs: check
+    if: needs.check.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The key is in the environment of this step and of the ingest step only. Its value is never
+      # printed.
+      - name: Check the configuration
+        id: config
+        env:
+          ES_URL: ${{ vars.CADDIE_ES_URL }}
+          ES_API_KEY: ${{ secrets.CADDIE_DEMO_ES_API_KEY }}
+        run: |
+          if [ -n "$ES_URL" ] && [ -n "$ES_API_KEY" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "::notice::Skipping Elasticsearch: the CADDIE_ES_URL variable and the CADDIE_DEMO_ES_API_KEY secret are not both set (tier 3 is not configured for the demo)."
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # Node built-ins only: nothing is installed, so no third-party code runs next to the key.
+      - name: Refresh the demo conference on Elasticsearch
+        if: steps.config.outputs.ready == 'true'
+        env:
+          ES_URL: ${{ vars.CADDIE_ES_URL }}
+          ES_API_KEY: ${{ secrets.CADDIE_DEMO_ES_API_KEY }}
+          SLUG: ${{ needs.check.outputs.slug }}
+        run: node scripts/ingest.mjs --event "$SLUG" --skip-topics
+
+  # The permissions are the ceiling for the called jobs, which narrow them, as in ingest.yml.
+  pages:
+    needs: check
+    if: needs.check.outputs.stale == 'true'
+    permissions:
+      contents: read
+      deployments: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+    with:
+      demo_refresh: true

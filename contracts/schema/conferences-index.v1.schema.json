@@ -48,7 +48,8 @@
         "has_level": { "type": "boolean" },
         "track_group": { "type": ["string", "null"] },
         "tag_groups": { "type": "array", "items": { "type": "string" } },
-        "talk_count": { "type": "integer", "minimum": 0 }
+        "talk_count": { "type": "integer", "minimum": 0 },
+        "demo": { "description": "Present, and true, only on the demo conference: invented talks and speakers for trying the apps (docs/contracts/talk-bundle.md, The demo marker). Clients label everything of it as a demo. Absent on every real conference.", "const": true }
       }
     },
     "BundleEntry": {
@@ -106,6 +107,7 @@
         "track_group": { "$ref": "#/$defs/Conference/properties/track_group" },
         "tag_groups": { "$ref": "#/$defs/Conference/properties/tag_groups" },
         "talk_count": { "$ref": "#/$defs/Conference/properties/talk_count" },
+        "demo": { "$ref": "#/$defs/Conference/properties/demo" },
         "bundle": { "anyOf": [{ "$ref": "#/$defs/BundleEntry" }, { "type": "null" }] }
       },
       "if": { "properties": { "status": { "const": "unavailable" } } },

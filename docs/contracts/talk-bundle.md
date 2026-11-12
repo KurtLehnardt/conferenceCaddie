@@ -43,6 +43,16 @@ A bundle directory is content-addressed: its name is the first 16 hex digits of 
 - Entries are sorted by `start_date`, then `name`, as the API sorts them.
 - **Reading the index.** A client checks each conference entry on its own and skips an entry that is malformed, so one bad entry never hides the rest (`readConferenceIndex()`). For a well-formed entry it looks at `bundle_version` first: a version it implements is used after verification; a later version is left alone (the app keeps the bundle it has and says it needs an update for that conference); a malformed bundle entry is ignored. The shape of a bundle entry beyond `bundle_version`, `content_hash`, `path` and `files` belongs to its version, so the schema applies the v1 rules (exactly `bundle.json` and `vectors.i8`, `bge-small-en-v1.5` at 384 dimensions) only to entries with `bundle_version: 1`, and an index can list bundles of several versions while old and new apps coexist. An `index_version` above 1 means the app needs an update.
 
+### The demo marker
+
+A conference entry may carry `"demo": true`, here, in `GET /api/conferences` and in `bundle.json`'s `conference`. It marks the demo conference (`config/demo-conference.json`, `scripts/lib/demo-conference.mjs`): an invented conference whose talks and speakers are made up and whose dates are always yesterday, today and tomorrow in its zone, for showing the apps when no real conference is on. Its `source` is `"demo"`, its `official_schedule_url` and every talk `url` are null, its name contains the word "Demo", and every abstract says that the session and its speakers are fictional.
+
+- The field is optional and only ever `true`: it is absent on every real conference, so their entries and bundles keep the bytes they had. A schema check refuses `"demo": false` and any other value.
+- Clients read exactly `demo === true` and show a "Demo" label on every surface where that conference's data appears: the conference list and picker, talk cards and details, search results, For you, the people screens (Around now, profile, Meet up, requests) and any notification text.
+- Anything that spans conferences leaves it out (operator counts and usage, cross-conference checks). A demo that is hidden or switched off is not listed at all, by the bundles or by `GET /api/conferences`, rather than listed as unavailable.
+- Its bundle's attribution names no licensor of real content: the licensor says the data is invented, the licence is CC0 1.0 and `source_url` is null.
+- Fixture: `contracts/fixtures/demo/conferences.json` (an index with a demo entry and a real one) and `contracts/fixtures/demo/invalid-demo-false.json` (a conference entry that must fail).
+
 ## `bundle.json`
 
 The file is canonical JSON (below), so its keys appear in sorted order; they are listed here by meaning.

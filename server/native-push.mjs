@@ -33,7 +33,9 @@
 //   Apple and Google in plain text, unlike Web Push payloads, which are end-to-end encrypted, so a
 //   native push carries nothing about anyone: no zone, no passage, no name, no ref, no profile_id,
 //   no conference and no spot line. The app opens Around now, which shows the match through the
-//   authenticated API.
+//   authenticated API. The one exception is the demo conference (invented data): its pushes use
+//   NATIVE_ALERT_DEMO, which says "Demo" so a demo push is never taken for a real conference's; that
+//   names no person and no real conference either.
 // - Every push has one outcome: 'sent'; 'gone', when the platform says the token will never work
 //   again (APNs 410 or 400 BadDeviceToken; FCM 404 UNREGISTERED, or 400 INVALID_ARGUMENT naming
 //   message.token), and the caller then deletes the registration; or 'failed', with one log line
@@ -368,15 +370,24 @@ export const NATIVE_ALERT = Object.freeze({
   deepLink: 'caddie://people?around=1',
 });
 
-// The APNs body, the same bytes for every push.
-export const APNS_BODY = JSON.stringify({ aps: { alert: { title: NATIVE_ALERT.title, body: NATIVE_ALERT.body }, sound: 'default' }, deepLink: NATIVE_ALERT.deepLink });
+// The notification of a push about the demo conference: labelled, otherwise the same.
+export const NATIVE_ALERT_DEMO = Object.freeze({
+  title: 'Conference Caddie (Demo)',
+  body: 'Demo conference: someone whose experience matches yours is in your zone right now',
+  deepLink: NATIVE_ALERT.deepLink,
+});
 
-/** The FCM HTTP v1 message for one registration token: the same for every push but the token. */
-export const fcmMessageOf = (token, ttl) => ({
+const apnsBodyOf = (alert) => JSON.stringify({ aps: { alert: { title: alert.title, body: alert.body }, sound: 'default' }, deepLink: alert.deepLink });
+// The APNs body, the same bytes for every push (APNS_BODY_DEMO for every push about the demo).
+export const APNS_BODY = apnsBodyOf(NATIVE_ALERT);
+export const APNS_BODY_DEMO = apnsBodyOf(NATIVE_ALERT_DEMO);
+
+/** The FCM HTTP v1 message for one registration token: the same for every push but the token (and the demo label). */
+export const fcmMessageOf = (token, ttl, alert = NATIVE_ALERT) => ({
   message: {
     token,
-    notification: { title: NATIVE_ALERT.title, body: NATIVE_ALERT.body },
-    data: { deepLink: NATIVE_ALERT.deepLink },
+    notification: { title: alert.title, body: alert.body },
+    data: { deepLink: alert.deepLink },
     android: { ttl: `${ttl}s`, priority: 'normal', notification: { tag: NUDGE_TAG } },
   },
 });
@@ -407,7 +418,7 @@ function apnsChannel(config, { transport, now, log }) {
   // the answer says nothing about it. Only the production host counts: a client chooses sandbox
   // for a development build, and a key may be limited to one environment, so a client must not be
   // able to turn the channel off for everyone.
-  return async function send(registration, { ttl }) {
+  return async function send(registration, { ttl, demo = false }) {
     const sandbox = registration.environment === 'sandbox';
     const origin = sandbox ? APNS_ORIGINS.sandbox : APNS_ORIGINS.production;
     const attempt = (token) => transport(origin, {
@@ -421,7 +432,7 @@ function apnsChannel(config, { transport, now, log }) {
         'apns-collapse-id': NUDGE_TAG,
         'content-type': 'application/json',
       },
-      body: APNS_BODY,
+      body: demo ? APNS_BODY_DEMO : APNS_BODY,
     });
     const used = providerToken();
     let res = await attempt(used);
@@ -527,8 +538,8 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
   // (SENDER_ID_MISMATCH, a token of another Firebase project, and THIRD_PARTY_AUTH_ERROR, a token
   // of an app whose own APNs or Web Push credentials are missing), so no client can turn the
   // channel off for everyone.
-  return async function send(registration, { ttl }) {
-    const body = JSON.stringify(fcmMessageOf(registration.token, ttl));
+  return async function send(registration, { ttl, demo = false }) {
+    const body = JSON.stringify(fcmMessageOf(registration.token, ttl, demo ? NATIVE_ALERT_DEMO : NATIVE_ALERT));
     const post = (token) => fetchImpl(sendUrl, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -565,7 +576,8 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
  * Returns { apns, fcm, send(registration, { ttl }) }, where apns and fcm say whether the channel is
  * on now (configured and well-formed, and not turned off after AUTH_FAILURES_MAX authentication
  * failures in a row) and registration is { platform, token, environment }. send pushes
- * NATIVE_ALERT, and nothing else, and resolves to 'sent', 'gone' or 'failed'.
+ * NATIVE_ALERT (NATIVE_ALERT_DEMO with demo: true), and nothing else, and resolves to 'sent', 'gone'
+ * or 'failed'.
  */
 export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = () => Date.now(), log = (line) => console.error(line), timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const stub = env.PUSH_TRANSPORT === 'stub' ? stubTransports(env) : null;
@@ -603,12 +615,12 @@ export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = (
     get fcm() {
       return state.fcm.on;
     },
-    async send(registration, { ttl = DEFAULT_TTL_SECONDS } = {}) {
+    async send(registration, { ttl = DEFAULT_TTL_SECONDS, demo = false } = {}) {
       const platform = registration?.platform;
       const channel = platform === 'apns' || platform === 'fcm' ? channels[platform] : null;
       if (!channel || !state[platform].on) return 'failed';
       try {
-        const { outcome, auth } = await channel(registration, { ttl });
+        const { outcome, auth } = await channel(registration, { ttl, demo: demo === true });
         account(state[platform], auth);
         return outcome;
       } catch (err) {

@@ -1,0 +1,16 @@
+{
+  "slug": "caddie-fixture-2099",
+  "name": "Caddie Fixture Conference",
+  "start_date": "2099-03-02",
+  "end_date": "2099-03-03",
+  "time_zone": "Europe/Paris",
+  "location": { "city": "Lyon", "region": "", "country": "France", "virtual": false },
+  "status": "searchable",
+  "official_schedule_url": "https://example.org/caddie-fixture/schedule",
+  "source": "sessionize",
+  "has_level": false,
+  "track_group": "Track",
+  "tag_groups": [],
+  "talk_count": 3,
+  "demo": false
+}

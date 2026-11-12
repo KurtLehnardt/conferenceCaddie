@@ -1039,7 +1039,8 @@ describe('STAT-1 to STAT-3 stats', () => {
     assert.deepEqual(result.items[1], { index: 'caddie-talks-v3', docs: 1234, size: '41.2mb' });
     assert.equal(result.items.length, 5);
     assert.match(result.summary, /cluster yellow, 4 caddie indices \(needs the monitor privilege/);
-    assert.deepEqual(r.requests.map((e) => `${e.method} ${e.path}?${e.params}`), ['GET /_cluster/health?', 'GET /_cat/indices/caddie-*?format=json&h=index%2Cdocs.count%2Cstore.size']);
+    // The third request looks for a demo conference to leave out of the counts; there is none here.
+    assert.deepEqual(r.requests.map((e) => `${e.method} ${e.path}?${e.params}`), ['GET /_cluster/health?', 'GET /_cat/indices/caddie-*?format=json&h=index%2Cdocs.count%2Cstore.size', 'POST /caddie-conferences/_search?ignore_unavailable=true']);
     delete cluster.clusterHealth;
     delete cluster.catIndices;
     const own = await invoke(['stats', 'usage']);
@@ -1073,5 +1074,101 @@ describe('STAT-1 to STAT-3 stats', () => {
     } finally {
       await new Promise((resolve) => api.close(resolve));
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The demo conference (demo: true, invented data; scripts/lib/demo-conference.mjs): hiding it leaves
+// no presence, meet request or nudge of it behind, removing it leaves nothing, it is gone from the
+// public list either way, and the counts that span conferences leave it out.
+
+describe('DEMO the demo conference on tier 3', () => {
+  const DEMO = 'caddie-demo-conference';
+
+  // The demo conference as the ingest stores it, with two people: one around, both in a meet and a
+  // nudge; and a person around at the real conference EVENT, with a meet and a nudge of its own.
+  function seedDemo() {
+    seedConferenceFiles(DEMO);
+    const local = readJson(join(root, 'data', DEMO, 'conference.json'));
+    writeFileSync(join(root, 'data', DEMO, 'conference.json'), `${JSON.stringify({ ...local, name: 'Caddie Demo Conference', demo: true, source: 'demo' }, null, 2)}\n`);
+    cluster.put(INDEX.conferences, DEMO, { slug: DEMO, name: 'Caddie Demo Conference', status: 'searchable', demo: true, source: 'demo', start_date: '2099-12-01', end_date: '2099-12-03', time_zone: 'UTC' });
+    cluster.put(INDEX.talks, `${DEMO}:d1-a10`, { conference: DEMO });
+    const around = { presence_zone: 'Main Hall', presence_spot: 'by the coffee', presence_since: '2026-11-11T09:00:00Z', presence_until: FUTURE, presence_location: { lat: 1, lon: 2 } };
+    cluster.put(INDEX.people, `${DEMO}:p1`, { event_id: DEMO, profile_id: 'p1', open_to_meet: true, visible_until: FUTURE, ...around });
+    cluster.put(INDEX.people, `${DEMO}:p2`, { event_id: DEMO, profile_id: 'p2', open_to_meet: true, visible_until: FUTURE });
+    cluster.put(INDEX.meets, 'demo-meet', { event_id: DEMO, meet_id: 'demo-meet', participants: ['p1', 'p2'], requester_id: 'p2', state: 'requested', expires_at: FUTURE });
+    cluster.put(INDEX.nudges, 'demo-nudge', { event_id: DEMO, profile_ids: ['p1', 'p2'], receivers: ['p1'], expires_at: FUTURE });
+    cluster.put(INDEX.people, `${EVENT}:r1`, { event_id: EVENT, profile_id: 'r1', open_to_meet: true, visible_until: FUTURE, ...around });
+    cluster.put(INDEX.meets, 'real-meet', { event_id: EVENT, meet_id: 'real-meet', participants: ['r1', 'x'], requester_id: 'x', state: 'requested', expires_at: FUTURE });
+    cluster.put(INDEX.nudges, 'real-nudge', { event_id: EVENT, profile_ids: ['r1', 'x'], receivers: ['r1'], expires_at: FUTURE });
+  }
+
+  test('hide clears the demo\'s presence and deletes its meets and nudges; the real conference keeps its own', async () => {
+    seedDemo();
+    const dry = await invoke(['conferences', 'hide', '--event', DEMO]);
+    assert.equal(dry.code, 0, dry.stderr);
+    assert.match(dry.stdout, /it is the demo conference, so its presence would be cleared and its meet requests and nudges deleted/);
+    assert.ok(cluster.source(INDEX.meets, 'demo-meet'), 'the preview deletes nothing');
+
+    const r = await invoke(confirmed(['conferences', 'hide', '--event', DEMO], DEMO));
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /demo conference: cleared presence on 1 profile, deleted 1 meet and 1 nudge record/);
+    assert.equal(cluster.source(INDEX.conferences, DEMO).status, 'unavailable');
+    assert.equal(cluster.source(INDEX.people, `${DEMO}:p1`).presence_until, null);
+    assert.equal(cluster.source(INDEX.people, `${DEMO}:p1`).presence_zone, null);
+    assert.equal(cluster.source(INDEX.meets, 'demo-meet'), null);
+    assert.equal(cluster.source(INDEX.nudges, 'demo-nudge'), null);
+    assert.equal(cluster.source(INDEX.people, `${EVENT}:r1`).presence_until, FUTURE, 'the real conference keeps its presence');
+    assert.ok(cluster.source(INDEX.meets, 'real-meet'));
+    assert.ok(cluster.source(INDEX.nudges, 'real-nudge'));
+    assert.equal(operatorFile().hidden[DEMO].reason, 'other');
+  });
+
+  test('hiding a real conference keeps its presence, meets and nudges, as before', async () => {
+    seedDemo();
+    seedConferenceFiles(EVENT);
+    const r = await invoke(confirmed(['conferences', 'hide', '--event', EVENT], EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /demo conference/);
+    assert.equal(cluster.source(INDEX.people, `${EVENT}:r1`).presence_until, FUTURE);
+    assert.ok(cluster.source(INDEX.meets, 'real-meet') && cluster.source(INDEX.nudges, 'real-nudge'));
+    assert.ok(cluster.source(INDEX.meets, 'demo-meet'), 'and nothing of the demo is touched');
+  });
+
+  test('remove leaves no row of the demo behind', async () => {
+    seedDemo();
+    const r = await invoke(confirmed(['conferences', 'remove', '--event', DEMO], DEMO));
+    assert.equal(r.code, 0, r.stderr);
+    for (const name of ['people', 'meets', 'nudges', 'talks', 'push', 'blocks', 'reports']) {
+      assert.deepEqual(cluster.ids(INDEX[name]).filter((id) => cluster.source(INDEX[name], id)?.event_id === DEMO || cluster.source(INDEX[name], id)?.conference === DEMO), [], name);
+    }
+    assert.equal(cluster.source(INDEX.conferences, DEMO), null);
+    assert.ok(cluster.source(INDEX.meets, 'real-meet'), 'another conference keeps its rows');
+  });
+
+  test('counts without --event, and usage, leave the demo out; --event counts it; list marks it', async () => {
+    seedDemo();
+    const all = await invoke(['stats', 'counts', '--json']);
+    assert.equal(all.code, 0, all.stderr);
+    const counts = all.json().result.counts;
+    assert.equal(counts.people, 1, 'only the real conference\'s person');
+    assert.equal(counts.meets, 1);
+    assert.equal(counts.nudges, 1);
+    assert.equal(counts.talks, 0);
+    assert.equal(counts.conferences, 1, 'the demo conference document is left out');
+    assert.match(all.json().result.summary, /the demo conference caddie-demo-conference left out/);
+    const own = await invoke(['stats', 'counts', '--event', DEMO, '--json']);
+    assert.equal(own.json().result.counts.people, 2);
+    const usage = await invoke(['stats', 'usage', '--json']);
+    assert.equal(usage.code, 0, usage.stderr);
+    const rows = Object.fromEntries(usage.json().result.items.slice(1).map((row) => [row.index, row.docs]));
+    assert.equal(rows[INDEX.people], 1);
+    assert.equal(rows[INDEX.meets], 1);
+    assert.equal(rows[INDEX.conferences], 1);
+    assert.match(usage.json().result.summary, /documents of the demo conference caddie-demo-conference left out of the counts/);
+    const list = await invoke(['conferences', 'list', '--json']);
+    const demo = list.json().result.items.find((c) => c.slug === DEMO);
+    assert.equal(demo.demo, true);
+    assert.ok(!('demo' in list.json().result.items.find((c) => c.slug === EVENT)));
   });
 });
