@@ -34,6 +34,8 @@ import app.conferencecaddie.shared.ble.BleRadioState
 import app.conferencecaddie.shared.ble.BleReadResult
 import app.conferencecaddie.shared.ble.BleStopReason
 import app.conferencecaddie.shared.ble.BleWakeups
+import app.conferencecaddie.shared.core.AndroidCore
+import app.conferencecaddie.shared.people.PeopleContext
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -47,6 +49,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -59,6 +62,8 @@ import org.junit.runner.RunWith
  * Bluetooth and notification permissions are granted through the instrumentation and never revoked
  * (revoking one ends the app's process). Starting a foreground service needs the app in front on
  * Android 12 and newer, so every start happens with MainActivity shown.
+ *
+ * The app's own people features share the process's one radio ([letTheAppsRuntimeRestoreFirst]).
  */
 @RunWith(AndroidJUnit4::class)
 class BleServiceLifecycleTest {
@@ -1319,7 +1324,45 @@ class BleServiceLifecycleTest {
         override fun shouldShowRationale(permission: String) = rationale
     }
 
-    private companion object {
+    companion object {
+        /**
+         * The app's people features drive the same radio, through their Bluetooth runtime. MainActivity
+         * creates them, and once the core has the backend's capabilities (fetched over the network on a
+         * new install) the runtime restores: on this test phone it resumes nothing and stops the radio
+         * (BleRuntime.restore). That happens once per process, at a moment set by the network, so it
+         * would land inside whichever test first shows MainActivity and end that test's session. The
+         * class has the restore happen before any test instead.
+         */
+        @BeforeClass
+        @JvmStatic
+        fun letTheAppsRuntimeRestoreFirst() {
+            val context: Context = ApplicationProvider.getApplicationContext()
+            // The same core and controller MainActivity uses; creating them starts the capabilities fetch.
+            val people = CaddiePeople.controller(context)
+            val core = AndroidCore.get(context, CaddiePeople.allowLocalHttp(context))
+            val until = SystemClock.uptimeMillis() + RESTORE_TIMEOUT_MS
+            var applied: PeopleContext? = null
+            while (true) {
+                // Null while the capabilities load. A request can take a minute to time out.
+                val next = PeopleContext.fromCore(core.state.value)
+                if (next != null && next == applied) break
+                assertTrue("the app's capabilities load", SystemClock.uptimeMillis() < until)
+                if (next == null) {
+                    Thread.sleep(50)
+                    continue
+                }
+                // The controller applies one context at a time and restores Bluetooth with the first
+                // one that names the backend, so once this returns the restore has run, whether this
+                // call or the controller's own following of the core got there first. It is applied
+                // again until it is the core's latest, so the controller is not left on an older one.
+                runBlocking { people.updateContext(next) }
+                applied = next
+            }
+        }
+
+        /** The longest the capabilities may take: a request times out after 60 seconds. */
+        private const val RESTORE_TIMEOUT_MS = 90_000L
+
         const val ONGOING_ID = 4101
 
         /** BleRadioService.ACTION_STOP, internal to the shared module. */
