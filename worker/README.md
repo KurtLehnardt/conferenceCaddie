@@ -2,7 +2,7 @@
 
 This directory holds the free hosting of Conference Caddie: one Cloudflare Worker,
 `conference-caddie`, that serves the web app as static assets and the API on the same origin
-(`https://conference-caddie.krlehnardt.workers.dev`), with SQLite-backed Durable Objects for all
+(`https://<your-worker>.workers.dev`; this deployment: `https://conference-caddie.krlehnardt.workers.dev`), with SQLite-backed Durable Objects for all
 storage (FTS5 for keyword search, float32 vectors with brute-force cosine in code), Workers AI for
 embeddings, a Cron Trigger for purges and expiry, and VAPID Web Push sent from the Worker. GitHub
 Pages publishes only the public talk bundles and a landing page that links to the app; the app is
@@ -36,8 +36,8 @@ for a fork; the steps below that name this deployment's addresses use placeholde
   subdomain, create the subdomain once in the dashboard. D1, KV, Vectorize and Pages are not used. A token that can
   list Workers but answers 403 "No access to the specified resource" on
   `/workers/scripts/<name>` lacks "Workers Scripts: Edit"; `deploy.sh` says so when it fails.
-- The GitHub CLI (`gh`), logged in with access to `KurtLehnardt/conferenceCaddie`, for the
-  repository secret, variable, Pages and workflow steps.
+- The GitHub CLI (`gh`), logged in with access to `<owner>/<repo>` (this deployment:
+  `KurtLehnardt/conferenceCaddie`), for the repository secret, variable, Pages and workflow steps.
 
 Never print a token, a secret or a device secret: no `set -x`, no `curl -v`, no `env` or
 `printenv`, and no unfiltered `wrangler tail` (see [Logs and CPU](#logs-and-cpu)).
@@ -176,8 +176,13 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 3. **Migrate the data** from the Elasticsearch backup (one time).
 
    A fork skips this step: the migration only moves this deployment's own earlier data, from the
-   Elasticsearch stack it replaced, and a new copy has no such backup. Set the two variables of
-   the first line below anyway, because step 4 uses them; the weekly ingest fills the new Worker.
+   Elasticsearch stack it replaced, and a new copy has no such backup. Set the first two variables
+   below anyway, because step 4 uses them, and then load the committed data with
+   `node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE"` before the smoke. Without
+   `--event` it pushes every conference folder, including the conferences that are not searchable,
+   which the smoke's check `u` needs ([Local run](#local-run)). The ingest workflow, weekly or
+   started by hand with `gh workflow run ingest.yml`, pushes only the events it fetched, so it does
+   not load them.
 
    ```sh
    export CADDIE_APP_URL=https://<your-worker>.workers.dev   # the URL deploy.sh printed
@@ -263,7 +268,8 @@ deleted it.
 The smoke signs its admin calls by default (`SMOKE_ADMIN_AUTH=signed`, since #67;
 [Admin requests](#admin-requests)), and none of them follows a redirect: a 3xx is a FAIL.
 `SMOKE_ADMIN_AUTH=bearer` sends the token as `Authorization: Bearer` instead. It is only for a
-local or old Worker from before signed admin requests; a current Worker answers a bearer with 404.
+Worker, local or deployed, built from before signed admin requests; a current Worker answers a
+bearer with 404.
 
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
 
@@ -437,13 +443,19 @@ supported client for reviewing, undoing and confirming hides is the `caddie-admi
 `POST /admin/moderation`, signing each request with the admin token from `ADMIN_TOKEN` or
 `ADMIN_TOKEN_FILE` (default `admin-token` in the CLI's config directory, which is
 `~/.config/conference-caddie` unless `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` says otherwise; the
-file must have mode 0600, as `setup-secrets.mjs` writes it). The Worker's origin is the `api` of a
-tier 2 backend in the CLI's `config.json`, in the same directory:
+file must have mode 0600, as `setup-secrets.mjs` writes it; that script always writes
+`~/.config/conference-caddie/admin-token`, so with either variable set, point `ADMIN_TOKEN_FILE` at
+that file or use `ADMIN_TOKEN`). The Worker's origin is the `api` of a tier 2 backend in the CLI's
+`config.json`, in the same directory. If you have no `config.json` yet, the first command below
+creates it; otherwise add the `"worker"` entry to its `backends` by hand. The command never
+overwrites an existing file (`noclobber` makes it fail instead):
 
 ```sh
-cat > ~/.config/conference-caddie/config.json <<'EOT'
+dir="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}"
+mkdir -p "$dir" && (set -o noclobber; cat > "$dir/config.json" <<'EOT'
 { "default": "worker", "backends": { "worker": { "tier": 2, "api": "https://<your-worker>.workers.dev" } } }
 EOT
+)
 node scripts/caddie-admin.mjs moderation queue --event <slug>
 node scripts/caddie-admin.mjs moderation queue --event <slug> --since 2026-11-10T08:00:00Z
 node scripts/caddie-admin.mjs moderation queue --event <slug> --show-content

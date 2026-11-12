@@ -324,6 +324,17 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
       return true;
     });
     assert.equal(dropped.seen.length, 2);
+    // The headers of the last answer arrive, but its body breaks: the earlier JSON object must
+    // not survive as the error's body.
+    const broken = await halfBody([{ status: 502, then: 'ok' }, { status: 502, then: 'break' }]);
+    await assert.rejects(adminClient(broken.base, KEY, { retries: 1, timeoutMs: 2_000, env: {} })('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), (e) => {
+      assert.ok(e instanceof AdminError);
+      assert.equal(e.body, null);
+      assert.equal(e.status, 0);
+      assert.match(e.message, /^POST \/admin\/moderation: network error \(gave up after 2 attempts\)/);
+      return true;
+    });
+    assert.equal(broken.hits.length, 2);
   });
 
   test('a status_mismatch that names both unretired and other documents gives each its own advice and names the slugs', async () => {
