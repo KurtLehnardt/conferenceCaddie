@@ -180,8 +180,9 @@ export function withConferenceFiles(adapter, { root, now = () => new Date(), tie
     // removal that an unretire overtook or an unretire whose fan-out failed), and the documented
     // repair is to run the unretire again; so it is sent without a local entry too, but then only
     // with the local conference document (the slug alone would be stored as an unavailable
-    // conference), and the tier 2 adapter refuses a slug the Worker lists with another status.
-    // The local entry is dropped when there is one.
+    // conference), and the tier 2 adapter refuses a slug the Worker lists with another status and
+    // sends the status it read as expect_status, which the Worker checks (409 status_mismatch).
+    // The local entry is dropped when there is one, and only after the Worker took the unretire.
     async unretireConference({ event, slug, mode }) {
       const operator = readOperatorFile(root);
       const recorded = !!operator.removed[slug];

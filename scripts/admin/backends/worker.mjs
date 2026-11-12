@@ -30,12 +30,20 @@
 //   its steps (removal_incomplete) says which step and asks for another run. A conference the
 //   Worker does not route (400 "conference is not available") is exit 4 with the code
 //   conference_unavailable.
+// - An unretire carries expect_status: the status of the slug's directory row as a fresh GET
+//   /api/conferences found it, or null when the slug is not listed (no row). The Worker answers
+//   409 status_mismatch, writing nothing, when the row changed since; that is exit 1 with the code
+//   status_mismatch, never retried, naming each slug as `slug expected->actual` and, after an
+//   attempt that may have run, that attempt's answer; the operator re-runs the unretire, which
+//   reads the listing again. A 200 that lists the unretired slug under skipped_retired is exit 1
+//   with the code skipped_retired: nothing of it was applied.
 // - Every 2xx must carry a JSON object, and the writes that answer "ok" (POST /admin/moderation,
 //   POST /admin/people/block, DELETE /admin/conference) must answer "ok": true; anything else is
 //   exit 1, never taken for success.
 // - Query values stay inside the signer's charset: slugs, refs, integers, ISO instants in Z form
 //   and comma lists; free text travels base64url-encoded under q64. Flags that change what a
-//   handler does (unretire) travel in the JSON body, never in the query.
+//   handler does (unretire, and the expect_status precondition) travel in the JSON body, never in
+//   the query.
 // - A result row never holds profile_id, secret_hash, reporter ids, push endpoints or tokens,
 //   positions, cells or Bluetooth fields: every row is rebuilt from an allow-list of keys, so a
 //   field the Worker might add later never reaches the output by accident.
@@ -96,6 +104,34 @@ function describe(status, json) {
   if (!code) return `status ${status}`;
   return `status ${status} (${code}${cause ? `; cause ${cause}` : ''})`;
 }
+
+// The mismatching documents of a 409 status_mismatch, as the peer's adminClient shows them
+// (worker/ingest/lib.mjs): `slug expected->actual` with the arrow U+2192, "(no row)" for the JSON
+// value null (the directory has no row for the slug) and a status that reads as null quoted, so
+// the two never look the same. Only well-formed slugs and statuses are named, at most 20; an entry
+// with anything else is counted, not shown.
+const STATUS_WORD_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const isStatusWord = (v) => v === null || (typeof v === 'string' && STATUS_WORD_RE.test(v));
+const statusShown = (v) => (v === null ? '(no row)' : /^null$/i.test(v) ? `"${v}"` : v);
+function mismatchList(mismatched) {
+  const entries = Array.isArray(mismatched) ? mismatched : [];
+  const shown = entries
+    .filter((m) => isPlainObject(m) && typeof m.slug === 'string' && SLUG_RE.test(m.slug) && isStatusWord(m.expected) && isStatusWord(m.actual))
+    .map((m) => `${m.slug} ${statusShown(m.expected)}\u2192${statusShown(m.actual)}`);
+  const hidden = entries.length - shown.length;
+  const named = shown.length ? `${shown.slice(0, 20).join(', ')}${shown.length > 20 ? ` and ${shown.length - 20} more` : ''}` : '(none named)';
+  return `${named}${hidden > 0 ? ` (${hidden} malformed ${hidden === 1 ? 'entry' : 'entries'} not shown)` : ''}`;
+}
+
+// The statuses a directory row stores (worker/src/directory.js #upsert), which GET
+// /api/conferences lists as they are.
+const ROW_STATUSES = ['searchable', 'unavailable'];
+
+// A key of a local conference document that the Worker reads as an instruction rather than a
+// field: "unretire" or "expect_status", or one that differs from either only in letter case or
+// surrounding whitespace, which the Worker refuses with 400 ("the key must be written exactly as
+// ..."). putConference drops every such key and sends only its own flag and precondition.
+const isControlKey = (key) => ['unretire', 'expect_status'].includes(key.trim().toLowerCase());
 
 // Whether undici wrote a whole admin request to a socket (N1). undici publishes
 // undici:client:sendHeaders once it has written a request's headers to a connected socket and
@@ -227,6 +263,10 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     let mayHaveRun = false;
     // The last failed attempt that may have reached the Worker (a network error or a 5xx).
     let earlier = null;
+    // What the last attempt that may have run (mayHaveRun) answered, for a 409 status_mismatch
+    // that follows it: "answered status 502 (...)", "answered status 200, its answer lost" or
+    // "got no answer (<code>)".
+    let ranBy = null;
     const note = () => (write ? earlierNote(earlier) : '');
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
       let signed;
@@ -249,7 +289,10 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       } catch (err) {
         // Only a request undici had written whole may have run; one that never left (refused,
         // DNS, a reset during the TLS handshake) did not.
-        if (probe.sent()) mayHaveRun = true;
+        if (probe.sent()) {
+          mayHaveRun = true;
+          ranBy = `got no answer (${failureOf(err)})`;
+        }
         earlier = failureOf(err);
         lastError = networkError(err);
         if (attempt < RETRIES) await sleep(250 * 2 ** attempt);
@@ -270,6 +313,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       } catch (err) {
         // A 2xx ran and only its answer was lost; a 5xx may have run.
         if (res.ok) mayHaveRun = true;
+        if (res.ok || res.status >= 500) ranBy = `answered status ${res.status}, its answer lost`;
         earlier = res.ok || res.status >= 500 ? `status ${res.status}, answer lost` : failureOf(err);
         lastError = networkError(err);
         if (attempt < RETRIES) await sleep(250 * 2 ** attempt);
@@ -316,6 +360,21 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
         const hint = Number.isFinite(after) && after > 0 ? `run the removal again after ${after} seconds (Retry-After)` : 'run the removal again (after the Retry-After the Worker sent, if any)';
         throw new AdminError(`${where}: removal incomplete at step ${step} (status ${res.status}; retired ${json.retired === true}, wiped ${json.wiped === true}${cause}); ${hint}`);
       }
+      // The expect_status precondition of PUT /admin/conferences did not hold (#79): the
+      // directory's row of a slug has another status than the document expected, and nothing was
+      // written. Never retried: the same body would mismatch again. The error carries the answer
+      // and whether an earlier attempt of this request may have run (its answer as ranBy), because
+      // that attempt may be what changed the status; putConference turns it into the operator's
+      // message.
+      if (res.status === 409 && json.error === 'status_mismatch') {
+        const mismatch = new AdminError(`${lastError}${mayHaveRun ? '' : note()}`);
+        mismatch.code = 'status_mismatch';
+        mismatch.status = res.status;
+        mismatch.json = json;
+        mismatch.mayHaveRun = mayHaveRun;
+        mismatch.ranBy = mayHaveRun ? ranBy : null;
+        throw mismatch;
+      }
       // A conference the Worker does not route: never added, or removed (its object refuses admin
       // requests after a wipe until an unretire puts the directory row back). Exit 4, as every
       // other absent conference.
@@ -340,7 +399,10 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       }
       // A 429 is the limiter's, before any handler; a 5xx may have run (mayHaveRun is set above).
       if (res.status === 429 || res.status >= 500) {
-        if (res.status >= 500) earlier = describe(res.status, json);
+        if (res.status >= 500) {
+          earlier = describe(res.status, json);
+          ranBy = `answered ${earlier}`;
+        }
         const after = Number(res.headers.get('retry-after'));
         if (attempt < RETRIES) await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 30) * 1000 : 250 * 2 ** attempt);
         continue;
@@ -443,12 +505,30 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
 
   // Sends the rewritten local conference document (and nothing else of the batch answer is
   // trusted): a retired slug the Worker skipped is an error, because the hide did not happen.
-  async function putConference(slug, doc, { unretire = false } = {}) {
-    const body = { conferences: [unretire ? { ...doc, slug, unretire: true } : { ...doc, slug }] };
+  // The document's own control keys (isControlKey) are dropped; an unretire carries "unretire":
+  // true and its expect_status (a status string or null), which the Worker checks against the
+  // slug's directory row inside its upsert transaction (#79).
+  async function putConference(slug, doc, { unretire = false, expectStatus } = {}) {
+    const fields = Object.fromEntries(Object.entries(doc).filter(([key]) => !isControlKey(key)));
+    const sent = { ...fields, slug, ...(unretire ? { unretire: true } : {}), ...(expectStatus !== undefined ? { expect_status: expectStatus } : {}) };
+    const body = { conferences: [sent] };
     let json;
     try {
       ({ json } = await admin('PUT', '/admin/conferences', body));
     } catch (err) {
+      // The row's status changed between the listing this command read and the PUT, or an
+      // earlier attempt of this request changed it (the retry effect: an attempt that answered a
+      // 5xx or no answer may have stored the row, so its repeat mismatches). Nothing was written
+      // by this attempt. The CLI never re-reads and resends on its own: the operator re-runs the
+      // command, which reads the listing again and expects what it finds.
+      if (unretire && err?.code === 'status_mismatch') {
+        const changed = err.mayHaveRun
+          ? `an earlier attempt of this command ${err.ranBy ?? 'failed'} and may have been applied, so the actual status can be the one it set; run conferences unretire --event ${slug} again until it answers 200: each run re-reads the status and expects that`
+          : `something changed the conference between this command's read and its PUT (another remove, unretire, hide or unhide, or an ingest run); check it with conferences list --all, then run conferences unretire --event ${slug} again if it is still wanted: it re-reads the status and expects that`;
+        const mismatch = new AdminError(`unretire of ${slug} not applied: the directory holds another status than this command read (expected\u2192actual): ${mismatchList(err.json?.mismatched)}; nothing was written by this attempt; ${changed} (${err.message})`);
+        mismatch.code = 'status_mismatch';
+        throw mismatch;
+      }
       // A flagged fan-out that failed answers 502 unretire_incomplete (with a cause such as
       // unretire_superseded or conference_retired) and the slugs it could not sync; the client
       // retried it (signed afresh, and a second unretire repairs the first). Still failing, the
@@ -464,6 +544,13 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       throw err;
     }
     const skipped = Array.isArray(json.skipped_retired) ? json.skipped_retired : [];
+    // An unretire the Worker skipped kept the tombstone and applied nothing of the document: a
+    // Worker that reads "unretire": true never skips the slug, so it is older than that flag.
+    if (skipped.includes(slug) && unretire) {
+      const kept = new AdminError(`unretire of ${slug} not applied (retired): the Worker answered status 200 and listed ${slug} under skipped_retired, so it kept the tombstone and applied nothing of the document; a Worker that reads "unretire": true never skips it, so check that the Worker is deployed from a version with the unretire flag (worker/README.md), then run conferences unretire --event ${slug} again`);
+      kept.code = 'skipped_retired';
+      throw kept;
+    }
     if (skipped.includes(slug)) throw new AdminError(`${slug} is retired on the Worker (a tombstone from conferences remove); run conferences unretire --event ${slug} first`);
     return { upserted: int(json.upserted), searchable: int(json.searchable), synced: int(json.synced) };
   }
@@ -796,21 +883,38 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     // or live. So the Worker's own listing is read first: a slug it lists must keep its status
     // (the repair after removal_superseded, unretire_incomplete or removal_incomplete, where the
     // row is still listed), and a different status is refused, because the unretire would change a
-    // live conference (DECISIONS.md, caddie-admin C1).
+    // live conference (DECISIONS.md, caddie-admin C1). The document also carries expect_status,
+    // the status of the slug's directory row as this read found it: the listed status, or null
+    // when the slug is not listed. GET /api/conferences lists every directory row, tombstoned or
+    // with a wiped object alike, with the status the row stores, so "not listed" is "no row". The
+    // Worker checks it in the upsert's transaction, so a removal or an unretire that lands between
+    // the read and the PUT answers 409 status_mismatch and nothing is written. A listing that
+    // shows the slug with a status a row never stores, or twice with two statuses, does not say
+    // what the row holds: the unretire is refused and nothing is sent.
     async unretireConference({ slug, doc, mode }) {
-      const current = (await conferenceList()).find((c) => c.slug === slug) ?? null;
+      const listed = (await conferenceList()).filter((c) => c.slug === slug);
       const statusOf = (s) => (s === 'searchable' ? 'searchable' : 'unavailable');
       const sending = statusOf(doc.status);
       const wanted = `${sending}${typeof doc.status_reason === 'string' && /^[a-z_]{1,40}$/.test(doc.status_reason) ? ` (${doc.status_reason})` : ''}`;
-      const live = current ? statusOf(current.status) : 'not listed';
+      const statuses = [...new Set(listed.map((c) => c.status))];
+      if (statuses.length > 1 || (statuses.length === 1 && !ROW_STATUSES.includes(statuses[0]))) {
+        const shown = statuses.map((v) => (typeof v === 'string' && STATUS_WORD_RE.test(v) ? v : 'a malformed value')).join(' and ');
+        const unknown = new AdminError(`${slug} is listed on the Worker as ${shown}, which is not one status a directory row stores (${ROW_STATUSES.join(' or ')}), so this command cannot tell what to expect; refused, nothing was sent; check GET /api/conferences and that the Worker and this CLI are from the same version`);
+        unknown.code = 'unretire_refused';
+        throw unknown;
+      }
+      const current = listed[0] ?? null;
+      const live = current ? current.status : 'not listed';
+      const expectStatus = current ? current.status : null;
       if (current && live !== sending) {
         const refused = new AdminError(`${slug} is listed on the Worker as ${live}, and the unretire would send it as ${wanted}; refused, because that would change a live conference (use conferences hide, unhide or refresh to change its status, or update the local data/${slug}/conference.json first)`);
         refused.code = 'unretire_refused';
         throw refused;
       }
-      if (mode === 'dry-run') return { backend: 'worker', summary: `would unretire ${slug}: sending ${wanted} (Worker now ${live}) to PUT /admin/conferences with "unretire": true on the document, dropping the Worker's tombstone` };
-      const counts = await putConference(slug, doc, { unretire: true });
-      return { backend: 'worker', counts, summary: `unretired ${slug}: sent ${wanted} (Worker was ${live}) with unretire: true; the Worker dropped its tombstone (upserted ${counts.upserted})` };
+      const expected = JSON.stringify(expectStatus);
+      if (mode === 'dry-run') return { backend: 'worker', summary: `would unretire ${slug}: sending ${wanted} (Worker now ${live}) to PUT /admin/conferences with "unretire": true and "expect_status": ${expected} on the document, dropping the Worker's tombstone` };
+      const counts = await putConference(slug, doc, { unretire: true, expectStatus });
+      return { backend: 'worker', counts, summary: `unretired ${slug}: sent ${wanted} (Worker was ${live}) with unretire: true and expect_status: ${expected}; the Worker dropped its tombstone (upserted ${counts.upserted})` };
     },
 
     async counts({ event }) {
