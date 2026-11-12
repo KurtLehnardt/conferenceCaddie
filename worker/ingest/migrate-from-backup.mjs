@@ -284,7 +284,7 @@ export async function run(argv, { client = adminClient, readToken = readAdminTok
     // CADDIE_ADMIN_SIG_VERSION is checked here, as push-ingest.mjs does, and not only when the admin
     // client is created: a dry run creates no client, and a real run creates it only after the plan
     // has been read and printed, so a bad value should stop every run before any of that.
-    adminSignVersion();
+    if (adminSignVersion() === 1) error('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). Remove the setting once v2 works again: the Worker refuses v1 after step (d).');
     const backup = resolve(args.backup);
     if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
 

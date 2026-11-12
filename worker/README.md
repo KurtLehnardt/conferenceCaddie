@@ -299,11 +299,10 @@ deploy replaces the Worker's variables with those of `wrangler.toml`. Never set 
 `wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
 deleted it.
 
-The smoke signs its admin calls by default (`SMOKE_ADMIN_AUTH=signed`, since #67;
-[Admin requests](#admin-requests)), and none of them follows a redirect: a 3xx is a FAIL.
-`SMOKE_ADMIN_AUTH=bearer` sends the token as `Authorization: Bearer` instead. It is only for a
-Worker, local or deployed, built from before signed admin requests; a current Worker answers a
-bearer with 404.
+The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
+redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like the Worker-side
+clients; `CADDIE_ADMIN_SIG_VERSION=1` makes it sign v1, for a Worker from before v2. Its bearer
+mode is gone, and a current Worker answers a bearer with 404.
 
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
 
@@ -388,7 +387,7 @@ A Worker from before signed admin requests reads only the bearer, and the client
 on send only the signature, so rolling the Worker back means rolling the clients back too: run
 `push-ingest.mjs`, `migrate-from-backup.mjs`, `topics-local.mjs` and `moderation.mjs` from the
 commit before the merge (and revert the merge on `main`, so the weekly ingest sends the bearer
-again), and run the smoke with `SMOKE_ADMIN_AUTH=bearer`. Otherwise every ingest and moderation call
+again), and run the smoke from that commit too, since the current smoke has no bearer mode. Otherwise every ingest and moderation call
 gets a 404 that looks like a wrong token. The `admin_nonces` table and its index stay in the objects
 and are harmless to the older code, which never reads them. After a rollback the conference objects
 stay at `schema_version` 3, so the next schema change must use version 4: a later change that bumps
