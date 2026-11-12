@@ -139,13 +139,19 @@ function tablesOf(db) {
     .filter((n) => !/_fts_(data|idx|content|docsize|config)$/.test(n));
 }
 
+// The meta rows of the order sequence (directory.js #nextSeq): the directory's counter and each
+// slug's latest unretire, and an object's highest wipe and unretire numbers. Like a nonce, a retry
+// takes a new number, so the twice-applied tests leave them out; the ordering tests read them.
+const ORDER_KEYS = /^(order_seq|unretired_seq:.*|wipe_seq|unretire_seq)$/;
+
 // The stored state of a database, for the twice-applied tests: every row of every table except
-// the nonces (a retry is a new nonce) and the meter's usage_days (every request counts).
+// the nonces (a retry is a new nonce), the meter's usage_days (every request counts) and the order
+// numbers in meta (ORDER_KEYS).
 function snapshot(db) {
   const out = {};
   for (const t of tablesOf(db)) {
     if (t === 'admin_nonces' || t === 'usage_days') continue;
-    out[t] = rows(db, `SELECT * FROM ${t}`).map((r) => JSON.stringify(r, (k, v) => (v instanceof Uint8Array ? [...v] : v))).sort();
+    out[t] = rows(db, `SELECT * FROM ${t}`).filter((r) => t !== 'meta' || !ORDER_KEYS.test(r.k)).map((r) => JSON.stringify(r, (k, v) => (v instanceof Uint8Array ? [...v] : v))).sort();
   }
   return out;
 }
@@ -636,9 +642,10 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
     const after = counts(db);
     for (const [t, n] of Object.entries(after)) {
       if (t === 'admin_nonces') continue;
-      assert.equal(n, t === 'meta' ? 2 : 0, `${t} after the wipe`);
+      assert.equal(n, t === 'meta' ? 3 : 0, `${t} after the wipe`);
     }
-    assert.deepEqual(rows(db, 'SELECT k FROM meta ORDER BY k').map((x) => x.k), ['retired_at', 'schema_version'], 'meta keeps the schema version and gets the marker');
+    assert.deepEqual(rows(db, 'SELECT k FROM meta ORDER BY k').map((x) => x.k), ['retired_at', 'schema_version', 'wipe_seq'], 'meta keeps the schema version and gets the marker and the removal\'s number');
+    assert.deepEqual(rows(db, "SELECT v FROM meta WHERE k = 'wipe_seq'")[0].v, rows(ctx.db('directory:global'), "SELECT v FROM meta WHERE k = 'order_seq'")[0].v, 'the wipe carries the number step 1 took');
     assert.ok(Math.abs(Number(rows(db, "SELECT v FROM meta WHERE k = 'retired_at'")[0].v) - Date.now()) < 60_000);
     assert.ok(rows(db, 'SELECT nonce, ts_ms FROM admin_nonces').some((x) => x.nonce === del.nonce && x.ts_ms === del.ts * 1000), 'the wipe recorded its nonce');
     assert.ok(rows(ctx.db('directory:global'), 'SELECT nonce FROM admin_nonces').some((x) => x.nonce === del.nonce), 'the tombstone step recorded it too');
@@ -724,6 +731,15 @@ describe('conference removal (W7.4), the tombstone and unretire (W7.7)', { skip 
     ok(await call(ctx.env, used.build()));
     const replay = await wipe({ 'x-caddie-admin-nonce': used.nonce, 'x-caddie-admin-ts': String(used.ts) });
     assert.deepEqual([replay.status, await replay.json()], [401, { error: 'admin_replay' }]);
+    // A fresh nonce without the removal's order number, or with one that is not a positive integer.
+    const noBody = await wipe({ 'x-caddie-admin-nonce': 'b'.repeat(22), 'x-caddie-admin-ts': ts });
+    assert.equal(noBody.status, 415);
+    for (const [i, body] of ['{}', '{"seq":0}', '{"seq":-1}', '{"seq":1.5}', '{"seq":"1"}', '{"seq":1,"x":1}'].entries()) {
+      const r = await o.fetch(new Request('https://do.internal/internal/wipe', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': `s${i}`.padEnd(22, 's'), 'x-caddie-admin-ts': ts }, body,
+      }));
+      assert.equal(r.status, 400, body);
+    }
     assert.equal(o.store.person(a.profile_id)?.display_name, 'Ann');
     assert.ok(counts(ctx.db(`conference:${SLUG}`)).talks > 0);
     // GET is not the wipe.
@@ -946,7 +962,9 @@ describe('removal order, failures and the retired marker (review round 1)', { sk
     assert.equal((await toObject(o, 'POST', `/admin/people?event=${SLUG}`, { people: [] })).status, 200);
     o.buckets.set('people-read:ip:198.51.100.7', { tokens: 1, at: Date.now() });
     const wipe = await o.fetch(new Request('https://do.internal/internal/wipe', {
-      method: 'POST', headers: { 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': newId(), 'x-caddie-admin-ts': String(Math.floor(Date.now() / 1000)) },
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': newId(), 'x-caddie-admin-ts': String(Math.floor(Date.now() / 1000)) },
+      body: JSON.stringify({ seq: 1 }),
     }));
     assert.equal(wipe.status, 200);
     assert.equal(o.buckets.size, 0);
@@ -994,7 +1012,8 @@ describe('review round 2', { skip }, () => {
     const env = { ...ctx.env, CONFERENCE: ns };
     arm.on = true;
     const first = await call(env, signed('PUT', '/admin/conferences', { body: { conferences: [{ ...conf(SLUG), unretire: true }] } }).build());
-    assert.deepEqual(pair(first), [502, { error: 'unretire_incomplete', unretire_failed: [SLUG], upserted: 1, searchable: 1, synced: 0, skipped_retired: [] }]);
+    assert.deepEqual(pair(first), [502, { cause: 'Service is temporarily unavailable', error: 'unretire_incomplete', unretire_failed: [SLUG], upserted: 1, searchable: 1, synced: 0, skipped_retired: [] }]);
+    assert.equal(Object.keys(first.json)[0], 'cause', 'cause comes first');
     assert.deepEqual([retiredOf(ctx), typeof ctx.obj().retiredAt], [[], 'number'], 'the tombstone is gone, the object still refuses');
     // A plain upsert cannot repair it (its fan-out carries no flag) ...
     const weekly = await call(env, signed('PUT', '/admin/conferences', { body: { conferences: [conf(SLUG)] } }).build());
@@ -1013,13 +1032,21 @@ describe('review round 2', { skip }, () => {
     const o = ctx.obj();
     const p = await person(o, { name: 'Eve' });
     const r1 = await person(o, { name: 'R1' });
+    const r2 = await person(o, { name: 'R2' });
     const OSC52 = '\u001b]52;c;cHduZWQ=\u0007';
     o.exec('UPDATE people SET display_name = ?, about = ?, contact_note = ?, linkedin_url = ? WHERE profile_id = ?',
       `Eve${OSC52}`, `x\u001b[2J\u009b31m${OSC52}`, `n${OSC52}`, `https://www.linkedin.com/in/eve${OSC52}`, p.profile_id);
     o.exec("INSERT INTO presence (profile_id, zone, spot, spot_pending, since_ms, until_ms) VALUES (?, 'Hallway', ?, 0, ?, ?)", p.profile_id, `door${OSC52}`, Date.now(), Date.now() + HOUR);
     o.exec("INSERT INTO reports (id, target_kind, target_id, target_profile_id, reporter_id, reason, created_at_ms) VALUES (?, 'profile', ?, ?, ?, ?, ?)",
       `profile:${p.ref}:${r1.profile_id}`, p.ref, p.profile_id, r1.profile_id, `spam${OSC52}`, Date.now());
-    o.exec('UPDATE people SET hidden = 1 WHERE profile_id = ?', p.profile_id);
+    // A second reason that differs as stored and cleans to the same text as the first.
+    o.exec("INSERT INTO reports (id, target_kind, target_id, target_profile_id, reporter_id, reason, created_at_ms) VALUES (?, 'profile', ?, ?, ?, ?, ?)",
+      `profile:${p.ref}:${r2.profile_id}`, p.ref, p.profile_id, r2.profile_id, 'spam]52;c;\u0001cHduZWQ=\u009b', Date.now());
+    // A hidden meet between Eve and R1, and Eve's spot line hidden too, for the moderation queue.
+    const meetId = newId();
+    o.exec("INSERT INTO meets (meet_id, requester_id, recipient_id, state, hidden, created_at_ms, expires_at_ms) VALUES (?, ?, ?, 'active', 1, ?, ?)",
+      meetId, p.profile_id, r1.profile_id, Date.now(), Date.now() + HOUR);
+    o.exec('UPDATE people SET hidden = 1, spot_hidden = 1 WHERE profile_id = ?', p.profile_id);
     o.store.invalidatePeople();
     const answers = [
       await send(ctx, 'GET', `/admin/people/search?event=${SLUG}&q64=${q64('Eve')}&include_hidden=1`),
@@ -1046,8 +1073,13 @@ describe('review round 2', { skip }, () => {
     }
     const v = answers[1].json.person;
     assert.deepEqual([v.display_name, v.about, v.contact_note, v.linkedin_url, v.spot], ['Eve]52;c;cHduZWQ=', 'x[2J31m]52;c;cHduZWQ=', 'n]52;c;cHduZWQ=', 'https://www.linkedin.com/in/eve]52;c;cHduZWQ=', 'door]52;c;cHduZWQ=']);
-    assert.deepEqual(v.counts.reports.reasons, { 'spam]52;c;cHduZWQ=': 1 });
+    assert.deepEqual(v.counts.reports.reasons, { 'spam]52;c;cHduZWQ=': 2 }, 'two reasons equal after cleaning are added up');
     assert.equal(answers[0].json.people[0].display_name, 'Eve]52;c;cHduZWQ=');
+    const queue = answers[2].json.hidden;
+    const byKind = (kind) => queue.filter((h) => h.kind === kind);
+    assert.deepEqual(byKind('profile').map((h) => [h.display_name, h.ref, h.reports, h.reasons]), [['Eve]52;c;cHduZWQ=', p.ref, 2, { 'spam]52;c;cHduZWQ=': 2 }]]);
+    assert.deepEqual(byKind('spot').map((h) => [h.display_name, h.ref]), [['Eve]52;c;cHduZWQ=', p.ref]]);
+    assert.deepEqual(byKind('meet').map((h) => [h.meet_id, h.between]), [[meetId, ['Eve]52;c;cHduZWQ=', 'R1']]]);
   });
 
   test('an unretire during the removal supersedes it: step 3 keeps the row and answers 409 removal_superseded, and the conference stays live and visited by the cron', async () => {
@@ -1078,9 +1110,10 @@ describe('review round 2', { skip }, () => {
     assert.deepEqual(targets.targets, [{ slug: SLUG }]);
   });
 
-  test('an unretire between the tombstone and the wipe also supersedes; the object it leaves wiped is repaired by repeating the unretire', async () => {
+  test('an unretire between the tombstone and the wipe also supersedes: the object refuses the earlier wipe and keeps its data, and step 3 is not run', async () => {
     const ctx = realEnv();
     await withConferences(ctx);
+    const ann = await person(ctx.obj(), { name: 'Ann' });
     let mid = null;
     const cns = {
       ...ctx.CONFERENCE,
@@ -1095,10 +1128,11 @@ describe('review round 2', { skip }, () => {
       },
     };
     const r = await call({ ...ctx.env, CONFERENCE: cns }, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
-    assert.deepEqual([r.status, r.json.error, mid.status], [409, 'removal_superseded', 200]);
-    assert.deepEqual([directoryRows(ctx), retiredOf(ctx), ctx.obj().conf, typeof ctx.obj().retiredAt], [[SLUG], [], null, 'number']);
-    ok(await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(SLUG), unretire: true }] }));
-    assert.deepEqual([ctx.obj().conf?.status, ctx.obj().retiredAt], ['searchable', null]);
+    assert.deepEqual(pair(mid), [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
+    assert.deepEqual(pair(r), [409, { error: 'removal_superseded', step: 'wipe', retired: false, wiped: false }]);
+    assert.deepEqual([directoryRows(ctx), retiredOf(ctx), ctx.obj().conf?.status, ctx.obj().retiredAt], [[SLUG], [], 'searchable', null]);
+    assert.equal(ctx.obj().store.person(ann.profile_id)?.display_name, 'Ann', 'nothing was wiped');
+    ok(await send(ctx, 'POST', `/admin/talks?event=${SLUG}`, { generation: 1, talks: [] }));
   });
 
   test('unretire on a slug without a tombstone still sends its object the document with the flag, whatever the status', async () => {
@@ -1115,9 +1149,369 @@ describe('review round 2', { skip }, () => {
     const ctx = realEnv();
     await withConferences(ctx);
     const d = ctx.DIRECTORY.get({ name: 'global' });
-    const drop = await d.fetch(`https://directory.internal/internal/conference/${SLUG}`, { method: 'DELETE' });
-    assert.deepEqual([drop.status, await drop.json()], [409, { error: 'removal_superseded' }]);
+    for (const q of ['', '?seq=', '?seq=0', '?seq=-1', '?seq=1.5', '?seq=x']) {
+      const bad = await d.fetch(`https://directory.internal/internal/conference/${SLUG}${q}`, { method: 'DELETE' });
+      assert.deepEqual([bad.status, await bad.json()], [400, { error: 'seq must be a positive integer' }], q);
+    }
+    const drop = await d.fetch(`https://directory.internal/internal/conference/${SLUG}?seq=1`, { method: 'DELETE' });
+    assert.deepEqual([drop.status, await drop.json()], [409, { error: 'removal_superseded', retired: false }]);
     assert.deepEqual([directoryRows(ctx), retiredOf(ctx)], [[SLUG], []]);
+  });
+});
+
+describe('review round 3: the later of a removal and an unretire wins (the order sequence)', { skip }, () => {
+  const directoryRows = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug FROM conferences ORDER BY slug').map((r) => r.slug);
+  const tombstones = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug FROM retired').map((r) => r.slug);
+  const counts = (db) => Object.fromEntries(tablesOf(db).map((t) => [t, rows(db, `SELECT COUNT(*) AS n FROM ${t}`)[0].n]));
+  // The conference as the directory and its object hold it. live: the object has its document and
+  // no removal marker, so a stale Worker isolate would still send it public writes.
+  function look(ctx) {
+    const o = ctx.obj();
+    return { row: directoryRows(ctx).includes(SLUG), tomb: tombstones(ctx).includes(SLUG), marked: o.retiredAt !== null, live: o.retiredAt === null && o.conf !== null };
+  }
+  // The two consistent states: removed (tombstone, no row, object wiped and marked) and live (no
+  // tombstone, the row, the object with its document and without the marker).
+  const REMOVED = { row: false, tomb: true, marked: true, live: false };
+  const LIVE = { row: true, tomb: false, marked: false, live: true };
+  const unretireBody = () => ({ conferences: [{ ...conf(SLUG), unretire: true }] });
+
+  // worker.fetch with the console silenced once around a whole run (call() swaps the console per
+  // request, which concurrent requests would leave swapped).
+  async function quietly(fn) {
+    const { log, error } = console;
+    console.log = () => {};
+    console.error = () => {};
+    try {
+      return await fn();
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+  }
+  const answer = async (env, req) => {
+    const res = await worker.fetch(req, env);
+    return { status: res.status, json: await res.json().catch(() => null) };
+  };
+
+  // The Worker's environment with every Durable Object call of an unretire (U) and a removal (R) of
+  // SLUG recognised as a step: Uc the directory's upsert, Uf the fan-out to the object; R1 the
+  // tombstone, R2 the wipe, R3 the row delete. While a step is in `pending`, it waits until it is
+  // first there, so the steps run in exactly that order; a step named in `fail` throws once, as a
+  // network failure. After every recognised step (gated or not) the invariant is checked: a live
+  // object never coexists with a missing directory row. `ran` lists the number-taking steps (Uc,
+  // R1) in the order they ran.
+  function stepped(ctx, { order = [], fail = null } = {}) {
+    const pending = [...order];
+    const waiting = new Map();
+    const violations = [];
+    const ran = [];
+    let failed = false;
+    const pump = () => {
+      const w = waiting.get(pending[0]);
+      if (w) {
+        waiting.delete(pending[0]);
+        w();
+      }
+    };
+    const finish = (names) => {
+      for (const n of names) {
+        const i = pending.indexOf(n);
+        if (i >= 0) pending.splice(i, 1);
+      }
+      pump();
+    };
+    const stepOf = (kind, path, method, init) => {
+      if (kind === 'd' && path === '/admin/conferences') return 'Uc';
+      if (kind === 'c' && path === '/internal/conference' && JSON.parse(init.body).unretired !== undefined) return 'Uf';
+      if (kind === 'd' && path === '/admin/conference/retire') return 'R1';
+      if (kind === 'c' && path === '/internal/wipe') return 'R2';
+      if (kind === 'd' && path === `/internal/conference/${SLUG}` && method === 'DELETE') return 'R3';
+      return null;
+    };
+    const wrap = (ns, kind) => ({
+      ...ns,
+      get: (id) => {
+        const stub = ns.get(id);
+        return {
+          fetch: async (url, init = {}) => {
+            const step = stepOf(kind, new URL(url).pathname, init.method ?? 'GET', init);
+            if (!step) return stub.fetch(url, init);
+            const gated = pending.includes(step);
+            if (gated) await new Promise((resolve) => { waiting.set(step, resolve); pump(); });
+            try {
+              if (step === fail && !failed) {
+                failed = true;
+                throw new Error('network failure');
+              }
+              if (step === 'Uc' || step === 'R1') ran.push(step);
+              return await stub.fetch(url, init);
+            } finally {
+              const s = look(ctx);
+              if (s.live && !s.row) violations.push(`after ${step}: ${JSON.stringify(s)}`);
+              if (gated) finish([step]);
+            }
+          },
+        };
+      },
+    });
+    const env = { ...ctx.env, CONFERENCE: wrap(ctx.CONFERENCE, 'c'), DIRECTORY: wrap(ctx.DIRECTORY, 'd') };
+    return { env, finish, violations, ran };
+  }
+
+  const unretire = (env) => answer(env, signed('PUT', '/admin/conferences', { body: unretireBody() }).build());
+  const remove = (env) => answer(env, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+
+  // Every interleaving of the two steps of U with the three of R.
+  function interleavings(a, b) {
+    if (!a.length) return [b];
+    if (!b.length) return [a];
+    return [...interleavings(a.slice(1), b).map((x) => [a[0], ...x]), ...interleavings(a, b.slice(1)).map((x) => [b[0], ...x])];
+  }
+  const ORDERS = interleavings(['Uc', 'Uf'], ['R1', 'R2', 'R3']);
+
+  // A public profile write straight to the object, as a Worker isolate whose directory cache still
+  // names the slug would forward it.
+  async function publicWrite(o) {
+    const res = await o.fetch(new Request('https://do.internal/api/people/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-device': `${newId()}.${randomBytes(32).toString('base64url')}` },
+      body: JSON.stringify({ event: SLUG, profile: { display_name: 'Late' }, open_to_meet: true, shared_talk_ids: [] }),
+    }));
+    return res.status;
+  }
+
+  async function assertState(ctx, intent, where) {
+    const s = look(ctx);
+    assert.deepEqual(s, intent === 'removed' ? REMOVED : LIVE, `${where}: ${JSON.stringify(s)}`);
+    const o = ctx.obj();
+    if (intent === 'removed') {
+      assert.equal(counts(ctx.db(`conference:${SLUG}`)).people, 0, `${where}: the object holds no people`);
+      assert.equal(await publicWrite(o), 400, `${where}: a stale isolate's public write is refused`);
+    } else {
+      assert.equal(o.conf.status, 'searchable', where);
+      const targets = await (await ctx.DIRECTORY.get({ name: 'global' }).fetch('https://directory.internal/internal/cron-targets')).json();
+      assert.ok(targets.targets.some((t) => t.slug === SLUG), `${where}: the cron visits the live conference`);
+    }
+  }
+
+  // Each order, from a live conference and from one removed before, with no failure and with each
+  // later step failing once. The critic's interleavings of round 3 are among them: P1 is
+  // live Uc,R1,R2,R3,Uf; P2 live Uc,R1,R2,Uf,R3; P5 live R1,R2,R3,Uc,Uf with R3 failing and the
+  // removal retried after the unretire; P7 live R1,Uc,Uf,R2,R3. P3, P4 and P6 have their own tests
+  // below.
+  for (const initial of ['live', 'removed']) {
+    for (const fail of [null, 'Uf', 'R2', 'R3']) {
+      for (const order of ORDERS) {
+        test(`${initial}, ${order.join(',')}${fail ? `, ${fail} fails once` : ''}: never a live object without its row, and the later operation wins`, async () => {
+          const ctx = realEnv();
+          await withConferences(ctx);
+          await person(ctx.obj(), { name: 'Ann' });
+          if (initial === 'removed') ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+          const run = stepped(ctx, { order, fail });
+          const [u, r] = await quietly(() => Promise.all([
+            unretire(run.env).finally(() => run.finish(['Uc', 'Uf'])),
+            remove(run.env).finally(() => run.finish(['R1', 'R2', 'R3'])),
+          ]));
+          assert.deepEqual(run.violations, []);
+          const before = (x, y) => order.indexOf(x) < order.indexOf(y);
+          let last = run.ran.filter((x) => x === 'Uc' || x === 'R1').at(-1);
+          assert.equal(last, before('Uc', 'R1') ? 'R1' : 'Uc');
+          if (!fail) {
+            // The later by the directory's order wins at once, and each answer says what happened.
+            await assertState(ctx, last === 'Uc' ? 'live' : 'removed', 'without a retry');
+            const listed = { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] };
+            if (last === 'R1') {
+              assert.equal(r.status, 200, JSON.stringify(r.json));
+              if (before('Uf', 'R2')) assert.deepEqual(pair(u), [200, listed]);
+              else assert.deepEqual(pair(u), [502, { cause: 'unretire_superseded', error: 'unretire_incomplete', unretire_failed: [SLUG], ...listed, synced: 0 }]);
+            } else {
+              assert.deepEqual(pair(u), [200, listed]);
+              if (before('Uf', 'R2')) assert.deepEqual(pair(r), [409, { error: 'removal_superseded', step: 'wipe', retired: false, wiped: false }]);
+              else if (before('R3', 'Uc')) assert.equal(r.status, 200, JSON.stringify(r.json));
+              else assert.deepEqual({ ...r.json, deleted: typeof r.json.deleted }, { error: 'removal_superseded', step: 'directory', retired: false, wiped: true, deleted: 'object' });
+            }
+          } else {
+            assert.ok([200, 409, 502].includes(r.status) && [200, 502].includes(u.status), `${r.status} ${u.status}`);
+          }
+          // The clients retry as adminClient does: a removal_incomplete removal, then an
+          // unretire_incomplete unretire, each re-signed; a superseded removal is the operator's call.
+          await quietly(async () => {
+            if (r.json?.error === 'removal_incomplete') {
+              assert.equal((await remove(run.env)).status, 200);
+              last = 'R1';
+            }
+            if (u.status !== 200) {
+              assert.equal(u.json?.error, 'unretire_incomplete');
+              assert.deepEqual((await unretire(run.env)).status, 200);
+              last = 'Uc';
+            }
+          });
+          assert.deepEqual(run.violations, []);
+          await assertState(ctx, last === 'Uc' ? 'live' : 'removed', 'after the retries');
+        });
+      }
+    }
+  }
+
+  test('P6: a second removal that runs whole between the wipe and step 3 of the first; both answer 200 and the conference is removed', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    let second = null;
+    const run = stepped(ctx);
+    const dir = {
+      ...run.env.DIRECTORY,
+      get: (id) => {
+        const stub = run.env.DIRECTORY.get(id);
+        return {
+          fetch: async (url, init = {}) => {
+            if (!second && new URL(url).pathname === `/internal/conference/${SLUG}`) second = await remove(run.env);
+            return stub.fetch(url, init);
+          },
+        };
+      },
+    };
+    const first = await quietly(() => remove({ ...run.env, DIRECTORY: dir }));
+    assert.deepEqual([first.status, second.status], [200, 200]);
+    assert.deepEqual(run.violations, []);
+    await assertState(ctx, 'removed', 'P6');
+  });
+
+  // R1 runs its tombstone and wipe; then an unretire and a second removal R2 run whole; then R1's
+  // step 3. The tombstone R1 finds is R2's, and an unretire came after R1, so R1's step 3 must keep
+  // the row: R2 finishes the removal with its own number. When R2's wipe fails, the object stays
+  // live with its row (the removal_incomplete state) until R2 is sent again.
+  for (const r2WipeFails of [false, true]) {
+    test(`a removal whose step 3 comes after an unretire and a second removal yields to them${r2WipeFails ? ', also when the second removal\'s wipe fails' : ''}`, async () => {
+      const ctx = realEnv();
+      await withConferences(ctx);
+      const run = stepped(ctx, { fail: r2WipeFails ? 'R2' : null });
+      let middle = null;
+      let wipes = 0;
+      const cns = {
+        ...run.env.CONFERENCE,
+        get: (id) => {
+          const stub = run.env.CONFERENCE.get(id);
+          return { fetch: async (url, init = {}) => {
+            // The first removal's own wipe must go through; only the second one's may fail.
+            if (new URL(url).pathname === '/internal/wipe' && wipes++ === 0) return ctx.CONFERENCE.get(id).fetch(url, init);
+            return stub.fetch(url, init);
+          } };
+        },
+      };
+      const dir = {
+        ...run.env.DIRECTORY,
+        get: (id) => {
+          const stub = run.env.DIRECTORY.get(id);
+          return {
+            fetch: async (url, init = {}) => {
+              if (!middle && new URL(url).pathname === `/internal/conference/${SLUG}` && init.method === 'DELETE') {
+                middle = { u: await unretire(run.env) };
+                middle.r2 = await remove({ ...run.env, CONFERENCE: cns });
+              }
+              return stub.fetch(url, init);
+            },
+          };
+        },
+      };
+      const first = await quietly(() => remove({ ...run.env, CONFERENCE: cns, DIRECTORY: dir }));
+      assert.equal(middle.u.status, 200);
+      assert.deepEqual({ ...first.json, deleted: typeof first.json.deleted }, { error: 'removal_superseded', step: 'directory', retired: true, wiped: true, deleted: 'object' });
+      assert.equal(first.status, 409);
+      assert.deepEqual(run.violations, []);
+      if (!r2WipeFails) {
+        assert.equal(middle.r2.status, 200);
+        await assertState(ctx, 'removed', 'the second removal finished');
+      } else {
+        assert.deepEqual([middle.r2.status, middle.r2.json.error, middle.r2.json.step], [502, 'removal_incomplete', 'wipe']);
+        assert.deepEqual(look(ctx), { row: true, tomb: true, marked: false, live: true }, 'the removal_incomplete state: the row stays with the live object');
+        ok(await quietly(() => remove(run.env)));
+        assert.deepEqual(run.violations, []);
+        await assertState(ctx, 'removed', 'the second removal sent again');
+      }
+    });
+  }
+
+  test('P3: an unretire whose fan-out hits the daily limit answers 503 with cause daily_limit first and Retry-After, so adminClient stops', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG, OTHER]);
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    const env = { ...ctx.env, CONFERENCE: failOnce(ctx.CONFERENCE, (p) => p === '/internal/conference', dailyLimit) };
+    const r = await call(env, signed('PUT', '/admin/conferences', { body: { conferences: [{ ...conf(SLUG), unretire: true }, conf(OTHER, { name: 'changed' })] } }).build());
+    assert.deepEqual(pair(r), [503, { cause: 'daily_limit', error: 'unretire_incomplete', unretire_failed: [SLUG], upserted: 2, searchable: 2, synced: 1, skipped_retired: [] }]);
+    assert.equal(Object.keys(r.json)[0], 'cause');
+    assert.ok(JSON.stringify(r.json).slice(0, 200).includes('daily_limit'));
+    assert.equal(r.headers.get('retry-after'), '60');
+    assert.equal(ctx.obj(OTHER).conf.name, 'changed', 'the rest of the batch was applied');
+  });
+
+  test('P4: a plain fan-out that hits the daily limit while an unretire fails otherwise also answers 503 daily_limit; without the limit it is 502 with the cause first', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx, [SLUG, OTHER]);
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    // The unretire's fan-out breaks (network), and the other conference's fan-out hits the limit.
+    let calls = 0;
+    const cns = {
+      ...ctx.CONFERENCE,
+      get: (id) => {
+        const stub = ctx.CONFERENCE.get(id);
+        return { fetch: async (url, init = {}) => {
+          if (new URL(url).pathname === '/internal/conference' && calls++ < 2) {
+            if (JSON.parse(init.body).unretired !== undefined) throw new Error('network failure');
+            return dailyLimit();
+          }
+          return stub.fetch(url, init);
+        } };
+      },
+    };
+    const body = { conferences: [{ ...conf(SLUG), unretire: true }, conf(OTHER, { name: 'changed' })] };
+    const limited = await call({ ...ctx.env, CONFERENCE: cns }, signed('PUT', '/admin/conferences', { body }).build());
+    assert.deepEqual([limited.status, Object.keys(limited.json)[0], limited.json.cause, limited.json.unretire_failed], [503, 'cause', 'daily_limit', [SLUG]]);
+    const env = { ...ctx.env, CONFERENCE: failOnce(ctx.CONFERENCE, (p) => p === '/internal/conference') };
+    const broken = await call(env, signed('PUT', '/admin/conferences', { body }).build());
+    assert.deepEqual(pair(broken), [502, { cause: 'Service is temporarily unavailable', error: 'unretire_incomplete', unretire_failed: [SLUG], upserted: 2, searchable: 2, synced: 1, skipped_retired: [] }]);
+    ok(await send(ctx, 'PUT', '/admin/conferences', body));
+    assert.deepEqual(look(ctx), LIVE);
+  });
+
+  test('an unretire fan-out whose number is not above the last wipe is refused; a wipe whose number is below the last unretire is refused and deletes nothing', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    const o = ctx.obj();
+    const ann = await person(o, { name: 'Ann' });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const fanOut = (unretired) => o.fetch(new Request('https://do.internal/internal/conference', {
+      method: 'PUT', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG }, body: JSON.stringify({ doc: conf(SLUG), route_prefix: 'abcdef', unretired }),
+    }));
+    const wipe = (seq) => o.fetch(new Request('https://do.internal/internal/wipe', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG, 'x-caddie-admin-nonce': newId(), 'x-caddie-admin-ts': ts }, body: JSON.stringify({ seq }),
+    }));
+    for (const bad of [true, 0, -1, 1.5, '7']) assert.equal((await fanOut(bad)).status, 400, JSON.stringify(bad));
+    assert.equal((await fanOut(10)).status, 200);
+    const refused = await wipe(9);
+    assert.deepEqual([refused.status, await refused.json()], [409, { error: 'removal_superseded' }]);
+    assert.equal(o.store.person(ann.profile_id)?.display_name, 'Ann', 'the refused wipe deleted nothing');
+    assert.equal(o.retiredAt, null);
+    assert.equal((await wipe(11)).status, 200);
+    const late = await fanOut(10);
+    assert.deepEqual([late.status, await late.json()], [409, { error: 'unretire_superseded' }]);
+    assert.equal((await fanOut(11)).status, 409, 'equal is not later');
+    assert.notEqual(o.retiredAt, null);
+    assert.equal((await fanOut(12)).status, 200);
+    assert.equal(o.retiredAt, null);
+    assert.deepEqual(rows(ctx.db(`conference:${SLUG}`), "SELECT k, v FROM meta WHERE k IN ('wipe_seq', 'unretire_seq') ORDER BY k"), [{ k: 'unretire_seq', v: '12' }, { k: 'wipe_seq', v: '11' }]);
+  });
+
+  test('objects and a directory from before the sequence read it as 0: the first removal and unretire work as before', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    for (const db of [ctx.db('directory:global'), ctx.db(`conference:${SLUG}`)]) {
+      assert.deepEqual(rows(db, "SELECT k FROM meta WHERE k IN ('order_seq', 'wipe_seq', 'unretire_seq') OR k LIKE 'unretired_seq:%'"), []);
+    }
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    await assertState(ctx, 'removed', 'first removal');
+    ok(await send(ctx, 'PUT', '/admin/conferences', unretireBody()));
+    await assertState(ctx, 'live', 'first unretire');
+    assert.deepEqual(rows(ctx.db('directory:global'), "SELECT k, v FROM meta WHERE k = 'order_seq' OR k LIKE 'unretired_seq:%' ORDER BY k"), [{ k: 'order_seq', v: '2' }, { k: `unretired_seq:${SLUG}`, v: '2' }]);
   });
 });
 

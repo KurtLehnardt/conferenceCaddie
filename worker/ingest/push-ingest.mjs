@@ -187,13 +187,15 @@ export async function pushEvent(conf, prepared, { admin, dryRun, generation, reb
 }
 
 /**
- * PUT /admin/conferences with the documents to store. Logs the upsert count, then each slug the
- * Worker skipped because the operator removed it (skipped_retired), by name, so the operator sees
- * why a conference did not come back. Only well-formed slugs are logged or returned. Returns the
- * skipped slugs.
+ * PUT /admin/conferences with the conference documents to store, each passed through
+ * conferenceForWorker here, on the one path that sends them, so no caller can send an `unretire`
+ * key: `prepared` maps a slug to its workerTalks() result for the takedown recount. Logs the upsert
+ * count, then each slug the Worker skipped because the operator removed it (skipped_retired), by
+ * name, so the operator sees why a conference did not come back. Only well-formed slugs are logged
+ * or returned. Returns the skipped slugs.
  */
-export async function upsertConferences(admin, docs, log = console.log) {
-  const r = await admin('PUT', '/admin/conferences', { conferences: docs });
+export async function upsertConferences(admin, confs, { prepared = new Map(), log = console.log } = {}) {
+  const r = await admin('PUT', '/admin/conferences', { conferences: confs.map((c) => conferenceForWorker(c, prepared.get(c.slug))) });
   log(`Conferences upserted: ${r.upserted ?? '?'}.`);
   const skipped = Array.isArray(r.skipped_retired) ? [...new Set(r.skipped_retired.filter((s) => typeof s === 'string' && isSlug(s)))] : [];
   for (const slug of skipped) {
@@ -288,7 +290,6 @@ async function main() {
       prepared.set(c.slug, { error: e });
     }
   }
-  const forWorker = (c) => conferenceForWorker(c, prepared.get(c.slug));
   if (!dryRun) {
     // A schedule that could not be fetched this time (status_reason fetch_failed, which
     // scripts/ingest.mjs records on a transient error) must not take down a conference the Worker
@@ -297,7 +298,7 @@ async function main() {
     const kept = confs.filter((c) => c.status !== 'searchable' && c.status_reason === 'fetch_failed' && live.has(c.slug));
     for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
     const sent = confs.filter((c) => !kept.includes(c));
-    const plan = planPush({ sent, searchable, skipped: await upsertConferences(admin, sent.map(forWorker)) });
+    const plan = planPush({ sent, searchable, skipped: await upsertConferences(admin, sent, { prepared }) });
     report.kept = kept.map((c) => c.slug);
     report.skipped_retired = plan.skipped_retired;
     report.upserted = plan.upserted;

@@ -182,7 +182,12 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    Only sample profiles are copied by default (`--include-real` copies the others too); presence,
    location and Bluetooth fields are never copied; embeddings are recomputed in the Worker. The
    script prints counts only. `data/exports/` is git-ignored and must stay that way, because the
-   backup holds personal data.
+   backup holds personal data. It never sends an `unretire` key, whatever the backup holds, and
+   it ends with a summary that names every conference it skipped. It exits 0 when everything was
+   sent (a conference the Worker holds as removed is skipped by design), 3 when the run finished
+   but a conference was skipped because its object answered `400 conference is not available`
+   (its data was not all sent; check that the Worker lists it and run the migration again), 2 when
+   a request failed and the run stopped, and 1 on a usage error.
 
 4. **Set the repository variables and publish the talk bundles on GitHub Pages.**
 
@@ -510,15 +515,30 @@ line (method, path template, status, duration).
   can let it come back:
   1. The DirectoryDO records the request's nonce (a replayed removal is `401 admin_replay` and
      writes nothing) and writes or refreshes the tombstone `retired(slug, at_ms)`, keeping the
-     conference row. From here on `PUT /admin/conferences` skips the slug.
+     conference row. From here on `PUT /admin/conferences` skips the slug. In the same
+     transaction the removal takes the next number of the directory's order sequence (below),
+     which the Worker passes to steps 2 and 3 and never answers.
   2. The conference's object records the nonce in its own table, deletes every row of every table
      except `admin_nonces` (talks, vectors, topics, facets, people and everything that hangs off
-     them, reports, the meter's `usage_days`, and `meta` but for `schema_version`), writes the
-     marker `meta.retired_at`, and drops its caches, its conference document and its rate-limit
-     buckets. A request that was waiting on an await when the wipe ran writes nothing afterwards:
-     it answers `400 conference is not available`.
-  3. The DirectoryDO deletes the conference row, but only while the tombstone of step 1 is still
-     there; it never writes one.
+     them, reports, the meter's `usage_days`, and `meta` but for `schema_version` and the two order
+     numbers), writes the marker `meta.retired_at` and the removal's number as `meta.wipe_seq`, and
+     drops its caches, its conference document and its rate-limit buckets. A request that was
+     waiting on an await when the wipe ran writes nothing afterwards: it answers `400 conference is
+     not available`. When the object already took an unretire with a higher number, it deletes
+     nothing (see below).
+  3. The DirectoryDO deletes the conference row, but only while a tombstone is there and no
+     unretire of the slug took a higher number than the removal's; it never writes a tombstone.
+
+  The order sequence ranks removals and unretires of a conference in the order the directory
+  committed them: a counter in the DirectoryDO's `meta` (`order_seq`) that only grows, taken by
+  each removal at step 1 and by each unretire for each slug it unretires. When the two overlap,
+  the later of them by this number wins everywhere: in the directory, which also keeps each slug's
+  latest unretire number (`meta` `unretired_seq:<slug>`) for step 3, and in the object, which
+  takes an unretire's document only when its number is above its last wipe's, and refuses a wipe
+  whose number is below the last unretire it took. So an unretire and a removal that overlap end
+  either removed (tombstone, no row, object wiped and marked) or live (no tombstone, the row, the
+  object with its document), never with a live object that no directory row names. A directory or
+  an object from before the sequence has none of these rows and reads them as 0.
 
   The answer is `{"ok": true, "deleted": {"<table>": <rows>}, "directory": 1 | 0, "retired": true,
   "already_retired_at": "<ISO>" | null}`. `directory` is 0 when the directory did not know the
@@ -529,15 +549,19 @@ line (method, path template, status, duration).
   and `{"error": "removal_incomplete", "step": "wipe" | "directory", "retired": true, "wiped":
   <bool>, "cause": "<the step's error>", "deleted": {...} (after the wipe)}`, `cause` first so a
   client that reads the start of a 503 sees `daily_limit`: the tombstone holds, and sending the
-  removal again finishes it. If the tombstone is gone at step 3, an unretire of the slug ran
-  during the removal and won: the row is kept and the answer is `409 {"error":
-  "removal_superseded", "step": "directory", "retired": false, "wiped": true, "deleted": {...}}`.
-  The conference is then as the unretire left it, except that step 2 emptied its object; if the
-  unretire's document reached the object before the wipe, the wipe set the marker again, and
-  repeating the unretire clears it. Decide whether to unretire again or remove again. The tables stay (no `storage.deleteAll()`), so the
+  removal again finishes it. If an unretire of the slug ran during the removal, it came later by
+  the order sequence and won, and the answer is `409 {"error": "removal_superseded", "step":
+  "wipe" | "directory", "retired": <bool> | null, "wiped": <bool>, "deleted": {...}}`: step
+  `wipe` when the object had already taken the unretire and refused the wipe (`wiped` false,
+  nothing deleted, no `deleted`), step `directory` when the object was wiped first and then took
+  the unretire, so step 3 kept the row (`wiped` true, with the counts). Either way the conference
+  is live as the unretire left it (its object emptied in the second case) and nothing is left to
+  finish. `retired` is whether the directory holds a tombstone for the slug now: false, unless
+  another removal of the slug ran since (null when the directory could not say). Decide whether
+  to remove it again. The tables stay (no `storage.deleteAll()`), so the
   object can take the conference again. While `retired_at` is set, the object refuses a conference
   document from the fan-out of `PUT /admin/conferences` (`409 conference_retired`) unless that
-  fan-out unretired it, so an ingest that read the directory before the removal cannot make the
+  fan-out unretired it with a number above the wipe's, so an ingest that read the directory before the removal cannot make the
   object searchable again, and it refuses every admin write with `400 conference is not available`
   (an object without a conference document always does); admin reads still answer. Until the
   Worker's directory cache expires (5 minutes), a public request for the slug reaches the empty
@@ -554,14 +578,21 @@ line (method, path template, status, duration).
   (beside `upserted`, `searchable` and `synced`; the list is empty when nothing was skipped), so the
   weekly ingest cannot bring a removed conference back. When any document of that slug in the
   request carries the top-level key `"unretire": true`, the tombstone is deleted, in the same
-  transaction as the upsert and after it, and the conference's object is sent the document whatever
-  its status, with the flag that lets it drop its `retired_at` marker. That happens whenever the
-  request unretires the slug, with or without a tombstone, so on a slug without a tombstone the
-  flag still sends the object its document and clears a marker left there (for example by an
-  unretire whose fan-out failed). When the document of an unretired slug does not reach its object,
-  the answer is `502 {"error": "unretire_incomplete", "unretire_failed": ["<slug>"], "upserted",
-  "searchable", "synced", "skipped_retired"}`, so the client repeats the request, and the repeat
-  repairs the object. The key is never stored, and it must be a boolean when present (otherwise the
+  transaction as the upsert and after it, the slug takes the next number of the order sequence,
+  and the conference's object is sent the document whatever its status, with that number as the
+  flag that lets it drop its `retired_at` marker. That happens whenever the request unretires the
+  slug, with or without a tombstone, so on a slug without a tombstone the flag still sends the
+  object its document and clears a marker left there (for example by an unretire whose fan-out
+  failed). The object refuses the flag when a removal with a higher number already wiped it
+  (`409 unretire_superseded` internally): that removal came later and won. When the document of an
+  unretired slug does not reach its object or is refused, the answer is `502 {"cause": "<the
+  object's error>", "error": "unretire_incomplete", "unretire_failed": ["<slug>"], "upserted",
+  "searchable", "synced", "skipped_retired"}`, so the client repeats the request, and the repeat,
+  with a new and higher number, repairs the object. When any fan-out of the request hit the
+  account's daily limit, the answer is `503` with `"cause": "daily_limit"` first and `Retry-After`
+  instead, so `adminClient` stops until the reset. `cause` comes first in either body, and
+  `adminClient` names the cause and the slugs of `unretire_failed` in its error. The rest of the
+  batch was stored either way. The key is never stored, and it must be a boolean when present (otherwise the
   whole request is 400 and nothing is written). `push-ingest.mjs` never sends it, whatever a
   conference document holds, so no ingest run can unretire. `push-ingest.mjs` and
   `migrate-from-backup.mjs` log each skipped slug by name and send nothing more for it, and
@@ -601,7 +632,13 @@ Before removing a conference: do it well away from the daily written-rows limit,
 deletes every row of the conference (several thousand for a large one) and every deleted row is a
 written row; do not remove it while an ingest run is pushing it; never unretire a conference
 while its removal is running; and if the answer is `removal_incomplete`, send the same removal
-again (the CLI re-signs it) until it answers 200.
+again (the CLI re-signs it) until it answers 200. The later of an overlapping removal and unretire
+wins, and an automatic retry counts as a new, later request: `adminClient` repeats a removal that
+answered a 503 other than `daily_limit` (or a 5xx, or no answer), so a retried removal can undo an
+unretire that the operator ran in between, and a repeated unretire can undo a removal. After any
+overlap, check the conference's state (`GET /api/conferences` lists it only while the directory
+has its row, and a signed `GET /admin/stats?event=<slug>` answers `400 conference is not
+available` once it is removed) and run the operation you intended again.
 
 ## Logs and CPU
 

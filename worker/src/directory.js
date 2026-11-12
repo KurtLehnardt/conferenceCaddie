@@ -11,8 +11,14 @@ import { utcDay } from './lib/time.js';
 
 const CONFERENCES_PER_MIN = 120;
 const CRON_DAYS_AFTER_END = 3;
-// DELETE /internal/conference/<slug>: the Worker's last step of DELETE /admin/conference.
+// DELETE /internal/conference/<slug>: the Worker's last step of DELETE /admin/conference; GET of
+// the same path answers whether the slug has a tombstone.
 const RETIRE_PATH_RE = /^\/internal\/conference\/([a-z0-9][a-z0-9-]{0,119})$/;
+// The meta row that holds the order sequence of removals and unretires (see #nextSeq), and the
+// prefix of the meta row that holds, per slug, the sequence number of its latest unretire.
+const SEQ_KEY = 'order_seq';
+const UNRETIRED_SEQ_PREFIX = 'unretired_seq:';
+const isSeq = (n) => Number.isSafeInteger(n) && n > 0;
 
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
@@ -72,6 +78,28 @@ export class DirectoryDO extends DurableObject {
     return this.docs;
   }
 
+  // The next number of the order sequence, which ranks every removal (DELETE /admin/conference,
+  // at its tombstone step) and every unretire (PUT /admin/conferences with "unretire": true, per
+  // slug) in the order the directory committed them. It is persisted in meta and only grows; a
+  // directory without the row starts at 0, so the first number is 1. Called inside the caller's
+  // transaction, so the number and the write it orders commit together. The Worker passes a
+  // removal's number to the object's wipe and to step 3, and an unretire's number to the object
+  // with its document: the object takes whichever of the two came later by this number, and step 3
+  // deletes the row only when no unretire of the slug came after its removal. So when a removal
+  // and an unretire of one conference overlap, the later of the two wins everywhere.
+  #nextSeq() {
+    const prev = Number(this.sql.exec('SELECT v FROM meta WHERE k = ?', SEQ_KEY).toArray()[0]?.v ?? 0);
+    const next = (Number.isSafeInteger(prev) && prev > 0 ? prev : 0) + 1;
+    this.sql.exec('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', SEQ_KEY, String(next));
+    return next;
+  }
+
+  // The sequence number of the slug's latest unretire, or 0 when it was never unretired.
+  #unretiredSeq(slug) {
+    const v = Number(this.sql.exec('SELECT v FROM meta WHERE k = ?', UNRETIRED_SEQ_PREFIX + slug).toArray()[0]?.v ?? 0);
+    return Number.isSafeInteger(v) && v > 0 ? v : 0;
+  }
+
   #limit(key, perMin) {
     const now = Date.now();
     const rate = perMin / 60_000;
@@ -119,8 +147,10 @@ export class DirectoryDO extends DurableObject {
       if (path === '/admin/conference/retire' && request.method === 'POST') return this.#retireFirst(new URL(request.url));
       // The last step of a conference removal. The Worker calls it only after the tombstone step
       // and the object's /internal/wipe accepted the request's nonce, so it records none (W2).
+      // GET answers whether the slug has a tombstone, for a removal whose wipe the object refused.
       const drop = RETIRE_PATH_RE.exec(path);
-      if (drop && request.method === 'DELETE') return this.#dropRow(drop[1]);
+      if (drop && request.method === 'DELETE') return this.#dropRow(drop[1], new URL(request.url));
+      if (drop && request.method === 'GET') return json(200, { retired: this.sql.exec('SELECT 1 FROM retired WHERE slug = ?', drop[1]).toArray().length > 0 });
       if (path === '/internal/cron-targets') return this.#cronTargets();
       if (path === '/internal/usage' && request.method === 'PUT') {
         const body = await readJson(request, new Set(['day', 'usage', 'holds']));
@@ -155,11 +185,14 @@ export class DirectoryDO extends DurableObject {
   // A slug with a retired row (DELETE /admin/conference) is skipped and listed in skipped_retired,
   // unless a document of that slug in the batch carries the top-level key "unretire": true (read
   // in a first pass, so the order of duplicates does not matter). Then the row is deleted in the
-  // same transaction as the upsert, after it. Every fan-out entry of a slug the batch unretires
-  // carries unretired: true and is sent whatever the status (has_object set), with or without a
-  // tombstone: that flag is the only fan-out a removed object accepts (conference.js, retired_at),
-  // so an unretire repeated after its fan-out failed still clears the object's marker (the Worker
-  // answers 502 for such a failure, so the client repeats it). The key is never stored. It must be
+  // same transaction as the upsert, after it. Every slug the batch unretires takes the next number
+  // of the order sequence (#nextSeq), recorded as the slug's latest unretire, and every fan-out
+  // entry of that slug carries it as unretired: <number> and is sent whatever the status
+  // (has_object set), with or without a tombstone: that flag is the only fan-out a removed object
+  // accepts (conference.js, retired_at), and only when its number is higher than the object's
+  // last wipe, so an unretire repeated after its fan-out failed or was refused still clears the
+  // object's marker with a new, higher number (the Worker answers 502 for such a failure, so the
+  // client repeats it). The key is never stored. It must be
   // a boolean when present (400 otherwise, before anything is written); it lives in the body,
   // never the query, so the signature's body hash covers it. The route prefixes are computed first
   // (an await), then every write runs in one transaction against the tombstones as they are at that
@@ -194,6 +227,7 @@ export class DirectoryDO extends DurableObject {
     let upserted = 0;
     const searchable = [];
     const skipped = [];
+    const unretireSeq = new Map();
     this.state.storage.transactionSync(() => {
       const retired = new Set(this.sql.exec('SELECT slug FROM retired').toArray().map((r) => r.slug));
       const current = new Map(this.sql.exec('SELECT slug, doc, route_prefix, has_object FROM conferences').toArray().map((r) => [r.slug, r]));
@@ -210,6 +244,11 @@ export class DirectoryDO extends DurableObject {
         // An unretired conference's object is sent its document whatever the status, so it drops
         // the removal marker; it then holds a document, which is what has_object records.
         const unretired = unretiring.has(doc.slug);
+        if (unretired && !unretireSeq.has(doc.slug)) {
+          const seq = this.#nextSeq();
+          unretireSeq.set(doc.slug, seq);
+          this.sql.exec('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', UNRETIRED_SEQ_PREFIX + doc.slug, String(seq));
+        }
         const hasObject = status === 'searchable' || prev?.has_object === 1 || unretired;
         if (!prev || prev.doc !== text || (hasObject && prev.has_object !== 1)) {
           this.sql.exec(
@@ -227,7 +266,7 @@ export class DirectoryDO extends DurableObject {
           retired.delete(doc.slug);
         }
         upserted += 1;
-        if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(unretired ? { unretired: true } : {}) });
+        if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(unretired ? { unretired: unretireSeq.get(doc.slug) } : {}) });
       }
     });
     this.docs = null;
@@ -237,32 +276,43 @@ export class DirectoryDO extends DurableObject {
   // POST /admin/conference/retire?event=<slug> (step 1 of DELETE /admin/conference): writes or
   // refreshes the slug's tombstone and keeps its conferences row. Reached through the /admin/*
   // check above, so the request's nonce is recorded first and a replay is 401 before any write.
-  // Answers {ok, already_retired_at}: the time of the earlier tombstone (ISO), or null, so a removal
-  // retried after its first answer was lost can say it had already happened.
+  // Answers {ok, already_retired_at, seq}: the time of the earlier tombstone (ISO), or null, so a
+  // removal retried after its first answer was lost can say it had already happened; and the
+  // removal's number in the order sequence (#nextSeq), taken in the same transaction, which the
+  // Worker passes to the wipe and to step 3 and never shows the client.
   #retireFirst(url) {
     const slug = url.searchParams.get('event');
     if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw bad('event must be a conference slug');
     let before = null;
+    let seq = 0;
     this.state.storage.transactionSync(() => {
       before = this.sql.exec('SELECT at_ms FROM retired WHERE slug = ?', slug).toArray()[0]?.at_ms ?? null;
       this.sql.exec('INSERT INTO retired (slug, at_ms) VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET at_ms = excluded.at_ms', slug, Date.now());
+      seq = this.#nextSeq();
     });
-    return json(200, { ok: true, already_retired_at: before === null ? null : new Date(Number(before)).toISOString() });
+    return json(200, { ok: true, already_retired_at: before === null ? null : new Date(Number(before)).toISOString(), seq });
   }
 
-  // DELETE /internal/conference/<slug> (step 3, after the object's wipe): deletes the conference row
-  // only while step 1's tombstone still exists (removed: 1, or 0 when the directory did not know
-  // the slug), and never writes a tombstone. When the tombstone is gone, an unretire ran during the
-  // removal and its row and object are the conference now: 409 removal_superseded, nothing deleted.
+  // DELETE /internal/conference/<slug>?seq=<n> (step 3, after the object's wipe), n being the
+  // removal's number from step 1: deletes the conference row only while a tombstone exists and no
+  // unretire of the slug came after the removal by the order sequence (removed: 1, or 0 when the
+  // directory did not know the slug), and never writes a tombstone. Otherwise an unretire ran
+  // during the removal and its row and object are the conference now: 409 {error:
+  // "removal_superseded", retired}, retired saying whether a tombstone exists (a later removal's),
+  // and nothing deleted. A later removal of the slug finishes on its own, with its own number.
   // Idempotent.
-  #dropRow(slug) {
+  #dropRow(slug, url) {
+    const seq = Number(url.searchParams.get('seq'));
+    if (!isSeq(seq)) throw bad('seq must be a positive integer');
     let removed = 0;
     let retired = false;
+    let superseded = false;
     this.state.storage.transactionSync(() => {
       retired = this.sql.exec('SELECT 1 FROM retired WHERE slug = ?', slug).toArray().length > 0;
-      removed = this.sql.exec('DELETE FROM conferences WHERE slug = ? AND EXISTS (SELECT 1 FROM retired WHERE slug = ?) RETURNING 1', slug, slug).toArray().length;
+      superseded = !retired || this.#unretiredSeq(slug) > seq;
+      if (!superseded) removed = this.sql.exec('DELETE FROM conferences WHERE slug = ? AND EXISTS (SELECT 1 FROM retired WHERE slug = ?) RETURNING 1', slug, slug).toArray().length;
     });
-    if (!retired) return json(409, { error: 'removal_superseded' });
+    if (superseded) return json(409, { error: 'removal_superseded', retired });
     this.docs = null;
     return json(200, { ok: true, removed });
   }

@@ -137,14 +137,28 @@ export function normalizeApiBase(api) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // A short, safe description of a failed response: the status and, when the body is a JSON object
-// whose `error` is a short plain code, that code. Never any other part of the body.
+// whose `error` is a short plain code, that code, with its `cause` when that is one too. For an
+// answer that lists `unretire_failed` (PUT /admin/conferences, unretire_incomplete), the slugs of
+// that list (well-formed slugs only, at most 20 named) and the directory's `upserted` count, so the
+// operator sees which conferences were not unretired and that the rest of the batch was applied.
+// Never any other part of the body.
+const SHORT_CODE = /^[A-Za-z0-9_ .:-]{1,60}$/;
 function describe(status, text) {
-  let code = '';
+  let body = null;
   try {
-    const e = JSON.parse(text)?.error;
-    if (typeof e === 'string' && /^[A-Za-z0-9_ .:-]{1,60}$/.test(e)) code = e;
+    body = JSON.parse(text);
   } catch { /* not JSON */ }
-  return code ? `status ${status} (${code})` : `status ${status}`;
+  const code = typeof body?.error === 'string' && SHORT_CODE.test(body.error) ? body.error : '';
+  if (!code) return `status ${status}`;
+  const cause = typeof body.cause === 'string' && SHORT_CODE.test(body.cause) ? `, cause ${body.cause}` : '';
+  let out = `status ${status} (${code}${cause})`;
+  if (Array.isArray(body.unretire_failed)) {
+    const slugs = [...new Set(body.unretire_failed.filter((s) => typeof s === 'string' && isSlug(s)))];
+    const named = slugs.slice(0, 20).join(', ') + (slugs.length > 20 ? ` and ${slugs.length - 20} more` : '');
+    const upserted = Number.isSafeInteger(body.upserted) ? `; the rest of the batch was applied (upserted ${body.upserted})` : '';
+    out += `: not unretired, the object did not take the document: ${named || '(none named)'}${upserted}`;
+  }
+  return out;
 }
 
 // A redirect answer of a fetch made with redirect: 'manual': the 3xx itself (Node), or an

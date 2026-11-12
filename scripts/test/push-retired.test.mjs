@@ -6,8 +6,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { upsertConferences, planPush, pushEvent, conferenceForWorker } from '../../worker/ingest/push-ingest.mjs';
-import { send as migrate } from '../../worker/ingest/migrate-from-backup.mjs';
+import { send as migrate, plan as migrationPlan, summary as migrationSummary } from '../../worker/ingest/migrate-from-backup.mjs';
 import { loadStoplist } from '../../worker/ingest/topics-local.mjs';
 
 // A stand-in for the admin routes that records every call and answers PUT /admin/conferences with
@@ -26,7 +29,7 @@ const docs = [{ slug: 'kept-fixture-2099', status: 'searchable' }, { slug: 'gone
 test('each slug the Worker skipped as retired is logged by name and returned', async () => {
   const { admin, calls } = fakeAdmin({ upserted: 1, searchable: 1, synced: 1, skipped_retired: ['gone-fixture-2099', 'also-gone-2099'] });
   const lines = [];
-  const skipped = await upsertConferences(admin, docs, (l) => lines.push(l));
+  const skipped = await upsertConferences(admin, docs, { log: (l) => lines.push(l) });
   assert.deepEqual(calls, [{ method: 'PUT', url: '/admin/conferences', body: { conferences: docs } }]);
   assert.deepEqual(skipped, ['gone-fixture-2099', 'also-gone-2099']);
   assert.equal(lines[0], 'Conferences upserted: 1.');
@@ -43,7 +46,7 @@ test('each slug the Worker skipped as retired is logged by name and returned', a
 test('an answer without skipped_retired (a Worker from before tombstones) skips nothing and logs only the count', async () => {
   for (const answer of [{ upserted: 3, searchable: 2, synced: 2 }, { upserted: 3, skipped_retired: [] }, { upserted: 3, skipped_retired: null }]) {
     const lines = [];
-    assert.deepEqual(await upsertConferences(fakeAdmin(answer).admin, docs, (l) => lines.push(l)), []);
+    assert.deepEqual(await upsertConferences(fakeAdmin(answer).admin, docs, { log: (l) => lines.push(l) }), []);
     assert.deepEqual(lines, ['Conferences upserted: 3.']);
   }
 });
@@ -53,7 +56,7 @@ test('only well-formed slugs are logged or returned, each once', async () => {
   const skipped = await upsertConferences(
     fakeAdmin({ upserted: 0, skipped_retired: ['gone-fixture-2099', 'gone-fixture-2099', 'Bad Slug', 'x\nFAKE LOG LINE', '../etc', 42, null, { slug: 'y' }] }).admin,
     docs,
-    (l) => lines.push(l),
+    { log: (l) => lines.push(l) },
   );
   assert.deepEqual(skipped, ['gone-fixture-2099']);
   assert.equal(lines.length, 2);
@@ -94,7 +97,7 @@ test('push-ingest never posts /admin/talks, topics or facets for a retired slug'
   const sent = [{ slug: 'kept-2099', status: 'searchable' }, { slug: 'gone-2099', status: 'searchable' }];
   const { admin, calls } = recordingAdmin(['gone-2099']);
   const lines = [];
-  const plan = planPush({ sent, searchable: sent, skipped: await upsertConferences(admin, sent, (l) => lines.push(l)) });
+  const plan = planPush({ sent, searchable: sent, skipped: await upsertConferences(admin, sent, { log: (l) => lines.push(l) }) });
   for (const conf of plan.push) await pushEvent(conf, { talks: [talk(conf.slug, 1), talk(conf.slug, 2), talk(conf.slug, 3)], dropped: 0, redacted: 0, entries: 0 }, { admin, dryRun: false, generation: 1, rebuild: false, stop: loadStoplist() });
   assert.ok(calls.some((c) => c.url === '/admin/talks?event=kept-2099'));
   assert.deepEqual(calls.filter((c) => c.url.includes('gone-2099')), []);
@@ -113,7 +116,8 @@ test('migrate-from-backup sends nothing more for a slug the Worker skipped as re
     reports: { byEvent: byConf((slug) => [{ target_kind: 'profile', event_id: slug }]) },
   };
   const { admin, calls } = recordingAdmin(['gone-2099', 'Bad\nslug', 7]);
-  const lines = await migrate(plan, admin);
+  const { lines, retired, unavailable } = await migrate(plan, admin);
+  assert.deepEqual([retired, unavailable], [['gone-2099'], []]);
   assert.deepEqual(calls.filter((c) => c.url.includes('gone-2099')), []);
   for (const route of ['/admin/talks?', '/admin/talks/finalize?', '/admin/topics?', '/admin/facets?', '/admin/people?', '/admin/reports?']) {
     assert.ok(calls.some((c) => c.url === `${route}event=kept-2099`), route);
@@ -122,7 +126,20 @@ test('migrate-from-backup sends nothing more for a slug the Worker skipped as re
   assert.ok(!lines.some((l) => l.includes('Bad')));
 });
 
-test('push-ingest never sends unretire, so a run of the ingest cannot bring a removed conference back', () => {
+test('push-ingest\'s send path strips unretire, with the takedown recount, so a run of the ingest cannot bring a removed conference back', async () => {
+  // upsertConferences is the one path main() sends conference documents through.
+  const { admin, calls } = fakeAdmin({ upserted: 2, skipped_retired: [] });
+  const local = [{ slug: 'gone-2099', status: 'searchable', unretire: true, counts: { sessions: 3, talk: 3 } }, { slug: 'kept-2099', status: 'unavailable', unretire: false }];
+  const prepared = new Map([['gone-2099', { dropped: 1, talks: [talk('gone-2099', 1), talk('gone-2099', 2)] }]]);
+  await upsertConferences(admin, local, { prepared, log: () => {} });
+  assert.equal(calls.length, 1);
+  const sentDocs = calls[0].body.conferences;
+  assert.deepEqual(sentDocs.map((d) => [d.slug, 'unretire' in d]), [['gone-2099', false], ['kept-2099', false]]);
+  assert.equal(sentDocs[0].counts.sessions, 2, 'the takedown recount applies on the send path');
+  assert.equal(local[0].unretire, true, 'the local documents are not changed');
+});
+
+test('conferenceForWorker drops unretire and recounts after takedowns', () => {
   const conf = { slug: 'gone-2099', status: 'searchable', unretire: true, counts: { sessions: 3, talk: 3 } };
   assert.deepEqual(conferenceForWorker(conf, undefined), { slug: 'gone-2099', status: 'searchable', counts: { sessions: 3, talk: 3 } });
   const prepared = { dropped: 1, talks: [talk('gone-2099', 1), talk('gone-2099', 2)] };
@@ -149,18 +166,57 @@ test('migrate-from-backup skips a conference whose object answers "conference is
     }
     return inner(method, url, body);
   };
-  const lines = await migrate(plan, admin);
+  const { lines, retired, unavailable } = await migrate(plan, admin);
+  assert.deepEqual([retired, unavailable], [[], ['bare-2099']]);
   // One refused call, then nothing more for that conference; the others get everything.
   assert.deepEqual(calls.filter((c) => c.url.includes('bare-2099')).map((c) => c.url), ['/admin/talks?event=bare-2099']);
   for (const slug of ['first-2099', 'last-2099']) {
     for (const route of ['/admin/talks?', '/admin/talks/finalize?', '/admin/topics?', '/admin/people?']) assert.ok(calls.some((c) => c.url === `${route}event=${slug}`), `${route} ${slug}`);
   }
   assert.equal(lines.filter((l) => l.startsWith('bare-2099: skipped') && l.includes('not available')).length, 1);
-  // Any other failure still stops the run.
-  const other = async () => {
-    const err = new Error('PUT /admin/topics: status 409 (conflict)');
-    err.status = 409;
+  // Any other failure still stops the run: another status, and a 400 with another message.
+  const failing = (status, code) => async () => {
+    const err = new Error(`PUT /admin/topics: status ${status} (${code})`);
+    err.status = status;
     throw err;
   };
-  await assert.rejects(migrate({ topics: { byConf: new Map([['x-2099', []]]) } }, other), /409/);
+  await assert.rejects(migrate({ topics: { byConf: new Map([['x-2099', []]]) } }, failing(409, 'conflict')), /409/);
+  const calls400 = [];
+  const bad400 = async (method, url) => {
+    calls400.push(url);
+    return failing(400, 'topics must be an array')();
+  };
+  await assert.rejects(
+    migrate({ topics: { byConf: new Map([['x-2099', []], ['y-2099', []]]) } }, bad400),
+    (e) => e.status === 400 && /topics must be an array/.test(e.message),
+  );
+  assert.deepEqual(calls400, ['/admin/topics?event=x-2099'], 'the run stopped at the first such 400');
+});
+
+test('the migration summary names every skipped conference, and a skip as not available makes the exit code 3', () => {
+  assert.deepEqual(migrationSummary({ retired: [], unavailable: [] }), { lines: ['Done.'], code: 0 });
+  const removed = migrationSummary({ retired: ['gone-2099'], unavailable: [] });
+  assert.equal(removed.code, 0, 'a conference removed on purpose is not a failure');
+  assert.ok(removed.lines.some((l) => l.includes('gone-2099')));
+  const bare = migrationSummary({ retired: ['gone-2099'], unavailable: ['bare-2099', 'other-2099'] });
+  assert.equal(bare.code, 3);
+  assert.ok(bare.lines.some((l) => l.includes('bare-2099, other-2099') && l.includes('not available')));
+  assert.notEqual(bare.lines.at(-1), 'Done.');
+});
+
+test('the migration never sends an unretire key from a backup conference document', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'caddie-backup-'));
+  try {
+    writeFileSync(join(dir, 'caddie-conferences-v1.ndjson'), `${[
+      { _id: 'gone-2099', slug: 'gone-2099', status: 'searchable', unretire: true },
+      { _id: 'kept-2099', slug: 'kept-2099', status: 'searchable' },
+    ].map((d) => JSON.stringify(d)).join('\n')}\n`);
+    const p = migrationPlan(dir, { include: new Set(['conferences']), includeReal: false });
+    assert.deepEqual(p.conferences.send, [{ slug: 'gone-2099', status: 'searchable' }, { slug: 'kept-2099', status: 'searchable' }]);
+    const { admin, calls } = recordingAdmin([]);
+    await migrate(p, admin);
+    assert.deepEqual(calls.map((c) => [c.url, c.body.conferences.some((d) => 'unretire' in d)]), [['/admin/conferences', false]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

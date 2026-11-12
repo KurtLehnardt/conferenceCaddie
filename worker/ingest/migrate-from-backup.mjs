@@ -26,6 +26,12 @@
 //
 // The backup is read from the git-ignored data/exports/ and personal data travels only to the
 // admin endpoint. The script prints counts per table only: no names, texts, hashes or emails.
+//
+// Exit code: 0 when everything was sent (conferences the Worker holds as removed are skipped by
+// design and named in the summary); 3 when the run finished but at least one conference was
+// skipped because its object answered "conference is not available", so its talks, topics,
+// facets, people or reports were not all sent (the summary names each one; see send() below); 2
+// when a request failed and the run stopped; 1 on a usage error.
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -53,6 +59,9 @@ export function personPayload(row) {
 }
 
 const dropId = ({ _id, ...rest }) => rest;
+// A conference document as the backup holds it, without its _id and without an `unretire` key, so
+// a migration can never bring back a conference the operator removed, whatever the backup holds.
+const conferenceDoc = ({ _id, unretire, ...rest }) => rest;
 
 function groupBy(rows, key) {
   const m = new Map();
@@ -87,7 +96,7 @@ export function plan(backup, { include, includeReal, now = Date.now() }) {
 
   if (include.has('conferences')) {
     const rows = file('caddie-conferences-v1');
-    out.conferences = { read: rows.length, send: rows.map(dropId) };
+    out.conferences = { read: rows.length, send: rows.map(conferenceDoc) };
   }
 
   if (include.has('talks')) {
@@ -160,12 +169,16 @@ function describePlan(p, { dryRun, includeReal }) {
 // re-run of the migration. A conference whose object answers 400 "conference is not available"
 // (it holds no conference document: never searchable, its document did not reach it, or it was
 // removed) is likewise logged by name and skipped from then on, and the run carries on with the
-// others instead of stopping at the first. Returns the lines to print.
+// others instead of stopping at the first. Any other failure, a 400 with another message included,
+// stops the run. Returns {lines, retired, unavailable}: the lines to print, and the slugs skipped
+// as removed and as not available, for the summary and the exit code.
 export async function send(p, admin) {
   const generation = Date.now();
   const q = (slug) => `?event=${encodeURIComponent(slug)}`;
   const lines = [];
   const skip = new Set();
+  const retired = [];
+  const unavailable = [];
   // Runs fn(slug, value) for every entry of the map whose conference is not skipped. A 400
   // "conference is not available" skips that conference for the rest of the run.
   const each = async (map, fn) => {
@@ -176,6 +189,7 @@ export async function send(p, admin) {
       } catch (e) {
         if (!(e?.status === 400 && /conference is not available/.test(String(e.message)))) throw e;
         skip.add(slug);
+        unavailable.push(slug);
         lines.push(`${slug}: skipped, the Worker answered that the conference is not available (its object holds no conference document); nothing more of it is sent.`);
       }
     }
@@ -187,6 +201,7 @@ export async function send(p, admin) {
     for (const slug of Array.isArray(r.skipped_retired) ? r.skipped_retired : []) {
       if (typeof slug !== 'string' || !isSlug(slug) || skip.has(slug)) continue;
       skip.add(slug);
+      retired.push(slug);
       lines.push(`${slug}: skipped, the Worker holds it as removed (DELETE /admin/conference); nothing of it is sent. To bring it back, run caddie-admin conferences unretire --event ${slug}.`);
     }
   }
@@ -238,7 +253,21 @@ export async function send(p, admin) {
     });
     lines.push(`reports: inserted ${sum.inserted}, skipped ${sum.skipped}`);
   }
-  return lines;
+  return { lines, retired, unavailable };
+}
+
+// The closing lines and the exit code of a run that sent its plan: 0 unless a conference was
+// skipped as not available (3), whose data was then not all sent.
+export function summary({ retired, unavailable }) {
+  const lines = [];
+  if (retired.length) lines.push(`Skipped as removed (by design, nothing of them was sent): ${retired.join(', ')}.`);
+  if (unavailable.length) {
+    lines.push(`Skipped as not available, so their data was not all sent: ${unavailable.join(', ')}. Check that the Worker lists them, then run the migration again.`);
+    lines.push('Done, with skipped conferences.');
+    return { lines, code: 3 };
+  }
+  lines.push('Done.');
+  return { lines, code: 0 };
 }
 
 async function main() {
@@ -261,9 +290,10 @@ async function main() {
     console.log('Dry run: nothing was sent.');
     return 0;
   }
-  for (const line of await send(p, adminClient(api, token))) console.log(line);
-  console.log('Done.');
-  return 0;
+  const result = await send(p, adminClient(api, token));
+  const end = summary(result);
+  for (const line of [...result.lines, ...end.lines]) console.log(line);
+  return end.code;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

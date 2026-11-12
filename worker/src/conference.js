@@ -39,8 +39,8 @@ const HELD_TABLES = ['people', 'presence', 'blocks', 'meets', 'push_subs', 'nudg
 // schema.js and the meter's usage_days, so nothing of the conference is left, and only admin_nonces
 // is kept, because it holds the wipe's own nonce and the replay check needs it. The full-text
 // tables are emptied through their virtual tables, never their shadow tables. meta keeps its
-// schema_version row (the database's shape, not conference data) and gets the retired_at marker
-// (META_KEPT). storage.deleteAll() is not used, so the tables and their indexes stay and the
+// schema_version row (the database's shape, not conference data), gets the retired_at marker, and
+// keeps the two order numbers (META_KEPT). storage.deleteAll() is not used, so the tables and their indexes stay and the
 // object can take the conference again.
 const WIPE_TABLES = [
   'talks_fts', 'talk_vectors', 'talks', 'topics', 'facets', 'people_fts', 'shared_talks', 'presence', 'blocks', 'meets',
@@ -50,7 +50,13 @@ const WIPE_TABLES = [
 // given back) marks a removed object: while it is set, PUT /internal/conference is refused unless
 // the directory's fan-out says the conference was unretired, so a fan-out that left the Worker
 // before the removal cannot make the object searchable again; admin writes are refused too.
-const META_KEPT = "('schema_version', 'retired_at')";
+// wipe_seq and unretire_seq are the highest numbers of the directory's order sequence (directory.js
+// #nextSeq) that a wipe and an unretire fan-out brought to this object: a wipe is refused when an
+// unretire with a higher number was already taken, and an unretire fan-out is refused unless its
+// number is higher than the last wipe's, so the later of the two, by the directory's order, wins.
+// An object without either row reads it as 0, so objects from before the sequence keep working.
+const META_KEPT = "('schema_version', 'retired_at', 'wipe_seq', 'unretire_seq')";
+const isSeq = (n) => Number.isSafeInteger(n) && n > 0;
 
 function matchRoute(routes, method, path) {
   const allowed = new Set();
@@ -303,23 +309,39 @@ export class ConferenceDO extends DurableObject {
     return out;
   }
 
-  // POST /internal/wipe (step 2 of DELETE /admin/conference in the Worker): the only internal route
-  // that takes the admin nonce the Worker forwards, which is recorded first, as for every /admin/*
-  // request (W2): missing headers are 404, a timestamp past the object's clock window 401
-  // admin_skew, a nonce seen before 401 admin_replay, and nothing is deleted for any of them. Then
-  // every row of WIPE_TABLES goes and the retired_at marker is written (kept if already there), in
-  // one transaction, and the caches, the conference document (this.conf), the query-vector cache
-  // and the rate-limit buckets (keyed by client addresses) are dropped. Answers
-  // {ok, deleted: {table: rows}}; a second wipe answers zero counts.
-  #wipe(request) {
+  // A meta row holding an order number (wipe_seq, unretire_seq), or 0 when there is none.
+  #seqOf(key) {
+    const v = Number(this.exec('SELECT v FROM meta WHERE k = ?', key).toArray()[0]?.v ?? 0);
+    return isSeq(v) ? v : 0;
+  }
+
+  // POST /internal/wipe {seq} (step 2 of DELETE /admin/conference in the Worker): the only internal
+  // route that takes the admin nonce the Worker forwards, which is recorded first, as for every
+  // /admin/* request (W2): missing headers are 404, a timestamp past the object's clock window 401
+  // admin_skew, a nonce seen before 401 admin_replay, and nothing is deleted for any of them. seq
+  // is the removal's number in the directory's order sequence (the Worker's, from step 1; 400 when
+  // it is not a positive integer). When this object already took an unretire with a higher number,
+  // that unretire came later and wins: 409 {error: "removal_superseded"} and nothing is deleted.
+  // Otherwise every row of WIPE_TABLES goes, the retired_at marker is written (kept if already
+  // there) and wipe_seq is raised to seq, in one transaction, and the caches, the conference
+  // document (this.conf), the query-vector cache and the rate-limit buckets (keyed by client
+  // addresses) are dropped. Answers {ok, deleted: {table: rows}}; a second wipe answers zero counts.
+  async #wipe(request) {
     const now = Date.now();
     const nonce = consumeAdminNonce((q, ...b) => this.exec(q, ...b), request.headers, now);
     if (nonce === 'missing') return json(404, { error: 'Not found' });
     if (nonce === 'skew') return json(401, { error: 'admin_skew' });
     if (nonce === 'replay') return json(401, { error: 'admin_replay' });
+    const { seq } = await readJson(request, new Set(['seq']));
+    if (!isSeq(seq)) throw new HttpError(400, { error: 'seq must be a positive integer' });
     const deleted = {};
     let retiredAt = null;
+    let superseded = false;
     this.state.storage.transactionSync(() => {
+      if (this.#seqOf('unretire_seq') > seq) {
+        superseded = true;
+        return;
+      }
       for (const t of WIPE_TABLES) {
         const where = t === 'meta' ? ` WHERE k NOT IN ${META_KEPT}` : '';
         deleted[t] = Number(this.exec(`SELECT COUNT(*) AS n FROM ${t}${where}`).one().n);
@@ -327,7 +349,9 @@ export class ConferenceDO extends DurableObject {
       }
       this.exec("INSERT INTO meta (k, v) VALUES ('retired_at', ?) ON CONFLICT(k) DO NOTHING", String(now));
       retiredAt = Number(this.exec("SELECT v FROM meta WHERE k = 'retired_at'").one().v);
+      if (seq > this.#seqOf('wipe_seq')) this.exec("INSERT INTO meta (k, v) VALUES ('wipe_seq', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(seq));
     });
+    if (superseded) return json(409, { error: 'removal_superseded' });
     this.wipes += 1;
     this.retiredAt = retiredAt;
     this.store.close();
@@ -344,16 +368,30 @@ export class ConferenceDO extends DurableObject {
     if (path === '/internal/conference' && request.method === 'PUT') {
       const body = await readJson(request, new Set(['doc', 'route_prefix', 'unretired']));
       if (!body.doc || typeof body.doc.slug !== 'string' || typeof body.route_prefix !== 'string') throw new HttpError(400, { error: 'doc and route_prefix are required' });
-      // A removed object takes its document back only from the fan-out of the upsert that removed
-      // its tombstone (unretired: true), which also drops the marker. Any other fan-out, such as
-      // one that left the Worker before the removal, is refused.
-      if (this.retiredAt !== null && body.unretired !== true) return json(409, { error: 'conference_retired' });
+      const unretired = body.unretired !== undefined;
+      if (unretired && !isSeq(body.unretired)) throw new HttpError(400, { error: 'unretired must be a positive integer' });
+      // A removed object takes its document back only from the fan-out of an unretire (unretired:
+      // <its number in the directory's order sequence>), which also drops the marker. Any other
+      // fan-out, such as one that left the Worker before the removal, is refused. An unretire is
+      // taken only when it came after the last wipe by that order; an earlier one lost to the
+      // removal (409 unretire_superseded, which the Worker answers as unretire_incomplete, so the
+      // client's repeat, with a new number, wins).
+      if (this.retiredAt !== null && !unretired) return json(409, { error: 'conference_retired' });
+      let superseded = false;
       const doc = { ...body.doc, route_prefix: body.route_prefix };
       this.state.storage.transactionSync(() => {
+        if (unretired && !(body.unretired > this.#seqOf('wipe_seq'))) {
+          superseded = true;
+          return;
+        }
         this.exec("INSERT INTO meta (k, v) VALUES ('conference', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(doc));
-        if (body.unretired === true) this.exec("DELETE FROM meta WHERE k = 'retired_at'");
+        if (unretired) {
+          this.exec("DELETE FROM meta WHERE k = 'retired_at'");
+          if (body.unretired > this.#seqOf('unretire_seq')) this.exec("INSERT INTO meta (k, v) VALUES ('unretire_seq', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(body.unretired));
+        }
       });
-      if (body.unretired === true) this.retiredAt = null;
+      if (superseded) return json(409, { error: 'unretire_superseded' });
+      if (unretired) this.retiredAt = null;
       this.#setConf(doc);
       return json(200, { ok: true });
     }

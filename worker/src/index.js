@@ -432,27 +432,44 @@ async function handleAdmin(request, env, url, header) {
     // searchable: the documents to copy into each conference's object (searchable ones, and those
     // whose object exists, so it learns its status). skipped_retired: the slugs the directory left
     // alone because they were removed (DELETE /admin/conference) and the document did not carry
-    // "unretire": true.
+    // "unretire": true. unretired, on the entries of a slug the request unretires: the unretire's
+    // number in the directory's order sequence, which the object compares with its last wipe's.
     const { upserted, searchable: docs, skipped_retired: skipped = [] } = await res.json();
     const searchable = docs.filter((c) => c.doc?.status === 'searchable');
     directory = null;
     let synced = 0;
     const unretireFailed = [];
+    let unretireCause = null;
+    let dailyLimitRetry = null;
     for (const c of docs) {
+      const unretired = Number.isSafeInteger(c.unretired) && c.unretired > 0;
       const r = await callDo(conferenceStub(env, c.slug), 'https://conference.internal/internal/conference', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Caddie-Slug': c.slug },
-        body: JSON.stringify({ doc: c.doc, route_prefix: c.route_prefix, ...(c.unretired === true ? { unretired: true } : {}) }),
+        body: JSON.stringify({ doc: c.doc, route_prefix: c.route_prefix, ...(unretired ? { unretired: c.unretired } : {}) }),
       });
-      if (r.ok) synced += 1;
-      else if (c.unretired === true && !unretireFailed.includes(c.slug)) unretireFailed.push(c.slug);
+      if (r.ok) {
+        synced += 1;
+        continue;
+      }
+      const cause = await errorCode(r);
+      if (r.status === 503 && cause === 'daily_limit') dailyLimitRetry = r.headers.get('retry-after') ?? dailyLimitRetry ?? '';
+      if (unretired && !unretireFailed.includes(c.slug)) {
+        unretireFailed.push(c.slug);
+        unretireCause ??= cause;
+      }
     }
     console.log(`admin conferences upserted=${upserted} searchable=${searchable.length} synced=${synced} skipped_retired=${skipped.length}`);
-    // An unretire whose document did not reach the object leaves the object refusing its
+    // An unretire whose document did not reach the object, or that the object refused because a
+    // removal with a later number wiped it (unretire_superseded), leaves the object refusing its
     // conference (its removal marker stays), so the request answers 502 and the client repeats it;
-    // the repeat sends the flag again and clears the marker.
+    // the repeat takes a new number and clears the marker. When any fan-out of the request hit the
+    // account's daily limit, the answer is 503 with cause daily_limit first in the body instead, so
+    // the client stops until the reset rather than retrying in vain. cause comes first either way.
     if (unretireFailed.length) {
-      return json(502, { error: 'unretire_incomplete', unretire_failed: unretireFailed, upserted, searchable: searchable.length, synced, skipped_retired: skipped });
+      const rest = { error: 'unretire_incomplete', unretire_failed: unretireFailed, upserted, searchable: searchable.length, synced, skipped_retired: skipped };
+      if (dailyLimitRetry !== null) return json(503, { cause: 'daily_limit', ...rest }, dailyLimitRetry ? { 'Retry-After': dailyLimitRetry } : {});
+      return json(502, { ...(unretireCause ? { cause: unretireCause } : {}), ...rest });
     }
     return json(200, { upserted, searchable: searchable.length, synced, skipped_retired: skipped });
   }
@@ -481,18 +498,26 @@ async function handleAdmin(request, env, url, header) {
 //      written) and writes or refreshes the slug's tombstone (retired), keeping its row. From now
 //      on PUT /admin/conferences skips the slug, so a failure in a later step cannot let the next
 //      ingest revive it.
+//      Step 1 also answers the removal's number in the directory's order sequence, which ranks
+//      removals and unretires (directory.js #nextSeq). It goes to steps 2 and 3, never to the client.
 //   2. The conference's object records the nonce in its own table, deletes every row it holds but
-//      its nonces, and sets its retired_at marker (POST /internal/wipe).
-//   3. The DirectoryDO deletes the conference row (DELETE /internal/conference/<slug>, no nonce).
+//      its nonces, and sets its retired_at marker (POST /internal/wipe {seq}), unless it already
+//      took an unretire with a higher number.
+//   3. The DirectoryDO deletes the conference row (DELETE /internal/conference/<slug>?seq=<n>, no
+//      nonce), unless an unretire with a higher number ran since.
 // The slug need not be in the directory: an unknown one still gets its tombstone and its object
 // wiped. Answers {ok, deleted: {<table>: rows}, directory: 1 | 0, retired: true,
 // already_retired_at: <ISO of the earlier tombstone> | null}; a second removal answers zero counts.
 // A failure of step 1 is answered as it is (nothing changed). A failure of step 2 or 3 is answered
 // with that step's status (and Retry-After) and {error: "removal_incomplete", step: "wipe" |
 // "directory", retired: true, wiped, cause?, deleted?}: the tombstone holds, and the same removal
-// sent again finishes the work. When an unretire of the slug ran during the removal (its tombstone
-// is gone at step 3), the row is kept and the answer is 409 {error: "removal_superseded", step:
-// "directory", retired: false, wiped: true, deleted}.
+// sent again finishes the work. When an unretire of the slug ran during the removal and so came
+// later by the order sequence, the unretire wins and the answer is 409 {error:
+// "removal_superseded", step, retired, wiped, deleted?}: step "wipe" when the object had already
+// taken the unretire and refused the wipe (wiped false, nothing deleted), step "directory" when
+// the object was wiped first and then took the unretire, so step 3 kept the row (wiped true, with
+// the counts). retired is whether the directory holds a tombstone for the slug now, as stored: false
+// unless another removal of the slug wrote one since (or the directory could not say, null).
 async function removeConference(request, env, url, verified) {
   if (request.method !== 'DELETE') throw reply(405, { error: 'Method not allowed' }, { Allow: 'DELETE' });
   const slug = url.searchParams.get('event');
@@ -503,21 +528,38 @@ async function removeConference(request, env, url, verified) {
       headers: forwardHeaders(request, null, verified),
     });
     if (!retire.ok) return retire;
-    const { already_retired_at: alreadyRetiredAt = null } = await retire.json();
+    const { already_retired_at: alreadyRetiredAt = null, seq } = await retire.json();
+    if (!Number.isSafeInteger(seq) || seq <= 0) return json(502, { error: 'removal_incomplete', step: 'wipe', retired: true, wiped: false });
+    const wipeHeaders = forwardHeaders(request, slug, verified);
+    wipeHeaders.set('Content-Type', 'application/json');
     const wiped = await callDo(conferenceStub(env, slug), 'https://conference.internal/internal/wipe', {
       method: 'POST',
-      headers: forwardHeaders(request, slug, verified),
+      headers: wipeHeaders,
+      body: JSON.stringify({ seq }),
     });
+    if (wiped.status === 409 && (await errorCode(wiped.clone())) === 'removal_superseded') {
+      // The object had already taken an unretire that came after this removal: it stays live and
+      // nothing was deleted. Step 3 is not run, so the directory keeps the row the unretire wrote.
+      return json(409, { error: 'removal_superseded', step: 'wipe', retired: await tombstoneOf(env, slug), wiped: false });
+    }
     if (!wiped.ok) return removalIncomplete(wiped, { step: 'wipe', retired: true, wiped: false });
     const { deleted } = await wiped.json();
-    const dir = await callDo(directoryStub(env), `https://directory.internal/internal/conference/${slug}`, {
+    const dir = await callDo(directoryStub(env), `https://directory.internal/internal/conference/${slug}?seq=${seq}`, {
       method: 'DELETE',
       headers: forwardHeaders(request, null),
     });
     if (dir.status === 409) {
-      // An unretire ran during the removal: the directory keeps its row and the unretire's object
-      // stands, wiped by step 2. Nothing is left to finish; the operator decides what comes next.
-      return json(409, { error: 'removal_superseded', step: 'directory', retired: false, wiped: true, deleted });
+      // An unretire ran during the removal, after the wipe: the directory keeps its row and the
+      // unretire's object stands, emptied by step 2. Nothing is left to finish; the operator decides
+      // what comes next.
+      let retired = null;
+      try {
+        const r = (await dir.json())?.retired;
+        if (typeof r === 'boolean') retired = r;
+      } catch {
+        /* not JSON */
+      }
+      return json(409, { error: 'removal_superseded', step: 'directory', retired, wiped: true, deleted });
     }
     if (!dir.ok) return removalIncomplete(dir, { step: 'directory', retired: true, wiped: true }, deleted);
     const { removed } = await dir.json();
@@ -527,18 +569,36 @@ async function removeConference(request, env, url, verified) {
   }
 }
 
+// The short error code of a failed answer (its body's error, when that is a short plain code), or
+// null. Consumes the body.
+async function errorCode(res) {
+  try {
+    const e = (await res.json())?.error;
+    if (typeof e === 'string' && /^[A-Za-z0-9_ .:-]{1,60}$/.test(e)) return e;
+  } catch {
+    /* not JSON */
+  }
+  return null;
+}
+
+// Whether the directory holds a tombstone for the slug, as stored, or null when it cannot say.
+async function tombstoneOf(env, slug) {
+  const r = await callDo(directoryStub(env), `https://directory.internal/internal/conference/${slug}`, { method: 'GET' });
+  if (!r.ok) return null;
+  try {
+    const v = (await r.json())?.retired;
+    return typeof v === 'boolean' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 // The answer to a removal that stopped after its tombstone: the failing step's status and
 // Retry-After, what was done, the step's own short error code as cause, and the wipe's counts when
 // there are some. cause comes before the counts, so a client that reads the first 200 characters
 // of a 503 (adminClient) sees daily_limit and does not retry until the reset.
 async function removalIncomplete(res, done, deleted) {
-  let cause = null;
-  try {
-    const e = (await res.json())?.error;
-    if (typeof e === 'string' && /^[A-Za-z0-9_ .:-]{1,60}$/.test(e)) cause = e;
-  } catch {
-    /* not JSON */
-  }
+  const cause = await errorCode(res);
   const retry = res.headers.get('retry-after');
   const body = { error: 'removal_incomplete', ...done, ...(cause ? { cause } : {}), ...(deleted ? { deleted } : {}) };
   return json(res.status, body, retry ? { 'Retry-After': retry } : {});
