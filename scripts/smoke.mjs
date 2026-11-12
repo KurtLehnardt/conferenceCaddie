@@ -60,8 +60,14 @@
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
 //   SMOKE_BLE=1          run the Bluetooth resolution checks (ble2, ble3) against a remote API, Worker or
 //                        Cloud Run. They put test profiles with a specific match around, so they run by
-//                        default only against a local API (localhost or 127.0.0.1), never next to real
-//                        attendees. ble1 and cap3 are safe anywhere and always run.
+//                        default only against an API on this machine (the loopback hosts localhost,
+//                        127.0.0.1 and [::1]), never next to real attendees. ble1 is safe anywhere and
+//                        runs whenever cap1 or cap3 read a capabilities document; cap3 runs against
+//                        every backend but the Worker, which cap1 checks instead.
+//   SMOKE_BLE_MODE       the ble.mode this backend is expected to serve: derived-v1, server-rotate or
+//                        none. Check ble0 then compares the capabilities document with it, so a backend
+//                        that falls back to server-rotate (and makes ble3 skip) fails the run. Unset,
+//                        ble0 is skipped with the mode it found.
 //   SMOKE_NATIVE_PUSH    the native push platforms this backend is expected to push to: "none", or a
 //                        comma-separated list of apns and fcm. Check np2 then compares push.apns and
 //                        push.fcm with it. Unset, np2 passes when both are false and is skipped when
@@ -96,7 +102,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
-import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
+import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
 
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
@@ -188,6 +194,13 @@ const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE)
 const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER && !LOCAL_API ? 'bundle' : 'data')).toLowerCase();
 if (!['bundle', 'data'].includes(TALKS_FROM)) {
   console.log('FAIL config: SMOKE_TALKS must be bundle or data');
+  process.exit(1);
+}
+// The ble.mode the backend is expected to serve (SMOKE_BLE_MODE, check ble0), or '' to only report it.
+const BLE_MODES = ['derived-v1', 'server-rotate', 'none'];
+const BLE_MODE_EXPECTED = (process.env.SMOKE_BLE_MODE ?? '').trim().toLowerCase();
+if (BLE_MODE_EXPECTED && !BLE_MODES.includes(BLE_MODE_EXPECTED)) {
+  console.log(`FAIL config: SMOKE_BLE_MODE must be ${BLE_MODES.join(', ')}`);
   process.exit(1);
 }
 const BUNDLE_BASE = process.env.SMOKE_BUNDLE_BASE || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
@@ -305,6 +318,9 @@ async function check(name, fn) {
 const responses = [];
 // Page and admin responses, which the leak check scans for secret values only.
 const otherResponses = [];
+// Every Bluetooth key a presence write minted ({ key, label, response }): check l fails when one
+// appears in any response but the one that minted it.
+const mintedBleKeys = [];
 const headerText = (headers) => [...headers].map(([k, v]) => `${k}: ${v}`).join('\n');
 // Every search result seen, for the evidence check.
 const allResults = [];
@@ -638,7 +654,7 @@ const names = (results) => (results ?? []).map((p) => p.display_name);
 // ---------------------------------------------------------------------------------------------
 // Conferences.
 
-const NOT_WORKER_WHY_EARLY = 'the API is not the Worker (Cloud Run sends no CORS headers)';
+const NOT_WORKER_WHY_EARLY = 'the API is not the Worker (Cloud Run serves the app and the API from one origin, and sends CORS headers only on /api/capabilities)';
 let conferences = [];
 await check('conf: GET /api/conferences lists the conferences', async () => {
   const { status, json } = await api('GET', '/api/conferences');
@@ -680,7 +696,7 @@ if (TALKS_FROM === 'data') {
 // producer's (docs/contracts/capabilities.md), in closed mode. Later checks read ble.mode from it.
 let capsDoc = null;
 if (!IS_WORKER) {
-  skip('cap1: GET /api/capabilities serves a valid tier 2 document', NOT_WORKER_WHY_EARLY);
+  skip('cap1: GET /api/capabilities serves a valid tier 2 document', 'the API is not the Worker; cap3 checks the tier 3 document');
   // The tier 3 server (Cloud Run) serves the same document with tier 'paid'. Push flags are checked
   // for the schema only, because they change when native push is switched on.
   await check('cap3: GET /api/capabilities serves a valid tier 3 document', async () => {
@@ -699,15 +715,17 @@ if (!IS_WORKER) {
     if (capsDoc.people?.enabled !== true || capsDoc.people?.reports !== true) problems.push(`people.enabled ${capsDoc.people?.enabled}, people.reports ${capsDoc.people?.reports}`);
     const ble = capsDoc.ble ?? {};
     if (!['derived-v1', 'server-rotate'].includes(ble.mode)) problems.push(`ble.mode ${ble.mode}`);
+    // The service UUID and the window are the same in both modes (server/capabilities.mjs).
+    if (ble.service_uuid !== 'e52c391c-b926-4856-9a38-d46c3c10c733') problems.push(`service_uuid ${ble.service_uuid}`);
+    if (ble.window_s !== 600) problems.push(`window_s ${ble.window_s}`);
     if (ble.mode === 'derived-v1') {
-      if (ble.window_s !== 600) problems.push(`window_s ${ble.window_s}`);
       if (ble.sightings_min_interval_s !== 10) problems.push(`sightings_min_interval_s ${ble.sightings_min_interval_s}`);
       if (ble.colocation_required !== true) problems.push(`colocation_required ${ble.colocation_required}`);
-      if (ble.service_uuid !== 'e52c391c-b926-4856-9a38-d46c3c10c733') problems.push(`service_uuid ${ble.service_uuid}`);
     }
     report(problems.length === 0, 'cap3: GET /api/capabilities serves a valid tier 3 document', problems.length ? problems.join('; ') : `closed-mode valid, tier paid, ble.mode ${ble.mode}, people.semantic ${capsDoc.people?.semantic}`);
   });
 } else {
+  skip('cap3: GET /api/capabilities serves a valid tier 3 document', 'the API is the Worker; cap1 checks its tier 2 document');
   await check('cap1: GET /api/capabilities serves a valid tier 2 document', async () => {
     const res = await fetch(`${API_BASE}/api/capabilities`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     const text = await res.text();
@@ -723,6 +741,19 @@ if (!IS_WORKER) {
     if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
     report(problems.length === 0, 'cap1: GET /api/capabilities serves a valid tier 2 document', problems.length ? problems.join('; ') : `closed-mode valid, ble.mode ${capsDoc.ble?.mode}, people.semantic ${capsDoc.people?.semantic}`);
   });
+}
+
+// ble0: the Bluetooth mode is the one SMOKE_BLE_MODE expects. cap3 accepts both derived-v1 and
+// server-rotate, and ble3 skips on server-rotate, so without an expectation a backend that lost its
+// keyring and fell back to server-rotate would pass the run.
+const BLE0 = 'ble0: ble.mode is the one SMOKE_BLE_MODE expects';
+if (!capsDoc) {
+  if (BLE_MODE_EXPECTED) report(false, BLE0, `SMOKE_BLE_MODE=${BLE_MODE_EXPECTED} but no capabilities document was read`);
+  else skip(BLE0, 'no capabilities document');
+} else if (!BLE_MODE_EXPECTED) {
+  skip(BLE0, `ble.mode is ${capsDoc.ble?.mode}; set SMOKE_BLE_MODE to check which mode to expect`);
+} else {
+  report(capsDoc.ble?.mode === BLE_MODE_EXPECTED, BLE0, capsDoc.ble?.mode === BLE_MODE_EXPECTED ? `ble.mode ${BLE_MODE_EXPECTED}` : `ble.mode ${capsDoc.ble?.mode}, expected ${BLE_MODE_EXPECTED}`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2345,7 +2376,21 @@ try {
   });
 
   // Bluetooth. ble1 needs no match: a profile with only the common topic, so it is safe anywhere.
-  const tokenOf = (keyText, dw = 0) => encodeToken(deriveToken(decodeKey(keyText), windowOf(Date.now() / 1000) + BigInt(dw)));
+  // The window length comes from the capabilities document for every token and every wait below,
+  // with the contract's 600 s when there is none. Sightings are sent at -30 dBm, the strongest
+  // ble.near_rssi a server may be configured with (BLE_NEAR_RSSI is at most -30), so they always
+  // count as near.
+  const bleWindowS = () => capsDoc?.ble?.window_s ?? WINDOW_S;
+  const tokenOf = (keyText, dw = 0) => encodeToken(deriveToken(decodeKey(keyText), windowOf(Date.now() / 1000, bleWindowS()) + BigInt(dw)));
+  const BLE_RSSI = -30;
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // A presence write with ble:true. A key it mints is recorded with the write's label, which no
+  // other request uses, so check l can fail when that key appears in any other response.
+  const presenceBle = async (device, label, zone = ZONE_A) => {
+    const r = await api('PUT', '/api/presence', { event: PRIMARY, zone, spot: '', ble: true }, { device, label });
+    if (typeof r.json?.ble_key === 'string' && r.json.ble_key) mintedBleKeys.push({ key: r.json.ble_key, label, response: r.json });
+    return r;
+  };
   await check('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', async () => {
     if (!capsDoc) {
       skip('ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', 'no capabilities document');
@@ -2353,7 +2398,7 @@ try {
     }
     const BT = newDevice();
     await putProfile(BT, PRIMARY, 'BT', { speak: [COMMON_TOPIC] }, { open: true });
-    const on = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: BT, label: 'BT-presence' });
+    const on = await presenceBle(BT, 'BT-presence-ble');
     const derived = capsDoc.ble?.mode === 'derived-v1';
     const problems = [];
     const pv = validator('people-api.v1', 'PresencePutResponse')(on.json, { closed: true });
@@ -2361,60 +2406,78 @@ try {
     if (derived && !(/^[A-Za-z0-9_-]{43}$/.test(on.json.ble_key ?? '') && /^[A-Za-z0-9_-]{11}$/.test(on.json.ble_key_id ?? ''))) problems.push('derived-v1 but no ble_key and ble_key_id');
     if (!derived && (on.json.ble_key || !on.json.ble?.token)) problems.push('server-rotate but no legacy token, or a key');
     const own = derived ? tokenOf(on.json.ble_key) : on.json.ble?.token;
-    const sight = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: -40 }, { token: crypto.randomBytes(16).toString('base64url'), rssi: -40 }] }, { device: BT, label: 'BT-sightings' });
+    const sight = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: BLE_RSSI }, { token: crypto.randomBytes(16).toString('base64url'), rssi: BLE_RSSI }] }, { device: BT, label: 'BT-sightings' });
     const sv = validator('people-api.v1', 'SightingsResponse')(sight.json, { closed: true });
     if (sight.status !== 200 || !sv.valid || (sight.json.nearby ?? []).length !== 0) problems.push(`own and unknown tokens gave ${sight.status} ${JSON.stringify(sight.json)}`);
     if (derived && sight.json.ble_key_id !== on.json.ble_key_id) problems.push('the sightings answer does not name the current key');
     const off = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: false }, { device: BT, label: 'BT-presence' });
-    const after = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: -40 }] }, { device: BT, label: 'BT-sightings' });
+    const after = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: own, rssi: BLE_RSSI }] }, { device: BT, label: 'BT-sightings' });
     if (off.status !== 200 || after.status !== 403 || after.json.error !== 'ble_required') problems.push(`after ble:false sightings gave ${after.status} ${JSON.stringify(after.json)}`);
     await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: BT, label: 'BT-presence' });
     report(problems.length === 0, 'ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', problems.length ? problems.join('; ') : `${capsDoc.ble?.mode}: ${derived ? 'key and key id once, ' : ''}own and unknown tokens resolve nobody, 403 ble_required after ble:false`);
   });
 
-  await check('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', async () => {
+  const BLE2 = 'ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window';
+  await check(BLE2, async () => {
     if (!capsDoc || capsDoc.ble?.mode === 'none') {
-      skip('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', 'no Bluetooth on this backend');
+      skip(BLE2, capsDoc ? 'ble.mode is none: no Bluetooth on this backend' : 'no capabilities document');
       return;
     }
     if (!LOCAL_API && process.env.SMOKE_BLE !== '1') {
-      skip('ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
+      skip(BLE2, 'it puts specific-match test profiles around; set SMOKE_BLE=1 to run it against a deployed API');
       return;
     }
     const derived = capsDoc.ble.mode === 'derived-v1';
     const word = `zqvble${runTag}`;
     const BR = newDevice();
-    await putProfile(BR, PRIMARY, 'BR', { interests: `${word} glimmering quabbit rigs` }, { open: true });
-    await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: BR, label: 'BR-presence' });
-    const tokens = [];
     const around = [BR];
-    for (let i = 0; i < 12; i++) {
-      const d = newDevice();
-      around.push(d);
-      await putProfile(d, PRIMARY, `BN${i}`, { expertise: `tuned ${word} glimmering quabbit rigs ${i}` }, { open: true });
-      const p = await api('PUT', '/api/presence', { event: PRIMARY, zone: i === 11 ? ZONE_F : ZONE_A, spot: '', ble: true }, { device: d, label: `BN${i}-presence` });
-      tokens.push(derived ? tokenOf(p.json.ble_key) : p.json.ble?.token);
-    }
-    const report11 = () => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: -50 })) }, { device: BR, label: 'BR-sightings' });
-    let near = await report11();
-    // The server rebuilds its token table on an unknown token only when the cached table is older
-    // than 30 seconds, and an earlier check (ble1) may have built it moments ago. An empty answer
-    // therefore asks again, every 5 s up to 45 s; an empty answer that is final still fails below.
-    if (derived) {
-      for (let waited = 0; (near.json.nearby ?? []).length === 0 && waited < 45_000; waited += 5000) {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        near = await report11();
-      }
-    }
-    const far = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: -40 }] }, { device: BR, label: 'BR-sightings' });
-    for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble2-presence' });
-    const nearby = near.json.nearby ?? [];
     const problems = [];
-    if (near.status !== 200) problems.push(`sightings gave ${near.status}`);
-    if (nearby.length !== 10) problems.push(`${nearby.length} of 11 co-located matches returned, expected the cap of 10`);
-    if (nearby.some((p) => p.zone !== ZONE_A)) problems.push('a same-zone person came without the zone');
-    if ((far.json.nearby ?? []).length !== 0) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
-    report(problems.length === 0, 'ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window', problems.length ? problems.join('; ') : `${capsDoc.ble.mode}: 10 of 11 co-located matches, zone shown, another zone resolves nobody`);
+    try {
+      const setup = [];
+      const brPut = await putProfile(BR, PRIMARY, 'BR', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+      const brOn = await presenceBle(BR, 'BR-presence-ble');
+      if (brPut.status !== 200 || brOn.status !== 200) setup.push(`BR: profile ${brPut.status}, presence ${brOn.status}`);
+      // BN11, in another zone, is made first: any token table that holds the co-located ten holds it
+      // too, so its "resolves nobody" below is the co-location rule and not a table that lacks it.
+      const tokens = new Array(12);
+      for (const i of [11, ...Array.from({ length: 11 }, (_, k) => k)]) {
+        const d = newDevice();
+        around.push(d);
+        const put = await putProfile(d, PRIMARY, `BN${i}`, { expertise: `tuned ${word} glimmering quabbit rigs ${i}` }, { open: true });
+        const p = await presenceBle(d, `BN${i}-presence-ble`, i === 11 ? ZONE_F : ZONE_A);
+        tokens[i] = derived ? (p.json.ble_key ? tokenOf(p.json.ble_key) : null) : p.json.ble?.token;
+        if (put.status !== 200 || p.status !== 200 || !tokens[i]) setup.push(`BN${i}: profile ${put.status}, presence ${p.status}${tokens[i] ? '' : `, no ${derived ? 'key' : 'token'}`}`);
+      }
+      if (setup.length) throw new Error(`setup failed: ${setup.slice(0, 3).join('; ')}`);
+      // An answer counts only as a 200, which on derived-v1 also names the requester's key id.
+      const unanswered = (r) => (r.status !== 200 || (derived && r.json.ble_key_id !== brOn.json.ble_key_id)
+        ? `sightings gave ${r.status}${r.status === 200 ? ' without the requester\'s ble_key_id' : ''}` : null);
+      const report11 = () => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: tokens.slice(0, 11).map((token) => ({ token, rssi: BLE_RSSI })) }, { device: BR, label: 'BR-sightings' });
+      // A token table is cached per instance (tier 3 runs up to two) and rebuilt on an unknown token
+      // only once it is older than 30 seconds, so the ten may come back over several answers. Ask
+      // again every 5 s for up to 45 s while fewer than ten come back; stop at any answer that does
+      // not count. No answer may ever name more than ten.
+      let near = await report11();
+      let most = (near.json.nearby ?? []).length;
+      for (const until = Date.now() + 45_000; !unanswered(near) && (near.json.nearby ?? []).length < 10 && Date.now() < until;) {
+        await pause(5000);
+        near = await report11();
+        most = Math.max(most, (near.json.nearby ?? []).length);
+      }
+      const nearby = near.json.nearby ?? [];
+      if (unanswered(near)) problems.push(unanswered(near));
+      else {
+        if (most > 10) problems.push(`an answer named ${most} people, over the cap of 10`);
+        if (nearby.length !== 10) problems.push(`${nearby.length} of 11 co-located matches returned, expected the cap of 10`);
+        if (nearby.some((p) => p.zone !== ZONE_A)) problems.push('a same-zone person came without the zone');
+      }
+      const far = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: tokens[11], rssi: BLE_RSSI }] }, { device: BR, label: 'BR-sightings' });
+      if (unanswered(far)) problems.push(`for the person in ${ZONE_F}: ${unanswered(far)}`);
+      else if ((far.json.nearby ?? []).length !== 0) problems.push(`a person in ${ZONE_F} resolved for a requester in ${ZONE_A}`);
+    } finally {
+      for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble2-presence' }).catch(() => {});
+    }
+    report(problems.length === 0, BLE2, problems.length ? problems.join('; ') : `${capsDoc.ble.mode}: 10 of 11 co-located matches, zone shown, another zone resolves nobody`);
   });
 
   // ble3: windows and re-keying, end to end (derived-v1 only). The server resolves a token of the
@@ -2436,66 +2499,81 @@ try {
     const around = [R3, T3];
     const problems = [];
     try {
-      await putProfile(R3, PRIMARY, 'BQ', { interests: `${word} glimmering quabbit rigs` }, { open: true });
-      await putProfile(T3, PRIMARY, 'BU', { expertise: `tuned ${word} glimmering quabbit rigs` }, { open: true });
-      await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: R3, label: 'BQ-presence' });
-      const first = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: T3, label: 'BU-presence' });
+      const rp = await putProfile(R3, PRIMARY, 'BQ', { interests: `${word} glimmering quabbit rigs` }, { open: true });
+      const tp = await putProfile(T3, PRIMARY, 'BU', { expertise: `tuned ${word} glimmering quabbit rigs` }, { open: true });
+      const rOn = await presenceBle(R3, 'BQ-presence-ble');
+      const first = await presenceBle(T3, 'BU-presence-ble1');
+      const setup = [['the requester\'s profile write', rp], ['the target\'s profile write', tp], ['the requester\'s presence write', rOn], ['the target\'s presence write', first]]
+        .filter(([, r]) => r.status !== 200).map(([what, r]) => `${what} gave ${r.status}`);
+      if (!setup.length && !(rOn.json.ble_key_id && first.json.ble_key)) setup.push('a presence write with ble:true gave no key');
+      if (setup.length) throw new Error(`setup failed: ${setup.join('; ')}`);
       const keyOld = first.json.ble_key;
-      if (first.status !== 200 || !keyOld) {
-        throw new Error(`the first presence write gave ${first.status} without a key`);
-      }
-      const who = (token) => api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token, rssi: -50 }] }, { device: R3, label: 'BQ-sightings' })
-        .then((r) => (r.json.nearby ?? []).map((p) => p.display_name));
       const target = testName('BU');
-      // The server rebuilds its token table on an unknown token only when the cached table is older
-      // than 30 seconds, so a token minted a moment ago can stay unknown for up to that long. A
-      // check that expects a person therefore polls (every 5 s, up to 45 s); one that expects nobody
-      // asks once. The api helper waits out the per-device sightings limit.
-      const resolvesT = async (token) => {
+      const sign = (dw) => `${dw >= 0 ? '+' : ''}${dw}`;
+      // Every answer below counts only as a 200 that names the requester's key id; anything else is
+      // reported as it is, never read as "nobody". The api helper waits out the per-device limit.
+      const who = async (token) => {
+        const r = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token, rssi: BLE_RSSI }] }, { device: R3, label: 'BQ-sightings' });
+        return { status: r.status, keyId: r.json?.ble_key_id, names: (r.json?.nearby ?? []).map((p) => p.display_name) };
+      };
+      const unanswered = (a) => (a.status !== 200 || a.keyId !== rOn.json.ble_key_id
+        ? `sightings gave ${a.status}${a.status === 200 ? ' without the requester\'s ble_key_id' : ''}` : null);
+      // A token table is cached per instance (tier 3 runs up to two) and rebuilt on an unknown token
+      // only once it is older than 30 seconds, so a check that expects the target asks again every
+      // 5 s for up to 45 s. A check that expects nobody asks once. Each returns what went wrong, or null.
+      const resolves = async (token, what) => {
         const until = Date.now() + 45_000;
         for (;;) {
-          if ((await who(token)).includes(target)) return true;
-          if (Date.now() >= until) return false;
-          await new Promise((resolve) => setTimeout(resolve, 5000));
+          const a = await who(token);
+          if (unanswered(a)) return `${what}: ${unanswered(a)}`;
+          if (a.names.includes(target)) return null;
+          if (Date.now() >= until) return `${what} did not resolve within 45 s`;
+          await pause(5000);
         }
       };
-      // The probes below take up to about two minutes. If a window boundary fell inside them, the
-      // server's w-1..w+1 table would move under the tokens and the check would fail although the
-      // server is right. So wait for the next window first when less than 150 s of this one is left.
-      const windowS = capsDoc.ble.window_s ?? 600;
+      const resolvesNobody = async (token, what) => {
+        const a = await who(token);
+        if (unanswered(a)) return `${what}: ${unanswered(a)}`;
+        return a.names.length ? `${what} resolved ${a.names.length} people` : null;
+      };
+      const note = (problem) => { if (problem) problems.push(problem); };
+      // Each part takes up to about two minutes. If a window boundary fell inside one, the server's
+      // w-1..w+1 table would move under the tokens and the check would fail although the server is
+      // right. So each part first waits for the next window when less than 150 s of this one is left.
       const waitForWindow = async () => {
+        const windowS = bleWindowS();
         const left = windowS - (Math.floor(Date.now() / 1000) % windowS);
-        if (left < 150) await new Promise((resolve) => setTimeout(resolve, (left + 2) * 1000));
+        if (left < 150) await pause((left + 2) * 1000);
       };
       await waitForWindow();
       // (a) windows w-1, w, w+1 resolve the target; w-2 and w+2 resolve nobody.
-      for (const dw of [0, -1, 1]) if (!(await resolvesT(tokenOf(keyOld, dw)))) problems.push(`the token of window ${dw >= 0 ? '+' : ''}${dw} did not resolve`);
-      for (const dw of [-2, 2]) {
-        const got = await who(tokenOf(keyOld, dw));
-        if (got.length !== 0) problems.push(`the token of window ${dw >= 0 ? '+' : ''}${dw} resolved ${got.length} people`);
-      }
+      for (const dw of [0, -1, 1]) note(await resolves(tokenOf(keyOld, dw), `the token of window ${sign(dw)}`));
+      for (const dw of [-2, 2]) note(await resolvesNobody(tokenOf(keyOld, dw), `the token of window ${sign(dw)}`));
+      // (b) and (c) run in one window, so the table that (b) leaves cached still holds the old key's
+      // token when (c) asks about it right after the re-key.
+      await waitForWindow();
       // (b) a presence write without ble keeps the session: no key in the answer, same token works.
       const quiet = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '' }, { device: T3, label: 'BU-presence' });
       if (quiet.status !== 200 || quiet.json.ble_key) problems.push(`a presence write without ble gave ${quiet.status}${quiet.json.ble_key ? ' and a key' : ''}`);
-      if (!(await who(tokenOf(keyOld))).includes(target)) problems.push('after a presence write without ble the current token no longer resolves');
-      // (c) re-key: a new key and key id, the sightings answer names the new id, the old key's token
-      // resolves nobody and the new key's token resolves the target.
-      await waitForWindow();
-      const second = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', ble: true }, { device: T3, label: 'BU-presence' });
+      note(await resolves(tokenOf(keyOld), 'after a presence write without ble, the current token'));
+      // (c) re-key: a new key and key id; the old key's token resolves nobody at once (the cached
+      // entry is refused by the server's check of the stored nonce); the target's sightings answer
+      // names the new id; the new key's token resolves the target.
+      const second = await presenceBle(T3, 'BU-presence-ble2');
       const keyNew = second.json.ble_key;
       if (second.status !== 200 || !keyNew) {
         throw new Error(`the re-key gave ${second.status} without a key`);
       }
       if (keyNew === keyOld || second.json.ble_key_id === first.json.ble_key_id) problems.push('the re-key returned the old key or key id');
-      const own = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: crypto.randomBytes(16).toString('base64url'), rssi: -50 }] }, { device: T3, label: 'BU-sightings' });
-      if (own.json.ble_key_id !== second.json.ble_key_id) problems.push('the target\'s sightings answer does not name the new key id');
-      const oldNow = await who(tokenOf(keyOld));
-      if (oldNow.length !== 0) problems.push(`the old key's token resolved ${oldNow.length} people after the re-key`);
-      if (!(await resolvesT(tokenOf(keyNew)))) problems.push('the new key\'s token did not resolve within 45 s');
+      note(await resolvesNobody(tokenOf(keyOld), 'after the re-key, the old key\'s token'));
+      const own = await api('POST', '/api/presence/sightings', { event: PRIMARY, sightings: [{ token: crypto.randomBytes(16).toString('base64url'), rssi: BLE_RSSI }] }, { device: T3, label: 'BU-sightings' });
+      if (own.status !== 200) problems.push(`the target's sightings gave ${own.status}`);
+      else if (own.json.ble_key_id !== second.json.ble_key_id) problems.push('the target\'s sightings answer does not name the new key id');
+      note(await resolves(tokenOf(keyNew), 'the new key\'s token'));
     } finally {
       for (const d of around) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: d, label: 'ble3-presence' }).catch(() => {});
     }
-    report(problems.length === 0, BLE3, problems.length ? problems.join('; ') : 'w-1, w and w+1 resolve, w-2 and w+2 do not; a presence write without ble keeps the key; a re-key gives a new key and id, the old key resolves nobody and the new one resolves');
+    report(problems.length === 0, BLE3, problems.length ? problems.join('; ') : 'w-1, w and w+1 resolve, w-2 and w+2 do not; a presence write without ble keeps the key; a re-key gives a new key and id, the old key resolves nobody at once and the new one resolves');
   });
 
   await check('unav1: an owner can delete while the conference is unavailable', async () => {
@@ -2793,6 +2871,14 @@ if (!WORKER_SERVES_APP) {
     // A non-sharer and anonymous callers see no contact details at all.
     if (['N-members', 'anon-members', 'public-counts', 'C-matches', 'recs'].includes(r.label) && /linkedin_url|contact_note/.test(r.text)) hits.push(`contact fields in ${r.label}`);
   }
+  // A Bluetooth key reaches only the device whose presence write minted it, in that write's answer
+  // (ble1, ble2 and ble3 record each one with its write).
+  for (const m of mintedBleKeys) {
+    for (const r of [...responses, ...otherResponses]) {
+      if (r.json === m.response) continue;
+      if (`${r.text}\n${r.headersText}`.includes(m.key)) hits.push(`the Bluetooth key minted by ${m.label} in ${r.label} ${r.path}`);
+    }
+  }
   const unique = [...new Set(hits)];
   // l trusts the shared talks each accepted profile write sent; the server must have echoed
   // exactly that list and, read back through the app's own API, must have stored it.
@@ -2803,7 +2889,7 @@ if (!WORKER_SERVES_APP) {
     ...(echoChecked > 0 && storedChecked === 0 ? ['no stored profile was read back'] : []),
   ];
   report(l0Problems.length === 0, 'l0: every accepted profile write echoes and stores the shared talks it sent', l0Problems.length ? l0Problems.join('; ') : `${echoChecked} writes checked, ${storedChecked} talks read back`);
-  report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked${IS_WORKER ? `, plus ${otherResponses.length} page and admin responses` : ''}`);
+  report(unique.length === 0, 'l: secret_hash and other people\'s contact details never leak', unique.length ? unique.slice(0, 4).join('; ') : `${responses.length} responses checked${IS_WORKER ? `, plus ${otherResponses.length} page and admin responses` : ''}${mintedBleKeys.length ? `, ${mintedBleKeys.length} Bluetooth keys only in the answers that minted them` : ''}`);
 }
 
 {
