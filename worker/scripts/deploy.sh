@@ -6,14 +6,17 @@
 #   bash worker/scripts/deploy.sh                    ensure the workers.dev subdomain, build the app, deploy
 #   bash worker/scripts/deploy.sh --subdomain-only   only ensure the workers.dev subdomain
 #
-# Reads CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID from the environment and never prints them.
+# Reads CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID from the environment and never prints them, and
+# the optional CADDIE_WORKERS_SUBDOMAIN (step 1).
 # The token reaches curl through its standard input (a curl config read with -K -), never through
 # a command line, so it does not show up in the process list either.
 #
 # Steps:
 #   1. GET /accounts/{account}/workers/subdomain. When the account has no workers.dev subdomain yet,
-#      PUT {"subdomain":"kurtlehnardt"}, and on a conflict fall back to
-#      conference-caddie-<6 random lowercase letters>.
+#      PUT {"subdomain":"<CADDIE_WORKERS_SUBDOMAIN>"} (an optional environment variable: the name you
+#      want, lowercase letters, digits and hyphens), and when it is unset, or the name is taken, use
+#      conference-caddie-<6 random lowercase letters>. An account that already has a subdomain keeps
+#      it, whatever the variable says.
 #   2. Build the web app in Worker mode (npm --prefix web run build:worker: base "/", same-origin
 #      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
 #      wrangler.toml, so the app ships with the Worker.
@@ -31,7 +34,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PREFERRED_SUBDOMAIN="kurtlehnardt"
+# The name to try first when the account has no workers.dev subdomain; empty goes straight to the
+# random fallback, so a fork never claims the name of the repository's original owner.
+PREFERRED_SUBDOMAIN="${CADDIE_WORKERS_SUBDOMAIN:-}"
 FALLBACK_PREFIX="conference-caddie-"
 API="https://api.cloudflare.com/client/v4"
 
@@ -57,6 +62,12 @@ fi
 if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
   echo "CLOUDFLARE_ACCOUNT_ID is not set." >&2
   exit 1
+fi
+# The name goes into a JSON body, so it is checked: a DNS label of lowercase letters, digits and hyphens.
+subdomain_re='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+if [ -n "$PREFERRED_SUBDOMAIN" ] && ! [[ "$PREFERRED_SUBDOMAIN" =~ $subdomain_re ]]; then
+  echo "CADDIE_WORKERS_SUBDOMAIN must be a workers.dev subdomain: lowercase letters, digits and hyphens, not starting or ending with a hyphen." >&2
+  exit 2
 fi
 command -v node >/dev/null || { echo "node (22 or later) is required." >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required." >&2; exit 1; }
@@ -131,7 +142,7 @@ elif [ "$status" = "000" ]; then
 fi
 
 if [ -z "$subdomain" ] && [ "$unreadable" = "0" ]; then
-  candidate="$PREFERRED_SUBDOMAIN"
+  candidate="${PREFERRED_SUBDOMAIN:-$FALLBACK_PREFIX$(random_suffix)}"
   for attempt in 1 2 3 4; do
     status="$(cf_api PUT /workers/subdomain "{\"subdomain\":\"$candidate\"}")"
     if [ "$status" = "200" ] && [ "$(json_field 'r.success === true')" = "true" ]; then

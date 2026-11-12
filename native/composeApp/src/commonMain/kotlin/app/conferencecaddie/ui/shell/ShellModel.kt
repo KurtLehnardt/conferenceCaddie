@@ -1,7 +1,15 @@
 package app.conferencecaddie.ui.shell
 
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.ui.components.ToastData
@@ -36,6 +44,13 @@ data class SummaryRow(val label: String, val value: String)
 data class ShellState(
     /** Gates the People tab: it shows only when the backend serves people features. */
     val capabilities: Capabilities = Capabilities(),
+    /**
+     * False while the shell cannot tell yet whether the People tab belongs in the tab bar: on a
+     * first start the capabilities are still on their way (a later start shows the stored ones at
+     * once). Until then no tab is shown as selected unless the person picked one, so the app does
+     * not open on For you and then move to People.
+     */
+    val tabsKnown: Boolean = true,
     /** Null while the list is loading. */
     val conferences: List<ConferenceItem>? = null,
     val conferencesError: String? = null,
@@ -49,7 +64,10 @@ data class ShellState(
     val capabilitiesSummary: List<SummaryRow>? = null,
     val online: Boolean = true,
     val interestedCount: Int = 0,
+    /** Incoming asks waiting for an answer: the People tab's badge. */
     val peopleBadge: Int = 0,
+    /** The name on this device's people profile, shown under Profile in Settings; blank says "Set up your profile". */
+    val profileName: String = "",
     val theme: ThemePreference = ThemePreference.System,
     /** Bytes of saved schedules on this device; null hides the Storage group. */
     val savedSchedulesBytes: Long? = null,
@@ -95,6 +113,12 @@ class ShellActions(
  * that tab. Slots are drawn only while a searchable conference is selected; otherwise the shell
  * shows the web's blocker states (loading, error, not available). [appBarActions] adds buttons on
  * the right of the app bar of a tab screen, after the offline badge and before the gear.
+ *
+ * The people slots: [peoplePage] draws Profile, Requests and Meet up when the shell opens them
+ * (null leaves them out, and Settings then has no You group); [settingsPeople] draws the people
+ * groups of Settings (Blocked people, People I met, People I'm watching, Nudges, Push) after You,
+ * while a searchable conference is selected. Its groups go straight into the Settings column, which
+ * spaces them 24 dp apart.
  */
 class TabContent(
     val people: (@Composable () -> Unit)? = null,
@@ -102,13 +126,53 @@ class TabContent(
     val search: (@Composable () -> Unit)? = null,
     val interested: (@Composable () -> Unit)? = null,
     val appBarActions: (@Composable (Tab) -> Unit)? = null,
+    val peoplePage: (@Composable (PeoplePage) -> Unit)? = null,
+    val settingsPeople: (@Composable ColumnScope.() -> Unit)? = null,
 )
 
-/** Lets tab content move around the shell, for example "Find talks" on an empty Interested list. */
+/**
+ * A screen of its own on top of the tabs, with Back in the app bar and no tab bar selection of its
+ * own: the web's non-tab routes. The shell keeps them as a stack ([ShellNavigation.pages]).
+ */
+sealed interface ShellPage {
+    /** Settings (#/settings): the gear opens it. */
+    data object Settings : ShellPage
+}
+
+/**
+ * The people screens over the tabs. Requests and Meet up keep People selected in the tab bar, as
+ * on the web; Profile and Settings select no tab. The caller draws them ([TabContent.peoplePage]).
+ */
+sealed interface PeoplePage : ShellPage {
+    /** Profile (#/profile). Its Back is the labelled "‹ Settings", which leads to Settings. */
+    data object Profile : PeoplePage
+
+    /** Requests (#/inbox). */
+    data object Inbox : PeoplePage
+
+    /** Meet up (#/meet/{id}). */
+    data class Meet(val meetId: String) : PeoplePage
+}
+
+/**
+ * Lets content move around the shell, for example "Find talks" on an empty Interested list.
+ *
+ * Pages ([ShellPage]) stack over the tab screens: [openPage] puts one on top (or, when it is
+ * already open, goes back to it, so Settings → Profile → "‹ Settings" returns to the Settings
+ * underneath); [back] leaves the top page, as the system Back and the iOS edge swipe do;
+ * [selectTab] leaves every page and shows the tab. The app bar's own Back differs, as on the web:
+ * Settings, Requests and Meet up lead straight to the tab screen, and Profile leads to Settings.
+ */
 interface ShellNavigator {
     fun selectTab(tab: Tab)
     fun openSettings()
     fun openSwitcher()
+
+    /** Opens [page] on top of the current screen, or goes back to it when it is already open. */
+    fun openPage(page: ShellPage) = Unit
+
+    /** Leaves the top page, if any. */
+    fun back() = Unit
 }
 
 val LocalShellNavigator = staticCompositionLocalOf<ShellNavigator> {
@@ -118,6 +182,101 @@ val LocalShellNavigator = staticCompositionLocalOf<ShellNavigator> {
         override fun openSwitcher() = Unit
     }
 }
+
+/**
+ * The shell's navigation: the tab asked for, the pages stacked over it and whether the conference
+ * switcher is open. [App] makes one itself; a caller that needs to move around the shell from
+ * outside it (a notification tap, a launch option) makes it with [rememberShellNavigation] and
+ * passes it in. It survives configuration changes and process death on Android.
+ */
+@Stable
+class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
+    /**
+     * The tab last asked for (a tap, a link, a notification or a launch option), or null for the
+     * first one offered: People when the backend serves people features, else For you. Null is
+     * never fixed on a start tab, so People opens when the capabilities arrive after the first
+     * screen, and a tab the person picked is never replaced. While the backend does not offer the
+     * tab asked for (People without people features), the shell shows its first tab, and returns to
+     * this one once it is offered again.
+     */
+    var tab: Tab? by mutableStateOf(initialTab)
+        private set
+
+    /** The pages over the tab screen, bottom first; empty on a tab screen. */
+    var pages: List<ShellPage> by mutableStateOf(emptyList())
+        private set
+
+    var switcherOpen: Boolean by mutableStateOf(false)
+
+    /** The page showing, or null on a tab screen. */
+    val top: ShellPage? get() = pages.lastOrNull()
+
+    override fun selectTab(tab: Tab) {
+        pages = emptyList()
+        this.tab = tab
+    }
+
+    override fun openSettings() = openPage(ShellPage.Settings)
+
+    override fun openSwitcher() {
+        switcherOpen = true
+    }
+
+    override fun openPage(page: ShellPage) {
+        val i = pages.indexOf(page)
+        pages = if (i >= 0) pages.take(i + 1) else pages + page
+    }
+
+    override fun back() {
+        pages = pages.dropLast(1)
+    }
+
+    /**
+     * The app bar's Back (web app.tsx `backTo`): Profile leads to Settings (back to the one
+     * underneath, or a new one on top, as the web's link does); every other page leads to the tab.
+     */
+    fun appBarBack() {
+        if (top == PeoplePage.Profile) openPage(ShellPage.Settings) else pages = emptyList()
+    }
+
+    /** Closes the pages [which] selects, wherever they are in the stack. */
+    fun closePages(which: (ShellPage) -> Boolean) {
+        if (pages.any(which)) pages = pages.filterNot(which)
+    }
+
+    companion object {
+        private fun encode(page: ShellPage): String = when (page) {
+            ShellPage.Settings -> "settings"
+            PeoplePage.Profile -> "profile"
+            PeoplePage.Inbox -> "inbox"
+            is PeoplePage.Meet -> "meet:${page.meetId}"
+        }
+
+        private fun decode(value: String): ShellPage? = when {
+            value == "settings" -> ShellPage.Settings
+            value == "profile" -> PeoplePage.Profile
+            value == "inbox" -> PeoplePage.Inbox
+            value.startsWith("meet:") -> PeoplePage.Meet(value.removePrefix("meet:"))
+            else -> null
+        }
+
+        /** Saves the tab, the switcher and the pages as strings, which every platform can keep. */
+        val Saver: Saver<ShellNavigation, Any> = listSaver(
+            save = { nav -> listOf(nav.tab?.name ?: "", nav.switcherOpen.toString()) + nav.pages.map(::encode) },
+            restore = { saved ->
+                ShellNavigation(Tab.entries.firstOrNull { it.name == saved[0] }).apply {
+                    switcherOpen = saved[1] == "true"
+                    pages = saved.drop(2).mapNotNull(::decode)
+                }
+            },
+        )
+    }
+}
+
+/** A [ShellNavigation] kept across recomposition and configuration changes, starting on [initialTab]. */
+@Composable
+fun rememberShellNavigation(initialTab: Tab? = null): ShellNavigation =
+    rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation(initialTab) }
 
 /**
  * What [ShellState.pendingConnect] becomes once the person confirmed switching to [base]: cleared

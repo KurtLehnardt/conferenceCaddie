@@ -21,10 +21,11 @@ object BuildDefaults {
 /**
  * Launch options for debug builds, so screenshots and manual checks can open a given screen without
  * tapping through the app: `-caddie.tab Search`, `-caddie.open settings|switcher`,
- * `-caddie.theme light|dark`, `-caddie.connect <base>` and `-caddie.gallery 1` (iOS launch arguments; Android intent
- * extras of the same names). Release builds ignore them. `caddie.connect` goes through the same
- * BackendUrl rules as a `caddie://connect` link (https only, normalised), so it can only ask the
- * question a real link could.
+ * `-caddie.theme light|dark`, `-caddie.connect <base>`, `-caddie.gallery 1` and
+ * `-caddie.people home|around|search:<text>|profile|inbox|meet:<id>|settings-people` (iOS launch
+ * arguments; Android intent extras of the same names). Release builds ignore them. `caddie.connect`
+ * goes through the same BackendUrl rules as a `caddie://connect` link (https only, normalised), so it
+ * can only ask the question a real link could.
  */
 data class DebugLaunch(
     val tab: Tab? = null,
@@ -33,6 +34,8 @@ data class DebugLaunch(
     val connect: String? = null,
     /** Shows the component gallery on the Search tab. */
     val gallery: Boolean = false,
+    /** A people screen to open once people features are known (ui/people/PeopleTab.kt, `PeopleLaunch`). */
+    val people: String? = null,
 ) {
     companion object {
         /** Reads the options from name and value pairs; unknown names and values are ignored. */
@@ -42,6 +45,7 @@ data class DebugLaunch(
             theme = get("caddie.theme")?.let { name -> ThemePreference.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } },
             connect = get("caddie.connect")?.let(::linkBase),
             gallery = get("caddie.gallery") == "1",
+            people = get("caddie.people"),
         )
     }
 }
