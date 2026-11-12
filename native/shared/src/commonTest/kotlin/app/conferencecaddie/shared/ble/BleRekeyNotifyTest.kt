@@ -3,6 +3,7 @@ package app.conferencecaddie.shared.ble
 import app.conferencecaddie.shared.net.HttpResponse
 import app.conferencecaddie.shared.people.ConnectRuntime
 import app.conferencecaddie.shared.people.FakeApiHttp
+import app.conferencecaddie.shared.people.FIXTURE_CONFERENCE
 import app.conferencecaddie.shared.people.FakeNotifier
 import app.conferencecaddie.shared.people.NearbyPerson
 import app.conferencecaddie.shared.people.PeopleText
@@ -401,6 +402,19 @@ class BleRekeyNotifyTest {
     // Notifications
 
     private fun FakeNotifier.ble() = shown.filter { it.id.startsWith("caddie-ble-") }
+
+    @Test
+    fun aNearbyNotificationAtADemoConferenceSaysSo() = runTest {
+        val b = BleRig(this)
+        b.h.conference = FIXTURE_CONFERENCE.copy(demo = true)
+        b.on()
+        b.h.server.sightings = { b.answer(nearby("r1", evidence = "Kubernetes")) }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        val shown = b.h.notifier.ble().single()
+        assertEquals("Conference Caddie · Demo conference", shown.title)
+        assertEquals("Someone who's worked on Kubernetes is right near you", shown.body)
+    }
 
     @Test
     fun theFirstStrongMatchBecomesOneNotificationThatLandsOnTheirCard() = runTest {

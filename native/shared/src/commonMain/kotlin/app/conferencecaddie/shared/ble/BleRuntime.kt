@@ -1,6 +1,7 @@
 package app.conferencecaddie.shared.ble
 
 import app.conferencecaddie.shared.Capabilities
+import app.conferencecaddie.shared.Demo
 import app.conferencecaddie.shared.Notifier
 import app.conferencecaddie.shared.bundle.IsoTime
 import app.conferencecaddie.shared.people.ApiResult
@@ -72,6 +73,9 @@ internal interface BleHost {
 
     /** Bluetooth started or stopped at [slug], so presence's background rule can follow. */
     fun bluetoothChanged(slug: String)
+
+    /** True when [slug] is a demo conference, so a notification about it says so. */
+    fun demo(slug: String): Boolean
 }
 
 /**
@@ -850,7 +854,12 @@ internal class BleRuntime(
             host.recordNudge(slug, p.ref)
             store.update(slug) { it.copy(ble = it.ble.copy(notifiedAt = recent + now)) }
             host.reveal(slug, p.ref)
-            host.notifier.show(NOTIFICATION_ID_PREFIX + slug, ConnectRuntime.NOTIFICATION_TITLE, PeopleText.nearbyText(evidence), ConnectRuntime.NUDGE_DEEP_LINK)
+            host.notifier.show(
+                NOTIFICATION_ID_PREFIX + slug,
+                Demo.notificationTitle(ConnectRuntime.NOTIFICATION_TITLE, host.demo(slug)),
+                PeopleText.nearbyText(evidence),
+                ConnectRuntime.NUDGE_DEEP_LINK,
+            )
             host.changed()
             return
         }

@@ -64,7 +64,7 @@ data class PeopleContext(
             val all = (state.conferences as? ConferencesState.Ready)?.conferences.orEmpty().map { it.conference }
             val listed = all.firstOrNull { it.slug == state.selectedSlug }
             val conference = (bundle?.conference ?: listed)?.let {
-                ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate)
+                ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate, it.demo)
             }
             return PeopleContext(
                 state.backend,
@@ -73,7 +73,7 @@ data class PeopleContext(
                 bundle,
                 if (conference != null) state.interested else emptyList(),
                 storageInMemory = state.storageInMemory,
-                listed = all.map { ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate) },
+                listed = all.map { ConferenceInfo(it.slug, it.name, it.timeZone, it.startDate, it.endDate, it.demo) },
                 listKnown = state.conferences is ConferencesState.Ready,
             )
         }
@@ -88,6 +88,8 @@ data class ConferenceInfo(
     /** `YYYY-MM-DD`, or null. */
     val startDate: String? = null,
     val endDate: String? = null,
+    /** A demo conference (`"demo": true`), whose notifications this device marks as such ([app.conferencecaddie.shared.Demo]). */
+    val demo: Boolean = false,
 )
 
 /** Which people features the backend offers this app, from `forThisApp()`. */

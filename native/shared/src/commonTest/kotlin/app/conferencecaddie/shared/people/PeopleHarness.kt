@@ -141,14 +141,17 @@ class PeopleHarness(
 
     val state: PeopleUiState get() = controller.state.value
 
+    /** The conference [context] selects: the fixture conference unless a test marks it, as a demo for example. */
+    var conference: ConferenceInfo = FIXTURE_CONFERENCE
+
     /** The fixture conference, selected and in the backend's list, as [PeopleContext.fromCore] gives it. */
     fun context(caps: Capabilities = PEOPLE_ON, interested: List<String> = emptyList(), bundle: TalkBundle? = FIXTURE_BUNDLE) = PeopleContext(
         backend = BACKEND,
         capabilities = caps.forThisApp(),
-        conference = FIXTURE_CONFERENCE,
+        conference = conference,
         bundle = bundle,
         interested = interested,
-        listed = listOf(FIXTURE_CONFERENCE),
+        listed = listOf(conference),
         listKnown = true,
     )
 

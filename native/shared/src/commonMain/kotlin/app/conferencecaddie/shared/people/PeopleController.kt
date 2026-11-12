@@ -973,6 +973,11 @@ class PeopleController(
 
         override fun presenceOn(): Boolean = context?.let { featuresOf(it).presence } == true
 
+        override fun demo(slug: String): Boolean {
+            val ctx = context?.takeIf { it.backend == backend } ?: return false
+            return (ctx.conference?.takeIf { it.slug == slug } ?: ctx.listed.firstOrNull { it.slug == slug })?.demo == true
+        }
+
         override fun presence(slug: String): Presence = presenceRuntime.get(slug)
 
         override fun topicIds(slug: String): Set<String>? =

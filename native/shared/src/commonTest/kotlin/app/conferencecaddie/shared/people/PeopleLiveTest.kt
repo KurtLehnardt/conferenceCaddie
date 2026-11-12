@@ -254,6 +254,22 @@ class PeopleLiveTest {
     }
 
     @Test
+    fun aNotificationAboutADemoConferenceSaysSo() = runTest {
+        val h = PeopleHarness(this)
+        h.conference = FIXTURE_CONFERENCE.copy(demo = true)
+        h.start()
+        h.visible()
+        h.server.matches = { page(person("3f2a9c0d1e4b5a68", zone = "Hallway", evidence = "Built <mark>eBPF</mark> probes.")) }
+        h.controller.turnOnPresence("Hallway", "")
+        h.controller.setForeground(false)
+        runCurrent()
+        h.controller.backgroundCheck()
+        val shown = h.notifier.shown.single()
+        assertEquals("Conference Caddie · Demo conference", shown.title)
+        assertEquals("Someone who's worked on Built eBPF probes is in Hallway right now", shown.body, "the words stay the banner's")
+    }
+
+    @Test
     fun someoneOnTheWatchListNudgesInTheBannerOnly() = runTest {
         val h = PeopleHarness(this)
         h.start()
