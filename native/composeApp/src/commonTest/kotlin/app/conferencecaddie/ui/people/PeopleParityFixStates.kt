@@ -15,10 +15,13 @@ import kotlinx.coroutines.delay
 // start with fix-; the heights are the web screenshots' at 390 and 320 wide, and each state is also
 // shot at twice the font size, in landscape and in the wide layout (extras), like the brief's screens.
 
-/** What Jordan Rivera's profile wants to learn, as For you's topics on this device (For you runs here, not from the profile). */
+/** The topics Jordan Rivera's profile wants to learn. */
+internal val JORDAN_LEARNS = listOf("ebpf", "security")
+
+/** Sets [JORDAN_LEARNS] as For you's topics on this device (For you runs here, not from the profile). */
 private suspend fun ParityRun.learnLikeJordan() {
-    rig.core.setLearnTopics(listOf("ebpf", "security"))
-    while (rig.core.state.value.learn.topics != listOf("ebpf", "security")) delay(20)
+    rig.core.setLearnTopics(JORDAN_LEARNS)
+    while (rig.core.state.value.learn.topics != JORDAN_LEARNS) delay(20)
 }
 
 @OptIn(ExperimentalTestApi::class)
@@ -76,13 +79,16 @@ internal val PARITY_FIX_STATES: List<ParityState> = listOf(
         shoot()
     },
     ParityState("fix-foryou-people", 1035, 1098, extras = extras(2400)) {
-        // Talk 12 is the sample's last talk, so it stays in For you (which lists upcoming talks) for
-        // the whole conference; the earlier ones leave it as the real clock passes them.
-        start(shared = listOf(12), tab = "tab-For you", prepare = { learnLikeJordan() })
-        val talk12 = ParitySample.talk(12).id
-        waitInList("for-you-screen", hasTestTag("for-you-$talk12"))
-        waitInList("for-you-screen", hasTestTag("share-switch-$talk12"), unmerged = true)
+        // Shared for talk 7, as the web screenshot is. For you lists only talks that have not ended;
+        // at the rig's pinned instant (ParitySample.pinnedNowMs) that is talks 9, 7 and 12.
+        start(shared = listOf(FOR_YOU_SHARED_TALK), tab = "tab-For you", prepare = { learnLikeJordan() })
+        val shared = ParitySample.talk(FOR_YOU_SHARED_TALK).id
+        waitInList("for-you-screen", hasTestTag("for-you-$shared"))
+        waitInList("for-you-screen", hasTestTag("share-switch-$shared"), unmerged = true)
         settle(800)
         shoot()
     },
 )
+
+/** The talk fix-foryou-people shares, as the web screenshot does (parity-3/scenarios.mjs). */
+internal const val FOR_YOU_SHARED_TALK = 7

@@ -105,6 +105,10 @@ import kotlinx.coroutines.delay
  * tab, view and day as the web's routes do, a people route (`#/inbox`, `#/meet/<id>`, a tapped
  * notification's `caddie://inbox` and the like) goes in the shell's request to the People layer,
  * which opens its page once people features are on, and a schedule file opens Import my schedule.
+ *
+ * [clock] is the time the screens show talks against (ended, happening now, the For you refresh);
+ * the hosts keep the system clock, and the parity screenshots pass a fixed one, as they pass the
+ * core.
  */
 @Composable
 fun CaddieApp(
@@ -117,6 +121,7 @@ fun CaddieApp(
     embedder: (suspend () -> Embedder?)? = null,
     people: PeopleController? = null,
     platform: PlatformActions = PlatformActions.None,
+    clock: Clock = Clock.System,
 ) {
     val state by core.state.collectAsState()
     // The screens' models run in this scope. The core searches and works out For you off the main
@@ -175,15 +180,16 @@ fun CaddieApp(
     var toast by remember { mutableStateOf<ToastData?>(null) }
     // What the toast's button does (Undo), for the toast showing.
     var toastAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val toastIds = remember { ToastIds() }
     val showToast: (String, String?, (() -> Unit)?) -> Unit = { message, label, action ->
-        toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = message, actionLabel = label)
+        toast = toastIds.toast(message, label)
         toastAction = action
     }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
-    val nowMs by produceState(Clock.System.now().toEpochMilliseconds()) {
+    val nowMs by produceState(clock.now().toEpochMilliseconds(), clock) {
         while (true) {
             delay(30_000)
-            value = Clock.System.now().toEpochMilliseconds()
+            value = clock.now().toEpochMilliseconds()
         }
     }
 
@@ -616,6 +622,17 @@ private const val THEME = "theme"
 /** The last id given to a [ShellRequest]. */
 private class RequestIds {
     var last = 0L
+}
+
+/**
+ * The shell's toasts, each with the next id. [app.conferencecaddie.ui.components.Toast] restarts its
+ * timer when the id changes, so two toasts shown in the same millisecond (a time-based id would make
+ * them equal) each get their full time.
+ */
+internal class ToastIds {
+    private var last = 0L
+
+    fun toast(message: String, actionLabel: String?): ToastData = ToastData(id = ++last, message = message, actionLabel = actionLabel)
 }
 
 /**
