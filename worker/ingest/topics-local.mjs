@@ -331,9 +331,12 @@ async function main() {
   const talks = readEventTalks(args.event);
   let admin = null;
   if (args.api) {
-    const token = readAdminToken();
+    // api is the canonical origin from normalizeApiBase, the same origin adminClient signs v2 for,
+    // and readAdminToken checks a fallback to the old token file against that origin.
+    const api = normalizeApiBase(args.api);
+    const token = readAdminToken({ apiOrigin: api });
     if (!token) throw new UsageError('--api needs ADMIN_TOKEN (or ADMIN_TOKEN_FILE).');
-    admin = adminClient(normalizeApiBase(args.api), token);
+    admin = adminClient(api, token);
   }
   // This command only reads, so an empty rebuilt list is reported rather than refused.
   const result = await resolveTopics(talks, { slug: args.event, admin, rebuild: args['rebuild-topics'], allowEmpty: true });

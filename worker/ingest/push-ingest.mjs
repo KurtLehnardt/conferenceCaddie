@@ -248,7 +248,10 @@ async function main() {
   if (adminSignVersion() === 1) console.warn('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). Remove the setting once v2 works again: the Worker refuses v1 after step (d).');
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
   const dryRun = args['dry-run'];
-  const token = readAdminToken();
+  // The origin lets readAdminToken check a fallback to the old token file against caddie-admin's
+  // config.json there, as the smoke does. api is the canonical origin from normalizeApiBase, the
+  // same origin adminClient signs v2 for, so the token file is checked for the origin it signs.
+  const token = readAdminToken({ apiOrigin: api });
   if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to push, or pass --dry-run.');
 
   const ingestReport = args['events-from'] ? JSON.parse(readFileSync(args['events-from'], 'utf8')) : null;

@@ -124,19 +124,24 @@ export function withTopics(doc, topics) {
 // The token comes from ADMIN_TOKEN, else from the file named by ADMIN_TOKEN_FILE, else from the
 // operator file that worker/scripts/setup-secrets.mjs writes, at the default place of
 // admin-token-file.mjs (the caddie-admin CLI's config directory). When only the old default
-// ~/.config/conference-caddie/admin-token exists, that file is read and warn gets one line naming
-// both paths (never the value). When both exist as two files with different tokens, or the old one
-// cannot be read, the default one is read and warn gets one line naming both paths (never the
-// values). Two paths that lead to one file through a symbolic or a hard link count as one file. The
-// value returned is the one admin-token-file.mjs read and compared, not a second read. Returns ''
-// when none is available. env, home and warn are for tests.
-export function readAdminToken({ env = process.env, home = homedir(), warn = (line) => process.stderr.write(`${line}\n`) } = {}) {
+// ~/.config/conference-caddie/admin-token exists, and CADDIE_ADMIN_HOME is not set, that file is
+// read and warn gets one line naming both paths (never the value). With apiOrigin, the origin of
+// the API the token is for, that fallback also needs the old directory's config.json, when there is
+// one, to list apiOrigin as a tier 2 api, as in the smoke; otherwise the old file is not read and
+// warn gets one line that says why. With CADDIE_ADMIN_HOME set the old file is never read, and when
+// it exists warn gets one line naming both paths; when ADMIN_TOKEN_FILE names the old file itself
+// then, it is read, because ADMIN_TOKEN_FILE comes first, and warn gets one line that says so. When
+// both exist as two files with different tokens, or the old one cannot be read, the default one is
+// read and warn gets one line naming both paths (never the values). Two paths that lead to one file
+// through a symbolic or a hard link count as one file. The value returned is the one
+// admin-token-file.mjs read and compared, not a second read. Returns '' when none is available.
+// env, home and warn are for tests.
+export function readAdminToken({ env = process.env, home = homedir(), warn = (line) => process.stderr.write(`${line}\n`), apiOrigin } = {}) {
   const direct = (env.ADMIN_TOKEN || '').trim();
   if (direct) return direct;
-  const { value, note } = adminTokenFileToRead(env, home);
-  if (value === null) return '';
+  const { value, note } = adminTokenFileToRead(env, home, { apiOrigin });
   if (note) warn(note);
-  return value;
+  return value ?? '';
 }
 
 // The hosts on which the API base may be plain http.
