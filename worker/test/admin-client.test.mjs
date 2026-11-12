@@ -4,9 +4,10 @@
 // and sends nothing. A local HTTP server on 127.0.0.1 records what each one sends, and every
 // recorded request must verify with verifyAdminSignature() from scripts/lib/admin-sign.mjs,
 // carry the body it signed and no Authorization header; a retried request must be signed afresh.
-// adminClient signs v2, bound to the origin of its base, unless CADDIE_ADMIN_SIG_VERSION is "1"
-// (step c of the migration, DECISIONS.md "Admin signature v2"), so every recorded request is
-// verified as v2 only, for the recorder's origin only, unless a test asks for v1.
+// adminClient signs v2, bound to the origin of its base, always: the override
+// CADDIE_ADMIN_SIG_VERSION was removed in step e of the migration (DECISIONS.md "Admin signature
+// v2"), so every recorded request is verified as v2 only, for the recorder's origin only, and the
+// last test of this file checks that no server here ever received a v1 header.
 // The key is the shared fixture's fake one; nothing leaves this machine.
 
 import { test, describe, after } from 'node:test';
@@ -33,6 +34,11 @@ const DATA = fileURLToPath(new URL('../../data/', import.meta.url));
 // with the next of `answers` ({ status, headers, body, drop }), then 200 {} once they run out.
 // `drop` closes the connection without an answer.
 const servers = [];
+// Every X-Caddie-Admin header any server of this file received, for the last test: none is v1.
+const adminHeaders = [];
+const noteHeader = (req) => {
+  if (req.headers['x-caddie-admin'] !== undefined) adminHeaders.push(req.headers['x-caddie-admin']);
+};
 // Each record also holds `origin`, the recorder's own origin, which a v2 signature must name.
 function recorder(answers = []) {
   const seen = [];
@@ -41,6 +47,7 @@ function recorder(answers = []) {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
+      noteHeader(req);
       seen.push({ method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks), origin });
       const a = answers.shift() ?? { status: 200, body: {} };
       if (a.drop) {
@@ -73,6 +80,7 @@ function halfBody(plan) {
   const hits = [];
   const server = createServer((req, res) => {
     hits.push(req.url);
+    noteHeader(req);
     req.resume();
     const { status, then } = plan.shift() ?? { status: 200, then: 'ok' };
     if (then === 'ok') {
@@ -96,6 +104,7 @@ function redirector(status, target) {
   const hits = [];
   const server = createServer((req, res) => {
     hits.push(req.url);
+    noteHeader(req);
     req.resume();
     res.writeHead(status, { Location: `${target}/elsewhere` });
     res.end();
@@ -108,15 +117,15 @@ function redirector(status, target) {
 const ACCESS = { CF_ACCESS_CLIENT_ID: 'fake-id.access', CF_ACCESS_CLIENT_SECRET: 'fake-access-secret' };
 
 // One recorded request: signed for exactly what was sent, with the key and no other credential.
-// `version` is the only version the verifier accepts (2 unless the test set
-// CADDIE_ADMIN_SIG_VERSION=1), and a v2 signature must name the recorder's origin.
-function assertSigned(r, { version = 2 } = {}) {
+// The verifier accepts v2 only, and the signature must name the recorder's origin.
+function assertSigned(r) {
   assert.equal(r.headers.authorization, undefined, 'no Authorization header');
   for (const v of Object.values(r.headers)) assert.ok(!String(v).includes(KEY), 'no header carries the key');
-  const v = verifyAdminSignature({ headerValue: r.headers['x-caddie-admin'], method: r.method, pathWithQuery: r.url, keys: [KEY], now: Date.now(), allowedVersions: [version], ...(version === 2 ? { expectedOrigins: [r.origin] } : {}) });
+  assert.match(r.headers['x-caddie-admin'], /^v2 /);
+  const v = verifyAdminSignature({ headerValue: r.headers['x-caddie-admin'], method: r.method, pathWithQuery: r.url, keys: [KEY], now: Date.now(), allowedVersions: [2], expectedOrigins: [r.origin] });
   assert.equal(v.ok, true, `${r.method} ${r.url}: ${v.reason}`);
-  assert.equal(v.version ?? 1, version);
-  if (version === 2) assert.equal(v.origin, r.origin);
+  assert.equal(v.version, 2);
+  assert.equal(v.origin, r.origin);
   assert.ok(bodyMatches(v.bodySha256, r.body), `${r.method} ${r.url}: the body is the one signed`);
   if (r.body.length === 0) assert.equal(v.bodySha256, EMPTY_BODY_SHA256);
   return v;
@@ -453,11 +462,15 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
   });
 });
 
-describe('adminClient: signature version and API base (step c of admin signature v2)', () => {
+describe('adminClient: always v2, and the API base (steps c and e of admin signature v2)', () => {
   const ENV_NAME = 'CADDIE_ADMIN_SIG_VERSION';
+  // Every value the removed override could hold: unset, empty, the two versions it named, and
+  // values it used to refuse. None of them changes the version any more.
+  const VALUES = [undefined, '', '1', '2', '3', ' 1', 'fake-stale-sig-version'];
 
-  test('unset, empty or "2" signs v2 for the base\'s origin, which a verifier for another origin or for v1 only refuses', async () => {
-    for (const env of [{}, { [ENV_NAME]: '' }, { [ENV_NAME]: '2' }]) {
+  test('v2 for the base\'s origin whatever CADDIE_ADMIN_SIG_VERSION holds, which a verifier for another origin or for v1 only refuses', async () => {
+    for (const value of VALUES) {
+      const env = value === undefined ? {} : { [ENV_NAME]: value };
       const { seen, base } = await recorder();
       const admin = adminClient(base, KEY, { retries: 0, env });
       await admin('GET', `/admin/stats?event=${SLUG}`);
@@ -465,7 +478,7 @@ describe('adminClient: signature version and API base (step c of admin signature
       assert.equal(await drainPending(admin, SLUG), null);
       assert.equal(seen.length, 3, JSON.stringify(env));
       for (const r of seen) {
-        assert.match(r.headers['x-caddie-admin'], /^v2 /);
+        assert.match(r.headers['x-caddie-admin'], /^v2 /, JSON.stringify(env));
         assertSigned(r);
         const verify = (opts) => verifyAdminSignature({ headerValue: r.headers['x-caddie-admin'], method: r.method, pathWithQuery: r.url, keys: [KEY], now: Date.now(), ...opts });
         assert.equal(verify({ allowedVersions: [2], expectedOrigins: [r.origin.replace('127.0.0.1', 'localhost')] }).reason, 'signature');
@@ -475,48 +488,27 @@ describe('adminClient: signature version and API base (step c of admin signature
     }
   });
 
-  test('CADDIE_ADMIN_SIG_VERSION=1 rolls back to v1, retries included, each with a fresh nonce', async () => {
+  test('CADDIE_ADMIN_SIG_VERSION=1, the old rollback value, still signs every attempt v2, retries included, each with a fresh nonce', async () => {
     const { seen, base } = await recorder([{ status: 503, headers: { 'Retry-After': '1' }, body: { error: 'busy' } }, { body: { ok: true } }]);
     const admin = adminClient(base, KEY, { retries: 1, env: { [ENV_NAME]: '1' } });
     assert.deepEqual(await admin('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), { ok: true });
     assert.equal(seen.length, 2);
-    for (const r of seen) {
-      assert.match(r.headers['x-caddie-admin'], /^v1 /);
-      assertSigned(r, { version: 1 });
-      const asV2 = verifyAdminSignature({ headerValue: r.headers['x-caddie-admin'], method: r.method, pathWithQuery: r.url, keys: [KEY], now: Date.now(), allowedVersions: [2], expectedOrigins: [r.origin] });
-      assert.equal(asV2.reason, 'malformed');
-    }
+    for (const r of seen) assertSigned(r);
     const headers = seen.map((r) => parseVersionedAdminHeader(r.headers['x-caddie-admin']));
+    assert.deepEqual(headers.map((h) => h.version), [2, 2]);
     assert.notEqual(headers[0].nonce, headers[1].nonce);
     assert.ok(headers[1].ts > headers[0].ts);
   });
 
-  test('the version is read once, when the client is created: a later change of the environment does not alter it', async () => {
+  test('a value set before or after the client is created changes nothing, fails nothing and is never repeated', async () => {
     const { seen, base } = await recorder();
-    const v2env = {};
-    const v2 = adminClient(base, KEY, { retries: 0, env: v2env });
-    v2env[ENV_NAME] = '1';
-    await v2('GET', `/admin/stats?event=${SLUG}`);
-    const v1env = { [ENV_NAME]: '1' };
-    const v1 = adminClient(base, KEY, { retries: 0, env: v1env });
-    v1env[ENV_NAME] = 'not-a-version';
-    await v1('GET', `/admin/stats?event=${SLUG}`);
-    assertSigned(seen[0]);
-    assertSigned(seen[1], { version: 1 });
-  });
-
-  test('any other value fails when the client is created, with a UsageError that names the variable and not the value, and nothing is sent', async () => {
-    const { seen, base } = await recorder();
-    for (const value of ['3', '0', 'v2', '02', ' 2', '2 ', '2\n', '1.0', 'true', 'fake-secret-sig-version-value', 2, 1]) {
-      assert.throws(() => adminClient(base, KEY, { env: { [ENV_NAME]: value } }), (e) => {
-        assert.ok(e instanceof UsageError, String(value));
-        assert.ok(e.message.includes(ENV_NAME), e.message);
-        assert.ok(!e.message.includes(KEY));
-        if (typeof value === 'string' && value.length > 3) assert.ok(!e.message.includes(value.trim()), e.message);
-        return true;
-      }, JSON.stringify(value));
-    }
-    assert.equal(seen.length, 0);
+    const env = { [ENV_NAME]: 'fake-stale-sig-version' };
+    const admin = adminClient(base, KEY, { retries: 0, env });
+    env[ENV_NAME] = '1';
+    await admin('GET', `/admin/stats?event=${SLUG}`);
+    for (const value of ['0', 'v1', 2, 1]) await adminClient(base, KEY, { retries: 0, env: { [ENV_NAME]: value } })('GET', `/admin/stats?event=${SLUG}`);
+    assert.equal(seen.length, 5);
+    for (const r of seen) assertSigned(r);
   });
 
   test('a base that is not a canonical origin is refused before any request, by normalizeApiBase and by adminClient, and the message never repeats it', async () => {
@@ -589,10 +581,18 @@ describe('adminClient: signature version and API base (step c of admin signature
   });
 });
 
-// The real rollback path: the scripts create their client without an `env` option, so the switch
-// reaches them only through process.env, which the CI workflow fills from the repository variable.
-describe('adminClient: CADDIE_ADMIN_SIG_VERSION from the process environment (the rollback path the scripts and CI use)', () => {
+// The path the scripts and CI used for the rollback: the scripts create their client without an
+// `env` option, so the removed override would have reached them only through process.env, which the
+// CI workflow filled from the repository variable until step e. Each script now signs v2 whatever
+// the variable holds, and says once, on stderr, that a non-empty value is ignored.
+describe('CADDIE_ADMIN_SIG_VERSION in the process environment is ignored with one warning (step e)', () => {
   const ENV_NAME = 'CADDIE_ADMIN_SIG_VERSION';
+  const STALE = 'fake-stale-sig-version';
+  // The warning the scripts print, and how many times it appears in a text.
+  const WARNING = /^Admin signature: CADDIE_ADMIN_SIG_VERSION was removed in step e of the admin signature migration \(DECISIONS\.md, "Admin signature v2"\) and is ignored: every admin request is signed with v2; unset it\.$/;
+  const warnings = (text) => text.split('\n').filter((l) => l.includes(ENV_NAME));
+  // Unset, empty: no warning. "1", "2" and any other value: one warning. Every case signs v2.
+  const CASES = [[undefined, false], ['', false], ['1', true], ['2', true], [STALE, true]];
   // A committed conference with a talk file, for the scripts that read one.
   const slug = readdirSync(DATA).filter((d) => existsSync(join(DATA, d, 'talks.ndjson'))).sort()[0];
   const home = mkdtempSync(join(tmpdir(), 'caddie-sig-env-'));
@@ -605,88 +605,125 @@ describe('adminClient: CADDIE_ADMIN_SIG_VERSION from the process environment (th
       execFile(process.execPath, [script, ...args], { cwd: fileURLToPath(new URL('../../', import.meta.url)), env: { PATH: process.env.PATH, HOME: home, ADMIN_TOKEN_FILE: join(home, 'no-admin-token'), ...env } }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr }));
     });
   }
+  const withValue = (value) => (value === undefined ? {} : { [ENV_NAME]: value });
 
-  test('without an env option the client reads process.env: "1" signs v1, unset, empty or "2" signs v2, and another value fails at creation', async () => {
+  // Sets process.env[ENV_NAME] to `value` (undefined deletes it) for the length of `fn`.
+  async function withProcessEnv(value, fn) {
     const had = Object.prototype.hasOwnProperty.call(process.env, ENV_NAME);
     const saved = process.env[ENV_NAME];
-    const { seen, base } = await recorder();
     try {
-      const cases = [['1', 1], ['', 2], [undefined, 2], ['2', 2]];
-      for (const [value, version] of cases) {
-        if (value === undefined) delete process.env[ENV_NAME];
-        else process.env[ENV_NAME] = value;
+      if (value === undefined) delete process.env[ENV_NAME];
+      else process.env[ENV_NAME] = value;
+      return await fn();
+    } finally {
+      if (had) process.env[ENV_NAME] = saved;
+      else delete process.env[ENV_NAME];
+    }
+  }
+
+  test('without an env option the client reads nothing of it from process.env: v2 for every value, and no failure', async () => {
+    const { seen, base } = await recorder();
+    for (const [value] of CASES) {
+      await withProcessEnv(value, async () => {
         await adminClient(base, KEY)('GET', `/admin/stats?event=${SLUG}`);
         await adminClient(base, KEY, { retries: 0 })('GET', `/admin/stats?event=${SLUG}`);
-        for (const r of seen.splice(0)) assertSigned(r, { version });
-      }
-      process.env[ENV_NAME] = 'fake-invalid-sig-version';
-      assert.throws(() => adminClient(base, KEY), (e) => e instanceof UsageError && e.message.includes(ENV_NAME) && !e.message.includes('fake-invalid-sig-version'));
-      assert.equal(seen.length, 0);
-    } finally {
-      if (had) process.env[ENV_NAME] = saved;
-      else delete process.env[ENV_NAME];
+      });
+      const sent = seen.splice(0);
+      assert.equal(sent.length, 2, JSON.stringify(value));
+      for (const r of sent) assertSigned(r);
     }
   });
 
-  test('topics-local.mjs --api signs v1 under CADDIE_ADMIN_SIG_VERSION=1 and v2 when it is empty or unset', async () => {
+  test('with "1" in process.env and no env option, a retried request signs v2 on every attempt', async () => {
+    const { seen, base } = await recorder([{ status: 503, headers: { 'Retry-After': '1' }, body: { error: 'busy' } }, { body: { ok: true } }]);
+    await withProcessEnv('1', async () => {
+      assert.deepEqual(await adminClient(base, KEY, { retries: 1 })('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), { ok: true });
+    });
+    assert.equal(seen.length, 2);
+    for (const r of seen) assertSigned(r);
+    const headers = seen.map((r) => parseVersionedAdminHeader(r.headers['x-caddie-admin']));
+    assert.deepEqual(headers.map((h) => h.version), [2, 2]);
+    assert.notEqual(headers[0].nonce, headers[1].nonce);
+  });
+
+  test('topics-local.mjs --api signs v2 for every value, and warns once exactly when the value is not empty', async () => {
     assert.ok(slug, 'a committed conference with a talk file under data/');
-    for (const [env, version] of [[{ [ENV_NAME]: '1' }, 1], [{ [ENV_NAME]: '' }, 2], [{}, 2]]) {
+    for (const [value, warned] of CASES) {
       const { seen, base } = await recorder([{ body: { topics: [] } }]);
-      const r = await run(TOPICS_LOCAL, ['--event', slug, '--api', base, '--top', '1'], { ADMIN_TOKEN: KEY, ...env });
+      const r = await run(TOPICS_LOCAL, ['--event', slug, '--api', base, '--top', '1'], { ADMIN_TOKEN: KEY, ...withValue(value) });
       assert.equal(r.code, 0, r.stderr);
       assert.match(r.stdout, /topics \(built\)/);
-      assert.equal(seen.length, 1, JSON.stringify(env));
-      assert.match(seen[0].headers['x-caddie-admin'], version === 1 ? /^v1 / : /^v2 /);
-      assertSigned(seen[0], { version });
+      assert.equal(seen.length, 1, JSON.stringify(value));
+      assertSigned(seen[0]);
+      const lines = warnings(r.stderr);
+      assert.equal(lines.length, warned ? 1 : 0, `${JSON.stringify(value)}: ${r.stderr}`);
+      if (warned) assert.match(lines[0], WARNING);
+      assert.ok(!warnings(r.stdout).length, 'the warning goes to stderr only');
       assert.ok(!r.stdout.includes(KEY) && !r.stderr.includes(KEY));
+      assert.ok(!r.stdout.includes(STALE) && !r.stderr.includes(STALE), 'the value is never printed');
     }
   });
 
-  test('push-ingest.mjs checks CADDIE_ADMIN_SIG_VERSION first, also in a dry run that creates no client, and never repeats the value', async () => {
-    const { seen, base } = await recorder();
-    const args = ['--api', base, '--event', slug, '--dry-run'];
-    const bad = await run(PUSH_INGEST, args, { [ENV_NAME]: 'fake-invalid-sig-version' });
-    assert.equal(bad.code, 1, bad.stderr);
-    assert.ok(bad.stderr.includes(ENV_NAME), bad.stderr);
-    assert.ok(!bad.stderr.includes('fake-invalid-sig-version') && !bad.stdout.includes('fake-invalid-sig-version'));
-    assert.equal(bad.stdout, '');
-    // The same dry run with the switch empty gets through: the failure above is the value's.
-    const good = await run(PUSH_INGEST, args, { [ENV_NAME]: '' });
-    assert.equal(good.code, 0, good.stderr);
-    assert.match(good.stdout, /\(dry run\)/);
-    assert.equal(seen.length, 0);
+  test('push-ingest.mjs warns once, before anything else, also in a dry run without a token, and signs v2 in a dry run with one', async () => {
+    const args = (base) => ['--api', base, '--event', slug, '--dry-run'];
+    for (const [value, warned] of CASES) {
+      // Without a token the dry run creates no client and signs nothing (it reads only the public
+      // GET /api/conferences), but still says it.
+      const quiet = await recorder();
+      const bare = await run(PUSH_INGEST, args(quiet.base), withValue(value));
+      assert.equal(bare.code, 0, bare.stderr);
+      assert.match(bare.stdout, /\(dry run\)/);
+      assert.ok(quiet.seen.every((req) => req.url.startsWith('/api/') && req.headers['x-caddie-admin'] === undefined), quiet.seen.map((req) => req.url).join(' '));
+      // With a token the dry run reads the stored topics through the admin client.
+      const { seen, base } = await recorder([{ body: { topics: [] } }]);
+      const r = await run(PUSH_INGEST, args(base), { ADMIN_TOKEN: KEY, ...withValue(value) });
+      assert.equal(r.code, 0, r.stderr);
+      const signed = seen.filter((req) => req.url.startsWith('/admin/'));
+      assert.ok(signed.length >= 1, `${JSON.stringify(value)}: the dry run with a token signed a request`);
+      for (const req of signed) assertSigned(req);
+      for (const out of [bare, r]) {
+        const lines = warnings(out.stderr);
+        assert.equal(lines.length, warned ? 1 : 0, `${JSON.stringify(value)}: ${out.stderr}`);
+        if (warned) {
+          assert.match(lines[0], WARNING);
+          assert.equal(out.stderr.split('\n')[0], lines[0], 'the warning comes first');
+        }
+        assert.ok(!warnings(out.stdout).length, 'the warning goes to stderr only');
+        assert.ok(!out.stdout.includes(STALE) && !out.stderr.includes(STALE), 'the value is never printed');
+        assert.ok(!out.stdout.includes(KEY) && !out.stderr.includes(KEY));
+      }
+    }
   });
 
-  test('migrate-from-backup.mjs checks CADDIE_ADMIN_SIG_VERSION before it reads the backup, also in a dry run, and never repeats the value', async () => {
+  test('migrate-from-backup.mjs warns once through warn before it reads the backup, and signs v2', async () => {
     const backup = mkdtempSync(join(home, 'backup-'));
     writeFileSync(join(backup, 'caddie-conferences-v1.ndjson'), '');
-    const had = Object.prototype.hasOwnProperty.call(process.env, ENV_NAME);
-    const saved = process.env[ENV_NAME];
-    const { seen, base } = await recorder();
-    const args = ['--backup', backup, '--api', base, '--only', 'conferences', '--dry-run'];
-    const attempt = async () => {
-      const out = [];
-      const err = [];
-      const code = await migrateFromBackup(args, { readToken: () => '', log: (l) => out.push(l), error: (l) => err.push(l) });
-      return { code, out, err };
-    };
-    try {
-      process.env[ENV_NAME] = 'fake-invalid-sig-version';
-      const bad = await attempt();
-      assert.equal(bad.code, 1, bad.err.join('\n'));
-      assert.deepEqual(bad.out, [], 'the plan is not read or printed');
-      assert.ok(bad.err.join('\n').includes(ENV_NAME), bad.err.join('\n'));
-      assert.ok(![...bad.out, ...bad.err].join('\n').includes('fake-invalid-sig-version'));
-      // The same dry run with the switch empty gets through: the failure above is the value's.
-      process.env[ENV_NAME] = '';
-      const good = await attempt();
-      assert.equal(good.code, 0, good.err.join('\n'));
-      assert.ok(good.out.includes('Dry run: nothing was sent.'), good.out.join('\n'));
-      assert.equal(seen.length, 0);
-    } finally {
-      if (had) process.env[ENV_NAME] = saved;
-      else delete process.env[ENV_NAME];
+    for (const [value, warned] of CASES) {
+      for (const dryRun of [true, false]) {
+        const { seen, base } = await recorder([{ body: { upserted: 0, skipped_retired: [] } }]);
+        const args = ['--backup', backup, '--api', base, '--only', 'conferences', ...(dryRun ? ['--dry-run'] : [])];
+        const out = [];
+        const err = [];
+        const warn = [];
+        const code = await withProcessEnv(value, () => migrateFromBackup(args, { readToken: () => (dryRun ? '' : KEY), log: (l) => out.push(l), error: (l) => err.push(l), warn: (l) => warn.push(l) }));
+        const what = `${JSON.stringify(value)}${dryRun ? ' (dry run)' : ''}`;
+        assert.equal(code, 0, `${what}: ${err.join('\n')}`);
+        assert.deepEqual(err, [], what);
+        assert.equal(warn.length, warned ? 1 : 0, `${what}: ${warn.join('\n')}`);
+        if (warned) assert.match(warn[0], WARNING);
+        assert.ok(![...out, ...warn].join('\n').includes(STALE), 'the value is never printed');
+        assert.equal(seen.length, dryRun ? 0 : 1, what);
+        for (const r of seen) assertSigned(r);
+        if (dryRun) assert.ok(out.includes('Dry run: nothing was sent.'), out.join('\n'));
+      }
     }
+    // A stale value with a backup directory that does not exist: the warning still comes first.
+    const warn = [];
+    const err = [];
+    const code = await withProcessEnv(STALE, () => migrateFromBackup(['--backup', join(home, 'missing'), '--api', 'http://127.0.0.1:9', '--dry-run'], { readToken: () => '', log: () => {}, error: (l) => err.push(l), warn: (l) => warn.push(l) }));
+    assert.equal(code, 1);
+    assert.equal(warn.length, 1);
+    assert.match(err.join('\n'), /The backup directory does not exist\./);
   });
 });
 
@@ -762,4 +799,17 @@ describe('worker/scripts/moderation.mjs (deprecated in favour of caddie-admin)',
     assert.ok(since.stderr.includes(`${CLI} moderation queue --event ${SLUG} --since <iso>`), since.stderr);
     assert.ok(!since.stderr.includes('yesterday'), since.stderr);
   });
+});
+
+// Step e: no client sends v1. Every X-Caddie-Admin header that reached a server of this file, from
+// adminClient in this process and from the scripts run as child processes, under every value of
+// CADDIE_ADMIN_SIG_VERSION above, is v2. This is an end-of-file sweep: it reads the headers that
+// the earlier tests recorded, so it comes last, and it needs the whole file to run. Under a test
+// name filter the other tests may not have run, so the count is not checked then; the headers that
+// were recorded must still all be v2. Each test that uses recorder() also checks its own requests
+// with assertSigned, which fails on a v1 header in the test that sent it.
+const FILTERED = process.execArgv.some((a) => /^--test-(name-pattern|skip-pattern|only)\b/.test(a));
+test('no server of this file ever received a v1 header', () => {
+  if (!FILTERED) assert.ok(adminHeaders.length >= 40, `only ${adminHeaders.length} headers were recorded`);
+  for (const h of adminHeaders) assert.match(h, /^v2 /);
 });

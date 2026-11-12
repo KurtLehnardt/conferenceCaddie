@@ -1,7 +1,8 @@
 // The admin-auth plumbing of scripts/smoke.mjs: every admin call carries an X-Caddie-Admin header
-// that verifies with scripts/lib/admin-sign.mjs and no Authorization header; the signature is v2,
-// bound to the stub's origin, by default (CADDIE_ADMIN_SIG_VERSION unset or empty) and v1 with
-// CADDIE_ADMIN_SIG_VERSION=1, and any other value exits 2 before any request; a retried admin call
+// that verifies with scripts/lib/admin-sign.mjs and no Authorization header; the signature is
+// always v2, bound to the stub's origin, and CADDIE_ADMIN_SIG_VERSION (the override that step e
+// removed) changes nothing: unset or empty prints nothing, and any other value one NOTE that it is
+// ignored, and no request is ever signed v1; a retried admin call
 // is signed afresh (a new nonce); bearer mode is gone, so SMOKE_ADMIN_AUTH=bearer is a config FAIL
 // and no request ever carries Authorization; with a token, an API_BASE (or BASE_URL) that
 // canonicalOrigin refuses as typed is a config FAIL before any request; and when the Worker's
@@ -129,25 +130,26 @@ const skipLine = (lines, check) => lines.find((l) => l.startsWith(`SKIP ${check}
 
 describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   let v2;
-  let v1;
+  let stale;
   before(async () => {
     // The two runs are independent, each with its own stub, so they run at once: the default
-    // (CADDIE_ADMIN_SIG_VERSION unset) and the rollback to v1.
+    // (CADDIE_ADMIN_SIG_VERSION unset) and a run with the old rollback value "1" still set, which
+    // step e made a stale setting that is ignored.
     const [a, b] = await Promise.all([stubWorker({ authOk: signedOk }), stubWorker({ authOk: signedOk })]);
     const [ra, rb] = await Promise.all([
       runSmoke(a.port, {}),
       runSmoke(b.port, { CADDIE_ADMIN_SIG_VERSION: '1' }),
     ]);
     v2 = { ...ra, requests: a.requests, server: a.server };
-    v1 = { ...rb, requests: b.requests, server: b.server };
+    stale = { ...rb, requests: b.requests, server: b.server };
   });
   after(() => {
     v2?.server.close();
-    v1?.server.close();
+    stale?.server.close();
   });
 
   test('the run reached the admin checks and finished', () => {
-    for (const run of [v2, v1]) {
+    for (const run of [v2, stale]) {
       assert.ok(run.lines.some((l) => l.startsWith('PASS adm1:')), run.lines.filter((l) => l.includes('adm1')).join('\n'));
       assert.ok(run.lines.some((l) => l.startsWith('PASS p0:')), 'the people checks ran');
       assert.ok(adminCalls(run.requests, signedOk).length >= 3, 'the smoke made admin calls');
@@ -156,7 +158,7 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   });
 
   test('SMK-1: every admin call carries X-Caddie-Admin, verified by the stub, and no Authorization', () => {
-    for (const run of [v2, v1]) {
+    for (const run of [v2, stale]) {
       const calls = adminCalls(run.requests, signedOk);
       for (const r of calls) {
         assert.equal(r.authorization, null, `${r.method} ${r.path} carries an Authorization header`);
@@ -184,7 +186,7 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     assert.ok(signed.length >= 5);
     // Every signed request, the probes included, is v2.
     for (const r of signed) assert.equal(versionOf(r), 2, r.signed.split(' ')[0]);
-    const other = `http://127.0.0.1:${v1.server.address().port}`;
+    const other = `http://127.0.0.1:${stale.server.address().port}`;
     for (const r of adminCalls(v2.requests, signedOk)) {
       const v = verifyOn(r, { versions: [2] });
       assert.equal(v.ok, true, `${r.method} ${r.path}: ${v.reason}`);
@@ -198,30 +200,29 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     }
   });
 
-  test('CADDIE_ADMIN_SIG_VERSION=1 signs every admin call v1, the client half of the rollback, and says so once', () => {
-    // The rollback is never silent: one NOTE that v1 is not bound to a host and that the variable
-    // must be unset afterwards. The default run prints none.
-    const notes = (run) => run.lines.filter((l) => l.startsWith('NOTE CADDIE_ADMIN_SIG_VERSION=1:'));
-    assert.equal(notes(v1).length, 1, v1.stdout);
-    assert.match(notes(v1)[0], /signed with v1, which is not bound to a host/);
-    assert.match(notes(v1)[0], /since step d the Worker accepts v1 only while its ADMIN_SIG_MIN is "1" \(the rollback, which belongs in \[vars\] of worker\/wrangler\.toml, committed and deployed, never a secret\);/);
-    assert.match(notes(v1)[0], /unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over/);
-    assert.ok(v1.lines.indexOf(notes(v1)[0]) < v1.lines.findIndex((l) => /^(PASS|FAIL|SKIP) /.test(l)), 'before the first check');
+  test('CADDIE_ADMIN_SIG_VERSION=1, removed in step e, still signs every admin call v2, and the run says once that it is ignored', () => {
+    // One NOTE before the first check that the setting was removed and is ignored; the default run
+    // prints none.
+    const notes = (run) => run.lines.filter((l) => l.includes('CADDIE_ADMIN_SIG_VERSION'));
+    assert.equal(notes(stale).length, 1, stale.stdout);
+    assert.equal(notes(stale)[0], 'NOTE CADDIE_ADMIN_SIG_VERSION was removed in step e of the admin signature migration (DECISIONS.md, "Admin signature v2") and is ignored: every admin request is signed with v2; unset it');
+    assert.ok(stale.lines.indexOf(notes(stale)[0]) < stale.lines.findIndex((l) => /^(PASS|FAIL|SKIP) /.test(l)), 'before the first check');
     assert.equal(notes(v2).length, 0);
-    const signed = v1.requests.filter((r) => r.signed !== null);
+    assert.ok(!stale.stderr.includes('CADDIE_ADMIN_SIG_VERSION'), 'one NOTE on stdout, nothing on stderr');
+    const signed = stale.requests.filter((r) => r.signed !== null);
     assert.ok(signed.length >= 5);
-    for (const r of signed) assert.equal(versionOf(r), 1, r.signed.split(' ')[0]);
-    for (const r of adminCalls(v1.requests, signedOk)) {
-      const v = verifyOn(r, { versions: [1] });
+    // Every signed request, the probes included, is v2, and no request carries a v1 header.
+    for (const r of signed) assert.equal(versionOf(r), 2, r.signed.split(' ')[0]);
+    for (const r of adminCalls(stale.requests, signedOk)) {
+      const v = verifyOn(r, { versions: [2] });
       assert.equal(v.ok, true, `${r.method} ${r.path}: ${v.reason}`);
-      assert.equal(v.version, undefined, 'a v1 result has the v1 shape');
-      // A v2-only verifier (step d) reads it as malformed.
-      assert.equal(verifyOn(r, { versions: [2] }).reason, 'malformed');
+      assert.equal(v.origin, r.stubOrigin);
+      assert.equal(verifyOn(r, { versions: [1] }).reason, 'malformed');
     }
   });
 
   test('SMK-1: a retried admin call is signed afresh with a new nonce, never resent', () => {
-    for (const run of [v2, v1]) {
+    for (const run of [v2, stale]) {
       const failed = run.requests.find((r) => r.answered === 503);
       assert.ok(failed, 'the stub failed one admin call');
       const retry = run.requests.find((r) => r !== failed && r.method === failed.method && r.path === failed.path && signedOk(r));
@@ -234,14 +235,14 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   });
 
   test('bearer mode is gone: no request of either run carries an Authorization header', () => {
-    for (const run of [v2, v1]) {
+    for (const run of [v2, stale]) {
       assert.ok(run.requests.length > 20);
       assert.ok(run.requests.every((r) => r.authorization === null), 'no request carries Authorization');
     }
   });
 
   test('SMK-2: gated /admin/test/* routes make meter1, the expired profile, the aged presence and unav1 print SKIP naming ADMIN_TEST_ROUTES', () => {
-    for (const run of [v2, v1]) {
+    for (const run of [v2, stale]) {
       // q8b ages a presence too, but against this stub it stops earlier (no profile gets a ref),
       // so only q7 stands for the aged presence here.
       for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
@@ -260,7 +261,7 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   });
 
   test('SEC-3: the token never appears in the output or in any request', () => {
-    for (const run of [v2, v1]) {
+    for (const run of [v2, stale]) {
       assert.ok(!run.stdout.includes(TOKEN));
       assert.ok(!run.stderr.includes(TOKEN));
       for (const r of run.requests) {
@@ -272,7 +273,7 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   });
 
   test('SEC-16: GET and DELETE admin calls carry no body', () => {
-    for (const run of [v2, v1]) {
+    for (const run of [v2, stale]) {
       for (const r of adminCalls(run.requests, signedOk)) {
         if (['GET', 'HEAD', 'DELETE'].includes(r.method)) assert.equal(r.body, '');
       }
@@ -280,30 +281,26 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   });
 });
 
-test('an empty CADDIE_ADMIN_SIG_VERSION counts as unset: v2, and no Authorization', async () => {
-  const { server, requests, port } = await stubWorker({ authOk: signedOk });
-  try {
-    await runSmoke(port, { CADDIE_ADMIN_SIG_VERSION: '', SMOKE_ADMIN_AUTH: 'signed' });
-    const calls = adminCalls(requests, signedOk);
-    assert.ok(calls.length >= 3);
-    assert.ok(requests.filter((r) => r.signed !== null).every((r) => versionOf(r) === 2));
-    assert.ok(requests.every((r) => r.authorization === null));
-  } finally {
-    server.close();
-  }
-});
-
-test('CADDIE_ADMIN_SIG_VERSION other than unset, empty, "1" or "2" exits 2 before any request', async () => {
-  const { server, requests, port } = await stubWorker({ authOk: signedOk });
-  try {
-    for (const raw of ['3', ' 2', 'v2', '1 ']) {
-      const run = await runSmoke(port, { CADDIE_ADMIN_SIG_VERSION: raw });
-      assert.equal(run.code, 2, JSON.stringify(raw));
-      assert.ok(run.stdout.includes('FAIL config: CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set'), run.stdout);
-      assert.equal(requests.length, 0, JSON.stringify(raw));
+// Unset and the stale "1" run in the describe above; these are the other values the removed
+// override knew, empty (how GitHub Actions passes an undefined variable), "2", and values it used
+// to refuse with exit 2. Every run signs only v2, and only a non-empty value prints the NOTE.
+test('CADDIE_ADMIN_SIG_VERSION empty, "2" or any other value: v2 only, no Authorization, and one NOTE exactly when it is not empty', async () => {
+  for (const [raw, noted] of [['', false], ['2', true], ['fake-stale-sig-version', true]]) {
+    const { server, requests, port } = await stubWorker({ authOk: signedOk });
+    try {
+      const run = await runSmoke(port, { CADDIE_ADMIN_SIG_VERSION: raw, SMOKE_ADMIN_AUTH: 'signed' });
+      const calls = adminCalls(requests, signedOk);
+      assert.ok(calls.length >= 3, JSON.stringify(raw));
+      const signed = requests.filter((r) => r.signed !== null);
+      assert.ok(signed.length >= 5);
+      assert.ok(signed.every((r) => versionOf(r) === 2), JSON.stringify(raw));
+      assert.ok(requests.every((r) => r.authorization === null));
+      assert.ok(!run.lines.some((l) => l.startsWith('FAIL config:')), run.stdout);
+      assert.equal(run.lines.filter((l) => l.includes('CADDIE_ADMIN_SIG_VERSION')).length, noted ? 1 : 0, `${JSON.stringify(raw)}: ${run.stdout}`);
+      assert.ok(!run.stdout.includes('fake-stale-sig-version') && !run.stderr.includes('fake-stale-sig-version'), 'the value is never printed');
+    } finally {
+      server.close();
     }
-  } finally {
-    server.close();
   }
 });
 
@@ -493,7 +490,7 @@ test('a token shorter than 32 characters is refused before any request', async (
 // to a second loopback server (another origin); a followed redirect would carry X-Caddie-Admin and
 // the signed body there. The second server must never be called, the check must FAIL naming 302, and
 // the 3xx must never be retried (no NOTE line, and no second request for the same signed call).
-for (const [mode, env] of [['v2', {}], ['v1', { CADDIE_ADMIN_SIG_VERSION: '1' }]]) {
+for (const [mode, env] of [['unset', {}], ['CADDIE_ADMIN_SIG_VERSION=1, ignored', { CADDIE_ADMIN_SIG_VERSION: '1' }]]) {
   test(`a 302 from the API on an admin request is a FAIL naming 302, never followed or retried (${mode})`, async () => {
     const other = await stubWorker({ authOk: () => true });
     const { server, requests, port } = await stubWorker({ authOk: signedOk });
@@ -517,7 +514,7 @@ for (const [mode, env] of [['v2', {}], ['v1', { CADDIE_ADMIN_SIG_VERSION: '1' }]
       const redirected = requests.filter((r) => r.redirected && r.origin === null);
       const nonces = redirected.map((r) => r.signed);
       assert.ok(redirected.length > 0);
-      assert.ok(redirected.every((r) => r.signed.startsWith(`${mode} `) && r.authorization === null), 'the version asked for, and no Authorization');
+      assert.ok(redirected.every((r) => r.signed.startsWith('v2 ') && r.authorization === null), 'v2, and no Authorization');
       assert.equal(new Set(nonces).size, nonces.length, 'no signed header was sent twice');
       assert.ok(!run.stdout.includes(TOKEN));
     } finally {
