@@ -12,13 +12,14 @@
 #   app. The OkHttp engine serves Android and the JVM tests; the Darwin engine (NSURLSession) serves
 #   iOS, so App Transport Security applies there.
 # - kotlinx-io: the bundle cache uses its file system API. 0.9.1 was the version Ktor 3.6.1 itself
-#   depends on; 0.9.2 (2026-11-12, Dependabot) adds API only and rewrites the Kotlin/Native file
-#   source and sink, fixing a crash on a zero-byte read or write (kotlinx-io #529).
+#   depends on. 0.9.2 (2026-11-12, Dependabot) reimplements the Kotlin/Native FileSink and FileSource,
+#   the iOS path of the bundle cache that BundleSyncTest covers, and fixes a crash on a zero-byte
+#   read or write (kotlinx-io #529).
 # - androidx.sqlite 2.7.1, the newest stable release. Its bundled driver compiles SQLite with FTS5
 #   for Android, iOS and the JVM, so search behaves the same everywhere.
 # - kotlinx-datetime supplies time zones for "today in the conference's time zone". 0.7.1 was the
-#   version Compose (Material3) brings in; 0.8.0 (2026-11-12, Dependabot) only adds to the JVM and
-#   klib ABI dumps of 0.7.1, so Material3's calls still link, and its one breaking change, the
+#   version Compose (Material3) brings in. No symbol of 0.7.1 is missing from 0.8.0 (2026-11-12,
+#   Dependabot): the diff of the JVM and klib ABI dumps removes no line. Its one breaking change, the
 #   deprecation of TimeZone serialization (a warning), touches nothing the app uses.
 # Lifecycle's ViewModel for Compose (phase 2a review, 2026-11-10) keeps the Search screen's state
 # across an Android configuration change; it is the same Lifecycle 2.11.0 release as the runtime.

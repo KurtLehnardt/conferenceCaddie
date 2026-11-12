@@ -1035,10 +1035,10 @@ PR #83 holds the detail of each item: the full option mapping, the README change
   - The verification metadata was regenerated with the command in `native/README.md`. The entries that only the replaced versions needed were removed. A strict build of the same tasks passed without them.
   - The third-party notices were regenerated for the new kotlinx versions.
 - **kotlinx-datetime 0.8.0.**
-  - Its JVM and klib ABI dumps only add to those of 0.7.1. Material3 1.12.0-alpha03, which asks for 0.7.1, therefore still links.
+  - No symbol of 0.7.1 is missing from 0.8.0: the diff of its JVM and klib ABI dumps (`core/api/kotlinx-datetime.api`, `core/api/kotlinx-datetime.klib.api`) removes no line. Material3 1.12.0-alpha03, which was built against 0.7.1, finds every symbol it calls.
   - `kotlinx.datetime.Instant` and `Clock` remain deprecated type aliases of `kotlin.time`. The app uses neither of them.
   - The release's one breaking change deprecates `TimeZone` serialization with a warning. The app does not serialize a `TimeZone`.
-- **kotlinx-io 0.9.2** only adds API and fixes the Kotlin/Native file source and sink. Ktor 3.6.1 asks for 0.9.1.
+- **kotlinx-io 0.9.2 reimplements the Kotlin/Native `FileSink` and `FileSource`.** That is the iOS path of the bundle cache, which `BundleSyncTest` covers in the iOS simulator tests. The rewrite opens files with `O_CLOEXEC`, buffers less, and fixes a crash on a zero-byte read or write (kotlinx-io #529). The public API only gains `Random.nextByteString`. Ktor 3.6.1 asks for 0.9.1.
 - **Bouncy Castle 1.86 fixes CVEs that no alert names.** These are CVE-2026-17508, -18036, -18040, -71888, -71889, -71891 and -71892 in bcprov and bcpkix. Their GitHub advisories are unreviewed and list no versions, so Dependabot raises no alert for them. 1.86 removes only post-quantum and legacy code, none of it used by the Android Gradle Plugin.
 - **The tooling floors.**
   - None of the five releases removes public API, and none raises the Java baseline above 8.
@@ -1046,7 +1046,11 @@ PR #83 holds the detail of each item: the full option mapping, the README change
 - **ONNX Runtime 1.31.1 waits (#77 stays open).**
   - Microsoft still publishes no iOS archive for 1.31: `pod-archive-onnxruntime-c-1.31.0.zip` and `-1.31.1.zip` answer 404. The onnxruntime-c CocoaPod stops at 1.30.0, and the 1.31 GitHub releases carry no iOS asset.
   - Every platform must run the same runtime, so the on-device embedding and the talk checks can be compared across platforms. Android and the JVM therefore cannot move alone.
-  - 1.31.1 itself only fixes an OpenVINO Python build and WASM tests. Staying on 1.30.0 leaves no known fix behind.
+  - What waiting leaves out:
+    - 1.31.0 hardens model loading against crafted models (microsoft/onnxruntime #32684, #32940, #33063). The app loads only the pinned bge-small export, whose SHA-256 `gradle/pinned-downloads.properties` checks, so a crafted model cannot reach it.
+    - 1.31.0 also fixes the overflow handling of the Arm64 NEON/SVE GELU and Erf kernels (#32631). The embeddings measured with 1.30.0 show no sign of that overflow: EmbeddingDeviceTest on arm64 (min cosine 0.98 against the reference) and the talk checks.
+    - 1.31.1 adds only OpenVINO and WASM fixes.
+  - Revisit when `pod-archive-onnxruntime-c-1.31.x.zip` exists.
 
 ## Admin signature v2: the request is bound to its origin (step a of four) (2026-11-12)
 
