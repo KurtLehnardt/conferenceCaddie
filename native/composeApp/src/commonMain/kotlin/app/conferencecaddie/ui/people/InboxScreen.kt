@@ -19,7 +19,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,7 +42,6 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.theme.Caddie
 import kotlin.math.ceil
 import kotlin.math.max
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -68,10 +66,6 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
     val incoming = inbox.incoming.filter { it.state.isOpen }
     val outgoing = inbox.outgoing.filter { it.state.isOpen }
     val now = rememberNowMs(host, active = incoming.isNotEmpty())
-    // The cards' actions run in the screen's scope, not the card's: an ask that ran out is dropped
-    // by the controller before the answer reaches the card, and the card's own scope would be
-    // cancelled with it, losing "That ask has run out."
-    val scope = rememberCoroutineScope()
 
     PeopleScreenColumn(modifier.testTag("inbox-screen")) {
         // .pp-section: 10 dp between its parts.
@@ -83,7 +77,7 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
             }
             if (incoming.isNotEmpty()) {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    incoming.forEach { meet -> key(meet.meetId) { IncomingCard(meet, host, now, scope) } }
+                    incoming.forEach { meet -> key(meet.meetId) { IncomingCard(meet, host, now) } }
                 }
             }
         }
@@ -101,10 +95,11 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
 /** IncomingCard: an ask to me, with Accept, Not now and its time left, or Open meet-up once active. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long, scope: CoroutineScope) {
+private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long) {
     val c = Caddie.colors
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val shown = rememberInComposition()
     val name = meet.from?.displayName ?: meet.other.displayName
     val ref = meet.from?.ref ?: meet.other.ref
     val waiting = meet.state == MeetState.Requested
@@ -119,27 +114,37 @@ private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long, scope: C
     }
     val expires = if (waiting) expiresIn(meet.expiresAt, nowMs) else null
 
-    // busy is set before the launch, so a second tap in the same frame (Accept twice, or Accept then
-    // Not now) starts nothing.
+    // On the app's scope (PeopleHost.scope), not the card's or the screen's: an ask that ran out is
+    // dropped by the controller before the answer comes back, which takes the card away, and
+    // Requests can be left while Accept or Not now is under way. The answer then goes in a toast
+    // ([shown]); an accepted ask offers its meet-up there rather than opening it over whatever shows. busy is set before the launch, so a second tap
+    // in the same frame (Accept twice, or Accept then Not now) starts nothing.
     fun act(accept: Boolean) {
         if (busy) return
         busy = true
         error = null
-        scope.launch {
+        host.scope.launch {
             val res = try {
                 if (accept) host.controller.acceptMeet(meet.meetId) else host.controller.declineMeet(meet.meetId)
             } finally {
                 busy = false
             }
             when (res) {
-                is ApiResult.Ok -> if (accept) host.openMeet(meet.meetId)
+                is ApiResult.Ok -> if (accept) {
+                    if (shown.value) {
+                        host.openMeet(meet.meetId)
+                    } else {
+                        host.showToast(ConnectStrings.ACCEPTED_TOAST, PeopleToastAction(PeopleCommonStrings.OPEN_MEET_UP) { host.openMeet(meet.meetId) })
+                    }
+                }
                 is ApiResult.Failed -> {
                     val status = res.error.status
                     // The controller has already dropped an ask that ran out.
                     if (status == 404 || status == 410) {
                         if (accept) host.showToast(ConnectStrings.RAN_OUT)
                     } else {
-                        error = res.error.message.ifBlank { PeopleCommonStrings.NOT_SAVED }
+                        val message = res.error.message.ifBlank { PeopleCommonStrings.NOT_SAVED }
+                        if (shown.value) error = message else host.showMessage(message)
                     }
                 }
             }

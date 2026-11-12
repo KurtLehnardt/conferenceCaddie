@@ -143,10 +143,10 @@ internal class U3Rig(
     val nav = app.conferencecaddie.ui.shell.ShellNavigation()
     val toasts = MutableStateFlow<List<String>>(emptyList())
 
-    /** The label of each toast's action, or null, in the order of [toasts]. */
-    val toastActions = MutableStateFlow<List<String?>>(emptyList())
+    /** Each toast's action, or null, in the order of [toasts]. */
+    val toastActions = MutableStateFlow<List<PeopleToastAction?>>(emptyList())
     val host = PeopleHost(controller, nav, scope, { message, action ->
-        toastActions.update { it + action?.label }
+        toastActions.update { it + action }
         toasts.update { it + message }
     }, {}, {})
     val state: PeopleUiState get() = controller.state.value

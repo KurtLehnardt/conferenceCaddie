@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -24,6 +25,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.AppLink
@@ -305,21 +308,41 @@ fun rememberPeopleUi(
 ): PeopleUi? {
     if (controller == null) return null
     val state by controller.state.collectAsState()
-    val scope = rememberCoroutineScope()
     val toast by rememberUpdatedState(showToast)
     val talkOpener by rememberUpdatedState(openTalk)
     val urlOpener by rememberUpdatedState(openUrl)
-    val memory = rememberSaveable(saver = PeopleHostMemory.Saver) { PeopleHostMemory() }
-    val host = remember(controller, navigation, memory) {
+    // What outlives the activity's re-creation on Android (PeopleRetained): the scope the actions'
+    // answers run in, their toasts, the navigation and the host's memory. Held by the activity's
+    // ViewModelStore, as the Search screen's state is (CaddieApp); without an owner it lives as long
+    // as this composition.
+    val compositionScope = rememberCoroutineScope()
+    val owner = LocalViewModelStoreOwner.current
+    val retained = if (owner != null) {
+        viewModel(viewModelStoreOwner = owner, key = "people") { PeopleViewModel() }.retained
+    } else {
+        remember { PeopleRetained(compositionScope) }
+    }
+    DisposableEffect(retained, navigation) {
+        retained.current = navigation
+        onDispose { if (retained.current === navigation) retained.current = null }
+    }
+    val memory = rememberSaveable(retained, saver = PeopleHostMemory.retainedSaver(retained)) {
+        retained.memory ?: PeopleHostMemory().also { retained.memory = it }
+    }
+    val host = remember(controller, retained, memory) {
         PeopleHost(
             controller = controller,
-            navigator = navigation,
-            scope = scope,
-            toast = { message, action -> toast(message, action?.label, action?.onClick) },
+            navigator = retained.navigator,
+            scope = retained.scope,
+            toast = retained::post,
             openTalk = { talkOpener(it) },
             openUrl = { urlOpener(it) },
             memory = memory,
         )
+    }
+    // Toasts from the people screens, the ones asked for before a re-creation among them.
+    LaunchedEffect(retained) {
+        retained.toasts.collect { t -> toast(t.message, t.action?.label, t.action?.onClick) }
     }
     val enabled by rememberUpdatedState(state.features.enabled)
     val availability by rememberUpdatedState(state.availability)

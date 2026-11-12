@@ -20,7 +20,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,7 +48,6 @@ import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -82,7 +80,6 @@ import kotlinx.coroutines.sync.withLock
 @Composable
 fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, modifier: Modifier = Modifier) {
     val controller = host.controller
-    val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
     val editor = remember(controller) { ProfileEditor(controller, state.profile, state.topics) }
     // A change the user did not type (a delete clearing the device, another conference's topics)
@@ -110,17 +107,47 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
     var confirmDelete by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var deleteMessage by remember { mutableStateOf<String?>(null) }
+    // The actions run on the app's scope (PeopleHost.scope), not this screen's: Back, another tab or
+    // the activity's re-creation while one is under way would cancel its caller and lose its answer,
+    // which goes in a toast once the screen has left ([shown]). The busy flags are set before the
+    // launch, so a second tap in the same frame starts nothing.
+    val shown = rememberInComposition()
 
-    // The busy flags are set before the launch, so a second tap in the same frame starts nothing.
+    /** [message] where this screen shows it, or in a toast once the screen has left. */
+    fun answer(message: String, show: (String) -> Unit) {
+        if (shown.value) show(message) else host.showMessage(message)
+    }
+
     fun toggleVisible(on: Boolean) {
         if (visBusy) return
         visBusy = true
         visPending = on
-        scope.launch {
-            editor.push()
-            visMessage = controller.setOpenToMeet(on)
-            visPending = null
-            visBusy = false
+        host.scope.launch {
+            val err = try {
+                editor.push()
+                controller.setOpenToMeet(on)
+            } finally {
+                visPending = null
+                visBusy = false
+            }
+            visMessage = null
+            if (err != null) answer(err) { visMessage = it }
+        }
+    }
+
+    // "Stop sharing for all" runs on the app's scope (PeopleHost.scope): leaving Profile meanwhile
+    // loses no message, which goes in a toast once the screen has left ([shown]).
+    fun stopSharing() {
+        if (visBusy) return
+        visBusy = true
+        visMessage = null
+        host.scope.launch {
+            val err = try {
+                controller.unshareAll()
+            } finally {
+                visBusy = false
+            }
+            if (err != null) answer(err) { visMessage = it }
         }
     }
 
@@ -129,12 +156,15 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
         if (deleting) return
         deleting = true
         deleteMessage = null
-        scope.launch {
-            editor.push()
-            val result = controller.deleteMyProfile()
+        host.scope.launch {
+            val result = try {
+                editor.push()
+                controller.deleteMyProfile()
+            } finally {
+                deleting = false
+            }
             if (result.done) confirmDelete = false
-            deleteMessage = result.message
-            deleting = false
+            result.message?.let { m -> answer(m) { deleteMessage = it } }
         }
     }
 
@@ -149,7 +179,7 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
         verticalArrangement = Arrangement.spacedBy(PeopleScreenGap),
     ) {
         SaveStatus(state.sync)
-        PendingDeleteBanner(state, host, scope, onResult = { deleteMessage = it })
+        PendingDeleteBanner(state, host, onResult = { m -> answer(m) { deleteMessage = it } })
         if (state.visibility.hiddenForOwner) {
             PeopleBanner(LucideIcon.EyeOff, Modifier.testTag("profile-hidden-banner"), announce = true) {
                 Text(boldLead(ProfileStrings.HIDDEN_TITLE, ProfileStrings.HIDDEN_COPY))
@@ -262,7 +292,7 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
             if (visBusy) StatusLine(ProfileStrings.SAVING)
             NoticeText(PeopleCommonStrings.VISIBILITY_NOTICE)
             val shared = state.visibility.sharedTalkIds.size
-            if (shared > 0) SharedTalksRow(shared, enabled = !visBusy) { scope.launch { controller.unshareAll()?.let { visMessage = it } } }
+            if (shared > 0) SharedTalksRow(shared, enabled = !visBusy, onStop = ::stopSharing)
             visMessage?.let { ErrorText(it, Modifier.testTag("profile-visibility-message")) }
         }
 
@@ -439,7 +469,7 @@ private fun SharedTalksRow(count: Int, enabled: Boolean, onStop: () -> Unit) {
  * and says "may already be hidden" for a conference's delete.
  */
 @Composable
-private fun PendingDeleteBanner(state: PeopleUiState, host: PeopleHost, scope: CoroutineScope, onResult: (String) -> Unit) {
+private fun PendingDeleteBanner(state: PeopleUiState, host: PeopleHost, onResult: (String) -> Unit) {
     val d = state.deletes
     if (!d.unfinished) return
     var busy by remember { mutableStateOf(false) }
@@ -452,14 +482,15 @@ private fun PendingDeleteBanner(state: PeopleUiState, host: PeopleHost, scope: C
         else -> ProfileStrings.ANOTHER_CONFERENCE
     }
 
-    // On the profile screen's scope ([scope]), not one of the banner's own: a delete that finishes
+    // On the app's scope (PeopleHost.scope), not one of the banner's own: a delete that finishes
     // takes the banner away as it publishes, before the action returns, which would cancel the
-    // banner's scope and lose the result the Delete card shows. busy is set before the launch, so a
-    // second tap in the same frame starts nothing.
+    // banner's scope and lose the result the Delete card shows ([onResult], a toast once the
+    // profile screen has left). busy is set before the launch, so a second tap in the same frame
+    // starts nothing.
     fun run(action: suspend () -> String?) {
         if (busy) return
         busy = true
-        scope.launch {
+        host.scope.launch {
             val result = try {
                 action()
             } finally {

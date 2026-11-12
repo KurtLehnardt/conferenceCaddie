@@ -16,7 +16,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,8 +96,12 @@ private sealed interface MeetUi {
 @Composable
 fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier: Modifier = Modifier) {
     val controller = host.controller
-    val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // The actions run on the app's scope (PeopleHost.scope), not one of this screen's own: Back, or
+    // another tab, while an action is under way would cancel its caller and lose its answer. An
+    // answer this screen shows itself goes in a toast once the screen has left ([shown]). busy is
+    // set before the launch, so a second tap in the same frame starts nothing.
+    val shown = rememberInComposition()
     var view by remember { mutableStateOf<MeetUi>(MeetUi.Loading) }
     var spotMe by rememberSaveable { mutableStateOf("") }
     var spotSaved by remember { mutableStateOf(false) }
@@ -164,77 +167,92 @@ fun MeetScreen(meetId: String, state: PeopleUiState, host: PeopleHost, modifier:
         }
     }
 
+    /** Runs [action] on the app's scope with busy set, unless an action is under way already. */
+    fun act(action: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        host.scope.launch {
+            try {
+                action()
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     fun found() {
         val live = view as? MeetUi.Live ?: return
-        scope.launch {
-            busy = true
+        act {
             when (val res = controller.foundMeet(meetId)) {
                 is ApiResult.Ok -> {
                     run.stopped = true
                     view = foundView(live.meet)
+                    // The found view, with "Save this person", is on this screen.
+                    if (!shown.value) host.showToast(ConnectStrings.youFound(live.meet.other.displayName))
                 }
                 is ApiResult.Failed -> {
                     val (message, over) = meetProblem(res.error)
                     if (over) {
                         run.stopped = true
                         view = foundView(live.meet)
+                        if (!shown.value) host.showToast(message)
                     } else {
                         host.showToast(message)
                     }
                 }
             }
-            busy = false
         }
     }
 
     fun cancel() {
         confirmCancel = false
-        scope.launch {
-            busy = true
+        act {
             when (val res = controller.cancelMeet(meetId)) {
                 is ApiResult.Ok -> {
                     run.stopped = true
                     view = MeetUi.Cancelled
+                    if (!shown.value) host.showToast(ConnectStrings.MEET_CANCELLED)
                 }
                 is ApiResult.Failed -> {
                     val (message, over) = meetProblem(res.error)
                     if (over) {
                         run.stopped = true
                         view = MeetUi.Cancelled
+                        if (!shown.value) host.showToast(message)
                     } else {
                         host.showToast(message)
                     }
                 }
             }
-            busy = false
         }
     }
 
     fun saveSpotMe() {
-        scope.launch {
-            busy = true
-            spotError = null
-            when (val res = controller.setSpotMe(meetId, spotMe.trim().take(SPOT_ME_MAX))) {
-                is ApiResult.Ok -> spotSaved = true
-                is ApiResult.Failed -> spotError = res.error.message.ifBlank { PeopleCommonStrings.NOT_SAVED }
+        spotError = null
+        val text = spotMe.trim().take(SPOT_ME_MAX)
+        act {
+            when (val res = controller.setSpotMe(meetId, text)) {
+                is ApiResult.Ok -> if (shown.value) spotSaved = true else host.showToast(ConnectStrings.SAVED)
+                is ApiResult.Failed -> {
+                    val message = res.error.message.ifBlank { PeopleCommonStrings.NOT_SAVED }
+                    if (shown.value) spotError = message else host.showToast(message)
+                }
             }
-            busy = false
         }
     }
 
     fun setMeetingPoint(zone: String) {
         if (zone.isEmpty()) return
-        scope.launch {
-            busy = true
+        act {
             when (val res = controller.setMeetingPoint(meetId, zone)) {
                 is ApiResult.Ok -> {
                     rendezvous = zone
                     picking = false
                     (view as? MeetUi.Live)?.let { view = it.copy(meet = it.meet.copy(rendezvous = zone)) }
+                    if (!shown.value) host.showToast(ConnectStrings.meetAt(zone))
                 }
                 is ApiResult.Failed -> host.showToast(res.error.message.ifBlank { PeopleCommonStrings.NOT_SAVED })
             }
-            busy = false
         }
     }
 
@@ -399,7 +417,6 @@ private fun MeetEndedPrompt(title: String, host: PeopleHost) {
 /** .pp-found: "You found {name}", the opener or the hint, and "Save this person" / "Back to People". */
 @Composable
 private fun FoundCard(meetId: String, found: MeetUi.Found, host: PeopleHost) {
-    val scope = rememberCoroutineScope()
     val seen by produceState<SeenPerson?>(null, meetId) { value = host.controller.personForMeet(meetId) }
     var saved by remember { mutableStateOf(false) }
     val opener = seen?.opener?.takeIf { it.isNotBlank() } ?: seen?.reasons?.firstOrNull()?.takeIf { it.isNotBlank() }
@@ -417,10 +434,14 @@ private fun FoundCard(meetId: String, found: MeetUi.Found, host: PeopleHost) {
                 CaddieButton(
                     ConnectStrings.SAVE_PERSON,
                     {
-                        val about = found.about ?: seen?.about ?: ""
-                        scope.launch { host.controller.saveMet(found.name, about) }
-                        saved = true
-                        host.showToast(ConnectStrings.SAVED_TOAST)
+                        // saved is checked before anything else: a second tap in the same frame,
+                        // before the button gives way to "Saved under Settings", saves nobody twice.
+                        if (!saved) {
+                            saved = true
+                            val about = found.about ?: seen?.about ?: ""
+                            host.scope.launch { host.controller.saveMet(found.name, about) }
+                            host.showToast(ConnectStrings.SAVED_TOAST)
+                        }
                     },
                     small = true,
                 )

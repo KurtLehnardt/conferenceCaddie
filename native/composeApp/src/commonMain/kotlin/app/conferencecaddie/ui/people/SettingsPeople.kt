@@ -51,9 +51,11 @@ fun SettingsPeople(state: PeopleUiState, host: PeopleHost) {
  */
 @Composable
 fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
-    val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Unblock runs on the app's scope (PeopleHost.scope), so leaving Settings meanwhile loses neither
+    // its toast nor its error ([shown]); busy is set before the launch, one unblock at a time.
+    val shown = rememberInComposition()
     LaunchedEffect(host.controller, state.conference?.slug) { host.controller.refreshBlocks() }
 
     SettingsGroup(ProfileStrings.BLOCKED_PEOPLE, Modifier.testTag("set-blocked")) {
@@ -66,11 +68,21 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
                     CaddieButton(
                         ProfileStrings.UNBLOCK,
                         {
-                            scope.launch {
+                            if (busy == null) {
                                 busy = b.ref
-                                error = host.controller.unblock(b.ref)
-                                if (error == null) host.showToast(PeopleCommonStrings.unblocked(b.displayName))
-                                busy = null
+                                error = null
+                                host.scope.launch {
+                                    val err = try {
+                                        host.controller.unblock(b.ref)
+                                    } finally {
+                                        busy = null
+                                    }
+                                    when {
+                                        err == null -> host.showToast(PeopleCommonStrings.unblocked(b.displayName))
+                                        shown.value -> error = err
+                                        else -> host.showMessage(err)
+                                    }
+                                }
                             }
                         },
                         Modifier.testTag("unblock-${b.ref}"),

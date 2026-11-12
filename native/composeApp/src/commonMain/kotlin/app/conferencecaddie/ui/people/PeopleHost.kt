@@ -155,12 +155,50 @@ class PeopleHost(
     fun ask(person: Person) {
         askedPerson = person
         memory.askingRef = person.ref
+        memory.askSent = null
     }
 
     fun closeAsk() {
         askedPerson = null
         memory.askingRef = null
+        memory.askSent = null
     }
+
+    /**
+     * True when the ask of the sheet open for [ref] was sent. Kept in the memory rather than in the
+     * sheet: an ask that is answered after a re-creation shows "Asked" in the sheet that shows now.
+     */
+    fun askSent(ref: String): Boolean = memory.askSent == ref
+
+    /** The ask to [ref] was sent; the sheet open for it says so. */
+    fun markAskSent(ref: String) {
+        if (memory.askingRef == ref) memory.askSent = ref
+    }
+
+    /**
+     * Whether the presence card's setup panel is open. Kept in the memory rather than in the card:
+     * a turn-on answered after the activity was re-created closes the panel the new composition
+     * shows, which a copy restored from saved state would keep open.
+     */
+    internal var presencePanel: Boolean
+        get() = memory.presencePanel
+        set(value) {
+            memory.presencePanel = value
+        }
+
+    /** Whether Bluetooth's setup panel is open in the presence card; kept as [presencePanel] is. */
+    internal var bleCardPanel: Boolean
+        get() = memory.bleCardPanel
+        set(value) {
+            memory.bleCardPanel = value
+        }
+
+    /** Whether Bluetooth's setup panel is open in Settings; kept as [presencePanel] is. */
+    internal var bleSettingsPanel: Boolean
+        get() = memory.bleSettingsPanel
+        set(value) {
+            memory.bleSettingsPanel = value
+        }
 
     /** What ReportSheet is open for, or null. */
     val reporting: ReportTarget? get() = memory.reporting
@@ -258,8 +296,22 @@ class PeopleHostMemory {
     internal var blocking: BlockTarget? by mutableStateOf(null)
     internal var waved: Set<String> by mutableStateOf(emptySet())
     internal var request: PeopleRequest? by mutableStateOf(null)
+    internal var askSent: String? by mutableStateOf(null)
+    internal var presencePanel: Boolean by mutableStateOf(false)
+    internal var bleCardPanel: Boolean by mutableStateOf(false)
+    internal var bleSettingsPanel: Boolean by mutableStateOf(false)
 
     companion object {
+        /**
+         * [Saver], except that a restore finds [retained]'s memory when it has one: after a
+         * re-creation the composition goes on with the very memory the actions still change, and a
+         * restore from saved state happens only once the process was ended.
+         */
+        internal fun retainedSaver(retained: PeopleRetained): Saver<PeopleHostMemory, Any> = Saver(
+            save = { m -> with(Saver) { save(m) } },
+            restore = { saved -> retained.memory ?: Saver.restore(saved)?.also { retained.memory = it } },
+        )
+
         val Saver: Saver<PeopleHostMemory, Any> = Saver(
             save = { m ->
                 arrayListOf<Any?>(
@@ -268,6 +320,7 @@ class PeopleHostMemory {
                     m.blocking?.let { arrayListOf(it.ref, it.name) },
                     ArrayList(m.waved),
                     m.request?.let { arrayListOf(it.aroundNow, it.query, it.hereZone, it.id) },
+                    arrayListOf(m.askSent, m.presencePanel, m.bleCardPanel, m.bleSettingsPanel),
                 )
             },
             restore = { saved ->
@@ -282,6 +335,12 @@ class PeopleHostMemory {
                     m.waved = (list[3] as List<*>).filterIsInstance<String>().toSet()
                     (list[4] as List<*>?)?.let { q ->
                         m.request = PeopleRequest(q[0] as Boolean, q[1] as String?, q[2] as String?, q[3] as Long)
+                    }
+                    (list.getOrNull(5) as List<*>?)?.let { p ->
+                        m.askSent = p[0] as String?
+                        m.presencePanel = p[1] as Boolean
+                        m.bleCardPanel = p[2] as Boolean
+                        m.bleSettingsPanel = p[3] as Boolean
                     }
                 }
             },

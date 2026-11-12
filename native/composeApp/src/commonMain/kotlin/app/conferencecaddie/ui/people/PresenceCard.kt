@@ -102,7 +102,8 @@ fun PresenceControls(
     val currentState by rememberUpdatedState(state)
     val handled by rememberUpdatedState(onHereZoneHandled)
 
-    var panel by rememberSaveable { mutableStateOf(false) }
+    // In the host's memory, which an answer after a re-creation still reaches (PeopleHost.presencePanel).
+    var panel by host::presencePanel
     var zone by rememberSaveable { mutableStateOf("") }
     var modeName by rememberSaveable { mutableStateOf(presence.mode.name) }
     var spot by rememberSaveable { mutableStateOf(presence.spot) }

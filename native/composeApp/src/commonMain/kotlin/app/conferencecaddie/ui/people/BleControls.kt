@@ -9,7 +9,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -77,7 +76,8 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
     val controller = host.controller
     val settings = variant == BleVariant.Settings
     val presenceOn = state.presence.on
-    var panel by rememberSaveable { mutableStateOf(false) }
+    // In the host's memory, which an answer after a re-creation still reaches (PeopleHost.presencePanel).
+    var panel by if (settings) host::bleSettingsPanel else host::bleCardPanel
     var busy by remember { mutableStateOf(false) }
     val starting = busy || ble.starting
 
