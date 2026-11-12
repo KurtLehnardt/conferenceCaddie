@@ -104,6 +104,17 @@ const LAYOUTS = {
     s.put(join(dirname(s.old), 'config.json'), config(ORIGIN));
     return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false };
   },
+  // sameFile cannot stat the old place when ~/.config cannot be searched, so its false means "not
+  // proven the same": both modules keep the old place, and neither reads it.
+  'XDG_CONFIG_HOME set, ~/.config cannot be searched, the new file there': (s) => {
+    s.put(s.xdgFile, TOKEN);
+    s.lock(join(s.home, '.config'));
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false };
+  },
+  'XDG_CONFIG_HOME set, ~/.config cannot be searched, the new file missing': (s) => {
+    s.lock(join(s.home, '.config'));
+    return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: true, same: false };
+  },
   'CADDIE_ADMIN_HOME set, only the new file there (the old one missing)': (s) => {
     s.put(s.caddieFile, TOKEN);
     return { env: { CADDIE_ADMIN_HOME: s.caddie, XDG_CONFIG_HOME: s.xdg }, path: s.caddieFile, legacy: false, same: false };
@@ -144,6 +155,12 @@ const LAYOUTS = {
     symlinkSync(s.xdg, join(s.home, '.config'));
     s.put(s.xdgFile, TOKEN);
     return { env: { XDG_CONFIG_HOME: s.xdg }, path: s.xdgFile, legacy: false, same: true };
+  },
+  '~/.config/conference-caddie symlinked to $CADDIE_ADMIN_HOME, before the file exists': (s) => {
+    mkdirSync(s.caddie);
+    mkdirSync(join(s.home, '.config'));
+    symlinkSync(s.caddie, join(s.home, '.config', 'conference-caddie'));
+    return { env: { CADDIE_ADMIN_HOME: s.caddie }, path: s.caddieFile, legacy: false, same: true };
   },
   '~/.config/conference-caddie symlinked to $CADDIE_ADMIN_HOME, with the file': (s) => {
     mkdirSync(s.caddie);
@@ -209,7 +226,9 @@ describe('worker/ingest/admin-token-file.mjs and scripts/lib/admin-token-file.mj
   // With no variable set the path and the old place are the same string. sameFile cannot stat it
   // when ~/.config cannot be searched, so the shared module then reports that same path as legacy;
   // the Worker module counts two equal path strings as one path and reports none. Both mean "no
-  // other file to fall back to", which is what is compared here.
+  // other file to fall back to", which is what is compared here. The Worker module's null is
+  // checked strictly, because without that guard it would report an old place, and compare or
+  // note a file against itself, for an operator with no variable set.
   test('no variables, ~/.config cannot be searched: no other file to fall back to', (t) => {
     const s = scratch(t);
     s.lock(join(s.home, '.config'));
@@ -220,6 +239,10 @@ describe('worker/ingest/admin-token-file.mjs and scripts/lib/admin-token-file.mj
     const otherFile = (legacy, path) => legacy !== null && legacy !== path;
     assert.equal(otherFile(w.legacy, w.path), false);
     assert.equal(otherFile(p.legacy, p.path), false);
-    assert.equal(worker.adminTokenFileToRead({}, s.home).note, null, 'no note for an operator with no variable set');
+    assert.equal(w.legacy, null, 'the Worker module reports no old place');
+    const read = worker.adminTokenFileToRead({}, s.home);
+    assert.equal(read.legacy, null, 'the Worker reader reports no old place');
+    assert.equal(read.note, null, 'no note for an operator with no variable set');
+    assert.equal(read.trusted, true);
   });
 });

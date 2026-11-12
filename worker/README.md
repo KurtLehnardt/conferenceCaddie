@@ -162,8 +162,8 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    (`worker/ingest/admin-token-file.mjs`). If you set `XDG_CONFIG_HOME` and your token is still in
    `~/.config/conference-caddie/admin-token`, a script that reads the token file and finds none at
    the new place reads the old one and prints one line on stderr that names both paths and says,
-   if that file holds this deployment's token, to move it to the new place or set
-   `ADMIN_TOKEN_FILE` to it. There is no fallback when `CADDIE_ADMIN_HOME` is set, because it names
+   if that file holds this deployment's token, to move it to the new place and leave a symlink at
+   the old path, or set `ADMIN_TOKEN_FILE` to it. There is no fallback when `CADDIE_ADMIN_HOME` is set, because it names
    a separate setup: the old file is then never read, and a script that finds it prints one line
    that names both paths. The ingest, migration and topics scripts, which know the `--api` origin,
    also skip the fallback when the old directory has a `config.json` that does not list that origin
@@ -176,8 +176,10 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    `--only-missing` skips names the Worker already has. It sets a missing `CADDIE_ADMIN_TOKEN`
    from the token file, and `--rotate-admin-token` prints its recipe for an unfinished rotation
    from it, only when the file is trusted: `ADMIN_TOKEN_FILE` names it, no different file is at
-   the old place, or both hold the same token. In each of the other cases (the fallback to the old
-   file, two files with different tokens, an old file that cannot be read) the script stops with
+   the old place, or both hold the same token; with `CADDIE_ADMIN_HOME` set, the file there is
+   trusted when it exists, whatever the old place holds. In each of the other cases (the fallback
+   to the old file, two files with different tokens, an old file that cannot be read, only the old
+   file with `CADDIE_ADMIN_HOME` set) the script stops with
    exit 1, changes nothing, names both paths and says to set `ADMIN_TOKEN_FILE` to the file that
    holds this deployment's token; do that and run it again. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.

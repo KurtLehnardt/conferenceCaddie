@@ -991,7 +991,7 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
   const SET_FILE = 'Set ADMIN_TOKEN_FILE to the file that holds this deployment\'s token and run this command again.';
   const syncWhy = (doubt) => `ADMIN_TOKEN is set on the Worker and CADDIE_ADMIN_TOKEN is not, but ${doubt}. CADDIE_ADMIN_TOKEN is not set, and nothing was changed. ${SET_FILE}`;
   const recipeWhy = (doubt) => `The safe recipe makes the value in the token file the only admin token, so it is offered only when there is no doubt which file holds this deployment's token, and ${doubt}. ${SET_FILE}`;
-  const fallbackDoubt = (file, old) => `there is no token file at ${file}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${old}, which may hold another deployment's token`;
+  const fallbackDoubt = (file, old) => `there is no token file at ${file}, its default place under XDG_CONFIG_HOME, only one at its old place ${old}, which may hold another deployment's token`;
   const differsDoubt = (file, old) => `the token file ${file} and the file at its old place ${old} hold different tokens, so it is not clear which one is this deployment's`;
   const unreadableDoubt = (file, old) => `the file at the old place ${old} of the token file ${file} exists and cannot be read, so it is not clear which one holds this deployment's token`;
   // With CADDIE_ADMIN_HOME set there is no fallback to the old place: the one note, and the doubt
@@ -1159,6 +1159,32 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     assert.deepEqual(putsOf(w), [], 'nothing was put or set');
     assert.deepEqual(w.githubState(), {});
     assert.equal(existsSync(home), false, 'a read never creates the new place');
+    assertNoPartOf(NEW1, `${dry.text}\n${r.text}`, 'the output');
+    // ADMIN_TOKEN_FILE set to the old file is the operator's choice: the secret is set from it.
+    const ok = w.run(['--only-missing'], { env: { ...env, ADMIN_TOKEN_FILE: oldFile(w) } });
+    assert.equal(ok.status, 0, ok.text);
+    assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, NEW1);
+    assert.deepEqual(putsOf(w), ['gh secret set']);
+    assertNoPartOf(NEW1, ok.text, 'the output');
+  });
+
+  test('--only-missing refuses to set a missing GitHub secret when only the old file exists, with XDG_CONFIG_HOME set, unless ADMIN_TOKEN_FILE names it', (t) => {
+    const w = world(t, { workerSecrets: ALL_NAMES, githubSecrets: [], tokenFile: null });
+    writeOld(w, NEW1);
+    const xdg = join(w.dir, 'xdg');
+    const file = join(xdg, 'conference-caddie', 'admin-token');
+    const env = { ADMIN_TOKEN_FILE: undefined, XDG_CONFIG_HOME: xdg };
+    const why = syncWhy(fallbackDoubt(file, oldFile(w)));
+    const dry = w.run(['--only-missing', '--dry-run'], { env });
+    assert.equal(dry.status, 0, dry.text);
+    assert.ok(dry.stdout.includes(`Note: ${why}\nDry run: nothing is generated or changed. A real run stops here.\n`), dry.stdout);
+    assert.doesNotMatch(dry.stdout, /Would set/);
+    const r = w.run(['--only-missing'], { env });
+    assert.equal(r.status, 1, r.text);
+    assert.equal(r.stderr, `${why}\n`, 'the refusal says it all, in one message');
+    assert.deepEqual(putsOf(w), [], 'nothing was put or set');
+    assert.deepEqual(w.githubState(), {});
+    assert.equal(existsSync(xdg), false, 'a read never creates the new place');
     assertNoPartOf(NEW1, `${dry.text}\n${r.text}`, 'the output');
     // ADMIN_TOKEN_FILE set to the old file is the operator's choice: the secret is set from it.
     const ok = w.run(['--only-missing'], { env: { ...env, ADMIN_TOKEN_FILE: oldFile(w) } });

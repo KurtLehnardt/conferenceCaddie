@@ -9,12 +9,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adminTokenFile, adminTokenFileToRead, ignoredOldNote, sameFile } from '../ingest/admin-token-file.mjs';
 import { readAdminToken } from '../ingest/lib.mjs';
+import { run as migrate } from '../ingest/migrate-from-backup.mjs';
 import { configDir } from '../../scripts/admin/config.mjs';
 
 const LIB = fileURLToPath(new URL('../ingest/lib.mjs', import.meta.url));
@@ -94,8 +95,10 @@ describe('adminTokenFileToRead: the fallback to the old place, and whether the f
     const got = adminTokenFileToRead({ XDG_CONFIG_HOME: xdg }, s.home);
     const file = join(xdg, 'conference-caddie', 'admin-token');
     assert.deepEqual(shape(got), { path: s.old, value: TOKEN, legacy: s.old, trusted: false });
-    assert.equal(got.note, `Note: the admin token file is not at ${file}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, so the file at its old place ${s.old} was read instead; if that file holds this deployment's token, move it to ${file}, or set ADMIN_TOKEN_FILE to it.`);
-    assert.equal(got.doubt, `there is no token file at ${file}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${s.old}, which may hold another deployment's token`);
+    // The advice is the smoke's: move the file and leave a symlink at the old path, which a shell
+    // without XDG_CONFIG_HOME still reads, so no script loses the only copy.
+    assert.equal(got.note, `Note: the admin token file is not at ${file}, its default place under XDG_CONFIG_HOME, so the file at its old place ${s.old} was read instead; if that file holds this deployment's token, move it to ${file} and leave a symlink at the old path (ln -s '${file}' ~/'.config/conference-caddie/admin-token'), so every script uses one file, or set ADMIN_TOKEN_FILE to it.`);
+    assert.equal(got.doubt, `there is no token file at ${file}, its default place under XDG_CONFIG_HOME, only one at its old place ${s.old}, which may hold another deployment's token`);
     assertNoPartOf(TOKEN, `${got.note}\n${got.doubt}`, 'the note and the doubt');
   });
 
@@ -306,7 +309,8 @@ describe('readAdminToken', () => {
     });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stdout, String(TOKEN.length));
-    assert.equal(r.stderr, `Note: the admin token file is not at ${join(xdg, 'conference-caddie', 'admin-token')}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, so the file at its old place ${s.old} was read instead; if that file holds this deployment's token, move it to ${join(xdg, 'conference-caddie', 'admin-token')}, or set ADMIN_TOKEN_FILE to it.\n`);
+    const file = join(xdg, 'conference-caddie', 'admin-token');
+    assert.equal(r.stderr, `Note: the admin token file is not at ${file}, its default place under XDG_CONFIG_HOME, so the file at its old place ${s.old} was read instead; if that file holds this deployment's token, move it to ${file} and leave a symlink at the old path (ln -s '${file}' ~/'.config/conference-caddie/admin-token'), so every script uses one file, or set ADMIN_TOKEN_FILE to it.\n`);
     assertNoPartOf(TOKEN, r.stderr, 'stderr');
   });
 });
@@ -392,5 +396,91 @@ describe('adminTokenFileToRead: CADDIE_ADMIN_HOME and the old directory\'s confi
     s.put(join(s.home, '.config', 'conference-caddie', 'config.json'), config(ORIGIN));
     assert.equal(readAdminToken({ env, home: s.home, warn: (line) => listed.push(line), apiOrigin: ORIGIN }), TOKEN);
     assert.match(listed[0], /was read instead/);
+  });
+
+  test('an old directory that cannot be searched refuses the fallback, and the note says its config.json cannot be checked', { skip: AS_ROOT && 'root can search a directory at mode 000' }, (t) => {
+    const s = scratch(t);
+    s.put(s.old, TOKEN);
+    const oldDir = dirname(s.old);
+    const xdg = join(s.dir, 'xdg');
+    const file = join(xdg, 'conference-caddie', 'admin-token');
+    chmodSync(oldDir, 0o000);
+    try {
+      const got = adminTokenFileToRead({ XDG_CONFIG_HOME: xdg }, s.home, { apiOrigin: ORIGIN });
+      assert.deepEqual(shape(got), { path: file, value: null, legacy: s.old, trusted: false });
+      assert.equal(got.note, `Note: the admin token file is not at ${file}, its default place under XDG_CONFIG_HOME, and the file at its old place ${s.old} is not read, because ${join(oldDir, 'config.json')} cannot be checked for ${ORIGIN}; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`);
+      assert.doesNotMatch(got.note, /does not list/);
+    } finally {
+      chmodSync(oldDir, 0o700);
+    }
+  });
+});
+
+// The three scripts that know the --api origin pass it to readAdminToken, so the old directory's
+// config.json gates the fallback for them as it does for the smoke. Without these tests a refactor
+// could drop the origin and every other test would still pass. Each run stops before it would send
+// a request: nothing listens at the origin used, and no run gets that far.
+describe('the ingest, migration and topics scripts pass the --api origin to the token reader', () => {
+  const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+  const ORIGIN = 'http://127.0.0.1:9';
+  const config = (api) => JSON.stringify({ backends: { live: { tier: 2, api } } });
+  // A scratch home with only the old token file, XDG_CONFIG_HOME set, and an old config.json that
+  // lists api as its tier 2 api.
+  function oldOnly(t, api) {
+    const s = scratch(t);
+    s.put(s.old, TOKEN);
+    const oldConfig = s.put(join(dirname(s.old), 'config.json'), config(api));
+    const xdg = join(s.dir, 'xdg');
+    const refusal = `Note: the admin token file is not at ${join(xdg, 'conference-caddie', 'admin-token')}, its default place under XDG_CONFIG_HOME, and the file at its old place ${s.old} is not read, because ${oldConfig} does not list ${ORIGIN} as a tier 2 api; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`;
+    return { s, oldConfig, refusal, env: { PATH: process.env.PATH, HOME: s.home, XDG_CONFIG_HOME: xdg } };
+  }
+  const spawn = (name, args, env) => spawnSync(process.execPath, [join(ROOT, 'worker', 'ingest', name), ...args], { env, encoding: 'utf8', timeout: 60_000 });
+
+  test('migrate-from-backup asks for the token with the origin of --api', async (t) => {
+    const s = scratch(t);
+    const backup = dirname(s.put(join(s.dir, 'backup', 'caddie-conferences-v1.ndjson'), ''));
+    const asked = [];
+    const out = [];
+    const code = await migrate(['--backup', backup, '--api', 'https://caddie.example/base/', '--only', 'conferences', '--dry-run'], {
+      readToken: (options) => {
+        asked.push(options);
+        return '';
+      },
+      log: (line) => out.push(line),
+      error: (line) => out.push(line),
+    });
+    assert.equal(code, 0, out.join('\n'));
+    assert.deepEqual(asked, [{ apiOrigin: 'https://caddie.example' }]);
+  });
+
+  test('push-ingest --dry-run does not fall back when the old config.json lists another origin, and does when it lists this one', (t) => {
+    const { s, oldConfig, refusal, env } = oldOnly(t, 'https://other.example');
+    const args = ['--api', ORIGIN, '--dry-run', '--event', 'no-such-conference-zz'];
+    const r = spawn('push-ingest.mjs', args, env);
+    assert.equal(r.status, 1, r.stderr);
+    const lines = r.stderr.split('\n').filter(Boolean);
+    assert.equal(lines[0], refusal);
+    assert.match(lines[1], /^No data\/no-such-conference-zz\/conference\.json\./);
+    assert.equal(lines.length, 2, r.stderr);
+    assert.doesNotMatch(r.stderr, /was read instead/);
+    // The same run with the origin listed falls back to the old file, with its note.
+    writeFileSync(oldConfig, config(ORIGIN));
+    const listed = spawn('push-ingest.mjs', args, env);
+    assert.equal(listed.status, 1, listed.stderr);
+    assert.match(listed.stderr, /was read instead/);
+    assert.doesNotMatch(listed.stderr, /is not read, because/);
+    assertNoPartOf(TOKEN, `${r.stdout}${r.stderr}${listed.stdout}${listed.stderr}`, 'the output');
+    assert.equal(existsSync(join(s.dir, 'xdg')), false, 'a read never creates the new place');
+  });
+
+  test('topics-local --api does not fall back when the old config.json lists another origin, and stops for want of a token', (t) => {
+    const slug = readdirSync(join(ROOT, 'data')).find((d) => existsSync(join(ROOT, 'data', d, 'talks.ndjson')));
+    assert.ok(slug, 'a conference with talks in data/');
+    const { refusal, env } = oldOnly(t, 'https://other.example');
+    const r = spawn('topics-local.mjs', ['--event', slug, '--api', ORIGIN], env);
+    assert.equal(r.status, 1, r.stderr);
+    const lines = r.stderr.split('\n').filter(Boolean);
+    assert.deepEqual(lines, [refusal, '--api needs ADMIN_TOKEN (or ADMIN_TOKEN_FILE).']);
+    assertNoPartOf(TOKEN, `${r.stdout}${r.stderr}`, 'the output');
   });
 });

@@ -18,7 +18,9 @@
 // default but one at the old place reads the old one and gets a one-line note that names both
 // paths, never the value. When the caller knows the API origin it is about to use and the old
 // directory has its own config.json, that config must list the origin as a tier 2 api, or the old
-// file is not read, as in the smoke. When both files exist and hold different tokens, or the old
+// file is not read, as in the smoke (a config.json that cannot be checked lists nothing). The note
+// says to move the old file and leave a symlink at the old path, as the smoke's does, because a
+// shell without XDG_CONFIG_HOME still uses the old path. When both files exist and hold different tokens, or the old
 // one exists and cannot be read, the new one is read, with a one-line note that names both paths
 // (never the values).
 //
@@ -42,7 +44,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { adminTokenPaths, configuredWorkerOrigins, legacyAdminTokenFile, sameFile } from '../../scripts/lib/admin-token-file.mjs';
+import { adminTokenPaths, configuredWorkerOrigins, legacyAdminTokenFile, sameFile, shellPath } from '../../scripts/lib/admin-token-file.mjs';
 
 export { sameFile };
 
@@ -94,14 +96,21 @@ function readOnce(path) {
   }
 }
 
-// The config.json of the old directory when it exists (or cannot be checked) and does not list
-// apiOrigin as a tier 2 api, else null: the rule of resolveAdminTokenFile in
-// scripts/lib/admin-token-file.mjs, so one setup's config never sends another setup's token.
+// Why the old directory's config.json refuses the fallback for apiOrigin, as a clause that names
+// the file, else null: the rule of resolveAdminTokenFile in scripts/lib/admin-token-file.mjs, so one
+// setup's config never sends another setup's token. It refuses when it exists and does not list
+// apiOrigin as a tier 2 api, and when it cannot be checked (its directory cannot be searched); the
+// clause says which.
 function oldConfigRefuses(legacy, apiOrigin) {
   const oldDir = dirname(legacy);
   const config = join(oldDir, 'config.json');
-  if (!present(config)) return null;
-  return configuredWorkerOrigins({ CADDIE_ADMIN_HOME: oldDir }).includes(apiOrigin) ? null : config;
+  try {
+    statSync(config);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
+    return `${config} cannot be checked for ${apiOrigin}`;
+  }
+  return configuredWorkerOrigins({ CADDIE_ADMIN_HOME: oldDir }).includes(apiOrigin) ? null : `${config} does not list ${apiOrigin} as a tier 2 api`;
 }
 
 // { path, value, note, legacy, trusted, doubt }: the file a reader should read and its trimmed
@@ -143,9 +152,9 @@ export function adminTokenFileToRead(env = process.env, home = homedir(), { apiO
       return {
         ...result,
         legacy,
-        note: `Note: the admin token file is not at ${path}, its default place under XDG_CONFIG_HOME, and the file at its old place ${legacy} is not read, because ${refusedBy} does not list ${apiOrigin} as a tier 2 api; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`,
+        note: `Note: the admin token file is not at ${path}, its default place under XDG_CONFIG_HOME, and the file at its old place ${legacy} is not read, because ${refusedBy}; set ADMIN_TOKEN_FILE to the file that holds this deployment's token.`,
         trusted: false,
-        doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, only one at its old place ${legacy}, which is not read because ${refusedBy} does not list ${apiOrigin} as a tier 2 api`,
+        doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, only one at its old place ${legacy}, which is not read because ${refusedBy}`,
       };
     }
   }
@@ -154,16 +163,19 @@ export function adminTokenFileToRead(env = process.env, home = homedir(), { apiO
   result.legacy = legacy;
   if (!current.exists) {
     // The new file is missing and the old one is there, so the two are different places: the
-    // advice to move the old file rests on that, not on sameFile.
+    // advice to move the old file rests on that, not on sameFile. Only XDG_CONFIG_HOME leads here
+    // (adminTokenPaths gives no old place with CADDIE_ADMIN_HOME or ADMIN_TOKEN_FILE set). A shell
+    // without XDG_CONFIG_HOME still reads the old path, so the advice is the smoke's
+    // (resolveAdminTokenFile): move the file and leave a symlink at the old path, never only move it.
     return {
       ...result,
       path: legacy,
       value: old.value,
       note: old.value === null
         ? null
-        : `Note: the admin token file is not at ${path}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, so the file at its old place ${legacy} was read instead; if that file holds this deployment's token, move it to ${path}, or set ADMIN_TOKEN_FILE to it.`,
+        : `Note: the admin token file is not at ${path}, its default place under XDG_CONFIG_HOME, so the file at its old place ${legacy} was read instead; if that file holds this deployment's token, move it to ${path} and leave a symlink at the old path (ln -s ${shellPath(path, home)} ${shellPath(legacy, home)}), so every script uses one file, or set ADMIN_TOKEN_FILE to it.`,
       trusted: false,
-      doubt: `there is no token file at ${path}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${legacy}, which may hold another deployment's token`,
+      doubt: `there is no token file at ${path}, its default place under XDG_CONFIG_HOME, only one at its old place ${legacy}, which may hold another deployment's token`,
     };
   }
   if (current.value === null) return result;
