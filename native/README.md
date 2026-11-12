@@ -795,9 +795,13 @@ dependencies.
   `reactivecircus/android-emulator-runner`. The emulator's booted state is cached as a snapshot.
   No secrets. The release APK is signed only after this job passes.
 - **iOS simulator build** (macOS): the shared tests and the Compose UI tests on the iOS simulator,
-  the third-party notices check, the Release device framework link, and an unsigned simulator build
-  of the Xcode project. The TestFlight jobs write the Release app's size, installed and zipped, and
-  the signed IPA's size to their job summaries.
+  the third-party notices check, and an unsigned simulator build of the Xcode project. The
+  TestFlight jobs write the Release app's size, installed and zipped, and the signed IPA's size to
+  their job summaries.
+- **iOS device Release link** (macOS): `:composeApp:linkReleaseFrameworkIosArm64`, a compile check of
+  the device framework in Release. It takes 30 to 45 minutes on a contended runner, so it runs in
+  parallel with the simulator job instead of inside it, which keeps that job under its time limit.
+  The iOS Release framework job waits for it.
 - **TestFlight upload** (macOS, environment `release`, `main` only): described under Signing. It is
   skipped when its secrets are missing.
 
@@ -805,6 +809,11 @@ Gradle's caches (the open-source basic provider of `setup-gradle`), Kotlin/Nativ
 pinned downloads (keyed on `gradle/pinned-downloads.properties` and the runner's OS) and the bundle
 builder's fp32 model (keyed on its revision) are cached. Pull requests only read the caches; `main` writes them. The `~/.konan` key is the hash
 of the version catalog, with no fallback to older keys, so an old Kotlin/Native is never restored.
+The simulator job and the device link job each save their own `~/.konan` key (the latter has
+`-device-` in it), so they never race for one key. The simulator job is the only writer of the
+Gradle cache, and it does not download the iosArm64 libraries, so the device link job (which reads
+that cache without writing it) fetches those again on each run. `dependencies` only resolves the graph and does not download the
+libraries, and a download-only step was not worth a custom task.
 
 The artifacts of this public repository can be downloaded by anyone signed in to GitHub.
 
