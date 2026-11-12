@@ -31,9 +31,10 @@
 //   pass (400 for a near-miss of "expect_status" or "unretire" and for an invalid value) and the
 //   check (409 status_mismatch for the whole batch, nothing written); the tests cover a matching
 //   unretire, a removal or an unretire landing between the read and the PUT, each documented
-//   repair flow, the retry's expectation after an answer that proves a commit (and a removal
-//   landing between the attempts), the earlier attempts named only when the row shows the status
-//   sent, a version mismatch, the near-miss keys of a local document (sent and written back),
+//   repair flow, the retry's expectation after an answer that proves a commit (for searchable and
+//   other documents, and a removal landing between the attempts) and not after one that does not,
+//   the earlier attempts named only when the row shows the status sent, a version mismatch, the
+//   near-miss keys of a local document (sent, written back, and handed to the adapter directly),
 //   skipped_retired, and a listing that does not say what the row holds;
 // - STAT-1 to STAT-3: counts, usage and health, with the smoke and log commands naming variables.
 
@@ -46,6 +47,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BODYLESS_METHODS, HEADER_NAME, bodyMatches, signAdminRequest, verifyAdminSignature } from '../scripts/lib/admin-sign.mjs';
 import { main } from '../scripts/admin/cli.mjs';
+import { createWorkerAdapter } from '../scripts/admin/backends/worker.mjs';
 
 const realFetch = globalThis.fetch;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1859,6 +1861,27 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     assert.equal(stub.state.mismatches, 0);
   });
 
+  test('after a 502 unretire_incomplete the retry expects the stored status of a document that is not searchable: unavailable, partial_index, or the slug alone', async () => {
+    for (const [name, status, slugOnly] of [['unavailable', 'unavailable', false], ['partial_index', 'partial_index', false], ['slug only', undefined, true]]) {
+      seedConferenceFiles(EVENT);
+      RECORDED();
+      removedOnWorker();
+      const path = join(root, 'data', EVENT, 'conference.json');
+      // A removal rewrites the local document as unavailable (operator_removed), so this is the usual case.
+      if (slugOnly) rmSync(path, { force: true });
+      else writeFileSync(path, JSON.stringify({ ...readJson(path), status, status_reason: 'operator_removed' }));
+      stub.state.fanOutFailure = { status: 502, cause: 'unretire_superseded', times: 1 };
+      const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+      assert.equal(r.code, 0, `${name}: ${r.stderr}`);
+      const sent = admins(r.requests).map((x) => JSON.parse(x.body).conferences[0]);
+      assert.ok(sent.every((d) => Object.hasOwn(d, 'expect_status')), `${name}: every attempt carries the key`);
+      assert.deepEqual(sent.map((d) => d.expect_status), [null, 'unavailable'], name);
+      assert.equal(row()?.status, 'unavailable', name);
+      assert.ok(!stub.state.wipedObjects.has(EVENT), `${name}: the retry cleared the removal marker`);
+    }
+    assert.equal(stub.state.mismatches, 0);
+  });
+
   test('after a 2xx whose body was lost the retry expects the status the directory committed', async () => {
     seedConferenceFiles(EVENT);
     RECORDED();
@@ -1939,6 +1962,48 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     assert.deepEqual(admins(both.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, null, null]);
     assert.ok(both.stderr.includes(`testconf-2099 (no row)${TO}searchable; nothing was written by this attempt; earlier attempts of this command may have been applied (answered status 502 (Service is temporarily unavailable); answered status 503 (busy)), so the actual status can be the one this command sent; run conferences unretire --event testconf-2099 again until it answers 200`), both.stderr);
     assert.ok(!both.stderr.includes('may have done the work'));
+  });
+
+  test('a 5xx whose body could not be read proves no commit: the retry keeps its expectation, and the 409 names that answer', async () => {
+    seedConferenceFiles(EVENT);
+    RECORDED();
+    removedOnWorker();
+    // The first attempt is applied, but its answer arrives as a 502 whose body read fails.
+    let first = true;
+    const lost5xx = async (url, init) => {
+      if (!first || !String(url).includes('/admin/')) return realFetch(url, init);
+      first = false;
+      await (await realFetch(url, init)).text();
+      const body = new ReadableStream({ start(c) { c.error(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })); } });
+      return new Response(body, { status: 502 });
+    };
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT), { fetch: lost5xx });
+    assert.equal(r.code, 1);
+    assert.deepEqual(admins(r.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, null]);
+    assert.ok(r.stderr.includes(`testconf-2099 (no row)${TO}searchable; nothing was written by this attempt; an earlier attempt of this command answered status 502, its answer lost and may have been applied`), r.stderr);
+    assert.equal(r.audit.at(-1).error, 'status_mismatch');
+  });
+
+  test('the adapter drops every control key and near-miss of a document it is handed, before it sends', async () => {
+    const adapter = createWorkerAdapter({ name: 't2', tier: 2, api: stub.url }, { credential: TOKEN, fetch: realFetch });
+    const nearMiss = { 'Expect_Status': 'draft', ' expect_status': 'searchable', 'EXPECT_STATUS ': 7, 'Unretire': 'yes', 'unretire ': false, expect_status: 'draft', unretire: true };
+    const before = stub.requests.length;
+    const hidden = await adapter.hideConference({ event: EVENT, slug: EVENT, mode: 'run', doc: { slug: EVENT, name: 'Test Conf', status: 'unavailable', status_reason: 'operator_hidden', ...nearMiss } });
+    assert.equal(hidden.counts.upserted, 1);
+    const put = stub.requests.slice(before).find((x) => x.method === 'PUT');
+    const doc = JSON.parse(put.body).conferences[0];
+    for (const key of Object.keys(nearMiss)) assert.ok(!Object.hasOwn(doc, key), `the hide sends no ${JSON.stringify(key)}`);
+    assert.equal(doc.status_reason, 'operator_hidden');
+    // The unretire sends its own flag and precondition, never the document's.
+    stub.state.conferences = stub.state.conferences.filter((c) => c.slug !== EVENT);
+    stub.state.retired.add(EVENT);
+    const mark = stub.requests.length;
+    await adapter.unretireConference({ event: EVENT, slug: EVENT, mode: 'run', doc: { slug: EVENT, status: 'searchable', ...nearMiss } });
+    const sent = JSON.parse(stub.requests.slice(mark).find((x) => x.method === 'PUT').body).conferences[0];
+    for (const key of Object.keys(nearMiss).filter((k) => k !== 'expect_status' && k !== 'unretire')) assert.ok(!Object.hasOwn(sent, key), `the unretire sends no ${JSON.stringify(key)}`);
+    assert.equal(sent.expect_status, null);
+    assert.equal(sent.unretire, true);
+    assert.deepEqual(stub.problems, [], 'the stand-in saw no near-miss key and no invalid expect_status');
   });
 
   test('no near-miss of expect_status or unretire is ever sent or written back, whatever the local document holds; a hide sends no precondition', async () => {
