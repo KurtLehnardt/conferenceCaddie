@@ -265,15 +265,27 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
     });
   }
 
-  test('ADMIN_SIG_MIN is never loosened: a value that is not a string, or null, never means "1"', () => {
+  test('ADMIN_SIG_MIN is never loosened: a value that is not a string never means "1"', () => {
     for (const raw of [2, 1, '', false, 0, ['2'], ' 1', '1 ', '1\n']) {
       assert.deepEqual(adminConfig({ ADMIN_SIG_MIN: raw }, CUSTOM), { ok: false, invalid: 'ADMIN_SIG_MIN' }, JSON.stringify(raw));
     }
     for (const raw of [1, ['https://caddie.example'], {}, true]) {
       assert.deepEqual(adminConfig({ ADMIN_ORIGIN: raw }, CUSTOM), { ok: false, invalid: 'ADMIN_ORIGIN' }, JSON.stringify(raw));
     }
-    // An absent setting is the source default, "1" in this step.
+    // An absent setting is the source default, "1" in this step. The Worker reads it with ??, so
+    // null (which a Worker's environment never holds) counts as absent too, on purpose: it takes
+    // the default rather than failing closed, which keeps step d's default of "2" in force for it.
     assert.deepEqual(adminConfig({ ADMIN_SIG_MIN: undefined }, CUSTOM).allowedVersions, [1, 2]);
+    assert.deepEqual(adminConfig({ ADMIN_SIG_MIN: null }, CUSTOM), { ok: true, allowedVersions: [1, 2], origins: [CUSTOM] });
+  });
+
+  test('the verifier tries each distinct origin once: a list with a duplicate costs one compare per key', async () => {
+    const c = signCases.find((x) => x.origin === CUSTOM) ?? signCases[0];
+    for (const keys of [[c.key], [c.key, c.key === KEY ? KEY2 : KEY]]) {
+      const compare = countingCompare();
+      const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys, nowMs: c.ts * 1000, timingSafeEqual: compare.fn, allowedVersions: [1, 2], origins: [c.origin, c.origin] });
+      assert.deepEqual([v.ok, v.origin, compare.n], [true, c.origin, keys.length]);
+    }
   });
 
   test('the v1 and v2 canonical strings differ for the same fields, so neither header can carry the other\'s signature', () => {
@@ -283,6 +295,48 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
     assert.equal(v1, `caddie-admin-v1\nGET\n/admin/stats\n${EMPTY_BODY_SHA256}\n1762848000\n${'A'.repeat(22)}\n`);
     assert.equal(v2, `caddie-admin-v2\nGET\n/admin/stats\n${EMPTY_BODY_SHA256}\n1762848000\n${'A'.repeat(22)}\n${CUSTOM}\n`);
   });
+});
+
+// ---------------------------------------------------------------------------------------------
+// test/fixtures/admin-sign.v1.json under this step's settings. admin-auth.test.mjs runs it with the
+// verifier's default, [1]; the Worker now passes adminConfig()'s ([1, 2] and the request-URL
+// origin), and every v1 case must keep its result there. The one intended change is
+// v-malformed-version: a v2 header, malformed to a v1-only verifier, is now read and fails its
+// signature, which the Worker charges to the failed-auth bucket like any bad signature.
+
+const v1Fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
+const V1_CHANGED = new Map([['v-malformed-version', { ok: false, reason: 'signature' }]]);
+
+describe('test/fixtures/admin-sign.v1.json under step b\'s settings', () => {
+  const v1Cases = v1Fixture.cases.filter((c) => c.kind === 'sign' || c.kind === 'verify');
+
+  test('the fixture still has its cases, and the only changed one is a v2 header', () => {
+    assert.ok(v1Cases.length >= 55, `${v1Cases.length} v1 sign and verify cases`);
+    for (const id of V1_CHANGED.keys()) assert.equal(parseVersionedAdminHeader(v1Cases.find((c) => c.id === id).header).version, 2, id);
+  });
+
+  for (const c of v1Cases) {
+    test(`v1 ${c.kind} ${c.id}: the same result with ADMIN_SIG_MIN and ADMIN_ORIGIN unset${V1_CHANGED.has(c.id) ? ' (changed on purpose)' : ''}`, async () => {
+      const keys = c.kind === 'sign' ? [c.key] : c.keys;
+      const nowMs = (c.kind === 'sign' ? c.ts : c.now) * 1000;
+      const cfg = adminConfig({}, `${CUSTOM}${c.path_with_query}`);
+      assert.deepEqual(cfg, { ok: true, allowedVersions: [1, 2], origins: [CUSTOM] });
+      const run = async (settings) => {
+        const compare = countingCompare();
+        const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys, nowMs, timingSafeEqual: compare.fn, ...settings });
+        return { ok: v.ok, reason: v.reason, header: v.header ?? null, version: v.version ?? null, compares: compare.n };
+      };
+      const v1Only = await run({});
+      const stepB = await run({ allowedVersions: cfg.allowedVersions, origins: cfg.origins });
+      if (V1_CHANGED.has(c.id)) {
+        assert.deepEqual([v1Only.ok, v1Only.reason], [false, 'malformed']);
+        assert.deepEqual({ ok: stepB.ok, reason: stepB.reason }, V1_CHANGED.get(c.id));
+      } else {
+        assert.deepEqual(stepB, v1Only);
+        if (stepB.ok) assert.equal(stepB.version, 1);
+      }
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------------------------

@@ -426,11 +426,16 @@ Two optional Worker variables decide what is accepted. Neither is set in `wrangl
   Each entry must be a plain `http://` or `https://` origin with no path, query, credentials, `%`
   or non-ASCII character (an internationalised host in its `xn--` form); it is lowercased and the
   default port is dropped. When it is unset or empty, the Worker expects the origin of the request
-  URL it was invoked with, which on Cloudflare is always one of its own hostnames, never one taken
-  from a `Host` header. That is right for the plain `workers.dev` deployment. A Worker behind a
+  URL it was invoked with. The Worker never reads the `Host` header itself, but on Cloudflare the
+  request URL's host is the host the client sent, limited only to the hostnames whose routes match
+  this Worker. That is safe for the exact `workers.dev` hostname and for nothing else: with a zone
+  route such as `*.example.org/*`, a client can name any matching subdomain, even one that is
+  DNS-only or served elsewhere (a staging host), by connecting to a Cloudflare address directly,
+  and a request signed for that host would then verify here. A Worker with any zone route or
   custom domain, or behind Cloudflare Access or another proxy in front of `/admin/*`, needs
   `ADMIN_ORIGIN` in `[vars]`, listing every hostname that routes to it. Never list another
-  deployment's origin: a request signed for that deployment would then verify here.
+  deployment's origin: a request signed for that deployment would then verify here. Keep the list
+  short (a few entries): each failed v2 attempt costs one HMAC per key and listed origin.
 - `ADMIN_SIG_MIN`: the oldest version accepted. Unset means the default in the source,
   `WORKER_DEFAULT_SIG_MIN` in `src/lib/admin-auth.js`, which is `"1"` until step d changes it to
   `"2"`. The value is matched exactly: `"1"` accepts v1 and v2, `"2"` accepts v2 only, and a v1
@@ -449,6 +454,21 @@ which replaces the Worker's variables with those of `wrangler.toml` on every dep
 value would vanish at the next routine deploy. For `ADMIN_ORIGIN` that would silently fall back to
 the request URL's origin, which is wrong behind a proxy; that is also why the minimum's default
 lives in the source rather than in a variable.
+
+Security warning: never set either with `wrangler secret put`. A secret is the one kind of value
+that survives every deploy, and nothing in the repository shows it. A leftover `ADMIN_SIG_MIN`
+secret of `"1"` would override the source default of step d on every deploy and keep the v1
+replay window open, an empty one would answer 404 to every admin call, the ingest included, and
+a forgotten `ADMIN_ORIGIN` secret that lists a staging origin would make requests signed for
+staging verify here. Before deploying this step, and again before step d, run this in `worker/`,
+which prints the names of the Worker's secrets and never their values:
+
+```sh
+npx wrangler secret list
+```
+
+Neither `ADMIN_SIG_MIN` nor `ADMIN_ORIGIN` may be among them. If one is, remove it with
+`npx wrangler secret delete <name>`, and commit the value in `[vars]` instead if one is needed.
 
 ### Rotating the admin token
 

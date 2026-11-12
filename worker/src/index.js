@@ -389,8 +389,10 @@ async function handleApi(request, env, url, originAllowed) {
 //      nonce it has seen (401 admin_replay, schema.js admin_nonces). v1 and v2 nonces share the
 //      table, and the forwarded headers do not carry the version.
 // The origins a v2 signature may name are the ADMIN_ORIGIN list when it is set, else the origin of
-// the request's own URL, never the Host header (adminConfig). The Authorization header is not read
-// here.
+// the request's own URL (adminConfig). The Worker never reads the Host header itself, but on
+// Cloudflare the request URL's host is the one the client sent, limited to the hostnames routed to
+// this Worker, so the fallback is safe only on the exact workers.dev hostname. The Authorization
+// header is not read here.
 
 const timingSafeEqual = (a, b) => crypto.subtle.timingSafeEqual(a, b);
 

@@ -54,7 +54,9 @@ export const NONCE_TTL_MS = 900_000;
 // The ADMIN_SIG_MIN this Worker uses when the setting is absent from its environment. It is in the
 // source, not in wrangler.toml, so that no deploy path can lower it: once step d of the migration
 // (DECISIONS.md, "Admin signature v2") changes it to "2", a deploy that drops the [vars] entry, or a
-// fork that never had one, still refuses v1. Only an explicit ADMIN_SIG_MIN = "1" reopens v1.
+// fork that never had one, still refuses v1. Only an explicit ADMIN_SIG_MIN = "1" reopens v1, and it
+// belongs in [vars] of wrangler.toml, committed: never a secret, which no deploy replaces and the
+// repository does not show, so a forgotten one would keep v1 open without anyone seeing it.
 export const WORKER_DEFAULT_SIG_MIN = '1';
 
 const utf8 = (text) => new TextEncoder().encode(text);
@@ -115,10 +117,13 @@ export function canonicalStringV2(method, pathWithQuery, header, origin) {
 //   origins          the origins a v2 signature may name: the ADMIN_ORIGIN list when it is set
 //                    (parseAdminOrigin), else the request URL's own origin, taken as
 //                    new URL(requestUrl).origin and never through canonicalOrigin(), which refuses
-//                    a URL with a path. Cloudflare invokes the Worker only for the hostnames
-//                    routed to it, so the fallback is safe there; behind a proxy that forwards a
-//                    client-chosen Host, on a custom domain or behind Access, ADMIN_ORIGIN must be
-//                    set.
+//                    a URL with a path. That origin is not chosen by this Worker: on Cloudflare the
+//                    request URL's host is the host the client sent, limited only to the hostnames
+//                    whose routes match this Worker. The fallback is therefore safe only for the
+//                    exact workers.dev hostname. With a zone route (a wildcard such as
+//                    *.example.org/* lets the client pick any matching subdomain, even one that is
+//                    DNS-only or hosted elsewhere), a custom domain, Access, or a proxy that
+//                    forwards a client-chosen Host, ADMIN_ORIGIN must be set.
 // Either setting holding anything else is invalid configuration: { ok: false, invalid } names the
 // setting (never its value), and the caller answers 404 to every admin request, v1 included.
 export function adminConfig(env, requestUrl) {
@@ -141,10 +146,13 @@ function settingsUsable(allowedVersions, origins) {
 
 // Whether any key reproduces the header's signature, and with which origin for v2. A v1 header is
 // checked over the v1 canonical string with each key; a v2 header over the v2 canonical string for
-// every pair of key and origin (keys outer, origins inner). Every comparison runs even after one
-// matched, so the time taken depends only on the number of keys and origins, never on which pair
-// matched. Returns { matched, origin } (origin null for v1).
-export async function signatureMatches({ method, pathWithQuery, header, keys, origins = [], timingSafeEqual }) {
+// every pair of key and origin (keys outer, origins inner), each distinct origin once. Every
+// comparison runs even after one matched, so the time taken depends only on the number of keys and
+// origins, never on which pair matched. Returns { matched, origin } (origin null for v1), an object
+// that is always truthy: test `matched`, never the result itself. It is not exported, and it is not
+// called signatureMatches, the name of the boolean function it replaced, so that no caller written
+// for the old shape can use it by mistake.
+async function matchSignature({ method, pathWithQuery, header, keys, origins = [], timingSafeEqual }) {
   const version = header.version ?? 1;
   const texts = version === 2
     ? [...new Set(origins)].map((origin) => ({ origin, data: utf8(canonicalStringV2(method, pathWithQuery, header, origin)) }))
@@ -195,7 +203,7 @@ export async function verifyAdminHeader({ headerValue, method, pathWithQuery, ke
   if (!header || !allowedVersions.includes(header.version)) return { ok: false, reason: 'malformed' };
   if (BODYLESS_METHODS.has(String(method).toUpperCase()) && header.bodySha256 !== EMPTY_BODY_SHA256) return { ok: false, reason: 'bodyless_body_hash' };
   if (!mayTry()) return { ok: false, reason: 'limited' };
-  const sig = await signatureMatches({ method, pathWithQuery, header, keys: held, origins: header.version === 2 ? origins : [], timingSafeEqual });
+  const sig = await matchSignature({ method, pathWithQuery, header, keys: held, origins: header.version === 2 ? origins : [], timingSafeEqual });
   if (!sig.matched) return { ok: false, reason: 'signature' };
   if (!withinSkew(header.ts, nowMs)) return { ok: false, reason: 'skew' };
   return header.version === 2 ? { ok: true, reason: null, header, version: 2, origin: sig.origin } : { ok: true, reason: null, header, version: 1 };
