@@ -450,6 +450,16 @@ class CaddieCore(
         afterEmbedderLoad()
     }
 
+    /**
+     * For tests: waits until the load of the query embedder that has started, if one has, has ended
+     * and its state is written. A load starts within the call that needs it ([search], [forYou]),
+     * so a test can check after this that a call started none.
+     */
+    internal suspend fun awaitEmbedderLoad() {
+        embedderMutex.withLock { embedderJob }?.join()
+        awaitIdle()
+    }
+
     // Publishes the embedder's state for [generation], unless a later load or release has happened.
     private fun publishSemantic(generation: Long, next: (SemanticState) -> SemanticState) = command {
         beforeSemanticPublish()
