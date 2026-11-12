@@ -93,12 +93,12 @@ internal object ScheduleParser {
         return Detected(Format.Text)
     }
 
-    /** The entries of [text] in the [detected] format. */
-    fun entries(text: String, detected: Detected, filename: String, conference: ImportConference): List<ImportEntry> = when (detected.format) {
+    /** The entries of [text] in the [detected] format; [clock] only gives the text format a year when the conference has none. */
+    fun entries(text: String, detected: Detected, filename: String, conference: ImportConference, clock: Clock = Clock.System): List<ImportEntry> = when (detected.format) {
         Format.Ics -> icsEntries(text, conference)
         Format.Json -> jsonEntries(detected.json!!, conference)
         Format.Csv -> csvEntries(text, conference, filename)
-        Format.Text -> textEntries(text, conference)
+        Format.Text -> textEntries(text, conference, clock)
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -204,10 +204,11 @@ internal object ScheduleParser {
         var contextChars = 0
     }
 
-    private fun currentYear(): Int = Clock.System.now().toLocalDateTime(TimeZone.UTC).year
+    private fun currentYear(clock: Clock): Int = clock.now().toLocalDateTime(TimeZone.UTC).year
 
-    fun textEntries(text: String, conference: ImportConference): List<ImportEntry> {
-        val defaultYear = conference.startDate?.take(4)?.toIntOrNull()?.takeIf { it != 0 } ?: currentYear()
+    /** The text format. A date without a year takes the conference's start year; without one, the year of [clock] in UTC. */
+    fun textEntries(text: String, conference: ImportConference, clock: Clock = Clock.System): List<ImportEntry> {
+        val defaultYear = conference.startDate?.take(4)?.toIntOrNull()?.takeIf { it != 0 } ?: currentYear(clock)
         val zone = conference.timeZone?.takeIf { it.isNotEmpty() } ?: "UTC"
         val entries = ArrayList<ImportEntry>()
         var date: Triple<Int, Int, Int>? = null
