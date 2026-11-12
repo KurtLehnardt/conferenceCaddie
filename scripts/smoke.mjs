@@ -73,9 +73,10 @@
 //                        unav1) print SKIP instead of FAIL.
 //   CADDIE_ADMIN_SIG_VERSION  the admin signature version, read as caddie-admin and the ingest read it
 //                        (signVersionFromEnv of scripts/lib/admin-origin.mjs): unset or empty means 2,
-//                        bound to API_BASE's origin; exactly "1" signs v1, the temporary rollback until
-//                        step d of the migration (DECISIONS.md, "Admin signature v2") removes v1 from
-//                        the Worker; exactly "2" means 2. Any other value is a FAIL config with exit
+//                        bound to API_BASE's origin; exactly "1" signs v1, which the Worker refuses
+//                        since step d of the migration (DECISIONS.md, "Admin signature v2") unless
+//                        ADMIN_SIG_MIN = "1" is committed in its [vars] (the rollback); exactly "2"
+//                        means 2. Any other value is a FAIL config with exit
 //                        code 2 before any request, never a silent default. Under "1" a run that signs
 //                        prints one NOTE saying that v1 is not bound to a host and to unset the
 //                        variable once the rollback is over.
@@ -227,7 +228,8 @@ const API_ORIGIN_TYPED = canonicalOrigin(API_BASE_TYPED);
 // checks (readCredential: mode 0600, the whole file trimmed), so the smoke and the CLI use one key.
 // The default file is the production Worker's token, and a v1 signed request is not bound to a host:
 // whoever receives one can replay it to the Worker within the five-minute window (a v2 one is bound
-// to API_BASE's origin, but CADDIE_ADMIN_SIG_VERSION=1 still signs v1 until step d). So it is read
+// to API_BASE's origin, but CADDIE_ADMIN_SIG_VERSION=1 still signs v1 until step e removes the
+// switch, and a Worker rolled back with ADMIN_SIG_MIN = "1" accepts it). So it is read
 // only when the origin as typed (API_BASE_TYPED) is exactly the api of a tier 2 backend in
 // caddie-admin's config.json (configuredWorkerOrigins: https or http to this machine, an origin that
 // canonicalOrigin accepts), that origin is not on this machine (a local Worker has its own token in
@@ -306,9 +308,10 @@ if (SIGNS_ADMIN && API_ORIGIN_TYPED !== API_ORIGIN) {
   console.log(`FAIL config: ${process.env.API_BASE ? 'API_BASE' : 'the origin of BASE_URL'} must be the Worker's origin as plain ASCII (http:// or https://, a host and a port only, no user name, "%" or backslash; an internationalised host in its punycode xn-- form) to sign admin calls`);
   process.exit(1);
 }
-// The rollback to v1 (CADDIE_ADMIN_SIG_VERSION=1, until step d) is never silent.
+// The rollback to v1 (CADDIE_ADMIN_SIG_VERSION=1, which the Worker accepts since step d only while
+// ADMIN_SIG_MIN = "1" is committed in its [vars]) is never silent.
 if (SIGNS_ADMIN && SIGN_VERSION === 1) {
-  console.log('NOTE CADDIE_ADMIN_SIG_VERSION=1: the admin calls are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over');
+  console.log('NOTE CADDIE_ADMIN_SIG_VERSION=1: the admin calls are signed with v1, which is not bound to a host, so a request that reaches another host can be replayed to the Worker within five minutes; since step d the Worker accepts v1 only while ADMIN_SIG_MIN = "1" is committed in [vars] of worker/wrangler.toml and deployed; unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over');
 }
 // A browser sends its Origin on every call to a Worker on another origin, and on every same-origin
 // POST, PUT and DELETE, so the run sends it on every call to the Worker. Against Cloud Run no Origin

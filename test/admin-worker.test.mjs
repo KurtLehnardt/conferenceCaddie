@@ -578,8 +578,9 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
   });
 
   // Step c of the migration (DECISIONS.md, "Admin signature v2"): v2 by default, bound to the
-  // configured api's origin; CADDIE_ADMIN_SIG_VERSION=1 is the rollback to v1 until step d; empty
-  // counts as unset (GitHub Actions passes an undefined variable as "").
+  // configured api's origin; CADDIE_ADMIN_SIG_VERSION=1 is the client half of the rollback to v1,
+  // which a Worker accepts since step d only with ADMIN_SIG_MIN = "1"; empty counts as unset (GitHub
+  // Actions passes an undefined variable as "").
   test('the signature is v2 by default, bound to the api origin; CADDIE_ADMIN_SIG_VERSION=1 signs v1 and "" means 2', async () => {
     const verify = (call, allowedVersions, expectedOrigins) => verifyAdminSignature({ headerValue: call.headers['x-caddie-admin'], method: call.method, pathWithQuery: call.pathWithQuery, keys: [TOKEN], allowedVersions, expectedOrigins });
     for (const [env, version] of [[{}, 2], [{ CADDIE_ADMIN_SIG_VERSION: '' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '2' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '1' }, 1]]) {

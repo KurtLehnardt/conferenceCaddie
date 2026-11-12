@@ -197,12 +197,13 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     }
   });
 
-  test('CADDIE_ADMIN_SIG_VERSION=1 signs every admin call v1, the rollback until step d, and says so once', () => {
+  test('CADDIE_ADMIN_SIG_VERSION=1 signs every admin call v1, the client half of the rollback, and says so once', () => {
     // The rollback is never silent: one NOTE that v1 is not bound to a host and that the variable
     // must be unset afterwards. The default run prints none.
     const notes = (run) => run.lines.filter((l) => l.startsWith('NOTE CADDIE_ADMIN_SIG_VERSION=1:'));
     assert.equal(notes(v1).length, 1, v1.stdout);
     assert.match(notes(v1)[0], /signed with v1, which is not bound to a host/);
+    assert.match(notes(v1)[0], /since step d the Worker accepts v1 only while ADMIN_SIG_MIN = "1" is committed in \[vars\] of worker\/wrangler\.toml and deployed;/);
     assert.match(notes(v1)[0], /unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over/);
     assert.ok(v1.lines.indexOf(notes(v1)[0]) < v1.lines.findIndex((l) => /^(PASS|FAIL|SKIP) /.test(l)), 'before the first check');
     assert.equal(notes(v2).length, 0);
