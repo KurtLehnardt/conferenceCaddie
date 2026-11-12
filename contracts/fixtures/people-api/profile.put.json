@@ -136,6 +136,37 @@
           "error": "forbidden"
         }
       }
+    },
+    {
+      "name": "a shared talk that left the schedule is dropped",
+      "request": {
+        "headers": {
+          "X-Caddie-Device": "AAECAwQFBgcICQoLDA0ODw.ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+        },
+        "body": {
+          "event": "kubecon-cloudnativecon-north-america-2026",
+          "profile": {
+            "display_name": "Test Attendee",
+            "about": "SRE at a bank."
+          },
+          "open_to_meet": true,
+          "shared_talk_ids": [
+            "kubecon-cloudnativecon-north-america-2026:1371070",
+            "kubecon-cloudnativecon-north-america-2026:1250975"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "open_to_meet": true,
+          "shared_talk_ids": [
+            "kubecon-cloudnativecon-north-america-2026:1371070"
+          ],
+          "hidden_for_owner": false
+        }
+      }
     }
   ]
 }
