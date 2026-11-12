@@ -418,14 +418,19 @@ jobs:
         with:
           cache-provider: basic
 
-      # Kotlin/Native and its toolchain (about 2 GB) are keyed on the version catalog only, so an
-      # old Kotlin version is never restored. Pull requests only read the cache; main writes it.
+      # Kotlin/Native and its toolchain (about 2 GB) are keyed on the version catalog and, here, the
+      # partial-linkage level, so an old Kotlin version is never restored. Pull requests only read the
+      # cache; main writes it. ~/.konan also holds the per-library caches that the debug links reuse.
+      # Their own key leaves out the partial-linkage level, and a cache built at the default level lets a
+      # missing symbol through, so "pl-error" names the level the caches were built at
+      # (-Xpartial-linkage-loglevel=ERROR, shared/build.gradle.kts). Change it with the level, and in
+      # dependabot-verification-metadata.yml, which restores the same key.
       - name: Restore Kotlin/Native
         id: konan
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
+          key: konan-${{ runner.os }}-${{ runner.arch }}-pl-error-${{ hashFiles('native/gradle/libs.versions.toml') }}
 
       - name: Show the Xcode version
         run: xcodebuild -version

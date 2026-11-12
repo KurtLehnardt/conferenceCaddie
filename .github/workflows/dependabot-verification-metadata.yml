@@ -83,12 +83,14 @@ jobs:
 
       # Restored only, as on pull requests in native.yml. Kotlin/Native's toolchain is LLVM and the
       # sysroots; the Kotlin/Native distribution itself is a Maven artifact, which Gradle still resolves
-      # and records. The pinned downloads are checked by SHA-256 in the build.
+      # and records. The key is the one native.yml's simulator job saves on main (with "pl-error", the
+      # partial-linkage level its library caches were built at); keep the two equal. The pinned
+      # downloads are checked by SHA-256 in the build.
       - name: Restore Kotlin/Native
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/gradle/libs.versions.toml') }}
+          key: konan-${{ runner.os }}-${{ runner.arch }}-pl-error-${{ hashFiles('native/gradle/libs.versions.toml') }}
 
       - name: Restore the pinned downloads
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
