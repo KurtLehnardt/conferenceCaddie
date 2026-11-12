@@ -6,11 +6,18 @@
 //
 // --operator mints the third key, the one the caddie-admin command line uses, and writes it to a
 // file (default <config dir>/es-admin-key, mode 0600; --out changes the path) instead of Secret
-// Manager. It is limited to the caddie-* indices (read, write, delete, maintenance,
-// view_index_metadata) plus the cluster privilege monitor, and holds no security, inference or
-// index-management privilege, so a leak of it cannot create users, keys or indices. It expires
-// after 90 days unless --expiration says otherwise (an Elasticsearch duration such as 30d).
-// This mode needs no GC_PROJECT and no gcloud. It refuses to overwrite an existing file.
+// Manager. It is limited to the caddie-* indices (read, write, view_index_metadata, monitor,
+// maintenance), plus create_index and delete_index on caddie-topicwork-* (scripts/topics.mjs builds
+// and removes a work index on every run), and the two cluster actions cluster:monitor/health and
+// cluster:monitor/state. It holds no security, inference or other index-management privilege (not
+// the named cluster privilege monitor, which would include inference), so a leak of it cannot
+// create users, keys or other indices. Create the caddie-* indices, aliases and the first topics and
+// facets with the short-lived setup key first (npm run es:setup and the first ingest and
+// build-facets); the operator key only maintains what exists. It expires after 90 days unless
+// --expiration says otherwise (an Elasticsearch duration up to 365d, such as 30d). Every check
+// that fails invalidates the new key with the setup key and removes the file, and the key's id (not
+// a secret) is printed so you can find it. This mode needs no GC_PROJECT and no gcloud. It refuses
+// to overwrite an existing file.
 //
 // --only caddie-es-readonly (or caddie-es-people) re-mints just that key; the other is only
 // verified.
@@ -34,7 +41,7 @@
 // check.
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, openSync, closeSync, writeSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, openSync, closeSync, writeSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -86,13 +93,18 @@ const OPERATOR = {
   user: 'caddie-operator-svc',
   role: 'caddie_operator',
   name: 'caddie-operator',
-  cluster: ['monitor'],
-  indices: [{ names: ['caddie-*'], privileges: ['read', 'write', 'delete', 'maintenance', 'view_index_metadata'] }],
+  // Cluster actions rather than the named privilege monitor, which also covers inference.
+  cluster: ['cluster:monitor/health', 'cluster:monitor/state'],
+  indices: [
+    { names: ['caddie-*'], privileges: ['read', 'write', 'view_index_metadata', 'monitor', 'maintenance'] },
+    { names: ['caddie-topicwork-*'], privileges: ['create_index', 'delete_index'] },
+  ],
 };
 
 async function es(method, path, body, auth = `ApiKey ${ADMIN}`) {
   const res = await fetch(esUrlOrExit() + path, {
     method,
+    redirect: 'error', // a redirect would carry the Authorization header to another host
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -189,11 +201,19 @@ function writeKeyFile(file, value) {
   chmodSync(file, 0o600);
 }
 
+const EXPIRATION_RE = /^([1-9][0-9]{0,5})([dhm])$/;
+const EXPIRATION_MAX_MINUTES = 365 * 24 * 60;
+function checkExpiration(value) {
+  const m = EXPIRATION_RE.exec(value);
+  const minutes = m ? Number(m[1]) * { d: 1440, h: 60, m: 1 }[m[2]] : Infinity;
+  if (minutes > EXPIRATION_MAX_MINUTES) throw new Error('--expiration takes a duration such as 30d, 12h or 90d, at most 365d');
+}
+
 async function mintOperator() {
   const file = operatorFile();
   if (existsSync(file)) throw new Error(`${file} exists; move it away first (this script never overwrites a key file)`);
   const expiration = argValue('--expiration') ?? '90d';
-  if (!/^[1-9][0-9]{0,4}[dhm]$/.test(expiration)) throw new Error('--expiration takes a duration such as 30d, 12h or 90d');
+  checkExpiration(expiration);
   const k = OPERATOR;
   must(await es('PUT', `/_security/role/${k.role}`, { cluster: [...k.cluster, 'manage_own_api_key'], indices: k.indices }), `Role ${k.role}`);
   const password = randomPassword();
@@ -204,8 +224,26 @@ async function mintOperator() {
     `API key for ${k.user}`,
   );
   must(await es('POST', `/_security/user/${k.user}/_password`, { password: randomPassword() }), `Password reset for ${k.user}`);
-  writeKeyFile(file, key.encoded);
-  console.log(`Minted the operator key (expires in ${expiration}) and wrote it to ${file} with mode 0600.`);
+  console.log(`Minted the operator key ${key.id} (expires in ${expiration}).`);
+
+  // From here on, any failure invalidates the new key (with the setup key) and removes the file.
+  let wrote = false;
+  const undo = async (why) => {
+    if (wrote) {
+      try { unlinkSync(file); } catch {}
+    }
+    const r = await es('DELETE', '/_security/api_key', { ids: [key.id] });
+    console.error(`${why}; ${r.status < 300 ? `invalidated the new key ${key.id}` : `could NOT invalidate the new key ${key.id} (status ${r.status}); do it in Kibana`}${wrote ? ' and removed the file' : ''}.`);
+  };
+  try {
+    writeKeyFile(file, key.encoded);
+    wrote = true;
+    console.log(`Wrote it to ${file} with mode 0600.`);
+  } catch (err) {
+    await undo(`Writing ${file} failed (${err.code ?? 'error'})`);
+    return false;
+  }
+
   const O = `ApiKey ${key.encoded}`;
   const checks = [];
   const check = (ok, label) => {
@@ -213,24 +251,43 @@ async function mintOperator() {
     console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`);
   };
   const health = await es('GET', '/_cluster/health', undefined, O);
-  check(health.status === 200, 'operator key: cluster health (monitor)');
-  const cat = await es('GET', '/_cat/indices/caddie-*?format=json&h=index', undefined, O);
-  check(cat.status === 200, 'operator key: list the caddie-* indices');
-  const other = await es('POST', '/caddie-keycheck-not-ours-never/_search', { size: 0 }, O);
-  check(other.status === 403, 'operator key: cannot read an index outside caddie-*');
+  check(health.status === 200, 'operator key: cluster health');
+  const cat = await es('GET', '/_cat/indices/caddie-*?format=json&h=index,docs.count', undefined, O);
+  const rows = Array.isArray(cat.json) ? cat.json : [];
+  check(cat.status === 200 && rows.length > 0 && rows.every((r) => r['docs.count'] !== undefined && r['docs.count'] !== null && r['docs.count'] !== ''), 'operator key: list the caddie-* indices with their document counts (stats usage)');
+  const work = `caddie-topicwork-keycheck-${randomBytes(4).toString('hex')}`;
+  const made = await es('PUT', `/${work}`, { settings: { number_of_shards: 1 } }, O);
+  const gone = made.status === 200 ? await es('DELETE', `/${work}`, undefined, O) : { status: 0 };
+  check(made.status === 200 && gone.status === 200, 'operator key: create and delete a caddie-topicwork-* index (the topics script)');
+  const outside = await es('POST', '/keycheck-outside-never/_search', { size: 0 }, O);
+  check(outside.status === 403, 'operator key: cannot read an index outside caddie-*');
   const roles = await es('GET', '/_security/role', undefined, O);
   check(roles.status === 403, 'operator key: cannot read security settings');
+  const inference = await es('GET', '/_inference/_all', undefined, O);
+  check(inference.status === 403, 'operator key: cannot list inference endpoints');
   const priv = await es(
     'POST',
     '/_security/user/_has_privileges',
-    { cluster: ['monitor', 'manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'], index: [{ names: ['caddie-people'], privileges: ['read', 'write', 'delete', 'maintenance', 'view_index_metadata', 'manage', 'create_index'] }] },
+    {
+      cluster: ['monitor', 'manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'],
+      index: [
+        { names: ['caddie-people'], privileges: ['read', 'write', 'view_index_metadata', 'monitor', 'maintenance', 'manage', 'create_index', 'delete_index'] },
+        { names: ['caddie-talks'], privileges: ['create_index', 'delete_index', 'manage'] },
+        { names: [work], privileges: ['create_index', 'delete_index'] },
+      ],
+    },
     O,
   );
   const cl = priv.json?.cluster ?? {};
-  const ix = priv.json?.index?.['caddie-people'] ?? {};
-  check(priv.status === 200 && cl.monitor === true && ['manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'].every((p) => cl[p] === false), 'operator key: monitor only at cluster level, no security, inference or manage privileges');
-  check(['read', 'write', 'delete', 'maintenance', 'view_index_metadata'].every((p) => ix[p] === true) && ix.manage === false && ix.create_index === false, 'operator key: read, write, delete, maintenance and metadata on caddie-*, but not manage or create_index');
-  return checks.every(Boolean);
+  const ix = priv.json?.index ?? {};
+  check(priv.status === 200 && ['monitor', 'manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'].every((p) => cl[p] === false), 'operator key: no cluster monitor (it includes inference), no security, inference or manage privileges');
+  check(['read', 'write', 'view_index_metadata', 'monitor', 'maintenance'].every((p) => ix['caddie-people']?.[p] === true) && ['manage', 'create_index', 'delete_index'].every((p) => ix['caddie-people']?.[p] === false), 'operator key: read, write, metadata, monitor and maintenance on caddie-*, but not manage, create_index or delete_index');
+  check(['create_index', 'delete_index', 'manage'].every((p) => ix['caddie-talks']?.[p] === false) && ix[work]?.create_index === true && ix[work]?.delete_index === true, 'operator key: create_index and delete_index only on caddie-topicwork-*, refused on caddie-talks');
+  if (!checks.every(Boolean)) {
+    await undo('A check failed');
+    return false;
+  }
+  return true;
 }
 
 async function verify(readKey, peopleKey) {

@@ -214,6 +214,30 @@ test('the User-Agent of the ingest has a neutral default and an environment over
   assert.doesNotMatch(read('scripts/lib/http.mjs'), /kurtlehnardt/i);
 });
 
+test('the CLI messages quoted in ADMIN_CLI.md exist in scripts/admin', () => {
+  const doc = read('docs/ADMIN_CLI.md');
+  const sources = ['scripts/admin/cli.mjs', 'scripts/admin/credentials.mjs', 'scripts/admin/config.mjs', 'scripts/admin/confirm.mjs', ...fs.readdirSync(path.join(ROOT, 'scripts/admin/backends')).map((f) => `scripts/admin/backends/${f}`), ...fs.readdirSync(path.join(ROOT, 'scripts/admin/commands')).map((f) => `scripts/admin/commands/${f}`)]
+    .filter((f) => fs.existsSync(path.join(ROOT, f)))
+    .map(read)
+    .join('\n');
+  const quoted = [
+    'no such target (the Worker answered',
+    'refused: check the admin key, the failed-signature rate limit or the route (the Worker answers 404 "Not found" to each)',
+    'already done (an earlier attempt may have run and its answer was lost; the retry answered not_found)',
+    "this machine's clock is more than five minutes from the Worker's",
+    'the Worker saw this nonce before',
+    'an earlier attempt failed (',
+    'if it reached the Worker it may have done the work',
+    'removal incomplete at step',
+    'run the removal again (after the Retry-After the Worker sent, if any)',
+    'an unretire overtook the removal of',
+    'nothing further was done',
+  ];
+  assert.deepEqual(quoted.filter((q) => !sources.includes(q)), [], 'quoted in the test list but not printed by the CLI');
+  assert.deepEqual(quoted.filter((q) => !doc.includes(q)), [], 'printed by the CLI but not quoted in ADMIN_CLI.md');
+  for (const q of ['config not readable', 'only the owner may read it', 'is not removed']) assert.ok(doc.includes(q) && sources.includes(q.replace(/^config not readable$/, 'not readable')), `ADMIN_CLI.md or the CLI lost: ${q}`);
+});
+
 test('an invalid CADDIE_USER_AGENT (CRLF injection, control characters, non-ASCII, too long) falls back with one warning', () => {
   const probe = (value) => spawnSync(process.execPath, ['-e', "import('./scripts/lib/http.mjs').then((m) => console.log(m.USER_AGENT))"], { cwd: ROOT, encoding: 'utf8', env: { PATH: process.env.PATH, CADDIE_USER_AGENT: value } });
   const neutral = 'conference-caddie-ingest (+set CADDIE_USER_AGENT)';

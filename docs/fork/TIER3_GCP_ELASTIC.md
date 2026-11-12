@@ -15,10 +15,11 @@ This guide is the fork-friendly version of `docs/OPERATOR_CHECKLIST.md`, which s
 1. Install the packages, then create the Google Cloud project, enable its APIs and create the runtime service account.
 2. Create the Elastic deployment, a short-lived setup key and the `caddie-e5-small` endpoint.
 3. Write `deploy.env` with your own values.
-4. Create the indices.
+4. Create the indices and load the first conferences (with the setup key).
 5. Mint the two scoped service keys and the push keys, then the limited operator key, and invalidate the setup key.
+   (Step 4 also loads the first data with the setup key.)
 6. Deploy to Cloud Run.
-7. Load the conferences and run the smoke test.
+7. Run the smoke test.
 8. Install the operator command line ([ADMIN_CLI.md](../ADMIN_CLI.md)).
 
 ## 1. Packages, Google Cloud project, APIs and service account
@@ -49,7 +50,7 @@ In the Elastic Cloud console, create a deployment with a machine-learning node. 
 
 You need two kinds of key, and they must not be the same key:
 
-- A **setup key**, used only for the first-time steps 2 to 5 (creating indices, roles, users and the inference endpoint). It needs broad privileges, so make it short-lived: in Kibana (Stack Management, API keys) or with the API, create it with an **expiration of one day** and delete it in step 5 when you are done. Never keep it afterwards.
+- A **setup key**, used only for the first-time steps 2 to 5 (creating indices, aliases, roles, users and the inference endpoint, and the first load of data). It needs broad privileges, so make it short-lived: in Kibana (Stack Management, API keys) or with the API, create it with an **expiration of one day** and delete it in step 5 when you are done. Never keep it afterwards.
 - An **operator key**, used by the `caddie-admin` command line for every day work. It is limited to the `caddie-*` indices and has no security privileges. Step 5 mints it for you.
 
 The deployed service holds neither: it holds the two scoped service keys of step 5.
@@ -111,7 +112,8 @@ None of these values is a secret, so a plain `cat` is fine here (unlike a key fi
 Run these from the repository root with the setup key in `ELASTISEARCH_API_KEY`. Each script is safe to repeat. They all read `ES_URL` and the key:
 
 ```sh
-ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run es:setup         # talks, conferences, topics
+ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run es:setup                   # the talks index
+ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run es:setup -- --conferences  # the conferences index; es:setup alone makes only talks
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run people:setup     # people, presence, meets, blocks
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run reports:setup    # reports; hidden flags
 ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run rules:setup      # percolator index for the word rules
@@ -120,6 +122,17 @@ ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run push:setup       # push sub
 ```
 
 `docs/OPERATOR_CHECKLIST.md` steps 2 to 6 describe each of them, the variables they read and what to check afterwards. The rules index is optional: without it the server's built-in word list decides.
+
+Then load the committed conference data **with the setup key**, because this first run creates indices and aliases that the limited operator key of step 5 may not create: the topics index `caddie-topics-v1` (`scripts/topics.mjs`), the facets index `caddie-facets-v1` and its alias (`scripts/build-facets.mjs`). The smoke test of step 7 uses these four conferences, which gives three searchable and one unavailable conference (check `u` needs an unavailable one):
+
+```sh
+ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" npm run ingest -- --no-fetch \
+  --event kubecon-cloudnativecon-north-america-2026 --event mcp-dev-summit-nairobi-2026 \
+  --event pytorch-day-japan-2026 --event agentics-day-mcp-agents-europe-2027
+ELASTISEARCH_API_KEY="$ELASTISEARCH_API_KEY" node scripts/build-facets.mjs
+```
+
+`--no-fetch` builds from the committed `data/raw` files and makes no network call besides Elasticsearch. `build-facets.mjs` with no slug rebuilds every conference that has talks.
 
 ## 5. The service keys, the push keys, the operator key and ending the setup key
 
@@ -155,7 +168,13 @@ node scripts/create-es-keys.mjs --operator                    # expires in 90 da
 node scripts/create-es-keys.mjs --operator --expiration 30d   # or choose the lifetime
 ```
 
-The key is limited to the `caddie-*` indices with the privileges `read`, `write`, `delete`, `maintenance` and `view_index_metadata`, plus the cluster privilege `monitor`. It has no security privilege (it cannot create users, roles or keys), no inference privilege and no index-management privilege, so a leaked operator key cannot take over your cluster. The script then checks that, and prints PASS or FAIL for each check. The privileges are what the CLI uses: documents are read and written, `_delete_by_query` with a refresh needs `delete` and `maintenance`, `stats usage` reads `_cluster/health` and `_cat/indices` (`monitor`), and the word-list reload writes the rules index. Creating indices is a setup step and is done in step 4 with the setup key.
+The key has exactly these privileges, and the script checks them after it mints the key:
+
+- cluster actions `cluster:monitor/health` and `cluster:monitor/state` (for `stats usage`). It deliberately does not hold the named cluster privilege `monitor`, because that also covers the inference APIs.
+- on `caddie-*`: `read`, `write`, `view_index_metadata`, `monitor` and `maintenance` (documents are read and written, `_delete_by_query` with a refresh needs `maintenance`, `_cat/indices` with document counts needs the index `monitor`).
+- on `caddie-topicwork-*` only: `create_index` and `delete_index`, because `scripts/topics.mjs` builds a work index and deletes it on every run (`conferences add` and `conferences refresh` run it).
+
+It has no security privilege (it cannot create users, roles or keys), no inference privilege and no index-management privilege on the real indices, so a leaked operator key cannot take over your cluster. It cannot create `caddie-*` indices or aliases other than the work indices, which is why step 4 created them with the setup key. If you ever need a new index, make a new setup key. The script prints PASS or FAIL for every check, including that inference is refused. If any check fails, it invalidates the new key with the setup key, removes the file and says so, and it prints the key's id (not a secret) so you can find it. `--expiration` accepts at most 365 days.
 
 Verify it with the CLI after you have installed it ([ADMIN_CLI.md](../ADMIN_CLI.md)); all of these are read-only or previews:
 
@@ -164,9 +183,11 @@ caddie-admin stats usage
 caddie-admin attendees delete --event <slug> <a ref> --reason spam          # a preview; deletes nothing
 caddie-admin conferences remove --event <slug>                              # a preview; deletes nothing
 caddie-admin moderation rules reload                                        # a preview; changes nothing
+caddie-admin conferences refresh --event <slug> --dry-run                   # shows the ingest and facets steps it would run
+caddie-admin conferences refresh --event <slug>                             # one real refresh: ingest (topics work index), then facets
 ```
 
-If one of them answers 403, the operator key lacks a privilege that command needs; report it as a bug rather than switching to the setup key.
+If one of them answers 403, the operator key lacks a privilege that command needs; report it as a bug rather than switching to the setup key. The real refresh fetches the schedule from the network and writes to Elasticsearch, so run it on a conference you want refreshed.
 
 ### End the setup key
 
@@ -193,24 +214,19 @@ The script validates every setting before any `gcloud` call, mounts the secrets 
 
 After the first deploy, check once that the revision's environment holds no key in plain text: `gcloud run services describe conference-caddie --project "$GC_PROJECT" --region "$GC_REGION" --format yaml` (`GC_REGION` is the shell variable of step 1, or the value in `deploy.env`; `deploy.sh` defaults to `us-west1`) shows secrets by name only. Also check that `GET <service url>/api/capabilities` answers the tier you expect.
 
-## 7. Load the conferences and run the smoke test
+## 7. Run the smoke test
 
-From here on use the operator key, not the setup key (which you ended in step 5). Read it from its file into the environment of one shell, without printing it:
+From here on use the operator key, not the setup key (which you ended in step 5). Read it from its file into the environment of one shell, without printing it, and export your bundle base:
 
 ```sh
 export ELASTISEARCH_API_KEY="$(cat ~/.config/conference-caddie/es-admin-key)"
 export CADDIE_BUNDLE_BASE="$(sed -n 's/^CADDIE_BUNDLE_BASE=//p' ~/.config/conference-caddie/deploy.env)"
-```
-
-The smoke test checks the live service against three conferences whose data is committed (its defaults: `kubecon-cloudnativecon-north-america-2026`, `mcp-dev-summit-nairobi-2026` and `pytorch-day-japan-2026`), so ingest those first, and any conference of your own after them. `npm run ingest -- --list` lists the upcoming Linux Foundation events:
-
-```sh
-npm run ingest -- --event kubecon-cloudnativecon-north-america-2026 --event mcp-dev-summit-nairobi-2026 --event pytorch-day-japan-2026
-node scripts/build-facets.mjs kubecon-cloudnativecon-north-america-2026 mcp-dev-summit-nairobi-2026 pytorch-day-japan-2026
 BASE_URL=<your service URL> SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" npm run smoke
 ```
 
-The ingest builds the talk files under `data/`, indexes them and builds each conference's topic list; the facets script rebuilds the names used for suggested chips. Commit any new `data/<slug>/` folder so that tier 1 publishes the same bundle. The smoke creates and deletes its own test profiles. It reads `ES_URL` and the Elasticsearch key for the one expired-profile document it writes and removes, so keep those set. `SMOKE_BUNDLE_BASE` is your bundle base, which the smoke compares with the capabilities document of your service. `SMOKE_SKIP_BUNDLE=1` skips the bundle scan when you did not build `web/dist` locally.
+The smoke test checks the live service against the four conferences you loaded in step 4 (its defaults are `kubecon-cloudnativecon-north-america-2026`, `mcp-dev-summit-nairobi-2026` and `pytorch-day-japan-2026`; the fourth is the unavailable one that check `u` needs). Commit any new `data/<slug>/` folder so that tier 1 publishes the same bundle. The smoke creates and deletes its own test profiles. It reads `ES_URL` and the Elasticsearch key for the one expired-profile document it writes and removes, so keep those set. `SMOKE_BUNDLE_BASE` is your bundle base, which the smoke compares with the capabilities document of your service. `SMOKE_SKIP_BUNDLE=1` skips the bundle scan when you did not build `web/dist` locally.
+
+`npm run ingest -- --list` lists the upcoming Linux Foundation events, for conferences of your own.
 
 Once the operator command line is installed, you can do the ingest with `caddie-admin conferences add --event <slug>` on a tier 3 backend entry. It runs `scripts/ingest.mjs` and then `scripts/build-facets.mjs` for you.
 

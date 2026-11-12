@@ -170,3 +170,20 @@ test('VAPID_SUBJECT is required, has no default, and must be an https URL or a m
   const fromFile = deploy(sb, { env: without, noVapid: true, file: 'VAPID_SUBJECT=https://example.org/contact\n' + Object.entries(without).map(([k, v]) => `${k}=${v}`).join('\n') + '\n' });
   assert.equal(fromFile.status, 0, fromFile.stderr);
 }));
+
+test('VAPID_SUBJECT reaches the service environment when push nudges are on', withSandbox((sb) => {
+  fs.writeFileSync(path.join(sb.bin, 'gcloud'), `#!/bin/bash
+printf '%s\\n' "$*" >> "${path.join(sb.dir, 'gcloud.log')}"
+case "$*" in
+  *"secrets describe caddie-vapid-private"*) exit 0 ;;
+  *"secrets versions access latest --secret caddie-vapid-public"*) echo PUBKEY123; exit 0 ;;
+  "secrets describe"*) exit 1 ;;
+  "run services"*) echo https://fake.invalid/ ;;
+esac
+exit 0
+`, { mode: 0o755 });
+  const r = deploy(sb, { env: { ...GOOD, VAPID_SUBJECT: 'mailto:ops@example.org' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.envVars.includes(',VAPID_PUBLIC_KEY=PUBKEY123,VAPID_SUBJECT=mailto:ops@example.org'), r.envVars);
+  assert.ok(!/kurtlehnardt/i.test(r.envVars));
+}));

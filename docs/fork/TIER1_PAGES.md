@@ -30,7 +30,7 @@ If you want a private copy rather than a public fork, read [FORK.md](../FORK.md#
 
 ### Tokens for the GitHub CLI
 
-`gh auth login` gives the CLI your whole account's reach. For a fork you can instead use a fine-grained personal access token limited to your fork only, with the repository permissions Actions (read and write), Secrets (read and write), Variables (read and write), Pages (read and write), Administration (read and write, only for creating environments in [APPS.md](APPS.md)) and Contents (read); check GitHub's current list of fine-grained permissions for the exact names. Pass it in the shell as `GH_TOKEN`, which `gh` reads in preference to a stored login, and unset it afterwards:
+`gh auth login` gives the CLI your whole account's reach. For a fork you can instead use a fine-grained personal access token limited to your fork only, with the repository permissions Actions (read and write), Secrets (read and write), Variables (read and write), Environments (read and write), Pages (read and write), Administration (read and write, only for creating environments in [APPS.md](APPS.md)) and Contents (read); check GitHub's current list of fine-grained permissions for the exact names. Pass it in the shell as `GH_TOKEN`, which `gh` reads in preference to a stored login, and unset it afterwards:
 
 ```sh
 read -rs GH_TOKEN && export GH_TOKEN     # paste the token; it is not echoed and not written to your shell history
