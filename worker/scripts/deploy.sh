@@ -21,9 +21,10 @@
 #      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
 #      wrangler.toml, so the app ships with the Worker.
 #   3. GET /accounts/{account}/workers/scripts/{name}/secrets, with the name from worker/wrangler.toml,
-#      and refuse to deploy while ADMIN_SIG_MIN or ADMIN_ORIGIN is a secret of the Worker (DECISIONS.md,
-#      "Admin signature v2", step d). The check reads the secrets' names only; Cloudflare does not
-#      return their values, and the script prints only which of the two names it found. A 404 with
+#      and refuse to deploy while ADMIN_SIG_MIN, ADMIN_ORIGIN or ADMIN_TEST_ROUTES is a secret of the
+#      Worker (DECISIONS.md, "Admin signature v2", step d). The check reads the secrets' names only;
+#      Cloudflare does not return their values, and the script prints only which of the three names
+#      it found. A 404 with
 #      Cloudflare's error code 10007 means the Worker does not exist yet (a first deploy) and passes.
 #      Any other answer (a 403, a 5xx, no answer, a body that cannot be read) refuses to deploy, so a
 #      check that could not run never passes.
@@ -100,12 +101,15 @@ cf_api() {
 }
 
 # json_field EXPRESSION evaluates a JavaScript expression over the parsed response as `r` and
-# prints the result (an empty string for null or undefined).
+# prints the result (an empty string for null or undefined). A body that is missing, is not JSON,
+# or parses to something other than an object (null, a number, a string, an array) is read as {},
+# so the callers' fail-closed messages print instead of a Node error.
 json_field() {
   node -e '
     const fs = require("node:fs");
     let r = {};
     try { r = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch {}
+    if (r === null || typeof r !== "object" || Array.isArray(r)) r = {};
     const v = (new Function("r", "return (" + process.argv[2] + ");"))(r);
     process.stdout.write(v == null ? "" : String(v));
   ' "$WORK/resp.json" "$1"
@@ -218,13 +222,16 @@ if [ ! -d node_modules ]; then
   fi
 fi
 
-# 3. Refuse to deploy while ADMIN_SIG_MIN or ADMIN_ORIGIN is a secret of the Worker. Security
-# warning: a secret survives every deploy and the repository does not show it, so a leftover
-# ADMIN_SIG_MIN secret of "1" would override the source default ("2" since step d) and keep the v1
-# admin signature, and its replay window, open; a leftover ADMIN_ORIGIN secret could list another
-# deployment's origin. Both settings belong in [vars] of worker/wrangler.toml, committed. Only the
-# names are read: Cloudflare returns each secret's name and type, never its value, and the script
-# prints only which of the two names it found. A check that cannot run refuses to deploy.
+# 3. Refuse to deploy while ADMIN_SIG_MIN, ADMIN_ORIGIN or ADMIN_TEST_ROUTES is a secret of the
+# Worker. Security warning: a secret survives every deploy and the repository does not show it, so
+# a leftover ADMIN_SIG_MIN secret of "1" would override the source default ("2" since step d) and
+# keep the v1 admin signature, and its replay window, open; a leftover ADMIN_ORIGIN secret could
+# list another deployment's origin; and a leftover ADMIN_TEST_ROUTES secret of "1" would keep the
+# smoke's /admin/test/* fixture routes on after every deploy. ADMIN_SIG_MIN and ADMIN_ORIGIN belong
+# in [vars] of worker/wrangler.toml, committed; ADMIN_TEST_ROUTES is set only for a fixture smoke,
+# with wrangler deploy --var. Only the names are read: Cloudflare returns each secret's name and
+# type, never its value, and the script prints only which of the three names it found. A check
+# that cannot run refuses to deploy.
 # The name goes into the request's path, so it is checked like the subdomain above.
 worker_name="$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' wrangler.toml | head -n 1)"
 worker_name_re='^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
@@ -236,20 +243,35 @@ status="$(cf_api GET "/workers/scripts/$worker_name/secrets")"
 if [ "$status" = "200" ]; then
   # "none", the matched names separated by spaces, or empty when the body is not a successful list
   # of named secrets.
-  found="$(json_field 'r.success === true && Array.isArray(r.result) && r.result.every((s) => s && typeof s.name === "string") ? (r.result.map((s) => s.name).filter((n, i, all) => (n === "ADMIN_SIG_MIN" || n === "ADMIN_ORIGIN") && all.indexOf(n) === i).sort().join(" ") || "none") : ""')"
+  found="$(json_field 'r.success === true && Array.isArray(r.result) && r.result.every((s) => s && typeof s.name === "string") ? (r.result.map((s) => s.name).filter((n, i, all) => (n === "ADMIN_SIG_MIN" || n === "ADMIN_ORIGIN" || n === "ADMIN_TEST_ROUTES") && all.indexOf(n) === i).sort().join(" ") || "none") : ""')"
   if [ -z "$found" ]; then
-    echo "Refusing to deploy: the list of the Worker's secrets could not be read (HTTP 200, Cloudflare error codes: $(api_codes)), so the check that neither ADMIN_SIG_MIN nor ADMIN_ORIGIN is a secret did not run. Run this script again." >&2
+    echo "Refusing to deploy: the list of the Worker's secrets could not be read (HTTP 200, Cloudflare error codes: $(api_codes)), so the check that none of ADMIN_SIG_MIN, ADMIN_ORIGIN and ADMIN_TEST_ROUTES is a secret did not run. Run this script again." >&2
     exit 1
   fi
   if [ "$found" != "none" ]; then
     for name in $found; do
       echo "Refusing to deploy: $name is set as a secret on the Worker $worker_name." >&2
     done
-    echo "A secret survives every deploy and overrides what the source and worker/wrangler.toml say, so a leftover ADMIN_SIG_MIN of \"1\" would keep the v1 admin signature and its replay window open, and a leftover ADMIN_ORIGIN could accept requests signed for another deployment." >&2
+    echo "A secret survives every deploy and overrides what the source and worker/wrangler.toml say." >&2
+    for name in $found; do
+      case "$name" in
+        ADMIN_SIG_MIN) echo "A leftover ADMIN_SIG_MIN of \"1\" would keep the v1 admin signature and its replay window open." >&2 ;;
+        ADMIN_ORIGIN) echo "A leftover ADMIN_ORIGIN could accept requests signed for another deployment." >&2 ;;
+        ADMIN_TEST_ROUTES) echo "A leftover ADMIN_TEST_ROUTES of \"1\" would keep the smoke's /admin/test/* fixture routes on after every deploy." >&2 ;;
+      esac
+    done
     for name in $found; do
       echo "Remove it with: cd worker && npx wrangler secret delete $name" >&2
     done
-    echo "Then, if the setting is still needed, commit its value in [vars] of worker/wrangler.toml (worker/README.md, Signature v2), and run this script again." >&2
+    case " $found " in
+      *" ADMIN_SIG_MIN "*|*" ADMIN_ORIGIN "*)
+        echo "If ADMIN_SIG_MIN or ADMIN_ORIGIN is still needed, commit its value in [vars] of worker/wrangler.toml (worker/README.md, Signature v2)." >&2 ;;
+    esac
+    case " $found " in
+      *" ADMIN_TEST_ROUTES "*)
+        echo "ADMIN_TEST_ROUTES belongs neither in a secret nor in [vars]: set it only for a fixture smoke, with npx wrangler deploy --var ADMIN_TEST_ROUTES:1 (worker/README.md, Smoke)." >&2 ;;
+    esac
+    echo "Then run this script again." >&2
     exit 1
   fi
 elif [ "$status" = "404" ] && [[ ", $(api_codes), " == *", 10007, "* ]]; then
@@ -258,7 +280,7 @@ else
   if [ "$status" = "000" ]; then
     echo "Could not reach api.cloudflare.com to list the Worker's secrets." >&2
   fi
-  echo "Refusing to deploy: listing the Worker's secrets by name failed (HTTP $status, Cloudflare error codes: $(api_codes)), so the check that neither ADMIN_SIG_MIN nor ADMIN_ORIGIN is a secret did not run. Run this script again; if it keeps failing, give the token the account permission \"Workers Scripts: Edit\" (which includes reading the names of a Worker's secrets)." >&2
+  echo "Refusing to deploy: listing the Worker's secrets by name failed (HTTP $status, Cloudflare error codes: $(api_codes)), so the check that none of ADMIN_SIG_MIN, ADMIN_ORIGIN and ADMIN_TEST_ROUTES is a secret did not run. Run this script again; if it keeps failing, give the token the account permission \"Workers Scripts: Edit\" (which includes reading the names of a Worker's secrets)." >&2
   exit 1
 fi
 

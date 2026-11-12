@@ -133,9 +133,9 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    variable `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<6 random letters>` when the variable
    is unset or that name is taken; an account that already has a subdomain keeps it, whatever the
    variable says), builds the web app in Worker
-   mode into `web/dist-worker/`, checks that neither `ADMIN_SIG_MIN` nor `ADMIN_ORIGIN` is a
-   secret of the Worker ([Signature v2](#signature-v2); it refuses to deploy when one is, or when
-   it cannot tell), then runs `npx wrangler deploy`, which uploads the app with the
+   mode into `web/dist-worker/`, checks that none of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and
+   `ADMIN_TEST_ROUTES` is a secret of the Worker ([Signature v2](#signature-v2), [Smoke](#smoke);
+   it refuses to deploy when one is, or when it cannot tell), then runs `npx wrangler deploy`, which uploads the app with the
    Worker. It prints only the subdomain and the app URL, which is also the API's base. Until
    step 2 has run, the admin routes answer 404, because admin fails closed without `ADMIN_TOKEN`.
 
@@ -314,11 +314,13 @@ that switches the routes off again would refuse for the same reason; then
 `cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1` (the app built by that `deploy.sh`),
 run the smoke, then `bash worker/scripts/deploy.sh` again, because every wrangler deploy replaces
 the Worker's variables with those of `wrangler.toml`. `docs/fork/TIER2_CLOUDFLARE.md` wraps the
-sequence in a `trap`. If that last `deploy.sh` refuses (a secret `ADMIN_SIG_MIN` or `ADMIN_ORIGIN`
-appeared in the meantime, or Cloudflare did not answer the check), the routes stay on: its message
-names the cause and the remedy; fix that, run it again, and check that `POST /admin/test/profile`
-answers 404. Never set it with `wrangler secret put`: a secret survives every deploy, so the
-fixtures would stay on until someone deleted it.
+sequence in a `trap`. If that last `deploy.sh` refuses (a secret `ADMIN_SIG_MIN`, `ADMIN_ORIGIN`
+or `ADMIN_TEST_ROUTES` appeared in the meantime, or Cloudflare did not answer the check), the
+routes stay on: its message names the cause and the remedy; fix that, run it again, and check that
+`POST /admin/test/profile` answers 404. Never set it with `wrangler secret put`: a secret survives
+every deploy, so the fixtures would stay on until someone deleted it. `deploy.sh` therefore refuses
+to deploy while `ADMIN_TEST_ROUTES` is a secret of the Worker, and its message gives the remedy,
+`npx wrangler secret delete ADMIN_TEST_ROUTES` in `worker/`.
 
 The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
 redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like the Worker-side
@@ -451,11 +453,11 @@ even after one matched. A v2 signature made for another origin is an ordinary ba
 and one token from the failed-auth bucket. The nonce table and the Durable Objects' 305-second
 clock check are the same for both versions, and v1 and v2 nonces share the table.
 
-The move to v2 is in four steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
+The move to v2 is in five steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
 a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
-Worker refuses v1. Deploying step b changed nothing for the clients, which then still signed v1.
-A last step, e, removes the clients' switch `CADDIE_ADMIN_SIG_VERSION` once the first weekly CI
-ingest under step d has passed.
+Worker refuses v1; e, the clients' switch `CADDIE_ADMIN_SIG_VERSION` is removed once the first
+weekly CI ingest under step d has passed. Deploying step b changed nothing for the clients, which
+then still signed v1.
 
 From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
 so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and
@@ -528,7 +530,7 @@ a forgotten `ADMIN_ORIGIN` secret that lists a staging origin would make request
 staging verify here. `deploy.sh` enforces this before every deploy: it reads the names of the
 Worker's secrets through the Cloudflare API (`GET /accounts/<account>/workers/scripts/<name>/secrets`,
 which returns names and types, never values) and refuses to deploy while either name is among
-them, printing which one and the remedy. It also refuses when it cannot tell, on any answer other
+them, or `ADMIN_TEST_ROUTES` ([Smoke](#smoke)), printing which one and the remedy. It also refuses when it cannot tell, on any answer other
 than a list of secrets or the 404 with error code 10007 of a Worker that does not exist yet (a
 first deploy), printing only the HTTP status and Cloudflare's error codes. To check by hand, run
 this in `worker/`, which prints the names of the Worker's secrets and never their values:
@@ -537,8 +539,9 @@ this in `worker/`, which prints the names of the Worker's secrets and never thei
 npx wrangler secret list
 ```
 
-Neither `ADMIN_SIG_MIN` nor `ADMIN_ORIGIN` may be among them. If one is, remove it with
-`npx wrangler secret delete <name>`, and commit the value in `[vars]` instead if one is needed.
+None of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES` may be among them. If one is,
+remove it with `npx wrangler secret delete <name>`, and commit the value of `ADMIN_SIG_MIN` or
+`ADMIN_ORIGIN` in `[vars]` instead if one is needed.
 
 To roll back step d, commit `ADMIN_SIG_MIN = "1"` in `[vars]` of `worker/wrangler.toml` and deploy
 with `deploy.sh`; then a client that must sign v1 sets `CADDIE_ADMIN_SIG_VERSION=1` (for the CI

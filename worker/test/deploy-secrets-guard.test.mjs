@@ -1,6 +1,7 @@
-// worker/scripts/deploy.sh, step 3: the script refuses to deploy while ADMIN_SIG_MIN or ADMIN_ORIGIN
-// is a secret of the Worker (DECISIONS.md, "Admin signature v2", step d), because a secret survives
-// every deploy and would override the source default, for example keeping v1 open. It reads the
+// worker/scripts/deploy.sh, step 3: the script refuses to deploy while ADMIN_SIG_MIN, ADMIN_ORIGIN or
+// ADMIN_TEST_ROUTES is a secret of the Worker (DECISIONS.md, "Admin signature v2", step d), because a
+// secret survives every deploy and would override the source default, for example keeping v1 open or
+// the /admin/test/* fixture routes on. It reads the
 // secrets' names through the Cloudflare API, passes a first deploy (404 with error code 10007) and
 // refuses on any other answer, so a check that could not run never passes.
 //
@@ -93,18 +94,25 @@ const named = (...names) => ok(names.map((name) => ({ name, type: 'secret_text',
 const deployCalls = (w) => w.calls().filter((c) => c.tool === 'npx');
 const secretsCalls = (w) => w.calls().filter((c) => c.kind === 'secrets');
 
-// What every run must show: the secrets were asked for this Worker on this account, with the token
-// on curl's standard input; the token is in no stand-in's arguments and in none of the output, and
-// no value Cloudflare might return is printed.
+// What every run must show: the token reached curl on its standard input for every API call; it is
+// in no stand-in's arguments and in none of the output, and no value Cloudflare might return is
+// printed.
+function checkTokenHygiene(w, r) {
+  assert.ok(w.calls().some((c) => c.tool === 'curl' && c.kind === 'subdomain'), 'the subdomain was read');
+  for (const c of w.calls().filter((x) => x.tool === 'curl' && x.kind !== 'health')) assert.equal(c.stdinAuth, true, `the token reached curl on stdin (${c.kind})`);
+  for (const c of w.calls()) assert.ok(!JSON.stringify(c.args).includes(FAKE_TOKEN), `the token is not in the arguments of ${c.tool}`);
+  assert.ok(!r.text.includes(FAKE_TOKEN), 'the token is not printed');
+  assert.ok(!r.text.includes(CANARY), 'no secret value is printed');
+}
+
+// What every run past the subdomain step must show as well: the secrets were asked for this Worker
+// on this account, once.
 function checkHygiene(w, r) {
   const asked = secretsCalls(w);
   assert.equal(asked.length, 1, r.text);
   assert.equal(asked[0].url, `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/${WORKER_NAME}/secrets`);
   assert.equal(asked[0].method, 'GET');
-  for (const c of w.calls().filter((x) => x.tool === 'curl' && x.kind !== 'health')) assert.equal(c.stdinAuth, true, `the token reached curl on stdin (${c.kind})`);
-  for (const c of w.calls()) assert.ok(!JSON.stringify(c.args).includes(FAKE_TOKEN), `the token is not in the arguments of ${c.tool}`);
-  assert.ok(!r.text.includes(FAKE_TOKEN), 'the token is not printed');
-  assert.ok(!r.text.includes(CANARY), 'no secret value is printed');
+  checkTokenHygiene(w, r);
 }
 
 function assertDeployed(w, r) {
@@ -126,8 +134,8 @@ function assertRefused(w, r, pattern) {
   checkHygiene(w, r);
 }
 
-test('neither ADMIN_SIG_MIN nor ADMIN_ORIGIN is a secret: the deploy goes ahead', (t) => {
-  for (const secrets of [named('ADMIN_TOKEN', 'ES_API_KEY', 'ADMIN_TOKEN_NEXT'), ok([]), named('ADMIN_SIG_MIN_OLD', 'X_ADMIN_ORIGIN', 'admin_sig_min')]) {
+test('none of ADMIN_SIG_MIN, ADMIN_ORIGIN and ADMIN_TEST_ROUTES is a secret: the deploy goes ahead', (t) => {
+  for (const secrets of [named('ADMIN_TOKEN', 'ES_API_KEY', 'ADMIN_TOKEN_NEXT'), ok([]), named('ADMIN_SIG_MIN_OLD', 'X_ADMIN_ORIGIN', 'admin_sig_min', 'ADMIN_TEST_ROUTES_OLD', 'admin_test_routes')]) {
     const w = world(t, secrets);
     const r = w.run();
     assertDeployed(w, r);
@@ -144,6 +152,27 @@ test('an ADMIN_SIG_MIN secret refuses the deploy before wrangler runs, naming th
   assert.match(r.stderr, /cd worker && npx wrangler secret delete ADMIN_SIG_MIN$/m);
   assert.match(r.stderr, /\[vars\] of worker\/wrangler\.toml/);
   assert.doesNotMatch(r.stderr, /delete ADMIN_ORIGIN/);
+  assert.doesNotMatch(r.stderr, /ADMIN_TEST_ROUTES/);
+});
+
+test('an ADMIN_TEST_ROUTES secret refuses the deploy, naming the setting and the remedy', (t) => {
+  const w = world(t, named('ADMIN_TEST_ROUTES', 'ADMIN_TOKEN'));
+  const r = w.run();
+  assertRefused(w, r, /Refusing to deploy: ADMIN_TEST_ROUTES is set as a secret on the Worker /);
+  assert.match(r.stderr, /survives every deploy/);
+  assert.match(r.stderr, /\/admin\/test\/\* fixture routes on after every deploy/);
+  assert.match(r.stderr, /cd worker && npx wrangler secret delete ADMIN_TEST_ROUTES$/m);
+  assert.match(r.stderr, /only for a fixture smoke, with npx wrangler deploy --var ADMIN_TEST_ROUTES:1/);
+  // The remedy for the two signature settings is not given for this one.
+  assert.doesNotMatch(r.stderr, /ADMIN_SIG_MIN|ADMIN_ORIGIN|v1 admin signature/);
+
+  const all = world(t, named('ADMIN_TEST_ROUTES', 'ADMIN_SIG_MIN'));
+  const ra = all.run();
+  assertRefused(all, ra, /ADMIN_TEST_ROUTES is set as a secret/);
+  assert.match(ra.stderr, /ADMIN_SIG_MIN is set as a secret/);
+  assert.match(ra.stderr, /npx wrangler secret delete ADMIN_SIG_MIN$/m);
+  assert.match(ra.stderr, /npx wrangler secret delete ADMIN_TEST_ROUTES$/m);
+  assert.match(ra.stderr, /\[vars\] of worker\/wrangler\.toml/);
 });
 
 test('an ADMIN_ORIGIN secret refuses the deploy, and with both secrets both are named', (t) => {
@@ -177,13 +206,20 @@ test('any other answer refuses the deploy with the status and the error codes on
     ['200 not a success', { code: 200, body: { success: false, errors: [{ code: 10013, message: 'x' }], result: [] } }, /could not be read \(HTTP 200, Cloudflare error codes: 10013\)/],
     ['200 without a list', { code: 200, body: { success: true, result: { name: 'ADMIN_TOKEN' } } }, /could not be read/],
     ['200 with an entry without a name', { code: 200, body: { success: true, result: [{ type: 'secret_text', text: CANARY }] } }, /could not be read/],
+    // A body that parses to null or to something other than an object is read as {}: the readable
+    // message, not a Node error.
+    ['200 with body null', { code: 200, body: 'null' }, /could not be read \(HTTP 200, Cloudflare error codes: none\)/],
+    ['200 with a number', { code: 200, body: '5' }, /could not be read \(HTTP 200, Cloudflare error codes: none\)/],
+    ['200 with an array', { code: 200, body: '[{"name":"ADMIN_SIG_MIN"}]' }, /could not be read \(HTTP 200, Cloudflare error codes: none\)/],
+    ['404 with body null', { code: 404, body: 'null' }, /HTTP 404, Cloudflare error codes: none\)/],
   ];
   for (const [why, secrets, pattern] of cases) {
     const w = world(t, secrets);
     const r = w.run();
     assertRefused(w, r, pattern);
-    assert.match(r.stderr, /neither ADMIN_SIG_MIN nor ADMIN_ORIGIN is a secret did not run/, why);
+    assert.match(r.stderr, /none of ADMIN_SIG_MIN, ADMIN_ORIGIN and ADMIN_TEST_ROUTES is a secret did not run/, why);
     assert.doesNotMatch(r.stderr, /Authentication error|Could not route/, `${why}: only codes, no messages`);
+    assert.doesNotMatch(r.stderr, /TypeError|SyntaxError|^\s+at |node:internal/m, `${why}: no Node error`);
   }
   // The permission hint comes with a failed request.
   const w = world(t, cases[0][1]);
@@ -196,5 +232,5 @@ test('--subdomain-only stops before the check and the deploy', (t) => {
   assert.equal(r.status, 0, r.text);
   assert.deepEqual(secretsCalls(w), []);
   assert.deepEqual(deployCalls(w), []);
-  assert.ok(!r.text.includes(FAKE_TOKEN));
+  checkTokenHygiene(w, r);
 });
