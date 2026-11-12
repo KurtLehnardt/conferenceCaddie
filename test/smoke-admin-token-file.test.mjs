@@ -7,11 +7,11 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultAdminTokenFile, legacyAdminTokenFile, resolveAdminTokenFile, shellPath } from '../scripts/lib/admin-token-file.mjs';
+import { adminTokenPaths, defaultAdminTokenFile, legacyAdminTokenFile, resolveAdminTokenFile, sameFile, shellPath } from '../scripts/lib/admin-token-file.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SMOKE = join(ROOT, 'scripts', 'smoke.mjs');
@@ -131,6 +131,117 @@ describe('resolveAdminTokenFile', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+});
+
+// Runs fn with a fresh temporary home and removes it after.
+function withHome(fn) {
+  const home = tempHome();
+  try {
+    return fn(home);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe('sameFile', () => {
+  test('~/.config symlinked to $XDG_CONFIG_HOME: the same, with the token file missing and present', () => withHome((home) => {
+    const xdg = join(home, 'xdg');
+    mkdirSync(xdg);
+    symlinkSync(xdg, join(home, '.config'), 'dir');
+    const viaLink = join(home, '.config', 'conference-caddie', 'admin-token');
+    const real = join(xdg, 'conference-caddie', 'admin-token');
+    assert.equal(sameFile(viaLink, real), true, 'missing: the same location');
+    put(real);
+    assert.equal(sameFile(viaLink, real), true, 'present: the same inode');
+  }));
+
+  test('a symlinked conference-caddie directory: the same, with the token file missing and present', () => withHome((home) => {
+    const target = join(home, 'elsewhere', 'cc');
+    mkdirSync(target, { recursive: true });
+    mkdirSync(join(home, '.config'));
+    symlinkSync(target, join(home, '.config', 'conference-caddie'), 'dir');
+    const legacy = join(home, '.config', 'conference-caddie', 'admin-token');
+    const real = join(target, 'admin-token');
+    assert.equal(sameFile(legacy, real), true, 'missing');
+    assert.deepEqual(adminTokenPaths({ CADDIE_ADMIN_HOME: target }, home), { path: real, legacy: null, explicit: false });
+    put(real);
+    assert.equal(sameFile(legacy, real), true, 'present');
+    assert.deepEqual(adminTokenPaths({ CADDIE_ADMIN_HOME: target }, home), { path: real, legacy: null, explicit: false });
+  }));
+
+  test('a hard link is the same file', () => withHome((home) => {
+    put(join(home, 'a'));
+    linkSync(join(home, 'a'), join(home, 'b'));
+    assert.equal(sameFile(join(home, 'a'), join(home, 'b')), true);
+  }));
+
+  test('one path missing, or both missing in different places: not the same', () => withHome((home) => {
+    put(join(home, 'a', 'admin-token'));
+    assert.equal(sameFile(join(home, 'a', 'admin-token'), join(home, 'b', 'admin-token')), false);
+    assert.equal(sameFile(join(home, 'b', 'admin-token'), join(home, 'a', 'admin-token')), false);
+    assert.equal(sameFile(join(home, 'x', 'admin-token'), join(home, 'y', 'admin-token')), false);
+    assert.equal(sameFile(join(home, 'x', 'admin-token'), join(home, 'x', '..', 'x', 'admin-token')), true, 'the same missing path, spelled two ways');
+    assert.equal(sameFile(join(home, 'a', 'admin-token', 'under-a-file'), join(home, 'a', 'admin-token', 'under-a-file')), true, 'ENOTDIR counts as missing');
+  }));
+
+  test('two different files are not the same', () => withHome((home) => {
+    put(join(home, 'a'), 'fake-a\n');
+    put(join(home, 'b'), 'fake-a\n');
+    assert.equal(sameFile(join(home, 'a'), join(home, 'b')), false, 'equal contents do not make one file');
+  }));
+
+  test('an unreadable path is false, never a throw', { skip: process.getuid?.() === 0 ? 'root can search any directory' : false }, () => withHome((home) => {
+    const locked = join(home, 'locked');
+    put(join(locked, 'admin-token'));
+    chmodSync(locked, 0o000);
+    try {
+      assert.equal(sameFile(join(locked, 'admin-token'), join(locked, 'admin-token')), false);
+      assert.equal(sameFile(join(locked, 'admin-token'), join(home, 'other')), false);
+      assert.equal(sameFile(join(locked, 'missing', 'admin-token'), join(home, 'other')), false);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  }));
+
+  test('device and inode are compared as bigints: ids that collide as JS numbers stay apart', () => {
+    const big = 2n ** 60n;
+    assert.equal(Number(big), Number(big + 1n), 'the two ids are one JS number');
+    const asked = [];
+    const fakeStat = (ids) => (path, options) => {
+      asked.push(options);
+      return { dev: 7n, ino: ids[path] };
+    };
+    assert.equal(sameFile('a', 'b', fakeStat({ a: big, b: big + 1n })), false);
+    assert.equal(sameFile('a', 'b', fakeStat({ a: big + 1n, b: big + 1n })), true);
+    assert.ok(asked.every((o) => o.bigint === true), 'stat is asked for bigints');
+    assert.equal(sameFile('a', 'b', () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); }), false);
+  });
+});
+
+describe('adminTokenPaths', () => {
+  test('ADMIN_TOKEN_FILE: resolved, explicit, no legacy', () => withHome((home) => {
+    assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: 'rel/admin-token', XDG_CONFIG_HOME: join(home, 'xdg') }, home), { path: resolve('rel/admin-token'), legacy: null, explicit: true });
+  }));
+
+  test('empty-string variables count as unset', () => withHome((home) => {
+    const legacy = join(home, '.config', 'conference-caddie', 'admin-token');
+    assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: '', CADDIE_ADMIN_HOME: '', XDG_CONFIG_HOME: '' }, home), { path: legacy, legacy: null, explicit: false });
+    const xdg = join(home, 'xdg');
+    assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: '', CADDIE_ADMIN_HOME: '', XDG_CONFIG_HOME: xdg }, home), { path: join(xdg, 'conference-caddie', 'admin-token'), legacy, explicit: false });
+    assert.deepEqual(adminTokenPaths({ ADMIN_TOKEN_FILE: '', CADDIE_ADMIN_HOME: join(home, 'cah'), XDG_CONFIG_HOME: '' }, home), { path: join(home, 'cah', 'admin-token'), legacy, explicit: false });
+    assert.equal(defaultAdminTokenFile({ ADMIN_TOKEN_FILE: join(home, 'x'), XDG_CONFIG_HOME: xdg }, home), join(xdg, 'conference-caddie', 'admin-token'), 'the default ignores ADMIN_TOKEN_FILE');
+  }));
+
+  test('legacy is null when it is the same file or location as path, and the old path otherwise', () => withHome((home) => {
+    const xdg = join(home, 'xdg');
+    const legacy = join(home, '.config', 'conference-caddie', 'admin-token');
+    assert.equal(adminTokenPaths({ XDG_CONFIG_HOME: xdg }, home).legacy, legacy, 'different and both missing');
+    mkdirSync(xdg);
+    symlinkSync(xdg, join(home, '.config'), 'dir');
+    assert.equal(adminTokenPaths({ XDG_CONFIG_HOME: xdg }, home).legacy, null, 'symlinked ~/.config, file missing');
+    put(join(xdg, 'conference-caddie', 'admin-token'));
+    assert.equal(adminTokenPaths({ XDG_CONFIG_HOME: xdg }, home).legacy, null, 'symlinked ~/.config, file present');
+  }));
 });
 
 describe('shellPath', () => {

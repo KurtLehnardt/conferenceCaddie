@@ -10,12 +10,41 @@
 
 import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { configDir } from '../admin/config.mjs';
 
-// The file the CLI reads when ADMIN_TOKEN_FILE is unset.
-export function defaultAdminTokenFile(env, home = homedir()) {
-  return resolve(configDir(env, home), 'admin-token');
+// Where a path is, symlinks resolved, whether or not it exists yet: the real path of its nearest
+// existing ancestor with the missing segments joined back on. A symlinked ~/.config or
+// conference-caddie directory is then the same location before the token file is written.
+// Throws on anything but a missing segment (ENOENT, ENOTDIR).
+function location(path) {
+  let dir = resolve(path);
+  const rest = [];
+  for (;;) {
+    try {
+      return join(realpathSync(dir), ...rest);
+    } catch (err) {
+      const parent = dirname(dir);
+      if ((err?.code !== 'ENOENT' && err?.code !== 'ENOTDIR') || parent === dir) throw err;
+      rest.unshift(basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+// Whether two paths name the same file. Both exist: the same device and inode, read as bigints
+// (a Windows file id does not fit in a JS number), so a symlinked directory and a hard link count.
+// One or both missing: the same location (above). Any other error (a directory that cannot be
+// searched): false. `stat` is for the tests.
+export function sameFile(a, b, stat = statSync) {
+  try {
+    const sa = stat(a, { bigint: true, throwIfNoEntry: false });
+    const sb = stat(b, { bigint: true, throwIfNoEntry: false });
+    if (sa && sb) return sa.dev === sb.dev && sa.ino === sb.ino;
+    return location(a) === location(b);
+  } catch {
+    return false;
+  }
 }
 
 // The old location, and the default when none of the variables is set.
@@ -23,34 +52,42 @@ export function legacyAdminTokenFile(home = homedir()) {
   return resolve(home, '.config', 'conference-caddie', 'admin-token');
 }
 
-// Two existing paths name the same file: the same inode (a symlinked directory, a hard link) or
-// the same real path. When that cannot be told, they count as the same, so no note ever points at
-// the file in use.
-function sameFile(a, aStat, b, bStat) {
-  if (aStat.ino !== 0 && aStat.dev === bStat.dev && aStat.ino === bStat.ino) return true;
-  try {
-    return realpathSync(a) === realpathSync(b);
-  } catch {
-    return true;
-  }
+// The admin token paths, without reading anything but the file system's metadata:
+// - path: ADMIN_TOKEN_FILE resolved when it is non-empty, else <config dir>/admin-token resolved
+//   (configDir of scripts/admin/config.mjs, where an empty variable counts as unset);
+// - legacy: the old ~/.config/conference-caddie/admin-token when ADMIN_TOKEN_FILE is unset and it is
+//   not the same file or location as path (sameFile), else null;
+// - explicit: whether ADMIN_TOKEN_FILE was set (non-empty).
+export function adminTokenPaths(env = process.env, home = homedir()) {
+  const explicit = Boolean(env.ADMIN_TOKEN_FILE);
+  const path = explicit ? resolve(env.ADMIN_TOKEN_FILE) : resolve(configDir(env, home), 'admin-token');
+  const old = legacyAdminTokenFile(home);
+  const legacy = !explicit && !sameFile(path, old) ? old : null;
+  return { path, legacy, explicit };
+}
+
+// The file the CLI reads when ADMIN_TOKEN_FILE is unset.
+export function defaultAdminTokenFile(env, home = homedir()) {
+  return adminTokenPaths({ ...env, ADMIN_TOKEN_FILE: '' }, home).path;
 }
 
 // The token file the smoke reads: ADMIN_TOKEN_FILE if set; otherwise <config dir>/admin-token;
 // otherwise, when that file does not exist, the old ~/.config/conference-caddie/admin-token.
 // Returns { file, note }: file is null when ADMIN_TOKEN_FILE is unset and neither file exists, and
 // note is one NOTE line for the operator (the old file was read, or a different old file is still
-// there) or null.
+// there) or null. The old path is only ever considered when adminTokenPaths found it to be another
+// file or location than path, so no note points at the file in use.
 export function resolveAdminTokenFile(env, home = homedir()) {
-  if (env.ADMIN_TOKEN_FILE) return { file: env.ADMIN_TOKEN_FILE, note: null };
-  const file = defaultAdminTokenFile(env, home);
-  const legacy = legacyAdminTokenFile(home);
+  const { path, legacy, explicit } = adminTokenPaths(env, home);
+  if (explicit) return { file: path, note: null };
   let current;
   try {
-    current = statSync(file, { throwIfNoEntry: false });
+    current = statSync(path, { throwIfNoEntry: false });
   } catch {
     // There, but not even stat-able (a directory on the way is not searchable): reading it reports that.
-    return { file, note: null };
+    return { file: path, note: null };
   }
+  if (!legacy) return { file: current ? path : null, note: null };
   let old;
   try {
     old = statSync(legacy, { throwIfNoEntry: false });
@@ -59,12 +96,10 @@ export function resolveAdminTokenFile(env, home = homedir()) {
   }
   if (!current) {
     if (!old) return { file: null, note: null };
-    return { file: legacy, note: `NOTE admin token: ${file} does not exist, so the old path ${legacy} was read; move the file to ${file}, where caddie-admin reads it` };
+    return { file: legacy, note: `NOTE admin token: ${path} does not exist, so the old path ${legacy} was read; move the file to ${path}, where caddie-admin reads it` };
   }
-  if (old && !sameFile(file, current, legacy, old)) {
-    return { file, note: `NOTE admin token: read ${file}; the old path ${legacy} is a different file and is not read; keep only one of the two` };
-  }
-  return { file, note: null };
+  if (old) return { file: path, note: `NOTE admin token: read ${path}; the old path ${legacy} is a different file and is not read; keep only one of the two` };
+  return { file: path, note: null };
 }
 
 // A path as a POSIX shell word that survives copy and paste: a path under the home directory as
