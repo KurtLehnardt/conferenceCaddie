@@ -395,6 +395,84 @@ test('an unknown mode names keep', { skip }, async () => {
   });
 });
 
+test("every 'keep' answer validates against the response schema in closed mode", { skip }, async () => {
+  const plain = validator('people-api.v1', 'PresencePutResponse');
+  const derived = validator('people-api.v1', 'PresencePutResponseDerived');
+  const check = (schema, res, what) => {
+    assert.equal(res.status, 200, what);
+    assert.equal(res.json.until, 'keep', what);
+    const result = schema(res.json, { closed: true });
+    assert.equal(result.valid, true, `${what}: ${JSON.stringify(result.errors ?? null)}`);
+  };
+  await withFixedClock(T0, async (at) => {
+    const s = await setup();
+    assert.equal((await s.put({ until: 'hour', location: HERE, ble: true })).status, 200);
+    at(T0 + 1 * MIN);
+    check(plain, await s.put({ until: 'keep', location: NEAR }), 'a keep that changes only the position');
+    at(T0 + 2 * MIN);
+    check(plain, await s.put({ until: 'keep', location: NEAR }), 'a keep that changes nothing');
+    at(T0 + 3 * MIN);
+    const rekey = await s.put({ until: 'keep', ble: true });
+    check(derived, rekey, 'a keep that re-keys');
+    assert.ok(rekey.json.ble_key);
+    at(T0 + 4 * MIN);
+    check(plain, await s.put({ until: 'keep', ble: false }), 'a keep with ble: false');
+  });
+});
+
+test("a 'keep' racing a DELETE /api/presence leaves no presence and no position, in either order", { skip }, async () => {
+  for (const deleteFirst of [false, true]) {
+    await withFixedClock(T0, async (at) => {
+      const s = await setup();
+      const me = device('a');
+      assert.equal((await s.put({ until: 'hour', location: HERE, ble: true })).status, 200);
+      at(T0 + 5 * MIN);
+      const keep = () => s.put({ until: 'keep', location: NEAR, ble: true });
+      const off = () => call(s.obj, 'DELETE', '/api/presence', undefined, me);
+      const [first, second] = await Promise.all(deleteFirst ? [off(), keep()] : [keep(), off()]);
+      const [kept, deleted] = deleteFirst ? [second, first] : [first, second];
+      assert.equal(deleted.status, 200);
+      // The keep either landed before the delete or found presence off.
+      if (kept.status !== 200) {
+        assert.equal(kept.status, 400);
+        assert.deepEqual(kept.json, NOT_ACTIVE);
+      }
+      assert.deepEqual(s.rows(), [], `no presence row (delete first: ${deleteFirst})`);
+      assert.equal(s.location(), null, `no position (delete first: ${deleteFirst})`);
+    });
+  }
+});
+
+test('DELETE /api/presence turns off a presence written while it awaited the secret check', { skip }, async () => {
+  await withFixedClock(T0, async () => {
+    const s = await setup();
+    const me = device('a');
+    // The person is cached with no presence. While the DELETE awaits the secret check, the people
+    // cache is dropped (as a talks finalize does) and a PUT /api/presence turns presence on with
+    // a position, so the person that authenticate read before its await says there is none.
+    const store = s.obj.store;
+    const authenticate = store.authenticate;
+    store.authenticate = async function authenticateWithAGap(d) {
+      store.authenticate = authenticate;
+      const p = await authenticate.call(this, d);
+      store.invalidatePeople();
+      store.setPresence(me.id, { zone: 'Hallway', since_ms: T0, until_ms: T0 + 60 * MIN });
+      store.setLocation(me.id, { ...HERE, at: T0 });
+      assert.equal(p.presence ?? null, null, 'the copy read before the await has no presence');
+      return p;
+    };
+    try {
+      const res = await call(s.obj, 'DELETE', '/api/presence', undefined, me);
+      assert.equal(res.status, 200);
+    } finally {
+      store.authenticate = authenticate;
+    }
+    assert.deepEqual(s.rows(), [], 'the presence written in the gap is deleted');
+    assert.equal(s.location(), null, 'and its position forgotten');
+    assert.equal(store.isAround(store.person(me.id)), false);
+  });
+});
+
 test('the capabilities advertise until: keep, as the tier 2 fixture does, and validate in closed mode', () => {
   const tier2 = JSON.parse(readFileSync(new URL('../../contracts/fixtures/capabilities/tier2-free.json', import.meta.url), 'utf8'));
   for (const env of [{}, { BLE_MASTER_KEYRING: ENV.BLE_MASTER_KEYRING }]) {

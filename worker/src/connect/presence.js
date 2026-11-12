@@ -25,13 +25,14 @@
 //   never returned; only an active meet turns it into a distance and a bearing (meets.js).
 // - The presence row is written only on a real change: presence was off, or the zone, spot line,
 //   mode or Bluetooth flag changed, or the write carries no position (an explicit turn-on, which
-//   restarts the hour). A position-only update, the client's every-30-seconds fix, writes no row.
+//   restarts the hour for 'hour' and 'day'). A position-only update, the client's every-30-seconds fix, writes no row.
 //   With 'keep' the mode never counts as a change, and the row is written when the kept end has
 //   to be lowered to the end of the conference.
 // - After a presence row was written and the answer built, the nudge rule runs for this person
 //   (push/nudge.js afterPresence, which never throws). A position-only update cannot change who
 //   is in the same zone, so it does not run the rule.
-// - Turning presence off closes the person's active meets.
+// - Turning presence off deletes the presence row and the position whatever the person read before
+//   the secret check held, and closes the person's active meets.
 // - Bluetooth (lib/ble.js, docs/contracts/ble-tokens.md): ble: true starts a new session. It
 //   always mints a legacy 22-character token valid 10 minutes (never past the presence) for the
 //   old Android companion, and with the master keyring (derived-v1) also a fresh 16-byte
@@ -133,10 +134,12 @@ async function putPresence(ctx, req) {
   if (!store.zones().has(zone)) throw bad("zone must be one of the conference's zones");
   const now = Date.now();
   const around = store.isAround(me);
-  // Checked again on the clock of this write. On Workers the clock does not move while synchronous
-  // code runs, so this agrees with the first check there; where the clock does move (Node), an end
-  // reached in between answers presence_not_active instead of reading the end of no presence below.
-  if (mode === 'keep' && !(around && me.presence.until_ms > now)) throw presenceNotActive();
+  // Checked again on the clock of this write: isAround reads the clock after `now`, so `around`
+  // already means the presence ends after `now`. On Workers the clock does not move while
+  // synchronous code runs, so this agrees with the first check there; where the clock does move
+  // (Node), an end reached in between answers presence_not_active instead of reading the end of no
+  // presence below.
+  if (mode === 'keep' && !around) throw presenceNotActive();
   const cur = around ? me.presence : null;
   const end = Number.isFinite(ctx.conf.visible_until_ms) ? ctx.conf.visible_until_ms : Infinity;
   // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
@@ -198,12 +201,16 @@ async function putPresence(ctx, req) {
   return res;
 }
 
+// Turning presence off. The person that authenticate returns was read before its await on the
+// secret check, and the people cache can be dropped and a presence written in that gap (a talks
+// finalize and a PUT /api/presence), so the copy may say there is no presence when there is one.
+// The delete therefore never looks at it: clearPresence deletes the row, when there is one, and
+// forgets the position either way, as tier 3's delete does.
 async function deletePresence(ctx, req) {
   const device = writer(ctx, req);
   const me = await ctx.store.authenticate(device);
   if (me) {
-    if (me.presence) ctx.store.clearPresence(me.profile_id);
-    else ctx.store.setLocation(me.profile_id, null);
+    ctx.store.clearPresence(me.profile_id);
     // A meet that was active ends when either presence ends.
     closeActiveMeetsOf(ctx, me.profile_id);
   }
