@@ -1,307 +1,94 @@
 #!/usr/bin/env node
-// Operator CLI for reports on the free stack: what is hidden, what was reported, and undoing or
-// confirming a hide. It is the Worker counterpart of scripts/moderation.mjs (the Elasticsearch
-// version) and talks only to the Worker's GET and POST /admin/moderation routes.
+// Deprecated. The moderation commands of the caddie-admin CLI (scripts/caddie-admin.mjs, npm run
+// admin, docs/ADMIN_CLI.md) replace this script: they call the same GET and POST /admin/moderation
+// routes of the Worker, signed the same way, and add a preview before every change, a typed
+// confirmation and a private audit log. This script now makes no request at all. It prints, on
+// stderr, that it is deprecated and the caddie-admin command that does what the given options asked
+// for (or the whole mapping when no action is given or the options do not parse), and exits 2.
 //
-// Usage: node worker/scripts/moderation.mjs --event <slug> [--api <base>] [--show-content] <one action>
-//   --hidden                lists hidden profiles, spots and meets with their report counts
-//   --since <iso>           lists the reports made since that instant
-//   --unhide <kind>:<id>    clears the hidden flag of one target and removes its reports, so it
-//                           needs two fresh reports to be hidden again
-//   --delete <kind>:<id>    removes the target: a profile (everywhere, as a profile delete does),
-//                           a meet, or the spot line of a profile
-//   --purge                 deletes the conference's reports once the conference has ended
-//   --show-content          also prints display names and report reasons; without it the output
-//                           holds refs, meet ids, kinds, times and counts only
-//   <kind> is profile, spot or meet; <id> is the person's ref (16 hex characters) for a profile or
-//   a spot and the meet id (22 characters) for a meet, as --hidden and --since print them.
+// The mapping, for a tier 2 backend in the CLI's config.json ({ "tier": 2, "api": "<Worker origin>" },
+// which replaces --api and CADDIE_API_BASE; the token is still read from ADMIN_TOKEN, or from
+// ADMIN_TOKEN_FILE, whose default is admin-token in the CLI's config directory and must have mode
+// 0600; on Windows the CLI reads only ADMIN_TOKEN and no token file, scripts/admin/credentials.mjs):
+//   --hidden [--show-content]           moderation queue --event <slug> [--show-content]
+//   --since <iso> [--show-content]      moderation queue --event <slug> --since <iso> [--show-content]
+//                                       (the queue also lists the hidden targets)
+//   --unhide <kind>:<id>                moderation unhide --event <slug> <kind>:<id> --yes --confirm <kind>:<id>
+//   --delete <kind>:<id>                moderation delete --event <slug> <kind>:<id> --yes --confirm <kind>:<id>
+//   --purge                             moderation purge-reports --event <slug> --yes --confirm <slug>
+// Without --yes each of the last three only previews. The CLI sends the Cloudflare Access headers
+// when CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are both set, and never follows a redirect.
 //
-// Env: CADDIE_API_BASE (the Worker URL, when --api is not given); ADMIN_TOKEN, or ADMIN_TOKEN_FILE
-//      (default ~/.config/conference-caddie/admin-token, written by setup-secrets.mjs).
-//
-// The admin token never leaves this machine and is never printed: each request carries an
-// X-Caddie-Admin signature made with it (scripts/lib/admin-sign.mjs), and no Authorization header.
-// The API base must be the Worker's origin, with no path, over https (plain http for localhost
-// only). With CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET both set, the Cloudflare Access
-// service token headers are sent too, as worker/ingest/lib.mjs sends them. The Worker never
-// returns profile ids or reporter ids from these routes, and this script prints neither.
+// The suggested command repeats a value from the command line only when it has the shape of its
+// field (a slug, a kind and a ref or meet id, an ISO instant); anything else is shown as a
+// placeholder, so nothing the operator typed by mistake reaches the terminal as it is.
 
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
-import { accessHeaders, isRedirect, normalizeApiBase } from '../ingest/lib.mjs';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
-const REF_RE = /^[0-9a-f]{16}$/;
-const MEET_ID_RE = /^[A-Za-z0-9_-]{22}$/;
-const KINDS = ['profile', 'spot', 'meet'];
-const USAGE = 'Usage: node worker/scripts/moderation.mjs --event <slug> [--api <base>] [--show-content] (--hidden | --since <iso> | --unhide <kind>:<id> | --delete <kind>:<id> | --purge)';
+const TARGET_RE = /^(?:(?:profile|spot):[0-9a-f]{16}|meet:[A-Za-z0-9_-]{22})$/;
+const ISO_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9:.]{2,18}(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?$/;
+const CLI = 'node scripts/caddie-admin.mjs';
 
-function usage(message, code = 2) {
-  if (message) console.error(message);
-  (code === 0 ? console.log : console.error)(USAGE);
-  if (code === 0) {
-    console.log('  <kind> is profile, spot or meet; <id> is a ref (16 hex characters) or a meet id (22 characters).');
-    console.log('  The API base comes from --api or CADDIE_API_BASE; the admin token from ADMIN_TOKEN or ADMIN_TOKEN_FILE');
-    console.log('  (default ~/.config/conference-caddie/admin-token). Display names and reasons print only with --show-content.');
-  }
-  process.exit(code);
+const MAPPING = [
+  ['--hidden [--show-content]', 'moderation queue --event <slug> [--show-content]'],
+  ['--since <iso> [--show-content]', 'moderation queue --event <slug> --since <iso> [--show-content]'],
+  ['--unhide <kind>:<id>', 'moderation unhide --event <slug> <kind>:<id> --yes --confirm <kind>:<id>'],
+  ['--delete <kind>:<id>', 'moderation delete --event <slug> <kind>:<id> --yes --confirm <kind>:<id>'],
+  ['--purge', 'moderation purge-reports --event <slug> --yes --confirm <slug>'],
+];
+
+const HEAD = 'worker/scripts/moderation.mjs is deprecated and makes no request; use the caddie-admin CLI (scripts/caddie-admin.mjs, or npm run admin --) with a tier 2 backend instead.';
+const TAIL = [
+  'Set the Worker origin as a backend in the CLI\'s config.json ({ "tier": 2, "api": "<Worker origin>" }) instead of --api or CADDIE_API_BASE; the token comes from ADMIN_TOKEN or ADMIN_TOKEN_FILE as before (a token file must have mode 0600), except on Windows, where the CLI reads only ADMIN_TOKEN and no token file.',
+  'Without --yes, unhide, delete and purge-reports only preview. See docs/ADMIN_CLI.md.',
+];
+
+// The caddie-admin command for one set of parsed options, or null when no single action was given.
+function equivalent(opts) {
+  const slug = typeof opts.event === 'string' && SLUG_RE.test(opts.event) ? opts.event : '<slug>';
+  const target = (v) => (TARGET_RE.test(v) ? v : '<kind>:<id>');
+  const content = opts['show-content'] ? ' --show-content' : '';
+  const actions = [];
+  if (opts.hidden) actions.push(`moderation queue --event ${slug}${content}`);
+  if (opts.since !== undefined) actions.push(`moderation queue --event ${slug} --since ${ISO_RE.test(opts.since) ? opts.since : '<iso>'}${content}`);
+  if (opts.unhide !== undefined) actions.push(`moderation unhide --event ${slug} ${target(opts.unhide)} --yes --confirm ${target(opts.unhide)}`);
+  if (opts.delete !== undefined) actions.push(`moderation delete --event ${slug} ${target(opts.delete)} --yes --confirm ${target(opts.delete)}`);
+  if (opts.purge) actions.push(`moderation purge-reports --event ${slug} --yes --confirm ${slug}`);
+  return actions.length === 1 ? `${CLI} ${actions[0]}` : null;
 }
 
-let opts;
-try {
-  ({ values: opts } = parseArgs({
-    options: {
-      event: { type: 'string' },
-      api: { type: 'string' },
-      hidden: { type: 'boolean', default: false },
-      since: { type: 'string' },
-      unhide: { type: 'string' },
-      delete: { type: 'string' },
-      purge: { type: 'boolean', default: false },
-      'show-content': { type: 'boolean', default: false },
-      help: { type: 'boolean', short: 'h', default: false },
-    },
-    strict: true,
-  }));
-} catch (err) {
-  usage(err.message);
-}
-if (opts.help) usage('', 0);
-
-const slug = opts.event;
-if (!slug || !SLUG_RE.test(slug)) usage('--event <slug> is required.');
-const actions = [];
-if (opts.hidden) actions.push(['hidden']);
-if (opts.since !== undefined) actions.push(['since', opts.since]);
-if (opts.unhide !== undefined) actions.push(['unhide', opts.unhide]);
-if (opts.delete !== undefined) actions.push(['delete', opts.delete]);
-if (opts.purge) actions.push(['purge']);
-if (actions.length !== 1) usage('Give exactly one action.');
-const [action, arg] = actions[0];
-const showContent = opts['show-content'];
-
-const rawBase = opts.api ?? process.env.CADDIE_API_BASE ?? '';
-let base;
-try {
-  base = normalizeApiBase(rawBase);
-} catch (err) {
-  usage(`${err.message} --api <base> (or CADDIE_API_BASE) is the Worker URL, for example https://conference-caddie.<subdomain>.workers.dev.`);
-}
-
-function readToken() {
-  if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN.trim();
-  const file = process.env.ADMIN_TOKEN_FILE || join(homedir(), '.config', 'conference-caddie', 'admin-token');
+// The lines printed on stderr for an argument list.
+function deprecationLines(argv) {
+  let opts = null;
   try {
-    return readFileSync(file, 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
-const token = readToken();
-if (!token) {
-  console.error('No admin token: set ADMIN_TOKEN or ADMIN_TOKEN_FILE, or run node worker/scripts/setup-secrets.mjs first.');
-  process.exit(1);
-}
-
-// --unhide and --delete name a target as kind:id.
-function parseTarget(value) {
-  const colon = String(value).indexOf(':');
-  const kind = colon === -1 ? '' : value.slice(0, colon);
-  const id = colon === -1 ? '' : value.slice(colon + 1);
-  if (!KINDS.includes(kind)) usage('The target must be profile:<ref>, spot:<ref> or meet:<meet id>.');
-  if (kind === 'meet' ? !MEET_ID_RE.test(id) : !REF_RE.test(id)) usage(kind === 'meet' ? 'A meet id has 22 characters.' : 'A ref has 16 hex characters.');
-  return { kind, id };
-}
-
-const redact = (text) => String(text ?? '').split(token).join('[ADMIN_TOKEN]');
-
-// query is a plain object of parameters. Its values are a slug or an ISO instant, which the
-// signer's query charset allows as they are, so they are joined without percent-encoding (the
-// signer refuses a "%"); anything else is a usage error before a request is made.
-async function admin(method, query, body) {
-  const path = `/admin/moderation?${Object.entries(query).map(([k, v]) => `${k}=${v}`).join('&')}`;
-  const payload = body === undefined ? undefined : JSON.stringify(body);
-  let signed;
-  try {
-    signed = signAdminRequest({ method, path, base, body: payload, key: token });
-  } catch (err) {
-    usage(err.message);
-  }
-  let res;
-  try {
-    res = await fetch(signed.url, {
-      method,
-      headers: {
-        [HEADER_NAME]: signed.header,
-        ...accessHeaders(process.env),
-        ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+    ({ values: opts } = parseArgs({
+      args: argv,
+      options: {
+        event: { type: 'string' },
+        api: { type: 'string' },
+        hidden: { type: 'boolean' },
+        since: { type: 'string' },
+        unhide: { type: 'string' },
+        delete: { type: 'string' },
+        purge: { type: 'boolean' },
+        'show-content': { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
       },
-      body: payload,
-      // Never followed: fetch drops only Authorization on a cross-origin redirect, so the signed
-      // header and the Access secret would go to the other origin.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch (err) {
-    const why = err?.name === 'TimeoutError' ? 'timed out' : redact(err?.cause?.code ?? err?.cause?.message ?? err?.name ?? 'error');
-    console.error(`Could not reach the Worker at ${base} (${why}). Check --api or CADDIE_API_BASE.`);
-    process.exit(1);
+      strict: true,
+    }));
+  } catch {
+    opts = null;
   }
-  if (isRedirect(res)) {
-    console.error(`The Worker answered ${method} /admin/moderation with status ${res.status}, a redirect. Admin calls never follow redirects; --api (or CADDIE_API_BASE) must be the Worker's own origin.`);
-    process.exit(1);
-  }
-  const json = await res.json().catch(() => ({}));
-  if (res.status === 404) {
-    console.error(`The Worker answered 404 to ${method} /admin/moderation. Either the admin token is wrong or not set on the Worker (admin routes answer 404 then; after ten wrong signatures from one address in a minute they answer 404 to every request from it for up to a minute), or the conference ${slug} is unknown there.`);
-    process.exit(1);
-  }
-  if (res.status === 401 && json?.error === 'admin_skew') {
-    console.error("The Worker refused the request's timestamp (admin_skew): it was more than five minutes from the Worker's clock or the conference object's when the request reached them. Either this machine's clock is off, the request body took that long to arrive, or the Worker's and the object's clocks disagree; check this machine's clock and try again.");
-    process.exit(1);
-  }
-  if (!res.ok) {
-    const message = typeof json?.error === 'string' ? `: ${redact(json.error).slice(0, 200)}` : '';
-    console.error(`${method} /admin/moderation failed with status ${res.status}${message}.`);
-    process.exit(1);
-  }
-  return json;
+  const command = opts ? equivalent(opts) : null;
+  if (command) return [HEAD, `The equivalent command: ${command}`, ...TAIL];
+  return [
+    HEAD,
+    'Each option of this script and its caddie-admin command:',
+    ...MAPPING.map(([old, now]) => `  ${old.padEnd(32)}${CLI} ${now}`),
+    ...TAIL,
+  ];
 }
 
-// ---------------------------------------------------------------------------------------------
-// Normalising the response. The Worker returns {hidden, reports}; each entry names its target by
-// kind and ref (profiles and spots) or meet id, with a report count and reasons. Field names are
-// read leniently so that small differences in the admin module do not break the operator view.
-
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const quote = (s) => JSON.stringify(String(s ?? ''));
-
-function targetId(e) {
-  return String(e.ref ?? e.meet_id ?? e.target_id ?? e.id ?? '?');
-}
-
-function reportCount(e) {
-  for (const key of ['reporters', 'report_count', 'count', 'reports']) {
-    const v = e[key];
-    if (typeof v === 'number') return v;
-    if (Array.isArray(v)) return v.length;
-  }
-  return 0;
-}
-
-function reasonsText(e) {
-  let r = e.reasons ?? (Array.isArray(e.reports) ? e.reports.map((x) => x?.reason).filter(Boolean) : null);
-  if (!r) return '';
-  if (Array.isArray(r)) {
-    const counts = {};
-    for (const x of r) {
-      if (typeof x === 'string') counts[x] = (counts[x] ?? 0) + 1;
-      else if (x && typeof x === 'object' && x.reason) counts[x.reason] = (counts[x.reason] ?? 0) + (Number(x.count) || 1);
-    }
-    r = counts;
-  }
-  if (typeof r !== 'object') return '';
-  return Object.entries(r).sort((a, b) => b[1] - a[1]).map(([reason, n]) => `${reason} x${n}`).join(', ');
-}
-
-function namesText(e) {
-  if (e.display_name !== undefined) return quote(e.display_name ?? '(profile deleted)');
-  const names = e.names ?? e.participants ?? e.display_names;
-  if (Array.isArray(names)) return names.map((n) => quote(typeof n === 'string' ? n : n?.display_name ?? '(profile deleted)')).join(' and ');
-  return '';
-}
-
-const KIND_FROM_KEY = { profiles: 'profile', spots: 'spot', meets: 'meet', profile: 'profile', spot: 'spot', meet: 'meet' };
-
-function hiddenEntries(hidden) {
-  if (Array.isArray(hidden)) return hidden.map((e) => ({ ...e, kind: e.kind ?? e.target_kind ?? '?' }));
-  if (hidden && typeof hidden === 'object') {
-    return Object.entries(hidden).flatMap(([key, list]) => (Array.isArray(list) ? list.map((e) => ({ ...e, kind: e.kind ?? KIND_FROM_KEY[key] ?? key })) : []));
-  }
-  return [];
-}
-
-function createdIso(e) {
-  if (typeof e.created_at === 'string') return e.created_at;
-  const ms = e.created_at_ms ?? e.created_at;
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : '?';
-}
-
-// ---------------------------------------------------------------------------------------------
-// Actions.
-
-async function listHidden() {
-  const json = await admin('GET', { event: slug });
-  const entries = hiddenEntries(json.hidden);
-  for (const e of entries) {
-    const n = reportCount(e);
-    const parts = [String(e.kind).padEnd(7), e.kind === 'meet' ? `meet ${targetId(e)}` : `ref ${targetId(e)}`];
-    if (e.kind === 'meet' && e.state) parts.push(`state ${e.state}`);
-    parts.push(plural(n, 'report'));
-    if (showContent) {
-      const names = namesText(e);
-      const reasons = reasonsText(e);
-      if (names) parts.push(names);
-      if (reasons) parts.push(`reasons: ${reasons}`);
-    }
-    console.log(parts.join('  '));
-  }
-  console.log(entries.length ? `${plural(entries.length, 'hidden target')} at ${slug}.` : `Nothing is hidden at ${slug}.`);
-}
-
-async function listSince(iso) {
-  const sinceMs = Date.parse(iso);
-  if (!Number.isFinite(sinceMs)) usage('--since needs an ISO 8601 instant, for example 2026-11-10T08:00:00Z.');
-  const sinceIso = new Date(sinceMs).toISOString();
-  const json = await admin('GET', { event: slug, since: sinceIso });
-  const rows = (Array.isArray(json.reports) ? json.reports : [])
-    .filter((r) => {
-      const t = Date.parse(createdIso(r));
-      return !Number.isFinite(t) || t >= sinceMs;
-    })
-    .sort((a, b) => createdIso(a).localeCompare(createdIso(b)));
-  for (const r of rows) {
-    const kind = String(r.target_kind ?? r.kind ?? '?');
-    const parts = [createdIso(r), kind.padEnd(7), kind === 'meet' ? `meet ${targetId(r)}` : `ref ${targetId(r)}`];
-    if (showContent) {
-      if (r.reason) parts.push(`reason ${r.reason}`);
-      const names = namesText(r);
-      if (names) parts.push(names);
-    }
-    console.log(parts.join('  '));
-  }
-  console.log(`${plural(rows.length, 'report')} since ${sinceIso} at ${slug}.`);
-}
-
-// Prints the numeric and boolean fields of an action's answer (counts only, never content).
-function countsText(json) {
-  const parts = Object.entries(json ?? {})
-    .filter(([k, v]) => k !== 'ok' && (typeof v === 'number' || typeof v === 'boolean'))
-    .map(([k, v]) => `${k} ${v}`);
-  return parts.length ? ` (${parts.join(', ')})` : '';
-}
-
-async function act(body, done) {
-  const json = await admin('POST', { event: slug }, body);
-  if (json?.ok === false) {
-    console.error(`The Worker did not apply ${body.action}${countsText(json)}.`);
-    process.exit(1);
-  }
-  console.log(`${done}${countsText(json)}.`);
-}
-
-if (action === 'hidden') await listHidden();
-else if (action === 'since') await listSince(arg);
-else if (action === 'unhide') {
-  const t = parseTarget(arg);
-  await act({ action: 'unhide', kind: t.kind, id: t.id }, `Unhid ${t.kind} ${t.id} at ${slug} and removed its reports; it is hidden again after two new ones`);
-} else if (action === 'delete') {
-  const t = parseTarget(arg);
-  const what = t.kind === 'spot' ? `the spot line of ref ${t.id}` : t.kind === 'meet' ? `meet ${t.id}` : `the profile with ref ${t.id} everywhere`;
-  await act({ action: 'delete', kind: t.kind, id: t.id }, `Deleted ${what} at ${slug}`);
-} else {
-  await act({ action: 'purge' }, `Purged the reports of ${slug}`);
-}
+process.stderr.write(`${deprecationLines(process.argv.slice(2)).join('\n')}\n`);
+process.exitCode = 2;

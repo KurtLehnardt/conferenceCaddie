@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { upsertConferences, planPush, pushEvent, conferenceForWorker } from '../../worker/ingest/push-ingest.mjs';
 import { send as migrate, plan as migrationPlan, summary as migrationSummary, run as migrationRun } from '../../worker/ingest/migrate-from-backup.mjs';
 import { loadStoplist } from '../../worker/ingest/topics-local.mjs';
+import { withoutOperatorKeys } from '../../worker/ingest/lib.mjs';
 
 // A stand-in for the admin routes that records every call and answers PUT /admin/conferences with
 // `answer`.
@@ -159,6 +160,49 @@ test('push-ingest never sends expect_status: conferenceForWorker and the send pa
   const { admin, calls } = fakeAdmin({ upserted: 2, skipped_retired: [] });
   await upsertConferences(admin, [conf, { slug: 'kept-2099', status: 'unavailable', expect_status: null }], { log: () => {} });
   assert.deepEqual(calls[0].body.conferences.map((d) => [d.slug, 'expect_status' in d, 'unretire' in d]), [['gone-2099', false, false], ['kept-2099', false, false]]);
+});
+
+// Keys that differ from unretire or expect_status only in letter case or surrounding whitespace,
+// which the Worker refuses with 400 for the whole request, and keys that only contain the names,
+// which are a document's own and stay.
+const NEAR_MISSES = { Unretire: true, 'expect_status ': 'searchable', ' EXPECT_STATUS\t': null, '\nUNRETIRE': false, Expect_Status: 'unavailable' };
+const OWN_KEYS = { expect_status_note: 'x', unretired: 'y', 'un retire': 'z' };
+
+test('withoutOperatorKeys drops the operator keys and every near miss of them, keeps the rest in order, and changes nothing in place', () => {
+  const doc = { slug: 'gone-2099', unretire: true, ...NEAR_MISSES, status: 'searchable', expect_status: null, ...OWN_KEYS };
+  const out = withoutOperatorKeys(doc);
+  assert.deepEqual(Object.keys(out), ['slug', 'status', ...Object.keys(OWN_KEYS)]);
+  assert.equal(doc.Unretire, true, 'the document is not changed');
+});
+
+test('push-ingest drops a near-miss operator key in conferenceForWorker and on the send path, so one stray key cannot fail the weekly batch', async () => {
+  const conf = { slug: 'gone-2099', status: 'searchable', ...NEAR_MISSES, ...OWN_KEYS, counts: { sessions: 3, talk: 3 } };
+  assert.deepEqual(conferenceForWorker(conf, undefined), { slug: 'gone-2099', status: 'searchable', ...OWN_KEYS, counts: { sessions: 3, talk: 3 } });
+  const prepared = { dropped: 1, talks: [talk('gone-2099', 1), talk('gone-2099', 2)] };
+  const recounted = conferenceForWorker(conf, prepared);
+  assert.deepEqual(Object.keys(recounted), ['slug', 'status', ...Object.keys(OWN_KEYS), 'counts'], 'also with the takedown recount');
+  assert.equal(recounted.counts.sessions, 2);
+  const { admin, calls } = fakeAdmin({ upserted: 2, skipped_retired: [] });
+  await upsertConferences(admin, [conf, { slug: 'kept-2099', status: 'unavailable', 'Unretire ': true }], { log: () => {} });
+  assert.deepEqual(calls[0].body.conferences.map((d) => Object.keys(d)), [['slug', 'status', ...Object.keys(OWN_KEYS), 'counts'], ['slug', 'status']]);
+});
+
+test('the migration drops a near-miss operator key from a backup conference document', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'caddie-backup-'));
+  try {
+    writeFileSync(join(dir, 'caddie-conferences-v1.ndjson'), `${[
+      { _id: 'gone-2099', slug: 'gone-2099', status: 'searchable', ...NEAR_MISSES, ...OWN_KEYS },
+      { _id: 'kept-2099', slug: 'kept-2099', status: 'searchable', 'Unretire ': true },
+    ].map((d) => JSON.stringify(d)).join('\n')}\n`);
+    const p = migrationPlan(dir, { include: new Set(['conferences']), includeReal: false });
+    assert.deepEqual(p.conferences.send, [{ slug: 'gone-2099', status: 'searchable', ...OWN_KEYS }, { slug: 'kept-2099', status: 'searchable' }]);
+    const { admin, calls } = recordingAdmin([]);
+    await migrate(p, admin);
+    const folded = (d) => Object.keys(d).map((k) => k.trim().toLowerCase());
+    assert.deepEqual(calls.map((c) => [c.url, c.body.conferences.some((d) => folded(d).some((k) => k === 'unretire' || k === 'expect_status'))]), [['/admin/conferences', false]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('migrate-from-backup skips a conference whose object answers "conference is not available", names it, and carries on', async () => {
