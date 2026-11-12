@@ -371,8 +371,10 @@ Run the `delete` only after the `put` succeeded, and never print the token file.
 script fails, it says which state that left: after the Worker step nothing changed, so run it
 again; after the file step the Worker holds an `ADMIN_TOKEN_NEXT` that was saved nowhere and the old
 token still works everywhere, so run it again with `--replace-next` (the second run would
-otherwise stop, because `ADMIN_TOKEN_NEXT` is now set); after the
-repository-secret step the file holds the new value and `CADDIE_ADMIN_TOKEN` the old one, so run the
+otherwise stop, because `ADMIN_TOKEN_NEXT` is now set); a put can store its value and still fail (a
+timeout), which the next run then meets as an `ADMIN_TOKEN_NEXT` that is already set; after the
+repository-secret step the file holds the new value and `CADDIE_ADMIN_TOKEN` the old one (or the
+new one, if the set went through before it failed), so run the
 `gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < <token file>` command it prints before the
 two finishing commands. Running `setup-secrets.mjs --only-missing` at any point is safe: it never
 looks at `ADMIN_TOKEN_NEXT`, and only because the Worker accepts both keys during the overlap, a run
@@ -383,15 +385,31 @@ it, the Worker trims each secret it reads, and the clients trim what they read.
 
 If the Worker already has an `ADMIN_TOKEN_NEXT`, an earlier rotation was started, and the script
 exits 1 without changing anything: replacing its value would make the Worker refuse a token file
-and a repository secret that may hold exactly that value. It lists the cases. If the earlier run went
-through all three steps, run the two finishing commands; if the finishing `put` already ran, only
-the `delete` is left; if it stopped at its GitHub step, run the `gh secret set` command it printed
-and then the finishing commands; if it stopped at its Worker or token-file step (the file and the
-repository secret still hold the `ADMIN_TOKEN`), run the script again with `--replace-next`.
-`--replace-next` is the explicit choice to replace the `ADMIN_TOKEN_NEXT` that is there: until the
-run has been through all three steps, the token file and the repository secret may hold the old
-`ADMIN_TOKEN_NEXT`, which the Worker then no longer accepts, and the output says so at every failure
-point. It cannot be combined with `--skip-gh`. The same recipe is in docs/FREE_HOSTING.md
+and a repository secret that may hold exactly that value. It cannot read the Worker's or GitHub's
+secrets, so it cannot tell where the earlier rotation stopped, and it leads with one recipe that is
+safe wherever it stopped: it makes the value in the token file the only admin token, everywhere. It
+prints it with the resolved repository and the real path, never the value:
+
+```sh
+gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < ~/.config/conference-caddie/admin-token
+cd worker
+npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token
+npx wrangler secret delete ADMIN_TOKEN_NEXT
+```
+
+Run the three in this order, once any running ingest or smoke has finished, and only if the token
+file holds the token your clients should use. A new rotation then starts normally. If the token file
+is missing, empty or shorter than 32 characters, the script does not print the recipe (with a bad
+file it would make the Worker refuse every admin request) and says to stop: put the value you last
+set back into the file from your own copy, then run the command again.
+`--replace-next` is the other way on, for someone who wants to keep rotating without finishing the
+earlier rotation first: until the run has been through all three steps, the token file and the
+repository secret may hold the old `ADMIN_TOKEN_NEXT`, which the Worker then no longer accepts, and
+the output says so at every failure point (after a failed put, that the put may have gone through
+and that the command should be run again at once). It is refused with `--skip-gh` and without
+`--rotate-admin-token` (exit 2). A plain run (without `--rotate-admin-token`) that finds an
+`ADMIN_TOKEN` replaces it outright, with no overlap: if its GitHub step fails, the ingest is refused
+until the secret is set, and the output says so. The same recipe is in docs/FREE_HOSTING.md
 (Operations runbook).
 
 ## Moderation

@@ -15,7 +15,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +41,9 @@ fs.writeFileSync(path.join(dir, 'env-npx'), Object.keys(process.env).sort().join
 const at = args.indexOf('secret');
 const verb = args[at + 1];
 const name = args[at + 2];
-if (args[0] !== '--yes' || args[1] !== 'wrangler' || at !== 2) { process.stderr.write('unexpected npx call\\n'); process.exit(64); }
+// The script calls \`npx --yes wrangler secret ...\`; the recipe it prints says \`npx wrangler secret ...\`.
+const first = args[0] === '--yes' ? 1 : 0;
+if (args[first] !== 'wrangler' || at !== first + 1) { process.stderr.write('unexpected npx call\\n'); process.exit(64); }
 const state = JSON.parse(read('worker.json', '{}'));
 if (verb === 'list') {
   if (fail.includes('wrangler-list-garbage')) { process.stdout.write('not json'); process.exit(0); }
@@ -53,6 +55,12 @@ if (verb === 'put') {
   try { fs.writeFileSync(path.join(dir, 'file-at-put-' + name), fs.readFileSync(read('token-file', ''), 'utf8')); } catch {}
   if (fail.includes('wrangler-put:' + name)) { process.stderr.write('Authentication error for ' + input + '\\n'); process.exit(1); }
   state[name] = input;
+  if (fail.includes('wrangler-put-stored:' + name)) {
+    // The value is stored, and the tool still exits 1 (a timeout after the upload).
+    fs.writeFileSync(path.join(dir, 'worker.json'), JSON.stringify(state));
+    process.stderr.write('network timeout after uploading ' + input + '\\n');
+    process.exit(1);
+  }
   fs.writeFileSync(path.join(dir, 'worker.json'), JSON.stringify(state));
   process.stdout.write('Success! Uploaded secret ' + name + '\\n');
   process.exit(0);
@@ -90,6 +98,12 @@ if (args[0] === 'secret' && args[1] === 'set') {
   try { fs.writeFileSync(path.join(dir, 'file-at-gh-' + name), fs.readFileSync(read('token-file', ''), 'utf8')); } catch {}
   if (fail.includes('gh-set')) { process.stderr.write('HTTP 403 for ' + input + '\\n'); process.exit(1); }
   state[name] = input;
+  if (fail.includes('gh-set-stored')) {
+    // The value is stored, and the tool still exits 1.
+    fs.writeFileSync(path.join(dir, 'gh.json'), JSON.stringify(state));
+    process.stderr.write('timeout after setting ' + input + '\\n');
+    process.exit(1);
+  }
   fs.writeFileSync(path.join(dir, 'gh.json'), JSON.stringify(state));
   process.exit(0);
 }
@@ -142,7 +156,8 @@ function world(t, {
     file,
     repo,
     // Runs the script. env overrides the child's environment (a key set to undefined is removed);
-    // fail names the switches of the stand-ins: wrangler-put:<NAME>, wrangler-list-garbage, gh-set.
+    // fail names the switches of the stand-ins: wrangler-put:<NAME> and wrangler-put-stored:<NAME>
+    // (the value is stored, then the tool exits 1), wrangler-list-garbage, gh-set and gh-set-stored.
     run(args, { env = {}, fail = [] } = {}) {
       const childEnv = { PATH: bin, HOME: home, ADMIN_TOKEN_FILE: file, ...env };
       for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
@@ -296,8 +311,18 @@ describe('setup-secrets.mjs --rotate-admin-token', () => {
     assert.ok(!w.calls().some((c) => c.tool === 'gh'));
     assert.equal(w.token(), w.got('put-ADMIN_TOKEN_NEXT'));
     assert.match(r.stdout, /Skipped the GitHub secret \(--skip-gh\)/);
-    assert.ok(r.stdout.includes(`gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < ${w.file}`));
+    // The repository is worked out best-effort, for the command that is printed.
+    assert.ok(r.stdout.includes(`gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt/conferenceCaddie < ${w.file}`));
     assertNoPartOf(w.token(), r.text, 'the output');
+    // When it cannot be worked out, the run still succeeds and the command keeps a placeholder.
+    const other = world(t, { origin: 'https://gitlab.com/not/github.git' });
+    const r2 = other.run(['--rotate-admin-token', '--skip-gh']);
+    assert.equal(r2.status, 0, r2.text);
+    assert.ok(r2.stdout.includes(`gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < ${other.file}`));
+    // And CADDIE_GH_REPO is used for it when set.
+    const set = world(t, { origin: null });
+    const r3 = set.run(['--rotate-admin-token', '--skip-gh'], { env: { CADDIE_GH_REPO: 'org/named' } });
+    assert.ok(r3.stdout.includes(`gh secret set CADDIE_ADMIN_TOKEN --repo org/named < ${set.file}`));
   });
 
   test('a Worker failure changes nothing, redacts what the tool echoed, and says to rerun', (t) => {
@@ -311,8 +336,8 @@ describe('setup-secrets.mjs --rotate-admin-token', () => {
     assert.deepEqual(verbs(w.calls()), ['wrangler list', 'wrangler put ADMIN_TOKEN_NEXT'], 'the GitHub secret was not touched');
     assert.match(r.stderr, /Setting ADMIN_TOKEN_NEXT on the Worker failed \(exit 1\)/);
     assert.match(r.stderr, /\[redacted\]/);
-    assert.match(r.stderr, /Nothing else was changed: ADMIN_TOKEN, .* and the GitHub secret CADDIE_ADMIN_TOKEN keep their old values and keep working\. Run the same command again/);
-    assert.match(r.stderr, /if it then says ADMIN_TOKEN_NEXT is already set .* run it with --replace-next/);
+    assert.match(r.stderr, /Nothing else was changed: ADMIN_TOKEN, .* and the GitHub secret CADDIE_ADMIN_TOKEN keep their old values and keep working, even if the put went through before it failed/);
+    assert.match(r.stderr, /Run the same command again; if it then says ADMIN_TOKEN_NEXT is already set, follow the recipe it prints\./);
     assertNoPartOf(value, r.text, 'the output');
     assert.ok(!r.stdout.includes('ADMIN_TOKEN < '), 'no finishing commands after a failure');
   });
@@ -342,7 +367,7 @@ describe('setup-secrets.mjs --rotate-admin-token', () => {
     assert.equal(w.token(), value, 'the file already holds the new value');
     assert.match(r.stderr, /Setting the GitHub secret CADDIE_ADMIN_TOKEN failed \(exit 1\)/);
     assert.match(r.stderr, /\[redacted\]/);
-    assert.match(r.stderr, /CADDIE_ADMIN_TOKEN still holds the old token, which the Worker still accepts as ADMIN_TOKEN/);
+    assert.match(r.stderr, /CADDIE_ADMIN_TOKEN holds the old token, or the new one if the set went through before it failed, and the Worker accepts either/);
     assert.ok(r.stderr.includes(`  gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt/conferenceCaddie < ${w.file}`));
     assert.match(r.stderr, /do not run the two finishing commands before it succeeds/);
     assert.ok(!r.stdout.includes('secret delete ADMIN_TOKEN_NEXT'), 'the finishing commands are not offered after a failure');
@@ -359,7 +384,8 @@ describe('setup-secrets.mjs --rotate-admin-token', () => {
     // The dry run reports it and still exits 0.
     const dry = w.run(['--rotate-admin-token', '--dry-run']);
     assert.equal(dry.status, 0, dry.text);
-    assert.match(dry.stdout, /Note: ADMIN_TOKEN is not set on the Worker.* A real run stops here\./);
+    assert.match(dry.stdout, /Note: ADMIN_TOKEN is not set on the Worker[^\n]*\nDry run: nothing is generated or changed\. A real run stops here\./);
+    assert.ok(!dry.stdout.includes('Would set'), 'a dry run that a real run would stop at does not list what it would set');
   });
 
   test('an unreadable secret list stops a real run', (t) => {
@@ -388,7 +414,7 @@ describe('setup-secrets.mjs --rotate-admin-token with an ADMIN_TOKEN_NEXT alread
   const NEW1 = 'a1'.repeat(32);
   const inProgress = { ADMIN_TOKEN: OLD_TOKEN, ADMIN_TOKEN_NEXT: NEW1, REF_SALT: 'p'.repeat(40) };
 
-  test('stops without changing anything, and explains how to tell where the earlier rotation stopped', (t) => {
+  test('stops without changing anything, and leads with one recipe that makes the token file the only token', (t) => {
     const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: NEW1 });
     const r = w.run(['--rotate-admin-token']);
     assert.equal(r.status, 1);
@@ -397,11 +423,19 @@ describe('setup-secrets.mjs --rotate-admin-token with an ADMIN_TOKEN_NEXT alread
     assert.equal(w.token(), NEW1);
     assert.deepEqual(w.githubState(), { CADDIE_ADMIN_TOKEN: NEW1 });
     assert.match(r.stderr, /ADMIN_TOKEN_NEXT is already set on the Worker, so an earlier rotation was started and not finished/);
-    assert.match(r.stderr, /would stop accepting it\. Nothing was changed\./);
-    assert.ok(r.stderr.includes(`      npx wrangler secret put ADMIN_TOKEN < ${w.file}\n      npx wrangler secret delete ADMIN_TOKEN_NEXT`), 'the case where it finished: the two finishing commands');
-    assert.match(r.stderr, /finishing "put" of ADMIN_TOKEN already ran: only  npx wrangler secret delete ADMIN_TOKEN_NEXT  is left/);
-    assert.ok(r.stderr.includes(`stopped at its GitHub step`) && r.stderr.includes(`gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt/conferenceCaddie < ${w.file}`));
-    assert.match(r.stderr, /stopped at its Worker step or its token-file step .* run this command again with --replace-next/);
+    assert.match(r.stderr, /would stop accepting it \(after an earlier run that replaced it and stopped part-way, they may hold a value the Worker no longer accepts already\)\. Nothing was changed\./);
+    assert.match(r.stderr, /cannot tell where the earlier rotation stopped\. This recipe is safe wherever it stopped: it makes the value in the token file the only admin token, everywhere/);
+    // The three commands, in this order, with the resolved repository and the real path, and never the value.
+    const recipe = [
+      `  gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt/conferenceCaddie < ${w.file}`,
+      `  npx wrangler secret put ADMIN_TOKEN < ${w.file}`,
+      '  npx wrangler secret delete ADMIN_TOKEN_NEXT',
+    ].join('\n');
+    assert.ok(r.stderr.includes(`${recipe}\n`), r.stderr);
+    assert.ok(r.stderr.includes('the last two from '), 'the Worker commands are run from worker/');
+    // The case list is gone, and --replace-next comes only after the recipe.
+    assert.doesNotMatch(r.stderr, /stopped at its|finishing "put" of ADMIN_TOKEN already ran|went through all three steps/);
+    assert.ok(r.stderr.indexOf('--replace-next') > r.stderr.indexOf(recipe), '--replace-next is offered after the recipe');
     assertNoPartOf(NEW1, r.text, 'the output');
   });
 
@@ -410,7 +444,8 @@ describe('setup-secrets.mjs --rotate-admin-token with an ADMIN_TOKEN_NEXT alread
     const dry = w.run(['--rotate-admin-token', '--dry-run']);
     assert.equal(dry.status, 0, dry.text);
     assert.match(dry.stdout, /Note: ADMIN_TOKEN_NEXT is already set on the Worker, so an earlier rotation was started/);
-    assert.match(dry.stdout, /A real run stops here\./);
+    assert.match(dry.stdout, /Dry run: nothing is generated or changed\. A real run stops here\./);
+    assert.ok(!dry.stdout.includes('Would set'), 'a dry run that a real run would stop at does not list what it would set');
     const replace = w.run(['--rotate-admin-token', '--dry-run', '--replace-next']);
     assert.equal(replace.status, 0, replace.text);
     assert.match(replace.stdout, /--replace-next would replace it/);
@@ -459,7 +494,136 @@ describe('setup-secrets.mjs --rotate-admin-token with an ADMIN_TOKEN_NEXT alread
     const r = w.run(['--rotate-admin-token', '--replace-next'], { fail: ['gh-set'] });
     assert.equal(r.status, 1);
     assert.ok(!r.text.includes('--replace-next replaces it'));
-    assert.match(r.stderr, /still holds the old token, which the Worker still accepts as ADMIN_TOKEN/);
+    assert.match(r.stderr, /holds the old token, or the new one if the set went through before it failed, and the Worker accepts either/);
+  });
+
+  test('a token file that is missing, empty or too short gets no recipe: it says to stop, and what to do instead', (t) => {
+    for (const [label, content] of [['missing', null], ['empty', ''], ['blank', ' \n'], ['short', 'abc123'], ['31 characters', 'a'.repeat(31)]]) {
+      const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: content });
+      const r = w.run(['--rotate-admin-token']);
+      assert.equal(r.status, 1, label);
+      assert.match(r.stderr, /is missing, empty or shorter than 32 characters, so the safe recipe .* cannot be offered/, label);
+      assert.match(r.stderr, /Stop here\. Put the value you last set as the admin token back into that file from your own copy, then run this command again\./, label);
+      assert.match(r.stderr, /If you have no copy, run it again with --replace-next/, label);
+      assert.doesNotMatch(r.text, /gh secret set|secret put ADMIN_TOKEN|secret delete/, `${label}: no command that could do harm is printed`);
+      assert.deepEqual(verbs(w.calls()), ['wrangler list'], label);
+      assert.deepEqual(w.workerState(), inProgress, label);
+      // The dry run says the same and exits 0.
+      const dry = w.run(['--rotate-admin-token', '--dry-run']);
+      assert.equal(dry.status, 0, label);
+      assert.match(dry.stdout, /cannot be offered[\s\S]*A real run stops here\./, label);
+    }
+    // With --replace-next a missing file is simply written: that is the way out when no copy exists.
+    const gone = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: null });
+    const ok = gone.run(['--rotate-admin-token', '--replace-next']);
+    assert.equal(ok.status, 0, ok.text);
+    assert.match(gone.token(), /^[0-9a-f]{64}$/);
+  });
+
+  test('the recipe, run as printed, ends with the token file the only token, in every state an earlier rotation can have left', (t) => {
+    const N = 'e5'.repeat(32);
+    const N0 = 'd4'.repeat(32);
+    const N2 = 'c3'.repeat(32);
+    const A = OLD_TOKEN;
+    const states = {
+      '1 the earlier rotation went through all three steps': { worker: { ADMIN_TOKEN: A, ADMIN_TOKEN_NEXT: N }, file: N, gh: N },
+      '2 it stopped at its Worker or file step (the put went through)': { worker: { ADMIN_TOKEN: A, ADMIN_TOKEN_NEXT: N }, file: A, gh: A },
+      '3 it stopped at its GitHub step': { worker: { ADMIN_TOKEN: A, ADMIN_TOKEN_NEXT: N }, file: N, gh: A },
+      '4 the finishing put already ran': { worker: { ADMIN_TOKEN: N, ADMIN_TOKEN_NEXT: N }, file: N, gh: N },
+      '5 the finishing put ran and the GitHub secret was never set': { worker: { ADMIN_TOKEN: N, ADMIN_TOKEN_NEXT: N }, file: N, gh: A },
+      '6 an earlier --replace-next stopped at its token-file step': { worker: { ADMIN_TOKEN: A, ADMIN_TOKEN_NEXT: N2 }, file: N, gh: N },
+      '7 an earlier --replace-next stopped at its GitHub step': { worker: { ADMIN_TOKEN: A, ADMIN_TOKEN_NEXT: N2 }, file: N2, gh: N },
+      '8 the GitHub secret holds a value of yet another attempt': { worker: { ADMIN_TOKEN: A, ADMIN_TOKEN_NEXT: N }, file: N, gh: N0 },
+    };
+    for (const [name, state] of Object.entries(states)) {
+      const w = world(t, { worker: state.worker, github: { CADDIE_ADMIN_TOKEN: state.gh }, tokenFile: state.file });
+      const stopped = w.run(['--rotate-admin-token']);
+      assert.equal(stopped.status, 1, name);
+      assert.deepEqual([w.workerState(), w.token(), w.githubState().CADDIE_ADMIN_TOKEN], [state.worker, state.file, state.gh], `${name}: the stop changes nothing`);
+
+      // Run the printed commands as an operator would, in order, from worker/, against the stand-ins.
+      const commands = stopped.stderr.split('\n').filter((l) => /^ {2}(gh secret set |npx wrangler secret )/.test(l)).map((l) => l.trim());
+      assert.equal(commands.length, 3, `${name}: three commands\n${stopped.stderr}`);
+      assert.match(commands[0], /^gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt\/conferenceCaddie < /);
+      assert.match(commands[1], /^npx wrangler secret put ADMIN_TOKEN < /);
+      assert.equal(commands[2], 'npx wrangler secret delete ADMIN_TOKEN_NEXT');
+      for (const command of commands) {
+        const ran = spawnSync('/bin/sh', ['-c', command], { cwd: join(w.repo, 'worker'), env: { PATH: join(w.dir, 'bin'), HOME: w.home }, encoding: 'utf8' });
+        assert.equal(ran.status, 0, `${name}: ${command}\n${ran.stderr}`);
+      }
+
+      const worker = w.workerState();
+      assert.equal(worker.ADMIN_TOKEN_NEXT, undefined, `${name}: ADMIN_TOKEN_NEXT is gone`);
+      assert.equal(worker.ADMIN_TOKEN, state.file, `${name}: the file's value is the ADMIN_TOKEN`);
+      assert.equal(w.token(), state.file, `${name}: the file is untouched`);
+      assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, state.file, `${name}: the GitHub secret holds the file's value`);
+      const keys = adminKeys(worker);
+      assert.ok(keys.includes(w.token().trim()), `${name}: the Worker accepts the token file`);
+      assert.ok(keys.includes(w.githubState().CADDIE_ADMIN_TOKEN.trim()), `${name}: the Worker accepts the GitHub secret`);
+      // Afterwards a new rotation starts normally.
+      const again = w.run(['--rotate-admin-token']);
+      assert.equal(again.status, 0, `${name}: ${again.text}`);
+    }
+  });
+
+  test('--replace-next after a put that stored its value and then failed: the hint says it may have gone through, that the old value is refused, and to run again now', (t) => {
+    // The earlier rotation went through all three steps, so the file and the GitHub secret hold NEW1, which is ADMIN_TOKEN_NEXT.
+    const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: NEW1 });
+    const r = w.run(['--rotate-admin-token', '--replace-next'], { fail: ['wrangler-put-stored:ADMIN_TOKEN_NEXT'] });
+    assert.equal(r.status, 1);
+    // The premise: the put did go through, and the Worker now refuses what the file and GitHub hold.
+    const stored = w.workerState().ADMIN_TOKEN_NEXT;
+    assert.notEqual(stored, NEW1);
+    assert.ok(!adminKeys(w.workerState()).includes(NEW1));
+    assert.equal(w.token(), NEW1);
+    assert.match(r.stderr, /The put may have gone through before it failed \(a timeout, say\)\. If it did, the Worker now has a new ADMIN_TOKEN_NEXT that is saved nowhere and no longer accepts the old ADMIN_TOKEN_NEXT that the token file and CADDIE_ADMIN_TOKEN may hold, so a client that uses them is refused: run the same command again now, with --replace-next\./);
+    assert.doesNotMatch(r.stderr, /Nothing was changed by this run|are as they were/);
+    assertNoPartOf(stored, r.text, 'the output');
+    // Running it again now does what the hint says: everything is consistent afterwards.
+    const again = w.run(['--rotate-admin-token', '--replace-next']);
+    assert.equal(again.status, 0, again.text);
+    assert.ok(adminKeys(w.workerState()).includes(w.token()));
+    assert.ok(adminKeys(w.workerState()).includes(w.githubState().CADDIE_ADMIN_TOKEN));
+  });
+
+  test('--replace-next after a GitHub step that was refused earlier says the earlier rotation had completed its GitHub step', (t) => {
+    const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: NEW1 });
+    const r = w.run(['--rotate-admin-token', '--replace-next'], { fail: ['gh-set'] });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /\(the earlier rotation had completed its GitHub step\)/);
+    assert.doesNotMatch(r.stderr, /got as far as/);
+  });
+
+  test('two separate rotations make two different values', (t) => {
+    const first = world(t);
+    const second = world(t);
+    assert.equal(first.run(['--rotate-admin-token']).status, 0);
+    assert.equal(second.run(['--rotate-admin-token']).status, 0);
+    const a = first.got('put-ADMIN_TOKEN_NEXT');
+    const b = second.got('put-ADMIN_TOKEN_NEXT');
+    assert.match(a, /^[0-9a-f]{64}$/);
+    assert.match(b, /^[0-9a-f]{64}$/);
+    assert.notEqual(a, b);
+    assert.notEqual(first.token(), second.token());
+  });
+
+  test('a leftover temporary token file of a killed run is removed when it is old, and nothing else in the directory is touched', (t) => {
+    const w = world(t);
+    const dir = join(w.dir, 'secrets');
+    const stale = join(dir, '.admin-token.4242.1700000000000.tmp');
+    const fresh = join(dir, '.admin-token.4243.1700000000001.tmp');
+    const other = join(dir, 'notes.txt');
+    writeFileSync(stale, 'x'.repeat(64), { mode: 0o600 });
+    writeFileSync(fresh, 'y'.repeat(64), { mode: 0o600 });
+    writeFileSync(other, 'keep');
+    const old = new Date(Date.now() - 3_600_000);
+    utimesSync(stale, old, old);
+    const r = w.run(['--rotate-admin-token']);
+    assert.equal(r.status, 0, r.text);
+    assert.equal(existsSync(stale), false, 'the old leftover is gone');
+    assert.equal(existsSync(fresh), true, 'a recent one, which a run in progress may own, is kept');
+    assert.equal(readFileSync(other, 'utf8'), 'keep');
+    assert.equal(w.token(), w.got('put-ADMIN_TOKEN_NEXT'));
   });
 });
 
@@ -475,12 +639,16 @@ describe('setup-secrets.mjs --rotate-admin-token: what the Worker accepts after 
     'the earlier rotation went through all three steps': { worker: { ADMIN_TOKEN: OLD_TOKEN, ADMIN_TOKEN_NEXT: NEW1 }, file: NEW1, github: NEW1 },
     'the earlier rotation stopped at its Worker or file step': { worker: { ADMIN_TOKEN: OLD_TOKEN, ADMIN_TOKEN_NEXT: NEW1 }, file: OLD_TOKEN, github: OLD_TOKEN },
     'the earlier rotation stopped at its GitHub step': { worker: { ADMIN_TOKEN: OLD_TOKEN, ADMIN_TOKEN_NEXT: NEW1 }, file: NEW1, github: OLD_TOKEN },
+    'the finishing put already ran': { worker: { ADMIN_TOKEN: NEW1, ADMIN_TOKEN_NEXT: NEW1 }, file: NEW1, github: NEW1 },
+    'an earlier --replace-next stopped at its token-file step': { worker: { ADMIN_TOKEN: OLD_TOKEN, ADMIN_TOKEN_NEXT: 'c3'.repeat(32) }, file: NEW1, github: NEW1 },
   };
   const failures = {
     'no failure': {},
     'the Worker step fails': { fail: ['wrangler-put:ADMIN_TOKEN_NEXT'] },
+    'the Worker step stores the value and then fails': { fail: ['wrangler-put-stored:ADMIN_TOKEN_NEXT'] },
     'the token file step fails': { blockFile: true },
     'the GitHub step fails': { fail: ['gh-set'] },
+    'the GitHub step stores the value and then fails': { fail: ['gh-set-stored'] },
   };
   const accepted = (worker, value) => value !== null && adminKeys(worker).includes(String(value).trim());
 
@@ -506,13 +674,17 @@ describe('setup-secrets.mjs --rotate-admin-token: what the Worker accepts after 
             assert.equal(r.status, 1);
             assert.deepEqual([worker, fileValue, githubValue], [state.worker, state.file, state.github], 'a stopped run changes nothing');
           }
-          // The old ADMIN_TOKEN is never touched by a rotation.
-          assert.equal(worker.ADMIN_TOKEN, OLD_TOKEN);
+          // The ADMIN_TOKEN is never touched by a rotation.
+          assert.equal(worker.ADMIN_TOKEN, state.worker.ADMIN_TOKEN);
           // The invariant.
           const refused = [];
           if (!accepted(worker, fileValue)) refused.push('the token file');
           if (!accepted(worker, githubValue)) refused.push('the GitHub secret');
-          if (refused.length) assert.match(out, /no longer accepts/, `${refused.join(' and ')} would be refused by the Worker and the output does not say so\n${out}`);
+          if (refused.length) {
+            assert.match(out, /no longer accepts/, `${refused.join(' and ')} would be refused by the Worker and the output does not say so\n${out}`);
+            // And it never claims that nothing changed, which is not true when a failed step stored its value anyway.
+            assert.doesNotMatch(out, /Nothing was changed by this run|are as they were|Nothing else was changed/, `${refused.join(' and ')} are refused but the output says nothing changed\n${out}`);
+          }
           // And what the output claims about working clients is true.
           if (/keeps? working|keep their old values and keep working/.test(out)) assert.deepEqual(refused, [], `the output says clients keep working, but ${refused.join(' and ')} are refused\n${out}`);
           // Without a rotation in progress and with no --replace-next, every failure point is safe without any warning.
@@ -622,25 +794,56 @@ describe('setup-secrets.mjs: the repository of the GitHub secret (W9)', () => {
       const w = world(t, { origin: url });
       const r = w.run(['--rotate-admin-token']);
       assert.equal(r.status, 1, `${url}\n${r.text}`);
-      assert.match(r.stderr, /CADDIE_GH_REPO is not set and the repository could not be worked out from this clone \("origin" is not a github\.com address in https or ssh form\)\./, url);
+      const credentials = /^https:\/\/[^/@]*@github\.com\//.test(url);
+      assert.match(r.stderr, credentials
+        ? /CADDIE_GH_REPO is not set and the repository could not be worked out from this clone \(the git remote "origin" holds a user name or password, which this script does not take from a remote; use a plain https or ssh address\)\./
+        : /CADDIE_GH_REPO is not set and the repository could not be worked out from this clone \("origin" is not a github\.com address in https or ssh form\)\./, url);
       assert.match(r.stderr, /Set CADDIE_GH_REPO=<owner>\/<name>/);
-      for (const part of ['evil.example', 'user:pw', 'gitlab.com', '/srv/o/n']) assert.ok(!r.text.includes(part), `${url} echoed ${part}`);
+      for (const part of ['evil.example', 'user:pw', 'gitlab.com', '/srv/o/n', 'user@']) assert.ok(!r.text.includes(part), `${url} echoed ${part}`);
       assert.deepEqual(verbs(w.calls()), ['wrangler list'], `${url}: nothing was put`);
       assert.equal(w.token(), OLD_TOKEN);
     }
   });
 
-  test('no origin remote, or no git checkout at all: refused the same way', (t) => {
+  test('each way git can fail has its own words: no origin, not a checkout, no git, a remote with a credential', (t) => {
     const none = world(t, { origin: null });
     const r1 = none.run(['--rotate-admin-token']);
     assert.equal(r1.status, 1);
-    assert.match(r1.stderr, /this clone has no remote named "origin"/);
-    assert.match(r1.stderr, /CADDIE_GH_REPO/);
+    assert.match(r1.stderr, /\(this clone has no remote named "origin"\)/);
+    assert.match(r1.stderr, /Set CADDIE_GH_REPO=<owner>\/<name>/);
+
     const notGit = world(t, { gitInit: false });
     const r2 = notGit.run(['--rotate-admin-token']);
     assert.equal(r2.status, 1);
-    assert.match(r2.stderr, /CADDIE_GH_REPO is not set and the repository could not be worked out/);
+    assert.match(r2.stderr, /\(git cannot read this folder as a checkout: it is not one, or git refuses it because another user owns it\)/);
+    assert.doesNotMatch(r2.stderr, /no remote named/);
     assert.deepEqual(verbs(notGit.calls()), ['wrangler list']);
+
+    const noGit = world(t);
+    rmSync(join(noGit.dir, 'bin', 'git'));
+    const r3 = noGit.run(['--rotate-admin-token']);
+    assert.equal(r3.status, 1);
+    assert.match(r3.stderr, /\(git is not installed\)/);
+    assert.doesNotMatch(r3.stderr, /no remote named/);
+
+    const credentialed = world(t, { origin: 'https://x-access-token:ghp_NOTAREALTOKENVALUE@github.com/o/n.git' });
+    const r4 = credentialed.run(['--rotate-admin-token']);
+    assert.equal(r4.status, 1);
+    assert.match(r4.stderr, /holds a user name or password/);
+    assert.ok(!r4.text.includes('NOTAREALTOKENVALUE') && !r4.text.includes('x-access-token'), 'the credential is not echoed');
+    assert.deepEqual(verbs(credentialed.calls()), ['wrangler list']);
+  });
+
+  test('a git environment variable of the caller cannot point the script at another repository', (t) => {
+    const w = world(t, { origin: 'https://github.com/good/repo.git' });
+    const other = join(w.dir, 'other');
+    mkdirSync(other);
+    execFileSync(GIT, ['-C', other, 'init', '-q'], { env: { HOME: w.home, PATH: join(w.dir, 'bin') } });
+    execFileSync(GIT, ['-C', other, 'remote', 'add', 'origin', 'https://github.com/evil/other.git'], { env: { HOME: w.home, PATH: join(w.dir, 'bin') } });
+    const r = w.run(['--rotate-admin-token', '--dry-run'], { env: { GIT_DIR: join(other, '.git'), GIT_CONFIG_PARAMETERS: "'remote.origin.url=https://github.com/evil/inj.git'" } });
+    assert.equal(r.status, 0, r.text);
+    assert.match(r.stdout, /--repo good\/repo /);
+    assert.ok(!r.text.includes('evil'));
   });
 
   test('CADDIE_GH_REPO set: used as it is, over origin, and gh repo view is not asked', (t) => {
@@ -654,10 +857,14 @@ describe('setup-secrets.mjs: the repository of the GitHub secret (W9)', () => {
 
   test('a malformed CADDIE_GH_REPO is refused (exit 2)', (t) => {
     const w = world(t);
-    const r = w.run(['--rotate-admin-token'], { env: { CADDIE_GH_REPO: 'not a repo' } });
-    assert.equal(r.status, 2);
-    assert.match(r.stderr, /CADDIE_GH_REPO must look like <owner>\/<name>/);
+    for (const bad of ['not a repo', '-x/y', '../..', 'o/..', 'o/.', 'o/n/x', 'o', '/n']) {
+      const r = w.run(['--rotate-admin-token'], { env: { CADDIE_GH_REPO: bad } });
+      assert.equal(r.status, 2, bad);
+      assert.match(r.stderr, /CADDIE_GH_REPO must look like <owner>\/<name>/, bad);
+    }
     assert.deepEqual(putsOf(w), []);
+    // A well-formed one, with surrounding spaces, is fine.
+    assert.equal(w.run(['--rotate-admin-token', '--dry-run'], { env: { CADDIE_GH_REPO: '  o/n.x_y-z  ' } }).status, 0);
   });
 
   test('--skip-gh needs no repository at all', (t) => {
@@ -689,6 +896,68 @@ describe('setup-secrets.mjs: the repository of the GitHub secret (W9)', () => {
     const r = w.run(['--skip-gh']);
     assert.equal(r.status, 0, r.text);
     assert.ok(!w.calls().some((c) => c.tool === 'gh'));
+  });
+});
+
+describe('setup-secrets.mjs: the plain run and --only-missing', () => {
+  test('--only-missing that sets a missing GitHub secret from the token file says where it goes before it sets it', (t) => {
+    const w = world(t, { workerSecrets: ALL_NAMES, githubSecrets: [], origin: 'https://github.com/octocat/Hello-World.git', upstream: THIS_REPO_URL });
+    const r = w.run(['--only-missing']);
+    assert.equal(r.status, 0, r.text);
+    const announce = r.stdout.indexOf('The GitHub secret CADDIE_ADMIN_TOKEN goes to octocat/Hello-World (from the git remote "origin").');
+    const set = r.stdout.indexOf('Set the GitHub secret CADDIE_ADMIN_TOKEN on octocat/Hello-World.');
+    assert.ok(announce >= 0 && set > announce, r.stdout);
+    assert.equal(w.got('gh-repo-CADDIE_ADMIN_TOKEN'), 'octocat/Hello-World');
+    assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, OLD_TOKEN);
+    assert.deepEqual(putsOf(w), ['gh secret set']);
+  });
+
+  test('a plain run that replaces the live ADMIN_TOKEN outright says the ingest is refused until the GitHub secret is set', (t) => {
+    const w = world(t);
+    const r = w.run([], { fail: ['gh-set'] });
+    assert.equal(r.status, 1);
+    const value = w.got('put-ADMIN_TOKEN');
+    assert.notEqual(w.workerState().ADMIN_TOKEN, OLD_TOKEN, 'the Worker has the new ADMIN_TOKEN');
+    assert.equal(w.token(), value);
+    assert.ok(!adminKeys(w.workerState()).includes(w.githubState().CADDIE_ADMIN_TOKEN), 'the premise: the GitHub secret is now refused');
+    assert.match(r.stderr, /Setting the GitHub secret CADDIE_ADMIN_TOKEN failed/);
+    assert.match(r.stderr, /still holds the old one \(or the new one, if the set went through before it failed\)\. The old one is no longer accepted by the Worker, so the ingest workflow is refused until the secret is set:/);
+    assert.ok(r.stderr.includes(`  gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt/conferenceCaddie < ${w.file}`));
+    assertNoPartOf(value, r.text, 'the output');
+  });
+
+  test('a plain run whose ADMIN_TOKEN put stores its value and then fails says every client is refused, and to run it again', (t) => {
+    const w = world(t);
+    const r = w.run([], { fail: ['wrangler-put-stored:ADMIN_TOKEN'] });
+    assert.equal(r.status, 1);
+    const stored = w.workerState().ADMIN_TOKEN;
+    assert.notEqual(stored, OLD_TOKEN, 'the premise: the put went through');
+    assert.ok(!adminKeys(w.workerState()).includes(w.token()), 'the premise: the token file is now refused');
+    assert.match(r.stderr, /If the put did not go through, nothing was changed\. If it did \(a timeout, say\), the Worker's ADMIN_TOKEN is a value that nothing local holds, and the token file and CADDIE_ADMIN_TOKEN hold the old one, which the Worker no longer accepts, so every client is refused: run the same command again/);
+    assertNoPartOf(stored, r.text, 'the output');
+    // Running it again repairs everything.
+    const again = w.run([]);
+    assert.equal(again.status, 0, again.text);
+    assert.ok(adminKeys(w.workerState()).includes(w.token()));
+    assert.ok(adminKeys(w.workerState()).includes(w.githubState().CADDIE_ADMIN_TOKEN));
+  });
+
+  test('a plain run whose token file cannot be written says the old file and GitHub secret are refused', (t) => {
+    const w = world(t);
+    const blocker = join(w.dir, 'blocker');
+    writeFileSync(blocker, 'x');
+    const r = w.run([], { env: { ADMIN_TOKEN_FILE: join(blocker, 'admin-token') } });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /The Worker already holds the new ADMIN_TOKEN and nothing local has it; the token file and CADDIE_ADMIN_TOKEN hold the old one, which the Worker no longer accepts, so every client is refused until this is fixed\./);
+  });
+
+  test('the first run on a Worker that has no ADMIN_TOKEN yet does not claim that clients are refused', (t) => {
+    const w = world(t, { workerSecrets: [], githubSecrets: [] });
+    const blocker = join(w.dir, 'blocker');
+    writeFileSync(blocker, 'x');
+    const r = w.run([], { env: { ADMIN_TOKEN_FILE: join(blocker, 'admin-token') } });
+    assert.equal(r.status, 1);
+    assert.doesNotMatch(r.stderr, /no longer accepts|every client is refused/);
   });
 });
 
