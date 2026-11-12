@@ -62,7 +62,7 @@ const fcmToken = () => `${crypto.randomBytes(8).toString('base64url')}:APA91b${c
 function around(d, { web = false, apns = null, fcm = null } = {}) {
   const id = `${EVENT}:${d.profileId}`;
   const until = new Date(Date.now() + 30 * 60_000).toISOString();
-  fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_spot: SPOT, presence_since: new Date().toISOString(), presence_until: until, presence_location: { lat: 1.5, lon: 2.5 } });
+  fake.put('caddie-people', id, { ...fake.doc('caddie-people', id), presence_zone: 'Hall A', presence_spot: SPOT, presence_since: new Date().toISOString(), presence_until: until, presence_location: { lat: 61.5, lon: 102.5 } });
   if (web) fake.put('caddie-people-push', `push-${d.profileId}`, { event_id: EVENT, profile_id: d.profileId, endpoint: `https://fcm.googleapis.com/fcm/send/${d.profileId}`, keys_p256dh: 'B'.repeat(87), keys_auth: 'a'.repeat(22), expires_at: FUTURE });
   for (const [platform, token] of [['apns', apns], ['fcm', fcm]]) {
     if (token) fake.put('caddie-people-push', registrationId(EVENT, d.profileId, platform), { event_id: EVENT, profile_id: d.profileId, platform, token, ...(platform === 'apns' ? { environment: 'production' } : {}), expires_at: FUTURE });
@@ -135,9 +135,12 @@ describe('push nudge with native push', () => {
       assert.ok(!nativeText.includes(leak), `${leak} reached a native push`);
     }
 
-    // Nothing about either person in any push: no name, ref, profile_id, spot line or distance.
+    // Nothing about either person in any push: no name, ref, profile_id, spot line, distance or
+    // position. The position's numbers are ones no ISO time can hold (it has a "." only after its
+    // seconds, 00 to 59), so an ISO time added to a payload later cannot match them. They have one
+    // decimal, so they also catch a position rounded to one decimal.
     const sent = JSON.stringify(fake.pushes.map((p) => p.payload));
-    for (const leak of ['Harry', 'Vic', 'Trigger', 'Match', refFor(EVENT, t.profileId), refFor(EVENT, v.profileId), t.profileId, v.profileId, SPOT, 'coffee', 'distance', 'profile_id', '"ref"', '1.5', '2.5']) {
+    for (const leak of ['Harry', 'Vic', 'Trigger', 'Match', refFor(EVENT, t.profileId), refFor(EVENT, v.profileId), t.profileId, v.profileId, SPOT, 'coffee', 'distance', 'profile_id', '"ref"', '61.5', '102.5']) {
       assert.ok(!sent.includes(leak), `${leak} reached a push`);
     }
     const apns = fake.pushes.find((p) => p.platform === 'apns');
