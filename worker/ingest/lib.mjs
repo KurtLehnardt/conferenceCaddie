@@ -70,6 +70,19 @@ export function readNdjson(path, { optional = false } = {}) {
   return rows;
 }
 
+// The keys of a conference document that only the operator sends: `unretire`, which lifts a
+// removal, and `expect_status`, the precondition of PUT /admin/conferences. An ingest run or a
+// migration must never send either, whatever a committed conference.json or a backup holds. A key
+// that equals one of them after trim().toLowerCase() is dropped too, the same match as the
+// DirectoryDO's near-miss check: the Worker refuses such a key with 400 and fails the whole
+// request, so a stray "Unretire" or "expect_status " in one file would otherwise stop the batch.
+const OPERATOR_KEYS = new Set(['unretire', 'expect_status']);
+
+/** A copy of a conference document without its own operator keys (see OPERATOR_KEYS), in order. */
+export function withoutOperatorKeys(doc) {
+  return Object.fromEntries(Object.entries(doc).filter(([key]) => !OPERATOR_KEYS.has(key.trim().toLowerCase())));
+}
+
 export function chunk(items, size) {
   const out = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -148,8 +161,10 @@ function parseObject(text) {
 }
 
 // A short, safe description of a failed response: the status and, when the body is a JSON object
-// whose `error` is a short plain code, that code, with its `cause` when that is one too.
-const SHORT_CODE = /^[A-Za-z0-9_ .:-]{1,60}$/;
+// whose `error` is a short plain code, that code, with its `cause` when that is one too. The Worker's
+// error codes that an operator must see, such as the 400 for a misspelt `expect_status` key, are
+// written to match SHORT_CODE, and worker/test/admin-routes.test.mjs checks that they do.
+export const SHORT_CODE = /^[A-Za-z0-9_ .:-]{1,60}$/;
 function describeShort(status, body) {
   const code = typeof body?.error === 'string' && SHORT_CODE.test(body.error) ? body.error : '';
   if (!code) return `status ${status}`;
@@ -170,6 +185,8 @@ const STATUS_WORD = /^[A-Za-z0-9_-]{1,40}$/;
 const isStatusWord = (v) => v === null || (typeof v === 'string' && STATUS_WORD.test(v));
 const statusShown = (v) => (v === null ? '(no row)' : /^null$/i.test(v) ? `"${v}"` : v);
 const listed = (names, total) => names.slice(0, 20).join(', ') + (total > 20 ? ` and ${total - 20} more` : '');
+// A `mismatched` entry that is named: a well-formed slug and two well-formed statuses.
+const wellFormed = (m) => m !== null && typeof m === 'object' && isSlug(m.slug) && isStatusWord(m.expected) && isStatusWord(m.actual);
 function describe(status, body) {
   let out = describeShort(status, body);
   if (out === `status ${status}`) return out;
@@ -180,7 +197,7 @@ function describe(status, body) {
   }
   if (body.error === 'status_mismatch' && Array.isArray(body.mismatched)) {
     const shown = body.mismatched
-      .filter((m) => m !== null && typeof m === 'object' && isSlug(m.slug) && isStatusWord(m.expected) && isStatusWord(m.actual))
+      .filter(wellFormed)
       .map((m) => `${m.slug} ${statusShown(m.expected)}→${statusShown(m.actual)}`);
     const hidden = body.mismatched.length - shown.length;
     out += `: the directory holds another status (expected→actual): ${listed(shown, shown.length) || '(none named)'}`;
@@ -208,7 +225,7 @@ export class AdminError extends Error {
 
 // The optional Cloudflare Access service token: both CF_ACCESS_CLIENT_ID and
 // CF_ACCESS_CLIENT_SECRET set, or nothing. It is an extra layer in front of the Worker; the
-// signature is the check the Worker itself makes. worker/scripts/moderation.mjs sends it too.
+// signature is the check the Worker itself makes.
 export function accessHeaders(env = process.env) {
   const id = (env.CF_ACCESS_CLIENT_ID || '').trim();
   const secret = (env.CF_ACCESS_CLIENT_SECRET || '').trim();
@@ -257,10 +274,18 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
       else if (earlier.length > 1) text += `. Earlier attempts: ${earlier.map((e) => e.said).join('; ')}`;
       if (status === 409 && answer?.error === 'status_mismatch' && earlier.some((e) => e.mayHaveApplied)) {
         text += `; ${earlier.length === 1 ? 'it' : 'one of them'} may have been applied, so the actual status can be the one it set`;
-        const unretireMismatched = Array.isArray(answer.mismatched) && answer.mismatched.some((m) => typeof m?.slug === 'string' && unretiring.has(m.slug));
-        text += unretireMismatched
-          ? '; repeat the unretire without expect_status until it answers 200'
-          : '; check the conference, then send the request again with the actual status or without expect_status';
+        // The advice depends on which of the named slugs this request unretires: the unretire is
+        // repeated, any other document is checked first. When the 409 names both kinds, each gets
+        // its own advice, and the slugs are named so the operator knows which advice is whose.
+        const named = [...new Set((Array.isArray(answer.mismatched) ? answer.mismatched : []).filter(wellFormed).map((m) => m.slug))];
+        const unretired = named.filter((slug) => unretiring.has(slug));
+        const others = named.filter((slug) => !unretiring.has(slug));
+        const general = 'check the conference, then send the request again with the actual status or without expect_status';
+        if (unretired.length && others.length) {
+          text += `; repeat the unretire of ${listed(unretired, unretired.length)} without expect_status until it answers 200; for ${listed(others, others.length)}, ${general}`;
+        } else {
+          text += unretired.length ? '; repeat the unretire without expect_status until it answers 200' : `; ${general}`;
+        }
       }
       if (earlier.length) text += '.';
       return new AdminError(text, status, { body: answer, earlier: earlier.map((e) => e.short) });

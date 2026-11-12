@@ -1,7 +1,8 @@
 // The clients of the Worker's admin routes sign every request (W8): adminClient in
 // worker/ingest/lib.mjs (push-ingest.mjs, topics-local.mjs and migrate-from-backup.mjs use it) and
-// worker/scripts/moderation.mjs. A local HTTP server on 127.0.0.1 records what each one sends, and
-// every recorded request must verify with verifyAdminSignature() from scripts/lib/admin-sign.mjs,
+// the deprecated worker/scripts/moderation.mjs, which now only names the caddie-admin command to use
+// and sends nothing. A local HTTP server on 127.0.0.1 records what each one sends, and every
+// recorded request must verify with verifyAdminSignature() from scripts/lib/admin-sign.mjs,
 // carry the body it signed and no Authorization header; a retried request must be signed afresh.
 // The key is the shared fixture's fake one; nothing leaves this machine.
 
@@ -303,6 +304,61 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
     }
   });
 
+  test('a stale body from an earlier attempt never becomes the error\'s body: a last answer that is not a JSON object, or no answer, gives null', async () => {
+    const busy = (n) => ({ status: 502, headers: { 'Retry-After': '1' }, body: { error: 'busy', n } });
+    const notObject = await recorder([busy(1), busy(2), { status: 502, body: ['not', 'an', 'object'] }]);
+    await assert.rejects(adminClient(notObject.base, KEY, { retries: 2, env: {} })('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), (e) => {
+      assert.ok(e instanceof AdminError);
+      assert.equal(e.body, null);
+      assert.deepEqual([e.status, e.earlier], [0, ['status 502 (busy)', 'status 502 (busy)']]);
+      assert.equal(e.message, 'POST /admin/moderation: status 502 (gave up after 3 attempts). Earlier attempts: answered status 502 (busy); answered status 502 (busy).');
+      return true;
+    });
+    assert.equal(notObject.seen.length, 3);
+    const dropped = await recorder([busy(1), { drop: true }]);
+    await assert.rejects(adminClient(dropped.base, KEY, { retries: 1, env: {} })('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), (e) => {
+      assert.ok(e instanceof AdminError);
+      assert.equal(e.body, null);
+      assert.deepEqual([e.status, e.earlier], [0, ['status 502 (busy)']]);
+      assert.equal(e.message, 'POST /admin/moderation: network error (gave up after 2 attempts). An earlier attempt answered status 502 (busy).');
+      return true;
+    });
+    assert.equal(dropped.seen.length, 2);
+  });
+
+  test('a status_mismatch that names both unretired and other documents gives each its own advice and names the slugs', async () => {
+    const OTHER = 'other-fixture-2099';
+    const THIRD = 'third-fixture-2099';
+    const batch = { conferences: [
+      { slug: SLUG, unretire: true, expect_status: null },
+      { slug: OTHER, status: 'unavailable', expect_status: 'searchable' },
+      { slug: THIRD, unretire: true, expect_status: null },
+    ] };
+    const busy = { status: 502, headers: { 'Retry-After': '1' }, body: { error: 'busy' } };
+    const { seen, base } = await recorder([busy, mismatch([
+      { slug: SLUG, expected: null, actual: 'searchable' },
+      { slug: OTHER, expected: 'searchable', actual: 'unavailable' },
+      { slug: THIRD, expected: null, actual: 'unavailable' },
+      { slug: 'Bad Slug\nFAKE', expected: null, actual: 'searchable' },
+    ])]);
+    await assert.rejects(adminClient(base, KEY, { retries: 1, env: ACCESS })('PUT', '/admin/conferences', batch), (e) => {
+      assert.equal(e.message, `PUT /admin/conferences: status 409 (status_mismatch): the directory holds another status (expected→actual): ${SLUG} (no row)→searchable, ${OTHER} searchable→unavailable, ${THIRD} (no row)→unavailable (1 malformed entry not shown). An earlier attempt answered status 502 (busy); it may have been applied, so the actual status can be the one it set; repeat the unretire of ${SLUG}, ${THIRD} without expect_status until it answers 200; for ${OTHER}, check the conference, then send the request again with the actual status or without expect_status.`);
+      assert.ok(!e.message.includes('FAKE'), e.message);
+      assertNoSecret(e, seen);
+      return true;
+    });
+  });
+
+  test('a first answer of 503 daily_limit keeps the period that ends its sentence, because there is no earlier attempt to append', async () => {
+    const { seen, base } = await recorder([{ status: 503, body: { error: 'daily_limit' } }]);
+    await assert.rejects(adminClient(base, KEY, { retries: 3, env: {} })('GET', `/admin/stats?event=${SLUG}`), (e) => {
+      assert.equal(e.message, 'GET /admin/stats: status 503 (daily_limit). The daily limit is reached; try again after the reset.');
+      assert.deepEqual([e.status, e.earlier, e.body], [503, [], { error: 'daily_limit' }]);
+      return true;
+    });
+    assert.equal(seen.length, 1);
+  });
+
   test('a 401 is not retried and names its code', async () => {
     const { seen, base } = await recorder([{ status: 401, body: { error: 'admin_skew' } }]);
     const admin = adminClient(base, KEY, { retries: 3, env: {} });
@@ -368,80 +424,63 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
   });
 });
 
-// Runs moderation.mjs against the recorder; resolves with the exit code and both outputs.
-function moderation(base, args, env = {}) {
+// Runs the deprecated moderation.mjs with the given arguments and a token and Access values in its
+// environment; resolves with the exit code and both outputs.
+function moderation(args, env = {}) {
   return new Promise((resolve) => {
-    execFile(process.execPath, [MODERATION, '--event', SLUG, '--api', base, ...args], {
-      env: { ...process.env, ADMIN_TOKEN: KEY, ADMIN_TOKEN_FILE: '/nonexistent/admin-token', CADDIE_API_BASE: '', CF_ACCESS_CLIENT_ID: '', CF_ACCESS_CLIENT_SECRET: '', ...env },
+    execFile(process.execPath, [MODERATION, ...args], {
+      env: { ...process.env, ADMIN_TOKEN: KEY, ADMIN_TOKEN_FILE: '/nonexistent/admin-token', CADDIE_API_BASE: '', ...ACCESS, ...env },
     }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr }));
   });
 }
 
-describe('worker/scripts/moderation.mjs', () => {
-  test('signs each request, sends no Authorization header, and never prints the key', async () => {
-    const { seen, base } = await recorder([{ body: { hidden: [] } }, { body: { reports: [] } }, { body: { ok: true, removed: 2 } }]);
-    const runs = [
-      await moderation(base, ['--hidden']),
-      await moderation(base, ['--since', '2026-11-10T08:00:00Z']),
-      await moderation(base, ['--unhide', `profile:${'0123456789abcdef'}`]),
-    ];
-    for (const r of runs) {
-      assert.equal(r.code, 0, r.stderr);
-      assert.ok(!r.stdout.includes(KEY) && !r.stderr.includes(KEY));
-    }
-    assert.deepEqual(seen.map((r) => `${r.method} ${r.url}`), [
-      `GET /admin/moderation?event=${SLUG}`,
-      `GET /admin/moderation?event=${SLUG}&since=2026-11-10T08:00:00.000Z`,
-      `POST /admin/moderation?event=${SLUG}`,
-    ]);
-    for (const r of seen) {
-      assertSigned(r);
-      assert.equal(r.headers['cf-access-client-id'], undefined);
-    }
-    assert.deepEqual(JSON.parse(seen[2].body), { action: 'unhide', kind: 'profile', id: '0123456789abcdef' });
-  });
+describe('worker/scripts/moderation.mjs (deprecated in favour of caddie-admin)', () => {
+  const REF = '0123456789abcdef';
+  const MEET = 'AbCdEfGhIjKlMnOpQrSt_-';
+  const CLI = 'node scripts/caddie-admin.mjs';
 
-  test('sends the Cloudflare Access headers when both values are set, as adminClient does', async () => {
-    const { seen, base } = await recorder([{ body: { hidden: [] } }]);
-    const r = await moderation(base, ['--hidden'], { CF_ACCESS_CLIENT_ID: 'fake-id.access', CF_ACCESS_CLIENT_SECRET: 'fake-access-secret' });
-    assert.equal(r.code, 0, r.stderr);
-    assert.ok(!r.stdout.includes('fake-access-secret') && !r.stderr.includes('fake-access-secret'));
-    assert.deepEqual([seen[0].headers['cf-access-client-id'], seen[0].headers['cf-access-client-secret']], ['fake-id.access', 'fake-access-secret']);
-    assertSigned(seen[0]);
-  });
-
-  test('never follows a redirect, so the signature and the Access secret stay with the Worker\'s origin', async () => {
-    const target = await recorder();
-    const from = await redirector(307, target.base);
-    const r = await moderation(from.base, ['--hidden'], ACCESS);
-    assert.equal(r.code, 1);
-    assert.match(r.stderr, /status 307, a redirect\. Admin calls never follow redirects/);
-    assert.equal(from.hits.length, 1);
-    assert.equal(target.seen.length, 0);
-  });
-
-  test('refuses a redirect whose body stalls without waiting for the body', { timeout: 10_000 }, async () => {
-    const server = await halfBody([{ status: 302, then: 'stall' }]);
-    const started = Date.now();
-    const r = await moderation(server.base, ['--hidden']);
-    assert.equal(r.code, 1);
-    assert.match(r.stderr, /status 302, a redirect\. Admin calls never follow redirects/);
-    assert.equal(server.hits.length, 1);
-    assert.ok(Date.now() - started < 8_000, 'the 30-second fetch timeout was not waited for');
-  });
-
-  test('plain http is refused for anything but localhost', async () => {
-    for (const api of ['http://example.com', 'http://192.0.2.1:8787']) {
-      const r = await moderation(api, ['--hidden']);
-      assert.equal(r.code, 2, api);
-      assert.match(r.stderr, /plain http is allowed for localhost only/);
-    }
-  });
-
-  test('a base with a path is refused before a request is made', async () => {
+  test('each action names its caddie-admin command on stderr, exits 2 and sends no request, with a token and the Access values set', async () => {
     const { seen, base } = await recorder();
-    const r = await moderation(`${base}/prefix`, ['--hidden']);
+    const cases = [
+      [['--hidden'], `${CLI} moderation queue --event ${SLUG}`],
+      [['--hidden', '--show-content'], `${CLI} moderation queue --event ${SLUG} --show-content`],
+      [['--since', '2026-11-10T08:00:00Z'], `${CLI} moderation queue --event ${SLUG} --since 2026-11-10T08:00:00Z`],
+      [['--unhide', `profile:${REF}`], `${CLI} moderation unhide --event ${SLUG} profile:${REF} --yes --confirm profile:${REF}`],
+      [['--delete', `meet:${MEET}`], `${CLI} moderation delete --event ${SLUG} meet:${MEET} --yes --confirm meet:${MEET}`],
+      [['--delete', `spot:${REF}`], `${CLI} moderation delete --event ${SLUG} spot:${REF} --yes --confirm spot:${REF}`],
+      [['--purge'], `${CLI} moderation purge-reports --event ${SLUG} --yes --confirm ${SLUG}`],
+    ];
+    for (const [args, command] of cases) {
+      const r = await moderation(['--event', SLUG, '--api', base, ...args]);
+      assert.equal(r.code, 2, args.join(' '));
+      assert.equal(r.stdout, '');
+      assert.match(r.stderr, /^worker\/scripts\/moderation\.mjs is deprecated and makes no request/);
+      assert.ok(r.stderr.includes(`The equivalent command: ${command}\n`), r.stderr);
+      assert.ok(r.stderr.includes('docs/ADMIN_CLI.md'), r.stderr);
+      for (const secret of [KEY, ACCESS.CF_ACCESS_CLIENT_ID, ACCESS.CF_ACCESS_CLIENT_SECRET]) assert.ok(!r.stderr.includes(secret));
+    }
+    assert.equal(seen.length, 0, 'the deprecated script sent a request');
+  });
+
+  test('without an action, with two actions, with an unknown option or with -h it prints the whole mapping and exits 2', async () => {
+    for (const args of [[], ['--event', SLUG], ['--event', SLUG, '--hidden', '--purge'], ['--event', SLUG, '--bogus'], ['-h']]) {
+      const r = await moderation(args);
+      assert.equal(r.code, 2, args.join(' '));
+      assert.ok(!r.stderr.includes('The equivalent command'), r.stderr);
+      for (const command of ['moderation queue --event <slug> [--show-content]', 'moderation queue --event <slug> --since <iso>', 'moderation unhide --event <slug> <kind>:<id> --yes --confirm <kind>:<id>', 'moderation delete --event <slug> <kind>:<id> --yes --confirm <kind>:<id>', 'moderation purge-reports --event <slug> --yes --confirm <slug>']) {
+        assert.ok(r.stderr.includes(`${CLI} ${command}`), `${args.join(' ')}: ${command}`);
+      }
+      assert.ok(r.stderr.includes('docs/ADMIN_CLI.md'));
+    }
+  });
+
+  test('a value without the shape of its field is shown as a placeholder, never as it was typed', async () => {
+    const r = await moderation(['--event', 'Bad Slug\u001b[31m', '--unhide', 'profile:FAKE\nline', '--api', 'http://127.0.0.1:9']);
     assert.equal(r.code, 2);
-    assert.equal(seen.length, 0);
+    assert.ok(r.stderr.includes(`The equivalent command: ${CLI} moderation unhide --event <slug> <kind>:<id> --yes --confirm <kind>:<id>`), r.stderr);
+    assert.ok(!r.stderr.includes('FAKE') && !r.stderr.includes('\u001b') && !r.stderr.includes('Bad Slug'), r.stderr);
+    const since = await moderation(['--event', SLUG, '--since', 'yesterday; rm']);
+    assert.ok(since.stderr.includes(`${CLI} moderation queue --event ${SLUG} --since <iso>`), since.stderr);
+    assert.ok(!since.stderr.includes('yesterday'), since.stderr);
   });
 });

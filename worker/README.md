@@ -20,6 +20,11 @@ The Cloud Run plus Elasticsearch stack in `server/` and `scripts/deploy.sh` is u
 deployable from `main`. `worker/` is listed in `.gcloudignore` and `.dockerignore`, so the Cloud
 Run upload and image never include it.
 
+This README records how this deployment is built and run. To run your own copy of the free stack
+on Cloudflare, follow [docs/fork/TIER2_CLOUDFLARE.md](../docs/fork/TIER2_CLOUDFLARE.md), the guide
+for a fork; the steps below that name this deployment's addresses use placeholders such as
+`<your-worker>.workers.dev` and `<owner>/<repo>` for yours.
+
 ## Requirements
 
 - Node 22 or later. Wrangler is a dev dependency of `worker/package.json`; always run it as
@@ -170,12 +175,16 @@ Run these from the repository root, in this order. Each step is safe to repeat.
 
 3. **Migrate the data** from the Elasticsearch backup (one time).
 
+   A fork skips this step: the migration only moves this deployment's own earlier data, from the
+   Elasticsearch stack it replaced, and a new copy has no such backup. Set the two variables of
+   the first line below anyway, because step 4 uses them; the weekly ingest fills the new Worker.
+
    ```sh
-   export CADDIE_APP_URL=https://conference-caddie.krlehnardt.workers.dev   # the URL deploy.sh printed
+   export CADDIE_APP_URL=https://<your-worker>.workers.dev   # the URL deploy.sh printed
    export CADDIE_API_BASE="$CADDIE_APP_URL"
    export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
-   node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE" --dry-run
-   node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE"
+   node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE" --dry-run
+   node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE"
    ```
 
    Conferences, talks, topics and facets are copied as they are, so topic ids stay identical.
@@ -194,8 +203,8 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    ```sh
    gh variable set CADDIE_APP_URL --body "$CADDIE_APP_URL"
    gh variable set CADDIE_API_BASE --body "$CADDIE_API_BASE"
-   gh api -X POST repos/KurtLehnardt/conferenceCaddie/pages -f build_type=workflow \
-     || gh api -X PUT repos/KurtLehnardt/conferenceCaddie/pages -f build_type=workflow   # on HTTP 409
+   gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow \
+     || gh api -X PUT repos/<owner>/<repo>/pages -f build_type=workflow   # on HTTP 409
    gh workflow run pages.yml
    ```
 
@@ -225,7 +234,6 @@ The smoke script in `scripts/smoke.mjs` is the only verification. Against the fr
 ```sh
 BASE_URL="$CADDIE_APP_URL" \
 ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token \
-SMOKE_ADMIN_AUTH=signed \
 node scripts/smoke.mjs
 ```
 
@@ -252,9 +260,10 @@ deploy replaces the Worker's variables with those of `wrangler.toml`. Never set 
 `wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
 deleted it.
 
-`SMOKE_ADMIN_AUTH=signed` makes the smoke sign its admin calls ([Admin requests](#admin-requests)).
-Its default is still the old bearer, which this Worker answers with 404, until the smoke's own
-change makes signing the default.
+The smoke signs its admin calls by default (`SMOKE_ADMIN_AUTH=signed`, since #67;
+[Admin requests](#admin-requests)), and none of them follows a redirect: a 3xx is a FAIL.
+`SMOKE_ADMIN_AUTH=bearer` sends the token as `Authorization: Bearer` instead. It is only for a
+local or old Worker from before signed admin requests; a current Worker answers a bearer with 404.
 
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
 
@@ -301,22 +310,22 @@ admin request, `GET /admin/stats` and `GET /admin/moderation` included, answers
 nonce. The cron records no nonce and keeps its meter readings (`src/lib/meter.js`).
 
 The clients that sign are `worker/ingest/push-ingest.mjs`, `topics-local.mjs` and
-`migrate-from-backup.mjs` (through `adminClient` in `worker/ingest/lib.mjs`),
-`worker/scripts/moderation.mjs` and the smoke (with `SMOKE_ADMIN_AUTH=signed`); the `caddie-admin`
-CLI signs with the same module once it gains its Worker backend. They read the token from
-`ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`, and their `--api` base must be the Worker's origin, with no
-path, over https (plain http for localhost only). `adminClient` and `moderation.mjs` never follow a
-redirect: fetch drops only `Authorization` on a cross-origin redirect, so following one would hand
-the signed header and the Access secret to another origin; a 3xx answer is an error as soon as its
-headers arrive, never retried. The smoke (`scripts/smoke.mjs`) still follows redirects until its own
-change lands, so point it only at the Worker's own origin. A retry is signed afresh with a new nonce
-and timestamp, so it is a new request to the Worker, and every admin route handles a repeated
+`migrate-from-backup.mjs` (through `adminClient` in `worker/ingest/lib.mjs`), the smoke (signed by
+default), and the `caddie-admin` CLI, whose tier 2 backend (`scripts/admin/backends/worker.mjs`,
+#70) signs every request with the same module today; docs/ADMIN_CLI.md describes the CLI. They read
+the token from `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`. The base of the ingest scripts (`--api`) and of
+the CLI (the backend's `api` in its `config.json`) must be the Worker's origin, with no path, over
+https (plain http for localhost only); the smoke calls `API_BASE`, by default the origin of
+`BASE_URL`. None of them follows a redirect: fetch drops only `Authorization` on a cross-origin
+redirect, so following one would hand the signed header and the Access secret to another origin; a
+3xx answer is an error as soon as its headers arrive, never retried. A retry is signed afresh with
+a new nonce and timestamp, so it is a new request to the Worker, and every admin route handles a repeated
 request idempotently, with three exceptions: on `POST /admin/moderation`, `"action": "delete"`
 answers 404 when the target is already gone, and `"action": "unhide"` of a target that no longer
 exists answers 404 once its reports are gone; and `POST /admin/people/block` with
 `"action": "unblock"` answers 404 once the operator report is gone. Each, when its first answer was
 lost, reports 404 on the retry. When both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, `adminClient` and
-`moderation.mjs` also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
+the `caddie-admin` CLI also send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, for a
 Cloudflare Access application in front of `/admin/*`; the Worker does not check them, and the
 signature stays the check that matters. To rotate the token without an outage, see
 [Rotating the admin token](#rotating-the-admin-token).
@@ -423,30 +432,42 @@ until the secret is set, and the output says so. The same recipe is in docs/FREE
 
 Two reports from different people hide a profile, a spot line or a meet, and one report from the
 operator hides a profile or a spot line on its own ([Operator routes](#operator-routes)). The
-operator reviews and
-undoes or confirms hides with `worker/scripts/moderation.mjs`, which calls
-`GET` and `POST /admin/moderation`, signing each request with the admin token from `ADMIN_TOKEN`
-or `ADMIN_TOKEN_FILE` (default `~/.config/conference-caddie/admin-token`):
+supported client for reviewing, undoing and confirming hides is the `caddie-admin` CLI
+(docs/ADMIN_CLI.md) with a tier 2 backend. Its moderation commands call `GET` and
+`POST /admin/moderation`, signing each request with the admin token from `ADMIN_TOKEN` or
+`ADMIN_TOKEN_FILE` (default `admin-token` in the CLI's config directory, which is
+`~/.config/conference-caddie` unless `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` says otherwise; the
+file must have mode 0600, as `setup-secrets.mjs` writes it). The Worker's origin is the `api` of a
+tier 2 backend in the CLI's `config.json`, in the same directory:
 
 ```sh
-export CADDIE_API_BASE=https://conference-caddie.krlehnardt.workers.dev
-node worker/scripts/moderation.mjs --event <slug> --hidden
-node worker/scripts/moderation.mjs --event <slug> --since 2026-11-10T08:00:00Z
-node worker/scripts/moderation.mjs --event <slug> --hidden --show-content
-node worker/scripts/moderation.mjs --event <slug> --unhide profile:<ref>
-node worker/scripts/moderation.mjs --event <slug> --delete spot:<ref>
-node worker/scripts/moderation.mjs --event <slug> --delete meet:<meet id>
-node worker/scripts/moderation.mjs --event <slug> --purge
+cat > ~/.config/conference-caddie/config.json <<'EOT'
+{ "default": "worker", "backends": { "worker": { "tier": 2, "api": "https://<your-worker>.workers.dev" } } }
+EOT
+node scripts/caddie-admin.mjs moderation queue --event <slug>
+node scripts/caddie-admin.mjs moderation queue --event <slug> --since 2026-11-10T08:00:00Z
+node scripts/caddie-admin.mjs moderation queue --event <slug> --show-content
+node scripts/caddie-admin.mjs moderation unhide --event <slug> profile:<ref> --yes --confirm profile:<ref>
+node scripts/caddie-admin.mjs moderation delete --event <slug> spot:<ref> --yes --confirm spot:<ref>
+node scripts/caddie-admin.mjs moderation delete --event <slug> meet:<meet-id> --yes --confirm meet:<meet-id>
+node scripts/caddie-admin.mjs moderation purge-reports --event <slug> --yes --confirm <slug>
 ```
 
-By default the output holds kinds, refs, meet ids, times and report counts only. Display names and
-report reasons are printed only with `--show-content`. Profile ids, reporter ids and the token are
-never printed. `--unhide` also removes the target's reports, the operator's included, so it needs
-two new ones to be hidden again; it answers `{"ok": true, "found": <bool>, "removed": <n>}`, and for
-a profile that was deleted since (reports outlive it) it still removes the reports, with `found`
-false, so a profile made again from the same device is not hidden by them. Only a target with
-neither a row nor a report is 404. `--delete profile:<ref>` deletes the profile everywhere, as a
-profile delete does. `--purge` deletes the reports of a conference that has ended.
+The queue lists the hidden targets, and with `--since` also the reports made since that instant.
+Without `--yes`, `unhide`, `delete` and `purge-reports` only preview what they would do; with it,
+`--confirm` (or typing the target at the prompt) names the exact target. By default the output holds
+kinds, refs, meet ids, times and report counts only. Display names and report reasons are printed
+only with `--show-content`. Profile ids, reporter ids and the token are never printed. An unhide
+also removes the target's reports, the operator's included, so it needs two new ones to be hidden
+again; the Worker answers it with `{"ok": true, "found": <bool>, "removed": <n>}`, and for a profile
+that was deleted since (reports outlive it) it still removes the reports, with `found` false, so a
+profile made again from the same device is not hidden by them. Only a target with neither a row nor
+a report is 404. Deleting `profile:<ref>` deletes the profile everywhere, as a profile delete does.
+`purge-reports` deletes the reports of a conference that has ended. The CLI's other commands, such
+as `moderation hide` and the attendee and conference commands, are in docs/ADMIN_CLI.md.
+
+`worker/scripts/moderation.mjs` is deprecated. It makes no request any more: it prints, on stderr,
+the `caddie-admin` command that does what its options asked for (or the whole mapping) and exits 2.
 
 The word list in `config/moderation-words.json` is compiled into the Worker; changing it needs a
 deploy.
@@ -620,7 +641,10 @@ line (method, path template, status, duration).
   without `"unretire": true` whose precondition matches still answers 200 with the slug under
   `skipped_retired`, and nothing of it was applied. The key is never stored or sent to an object.
   `push-ingest.mjs` and `migrate-from-backup.mjs` strip it, as they strip `unretire`, so no ingest
-  run or migration ever sends a precondition.
+  run or migration ever sends a precondition. They also drop any key that equals either one after
+  trimming and lower-casing (`withoutOperatorKeys` in `ingest/lib.mjs`), the match the DirectoryDO
+  uses, so a stray `"Unretire"` or `"expect_status "` in a committed `conference.json` cannot fail
+  the whole weekly batch with 400.
 
 People text is stored without control characters: every write of a display name, profile text, a
 contact note, a spot line, a meet note or a how-to-spot-me line drops the C0 controls except tab
@@ -633,10 +657,10 @@ splits a word, as before.
 To bring a removed conference back, clear its tombstone with a signed `PUT /admin/conferences`
 whose document carries `"unretire": true`, then push the conference again. The CLI does both with
 `caddie-admin conferences unretire --event <slug>` and then `conferences refresh --event <slug>`
-once it has its Worker backend; `unretire` also deletes the slug's `removed` entry in
+on a tier 2 backend; `unretire` also deletes the slug's `removed` entry in
 `data/conference-operator.json`, which otherwise keeps `scripts/ingest.mjs` from fetching it
-(delete that entry by hand and commit it if the CLI is not used). Until then, from the repository
-root, with `CADDIE_API_BASE` and `ADMIN_TOKEN_FILE` set, this sends the local document with the
+(delete that entry by hand and commit it if the CLI is not used). Without the CLI, from the
+repository root, with `CADDIE_API_BASE` and `ADMIN_TOKEN_FILE` set, this sends the local document with the
 flag and prints the counts:
 
 ```sh
@@ -698,7 +722,10 @@ can be the one it set; repeat the unretire without expect_status until it answer
 
 When an earlier attempt answered a 5xx or no answer, the message says it may have been applied,
 and when none of the mismatching slugs is one the request unretires, it says to check the
-conference and send the request again with the actual status or without the key. After an `unretire_incomplete` the
+conference and send the request again with the actual status or without the key. When the 409
+names both, each kind gets its own advice with its slugs: `repeat the unretire of <slugs> without
+expect_status until it answers 200; for <slugs>, check the conference, then send the request again
+with the actual status or without expect_status`. After an `unretire_incomplete` the
 object may still be marked as removed: send the unretire again with `expect_status` set to the
 actual status the 409 showed, or without the key, until it answers 200. Nothing in the message
 comes from the request or a header. The `caddie-admin` CLI does not use `adminClient`; it has its
