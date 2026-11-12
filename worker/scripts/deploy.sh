@@ -16,11 +16,21 @@
 #      PUT {"subdomain":"<CADDIE_WORKERS_SUBDOMAIN>"} (an optional environment variable: the name you
 #      want, lowercase letters, digits and hyphens), and when it is unset, or the name is taken, use
 #      conference-caddie-<6 random lowercase letters>. An account that already has a subdomain keeps
-#      it, whatever the variable says.
+#      it, whatever the variable says. Only two answers mean "no subdomain yet": a successful answer
+#      whose subdomain is null, and a 404 with Cloudflare's error code 10007. Any other answer that
+#      does not name the subdomain stops the script without a PUT, because a PUT on an account that
+#      has a subdomain could rename it.
 #   2. Build the web app in Worker mode (npm --prefix web run build:worker: base "/", same-origin
 #      API, in-browser document reading) into web/dist-worker/, the [assets] directory of
 #      wrangler.toml, so the app ships with the Worker.
-#   3. npx wrangler deploy from worker/ (the wrangler version pinned in worker/package.json).
+#   3. GET /accounts/{account}/workers/scripts/{name}/secrets, with the name from worker/wrangler.toml,
+#      and refuse to deploy while ADMIN_SIG_MIN, ADMIN_ORIGIN or ADMIN_TEST_ROUTES is a secret of the
+#      Worker (DECISIONS.md, "Admin signature v2", step d). The check reads the secrets' names only;
+#      Cloudflare does not return their values, and the script prints only which of the three names
+#      it found. A 404 with Cloudflare's error code 10007 means the Worker does not exist yet (a
+#      first deploy) and passes. Any other answer (a 403, a 5xx, no answer, a body that cannot be
+#      read) refuses to deploy, so a check that could not run never passes.
+#   4. npx wrangler deploy from worker/ (the wrangler version pinned in worker/package.json).
 #      Its output goes to a temporary file that is deleted on exit; only the URL is printed.
 #
 # Output is the subdomain name and the app URL (which is also the API's base) only. On a failure
@@ -77,9 +87,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 # cf_api METHOD PATH [JSON BODY] writes the response body to $WORK/resp.json and prints the HTTP
 # status. The Authorization header is fed to curl as a config line on standard input; printf is a
-# shell builtin, so the token never appears in any process's arguments.
+# shell builtin, so the token never appears in any process's arguments. The previous response is
+# removed first, so an answer with no body is never read as the one before it.
 cf_api() {
   local method="$1" path="$2" body="${3:-}"
+  rm -f "$WORK/resp.json"
   local args=(-sS -K - -X "$method" -o "$WORK/resp.json" -w '%{http_code}' --max-time 30)
   if [ -n "$body" ]; then
     args+=(-H 'Content-Type: application/json' --data "$body")
@@ -91,12 +103,15 @@ cf_api() {
 }
 
 # json_field EXPRESSION evaluates a JavaScript expression over the parsed response as `r` and
-# prints the result (an empty string for null or undefined).
+# prints the result (an empty string for null or undefined). A body that is missing, is not JSON,
+# or parses to something other than an object (null, a number, a string, an array) is read as {},
+# so the callers' fail-closed messages print instead of a Node error.
 json_field() {
   node -e '
     const fs = require("node:fs");
     let r = {};
     try { r = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch {}
+    if (r === null || typeof r !== "object" || Array.isArray(r)) r = {};
     const v = (new Function("r", "return (" + process.argv[2] + ");"))(r);
     process.stdout.write(v == null ? "" : String(v));
   ' "$WORK/resp.json" "$1"
@@ -104,7 +119,12 @@ json_field() {
 
 # Cloudflare's error codes and messages, which never contain the token.
 api_errors() {
-  json_field '(r.errors || []).map((e) => `${e.code}: ${e.message}`).join("; ") || "no error details"'
+  json_field '(Array.isArray(r.errors) ? r.errors : []).filter((e) => e && typeof e === "object").map((e) => `${e.code}: ${e.message}`).join("; ") || "no error details"'
+}
+
+# Cloudflare's numeric error codes alone, without the messages.
+api_codes() {
+  json_field '(Array.isArray(r.errors) ? r.errors : []).map((e) => e && e.code).filter((c) => Number.isInteger(c)).join(", ") || "none"'
 }
 
 random_suffix() {
@@ -122,12 +142,30 @@ blocker() {
   exit 1
 }
 
-# 1. The workers.dev subdomain.
+# 1. The workers.dev subdomain. A subdomain is created only on an answer that says the account has
+# none: a 200 with success true and a null subdomain, or a 404 with error code 10007. Every other
+# answer that does not name the subdomain stops here, without a PUT, because a PUT on an account
+# that already has a subdomain could rename it and break every client of the old URL.
 status="$(cf_api GET /workers/subdomain)"
 subdomain=""
 unreadable=0
+create=0
+subdomain_unreadable() {
+  echo "Could not read the workers.dev subdomain (HTTP $1, error codes: $(api_codes)), so none was created and nothing was deployed. Run this script again." >&2
+  exit 1
+}
 if [ "$status" = "200" ]; then
-  subdomain="$(json_field 'r.result && r.result.subdomain')"
+  # "set:<name>" when the answer names the subdomain, "none" when it says there is none, and empty
+  # for anything else (not a success, no result object, or a subdomain that is neither a non-empty
+  # string nor null).
+  state="$(json_field 'r.success === true && r.result !== null && typeof r.result === "object" && !Array.isArray(r.result) ? (typeof r.result.subdomain === "string" && r.result.subdomain !== "" ? "set:" + r.result.subdomain : (r.result.subdomain === null ? "none" : "")) : ""')"
+  case "$state" in
+    set:*) subdomain="${state#set:}" ;;
+    none) create=1 ;;
+    *) subdomain_unreadable "$status" ;;
+  esac
+elif [ "$status" = "404" ] && [ "$(json_field '(Array.isArray(r.errors) ? r.errors : []).some((e) => e && e.code === 10007)')" = "true" ]; then
+  create=1
 elif [ "$status" = "401" ] || [ "$status" = "403" ]; then
   if [ "$SUBDOMAIN_ONLY" = "1" ]; then
     blocker "Reading the workers.dev subdomain failed with HTTP $status ($(api_errors))."
@@ -139,9 +177,11 @@ elif [ "$status" = "401" ] || [ "$status" = "403" ]; then
 elif [ "$status" = "000" ]; then
   echo "Could not reach api.cloudflare.com." >&2
   exit 1
+else
+  subdomain_unreadable "$status"
 fi
 
-if [ -z "$subdomain" ] && [ "$unreadable" = "0" ]; then
+if [ "$create" = "1" ]; then
   candidate="${PREFERRED_SUBDOMAIN:-$FALLBACK_PREFIX$(random_suffix)}"
   for attempt in 1 2 3 4; do
     status="$(cf_api PUT /workers/subdomain "{\"subdomain\":\"$candidate\"}")"
@@ -195,8 +235,6 @@ if [ ! -f "$WEB_DIR/dist-worker/index.html" ] || [ ! -f "$WEB_DIR/dist-worker/_h
 fi
 echo "Built the web app into web/dist-worker."
 
-# 3. Deploy with the wrangler pinned in worker/package.json. Its output can list bindings and
-# variables, so it is kept in a temporary file and only the URL is printed.
 cd "$WORKER_DIR"
 if [ ! -d node_modules ]; then
   if ! npm ci --no-audit --no-fund >"$WORK/npm.log" 2>&1; then
@@ -205,6 +243,71 @@ if [ ! -d node_modules ]; then
     exit 1
   fi
 fi
+
+# 3. Refuse to deploy while ADMIN_SIG_MIN, ADMIN_ORIGIN or ADMIN_TEST_ROUTES is a secret of the
+# Worker. Security warning: a secret survives every deploy and the repository does not show it, so
+# a leftover ADMIN_SIG_MIN secret of "1" would override the source default ("2" since step d) and
+# keep the v1 admin signature, and its replay window, open; a leftover ADMIN_ORIGIN secret could
+# list another deployment's origin; and a leftover ADMIN_TEST_ROUTES secret of "1" would keep the
+# smoke's /admin/test/* fixture routes on after every deploy. ADMIN_SIG_MIN and ADMIN_ORIGIN belong
+# in [vars] of worker/wrangler.toml, committed; ADMIN_TEST_ROUTES is set only for a fixture smoke,
+# with wrangler deploy --var. Only the names are read: Cloudflare returns each secret's name and
+# type, never its value, and the script prints only which of the three names it found. A check
+# that cannot run refuses to deploy.
+# The name goes into the request's path, so it is checked like the subdomain above.
+worker_name="$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' wrangler.toml | head -n 1)"
+worker_name_re='^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+if ! [[ "$worker_name" =~ $worker_name_re ]]; then
+  echo "Refusing to deploy: could not read the Worker's name from worker/wrangler.toml, so its secrets cannot be checked." >&2
+  exit 1
+fi
+status="$(cf_api GET "/workers/scripts/$worker_name/secrets")"
+if [ "$status" = "200" ]; then
+  # "none", the matched names separated by spaces, or empty when the body is not a successful list
+  # of named secrets.
+  found="$(json_field 'r.success === true && Array.isArray(r.result) && r.result.every((s) => s && typeof s.name === "string") ? (r.result.map((s) => s.name).filter((n, i, all) => (n === "ADMIN_SIG_MIN" || n === "ADMIN_ORIGIN" || n === "ADMIN_TEST_ROUTES") && all.indexOf(n) === i).sort().join(" ") || "none") : ""')"
+  if [ -z "$found" ]; then
+    echo "Refusing to deploy: the list of the Worker's secrets could not be read (HTTP 200, Cloudflare error codes: $(api_codes)), so the check that none of ADMIN_SIG_MIN, ADMIN_ORIGIN and ADMIN_TEST_ROUTES is a secret did not run. Run this script again." >&2
+    exit 1
+  fi
+  if [ "$found" != "none" ]; then
+    for name in $found; do
+      echo "Refusing to deploy: $name is set as a secret on the Worker $worker_name." >&2
+    done
+    echo "A secret survives every deploy and overrides what the source and worker/wrangler.toml say." >&2
+    for name in $found; do
+      case "$name" in
+        ADMIN_SIG_MIN) echo "A leftover ADMIN_SIG_MIN of \"1\" would keep the v1 admin signature and its replay window open." >&2 ;;
+        ADMIN_ORIGIN) echo "A leftover ADMIN_ORIGIN could accept requests signed for another deployment." >&2 ;;
+        ADMIN_TEST_ROUTES) echo "A leftover ADMIN_TEST_ROUTES of \"1\" would keep the smoke's /admin/test/* fixture routes on after every deploy." >&2 ;;
+      esac
+    done
+    for name in $found; do
+      echo "Remove it with: cd worker && npx wrangler secret delete $name" >&2
+    done
+    case " $found " in
+      *" ADMIN_SIG_MIN "*|*" ADMIN_ORIGIN "*)
+        echo "If ADMIN_SIG_MIN or ADMIN_ORIGIN is still needed, commit its value in [vars] of worker/wrangler.toml (worker/README.md, Signature v2)." >&2 ;;
+    esac
+    case " $found " in
+      *" ADMIN_TEST_ROUTES "*)
+        echo "ADMIN_TEST_ROUTES belongs neither in a secret nor in [vars]: set it only for a fixture smoke, with npx wrangler deploy --var ADMIN_TEST_ROUTES:1 (worker/README.md, Smoke)." >&2 ;;
+    esac
+    echo "Then run this script again." >&2
+    exit 1
+  fi
+elif [ "$status" = "404" ] && [[ ", $(api_codes), " == *", 10007, "* ]]; then
+  echo "Note: the Worker $worker_name does not exist yet (a first deploy), so it has no secrets to check." >&2
+else
+  if [ "$status" = "000" ]; then
+    echo "Could not reach api.cloudflare.com to list the Worker's secrets." >&2
+  fi
+  echo "Refusing to deploy: listing the Worker's secrets by name failed (HTTP $status, Cloudflare error codes: $(api_codes)), so the check that none of ADMIN_SIG_MIN, ADMIN_ORIGIN and ADMIN_TEST_ROUTES is a secret did not run. Run this script again; if it keeps failing, give the token the account permission \"Workers Scripts: Edit\" (which includes reading the names of a Worker's secrets)." >&2
+  exit 1
+fi
+
+# 4. Deploy with the wrangler pinned in worker/package.json. Its output can list bindings and
+# variables, so it is kept in a temporary file and only the URL is printed.
 
 # redact_tail FILE prints the last lines of FILE with the token and account id values replaced.
 redact_tail() {
@@ -233,7 +336,6 @@ if ! npx --yes wrangler deploy </dev/null >"$WORK/deploy.log" 2>&1; then
   exit 1
 fi
 
-worker_name="$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' wrangler.toml | head -n 1)"
 url="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' "$WORK/deploy.log" | head -n 1 || true)"
 if [ -z "$url" ] && [ -n "$subdomain" ]; then
   url="https://${worker_name:-conference-caddie}.$subdomain.workers.dev"

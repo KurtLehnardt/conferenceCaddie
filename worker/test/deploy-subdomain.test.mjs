@@ -118,6 +118,23 @@ test('an account that already has a subdomain keeps it, whatever the variable sa
   }
 });
 
+test('a 404 with error code 10007 also means that the account has none, and only then is one created', (t) => {
+  const w = world(t, { get: { code: 404, body: { success: false, errors: [{ code: 10007, message: 'not found' }], result: null } }, put: [{ echo: true }] });
+  const r = w.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
+  assert.equal(r.status, 0, r.text);
+  assert.deepEqual(puts(w), ['my-conf-caddie']);
+  assert.match(r.stdout, /^workers\.dev subdomain: my-conf-caddie$/m);
+  // Any other answer that does not name the subdomain stops before a PUT, which could rename one
+  // (deploy-secrets-guard.test.mjs covers more answers, and the full run).
+  for (const get of [{ code: 200, body: null }, { code: 200, body: {} }, { code: 404, body: { success: false, errors: [{ code: 7003 }] } }]) {
+    const bad = world(t, { get, put: [{ echo: true }] });
+    const rb = bad.run({ CADDIE_WORKERS_SUBDOMAIN: 'my-conf-caddie' });
+    assert.equal(rb.status, 1, rb.text);
+    assert.deepEqual(puts(bad), [], JSON.stringify(get));
+    assert.match(rb.stderr, /Could not read the workers\.dev subdomain/);
+  }
+});
+
 test('a name that is not a subdomain is refused before any request is made', (t) => {
   for (const bad of ['Bad_Name', 'UPPER', 'has space', 'a"b', '-lead', 'trail-', 'ok\nsecond', 'a'.repeat(64), 'x.y']) {
     const w = world(t, { ...NONE, put: [{ echo: true }] });

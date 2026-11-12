@@ -168,7 +168,8 @@ function stubEnv(vars = { ADMIN_TOKEN: KEY }) {
       return Response.json({ ok: true });
     },
   }));
-  return { env: { ...vars, DIRECTORY, CONFERENCE }, received };
+  // ADMIN_SIG_MIN "1", the step d rollback: these routes are driven with v1, which the default refuses.
+  return { env: { ADMIN_SIG_MIN: '1', ...vars, DIRECTORY, CONFERENCE }, received };
 }
 
 let ipSeq = 0;

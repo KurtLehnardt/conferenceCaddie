@@ -87,22 +87,28 @@ export function parseAdminOrigin(raw) {
 }
 
 // The Worker's ADMIN_SIG_MIN, as the Worker reads it (the fixture's worker_admin_sig_min): unset
-// (undefined) or exactly "1" allows [1, 2], exactly "2" allows [2], and anything else, the empty
-// string, surrounding whitespace and "02" included, is invalid configuration (null: every admin
-// request answers 404). The match is exact on purpose: a loose reading of a value meant as "2"
-// would fail open and accept v1 again.
+// (undefined) allows [2], exactly "1" allows [1, 2] (the rollback of step d of the migration),
+// exactly "2" allows [2], and anything else, the empty string, surrounding whitespace and "02"
+// included, is invalid configuration (null: every admin request answers 404). The match is exact
+// on purpose: a loose reading of a value meant as "2" would fail open and accept v1 again. The
+// Worker itself never passes undefined: it substitutes its source default, WORKER_DEFAULT_SIG_MIN
+// in worker/src/lib/admin-auth.js ("2" since step d), for an absent setting, and
+// worker/test/admin-auth-v2.test.mjs checks that both readings of an absent setting agree.
 export function parseAdminSigMin(raw) {
-  if (raw === undefined) return [1, 2];
+  if (raw === undefined) return [2];
   if (raw === '1') return [1, 2];
   if (raw === '2') return [2];
   return null;
 }
 
-// The client's override of the version it signs, from step c of the migration until step d:
-// CADDIE_ADMIN_SIG_VERSION unset or empty means 2 (GitHub Actions passes an undefined repository
-// variable as the empty string), exactly "1" or "2" means that version, and anything else is a
-// UsageError ("version", exit 2). `env` is passed in (process.env in Node), so this module needs
-// no process.
+// The client's override of the version it signs, from step c of the migration until step e, which
+// removes it once the first weekly CI ingest under step d has passed: CADDIE_ADMIN_SIG_VERSION
+// unset or empty means 2 (GitHub Actions passes an undefined repository variable as the empty
+// string), exactly "1" or "2" means that version, and anything else is a UsageError ("version",
+// exit 2). Since step d the Worker refuses v1 unless its ADMIN_SIG_MIN is "1" (the rollback, which
+// belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret), so "1" is
+// useful only together with that rollback. `env` is passed in (process.env in Node), so this module
+// needs no process.
 export const SIG_VERSION_ENV = 'CADDIE_ADMIN_SIG_VERSION';
 
 export function signVersionFromEnv(env) {

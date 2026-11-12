@@ -1,6 +1,7 @@
-// The Worker's check of admin signatures during the move to v2 (step b of "Admin signature v2" in
-// DECISIONS.md): the Worker accepts v1 and v2, a v2 signature is bound to an origin this Worker
-// serves, and ADMIN_SIG_MIN and ADMIN_ORIGIN choose what is accepted.
+// The Worker's check of admin signatures under "Admin signature v2" in DECISIONS.md: a v2 signature
+// is bound to an origin this Worker serves, and ADMIN_SIG_MIN and ADMIN_ORIGIN choose what is
+// accepted. Since step d an absent ADMIN_SIG_MIN means v2 only (WORKER_DEFAULT_SIG_MIN "2"), and
+// the tests that need v1 accepted set ADMIN_SIG_MIN "1", the rollback, explicitly.
 //
 // First the verifier and the configuration reader in src/lib/admin-auth.js against every case of
 // the shared fixture file test/fixtures/admin-sign.v2.json, which the signer
@@ -19,7 +20,7 @@ import {
   BODYLESS_METHODS, EMPTY_BODY_SHA256, HEADER_RE, HEADER_RE_V2, MIN_KEY_LENGTH, SKEW_SECONDS, WORKER_DEFAULT_SIG_MIN,
   adminConfig, canonicalString, canonicalStringV2, parseVersionedAdminHeader, verifyAdminHeader,
 } from '../src/lib/admin-auth.js';
-import { signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
+import { parseAdminSigMin, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v2.json', import.meta.url), 'utf8'));
 const byKind = (kind, call) => fixture.cases.filter((c) => c.kind === kind && (call === undefined || c.call === call));
@@ -40,6 +41,9 @@ const NOT_FOUND = { error: 'Not found' };
 // A request URL whose origin is in no case's list, so a case that sets ADMIN_ORIGIN can only pass
 // through the list, never through the request-URL fallback.
 const ELSEWHERE = 'https://not-listed.invalid';
+
+// The versions an absent ADMIN_SIG_MIN allows: v2 only since step d.
+const DEFAULT_VERSIONS = [2];
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const envFor = (setting, c) => (c.unset ? {} : { [setting]: c.raw });
@@ -114,15 +118,18 @@ function workerSettings(c) {
 }
 
 describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
-  test('its constants are the fixture\'s, and the default minimum is "1" in this step', () => {
+  test('its constants are the fixture\'s, and the default minimum is "2" since step d', () => {
     assert.equal(HEADER_RE_V2.source, fixture.header_re);
     assert.equal(HEADER_RE.source, fixture.v1_header_re);
     assert.equal(EMPTY_BODY_SHA256, fixture.empty_body_sha256);
     assert.deepEqual([...BODYLESS_METHODS], fixture.bodyless_methods);
     assert.equal(SKEW_SECONDS, fixture.skew_seconds);
     assert.equal(MIN_KEY_LENGTH, fixture.min_key_length);
-    // Step d of the migration changes this to "2" in the source.
-    assert.equal(WORKER_DEFAULT_SIG_MIN, '1');
+    // Step d of the migration changed this to "2" in the source. The shared reader gives an absent
+    // setting the same reading, so the fixture's sig-min-unset case and the Worker agree.
+    assert.equal(WORKER_DEFAULT_SIG_MIN, '2');
+    assert.deepEqual(parseAdminSigMin(WORKER_DEFAULT_SIG_MIN), DEFAULT_VERSIONS);
+    assert.deepEqual(parseAdminSigMin(undefined), DEFAULT_VERSIONS);
     // The fixture belongs to the signer's side and may grow; every case runs below.
     assert.ok(signCases.length >= 21, `${signCases.length} sign cases`);
     assert.ok(verifyCases.length >= 61, `${verifyCases.length} verify cases`);
@@ -233,11 +240,11 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
       if (c.input.trim() === '') {
         // Empty after trimming is unset: the request-URL fallback, never an accepted entry.
         assert.equal(c.expect.origin, null);
-        assert.deepEqual(cfg, { ok: true, allowedVersions: [1, 2], origins: [ELSEWHERE] });
+        assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: [ELSEWHERE] });
       } else if (c.expect.origin === null) {
         assert.deepEqual(cfg, { ok: false, invalid: 'ADMIN_ORIGIN' });
       } else {
-        assert.deepEqual(cfg, { ok: true, allowedVersions: [1, 2], origins: [c.expect.origin] });
+        assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: [c.expect.origin] });
       }
       // The fallback takes a request URL's origin as it is, path and all, without the origin rule.
       if (c.request_url_origin !== undefined) assert.deepEqual(adminConfig({}, c.input).origins, [c.request_url_origin]);
@@ -249,9 +256,19 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
       const requestUrl = `${CUSTOM}/admin/stats?event=${SLUG}`;
       const cfg = adminConfig(envFor(c.setting, c), requestUrl);
       if (c.setting === 'ADMIN_ORIGIN') {
-        if (c.expect.mode === 'invalid') assert.deepEqual(cfg, { ok: false, invalid: 'ADMIN_ORIGIN' });
-        else if (c.expect.mode === 'fallback') assert.deepEqual(cfg, { ok: true, allowedVersions: [1, 2], origins: [CUSTOM] });
-        else assert.deepEqual(cfg, { ok: true, allowedVersions: [1, 2], origins: c.expect.origins });
+        // Under the rollback setting ADMIN_SIG_MIN "1" as well: an invalid ADMIN_ORIGIN is invalid
+        // configuration for v1 too, though a v1 header carries no origin.
+        const rollback = adminConfig({ ...envFor(c.setting, c), ADMIN_SIG_MIN: '1' }, requestUrl);
+        if (c.expect.mode === 'invalid') {
+          assert.deepEqual(cfg, { ok: false, invalid: 'ADMIN_ORIGIN' });
+          assert.deepEqual(rollback, { ok: false, invalid: 'ADMIN_ORIGIN' });
+        } else if (c.expect.mode === 'fallback') {
+          assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: [CUSTOM] });
+          assert.deepEqual(rollback, { ok: true, allowedVersions: [1, 2], origins: [CUSTOM] });
+        } else {
+          assert.deepEqual(cfg, { ok: true, allowedVersions: DEFAULT_VERSIONS, origins: c.expect.origins });
+          assert.deepEqual(rollback, { ok: true, allowedVersions: [1, 2], origins: c.expect.origins });
+        }
       } else {
         assert.equal(c.setting, 'ADMIN_SIG_MIN');
         if (c.expect.allowed_versions === null) assert.deepEqual(cfg, { ok: false, invalid: 'ADMIN_SIG_MIN' });
@@ -267,11 +284,12 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
     for (const raw of [1, ['https://caddie.example'], {}, true]) {
       assert.deepEqual(adminConfig({ ADMIN_ORIGIN: raw }, CUSTOM), { ok: false, invalid: 'ADMIN_ORIGIN' }, JSON.stringify(raw));
     }
-    // An absent setting is the source default, "1" in this step. The Worker reads it with ??, so
+    // An absent setting is the source default, "2" since step d. The Worker reads it with ??, so
     // null (which a Worker's environment never holds) counts as absent too, on purpose: it takes
-    // the default rather than failing closed, which keeps step d's default of "2" in force for it.
-    assert.deepEqual(adminConfig({ ADMIN_SIG_MIN: undefined }, CUSTOM).allowedVersions, [1, 2]);
-    assert.deepEqual(adminConfig({ ADMIN_SIG_MIN: null }, CUSTOM), { ok: true, allowedVersions: [1, 2], origins: [CUSTOM] });
+    // the default rather than failing closed, which keeps the default of "2" in force for it.
+    assert.deepEqual(adminConfig({ ADMIN_SIG_MIN: undefined }, CUSTOM).allowedVersions, [2]);
+    assert.deepEqual(adminConfig({ ADMIN_SIG_MIN: null }, CUSTOM), { ok: true, allowedVersions: [2], origins: [CUSTOM] });
+    assert.deepEqual(adminConfig({}, CUSTOM), { ok: true, allowedVersions: [2], origins: [CUSTOM] });
   });
 
   test('the verifier tries each distinct origin once: a list with a duplicate costs one compare per key', async () => {
@@ -293,16 +311,17 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// test/fixtures/admin-sign.v1.json under this step's settings. admin-auth.test.mjs runs it with
-// allowedVersions [1], a verifier from before v2; the Worker now passes adminConfig()'s ([1, 2] and the request-URL
-// origin), and every v1 case must keep its result there. The one intended change is
+// test/fixtures/admin-sign.v1.json under the rollback settings. admin-auth.test.mjs runs it with
+// allowedVersions [1], a verifier from before v2; with ADMIN_SIG_MIN "1" (the rollback of step d,
+// since an absent setting refuses v1) the Worker passes adminConfig()'s [1, 2] and the request-URL
+// origin, and every v1 case must keep its result there. The one intended change is
 // v-malformed-version: a v2 header, malformed to a v1-only verifier, is now read and fails its
 // signature, which the Worker charges to the failed-auth bucket like any bad signature.
 
 const v1Fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
 const V1_CHANGED = new Map([['v-malformed-version', { ok: false, reason: 'signature' }]]);
 
-describe('test/fixtures/admin-sign.v1.json under step b\'s settings', () => {
+describe('test/fixtures/admin-sign.v1.json under the rollback setting ADMIN_SIG_MIN "1"', () => {
   const v1Cases = v1Fixture.cases.filter((c) => c.kind === 'sign' || c.kind === 'verify');
 
   test('the fixture still has its cases, and the only changed one is a v2 header', () => {
@@ -321,10 +340,10 @@ describe('test/fixtures/admin-sign.v1.json under step b\'s settings', () => {
   });
 
   for (const c of v1Cases) {
-    test(`v1 ${c.kind} ${c.id}: the same result with ADMIN_SIG_MIN and ADMIN_ORIGIN unset${V1_CHANGED.has(c.id) ? ' (changed on purpose)' : ''}`, async () => {
+    test(`v1 ${c.kind} ${c.id}: the same result with ADMIN_SIG_MIN "1" and ADMIN_ORIGIN unset${V1_CHANGED.has(c.id) ? ' (changed on purpose)' : ''}`, async () => {
       const keys = c.kind === 'sign' ? [c.key] : c.keys;
       const nowMs = (c.kind === 'sign' ? c.ts : c.now) * 1000;
-      const cfg = adminConfig({}, `${CUSTOM}${c.path_with_query}`);
+      const cfg = adminConfig({ ADMIN_SIG_MIN: '1' }, `${CUSTOM}${c.path_with_query}`);
       assert.deepEqual(cfg, { ok: true, allowedVersions: [1, 2], origins: [CUSTOM] });
       const run = async (settings) => {
         const compare = countingCompare();
@@ -332,13 +351,19 @@ describe('test/fixtures/admin-sign.v1.json under step b\'s settings', () => {
         return { ok: v.ok, reason: v.reason, header: v.header ?? null, version: v.version ?? null, compares: compare.n };
       };
       const v1Only = await run({ allowedVersions: [1] });
-      const stepB = await run({ allowedVersions: cfg.allowedVersions, origins: cfg.origins });
+      const rollback = await run({ allowedVersions: cfg.allowedVersions, origins: cfg.origins });
       if (V1_CHANGED.has(c.id)) {
         assert.deepEqual([v1Only.ok, v1Only.reason], [false, 'malformed']);
-        assert.deepEqual({ ok: stepB.ok, reason: stepB.reason }, V1_CHANGED.get(c.id));
+        assert.deepEqual({ ok: rollback.ok, reason: rollback.reason }, V1_CHANGED.get(c.id));
       } else {
-        assert.deepEqual(stepB, v1Only);
-        if (stepB.ok) assert.equal(stepB.version, 1);
+        assert.deepEqual(rollback, v1Only);
+        if (rollback.ok) assert.equal(rollback.version, 1);
+      }
+      // With ADMIN_SIG_MIN absent no v1 header is accepted, and none costs a comparison.
+      if (parseVersionedAdminHeader(c.header)?.version === 1) {
+        const byDefault = adminConfig({}, `${CUSTOM}${c.path_with_query}`);
+        const d = await run({ allowedVersions: byDefault.allowedVersions, origins: byDefault.origins });
+        assert.deepEqual([d.ok, d.compares], [false, 0]);
       }
     });
   }
@@ -463,7 +488,7 @@ async function bucketTaken(env, ip, failures) {
   return call(env, signedRequest('GET', STATS, { ip }).req);
 }
 
-describe('the Worker during the move to v2', { skip }, () => {
+describe('the Worker\'s admin routes under signature v2', { skip }, () => {
   test('a v2 request signed for the origin it reaches is accepted, and the object gets its nonce and timestamp', async () => {
     for (const vars of [{}, { ADMIN_SIG_MIN: '1' }, { ADMIN_SIG_MIN: '2' }]) {
       const { env, received } = stubEnv(vars);
@@ -504,15 +529,18 @@ describe('the Worker during the move to v2', { skip }, () => {
       const r = await call(env, signedRequest('GET', STATS, { signFor: STAGING, sendTo: CUSTOM, ip }).req);
       assert.deepEqual([r.status, r.hmac], [404, 1], `failure ${i + 1}`);
     }
-    for (const version of [1, 2]) {
-      const r = await call(env, signedRequest('GET', STATS, { version, ip }).req);
+    // The bucket is the address's, whatever the version: v1 is shown under the rollback setting
+    // ADMIN_SIG_MIN "1", since without it a v1 header is refused before the bucket is looked at.
+    for (const [version, e] of [[1, stubEnv({ ADMIN_SIG_MIN: '1' }).env], [2, env]]) {
+      const r = await call(e, signedRequest('GET', STATS, { version, ip }).req);
       assert.deepEqual([r.status, r.json, r.hmac, r.compare], [404, NOT_FOUND, 0, 0], `v${version} after ten wrong origins`);
     }
     assert.equal((await call(env, signedRequest('GET', STATS).req)).status, 200);
   });
 
   test('ADMIN_ORIGIN as a list: a v2 request for each listed origin is accepted, any other is refused, and v1 is not bound to it', async () => {
-    const { env, received } = stubEnv({ ADMIN_ORIGIN: ` ${CUSTOM.toUpperCase()}:443 , ${WORKERS_DEV}/ ` });
+    const ADMIN_ORIGIN = ` ${CUSTOM.toUpperCase()}:443 , ${WORKERS_DEV}/ `;
+    const { env, received } = stubEnv({ ADMIN_ORIGIN });
     for (const origin of [CUSTOM, WORKERS_DEV]) {
       // Sent to either listed hostname: both route to this one Worker.
       for (const sendTo of [CUSTOM, WORKERS_DEV]) {
@@ -527,9 +555,14 @@ describe('the Worker during the move to v2', { skip }, () => {
       const r = await call(env, signedRequest('GET', STATS, { signFor, sendTo }).req);
       assert.deepEqual([r.status, r.json, r.hmac, r.compare], [404, NOT_FOUND, 2, 2], `${signFor} via ${sendTo}`);
     }
-    // v1 carries no origin: accepted whatever the list, until step d.
-    assert.equal((await call(env, signedRequest('GET', STATS, { version: 1, signFor: STAGING }).req)).status, 200);
-    assert.equal(received.length, 5);
+    // v1 carries no origin: refused by default since step d, and under the rollback setting
+    // ADMIN_SIG_MIN "1" accepted whatever the list, which is why the rollback reopens the replay.
+    const v1 = signedRequest('GET', STATS, { version: 1, signFor: STAGING });
+    assert.deepEqual(await call(env, v1.req.clone()).then((r) => [r.status, r.hmac]), [404, 0]);
+    assert.equal(received.length, 4);
+    const rollback = stubEnv({ ADMIN_ORIGIN, ADMIN_SIG_MIN: '1' });
+    assert.equal((await call(rollback.env, v1.req)).status, 200);
+    assert.equal(rollback.received.length, 1);
   });
 
   test('an invalid ADMIN_ORIGIN or ADMIN_SIG_MIN answers 404 to every admin request, charges nothing, and logs the setting\'s name only', async () => {
@@ -541,26 +574,32 @@ describe('the Worker during the move to v2', { skip }, () => {
     ];
     assert.ok(invalid.length >= 25);
     const routes = [...adminRoutes.map((r) => [r.method, r.path]), ['PUT', '/admin/conferences'], ['GET', '/admin/stats'], ['GET', '/admin/no-such-route']];
-    for (const [setting, raw] of invalid) {
-      const { env, received } = stubEnv({ [setting]: raw, ADMIN_TEST_ROUTES: '1' });
+    // An invalid ADMIN_ORIGIN refuses every admin request, v1 included, so each one also runs under
+    // the rollback setting ADMIN_SIG_MIN "1": with the default, v1 is refused anyway, and only "1"
+    // shows that a v1 request, which carries no origin, is not let past an invalid ADMIN_ORIGIN.
+    const runs = invalid.flatMap(([setting, raw]) => [[setting, raw, {}], ...(setting === 'ADMIN_ORIGIN' ? [[setting, raw, { ADMIN_SIG_MIN: '1' }]] : [])]);
+    for (const [setting, raw, extra] of runs) {
+      const { env, received } = stubEnv({ [setting]: raw, ADMIN_TEST_ROUTES: '1', ...extra });
       const ip = freshIp();
+      const label = `${setting}=${JSON.stringify(raw)}${extra.ADMIN_SIG_MIN ? ' with ADMIN_SIG_MIN "1"' : ''}`;
       for (const [method, path] of routes) {
         for (const version of [1, 2]) {
           const body = method === 'GET' || method === 'DELETE' ? undefined : '{}';
           const r = await call(env, signedRequest(method, `${path}?event=${SLUG}`, { version, body, ip }).req);
-          const why = `${setting}=${JSON.stringify(raw)} v${version} ${method} ${path}`;
+          const why = `${label} v${version} ${method} ${path}`;
           assert.deepEqual([r.status, r.json, r.reads, r.hmac, r.compare], [404, NOT_FOUND, [], 0, 0], why);
           assert.deepEqual(r.logs, [`admin config invalid: ${setting}`], why);
         }
       }
       // An unsigned request is refused the same way.
       const bare = await call(env, new Request(`${CUSTOM}${STATS}`, { headers: { 'CF-Connecting-IP': ip } }));
-      assert.deepEqual([bare.status, bare.logs], [404, [`admin config invalid: ${setting}`]]);
-      assert.equal(received.length, 0);
+      assert.deepEqual([bare.status, bare.logs], [404, [`admin config invalid: ${setting}`]], label);
+      assert.equal(received.length, 0, label);
       // None of those took a token: with the setting fixed, the same address is served at once.
-      const fixed = await call(stubEnv().env, signedRequest('GET', STATS, { ip }).req);
-      assert.deepEqual([fixed.status, fixed.logs.filter(configLine)], [200, []], `${setting}=${JSON.stringify(raw)}: the bucket was charged`);
+      const fixed = await call(stubEnv(extra).env, signedRequest('GET', STATS, { ip }).req);
+      assert.deepEqual([fixed.status, fixed.logs.filter(configLine)], [200, []], `${label}: the bucket was charged`);
     }
+    assert.ok(runs.length > invalid.length);
     // The public API does not read either setting.
     const { env } = stubEnv({ ADMIN_ORIGIN: ',', ADMIN_SIG_MIN: '' });
     const health = await call(env, new Request(`${CUSTOM}/api/health`, { headers: { 'CF-Connecting-IP': freshIp() } }));
@@ -590,19 +629,52 @@ describe('the Worker during the move to v2', { skip }, () => {
     assert.equal((await call(env, signedRequest('GET', STATS, { ip }).req)).status, 200);
   });
 
-  test('ADMIN_SIG_MIN unset or "1" accepts v1 and v2', async () => {
-    for (const vars of [{}, { ADMIN_SIG_MIN: '1' }, { ADMIN_SIG_MIN: undefined }]) {
+  // The route-level proof that the source default is what the Worker uses: ADMIN_SIG_MIN is absent
+  // from the environment, so only WORKER_DEFAULT_SIG_MIN can refuse the v1 header, and the same
+  // header is accepted under "1", so it is a valid one. The null case reaches the constant only
+  // through the ?? in adminConfig(): parseAdminSigMin(null) is invalid configuration, so a reader
+  // that dropped the constant would answer 404 to the v2 request below as well, and this test would
+  // fail. Missing and undefined alone could not show that, because parseAdminSigMin(undefined) also
+  // reads an absent setting as [2].
+  test('ADMIN_SIG_MIN absent refuses a valid v1 header as malformed, without an HMAC or a charge; v2 passes', async () => {
+    for (const vars of [{}, { ADMIN_SIG_MIN: undefined }, { ADMIN_SIG_MIN: null }]) {
       const { env, received } = stubEnv(vars);
-      for (const version of [1, 2]) {
-        const r = await call(env, signedRequest('POST', `/admin/talks?event=${SLUG}`, { version, body: BODY }).req);
-        assert.deepEqual([r.status, r.hmac, r.compare], [200, 1, 2], `${JSON.stringify(vars)} v${version}`);
+      assert.equal(env.ADMIN_SIG_MIN ?? undefined, undefined);
+      const ip = freshIp();
+      // Twelve refusals from one address: more than the ten failures that would empty its bucket.
+      for (let i = 0; i < 12; i++) {
+        const r = await call(env, signedRequest('GET', STATS, { version: 1, ip }).req);
+        assert.deepEqual([r.status, r.json, r.hmac, r.compare, r.reads, r.logs], [404, NOT_FOUND, 0, 0, [], []], `${JSON.stringify(vars)} refusal ${i + 1}`);
       }
-      assert.equal(received.length, 2);
+      const post = signedRequest('POST', `/admin/talks?event=${SLUG}`, { version: 1, body: BODY, ip });
+      const refused = await call(env, post.req.clone());
+      assert.deepEqual([refused.status, refused.json, refused.hmac, refused.compare, refused.reads], [404, NOT_FOUND, 0, 0, []]);
+      assert.equal(received.length, 0);
+      // Nothing was charged: a v2 request from the same address is served at once.
+      const v2 = await call(env, signedRequest('POST', `/admin/talks?event=${SLUG}`, { body: BODY, ip }).req);
+      assert.deepEqual([v2.status, v2.hmac, v2.compare], [200, 1, 2]);
+      assert.equal(received.length, 1);
+      // The refused v1 header is valid: under the rollback setting the same request is accepted.
+      const rollback = stubEnv({ ADMIN_SIG_MIN: '1' });
+      const ok = await call(rollback.env, post.req);
+      assert.deepEqual([ok.status, ok.hmac, ok.compare], [200, 1, 2]);
+      assert.equal(rollback.received.length, 1);
     }
   });
 
+  test('ADMIN_SIG_MIN "1" (the rollback) accepts v1 and v2', async () => {
+    const { env, received } = stubEnv({ ADMIN_SIG_MIN: '1' });
+    for (const version of [1, 2]) {
+      const r = await call(env, signedRequest('POST', `/admin/talks?event=${SLUG}`, { version, body: BODY }).req);
+      assert.deepEqual([r.status, r.hmac, r.compare], [200, 1, 2], `v${version}`);
+    }
+    assert.equal(received.length, 2);
+  });
+
   test('a v1 header cannot carry a v2 signature, nor a v2 header a v1 signature: 404, charged', async () => {
-    const { env, received } = stubEnv();
+    // Under the rollback setting, where both versions are read and checked; with the default a v1
+    // header is refused before any HMAC.
+    const { env, received } = stubEnv({ ADMIN_SIG_MIN: '1' });
     const ip = freshIp();
     for (const [headerVersion, signedVersion] of [[1, 2], [2, 1], [1, 2], [2, 1], [1, 2]]) {
       const header = crossHeader({ headerVersion, signedVersion, method: 'GET', pathWithQuery: STATS });
@@ -631,7 +703,8 @@ describe('the nonce table with v2', { skip }, () => {
   const conf = { slug: SLUG, name: SLUG, status: 'searchable', start_date: '2099-06-01', end_date: '2099-06-02', time_zone: 'UTC' };
 
   test('a v2 replay is refused by the nonce table, and v1 and v2 share it', async () => {
-    const env = realEnv();
+    // The rollback setting ADMIN_SIG_MIN "1", so that v1 is accepted and the shared table can be shown.
+    const env = realEnv({ ADMIN_SIG_MIN: '1' });
     const send = (s) => call(env, new Request(s.url, { method: s.method, headers: { 'X-Caddie-Admin': s.header, 'CF-Connecting-IP': freshIp(), 'Content-Type': 'application/json' }, body: s.body }));
     const sign = (method, path, opts = {}) => ({ ...signAdminRequest({ method, path, base: CUSTOM, key: KEY, version: 2, ...opts }), body: opts.body });
 

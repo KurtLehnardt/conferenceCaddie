@@ -50,7 +50,7 @@ Leave `ADMIN_TEST_ROUTES` out of the file. It must never be set in `wrangler.tom
 bash worker/scripts/deploy.sh
 ```
 
-The script makes sure your account has a `workers.dev` subdomain. If the account has none, it creates the one named by the optional variable `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<six random letters>` when the variable is unset or the name is taken; an account that already has a subdomain keeps it. It then builds the web app in Worker mode into `web/dist-worker/` and runs `npx wrangler deploy`. It prints the subdomain and the app URL, which is also the API base, and nothing secret. Keep that URL:
+The script makes sure your account has a `workers.dev` subdomain. If the account has none, it creates the one named by the optional variable `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<six random letters>` when the variable is unset or the name is taken; an account that already has a subdomain keeps it. It then builds the web app in Worker mode into `web/dist-worker/`, checks that none of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES` is set as a secret of the Worker (the first two belong in `[vars]` of `worker/wrangler.toml`, and `ADMIN_TEST_ROUTES` is set only for a fixture smoke, [below](#admin_test_routes-the-smoke-fixtures); it refuses to deploy when one is, or when the token cannot list the Worker's secrets, and says how to fix it; a first deploy passes), and runs `npx wrangler deploy`. It prints the subdomain and the app URL, which is also the API base, and nothing secret. Keep that URL:
 
 ```sh
 export CADDIE_APP_URL="https://conference-caddie.<your-subdomain>.workers.dev"
@@ -100,7 +100,7 @@ gh run list --workflow ingest.yml --repo <owner>/<repo>
 
 The slug is the conference's name in this repository, for example the name of a folder under `data/`. `node scripts/ingest.mjs --list` lists the upcoming Linux Foundation events. The ingest workflow discovers the schedule on Sessionize with `scripts/ingest.mjs --dry-run` (no Elasticsearch involved), pushes it to the Worker with `worker/ingest/push-ingest.mjs`, and then calls the Pages workflow so the talk bundles follow what the Worker now serves. With an empty `events` input it refreshes every upcoming event; on a schedule it runs every Monday at 09:17 UTC. Until `CADDIE_ADMIN_TOKEN` and `CADDIE_API_BASE` are both set, a scheduled run only logs a notice and succeeds, and a manual run fails and says which one is missing. GitHub switches off scheduled workflows after 60 days without repository activity; running the workflow by hand switches it on again.
 
-One more repository variable is optional: `CADDIE_ADMIN_SIG_VERSION`, the rollback switch of the admin signature. Leave it unset. The ingest then signs every admin request with signature v2, which also signs the origin of `CADDIE_API_BASE`. Set it to `1` only to make the ingest sign v1 again, which works only while your Worker still accepts v1 (until step d of "Admin signature v2" in `DECISIONS.md`); any other value fails the workflow in its first step. When you bring a fork up to date with this repository, deploy the Worker (step 3) before the next ingest runs: a Worker from before step b of that move answers 404 to every v2 request, so the ingest fails until the Worker is deployed again or the variable is set to `1`.
+One more repository variable is optional: `CADDIE_ADMIN_SIG_VERSION`, the rollback switch of the admin signature. Leave it unset. The ingest then signs every admin request with signature v2, which also signs the origin of `CADDIE_API_BASE`. Set it to `1` only to make the ingest sign v1 again, which works only while your Worker accepts v1: since step d of "Admin signature v2" in `DECISIONS.md` it refuses v1 unless its `ADMIN_SIG_MIN` is `"1"` (the rollback, which belongs in `[vars]` of `worker/wrangler.toml`, committed and deployed, and never in a secret; [below](#version-1-the-temporary-rollback)). Any other value fails the workflow in its first step. Step e of that move removes the variable. When you bring a fork up to date with this repository, deploy the Worker (step 3) before the next ingest runs: a Worker from before step b of that move answers 404 to every v2 request, so the ingest fails until the Worker is deployed again or the variable is set to `1`.
 
 You can also push from your own machine, with the token file that step 4 wrote. This is also how you load the data the smoke test needs (next step). Run `node scripts/ingest.mjs --event <slug> --dry-run --skip-topics` first for a conference that is not yet under `data/`, so that its talk files exist:
 
@@ -140,18 +140,19 @@ node scripts/smoke.mjs
 
 Four routes under `/admin/test/` (`POST` and `DELETE /admin/test/profile`, `POST /admin/test/age-presence` and `POST /admin/test/meter-restart`) exist only for the smoke test. They create expired profiles, age presence and restart the usage meter, which nobody should be able to do on a live conference. The Worker serves them only when its variable `ADMIN_TEST_ROUTES` is the string `"1"`. Otherwise they answer 404, even to a correctly signed request, before the conference is looked up. `worker/wrangler.toml` does not set the variable, and a local `wrangler dev` run sets it in `.dev.vars`, so a local run has every check, while against a deployed Worker the smoke prints SKIP for the checks that need a fixture (`meter1`, the expired profile, the aged presence and `unav1`).
 
-To run them against a deployed Worker, deploy once with the variable, run the smoke, and deploy again without it. Every `wrangler deploy` replaces the Worker's variables with those of `wrangler.toml`, so the second deploy switches the routes off again. Wrap the sequence in a `trap`, so that the routes are switched off again even if the smoke is interrupted or fails:
+To run them against a deployed Worker, deploy once with the variable, run the smoke, and deploy again without it. Every `wrangler deploy` replaces the Worker's variables with those of `wrangler.toml`, so the second deploy switches the routes off again. Start with one ordinary `bash worker/scripts/deploy.sh`, which builds the app and runs the check of the Worker's secrets that the direct `wrangler deploy --var` skips (`deploy.sh` refuses to deploy while `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` or `ADMIN_TEST_ROUTES` is a secret of the Worker, or when it cannot read the list of secrets), and stop there if it refuses, so that the routes are never switched on when the deploy that switches them off would refuse. Then wrap the rest in a `trap`, so that the routes are switched off again even if the smoke is interrupted or fails:
 
 ```sh
 (
-  set -u
+  set -eu
+  bash worker/scripts/deploy.sh                  # the secrets check and the app build; nothing below runs if it refuses
   trap 'bash worker/scripts/deploy.sh' EXIT      # always redeploy without the variable, on success, failure or Ctrl-C
   (cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1)
   BASE_URL="$CADDIE_APP_URL" SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token node scripts/smoke.mjs
 )
 ```
 
-Never set `ADMIN_TEST_ROUTES` with `wrangler secret put`. A secret survives every deploy, so the fixtures would stay on until someone deleted it. Do not run this against a conference that is in use: while the routes are on, anyone who can sign admin requests (which means only you) can create expired profiles and restart the meter. If the trap's redeploy itself fails, run `bash worker/scripts/deploy.sh` again by hand and check that `POST /admin/test/profile` answers 404.
+Never set `ADMIN_TEST_ROUTES` with `wrangler secret put`. A secret survives every deploy, so the fixtures would stay on until someone deleted it; `deploy.sh` refuses to deploy while it is a secret, and its message gives the remedy, `npx wrangler secret delete ADMIN_TEST_ROUTES` in `worker/`. Do not run this against a conference that is in use: while the routes are on, anyone who can sign admin requests (which means only you) can create expired profiles and restart the meter. If the trap's redeploy itself fails, the routes stay on: it runs the same secrets check as every `deploy.sh`, so it can also refuse because a secret `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` or `ADMIN_TEST_ROUTES` appeared in the meantime or because Cloudflare did not answer the check (a 5xx, or no answer). Its message names the cause and the remedy; fix that, run `bash worker/scripts/deploy.sh` again by hand, and check that `POST /admin/test/profile` answers 404.
 
 ## The admin key and how requests are signed
 
@@ -165,14 +166,14 @@ X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>
 
 ### Version 1, the temporary rollback
 
-Version 1 (`v1` in the header) is the same HMAC without the origin. The Worker accepts both versions until step d of the migration (DECISIONS.md, "Admin signature v2"), which makes it refuse version 1. Until then, `CADDIE_ADMIN_SIG_VERSION=1` makes `caddie-admin` and the smoke sign version 1 again, for example if a Worker you roll back to does not accept version 2 yet:
+Version 1 (`v1` in the header) is the same HMAC without the origin. Since step d of the migration (DECISIONS.md, "Admin signature v2") the Worker refuses version 1 by default. To roll that back, commit `ADMIN_SIG_MIN = "1"` in `[vars]` of `worker/wrangler.toml` and deploy with `bash worker/scripts/deploy.sh`; the Worker then accepts both versions. Security warning: version 1 is not bound to a host, so end the rollback (remove the line and deploy again) as soon as you can. With the Worker rolled back, or for a Worker you roll back to that does not accept version 2 yet, `CADDIE_ADMIN_SIG_VERSION=1` makes `caddie-admin` and the smoke sign version 1 again:
 
 ```sh
 CADDIE_ADMIN_SIG_VERSION=1 caddie-admin stats counts --event <slug>
 BASE_URL="$CADDIE_APP_URL" SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token CADDIE_ADMIN_SIG_VERSION=1 node scripts/smoke.mjs
 ```
 
-Unset or empty means version 2, and `2` means version 2. Any other value is refused with exit code 2 before anything is sent, never read as a default. While the variable is `1`, `caddie-admin` prints one warning on stderr and the smoke one `NOTE` line, saying that version 1 is not bound to a host; unset the variable as soon as the rollback is over. The CI ingest has its own switch, the repository variable `CADDIE_ADMIN_SIG_VERSION` ([step 5](#5-repository-variables-the-ingest-secret-and-the-first-conference)); `worker/README.md`, "Signature v2", describes the ingest side.
+Unset or empty means version 2, and `2` means version 2. Any other value is refused with exit code 2 before anything is sent, never read as a default. While the variable is `1`, `caddie-admin` prints one warning on stderr and the smoke one `NOTE` line, saying that version 1 is not bound to a host; unset the variable as soon as the rollback is over. Step e of the migration removes the variable. The CI ingest has its own switch, the repository variable `CADDIE_ADMIN_SIG_VERSION` ([step 5](#5-repository-variables-the-ingest-secret-and-the-first-conference)); `worker/README.md`, "Signature v2", describes the ingest side.
 
 This is the whole admin surface of the Worker. There is no web admin page and no other credential. The CLI is the only intended client.
 

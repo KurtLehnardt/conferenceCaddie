@@ -362,20 +362,23 @@ async function handleApi(request, env, url, originAllowed) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Admin routes: every /admin/* request carries X-Caddie-Admin: v1 <ts> <nonce> <bodySha256> <sig>
-// or the same fields with "v2" in front, an HMAC-SHA256 made with ADMIN_TOKEN (or ADMIN_TOKEN_NEXT
-// during a rotation) over the method, the path and query, the body hash, the timestamp and the
-// nonce, and for v2 also the origin the request was signed for (lib/admin-auth.js). The checks run
+// Admin routes: every /admin/* request carries X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>
+// (or the same fields with "v1" in front, accepted only while ADMIN_SIG_MIN = "1" is set as the
+// rollback of step d), an HMAC-SHA256 made with ADMIN_TOKEN (or ADMIN_TOKEN_NEXT during a
+// rotation) over the method, the path and query, the body hash, the timestamp and the nonce, and
+// for v2 also the origin the request was signed for (lib/admin-auth.js). The checks run
 // in this order, and every failure before the clock check answers 404, so the routes are never
 // advertised and a 401 needs a valid signature (a key holder's, or a captured header's while its
 // timestamp is fresh):
 //   1. an Origin header (a browser is never an admin client): 404;
 //   2. invalid configuration (an ADMIN_SIG_MIN that is set to anything other than exactly "1" or
 //      "2", or an ADMIN_ORIGIN with an entry that is not a plain origin; an unset ADMIN_SIG_MIN
-//      means WORKER_DEFAULT_SIG_MIN): 404 and one log line naming the setting, never its value;
+//      means WORKER_DEFAULT_SIG_MIN, "2" since step d): 404 and one log line naming the setting,
+//      never its value;
 //      or no ADMIN_TOKEN of at least 32 characters after trimming: 404. Neither takes a
 //      token from the failed-auth bucket;
-//   3. the header absent or malformed, or of a version ADMIN_SIG_MIN does not allow: 404;
+//   3. the header absent or malformed, or of a version ADMIN_SIG_MIN does not allow (v1, unless
+//      ADMIN_SIG_MIN = "1" is set as the rollback): 404;
 //   4. GET, HEAD or DELETE with a body hash other than the empty body's: 404;
 //   5. ten failed signatures from this address within the last minute (peek, nothing computed): 404;
 //   6. no key reproduces the signature (for v2, with no origin this Worker serves): one token

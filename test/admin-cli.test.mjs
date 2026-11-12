@@ -848,6 +848,7 @@ describe('round-1 fixes', () => {
           if (json) assert.equal(JSON.parse(lines[0]).warning, 'sig_version_1');
           if (!json) assert.ok(lines[0].startsWith('caddie-admin: warning: '));
           assert.match(text, /^CADDIE_ADMIN_SIG_VERSION=1: admin requests are signed with v1, which is not bound to a host/);
+          assert.match(text, /since step d the Worker accepts v1 only while its ADMIN_SIG_MIN is "1" \(the rollback, which belongs in \[vars\] of worker\/wrangler\.toml, committed and deployed, never a secret\);/);
           assert.match(text, /unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over$/);
         }
       }

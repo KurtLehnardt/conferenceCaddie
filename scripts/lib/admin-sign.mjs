@@ -68,7 +68,8 @@ export const VERSION_V2 = 'v2';
 // The version signAdminRequest() signs when the caller names none: 2 from step c of the migration
 // on, the same version signVersionFromEnv() returns when CADDIE_ADMIN_SIG_VERSION is unset or
 // empty. The clients still pass version: signVersionFromEnv(process.env) explicitly, so
-// CADDIE_ADMIN_SIG_VERSION=1 rolls them back to v1 until step d removes v1.
+// CADDIE_ADMIN_SIG_VERSION=1 rolls them back to v1, which the Worker accepts since step d only
+// while its ADMIN_SIG_MIN is "1" (the rollback, which belongs in [vars] of worker/wrangler.toml).
 export const DEFAULT_SIGN_VERSION = 2;
 export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 export const QUERY_RE = /^[A-Za-z0-9_.:=&,-]*$/;

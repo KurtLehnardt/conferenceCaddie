@@ -628,11 +628,13 @@ describe('worker_config_cases: the Worker reads ADMIN_ORIGIN and ADMIN_SIG_MIN e
     assert.equal(r.origin, fixture.origins.workers_dev);
     const v1 = byId['v-v1-ok-during-migration'];
     assert.equal(verifyAdminSignature(moduleArgs(v1, { allowedVersions: parseAdminSigMin('2') })).reason, 'malformed');
-    assert.equal(verifyAdminSignature(moduleArgs(v1, { allowedVersions: parseAdminSigMin(undefined) })).ok, true);
+    // Since step d an absent setting means v2 only, like "2"; only the rollback value "1" accepts v1.
+    assert.equal(verifyAdminSignature(moduleArgs(v1, { allowedVersions: parseAdminSigMin(undefined) })).reason, 'malformed');
+    assert.equal(verifyAdminSignature(moduleArgs(v1, { allowedVersions: parseAdminSigMin('1') })).ok, true);
   });
 });
 
-describe('signVersionFromEnv: the client override of the signed version (steps c to d)', () => {
+describe('signVersionFromEnv: the client override of the signed version (steps c to e)', () => {
   test('unset or empty is 2; exactly "1" or "2" is that version', () => {
     assert.equal(SIG_VERSION_ENV, 'CADDIE_ADMIN_SIG_VERSION');
     assert.equal(signVersionFromEnv({}), 2);

@@ -128,14 +128,17 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    bash worker/scripts/deploy.sh
    ```
 
-   The script makes sure the account has a `workers.dev` subdomain (it reads it with the
-   Cloudflare API and, when there is none, creates the one named by the optional environment
-   variable `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<6 random letters>` when the variable
-   is unset or that name is taken; an account that already has a subdomain keeps it, whatever the
-   variable says), builds the web app in Worker
-   mode into `web/dist-worker/`, then runs `npx wrangler deploy`, which uploads the app with the
-   Worker. It prints only the subdomain and the app URL, which is also the API's base. Until
-   step 2 has run, the admin routes answer 404, because admin fails closed without `ADMIN_TOKEN`.
+   The script makes sure the account has a `workers.dev` subdomain (it reads it with the Cloudflare
+   API and, when there is none, creates the one named by the optional environment variable
+   `CADDIE_WORKERS_SUBDOMAIN`, or `conference-caddie-<6 random letters>` when the variable is unset
+   or that name is taken; an account that already has a subdomain keeps it, whatever the variable
+   says, and an answer that neither names a subdomain nor says there is none stops the script before
+   anything is created), builds the web app in Worker mode into `web/dist-worker/`, checks that none
+   of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES` is a secret of the Worker ([Signature
+   v2](#signature-v2), [Smoke](#smoke); it refuses to deploy when one is, or when it cannot tell),
+   then runs `npx wrangler deploy`, which uploads the app with the Worker. It prints only the
+   subdomain and the app URL, which is also the API's base. Until step 2 has run, the admin routes
+   answer 404, because admin fails closed without `ADMIN_TOKEN`.
 
    If the token cannot read or create the subdomain (HTTP 403 from the subdomain API), create it
    once in the Cloudflare dashboard (Workers & Pages, Overview, `workers.dev` subdomain) and run the
@@ -305,16 +308,25 @@ answer 404, to a correctly signed request as to any other, before the conference
 run has every check, while against the deployed Worker the smoke prints SKIP, naming the variable,
 for the checks that need a fixture (`meter1`, the expired profile, the aged presence and `unav1`)
 instead of FAIL, once it sees that `GET /admin/stats` answers 200 with the same credentials. To
-run them against the deployed Worker, deploy once with the variable and once without:
-`cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1` (the app already built by an earlier
-`deploy.sh`), run the smoke, then `bash worker/scripts/deploy.sh` again, because every wrangler
-deploy replaces the Worker's variables with those of `wrangler.toml`. Never set it with
-`wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
-deleted it.
+run them against the deployed Worker, deploy once with the variable and once without: first run
+`bash worker/scripts/deploy.sh` once and stop if it refuses, because the direct `wrangler deploy`
+that follows skips its check of the Worker's secrets ([Signature v2](#signature-v2)) and the deploy
+that switches the routes off again would refuse for the same reason; then
+`cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1` (the app built by that `deploy.sh`),
+run the smoke, then `bash worker/scripts/deploy.sh` again, because every wrangler deploy replaces
+the Worker's variables with those of `wrangler.toml`. `docs/fork/TIER2_CLOUDFLARE.md` wraps the
+sequence in a `trap`. If that last `deploy.sh` refuses (a secret `ADMIN_SIG_MIN`, `ADMIN_ORIGIN`
+or `ADMIN_TEST_ROUTES` appeared in the meantime, or Cloudflare did not answer the check), the
+routes stay on: its message names the cause and the remedy; fix that, run it again, and check that
+`POST /admin/test/profile` answers 404. Never set it with `wrangler secret put`: a secret survives
+every deploy, so the fixtures would stay on until someone deleted it. `deploy.sh` therefore refuses
+to deploy while `ADMIN_TEST_ROUTES` is a secret of the Worker, and its message gives the remedy,
+`npx wrangler secret delete ADMIN_TEST_ROUTES` in `worker/`.
 
 The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
 redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like the Worker-side
-clients; `CADDIE_ADMIN_SIG_VERSION=1` makes it sign v1, for a Worker from before v2. Its bearer
+clients; `CADDIE_ADMIN_SIG_VERSION=1` makes it sign v1, for a Worker from before v2 or one rolled
+back with `ADMIN_SIG_MIN = "1"` (a current Worker refuses v1 by default since step d). Its bearer
 mode is gone, and a current Worker answers a bearer with 404.
 
 The smoke's `keep1` and `keep2` run against the Worker too, where they printed SKIP before
@@ -349,8 +361,9 @@ within five minutes of the Worker's clock. `scripts/lib/admin-sign.mjs` signs an
 `src/lib/admin-auth.js` verifies; both are tested against `test/fixtures/admin-sign.v1.json` and
 `test/fixtures/admin-sign.v2.json`. The signer refuses a path or query that would be
 percent-encoded, so both sides always sign the same bytes, and flags such as `allow_shrink` travel
-in the JSON body, which the hash covers. The Worker also accepts version 2 of the header, which
-binds the request to the origin it was sent to; see [Signature v2](#signature-v2).
+in the JSON body, which the hash covers. Since step d of the move to version 2 of the header,
+which binds the request to the origin it was sent to, the Worker refuses this version 1 header
+unless `ADMIN_SIG_MIN = "1"` is set as the rollback; see [Signature v2](#signature-v2).
 
 The Worker checks, in this order: an `Origin` header, its own configuration (`ADMIN_SIG_MIN` and
 `ADMIN_ORIGIN`, see [Signature v2](#signature-v2)), an `ADMIN_TOKEN` of at least 32 characters,
@@ -424,9 +437,10 @@ stored version is at least `SCHEMA_VERSION`.
 A v1 signature does not cover the host, so a signed request that reaches another host (a typo in
 the base, a hostile mirror, a staging Worker that holds the same token) could be replayed here
 within the five-minute window; the nonce table does not stop it, because that replay is the
-nonce's first use here. Version 2 binds the origin, and the replay is closed once step d refuses
-v1: during steps b and c the Worker still accepts v1, so a captured v1 request can still be
-replayed across hosts. The v2 header has the v1 fields with `v2` in front:
+nonce's first use here. Version 2 binds the origin, and since step d the Worker refuses v1 by
+default, which closes that replay. Security warning: while the rollback `ADMIN_SIG_MIN = "1"` is in
+place, the Worker accepts v1 again, and a captured v1 request can again be replayed across hosts.
+The v2 header has the v1 fields with `v2` in front:
 
 ```
 X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>
@@ -440,9 +454,11 @@ even after one matched. A v2 signature made for another origin is an ordinary ba
 and one token from the failed-auth bucket. The nonce table and the Durable Objects' 305-second
 clock check are the same for both versions, and v1 and v2 nonces share the table.
 
-The move to v2 is in four steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
+The move to v2 is in five steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
 a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
-Worker refuses v1. Deploying step b changed nothing for the clients, which then still signed v1.
+Worker refuses v1; e, the clients' switch `CADDIE_ADMIN_SIG_VERSION` is removed once the first
+weekly CI ingest under step d has passed. Deploying step b changed nothing for the clients, which
+then still signed v1.
 
 From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
 so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and
@@ -458,15 +474,17 @@ set the repository variable of the same name to `1` for the CI ingest (`.github/
 passes it to the push step), and the clients sign v1 again. Unset or empty means v2, and any other
 value is a usage error when the client is created, before anything is sent; `push-ingest.mjs`
 and `migrate-from-backup.mjs` check it before anything else, also in a dry run, and the
-workflow's first step refuses it without printing it. The rollback works
-only while the Worker still accepts v1: step d will make the Worker refuse v1, and it removes the
-variable from the clients and the workflow in the same change. `scripts/moderation.mjs` (the
-deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
+workflow's first step refuses it without printing it. Since step d the Worker refuses v1, so this
+switch helps only together with the Worker's own rollback, an `ADMIN_SIG_MIN` of `"1"`, which
+belongs in `[vars]`, committed and deployed, and never in a secret (below). It stays in the clients
+and the workflow for one soak period, so that rolling back step d needs no change to the code, and
+step e removes it once the first weekly CI ingest under step d has passed. `scripts/moderation.mjs`
+(the deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
 `caddie-admin` command to use.
 
 Step c covers every client: since #93 the `caddie-admin` CLI (`scripts/admin/`) and
-`scripts/smoke.mjs` sign v2 too. What step d still waits for is a local `wrangler dev` smoke
-under v2, then the move of `ADMIN_SIG_MIN` to `"2"`.
+`scripts/smoke.mjs` sign v2 too. Step d changed the Worker's default minimum to `"2"`, after a
+local `wrangler dev` smoke under v2 had passed against that code.
 
 Two optional Worker variables decide what is accepted. Neither is set in `wrangler.toml` today.
 
@@ -486,9 +504,10 @@ Two optional Worker variables decide what is accepted. Neither is set in `wrangl
   deployment's origin: a request signed for that deployment would then verify here. Keep the list
   short (a few entries): each failed v2 attempt costs one HMAC per key and listed origin.
 - `ADMIN_SIG_MIN`: the oldest version accepted. Unset means the default in the source,
-  `WORKER_DEFAULT_SIG_MIN` in `src/lib/admin-auth.js`, which is `"1"` until step d changes it to
-  `"2"`. The value is matched exactly: `"1"` accepts v1 and v2, `"2"` accepts v2 only, and a v1
-  header is then a malformed header (404).
+  `WORKER_DEFAULT_SIG_MIN` in `src/lib/admin-auth.js`, which is `"2"` since step d: v2 only. The
+  value is matched exactly: `"1"` accepts v1 and v2 (the rollback), `"2"` accepts v2 only, and
+  when v1 is not accepted a v1 header is a malformed header (404), refused before any HMAC and
+  without a charge to the failed-auth bucket.
 
 Security warning: any other value is invalid configuration, and the Worker then answers 404 to
 every admin request, v1 included, without charging the failed-auth bucket. It logs one line,
@@ -506,18 +525,32 @@ lives in the source rather than in a variable.
 
 Security warning: never set either with `wrangler secret put`. A secret is the one kind of value
 that survives every deploy, and nothing in the repository shows it. A leftover `ADMIN_SIG_MIN`
-secret of `"1"` would override the source default of step d on every deploy and keep the v1
+secret of `"1"` would override the source default (`"2"`) on every deploy and keep the v1
 replay window open, an empty one would answer 404 to every admin call, the ingest included, and
 a forgotten `ADMIN_ORIGIN` secret that lists a staging origin would make requests signed for
-staging verify here. Before deploying this step, and again before step d, run this in `worker/`,
-which prints the names of the Worker's secrets and never their values:
+staging verify here. `deploy.sh` enforces this before every deploy: it reads the names of the
+Worker's secrets through the Cloudflare API
+(`GET /accounts/<account>/workers/scripts/<name>/secrets`, which returns names and types, never
+values) and refuses to deploy while either name is among them, or `ADMIN_TEST_ROUTES`
+([Smoke](#smoke)), printing which one and the remedy. It also refuses when it cannot tell, on any
+answer other than a list of secrets or the 404 with error code 10007 of a Worker that does not
+exist yet (a first deploy), printing only the HTTP status and Cloudflare's error codes. To check
+by hand, run this in `worker/`, which prints the names of the Worker's secrets and never their
+values:
 
 ```sh
 npx wrangler secret list
 ```
 
-Neither `ADMIN_SIG_MIN` nor `ADMIN_ORIGIN` may be among them. If one is, remove it with
-`npx wrangler secret delete <name>`, and commit the value in `[vars]` instead if one is needed.
+None of `ADMIN_SIG_MIN`, `ADMIN_ORIGIN` and `ADMIN_TEST_ROUTES` may be among them. If one is,
+remove it with `npx wrangler secret delete <name>`, and commit the value of `ADMIN_SIG_MIN` or
+`ADMIN_ORIGIN` in `[vars]` instead if one is needed.
+
+To roll back step d, commit `ADMIN_SIG_MIN = "1"` in `[vars]` of `worker/wrangler.toml` and deploy
+with `deploy.sh`; then a client that must sign v1 sets `CADDIE_ADMIN_SIG_VERSION=1` (for the CI
+ingest, the repository variable of that name). Removing a setting never reopens v1, because an
+absent `ADMIN_SIG_MIN` means `"2"`. To end the rollback, unset the variable, remove the line and
+deploy again.
 
 ### Rotating the admin token
 

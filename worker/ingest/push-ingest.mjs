@@ -245,7 +245,7 @@ async function main() {
   // CADDIE_ADMIN_SIG_VERSION is checked here, before anything is read or fetched, and not only when
   // the admin client is created: a dry run without a token and a run with no conference to push
   // create no client, and a bad value should stop every run at once rather than after the work.
-  if (adminSignVersion() === 1) console.warn('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). Remove the setting once v2 works again: the Worker refuses v1 after step (d).');
+  if (adminSignVersion() === 1) console.warn('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). The Worker refuses v1 since step d unless its ADMIN_SIG_MIN is "1" (the rollback of step d, which belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret); remove the setting once v2 works again.');
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
   const dryRun = args['dry-run'];
   // The origin lets readAdminToken check a fallback to the old token file against caddie-admin's

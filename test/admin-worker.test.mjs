@@ -387,8 +387,9 @@ function stubWorker() {
       // The failed-signature limiter is peeked before the signature is checked: once it is empty,
       // every request is refused, a valid one included.
       if (state.failedSignatures >= 10) return json(res, 404, { error: 'Not found' });
-      // As the Worker with ADMIN_ORIGIN unset: v1 or v2, a v2 signature bound to this stand-in's
-      // own origin (the api in the config), so one signed for any other origin is refused.
+      // As a Worker rolled back with ADMIN_SIG_MIN "1", ADMIN_ORIGIN unset: v1 or v2, a v2
+      // signature bound to this stand-in's own origin (the api in the config), so one signed for
+      // any other origin is refused.
       const v = verifyAdminSignature({ headerValue: req.headers['x-caddie-admin'] ?? null, method: req.method, pathWithQuery: record.pathWithQuery, keys: [TOKEN], allowedVersions: [1, 2], expectedOrigins: [`http://127.0.0.1:${server.address().port}`] });
       record.nonce = v.nonce ?? null;
       record.version = v.ok ? (v.version ?? 1) : null;
@@ -578,8 +579,9 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
   });
 
   // Step c of the migration (DECISIONS.md, "Admin signature v2"): v2 by default, bound to the
-  // configured api's origin; CADDIE_ADMIN_SIG_VERSION=1 is the rollback to v1 until step d; empty
-  // counts as unset (GitHub Actions passes an undefined variable as "").
+  // configured api's origin; CADDIE_ADMIN_SIG_VERSION=1 is the client half of the rollback to v1,
+  // which a Worker accepts since step d only with ADMIN_SIG_MIN = "1"; empty counts as unset (GitHub
+  // Actions passes an undefined variable as "").
   test('the signature is v2 by default, bound to the api origin; CADDIE_ADMIN_SIG_VERSION=1 signs v1 and "" means 2', async () => {
     const verify = (call, allowedVersions, expectedOrigins) => verifyAdminSignature({ headerValue: call.headers['x-caddie-admin'], method: call.method, pathWithQuery: call.pathWithQuery, keys: [TOKEN], allowedVersions, expectedOrigins });
     for (const [env, version] of [[{}, 2], [{ CADDIE_ADMIN_SIG_VERSION: '' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '2' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '1' }, 1]]) {

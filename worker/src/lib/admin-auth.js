@@ -51,13 +51,16 @@ export const MIN_KEY_LENGTH = 32;
 // be replayed, with 10 minutes to spare for a difference between the Worker's and the object's
 // clocks.
 export const NONCE_TTL_MS = 900_000;
-// The ADMIN_SIG_MIN this Worker uses when the setting is absent from its environment. It is in the
-// source, not in wrangler.toml, so that no deploy path can lower it: once step d of the migration
-// (DECISIONS.md, "Admin signature v2") changes it to "2", a deploy that drops the [vars] entry, or a
-// fork that never had one, still refuses v1. Only an explicit ADMIN_SIG_MIN = "1" reopens v1, and it
-// belongs in [vars] of wrangler.toml, committed: never a secret, which no deploy replaces and the
-// repository does not show, so a forgotten one would keep v1 open without anyone seeing it.
-export const WORKER_DEFAULT_SIG_MIN = '1';
+// The ADMIN_SIG_MIN this Worker uses when the setting is absent from its environment: "2", v2 only,
+// since step d of the migration (DECISIONS.md, "Admin signature v2"). It is in the source, not in
+// wrangler.toml, so that no deploy path can lower it: a deploy that drops the [vars] entry, or a
+// fork that never had one, still refuses v1. Only an explicit ADMIN_SIG_MIN = "1" reopens v1 (the
+// rollback of step d), and it belongs in [vars] of wrangler.toml, committed: never a secret, which
+// no deploy replaces and the repository does not show, so a forgotten one would keep v1 open
+// without anyone seeing it (worker/scripts/deploy.sh refuses to deploy while either setting is a
+// secret). Only an absent setting takes this default (adminConfig() reads it with ??): an empty or
+// otherwise malformed value is invalid configuration and fails closed.
+export const WORKER_DEFAULT_SIG_MIN = '2';
 
 const utf8 = (text) => new TextEncoder().encode(text);
 
@@ -112,8 +115,8 @@ export function canonicalStringV2(method, pathWithQuery, header, origin) {
 }
 
 // What this Worker accepts, read from its environment for one request:
-//   allowedVersions  from ADMIN_SIG_MIN, or WORKER_DEFAULT_SIG_MIN when it is absent, matched
-//                    exactly (parseAdminSigMin): "1" allows [1, 2], "2" allows [2];
+//   allowedVersions  from ADMIN_SIG_MIN, or WORKER_DEFAULT_SIG_MIN ("2") when it is absent,
+//                    matched exactly (parseAdminSigMin): "1" allows [1, 2], "2" allows [2];
 //   origins          the origins a v2 signature may name: the ADMIN_ORIGIN list when it is set
 //                    (parseAdminOrigin), else the request URL's own origin, taken as
 //                    new URL(requestUrl).origin and never through canonicalOrigin(), which refuses

@@ -170,9 +170,11 @@ export function normalizeApiBase(api) {
 
 // The admin signature version this process signs: CADDIE_ADMIN_SIG_VERSION through
 // signVersionFromEnv (scripts/lib/admin-origin.mjs). Unset or empty means 2, which binds every
-// request to the origin of the API base; exactly "1" rolls back to v1 while the Worker still
-// accepts it (until step d of the migration, DECISIONS.md "Admin signature v2"). Any other value is
-// a UsageError that names the variable and never repeats its value.
+// request to the origin of the API base; exactly "1" rolls back to v1, which the Worker accepts
+// since step d of the migration (DECISIONS.md "Admin signature v2") only while its ADMIN_SIG_MIN is
+// "1" (the rollback, which belongs in [vars] of worker/wrangler.toml, committed and deployed, never
+// a secret). The switch stays until step e. Any other value is a UsageError that names the variable
+// and never repeats its value.
 export function adminSignVersion(env = process.env) {
   try {
     return signVersionFromEnv(env);
