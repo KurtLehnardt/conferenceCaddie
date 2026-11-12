@@ -204,10 +204,6 @@ internal class BleRuntime(
 
     private fun stopMark(slug: String): Pair<Int, Int> = stopsEverywhere to (stopsBySlug[slug] ?: 0)
 
-    init {
-        platform?.radio?.watchAccess { scope.launch { accessChanged() } }
-    }
-
     // ---------------------------------------------------------------------------------------------
     // State for the screens
 
@@ -467,6 +463,10 @@ internal class BleRuntime(
      * Presence that has already ended sends nothing.
      */
     suspend fun restore() {
+        // The radio is one per process and keeps one access listener, while each backend has its own
+        // runtime: the runtime of the backend now selected takes it over here, at every session
+        // switch, so a late answer to the prompt reaches the backend whose switch shows the refusal.
+        platform?.radio?.watchAccess { scope.launch { accessChanged() } }
         val slugs = store.slugsWhere { it.ble.on }
         if (platform?.radio?.takeUserStoppedApp() == true) {
             for (s in slugs) {

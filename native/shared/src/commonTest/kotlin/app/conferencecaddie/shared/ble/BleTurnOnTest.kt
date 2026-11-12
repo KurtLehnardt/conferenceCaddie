@@ -187,6 +187,29 @@ class BleTurnOnTest {
     }
 
     @Test
+    fun aLateAnswerReachesTheBackendSelectedAgainAfterAnotherOneTookTheRadio() = runTest {
+        // The prompt timed out on this backend; another backend's runtime then took the radio's one
+        // listener, and coming back to this backend must take it back.
+        val b = BleRig(this)
+        b.ready()
+        b.radio.permissionKind = BlePermissionKind.Bluetooth
+        b.radio.accessNow = BleAccess.NotAsked
+        b.radio.afterRequest = BleAccess.Denied
+        assertEquals(BleProblem.PermissionDenied, (b.controller.turnOnBluetooth() as BleOutcome.Problem).problem)
+        val other = app.conferencecaddie.shared.BackendUrl.normalise("https://other.example") as app.conferencecaddie.shared.BackendUrl.Valid
+        b.h.controller.updateContext(b.h.context(BLE_ON).copy(backend = other))
+        runCurrent()
+        val othersListener = b.radio.accessListener
+        assertNotNull(othersListener, "the other backend's runtime listens now")
+        b.h.controller.updateContext(b.h.context(BLE_ON))
+        runCurrent()
+        assertTrue(b.radio.accessListener !== othersListener, "coming back takes the listener back")
+        b.radio.answerLate(BleAccess.Granted)
+        runCurrent()
+        assertNull(b.view.problem, "the refusal under this backend's switch is gone")
+    }
+
+    @Test
     fun aLateAnswerToThePromptReplacesTheRefusalUnderTheSwitch() = runTest {
         // iOS: the prompt went unanswered for a minute, so the turn-on counted it as refused.
         val b = BleRig(this)
