@@ -1141,6 +1141,47 @@ describe('CONF-7, CONF-8, CONF-12, CONF-13 conferences remove and unretire', () 
     assert.ok(!stub.state.retired.has(EVENT));
   });
 
+  test('a failed unretire fan-out (502) is retried with fresh signatures; still failing, it says "unretire incomplete; run it again"', async () => {
+    seedConferenceFiles(EVENT);
+    stub.state.retired.add(EVENT);
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
+    stub.forced.push({ status: 502, body: { error: 'Conferences are temporarily unavailable' }, act: true }, { status: 502, body: { error: 'Conferences are temporarily unavailable' }, act: true });
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    const calls = admins(r.requests);
+    assert.equal(calls.length, 3, 'two 502s, then success');
+    assert.equal(new Set(calls.map((c) => c.nonce)).size, 3, 'each attempt signed afresh');
+    for (const c of calls) assert.equal(JSON.parse(c.body).conferences[0].unretire, true, 'the flag travels on every attempt');
+    assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
+    stub.state.retired.add(EVENT);
+    writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [EVENT]: { since: '2026-11-01T00:00:00.000Z' } } }));
+    for (let i = 0; i < 4; i++) stub.forced.push({ status: 502, body: { error: 'Conferences are temporarily unavailable' } });
+    const failed = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(failed.code, 1);
+    assert.equal(admins(failed.requests).length, 4, 'bounded retries');
+    assert.match(failed.stderr, /^caddie-admin: unretire incomplete; run it again \(PUT \/admin\/conferences: status 502 .*gave up after 4 attempts\)/);
+    assert.deepEqual(Object.keys(operatorFile().removed), [EVENT], 'the local removed entry stays');
+    assert.equal(failed.audit.at(-1).result, 'failed');
+  });
+
+  test('a removal overtaken by an unretire (409 removal_superseded in the removal_incomplete shape) exits 1 without a re-run hint and changes no local file', async () => {
+    seedConferenceFiles(EVENT);
+    // cause before deleted, as the Worker now orders them; nothing here depends on the order.
+    stub.forced.push({ status: 409, body: { error: 'removal_incomplete', step: 'directory', retired: false, wiped: true, cause: 'removal_superseded', deleted: { talks: 3 } } });
+    const r = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(r.code, 1);
+    assert.equal(admins(r.requests).length, 1);
+    assert.match(r.stderr, /an unretire overtook the removal at step directory; nothing further was removed, the conference stays as the unretire left it \(status 409\)/);
+    assert.ok(!/run the removal again/.test(r.stderr), 'no re-run hint');
+    assert.equal(readJson(join(root, 'data', EVENT, 'conference.json')).status, 'searchable');
+    assert.deepEqual(operatorFile(), { hidden: {}, removed: {} });
+    stub.forced.push({ status: 409, body: { error: 'removal_superseded', step: 'directory' } });
+    const bare = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(bare.code, 1);
+    assert.match(bare.stderr, /an unretire overtook the removal/);
+    assert.ok(!/run the removal again/.test(bare.stderr));
+  });
+
   test('unretire without a local file sends the slug alone', async () => {
     mkdirSync(join(root, 'data'), { recursive: true });
     writeFileSync(join(root, 'data', 'conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [OTHER]: { since: '2026-11-01T00:00:00.000Z' } } }));

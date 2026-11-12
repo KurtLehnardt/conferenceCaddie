@@ -133,6 +133,7 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     const where = `${method} ${path.split('?')[0]}`;
     const payload = body === undefined ? undefined : JSON.stringify(body);
     let lastError = 'no attempt';
+    let lastStatus = 0;
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
       const retried = attempt > 0;
       let signed;
@@ -176,6 +177,12 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       }
       if (res.ok || okStatuses.includes(res.status)) return { status: res.status, json: json && typeof json === 'object' ? json : {}, retried };
       lastError = `${where}: ${describe(res.status, json)}`;
+      lastStatus = res.status;
+      // An unretire overtook the removal between its steps: the conference stays as the unretire
+      // left it, nothing further was removed, and running the removal again is not the answer.
+      if (json?.error === 'removal_superseded' || (json?.error === 'removal_incomplete' && (res.status === 409 || json.cause === 'removal_superseded'))) {
+        throw new AdminError(`${where}: an unretire overtook the removal at step ${typeof json.step === 'string' && /^[a-z_]{1,20}$/.test(json.step) ? json.step : 'directory'}; nothing further was removed, the conference stays as the unretire left it (status ${res.status})`);
+      }
       // A removal that stopped between its steps (tombstone, wipe, directory row): the next run
       // finishes it, so the operator is told to run it again rather than the client retrying blind.
       if (json?.error === 'removal_incomplete') {
@@ -206,7 +213,9 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       }
       throw new AdminError(lastError);
     }
-    throw new AdminError(`${lastError} (gave up after ${RETRIES + 1} attempts)`);
+    const gaveUp = new AdminError(`${lastError} (gave up after ${RETRIES + 1} attempts)`);
+    gaveUp.status = lastStatus;
+    throw gaveUp;
   }
 
   // One public GET (/api/*): unsigned, no Access headers, no redirect.
@@ -295,7 +304,15 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
   // trusted): a retired slug the Worker skipped is an error, because the hide did not happen.
   async function putConference(slug, doc, { unretire = false } = {}) {
     const body = { conferences: [unretire ? { ...doc, slug, unretire: true } : { ...doc, slug }] };
-    const { json } = await admin('PUT', '/admin/conferences', body);
+    let json;
+    try {
+      ({ json } = await admin('PUT', '/admin/conferences', body));
+    } catch (err) {
+      // A flagged fan-out that failed answers 502; the client retried it (signed afresh, and a
+      // second unretire repairs the first). Still failing, the operator runs it again.
+      if (unretire && err instanceof AdminError && err.status === 502) throw new AdminError(`unretire incomplete; run it again (${err.message})`);
+      throw err;
+    }
     const skipped = Array.isArray(json.skipped_retired) ? json.skipped_retired : [];
     if (skipped.includes(slug)) throw new AdminError(`${slug} is retired on the Worker (a tombstone from conferences remove); run conferences unretire --event ${slug} first`);
     return { upserted: int(json.upserted), searchable: int(json.searchable), synced: int(json.synced) };
