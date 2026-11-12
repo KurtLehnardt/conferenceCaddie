@@ -283,6 +283,7 @@ internal class BleRuntime(
             // out not to work reports it through onStopped.
             BleRadioState.Ready, BleRadioState.Unknown -> Unit
             BleRadioState.PoweredOff -> return refuse(slug, BleProblem.BluetoothOff)
+            BleRadioState.LocationOff -> return refuse(slug, BleProblem.LocationOff)
             BleRadioState.Unauthorized -> return refuse(slug, BleProblem.PermissionBlocked)
             BleRadioState.Unsupported -> return refuse(slug, BleProblem.Unsupported)
         }
@@ -454,7 +455,7 @@ internal class BleRuntime(
         if (platform.radio.access() != BleAccess.Granted) return false
         return when (platform.radio.state()) {
             BleRadioState.Ready, BleRadioState.Unknown -> true
-            BleRadioState.PoweredOff, BleRadioState.Unauthorized, BleRadioState.Unsupported -> false
+            BleRadioState.PoweredOff, BleRadioState.LocationOff, BleRadioState.Unauthorized, BleRadioState.Unsupported -> false
         }
     }
 
@@ -506,6 +507,10 @@ internal class BleRuntime(
             BleStopReason.BluetoothOff -> {
                 stop(r.slug, BleProblem.BluetoothOff)
                 host.notice(PeopleText.BLE_STOPPED_BLUETOOTH_OFF)
+            }
+            BleStopReason.LocationOff -> {
+                stop(r.slug, BleProblem.LocationOff)
+                host.notice(PeopleText.BLE_LOCATION_OFF)
             }
             BleStopReason.PermissionLost -> stop(r.slug, BleProblem.PermissionBlocked)
             BleStopReason.AdvertiseFailed, BleStopReason.Unsupported -> {

@@ -190,6 +190,9 @@ enum class BleProblem {
     /** Bluetooth is switched off on the device. */
     BluetoothOff,
 
+    /** Android 8 to 11: the Location switch is off, which a Bluetooth scan needs there. */
+    LocationOff,
+
     /** This phone's Bluetooth cannot send the code. */
     Unsupported,
 

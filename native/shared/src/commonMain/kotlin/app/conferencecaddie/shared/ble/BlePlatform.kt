@@ -98,6 +98,9 @@ enum class BleRadioState {
 
     /** Not known yet (iOS reports its state a moment after the managers start). */
     Unknown,
+
+    /** Android 8 to 11: the Location switch is off, so a scan hears nothing. */
+    LocationOff,
 }
 
 /** Why a running radio stopped by itself. */
@@ -119,6 +122,9 @@ enum class BleStopReason {
 
     /** The system ended the service or the process. */
     System,
+
+    /** Android 8 to 11: the Location switch was turned off, so a scan hears nothing. */
+    LocationOff,
 }
 
 /** What the radio needs to run. */
@@ -211,6 +217,13 @@ interface BleRadio {
      * then where it can, so the report goes out inside the same wake. Does nothing by default.
      */
     fun keepAwakeUntil(epochMillis: Long) {}
+
+    /**
+     * Whether the person stopped the whole app (Android's force stop, or the Task Manager) since the
+     * radio last ran, as far as the platform can tell. The runtime's restore then turns Bluetooth
+     * proximity off and tells the server instead of resuming it. Reading it clears it. False by default.
+     */
+    fun takeUserStoppedApp(): Boolean = false
 }
 
 /** Bluetooth proximity's platform services; null in [app.conferencecaddie.shared.PeopleServices] where there is no radio. */

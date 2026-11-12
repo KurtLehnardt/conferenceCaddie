@@ -86,6 +86,9 @@ object PeopleText {
     const val BLE_NEEDS_PRESENCE = "Turn on being around first."
 
     const val BLE_BLUETOOTH_OFF = "Turn on Bluetooth first."
+
+    /** Native, Android 8 to 11: a Bluetooth scan there needs the Location switch on. */
+    const val BLE_LOCATION_OFF = "Turn on Location first. This phone needs it to find people over Bluetooth."
     const val BLE_UNSUPPORTED = "This phone's Bluetooth can't send the code."
     const val BLE_PERMISSION = "Caddie needs the Nearby devices permission for this. You can allow it in Settings."
     const val BLE_NOTIFICATIONS = "Turn on notifications for Caddie so it can tell you when someone is near."
@@ -120,6 +123,7 @@ object PeopleText {
         BleProblem.NeedsPresence -> BLE_NEEDS_PRESENCE
         BleProblem.PermissionDenied, BleProblem.PermissionBlocked -> blePermissionMessage(kind)
         BleProblem.BluetoothOff -> BLE_BLUETOOTH_OFF
+        BleProblem.LocationOff -> BLE_LOCATION_OFF
         BleProblem.Unsupported -> BLE_UNSUPPORTED
         BleProblem.OtherDevice -> BLE_OTHER_DEVICE
         BleProblem.Failed -> BLE_START_FAILED
