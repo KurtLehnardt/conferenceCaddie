@@ -96,6 +96,7 @@ const presence = async (d, location) => {
 };
 const docOf = (d) => fake.doc('caddie-people', `${EVENT}:${d.profileId}`);
 const HERE = { lat: 39.74312, lon: -104.99541, accuracy: 12 };
+const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 
 describe('PUT /api/presence', () => {
   test('stores the cell and the time of the fix with the position, and DELETE clears them', async () => {
@@ -107,7 +108,10 @@ describe('PUT /api/presence', () => {
     assert.deepEqual(doc.presence_location, { lat: 39.74312, lon: -104.99541 });
     assert.deepEqual(doc.presence_cell, cellFor(doc.presence_location));
     assert.ok(Math.abs(Date.parse(doc.presence_located_at) - Date.now()) < 5000);
-    assert.equal(JSON.stringify(r.body).includes('39.74'), false, 'no coordinate is echoed');
+    // presence_since and presence_until are wall-clock times, and at hh:mm:39.74x their seconds
+    // read "39.74": time, not the coordinate. Whole ISO times are masked; every other value is checked.
+    const echoed = JSON.stringify(r.body, (key, value) => (typeof value === 'string' && ISO_TIME.test(value) ? 'time' : value));
+    assert.equal(echoed.includes('39.74'), false, 'no coordinate is echoed');
     assert.ok('presence_cell' in PRESENCE_OFF && 'presence_located_at' in PRESENCE_OFF);
     assert.equal((await request(handleConnectApi, 'DELETE', `/api/presence?event=${EVENT}`, d)).status, 200);
     for (const f of ['presence_location', 'presence_accuracy', 'presence_cell', 'presence_located_at']) assert.equal(docOf(d)[f], null, `${f} is cleared`);
