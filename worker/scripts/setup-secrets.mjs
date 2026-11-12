@@ -426,7 +426,7 @@ async function writeTokenFile(value, hint = '', previous = '') {
   const split = oldBefore
     ? ''
     : ` The two paths were hard links to one file, which this write split, so ${old} now holds the previous token${previous ? `, ${previous}` : ''}.`;
-  console.log(`The old token file ${old} still exists and was left as it is (not updated, not deleted); the token file is now ${TOKEN_FILE}, so delete the old one once nothing reads it.${split}`);
+  console.log(`The old token file ${old} still exists and was left as it is (not updated, not deleted); the token file is now ${TOKEN_FILE}. If the old file holds this deployment's token and nothing else reads it, delete it; when CADDIE_ADMIN_HOME keeps a second deployment apart, it may hold the other deployment's token.${split}`);
 }
 
 // The old default place ~/.config/conference-caddie/admin-token when the token file is at a new
@@ -524,7 +524,7 @@ async function rotateAdminToken() {
           + `Use it if the token file holds the token your clients should use. Run the three commands in this order (the last two from ${WORKER_DIR}), once any running ingest or smoke has finished:\n`
           + `  ${ghSetFrom(readFrom)}\n${finishingFrom(readFrom)}\n`
           + `Then run this command again to start a new rotation. To go on rotating at once instead, run it again with --replace-next, and accept that until that run has been through all three steps the token file and ${GH_SECRET} may hold the old ${NEXT_NAME}, which the Worker then no longer accepts.`
-        : `The token file ${readFrom} is missing, empty or shorter than 32 characters, so the safe recipe (make the value in the token file the only admin token) cannot be offered: with a bad file it would make the Worker refuse every admin request. Stop here. `
+        : `The token file ${readFrom} is missing, empty, cannot be read or is shorter than 32 characters, so the safe recipe (make the value in the token file the only admin token) cannot be offered: with a bad file it would make the Worker refuse every admin request. Stop here. `
           + 'Put the value you last set as the admin token back into that file from your own copy, then run this command again. '
           + `If you have no copy, run it again with --replace-next: it makes a new token and saves it in the file and in ${GH_SECRET}, and a client that holds anything else is refused until that run has been through all three steps.`);
     if (!dryRun) {
@@ -679,7 +679,7 @@ if (plan.has('ADMIN_TOKEN')) {
   if (token) {
     await announceRepo();
     await putGithubSecret(GH_SECRET, token, undefined, readFrom);
-  } else console.error(`ADMIN_TOKEN is set on the Worker but ${readFrom} is missing or empty, so the GitHub secret cannot be set. Rerun without --only-missing to rotate it.`);
+  } else console.error(`ADMIN_TOKEN is set on the Worker but ${readFrom} is missing, empty or cannot be read, so the GitHub secret cannot be set. Rerun without --only-missing to rotate it.`);
 }
 if (plan.has('REF_SALT')) await putWorkerSecret('REF_SALT', randomHex(32));
 if (plan.has('VAPID_PRIVATE_KEY')) {

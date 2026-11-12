@@ -219,8 +219,8 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    ```
 
    Setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place, so if a note from step 2
-   named the old `~/.config/conference-caddie/admin-token`, move that file to the new place first,
-   or point `ADMIN_TOKEN_FILE` at the old path.
+   named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's
+   token, move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
 
    Conferences, talks, topics and facets are copied as they are, so topic ids stay identical.
    Only sample profiles are copied by default (`--include-real` copies the others too); presence,
@@ -273,8 +273,8 @@ node scripts/smoke.mjs
 ```
 
 As in deploy step 3, setting `ADMIN_TOKEN_FILE` turns off the fallback to the old place: if a note
-named the old `~/.config/conference-caddie/admin-token`, move that file to the new place first, or
-point `ADMIN_TOKEN_FILE` at the old path.
+named the old `~/.config/conference-caddie/admin-token` and that file holds this deployment's token,
+move it to the new place first, or point `ADMIN_TOKEN_FILE` at it.
 
 `BASE_URL` is the app, and the API defaults to the same origin. The admin token makes it a Worker
 run (without one, set `SMOKE_API=worker`); the smoke then uses the `/admin/test/*` fixtures (see

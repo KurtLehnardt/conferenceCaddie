@@ -505,7 +505,7 @@ describe('setup-secrets.mjs --rotate-admin-token with an ADMIN_TOKEN_NEXT alread
       const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: content });
       const r = w.run(['--rotate-admin-token']);
       assert.equal(r.status, 1, label);
-      assert.match(r.stderr, /is missing, empty or shorter than 32 characters, so the safe recipe .* cannot be offered/, label);
+      assert.match(r.stderr, /is missing, empty, cannot be read or is shorter than 32 characters, so the safe recipe .* cannot be offered/, label);
       assert.match(r.stderr, /Stop here\. Put the value you last set as the admin token back into that file from your own copy, then run this command again\./, label);
       assert.match(r.stderr, /If you have no copy, run it again with --replace-next/, label);
       assert.doesNotMatch(r.text, /gh secret set|secret put ADMIN_TOKEN|secret delete/, `${label}: no command that could do harm is printed`);
@@ -1024,7 +1024,7 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     assert.equal(existsSync(xdg), false);
     assert.equal(read(oldFile(w)), OLD_TOKEN, 'the old file is neither updated nor deleted');
     const lines = r.stdout.split('\n').filter((l) => l.includes(oldFile(w)));
-    assert.deepEqual(lines, [`The old token file ${oldFile(w)} still exists and was left as it is (not updated, not deleted); the token file is now ${file}, so delete the old one once nothing reads it.`]);
+    assert.deepEqual(lines, [`The old token file ${oldFile(w)} still exists and was left as it is (not updated, not deleted); the token file is now ${file}. If the old file holds this deployment's token and nothing else reads it, delete it; when CADDIE_ADMIN_HOME keeps a second deployment apart, it may hold the other deployment's token.`]);
     // The dry run says the same, and changes nothing.
     const dry = w.run(['--dry-run'], { env: { ADMIN_TOKEN_FILE: undefined, CADDIE_ADMIN_HOME: join(w.dir, 'other'), XDG_CONFIG_HOME: xdg } });
     assert.equal(dry.status, 0, dry.text);
@@ -1128,7 +1128,7 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     writeOld(w, NEW1);
     const r = w.run(['--rotate-admin-token']);
     assert.equal(r.status, 1);
-    assert.ok(r.stderr.includes(`The token file ${w.file} is missing, empty or shorter than 32 characters`), r.stderr);
+    assert.ok(r.stderr.includes(`The token file ${w.file} is missing, empty, cannot be read or is shorter than 32 characters`), r.stderr);
     assert.doesNotMatch(r.text, /Note: the admin token file|gh secret set|secret put ADMIN_TOKEN/);
   });
 
@@ -1224,7 +1224,7 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     assert.equal(read(file), value);
     assert.equal(read(oldFile(w)), OLD_TOKEN, 'the old path keeps the previous token');
     const lines = r.stdout.split('\n').filter((l) => l.includes(oldFile(w)));
-    assert.deepEqual(lines, [`The old token file ${oldFile(w)} still exists and was left as it is (not updated, not deleted); the token file is now ${file}, so delete the old one once nothing reads it. The two paths were hard links to one file, which this write split, so ${oldFile(w)} now holds the previous token, which the Worker refuses once the two finishing commands below have run.`]);
+    assert.deepEqual(lines, [`The old token file ${oldFile(w)} still exists and was left as it is (not updated, not deleted); the token file is now ${file}. If the old file holds this deployment's token and nothing else reads it, delete it; when CADDIE_ADMIN_HOME keeps a second deployment apart, it may hold the other deployment's token. The two paths were hard links to one file, which this write split, so ${oldFile(w)} now holds the previous token, which the Worker refuses once the two finishing commands below have run.`]);
     assertNoPartOf(value, `${dry.text}\n${r.text}`, 'the output');
   });
 
