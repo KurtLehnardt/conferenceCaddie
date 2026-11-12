@@ -56,7 +56,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Caddie broadcasts a random code that changes every 10 minutes and listens for the codes of other phones that turned this on, so it can tell you when a strong match is within a few metres. Nothing about you is sent over Bluetooth.</string>
+	<string>Caddie broadcasts a random code that changes every 10 minutes and listens for the codes of other phones that turned this on, so it can tell you when a strong match is within a few metres. No profile details are sent over Bluetooth; nearby devices may see your phone's Bluetooth name, as with any Bluetooth device.</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<false/>
 	<key>CADisableMinimumFrameDurationOnPhone</key>

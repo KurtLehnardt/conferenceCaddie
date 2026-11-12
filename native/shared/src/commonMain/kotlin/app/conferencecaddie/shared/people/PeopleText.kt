@@ -75,9 +75,14 @@ object PeopleText {
     /** The switch's label. */
     const val BLE_LABEL = "Find people near me by Bluetooth (phone can stay in your pocket)"
 
-    /** The first-time explanation, shown before the first turn-on at a conference. */
+    /**
+     * The first-time explanation, shown before the first turn-on at a conference. The web's words,
+     * except that it says what Bluetooth itself can show: no profile details go over the air, but
+     * the phone's Bluetooth name can be read by a nearby device, as with any Bluetooth device (a
+     * phone this one connects to in order to read its code can read it, for one).
+     */
     const val BLE_NOTICE =
-        "Your phone broadcasts a random code that changes every 10 minutes and listens for others. Nothing about you is sent over Bluetooth; the code means something only to our server, only while you're around. Only people who also turned this on can be found, and you're told only about strong matches within a few metres."
+        "Your phone broadcasts a random code that changes every 10 minutes and listens for others. No profile details are sent over Bluetooth; nearby devices may see your phone's Bluetooth name, as with any Bluetooth device. The code means something only to our server, only while you're around. Only people who also turned this on can be found, and you're told only about strong matches within a few metres."
 
     /** The body of a nearby notification. Never a name or a distance. */
     fun nearbyText(evidence: String): String = "Someone who's worked on $evidence is right near you"
