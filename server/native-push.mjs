@@ -558,13 +558,16 @@ function fcmChannel(config, { fetch: fetchImpl, now, log, timeoutMs }) {
 /**
  * The native push channels of one configuration. Options exist for the tests: apnsTransport
  * ((origin, request) => { status, body }), fetch (for the metadata server's token and FCM), now
- * and log.
+ * and log. now is the clock, () => milliseconds since the epoch, read for the APNs provider
+ * token's iat and age and the apns-expiration of each push, and for the FCM access token's
+ * expiry and backoff. By default it is the real clock, Date.now looked up at each read, so a
+ * channel made when the module is imported (NATIVE_PUSH) follows a clock a test installs later.
  * Returns { apns, fcm, send(registration, { ttl }) }, where apns and fcm say whether the channel is
  * on now (configured and well-formed, and not turned off after AUTH_FAILURES_MAX authentication
  * failures in a row) and registration is { platform, token, environment }. send pushes
  * NATIVE_ALERT, and nothing else, and resolves to 'sent', 'gone' or 'failed'.
  */
-export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = Date.now, log = (line) => console.error(line), timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+export function createNativePush(env, { apnsTransport, fetch: fetchImpl, now = () => Date.now(), log = (line) => console.error(line), timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const stub = env.PUSH_TRANSPORT === 'stub' ? stubTransports(env) : null;
   const apnsSettings = apnsConfigFrom(env);
   const fcmSettings = fcmConfigFrom(env);

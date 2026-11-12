@@ -666,8 +666,12 @@ export async function ownDoc(eventId, profileId) {
 }
 
 export const isLive = (source) => typeof source.visible_until === 'string' && Date.parse(source.visible_until) > Date.now();
+// True while the person has said they are around and that has not run out at nowMs, for a caller
+// that reads its own clock (nudge.mjs). isAround is the same test now; it takes one argument, so it
+// is safe as a filter callback.
+export const isAroundAt = (source, nowMs) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > nowMs;
 // True while the person has said they are around and that has not run out.
-export const isAround = (source) => typeof source.presence_until === 'string' && Date.parse(source.presence_until) > Date.now();
+export const isAround = (source) => isAroundAt(source, Date.now());
 
 // ---------------------------------------------------------------------------------------------
 // Positions. A stored location is { lat, lon } rounded to 5 decimals (about a metre), stored with

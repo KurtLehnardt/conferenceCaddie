@@ -207,7 +207,7 @@ The same index holds the native push registrations (`PUT /api/push/native`): `_i
 
 ### Nudges sent: `caddie-people-nudges-v1` behind `caddie-people-nudges`
 
-`_id` is `{event_id}:{day}:{min_profile_id}:{max_profile_id}` where `day` is `YYYY-MM-DD` in the conference's time zone, written with `op_type: create`, so the write itself is the once-per-pair-per-day dedupe. Mapping (`dynamic: false`): `event_id`, `day`, `profile_ids` (the pair), `receivers` (the subset actually pushed) keyword; `created_at`, `expires_at` (the conference's `visible_until`) date. A `_count` on `receivers` over the last hour is the per-receiver rate limit. Deleted with either profile and by the purge.
+`_id` is `{event_id}:{day}:{min_profile_id}:{max_profile_id}` where `day` is `YYYY-MM-DD` in the conference's time zone (UTC-12 when the zone is unknown, as for `visible_until`), written with `op_type: create`, so the write itself is the once-per-pair-per-day dedupe. Mapping (`dynamic: false`): `event_id`, `day`, `profile_ids` (the pair), `receivers` (the subset actually pushed) keyword; `created_at`, `expires_at` (the conference's `visible_until`) date. A `_count` on `receivers` over the last hour is the per-receiver rate limit. Deleted with either profile and by the purge.
 
 ### Profile deletes: the pending state and blocks
 
