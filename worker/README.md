@@ -400,7 +400,9 @@ stored version is at least `SCHEMA_VERSION`.
 A v1 signature does not cover the host, so a signed request that reaches another host (a typo in
 the base, a hostile mirror, a staging Worker that holds the same token) could be replayed here
 within the five-minute window; the nonce table does not stop it, because that replay is the
-nonce's first use here. Version 2 closes this. Its header has the v1 fields with `v2` in front:
+nonce's first use here. Version 2 binds the origin, and the replay is closed once step d refuses
+v1: during steps b and c the Worker still accepts v1, so a captured v1 request can still be
+replayed across hosts. The v2 header has the v1 fields with `v2` in front:
 
 ```
 X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>

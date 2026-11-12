@@ -219,15 +219,10 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
 
   test('the verifier\'s own settings fail closed: v2 allowed with no origin, an empty origin, or no version', async () => {
     const c = signCases[0];
-    for (const [allowedVersions, origins] of [[[1, 2], []], [[2], undefined], [[2], ['']], [[2], [null]], [[], [CUSTOM]], [undefined, [CUSTOM]]]) {
+    for (const [allowedVersions, origins] of [[[1, 2], []], [[2], undefined], [[2], ['']], [[2], [null]], [[], [CUSTOM]], [undefined, [CUSTOM]], [null, [CUSTOM]], ['1', [CUSTOM]]]) {
       const compare = countingCompare();
       const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys: [c.key], nowMs: c.ts * 1000, timingSafeEqual: compare.fn, allowedVersions, origins });
-      if (allowedVersions === undefined) {
-        // The default is [1], a verifier from before v2: the v2 header is malformed.
-        assert.deepEqual([v.ok, v.reason, compare.n], [false, 'malformed', 0]);
-      } else {
-        assert.deepEqual([v.ok, v.reason, compare.n], [false, 'config', 0], JSON.stringify([allowedVersions, origins]));
-      }
+      assert.deepEqual([v.ok, v.reason, compare.n], [false, 'config', 0], JSON.stringify([allowedVersions, origins]));
     }
   });
 
@@ -298,8 +293,8 @@ describe('the verifier against test/fixtures/admin-sign.v2.json', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// test/fixtures/admin-sign.v1.json under this step's settings. admin-auth.test.mjs runs it with the
-// verifier's default, [1]; the Worker now passes adminConfig()'s ([1, 2] and the request-URL
+// test/fixtures/admin-sign.v1.json under this step's settings. admin-auth.test.mjs runs it with
+// allowedVersions [1], a verifier from before v2; the Worker now passes adminConfig()'s ([1, 2] and the request-URL
 // origin), and every v1 case must keep its result there. The one intended change is
 // v-malformed-version: a v2 header, malformed to a v1-only verifier, is now read and fails its
 // signature, which the Worker charges to the failed-auth bucket like any bad signature.
@@ -315,6 +310,16 @@ describe('test/fixtures/admin-sign.v1.json under step b\'s settings', () => {
     for (const id of V1_CHANGED.keys()) assert.equal(parseVersionedAdminHeader(v1Cases.find((c) => c.id === id).header).version, 2, id);
   });
 
+  test('allowedVersions has no default: a caller that omits it refuses a valid v1 header as "config", never falls back to v1', async () => {
+    const c = v1Cases.find((x) => x.kind === 'sign');
+    const compare = countingCompare();
+    const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys: [c.key], nowMs: c.ts * 1000, timingSafeEqual: compare.fn });
+    assert.deepEqual([v.ok, v.reason, compare.n], [false, 'config', 0]);
+    // The same call with [1] passed explicitly is accepted, so the refusal above is the missing setting.
+    const ok = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys: [c.key], nowMs: c.ts * 1000, timingSafeEqual: nodeTimingSafeEqual, allowedVersions: [1] });
+    assert.equal(ok.ok, true, ok.reason);
+  });
+
   for (const c of v1Cases) {
     test(`v1 ${c.kind} ${c.id}: the same result with ADMIN_SIG_MIN and ADMIN_ORIGIN unset${V1_CHANGED.has(c.id) ? ' (changed on purpose)' : ''}`, async () => {
       const keys = c.kind === 'sign' ? [c.key] : c.keys;
@@ -326,7 +331,7 @@ describe('test/fixtures/admin-sign.v1.json under step b\'s settings', () => {
         const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys, nowMs, timingSafeEqual: compare.fn, ...settings });
         return { ok: v.ok, reason: v.reason, header: v.header ?? null, version: v.version ?? null, compares: compare.n };
       };
-      const v1Only = await run({});
+      const v1Only = await run({ allowedVersions: [1] });
       const stepB = await run({ allowedVersions: cfg.allowedVersions, origins: cfg.origins });
       if (V1_CHANGED.has(c.id)) {
         assert.deepEqual([v1Only.ok, v1Only.reason], [false, 'malformed']);
@@ -563,6 +568,13 @@ describe('the Worker during the move to v2', { skip }, () => {
     // An Origin header is still refused first, before the configuration is read.
     const origin = await call(env, signedRequest('GET', STATS, { headers: { Origin: CUSTOM } }).req);
     assert.deepEqual([origin.status, origin.logs.filter(configLine)], [404, []]);
+    // The configuration is read before the key: with no ADMIN_TOKEN as well, the request still
+    // logs exactly one line naming the invalid setting.
+    for (const [setting, raw] of [['ADMIN_ORIGIN', ','], ['ADMIN_SIG_MIN', '3']]) {
+      const noKey = stubEnv({ [setting]: raw, ADMIN_TOKEN: undefined });
+      const r = await call(noKey.env, signedRequest('GET', STATS).req);
+      assert.deepEqual([r.status, r.json, r.hmac, r.logs], [404, NOT_FOUND, 0, [`admin config invalid: ${setting}`]], setting);
+    }
   });
 
   test('ADMIN_SIG_MIN "2" refuses v1 as a malformed header, without an HMAC or a charge; v2 passes', async () => {

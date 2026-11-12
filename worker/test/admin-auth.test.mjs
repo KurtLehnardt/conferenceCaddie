@@ -74,7 +74,7 @@ describe('the verifier against test/fixtures/admin-sign.v1.json', () => {
 
   for (const c of signCases) {
     test(`sign ${c.id}: the header is accepted for its method and path with now = ts`, async () => {
-      const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys: [c.key], nowMs: c.ts * 1000, timingSafeEqual: nodeTimingSafeEqual });
+      const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys: [c.key], nowMs: c.ts * 1000, timingSafeEqual: nodeTimingSafeEqual, allowedVersions: [1] });
       assert.equal(v.ok, true, v.reason);
       assert.equal(v.header.bodySha256, c.body_sha256);
       assert.equal(v.header.ts, String(c.ts));
@@ -89,7 +89,7 @@ describe('the verifier against test/fixtures/admin-sign.v1.json', () => {
   for (const c of verifyCases) {
     test(`verify ${c.id}: ${c.expect.ok ? 'ok' : c.expect.reason}`, async () => {
       assert.ok(c.expect.ok || applies(c.expect.reason, c), `the fixture's own reason must apply (${c.expect.reason})`);
-      const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys: c.keys, nowMs: c.now * 1000, timingSafeEqual: nodeTimingSafeEqual });
+      const v = await verifyAdminHeader({ headerValue: c.header, method: c.method, pathWithQuery: c.path_with_query, keys: c.keys, nowMs: c.now * 1000, timingSafeEqual: nodeTimingSafeEqual, allowedVersions: [1] });
       if (c.expect.ok) {
         assert.equal(v.ok, true, v.reason);
         assert.equal(v.header.bodySha256, c.expect.body_sha256);
@@ -110,6 +110,7 @@ describe('the verifier against test/fixtures/admin-sign.v1.json', () => {
         return nodeTimingSafeEqual(a, b);
       },
       mayTry: () => false,
+      allowedVersions: [1],
     });
     assert.deepEqual([v.ok, v.reason, calls], [false, 'limited', 0]);
     // ts arrives as a string and is never re-formatted: an equal number spelled otherwise is malformed.

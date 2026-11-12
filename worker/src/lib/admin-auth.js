@@ -190,12 +190,14 @@ export function withinSkew(ts, nowMs, limit = SKEW_SECONDS) {
 // no reason of its own. The body is not read here: on success the caller reads it, checks the
 // clock again (the body may take any time to arrive) and checks the body with bodyMatches().
 //
-// allowedVersions defaults to [1], a verifier that has never heard of v2; the Worker passes
-// adminConfig()'s. On success `header` carries the version and the fields as strings, and a v2
-// success also names the `origin` that matched.
+// allowedVersions has no default: a caller that passes none, or anything but a non-empty list of
+// the numbers 1 and 2, gets "config" on every request, so that a refactor that stops checking
+// adminConfig()'s `ok` fails closed instead of falling back to v1. The Worker passes adminConfig()'s;
+// a caller that means v1 only passes [1]. On success `header` carries the version and the fields
+// as strings, and a v2 success also names the `origin` that matched.
 //
 // Reasons: config, no_key, malformed, bodyless_body_hash, limited, signature, skew.
-export async function verifyAdminHeader({ headerValue, method, pathWithQuery, keys, nowMs, timingSafeEqual, mayTry = () => true, allowedVersions = [1], origins = [] }) {
+export async function verifyAdminHeader({ headerValue, method, pathWithQuery, keys, nowMs, timingSafeEqual, mayTry = () => true, allowedVersions, origins = [] }) {
   if (!settingsUsable(allowedVersions, origins)) return { ok: false, reason: 'config' };
   const held = (Array.isArray(keys) ? keys : [keys]).filter(usable);
   if (held.length === 0) return { ok: false, reason: 'no_key' };
