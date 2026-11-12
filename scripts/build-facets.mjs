@@ -53,6 +53,12 @@ async function ensureIndex() {
     if (created.status !== 200) fail(`Creating ${INDEX} failed with status ${created.status}.`);
     console.log(`Created ${INDEX}.`);
   }
+  // Read the alias first and point it only when it is missing: POST /_aliases needs the index
+  // management privilege, which the operator key of scripts/create-es-keys.mjs --operator does not
+  // have, and a rebuild of an existing index has nothing to change.
+  const have = await es('GET', `/_alias/${ALIAS}`);
+  if (have.status === 200 && Object.keys(have.json ?? {}).includes(INDEX)) return;
+  if (have.status !== 200 && have.status !== 404) fail(`Reading the alias ${ALIAS} failed with status ${have.status}.`);
   const alias = await es('POST', '/_aliases', { actions: [{ add: { index: INDEX, alias: ALIAS } }] });
   if (alias.status !== 200) fail(`Pointing ${ALIAS} at ${INDEX} failed with status ${alias.status}.`);
 }
