@@ -1,10 +1,12 @@
 package app.conferencecaddie.shared.ble
 
 import app.conferencecaddie.shared.BackendUrl
+import app.conferencecaddie.shared.Capabilities
 import app.conferencecaddie.shared.PeopleServices
 import app.conferencecaddie.shared.people.BleOutcome
 import app.conferencecaddie.shared.people.BleProblem
 import app.conferencecaddie.shared.people.ConferenceInfo
+import app.conferencecaddie.shared.people.PEOPLE_ON
 import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleText
 import kotlin.test.Test
@@ -14,6 +16,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -168,6 +172,39 @@ class BleLifecycleTest {
     }
 
     @Test
+    fun capabilitiesThatNoLongerOfferBluetoothTurnItOffAndTellTheServer() = runTest {
+        val withdrawn = listOf(
+            PEOPLE_ON.copy(ble = Capabilities.Ble(mode = Capabilities.BleMode.ServerRotate)),
+            BLE_ON.copy(people = BLE_ON.people.copy(presence = false)),
+        )
+        for (caps in withdrawn) {
+            val b = BleRig(this)
+            b.on()
+            b.controller.updateContext(b.h.context(caps))
+            runCurrent()
+            assertFalse(b.radio.running, "the switch is gone, so the radio stops here")
+            assertTrue(b.keys.aliases.isEmpty())
+            assertFalse(b.view.available)
+            assertFalse(b.view.on)
+            assertEquals(listOf("""{"event":"${b.slug}","zone":"Hallway","spot":"Green jacket","ble":false}"""), b.presencePuts().map { it.body })
+            // Offered again: it is off, and turns on as before.
+            b.controller.updateContext(b.h.context(BLE_ON))
+            runCurrent()
+            assertTrue(b.view.available)
+            assertFalse(b.view.on)
+            assertEquals(1, b.radio.starts.size)
+        }
+        // Capabilities that still offer it change nothing.
+        val b = BleRig(this)
+        b.on()
+        b.controller.updateContext(b.h.context(bleCaps(20)))
+        runCurrent()
+        assertTrue(b.radio.running)
+        assertTrue(b.view.on)
+        assertTrue(b.presencePuts().isEmpty())
+    }
+
+    @Test
     fun theRadioStoppingByItselfTurnsItOffAndSaysWhy() = runTest {
         suspend fun TestScope.stopped(reason: BleStopReason): BleRig {
             val b = BleRig(this)
@@ -233,6 +270,7 @@ class BleLifecycleTest {
         c.updateContext(b.h.context(BLE_ON))
         runCurrent()
         assertEquals(listOf(BleRadioConfig(nearRssi = -75, untilEpochMillis = until)), radio.starts)
+        assertEquals(0, radio.stops)
         assertTrue(c.state.value.ble.on)
         assertTrue(b.h.http.sent.none { it.path.startsWith("/api/presence") }, "no request to resume")
         assertContentEquals(b.radio.source!!.payloadNow(), radio.source!!.payloadNow(), "the same key, the same payload")
@@ -272,8 +310,17 @@ class BleLifecycleTest {
             assertFalse(c.state.value.ble.on)
             assertTrue(b.h.http.sent.none { it.path.startsWith("/api/presence") })
         }
-        // The permission was taken away, or Bluetooth is off.
-        for (setUp in listOf<(FakeBleRadio) -> Unit>({ it.accessNow = BleAccess.Denied }, { it.stateNow = BleRadioState.PoweredOff })) {
+        // The permission was taken away (for now or for good), Bluetooth is off or not allowed, or
+        // the phone turned out not to support it.
+        val setUps = listOf<(FakeBleRadio) -> Unit>(
+            { it.accessNow = BleAccess.Denied },
+            { it.accessNow = BleAccess.Blocked },
+            { it.stateNow = BleRadioState.PoweredOff },
+            { it.stateNow = BleRadioState.Unauthorized },
+            { it.stateNow = BleRadioState.Unsupported },
+            { it.supported = false },
+        )
+        for (setUp in setUps) {
             val b = BleRig(this)
             b.on()
             val (c, radio) = restart(b, FakeBleRadio().also(setUp))
@@ -282,6 +329,80 @@ class BleLifecycleTest {
             assertTrue(radio.starts.isEmpty())
             assertTrue(b.keys.aliases.isEmpty())
             assertFalse(c.state.value.ble.on)
+            assertFalse(radio.running)
+            assertTrue(b.h.http.sent.none { it.path.startsWith("/api/presence") }, "no request")
+        }
+    }
+
+    @Test
+    fun aRestartThatResumesNothingStopsARadioTheSystemRestarted() = runTest {
+        // Off before the process ended, yet the system restarted the radio (a sticky service).
+        BleRig(this).let { b ->
+            b.on()
+            b.controller.turnOffBluetooth()
+            val (c, radio) = restart(b, FakeBleRadio().apply { running = true })
+            c.updateContext(b.h.context(BLE_ON))
+            runCurrent()
+            assertFalse(radio.running)
+            assertEquals(1, radio.stops)
+            assertTrue(radio.starts.isEmpty())
+        }
+        // On, but the key did not survive: it cannot resume, so the restored radio stops too.
+        BleRig(this).let { b ->
+            b.on()
+            b.keys.lose(b.alias)
+            val (c, radio) = restart(b, FakeBleRadio().apply { running = true })
+            c.updateContext(b.h.context(BLE_ON))
+            runCurrent()
+            assertFalse(radio.running)
+            assertTrue(radio.starts.isEmpty())
+            assertFalse(c.state.value.ble.on)
+        }
+    }
+
+    @Test
+    fun aStopWhileTheKeyIsBeingStoredAbandonsTheStartAndLeavesNoKey() = runTest {
+        suspend fun TestScope.during(stopIt: suspend (BleRig) -> Unit): Pair<BleRig, BleOutcome> {
+            val b = BleRig(this)
+            b.ready()
+            val gate = CompletableDeferred<Unit>()
+            b.keys.putGate = gate
+            val outcome = async { b.controller.turnOnBluetooth() }
+            runCurrent()
+            assertEquals(1, b.keys.putsWaiting, "the key is on its way into the store")
+            stopIt(b)
+            runCurrent()
+            gate.complete(Unit)
+            runCurrent()
+            val o = outcome.await()
+            assertTrue(b.keys.aliases.isEmpty(), "the key that landed after the stop went again")
+            assertTrue(b.radio.starts.isEmpty())
+            assertFalse(b.radio.running)
+            assertFalse(b.view.on)
+            assertFalse(b.view.starting)
+            return b to o
+        }
+        during { it.controller.turnOffBluetooth() }.let { (b, o) ->
+            assertTrue(o is BleOutcome.Problem)
+            assertNull(b.view.problem, "the person turned it off: nothing to explain")
+            assertEquals(listOf(true, false), b.presencePuts().map { it.body!!.contains("\"ble\":true") })
+        }
+        during { it.controller.turnOffPresence() }.let { (b, o) ->
+            assertEquals(BleProblem.NeedsPresence, (o as BleOutcome.Problem).problem)
+            assertEquals(BleProblem.NeedsPresence, b.view.problem)
+        }
+        during { check(it.controller.deleteMyProfile().done) }.let { (_, o) ->
+            assertEquals(BleProblem.NeedsPresence, (o as BleOutcome.Problem).problem)
+        }
+        // A backend switch: the start's words wait under the switch for the way back.
+        val elsewhere = BackendUrl.normalise("https://other.example") as BackendUrl.Valid
+        during { it.controller.updateContext(it.h.context(BLE_ON).copy(backend = elsewhere)) }.let { (b, o) ->
+            assertEquals(BleOutcome.Problem(BleProblem.Failed, PeopleText.BLE_START_FAILED), o)
+            b.controller.updateContext(b.h.context(BLE_ON))
+            runCurrent()
+            assertFalse(b.view.on)
+            assertEquals(BleProblem.Failed, b.view.problem)
+            assertEquals(PeopleText.BLE_START_FAILED, b.view.message)
         }
     }
 

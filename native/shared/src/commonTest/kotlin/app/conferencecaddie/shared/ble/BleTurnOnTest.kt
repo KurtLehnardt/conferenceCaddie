@@ -175,6 +175,18 @@ class BleTurnOnTest {
     }
 
     @Test
+    fun deniedOnceAsksAgainAndCanBeGranted() = runTest {
+        val b = BleRig(this)
+        b.ready()
+        b.radio.accessNow = BleAccess.Denied
+        b.radio.afterRequest = BleAccess.Granted
+        assertEquals(BleOutcome.On, b.controller.turnOnBluetooth())
+        assertEquals(1, b.radio.requests, "the prompt shows again after a refusal that is not for good")
+        assertTrue(b.view.on)
+        assertNull(b.view.problem)
+    }
+
+    @Test
     fun theRadiosStateDecidesBeforeAnyWrite() = runTest {
         val b = BleRig(this)
         b.ready()

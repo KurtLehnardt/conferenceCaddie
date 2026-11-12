@@ -2,9 +2,14 @@ package app.conferencecaddie.shared.ble
 
 import app.conferencecaddie.shared.fixtures.Fixtures
 import app.conferencecaddie.shared.people.FakeApiHttp
+import app.conferencecaddie.shared.people.PresenceMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -54,8 +59,11 @@ class BleSightingsTest {
         b.on()
         val w = BleProtocol.windowAtMillis(b.now())
         b.radio.hear(b.radio.source!!.payloadNow()!!, -40, b.now())
+        // The windows either side, which the server also accepts, in both formats.
         b.radio.hear(BleProtocol.encodePayload(b.ownToken(w + 1)), -40, b.now())
+        b.radio.hear(BleProtocol.encodePayload(b.ownToken(w - 1)), -40, b.now())
         b.radio.hear(b.ownToken(w - 1), -40, b.now())
+        b.radio.hear(b.ownToken(w + 1), -40, b.now())
         advanceTimeBy(60_000)
         runCurrent()
         assertTrue(b.sightings().isEmpty())
@@ -140,6 +148,28 @@ class BleSightingsTest {
     }
 
     @Test
+    fun aTokenHeardAllAlongIsStillReportedAfterReportsFailedForMoreThanFiveMinutes() = runTest {
+        val b = BleRig(this)
+        b.on(bleCaps(300))
+        val t0 = b.now()
+        val at = ArrayList<Long>()
+        var failures = 2
+        b.h.server.sightings = {
+            at += b.now() - t0
+            if (failures-- > 0) FakeApiHttp.json(503, """{"error":"People are temporarily unavailable"}""") else b.answer()
+        }
+        // The same phone, heard every ten seconds for ten minutes (the last time at 590 seconds).
+        for (i in 0 until 60) {
+            b.radio.hear(otherPayload(1), -60, b.now())
+            advanceTimeBy(10_000)
+            runCurrent()
+        }
+        // First heard at 0, failed at 0 and at 300 seconds: still heard ten seconds ago, so not too old.
+        assertEquals(listOf(0L, 300_000, 600_000), at)
+        assertEquals(listOf(tokenText(1) to -60), b.reported(b.sightings().last()))
+    }
+
+    @Test
     fun aReportHoldsTheFiftyStrongestAndTheRestFollow() = runTest {
         val b = BleRig(this)
         b.on(bleCaps(10, nearRssi = -100))
@@ -170,6 +200,26 @@ class BleSightingsTest {
             runCurrent()
         }
         assertEquals(listOf(0L, 10_000, 30_000, 70_000, 150_000, 310_000, 610_000, 910_000), at)
+    }
+
+    @Test
+    fun aServerThatKeepsRefusingIsAskedLessAndLessAndItsBatchesAreDropped() = runTest {
+        val b = BleRig(this)
+        b.on()
+        val at = ArrayList<Long>()
+        val t0 = b.now()
+        b.h.server.sightings = {
+            at += b.now() - t0
+            FakeApiHttp.json(404, """{"error":"Not found"}""")
+        }
+        for (i in 0 until 200) {
+            b.radio.hear(otherPayload(i), -60, b.now())
+            advanceTimeBy(5_000)
+            runCurrent()
+        }
+        assertEquals(listOf(0L, 10_000, 30_000, 70_000, 150_000, 310_000, 610_000, 910_000), at, "the same wait as a server error")
+        assertEquals(listOf(tokenText(0) to -60), b.reported(b.sightings()[0]))
+        assertTrue(tokenText(0) !in b.reported(b.sightings()[1]).map { it.first }, "a refused batch is not sent again")
     }
 
     @Test
@@ -237,6 +287,75 @@ class BleSightingsTest {
     }
 
     @Test
+    fun retryAfterIsFollowedForAtLeastTheIntervalAndAtMostAnHour() = runTest {
+        val b = BleRig(this)
+        // The day, so presence outlasts the hour.
+        b.on(mode = PresenceMode.Day)
+        val t0 = b.now()
+        val at = ArrayList<Long>()
+        var answers = listOf(
+            FakeApiHttp.json(429, """{"error":"Too many requests"}""", mapOf("Retry-After" to "0")),
+            FakeApiHttp.json(429, """{"error":"Too many requests"}""", mapOf("Retry-After" to "999999")),
+        )
+        b.h.server.sightings = {
+            at += b.now() - t0
+            answers.firstOrNull()?.also { answers = answers.drop(1) } ?: b.answer()
+        }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        advanceTimeBy(9_999)
+        runCurrent()
+        assertEquals(listOf(0L), at, "Retry-After 0 still waits the interval")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000), at)
+        // Retry-After of eleven days: an hour at most. Something heard just before then is reported then.
+        advanceTimeBy(3_595_000)
+        runCurrent()
+        b.radio.hear(otherPayload(2), -60, b.now())
+        advanceTimeBy(4_999)
+        runCurrent()
+        assertEquals(2, at.size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000, 3_610_000), at)
+        assertEquals(listOf(tokenText(2) to -60), b.reported(b.sightings().last()))
+    }
+
+    @Test
+    fun theRadioIsAskedToKeepTheAppAwakeUntilTheNextReport() = runTest {
+        val b = BleRig(this)
+        b.on()
+        val t0 = b.now()
+        b.radio.hear(otherPayload(1), -60, t0)
+        runCurrent()
+        assertEquals(listOf(t0), b.radio.keepAwake, "the first report goes at once")
+        assertEquals(1, b.sightings().size)
+        b.radio.hear(otherPayload(2), -60, b.now())
+        b.radio.hear(otherPayload(3), -60, b.now())
+        runCurrent()
+        assertEquals(listOf(t0, t0 + 10_000), b.radio.keepAwake, "the next one an interval later, asked for once")
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(2, b.sightings().size)
+        assertEquals(2, b.radio.keepAwake.size, "nothing waits, so nothing to stay awake for")
+    }
+
+    @Test
+    fun aClockBefore1970ServesNothingInsteadOfThrowing() = runTest {
+        val keys = InMemoryBleKeyStore()
+        keys.put("a", ByteArray(32) { 1 })
+        var nowMs = -1L
+        val clock = object : Clock {
+            override fun now(): Instant = Instant.fromEpochMilliseconds(nowMs)
+        }
+        val source = BleRuntime.Source(keys, "a", clock)
+        assertNull(source.payloadNow())
+        nowMs = 0
+        assertNotNull(source.payloadNow())
+    }
+
+    @Test
     fun aRefusedBatchIsDroppedWhileAFailedOneIsKept() = runTest {
         val b = BleRig(this)
         b.on()
@@ -252,7 +371,11 @@ class BleSightingsTest {
         runCurrent()
         assertEquals(listOf(tokenText(2) to -60), b.reported(b.sightings()[1]), "the refused batch is not sent again")
         b.radio.hear(otherPayload(3), -55, b.now())
-        advanceTimeBy(10_000)
+        // The refusal started the backoff, so the wait after the 502 is twice the interval.
+        advanceTimeBy(19_999)
+        runCurrent()
+        assertEquals(2, b.sightings().size)
+        advanceTimeBy(1)
         runCurrent()
         assertEquals(listOf(tokenText(3) to -55, tokenText(2) to -60), b.reported(b.sightings()[2]), "the failed one is")
     }

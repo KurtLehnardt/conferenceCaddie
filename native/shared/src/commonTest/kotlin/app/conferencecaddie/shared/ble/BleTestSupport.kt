@@ -9,8 +9,10 @@ import app.conferencecaddie.shared.people.FIXTURE_SLUG
 import app.conferencecaddie.shared.people.FakeApiHttp
 import app.conferencecaddie.shared.people.PEOPLE_ON
 import app.conferencecaddie.shared.people.PeopleHarness
+import app.conferencecaddie.shared.people.PresenceMode
 import app.conferencecaddie.shared.people.START_MS
 import app.conferencecaddie.shared.people.SentRequest
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -32,6 +34,9 @@ class FakeBleRadio(
     var refreshes = 0
     var stops = 0
     val starts = ArrayList<BleRadioConfig>()
+
+    /** Every [keepAwakeUntil] the runtime asked for, in epoch milliseconds. */
+    val keepAwake = ArrayList<Long>()
     var source: BlePayloadSource? = null
     var events: BleRadioEvents? = null
     override var running = false
@@ -80,6 +85,10 @@ class FakeBleRadio(
         running = false
     }
 
+    override fun keepAwakeUntil(epochMillis: Long) {
+        keepAwake += epochMillis
+    }
+
     /** Another phone's payload heard at [rssi] dBm at [at]. */
     fun hear(payload: ByteArray, rssi: Int, at: Long) = events!!.onHeard(payload, rssi, at)
 
@@ -103,12 +112,32 @@ class RecordingKeyStore : BleKeyStore {
     /** The last key handed to [put], to check the caller zeroed its own copy. */
     var lastPutArgument: ByteArray? = null
 
+    /**
+     * While set, [put] waits for it before storing, as a platform put waits for its own thread; the
+     * key lands once it completes. [putsWaiting] counts the puts waiting now.
+     */
+    var putGate: CompletableDeferred<Unit>? = null
+    var putsWaiting = 0
+
     override suspend fun put(alias: String, key: ByteArray) {
         log?.add("keys.put")
         lastPutArgument = key
         if (failPut) throw IllegalStateException("key store unavailable")
-        inner.put(alias, key)
+        // The platform copies the key before its put suspends; the caller zeroes its own copy after.
+        val copy = key.copyOf()
+        putGate?.let {
+            putsWaiting++
+            try {
+                it.await()
+            } finally {
+                putsWaiting--
+            }
+        }
+        inner.put(alias, copy)
     }
+
+    /** The platform loses the key under [alias] (a Keystore entry gone), with nothing said. */
+    suspend fun lose(alias: String) = inner.remove(alias)
 
     override fun hmac(alias: String, message: ByteArray): ByteArray? {
         if (failHmac) throw IllegalStateException("key store unavailable")
@@ -156,18 +185,18 @@ class BleRig(val test: TestScope, startMs: Long = START_MS) {
     fun now(): Long = h.clock.now().toEpochMilliseconds()
 
     /** A visible profile with presence on in Hallway, ready to turn Bluetooth on; requests so far forgotten. */
-    suspend fun ready(caps: Capabilities = BLE_ON, zone: String = "Hallway", spot: String = "Green jacket") {
+    suspend fun ready(caps: Capabilities = BLE_ON, zone: String = "Hallway", spot: String = "Green jacket", mode: PresenceMode? = null) {
         h.start(caps)
         h.visible()
-        check(controller.turnOnPresence(zone, spot) == null)
+        check(controller.turnOnPresence(zone, spot, mode) == null)
         test.runCurrent()
         h.http.sent.clear()
         log.clear()
     }
 
     /** [ready], then Bluetooth on; the order log is followed from here, and the requests so far are forgotten. */
-    suspend fun on(caps: Capabilities = BLE_ON) {
-        ready(caps)
+    suspend fun on(caps: Capabilities = BLE_ON, mode: PresenceMode? = null) {
+        ready(caps, mode = mode)
         radio.log = log
         keys.log = log
         h.notifier.log = log

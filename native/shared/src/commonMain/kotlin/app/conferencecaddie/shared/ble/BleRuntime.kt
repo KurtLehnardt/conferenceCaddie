@@ -82,8 +82,10 @@ internal interface BleHost {
  * call; this runtime also tells the radio at every window start.
  *
  * Sightings are reported at most once per `ble.sightings_min_interval_s`, no later than that after
- * the first of them was heard, never older than five minutes, never this phone's own tokens or ones
- * already reported in the window, at most the 50 strongest, and only at or above `ble.near_rssi`.
+ * the first of them was heard, never once five minutes have passed since a token was last heard,
+ * never this phone's own tokens or ones already reported in the window, at most the 50 strongest,
+ * and only at or above `ble.near_rssi`. A report the server refuses or does not answer waits before
+ * the next one (backoff, Retry-After within an interval and an hour).
  * The answer's strong matches become at most one notification per answer, three an hour and one per
  * person per day (shared with the in-app nudges).
  *
@@ -100,8 +102,14 @@ internal class BleRuntime(
 
     private fun alias(slug: String) = BleProtocol.keyAlias(host.backendBase, slug)
 
-    /** One sighting waiting to be reported: the strongest RSSI heard and the earliest time it was heard. */
-    private class Heard(val rssi: Int, val at: Long)
+    /**
+     * One token waiting to be reported: the strongest RSSI heard, when it was first heard (the report
+     * goes no later than an interval after that) and when it was last heard (it is dropped five
+     * minutes after that, so a token heard all along is not lost to a report that had to wait).
+     */
+    private class Heard(val rssi: Int, val firstAt: Long, val lastAt: Long) {
+        fun merge(other: Heard) = Heard(max(rssi, other.rssi), min(firstAt, other.firstAt), max(lastAt, other.lastAt))
+    }
 
     /** The radio's session at one conference, from its start to its stop. */
     private inner class Run(val slug: String, val alias: String, var config: BleRadioConfig, val intervalMs: Long) : BleRadioEvents {
@@ -114,6 +122,7 @@ internal class BleRuntime(
         var backoffMs = 0L
         var sending = false
         var rekeyDue = false
+        var awakeUntil = -1L
         var flushJob: Job? = null
         var windowJob: Job? = null
         var untilJob: Job? = null
@@ -151,7 +160,10 @@ internal class BleRuntime(
 
         override fun payloadNow(): ByteArray? {
             if (closed) return null
-            val w = BleProtocol.windowAtMillis(clock.now().toEpochMilliseconds())
+            // A clock set before 1970 has no window; a radio callback gets nothing rather than a throw.
+            val nowMs = clock.now().toEpochMilliseconds()
+            if (nowMs < 0) return null
+            val w = BleProtocol.windowAtMillis(nowMs)
             val version = keyVersion
             cached?.let { if (it.window == w && it.version == version) return it.payload.copyOf() }
             val token = tokenOf(w) ?: return null
@@ -173,6 +185,9 @@ internal class BleRuntime(
     // Every stop moves these on, so a turn-on still under way at that conference gives up.
     private val stopsBySlug = HashMap<String, Int>()
     private var stopsEverywhere = 0
+
+    // Turn-offs the person asked for, per conference: a turn-on they cut short has nothing to explain.
+    private val offsBySlug = HashMap<String, Int>()
 
     private fun stopMark(slug: String): Pair<Int, Int> = stopsEverywhere to (stopsBySlug[slug] ?: 0)
 
@@ -240,12 +255,18 @@ internal class BleRuntime(
         if (store.deleteCovers(slug)) return refuse(slug, BleProblem.Failed, PeopleError.DELETE_UNFINISHED_MESSAGE)
         if (!presenceLive(slug)) return refuse(slug, BleProblem.NeedsPresence)
         val mark = stopMark(slug)
+        val offs = offsBySlug[slug] ?: 0
 
         // Presence ended, or Bluetooth was turned off or stopped here, while this waited: the
-        // attempt ends there. Only the end of presence is a problem to show; a stop the person or
-        // a delete asked for has said what it had to say.
-        fun abandoned(): BleOutcome =
-            if (!presenceLive(slug)) refuse(slug, BleProblem.NeedsPresence) else BleOutcome.Problem(BleProblem.Failed, PeopleText.BLE_START_FAILED)
+        // attempt ends there. The person turning it off needs no explanation; any other stop (a
+        // delete, a backend switch, the capabilities) leaves its words under the switch, so the
+        // setup panel that is still open says why nothing started.
+        fun abandoned(): BleOutcome = when {
+            !presenceLive(slug) -> refuse(slug, BleProblem.NeedsPresence)
+            (offsBySlug[slug] ?: 0) != offs -> BleOutcome.Problem(BleProblem.Failed, PeopleText.BLE_START_FAILED)
+            store.deleteCovers(slug) -> refuse(slug, BleProblem.Failed, PeopleError.DELETE_UNFINISHED_MESSAGE)
+            else -> refuse(slug, BleProblem.Failed, PeopleText.BLE_START_FAILED)
+        }
 
         when (radio.access()) {
             BleAccess.Granted -> Unit
@@ -291,7 +312,14 @@ internal class BleRuntime(
         // A server-rotate or older backend answers without a key this app can use.
         if (key == null || keyId == null || !BleProtocol.isKeyId(keyId)) return refuse(slug, BleProblem.Failed, PeopleText.BLE_START_FAILED)
         val alias = alias(slug)
-        if (!keys.store(alias, key, keyId)) {
+        val stored = keys.store(alias, key, keyId)
+        // Stopped while the key went into the store (the platform's put waits for its own thread):
+        // the stop removed the key before this one landed, so it goes again.
+        if (stopMark(slug) != markBeforeWrite || !presenceLive(slug)) {
+            if (run?.alias != alias) keys.removeQuietly(alias)
+            return abandoned()
+        }
+        if (!stored) {
             keys.removeQuietly(alias)
             return refuse(slug, BleProblem.Failed, PeopleText.BLE_START_FAILED)
         }
@@ -307,8 +335,26 @@ internal class BleRuntime(
      * on, a presence write with `ble: false` tells the server (in the presence write queue).
      */
     suspend fun turnOff(slug: String) {
+        offsBySlug[slug] = (offsBySlug[slug] ?: 0) + 1
         problems.remove(slug)
         turnOffAt(slug)
+    }
+
+    /**
+     * The capabilities changed with the session unchanged. When they no longer offer Bluetooth
+     * (derived-v1 or presence withdrawn, or people features off), it stops at once on the device
+     * wherever it runs or is starting, since its switch is gone and nothing else would stop it (iOS
+     * has no Stop of its own), and then, while presence is on, a presence write with `ble: false`
+     * tells the server (best effort, in the presence write queue, after this returns).
+     */
+    suspend fun offerChanged() {
+        if (host.bleOffered()) return
+        val slugs = (store.slugsWhere { it.ble.on } + listOfNotNull(run?.slug, startingSlug)).distinct()
+        for (s in slugs) {
+            problems.remove(s)
+            stop(s)
+            scope.launch { host.writePresenceBle(s, false) }
+        }
     }
 
     private suspend fun turnOffAt(slug: String) {
@@ -385,14 +431,19 @@ internal class BleRuntime(
      * state restoration, and after a backend switch back. It resumes only when it is still offered,
      * presence is live, the key is still in the store and names the stored key id, the permission is
      * granted and the radio can run; otherwise the record says off and the key goes, with no server
-     * call. One conference at most resumes.
+     * call. One conference at most resumes; when none does, the radio is stopped all the same.
      */
     suspend fun restore() {
         val slugs = store.slugsWhere { it.ble.on }
-        if (slugs.isEmpty()) return
         val resume = slugs.firstOrNull { canResume(it) }
         for (s in slugs) if (s != resume) stop(s)
         if (resume != null && run == null) startRun(resume, alias(resume))
+        // Nothing resumed: a radio the system restarted on its own (Android's sticky service, an
+        // iOS state restoration) would otherwise keep advertising a payload nobody serves.
+        if (run == null) {
+            if (resume != null) stop(resume)
+            platform?.radio?.stop()
+        }
     }
 
     private fun canResume(slug: String): Boolean {
@@ -422,6 +473,13 @@ internal class BleRuntime(
                 if (run !== r) return@launch
                 radio.refresh()
                 rollWindow(r, BleProtocol.windowAtMillis(now()))
+                // The key went from the store while it ran (a Keystore that lost it): the radio has
+                // nothing to send, so a new key is fetched (once per window, as any re-key) through
+                // the reports' loop.
+                if (r.source.payloadNow() == null && !r.rekeyDue) {
+                    r.rekeyDue = true
+                    scheduleFlush(r)
+                }
             }
         }
         scheduleUntil(r)
@@ -492,20 +550,25 @@ internal class BleRuntime(
         rollWindow(r, w)
         val text = token.text
         if (text in ownTokens(r, w) || text in r.resolved) return
-        val before = r.pending[text]
-        r.pending[text] = if (before == null) Heard(rssi, heardAt) else Heard(max(before.rssi, rssi), min(before.at, heardAt))
+        val heardNow = Heard(rssi, heardAt, heardAt)
+        r.pending[text] = r.pending[text]?.merge(heardNow) ?: heardNow
         scheduleFlush(r)
     }
 
     // The next report goes at the latest of: one interval after the last, the first sighting heard
-    // (no later than an interval after it), and the end of any backoff.
+    // (no later than an interval after it), and the end of any backoff. A platform that suspends the
+    // app soon after a Bluetooth event is asked to keep it running until then.
     private fun scheduleFlush(r: Run) {
         if (run !== r || r.sending) return
         r.flushJob?.cancel()
         r.flushJob = null
         if (r.pending.isEmpty() && !r.rekeyDue) return
-        val earliest = r.pending.values.minOfOrNull { it.at } ?: 0L
+        val earliest = r.pending.values.minOfOrNull { it.firstAt } ?: 0L
         val at = maxOf(r.lastSentAt + r.intervalMs, earliest, r.backoffUntil)
+        if (r.pending.isNotEmpty() && at != r.awakeUntil) {
+            r.awakeUntil = at
+            platform?.radio?.keepAwakeUntil(at)
+        }
         r.flushJob = scope.launch {
             delay(max(0, at - now()))
             r.flushJob = null
@@ -513,6 +576,8 @@ internal class BleRuntime(
         }
     }
 
+    // Whatever the report runs into (an exception from the records or a notification included),
+    // the next one is scheduled; a cancellation still ends it.
     private suspend fun flush(r: Run) {
         if (run !== r || r.sending) return
         r.sending = true
@@ -520,8 +585,8 @@ internal class BleRuntime(
             flushNow(r)
         } finally {
             r.sending = false
+            scheduleFlush(r)
         }
-        scheduleFlush(r)
     }
 
     private suspend fun flushNow(r: Run) {
@@ -537,7 +602,7 @@ internal class BleRuntime(
         val now = now()
         val w = BleProtocol.windowAtMillis(now)
         rollWindow(r, w)
-        r.pending.entries.removeAll { now - it.value.at > BleProtocol.SIGHTING_MAX_AGE_MS || it.key in r.resolved }
+        r.pending.entries.removeAll { now - it.value.lastAt > BleProtocol.SIGHTING_MAX_AGE_MS || it.key in r.resolved }
         if (r.pending.isEmpty() || now < r.lastSentAt + r.intervalMs || now < r.backoffUntil) return
         val batch = r.pending.entries.sortedByDescending { it.value.rssi }.take(BleProtocol.MAX_SIGHTINGS).map { it.key to it.value }
         for ((token, _) in batch) r.pending.remove(token)
@@ -572,19 +637,23 @@ internal class BleRuntime(
                         putBack(r, batch)
                         backOff(r, e)
                     }
-                    // Any other 4xx refused this batch as it was; it is not sent again.
-                    else -> Unit
+                    // Any other 4xx (a 404 from a server without the route, say) refused this batch
+                    // as it was: it is not sent again, and the next report waits as after a failure,
+                    // so a server that keeps refusing is not asked at every interval.
+                    else -> backOff(r, e)
                 }
             }
         }
     }
 
-    // The wait before the next request after one that failed: Retry-After (or the interval stretched
-    // by the API's pace) after a 429, otherwise the interval, then twice as long each time, at most
-    // five minutes. A request that goes through resets it.
+    // The wait before the next request after one that failed: after a 429, Retry-After (or the
+    // interval stretched by the API's pace), at least the interval and at most an hour; otherwise the
+    // interval, then twice as long each time, at most five minutes. A request that goes through
+    // resets it.
     private fun backOff(r: Run, e: PeopleError) {
         if (e.status == 429) {
-            r.backoffUntil = now() + (e.retryAfterSeconds?.let { it * 1000 } ?: api.pace.pacedMs(r.intervalMs))
+            val wait = e.retryAfterSeconds?.let { min(it, RETRY_AFTER_MAX_MS / 1000) * 1000 } ?: api.pace.pacedMs(r.intervalMs)
+            r.backoffUntil = now() + max(r.intervalMs, min(wait, RETRY_AFTER_MAX_MS))
             return
         }
         r.backoffMs = if (r.backoffMs == 0L) r.intervalMs else min(r.backoffMs * 2, BACKOFF_MAX_MS)
@@ -593,10 +662,7 @@ internal class BleRuntime(
 
     // Sightings of a report that did not go through wait for the next one (and still age out).
     private fun putBack(r: Run, batch: List<Pair<String, Heard>>) {
-        for ((token, h) in batch) {
-            val now = r.pending[token]
-            r.pending[token] = if (now == null) h else Heard(max(now.rssi, h.rssi), min(now.at, h.at))
-        }
+        for ((token, h) in batch) r.pending[token] = r.pending[token]?.merge(h) ?: h
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -607,9 +673,23 @@ internal class BleRuntime(
      * presence is live and Bluetooth is on, and at most once per token window: a second need within
      * the window means another device with this profile keeps taking the key, so this one stops and
      * says so, without telling the server (the other device keeps working). A write that fails is
-     * tried again at the next report.
+     * tried again at the next report, and so is one that throws, after the same wait.
      */
     private suspend fun rekey(r: Run) {
+        try {
+            rekeyNow(r)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Not an answer but something the write or the records did not expect: the need stays,
+            // after the wait of a write that got no answer, and the reports go on.
+            if (run !== r) return
+            r.rekeyDue = true
+            backOff(r, PeopleError.offline())
+        }
+    }
+
+    private suspend fun rekeyNow(r: Run) {
         val slug = r.slug
         val keys = platform?.keys ?: return
         if (!presenceLive(slug)) {
@@ -652,7 +732,14 @@ internal class BleRuntime(
             stop(slug, BleProblem.Failed, PeopleText.BLE_START_FAILED)
             return
         }
-        if (!keys.store(r.alias, key, keyId)) {
+        val stored = keys.store(r.alias, key, keyId)
+        // Stopped while the key went into the store: the stop removed the key before this one
+        // landed, so it goes again (unless a new run at this conference holds the alias by now).
+        if (run !== r) {
+            if (run?.alias != r.alias) keys.removeQuietly(r.alias)
+            return
+        }
+        if (!stored) {
             stop(slug, BleProblem.Failed, PeopleText.BLE_START_FAILED)
             return
         }
@@ -690,6 +777,9 @@ internal class BleRuntime(
     companion object {
         /** Reports wait at most this long after failures, however many there were. */
         const val BACKOFF_MAX_MS = 300_000L
+
+        /** A 429's Retry-After is followed up to this long, so a wrong header cannot stop the reports for days. */
+        const val RETRY_AFTER_MAX_MS = 3_600_000L
 
         /** At most this many nearby notifications in a rolling hour. */
         const val NOTIFY_PER_HOUR = 3

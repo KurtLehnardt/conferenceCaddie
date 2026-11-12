@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared.ble
 
+import app.conferencecaddie.shared.net.HttpResponse
 import app.conferencecaddie.shared.people.ConnectRuntime
 import app.conferencecaddie.shared.people.FakeApiHttp
 import app.conferencecaddie.shared.people.FakeNotifier
@@ -14,8 +15,10 @@ import app.conferencecaddie.shared.people.person
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -244,6 +247,154 @@ class BleRekeyNotifyTest {
         advanceTimeBy(1)
         runCurrent()
         assertEquals(reports + 1, b.sightings().size, "tried again after the interval, not after the doubled wait")
+    }
+
+    /**
+     * An answer whose headers cannot be read: the presence write throws out of the API instead of
+     * returning a failure, as an exception nothing below the runtime expects would.
+     */
+    private fun unreadableAnswer() = HttpResponse(
+        200,
+        "{}".encodeToByteArray(),
+        headers = object : Map<String, String> by emptyMap() {
+            override fun get(key: String): String? = throw IllegalStateException("unreadable answer")
+        },
+    )
+
+    private fun BleRig.storedKeyId() = BleProtocol.keyIdOf(keys.hmac(alias, BleProtocol.keyIdMessage())!!)
+
+    @Test
+    fun aReKeyWriteThatThrowsKeepsTheNeedBacksOffAndResumes() = runTest {
+        val b = BleRig(this)
+        b.on()
+        val put = b.h.server.presencePut
+        val t0 = b.now()
+        val at = ArrayList<Long>()
+        var throwing = true
+        b.h.server.presencePut = { r ->
+            at += b.now() - t0
+            if (throwing) unreadableAnswer() else put(r)
+        }
+        var other = true
+        b.h.server.sightings = { if (other) b.answer(keyId = "AAAAAAAAAAA").also { other = false } else b.answer() }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        assertEquals(listOf(0L), at)
+        assertTrue(b.view.on, "a write that throws keeps running")
+        advanceTimeBy(9_999)
+        runCurrent()
+        assertEquals(listOf(0L), at, "no retry before the interval")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000), at, "the re-key is still due")
+        advanceTimeBy(19_999)
+        runCurrent()
+        assertEquals(2, at.size, "the wait doubled")
+        throwing = false
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000, 30_000), at)
+        assertEquals(b.h.server.bleKeyId(), b.storedKeyId())
+        assertTrue(b.view.on)
+        // The reports go on.
+        val reports = b.sightings().size
+        b.radio.hear(otherPayload(2), -60, b.now())
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(reports + 1, b.sightings().size)
+        assertEquals(listOf(tokenText(2) to -60), b.reported(b.sightings().last()))
+    }
+
+    @Test
+    fun aReKeyRefusedWithRetryAfterWaitsAtLeastTheIntervalAndAtMostAnHour() = runTest {
+        val b = BleRig(this)
+        // The day, so presence outlasts the hour.
+        b.on(mode = PresenceMode.Day)
+        val put = b.h.server.presencePut
+        val t0 = b.now()
+        val at = ArrayList<Long>()
+        var answers = listOf(
+            FakeApiHttp.json(429, """{"error":"Too many requests"}""", mapOf("Retry-After" to "0")),
+            FakeApiHttp.json(429, """{"error":"Too many requests"}""", mapOf("Retry-After" to "999999")),
+        )
+        b.h.server.presencePut = { r ->
+            at += b.now() - t0
+            answers.firstOrNull()?.also { answers = answers.drop(1) } ?: put(r)
+        }
+        var other = true
+        b.h.server.sightings = { if (other) b.answer(keyId = "AAAAAAAAAAA").also { other = false } else b.answer() }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        advanceTimeBy(9_999)
+        runCurrent()
+        assertEquals(listOf(0L), at, "Retry-After 0 still waits the interval")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000), at)
+        advanceTimeBy(3_599_999)
+        runCurrent()
+        assertEquals(2, at.size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(0L, 10_000, 3_610_000), at, "eleven days asked for, an hour waited")
+        assertEquals(b.h.server.bleKeyId(), b.storedKeyId())
+        assertTrue(b.view.on)
+    }
+
+    @Test
+    fun aKeyLostWhileRunningIsFetchedAgainAtTheNextWindow() = runTest {
+        val b = BleRig(this)
+        b.on()
+        b.keys.lose(b.alias)
+        val next = BleProtocol.windowStartMillis(BleProtocol.windowAtMillis(b.now()) + 1)
+        advanceTimeBy(next - b.now() - 1)
+        runCurrent()
+        assertTrue(b.presencePuts().isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(repeated(b.slug), b.presencePuts().single().body, "a new key at the window that has no payload")
+        assertEquals(b.h.server.bleKeyId(), b.storedKeyId())
+        assertNotNull(b.radio.source!!.payloadNow())
+        assertEquals(2, b.radio.refreshes, "the window's, then the new key's")
+        assertTrue(b.view.on)
+        // Lost again within that window: found at the next one, a re-key in a new window.
+        b.keys.lose(b.alias)
+        advanceTimeBy(600_000)
+        runCurrent()
+        assertEquals(2, b.presencePuts().size)
+        assertTrue(b.view.on)
+        assertNotNull(b.radio.source!!.payloadNow())
+    }
+
+    @Test
+    fun aStopWhileTheReKeysKeyIsBeingStoredLeavesNoKey() = runTest {
+        val stops = listOf<suspend (BleRig) -> Unit>(
+            { it.controller.turnOffBluetooth() },
+            { it.controller.turnOffPresence() },
+            { check(it.controller.deleteMyProfile().done) },
+        )
+        for (stopIt in stops) {
+            val b = BleRig(this)
+            b.on()
+            b.h.server.sightings = { b.answer(keyId = "AAAAAAAAAAA") }
+            val gate = CompletableDeferred<Unit>()
+            b.keys.putGate = gate
+            b.radio.hear(otherPayload(1), -60, b.now())
+            runCurrent()
+            assertEquals(1, b.keys.putsWaiting, "the new key is on its way into the store")
+            stopIt(b)
+            runCurrent()
+            gate.complete(Unit)
+            runCurrent()
+            assertTrue(b.keys.aliases.isEmpty(), "the key that landed after the stop went again")
+            assertFalse(b.radio.running)
+            assertFalse(b.view.on)
+            assertEquals(1, b.presencePuts().count { it.body!!.contains("\"ble\":true") })
+            advanceTimeBy(60_000)
+            runCurrent()
+            assertTrue(b.keys.aliases.isEmpty())
+            assertEquals(1, b.presencePuts().count { it.body!!.contains("\"ble\":true") })
+        }
     }
 
     // ---------------------------------------------------------------------------------------------

@@ -1144,6 +1144,10 @@ class PeopleController(
                 s.connect.stopPoll()
                 aroundJob?.cancel()
             }
+            // The same backend's capabilities no longer offer Bluetooth (derived-v1 or presence
+            // withdrawn): its switch is gone, so it is turned off here, telling the server. A new
+            // session decided that in restore() already.
+            if (!backendChanged) s.ble.offerChanged()
         }
         publish()
     }
