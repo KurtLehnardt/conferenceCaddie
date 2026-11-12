@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -143,6 +144,12 @@ internal class ParityRig {
         clock = clock,
         timeZone = TimeZone.UTC,
     )
+
+    /** The whole app over this rig's core and [controller], on the rig's [clock] like everything else here. */
+    @Composable
+    fun App(controller: PeopleController) {
+        CaddieApp(core, isDebugBuild = false, appVersion = "parity", people = controller, clock = clock)
+    }
 
     /** The key under which the controller keeps the summit's record (PeopleStore). */
     val conferenceKey: String get() = "people:v1:${testBackendUrl(backend.base).base}#conference:${ParitySample.SLUG}"
@@ -318,7 +325,7 @@ internal class ParityRun(
         setContent {
             ParitySystemTheme(rig.dark.value) {
                 Box(Modifier.fillMaxSize().consumeWindowInsets(WindowInsets.safeDrawing)) {
-                    CaddieApp(rig.core, isDebugBuild = false, appVersion = "parity", people = controller, clock = rig.clock)
+                    rig.App(controller)
                 }
             }
         }

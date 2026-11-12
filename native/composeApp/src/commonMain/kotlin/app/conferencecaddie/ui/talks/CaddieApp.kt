@@ -180,10 +180,9 @@ fun CaddieApp(
     var toast by remember { mutableStateOf<ToastData?>(null) }
     // What the toast's button does (Undo), for the toast showing.
     var toastAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val toastIds = remember { ToastIds() }
     val showToast: (String, String?, (() -> Unit)?) -> Unit = { message, label, action ->
-        // The id only tells one toast from the next, so it keeps the system clock: a fixed [clock]
-        // would give two toasts the same id.
-        toast = ToastData(id = Clock.System.now().toEpochMilliseconds(), message = message, actionLabel = label)
+        toast = toastIds.toast(message, label)
         toastAction = action
     }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
@@ -623,6 +622,17 @@ private const val THEME = "theme"
 /** The last id given to a [ShellRequest]. */
 private class RequestIds {
     var last = 0L
+}
+
+/**
+ * The shell's toasts, each with the next id. [app.conferencecaddie.ui.components.Toast] restarts its
+ * timer when the id changes, so two toasts shown in the same millisecond (a time-based id would make
+ * them equal) each get their full time.
+ */
+internal class ToastIds {
+    private var last = 0L
+
+    fun toast(message: String, actionLabel: String?): ToastData = ToastData(id = ++last, message = message, actionLabel = actionLabel)
 }
 
 /**

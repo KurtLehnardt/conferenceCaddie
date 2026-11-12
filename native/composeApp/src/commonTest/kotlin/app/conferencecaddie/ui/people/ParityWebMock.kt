@@ -12,12 +12,14 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.time.Instant
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atTime
 import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -106,6 +108,18 @@ internal object ParitySample {
         val start = LocalDate.parse(conference.startDate ?: error("${conference.slug} has no start date"))
         val zone = TimeZone.of(conference.timeZone ?: error("${conference.slug} has no time zone"))
         return start.plus(1, DateTimeUnit.DAY).atTime(9, 0).toInstant(zone).toEpochMilliseconds()
+    }
+
+    /** The summit's bundle as [TestBackend] serves it, for the cameras, which have no rig. */
+    private val served: Conference by lazy {
+        TestBackend().also { it.publish(listOf(testConference())) }.bundleOf(testConference()).conference
+    }
+
+    /** The wall clock at [pinnedNowMs] in the summit's zone as `HHMM` ("0900"): what the Android shots' status bar shows. */
+    fun pinnedHhmm(): String {
+        val zone = TimeZone.of(served.timeZone ?: error("${served.slug} has no time zone"))
+        val wall = Instant.fromEpochMilliseconds(pinnedNowMs(served)).toLocalDateTime(zone)
+        return wall.hour.toString().padStart(2, '0') + wall.minute.toString().padStart(2, '0')
     }
 
     private fun minutes(hhmm: String) = hhmm.substringBefore(':').toInt() * 60 + hhmm.substringAfter(':').toInt()
