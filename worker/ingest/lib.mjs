@@ -3,10 +3,11 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contentHash } from '../../scripts/lib/hash.mjs';
 import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
+import { adminTokenFileToRead } from './admin-token-file.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -121,16 +122,22 @@ export function withTopics(doc, topics) {
 // Admin client
 
 // The token comes from ADMIN_TOKEN, else from the file named by ADMIN_TOKEN_FILE, else from the
-// operator file that worker/scripts/setup-secrets.mjs writes. Returns '' when none is available.
-export function readAdminToken() {
-  const direct = (process.env.ADMIN_TOKEN || '').trim();
+// operator file that worker/scripts/setup-secrets.mjs writes, at the default place of
+// admin-token-file.mjs (the caddie-admin CLI's config directory). When only the old default
+// ~/.config/conference-caddie/admin-token exists, that file is read and warn gets one line naming
+// both paths (never the value). Returns '' when none is available. env, home and warn are for tests.
+export function readAdminToken({ env = process.env, home = homedir(), warn = (line) => process.stderr.write(`${line}\n`) } = {}) {
+  const direct = (env.ADMIN_TOKEN || '').trim();
   if (direct) return direct;
-  const file = process.env.ADMIN_TOKEN_FILE || join(homedir(), '.config', 'conference-caddie', 'admin-token');
+  const { path, note } = adminTokenFileToRead(env, home);
+  let value;
   try {
-    return readFileSync(file, 'utf8').trim();
+    value = readFileSync(path, 'utf8').trim();
   } catch {
     return '';
   }
+  if (note) warn(note);
+  return value;
 }
 
 export function normalizeApiBase(api) {

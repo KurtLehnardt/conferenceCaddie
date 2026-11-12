@@ -160,7 +160,7 @@ These are the steps that took the stack live on 2026-11-11; repeat them only to 
    node worker/scripts/setup-secrets.mjs --only-missing   # ADMIN_TOKEN, REF_SALT, VAPID pair, first BLE_MASTER_KEYRING
    export CADDIE_APP_URL=https://conference-caddie.krlehnardt.workers.dev   # the URL deploy.sh printed
    export CADDIE_API_BASE="$CADDIE_APP_URL"                                 # the API is on the same origin
-   export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
+   export ADMIN_TOKEN_FILE="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}/admin-token"   # the token file setup-secrets.mjs wrote
    node worker/ingest/migrate-from-backup.mjs --backup data/exports/backup-2026-11-10T08-25-32 --api "$CADDIE_API_BASE"
    gh variable set CADDIE_APP_URL --body "$CADDIE_APP_URL"
    gh variable set CADDIE_API_BASE --body "$CADDIE_API_BASE"
@@ -169,6 +169,8 @@ These are the steps that took the stack live on 2026-11-11; repeat them only to 
    BASE_URL="$CADDIE_APP_URL" ADMIN_TOKEN_FILE="$ADMIN_TOKEN_FILE" SMOKE_ADMIN_AUTH=signed node scripts/smoke.mjs
    node worker/scripts/make-qr.mjs --app-url "$CADDIE_APP_URL"   # rewrites docs/demo/qr-kubecon.png and .svg
    ```
+
+   `setup-secrets.mjs` writes the admin token to the token file, mode 0600: the file `ADMIN_TOKEN_FILE` names, or else `admin-token` in the `caddie-admin` config directory (`configDir` in `scripts/admin/config.mjs`), which is `$CADDIE_ADMIN_HOME/admin-token` when `CADDIE_ADMIN_HOME` is set and `${XDG_CONFIG_HOME:-~/.config}/conference-caddie/admin-token` otherwise (an empty variable counts as unset). The `export` above names the same default for the smoke, which has no default of its own. Before this rule the default was always `~/.config/conference-caddie/admin-token`; if you set either variable and your token is still there, the Worker scripts that read the token file (`setup-secrets.mjs` and `readAdminToken` in `worker/ingest/lib.mjs`) read that old file when the new one is missing and print one line on stderr that names both paths and says to move the file, and `setup-secrets.mjs` writes only the new place, says so when the old file still exists, and never deletes it. With `ADMIN_TOKEN_FILE` set there is no fallback.
 
    The secrets live on the Worker, not in the app build, so a later `deploy.sh` keeps them. The smoke runs against the one origin: `BASE_URL` is the app, the API defaults to the same origin, and the admin token makes it a Worker run. The smoke signs its admin calls by default (`SMOKE_ADMIN_AUTH=signed`), which the Worker requires; `SMOKE_ADMIN_AUTH=bearer` is for a local or old Worker. Commit the two new QR files through a pull request.
 3. Check that the smoke ends with no FAIL, then open the app URL on a phone and scan the new QR code. Migration counts of the live run on 2026-11-11, the same as the last local run: 62 conferences, 717 talks, 114 topics, 898 facets, 132 of 136 people, 0 of 26 reports, 15 of 15 moderation rules.
@@ -193,29 +195,29 @@ node worker/scripts/setup-secrets.mjs --rotate-admin-token
 The second command generates 32 random bytes as hex and, in this order:
 
 1. puts them as `ADMIN_TOKEN_NEXT` on the Worker (`npx wrangler secret put`, value on standard input, no trailing newline). From here the Worker accepts the old and the new token.
-2. writes them to `~/.config/conference-caddie/admin-token` (mode 0600; `ADMIN_TOKEN_FILE` changes the path), only after step 1 succeeded, so a failed step 1 leaves the old token in the file.
+2. writes them to the token file (mode 0600; step 2 of [Go live](#go-live-about-10-minutes) says where it is), only after step 1 succeeded, so a failed step 1 leaves the old token in the file.
 3. sets the repository secret `CADDIE_ADMIN_TOKEN` to the same value (`--skip-gh` leaves it, and the output then says how to set it).
 
-It then prints the two commands that finish the rotation and does not run them. Run them from `worker/`, in this order, once any running ingest or smoke has finished (a client signs with the token it read when it started):
+It then prints the two commands that finish the rotation, with the token file's real path in place of `<token file>`, and does not run them. Run them from `worker/`, in this order, once any running ingest or smoke has finished (a client signs with the token it read when it started):
 
 ```sh
 cd worker
-npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token   # the new value becomes the ADMIN_TOKEN
-npx wrangler secret delete ADMIN_TOKEN_NEXT                                     # asks you to confirm
+npx wrangler secret put ADMIN_TOKEN < <token file>    # the new value becomes the ADMIN_TOKEN
+npx wrangler secret delete ADMIN_TOKEN_NEXT           # asks you to confirm
 ```
 
 - **Only this secret.** `--rotate-admin-token` touches nothing else (a run without it would also replace the VAPID pair, which ends every push subscription), needs an `ADMIN_TOKEN` already on the Worker, and cannot be combined with `--only-missing` or `--rotate-ref-salt`. A run without `--rotate-admin-token` that finds an `ADMIN_TOKEN` replaces it outright, with no overlap: if its GitHub step fails the ingest is refused until the secret is set, and the output says so. It uses your Cloudflare credentials like every wrangler call here, so `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` must be set.
 - **Order matters.** Run the `put` first and the `delete` only after it succeeded: until then the file and `CADDIE_ADMIN_TOKEN` match `ADMIN_TOKEN_NEXT` only. If the `put` fails, run it again; both tokens keep working. There is no way back to the old token once step 2 has run, because the file and the repository secret then hold only the new one: finish with the two commands.
 - **If a step of the script fails**, it says what state that left, in plain words:
   - Step 1 (the Worker): the old token, the file and the repository secret are untouched and keep working. The put may nevertheless have gone through before it failed (a timeout, say); then the Worker holds an `ADMIN_TOKEN_NEXT` that is saved nowhere, and the next run stops and prints the recipe below. Run the same command again.
-  - Step 2 (the file): the Worker accepts a new `ADMIN_TOKEN_NEXT` that was saved nowhere, and the old token still works everywhere. Fix `ADMIN_TOKEN_FILE` and run the same command again with `--replace-next` (it would otherwise stop, because `ADMIN_TOKEN_NEXT` is now set), or use the recipe below.
-  - Step 3 (the repository secret): the file already holds the new value and `CADDIE_ADMIN_TOKEN` holds the old one (or the new one, if the set went through before it failed), and the Worker accepts either. Run `gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < ~/.config/conference-caddie/admin-token` (printed with the real path and repository), and run the two finishing commands only after it succeeds.
-- **A rotation left half done stops the next run.** With `ADMIN_TOKEN_NEXT` already on the Worker the script exits 1 before changing anything, because replacing its value would make the Worker refuse a token file and a repository secret that may hold exactly that value. It cannot read the Worker's or GitHub's secrets, so it cannot tell where the earlier rotation stopped (it may have gone through all three steps, stopped at the GitHub step, stored a value and still failed, or been an earlier `--replace-next` that stopped part-way). It therefore leads with one recipe that is safe wherever it stopped: it makes the value in the token file the only admin token, everywhere. It prints it with the resolved repository and the real file path, never the value:
+  - Step 2 (the file): the Worker accepts a new `ADMIN_TOKEN_NEXT` that was saved nowhere, and the old token still works everywhere. Fix the token file's path (`ADMIN_TOKEN_FILE`, or `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` for the default) and run the same command again with `--replace-next` (it would otherwise stop, because `ADMIN_TOKEN_NEXT` is now set), or use the recipe below.
+  - Step 3 (the repository secret): the file already holds the new value and `CADDIE_ADMIN_TOKEN` holds the old one (or the new one, if the set went through before it failed), and the Worker accepts either. Run `gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < <token file>` (printed with the real path and repository), and run the two finishing commands only after it succeeds.
+- **A rotation left half done stops the next run.** With `ADMIN_TOKEN_NEXT` already on the Worker the script exits 1 before changing anything, because replacing its value would make the Worker refuse a token file and a repository secret that may hold exactly that value. It cannot read the Worker's or GitHub's secrets, so it cannot tell where the earlier rotation stopped (it may have gone through all three steps, stopped at the GitHub step, stored a value and still failed, or been an earlier `--replace-next` that stopped part-way). It therefore leads with one recipe that is safe wherever it stopped: it makes the value in the token file the only admin token, everywhere. It prints it with the resolved repository and the real path of the token file it read, never the value; that is the old `~/.config/conference-caddie/admin-token` when it fell back to that file (step 2 of [Go live](#go-live-about-10-minutes)), after the one-line note that says so:
 
   ```sh
-  gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < ~/.config/conference-caddie/admin-token
+  gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < <token file>
   cd worker
-  npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token
+  npx wrangler secret put ADMIN_TOKEN < <token file>
   npx wrangler secret delete ADMIN_TOKEN_NEXT
   ```
 

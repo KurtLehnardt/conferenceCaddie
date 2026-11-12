@@ -9,7 +9,7 @@
 // The mapping, for a tier 2 backend in the CLI's config.json ({ "tier": 2, "api": "<Worker origin>" },
 // which replaces --api and CADDIE_API_BASE; the token is still read from ADMIN_TOKEN, or from
 // ADMIN_TOKEN_FILE, whose default is admin-token in the CLI's config directory and must have mode
-// 0600):
+// 0600; on Windows the CLI reads only ADMIN_TOKEN and no token file, scripts/admin/credentials.mjs):
 //   --hidden [--show-content]           moderation queue --event <slug> [--show-content]
 //   --since <iso> [--show-content]      moderation queue --event <slug> --since <iso> [--show-content]
 //                                       (the queue also lists the hidden targets)
@@ -40,7 +40,7 @@ const MAPPING = [
 
 const HEAD = 'worker/scripts/moderation.mjs is deprecated and makes no request; use the caddie-admin CLI (scripts/caddie-admin.mjs, or npm run admin --) with a tier 2 backend instead.';
 const TAIL = [
-  'Set the Worker origin as a backend in the CLI\'s config.json ({ "tier": 2, "api": "<Worker origin>" }) instead of --api or CADDIE_API_BASE; the token comes from ADMIN_TOKEN or ADMIN_TOKEN_FILE as before (a token file must have mode 0600).',
+  'Set the Worker origin as a backend in the CLI\'s config.json ({ "tier": 2, "api": "<Worker origin>" }) instead of --api or CADDIE_API_BASE; the token comes from ADMIN_TOKEN or ADMIN_TOKEN_FILE as before (a token file must have mode 0600), except on Windows, where the CLI reads only ADMIN_TOKEN and no token file.',
   'Without --yes, unhide, delete and purge-reports only preview. See docs/ADMIN_CLI.md.',
 ];
 

@@ -151,9 +151,20 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    It generates `ADMIN_TOKEN` and `REF_SALT` (32 random bytes each, hex) and a VAPID P-256 pair
    with Web Crypto, and writes each value to the standard input of `npx wrangler secret put NAME`,
    never to a command line, a log or the terminal. `ADMIN_TOKEN` also goes to
-   `gh secret set CADDIE_ADMIN_TOKEN` (for the ingest workflow) and to
-   `~/.config/conference-caddie/admin-token` with mode 0600 (for the smoke, migration and
-   moderation runs). `--only-missing` skips names the Worker already has. An existing `REF_SALT`
+   `gh secret set CADDIE_ADMIN_TOKEN` (for the ingest workflow) and to the token file with mode
+   0600 (for the smoke, the ingest and migration scripts and the `caddie-admin` CLI). The token
+   file is the one `ADMIN_TOKEN_FILE` names, or else `admin-token` in the CLI's config directory
+   (`configDir` in `scripts/admin/config.mjs`): `$CADDIE_ADMIN_HOME/admin-token` when
+   `CADDIE_ADMIN_HOME` is set, else `$XDG_CONFIG_HOME/conference-caddie/admin-token`, with
+   `~/.config` when `XDG_CONFIG_HOME` is unset; an empty variable counts as unset. With neither
+   variable set that is `~/.config/conference-caddie/admin-token`, which was the only default
+   before. `readAdminToken` in `worker/ingest/lib.mjs` follows the same rule
+   (`worker/ingest/admin-token-file.mjs`). If you set `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` and
+   your token is still in `~/.config/conference-caddie/admin-token`, a script that reads the token
+   file and finds none at the new place reads the old one and prints one line on stderr that names
+   both paths and says to move the file; the script writes only the new place, says so in one line
+   when the old file still exists, and never deletes it. There is no such fallback when
+   `ADMIN_TOKEN_FILE` is set. `--only-missing` skips names the Worker already has. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.
    The first `BLE_MASTER_KEYRING` (Bluetooth derived tokens v1, one random master) is created
    when the Worker has none and never replaced; rotate it by hand (docs/FREE_HOSTING.md).
@@ -179,15 +190,18 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    Elasticsearch stack it replaced, and a new copy has no such backup. Set the first two variables
    below anyway, because step 4 uses them, and then load the committed data with
    `node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE"` before the smoke. Without
-   `--event` it pushes every conference folder, including the conferences that are not searchable,
-   which the smoke's check `u` needs ([Local run](#local-run)). The ingest workflow, weekly or
-   started by hand with `gh workflow run ingest.yml`, pushes only the events it fetched, so it does
-   not load them.
+   `--event` it pushes every committed conference folder in `data/`, including the conferences that
+   have left the LF upcoming list. The smoke needs those: its default conferences are among them
+   (`SMOKE_CONFERENCE` defaults to `kubecon-cloudnativecon-north-america-2026`, which leaves the
+   list once it ends on 2026-11-12), and its check `conf` fails when they are not listed as
+   searchable. The ingest workflow, weekly or started by hand, pushes only the upcoming events it
+   fetched (`--events-from`), not the committed conferences that have left the LF list, such as
+   the smoke's default conferences, so it does not replace this command.
 
    ```sh
    export CADDIE_APP_URL=https://<your-worker>.workers.dev   # the URL deploy.sh printed
    export CADDIE_API_BASE="$CADDIE_APP_URL"
-   export ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token
+   export ADMIN_TOKEN_FILE="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}/admin-token"   # the token file of step 2
    node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE" --dry-run
    node worker/ingest/migrate-from-backup.mjs --backup "data/exports/<backup file>" --api "$CADDIE_API_BASE"
    ```
@@ -238,7 +252,7 @@ The smoke script in `scripts/smoke.mjs` is the only verification. Against the fr
 
 ```sh
 BASE_URL="$CADDIE_APP_URL" \
-ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token \
+ADMIN_TOKEN_FILE="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}/admin-token" \
 node scripts/smoke.mjs
 ```
 
@@ -319,7 +333,8 @@ The clients that sign are `worker/ingest/push-ingest.mjs`, `topics-local.mjs` an
 `migrate-from-backup.mjs` (through `adminClient` in `worker/ingest/lib.mjs`), the smoke (signed by
 default), and the `caddie-admin` CLI, whose tier 2 backend (`scripts/admin/backends/worker.mjs`,
 #70) signs every request with the same module today; docs/ADMIN_CLI.md describes the CLI. They read
-the token from `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`. The base of the ingest scripts (`--api`) and of
+the token from `ADMIN_TOKEN` or `ADMIN_TOKEN_FILE`, and the ingest scripts and the CLI also from the
+default token file of deploy step 2 (the smoke needs one of the two variables). The base of the ingest scripts (`--api`) and of
 the CLI (the backend's `api` in its `config.json`) must be the Worker's origin, with no path, over
 https (plain http for localhost only); the smoke calls `API_BASE`, by default the origin of
 `BASE_URL`. None of them follows a redirect: fetch drops only `Authorization` on a cross-origin
@@ -374,18 +389,19 @@ node worker/scripts/setup-secrets.mjs --rotate-admin-token
 
 The script generates 32 random bytes as hex and, in this order: puts them as `ADMIN_TOKEN_NEXT`
 (`npx wrangler secret put`, on standard input, no trailing newline), which makes the Worker accept
-the old and the new token; writes them to `~/.config/conference-caddie/admin-token` (mode 0600,
-`ADMIN_TOKEN_FILE` changes the path), only after the Worker put succeeded; and sets the repository
+the old and the new token; writes them to the token file (mode 0600; deploy step 2 says where it
+is), only after the Worker put succeeded; and sets the repository
 secret `CADDIE_ADMIN_TOKEN` (`--skip-gh` leaves it). It never prints the value, and it does nothing
 else: no other secret is touched, and it cannot be combined with `--only-missing` or
 `--rotate-ref-salt`. It prints where the repository secret goes before it changes anything, then
 the two commands that finish the rotation, which you run from
 `worker/` once any running ingest or smoke has finished (a client signs with the token it read when
-it started), in this order:
+it started), in this order, with the token file's real path in place of `<token file>` (quoted
+for the shell when it needs quotes):
 
 ```sh
 cd worker
-npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token
+npx wrangler secret put ADMIN_TOKEN < <token file>
 npx wrangler secret delete ADMIN_TOKEN_NEXT
 ```
 
@@ -410,12 +426,14 @@ exits 1 without changing anything: replacing its value would make the Worker ref
 and a repository secret that may hold exactly that value. It cannot read the Worker's or GitHub's
 secrets, so it cannot tell where the earlier rotation stopped, and it leads with one recipe that is
 safe wherever it stopped: it makes the value in the token file the only admin token, everywhere. It
-prints it with the resolved repository and the real path, never the value:
+prints it with the resolved repository and the real path of the token file it read, never the
+value. That is the old `~/.config/conference-caddie/admin-token` when the script fell back to it
+(deploy step 2), after the one-line note that says so:
 
 ```sh
-gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < ~/.config/conference-caddie/admin-token
+gh secret set CADDIE_ADMIN_TOKEN --repo <owner>/<name> < <token file>
 cd worker
-npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token
+npx wrangler secret put ADMIN_TOKEN < <token file>
 npx wrangler secret delete ADMIN_TOKEN_NEXT
 ```
 
@@ -443,12 +461,17 @@ supported client for reviewing, undoing and confirming hides is the `caddie-admi
 `POST /admin/moderation`, signing each request with the admin token from `ADMIN_TOKEN` or
 `ADMIN_TOKEN_FILE` (default `admin-token` in the CLI's config directory, which is
 `~/.config/conference-caddie` unless `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` says otherwise; the
-file must have mode 0600, as `setup-secrets.mjs` writes it; that script always writes
-`~/.config/conference-caddie/admin-token`, so with either variable set, point `ADMIN_TOKEN_FILE` at
-that file or use `ADMIN_TOKEN`). The Worker's origin is the `api` of a tier 2 backend in the CLI's
-`config.json`, in the same directory. If you have no `config.json` yet, the first command below
-creates it; otherwise add the `"worker"` entry to its `backends` by hand. The command never
-overwrites an existing file (`noclobber` makes it fail instead):
+file must have mode 0600, as `setup-secrets.mjs` writes it). `setup-secrets.mjs` writes the token to
+that same default file (deploy step 2). The CLI has no fallback to the old
+`~/.config/conference-caddie/admin-token`, so if your token is still there while either variable is
+set, move it to the new place, as the note of the Worker scripts says, or point `ADMIN_TOKEN_FILE`
+at it. On Windows the CLI reads no token file at all, only `ADMIN_TOKEN`. The Worker's origin is
+the `api` of a tier 2 backend in the CLI's `config.json`, in the same directory. If you have no
+`config.json` yet, the first command below creates it; otherwise add the `"worker"` entry to its
+`backends` by hand, and either set `"default": "worker"` or pass `--backend worker` to each command
+below. The CLI sends a command without `--backend` to the backend that `"default"` names, so with an
+existing `"default": "es"` the moderation commands would go to that tier 3 backend without any
+notice. The first command never overwrites an existing file (`noclobber` makes it fail instead):
 
 ```sh
 dir="${CADDIE_ADMIN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie}"
@@ -814,7 +837,7 @@ unset val
 rm -f "$SCRATCH/staged.diff"; rmdir "$SCRATCH"
 ```
 
-Add the value of `~/.config/conference-caddie/admin-token` to the same check once it exists, and
+Add the value of the token file (deploy step 2) to the same check once it exists, and
 make sure nothing under `data/exports/` and no `.dev.vars` file is staged.
 
 ## Shutting down the paid stack

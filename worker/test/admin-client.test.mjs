@@ -482,6 +482,7 @@ describe('worker/scripts/moderation.mjs (deprecated in favour of caddie-admin)',
         assert.ok(r.stderr.includes(`${CLI} ${command}`), `${args.join(' ')}: ${command}`);
       }
       assert.ok(r.stderr.includes('docs/ADMIN_CLI.md'));
+      assert.ok(r.stderr.includes('except on Windows, where the CLI reads only ADMIN_TOKEN and no token file'), r.stderr);
     }
   });
 
