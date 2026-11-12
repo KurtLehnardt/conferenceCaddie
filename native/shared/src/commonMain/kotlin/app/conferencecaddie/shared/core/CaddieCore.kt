@@ -712,13 +712,18 @@ class CaddieCore(
         val current = (s.bundle as? BundleState.Ready)?.takeIf { s.selectedSlug == slug }
         val installed = current?.bundle ?: sync.installed(s.backend.base, key)
         if (installed != null) database.refreshInterested(key, installed)
-        return s.copy(
-            selectedSlug = slug,
-            bundle = installed?.let { current ?: ready(it, key, offline = false, updateApp = false, previous = null) } ?: BundleState.Loading(slug),
-            interested = database.interested(key),
-            interestedSnapshots = database.interestedSnapshots(key),
-            learn = learnInput(key),
+        return withStoredMarks(
+            s.copy(
+                selectedSlug = slug,
+                bundle = installed?.let { current ?: ready(it, key, offline = false, updateApp = false, previous = null) } ?: BundleState.Loading(slug),
+            ),
         )
+    }
+
+    /** [s] with the marked talks and the learn input stored for its selected conference. */
+    private suspend fun withStoredMarks(s: CoreState): CoreState {
+        val key = BundleSync.scope(s.backend.base, s.selectedSlug ?: return s)
+        return s.copy(interested = database.interested(key), interestedSnapshots = database.interestedSnapshots(key), learn = learnInput(key))
     }
 
     /**
@@ -819,13 +824,10 @@ class CaddieCore(
             var next = now.copy(conferences = conferences)
             // A conference the person chose meanwhile wins over the list's choice.
             if (selection != null && now.selectedSlug == seen.selectedSlug) {
-                next = next.copy(
-                    selectedSlug = selection.selectedSlug,
-                    bundle = selection.bundle,
-                    interested = selection.interested,
-                    interestedSnapshots = selection.interestedSnapshots,
-                    learn = selection.learn,
-                )
+                // The marks and the learn text are read again under the lock: a call made since the
+                // read above stored its change but showed it in no list, as this conference was not
+                // selected yet (a talk marked, or the Capacitor app's marks kept, at the first start).
+                next = withStoredMarks(next.copy(selectedSlug = selection.selectedSlug, bundle = selection.bundle))
             }
             _state.value = ensureBundle(next)
         }
