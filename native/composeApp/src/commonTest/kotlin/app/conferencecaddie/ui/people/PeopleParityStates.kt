@@ -592,7 +592,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         shoot()
     },
     ParityState("profile-delete-pending", 2913, 3198) {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val now = rig.clock.ms
         start(tab = null, record = { r ->
             JsonObject(r + ("delete_pending" to buildJsonObject {
                 put("attempts", 2)
@@ -608,7 +608,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         shoot()
     },
     ParityState("profile-delete-stuck", 3043, 3421) {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val now = rig.clock.ms
         start(tab = null, record = { r ->
             JsonObject(r + ("delete_pending" to buildJsonObject {
                 put("attempts", 6)
@@ -706,7 +706,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
 /** I'm around in the Expo hall, back after twenty minutes: "Still in Expo hall?" (scenarios.mjs still-in). */
 @OptIn(ExperimentalTestApi::class)
 private fun ParityRun.stillIn() {
-    val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+    val now = rig.clock.ms
     start(
         prepare = {
             presence("Expo hall")
