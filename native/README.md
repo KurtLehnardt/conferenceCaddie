@@ -145,7 +145,10 @@ Every size of text is in sp, so the system font size setting scales it, and cont
 dialogs scroll their text and keep their buttons on screen, and tab labels shrink back towards their
 default size rather than wrap or be cut off. Controls keep the web's visible sizes (buttons and icon
 buttons 44 dp, chips 36 dp), and every control's touch target is at least the platform's minimum, 48
-dp on Android and 44 pt on iOS, through Material's `minimumInteractiveComponentSize()`. Icons that
+dp on Android and 44 pt on iOS, through `minimumTouchTarget()` and `touchTargetIn()`
+(`ui/theme/TouchTarget.kt`), which round the minimum up to whole pixels where Material's
+`minimumInteractiveComponentSize()` and `heightIn` round to the nearest one;
+`scripts/check-touch-targets.sh` keeps those out. Icons that
 carry meaning have content descriptions, headings are marked as headings, and controls have keyboard
 focus rings like the web's.
 
@@ -206,7 +209,7 @@ host and anything presented from it follow it too.
   `OverflowMenu`, and `EvidenceText`, which shows the server's evidence with its `<mark>`
   highlights and treats nothing else as markup. Its header lists the web's computed-style quirks
   that the screens keep, such as the danger-styled text buttons that render in the accent ink.
-  Its controls reserve the platform's touch target (`minimumInteractiveComponentSize()`) and grow
+  Its controls reserve the platform's touch target (`minimumTouchTarget()`) and grow
   with large text, and `PeopleScreenColumn` ends above the keyboard (`imePadding()`), as Settings
   does; a screen built on a `LazyColumn` adds `imePadding()` itself.
 - The people pages (Profile, Requests, Meet up) and the People tab draw in the shell's content

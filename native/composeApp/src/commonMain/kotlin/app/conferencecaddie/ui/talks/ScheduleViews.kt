@@ -57,10 +57,10 @@ import app.conferencecaddie.ui.format.Format
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
+import app.conferencecaddie.ui.theme.minimumTouchTarget
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Instant
-import app.conferencecaddie.ui.theme.minimumTouchTarget
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 

@@ -36,6 +36,7 @@ import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 import app.conferencecaddie.ui.theme.minimumTouchTarget
+import app.conferencecaddie.ui.theme.touchTargetIn
 import kotlinx.coroutines.delay
 
 /** A button inside a state, banner or toast. */
@@ -175,7 +176,7 @@ fun Toast(toast: ToastData, onDismiss: () -> Unit, onAction: () -> Unit, modifie
             .widthIn(max = 560.dp)
             .shadow(8.dp, RoundedCornerShape(Caddie.dimens.radius), ambientColor = c.shadowLg, spotColor = c.shadowLg)
             .background(c.toastBg, RoundedCornerShape(Caddie.dimens.radius))
-            .heightIn(min = 48.dp)
+            .touchTargetIn(minHeight = 48.dp)
             .padding(start = 16.dp, top = 4.dp, bottom = 4.dp, end = 4.dp)
             .semantics { liveRegion = LiveRegionMode.Polite },
         verticalAlignment = Alignment.CenterVertically,

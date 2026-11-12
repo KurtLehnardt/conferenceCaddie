@@ -2,7 +2,12 @@ package app.conferencecaddie.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -31,6 +36,7 @@ import app.conferencecaddie.ui.people.StillChip
 import app.conferencecaddie.ui.theme.CaddieTheme
 import app.conferencecaddie.ui.theme.PlatformTouchTarget
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 // The touch targets at densities at which their minimum is a whole number of pixels and at which it
@@ -39,7 +45,8 @@ import kotlin.test.assertTrue
 // depends on the emulator's or simulator's window (TestDevice), so this test sets it itself, and
 // one run on any device covers every density below. One control of each way a minimum is held:
 // the control's own size (the Settings back, the spot report, the "Still in" chip), the room
-// reserved around a smaller control (a button, an icon button), and a row at least 48 dp tall.
+// reserved around a smaller control (a button, an icon button), and a row at least 48 dp tall, on
+// its own and in a parent sized to its intrinsic height.
 @OptIn(ExperimentalTestApi::class)
 class TouchTargetDensityUiTest {
     @Test
@@ -58,6 +65,11 @@ class TouchTargetDensityUiTest {
                         Box(Modifier.testTag("icon-button")) { CaddieIconButton(LucideIcon.ArrowLeft, "Back", {}) }
                         SwitchRow("Notifications", checked = false, onChange = {}, modifier = Modifier.testTag("switch-row"))
                         OptionRow("Newest first", selected = false, onClick = {}, modifier = Modifier.testTag("option-row"))
+                        // In a parent that takes its children's intrinsic height, as a row beside a divider does.
+                        Row(Modifier.height(IntrinsicSize.Min)) {
+                            SwitchRow("Sounds", checked = false, onChange = {}, modifier = Modifier.weight(1f).testTag("intrinsic-row"))
+                            Box(Modifier.width(1.dp).fillMaxHeight())
+                        }
                     }
                 }
             }
@@ -70,6 +82,7 @@ class TouchTargetDensityUiTest {
         for (d in DENSITIES) {
             density = d
             waitForIdle()
+            assertEquals(d, onNodeWithTag("button").fetchSemanticsNode().layoutInfo.density.density, "The controls are not drawn at $d")
             check("Settings back", onNodeWithTag("appbar-back"))
             check("Spot report", onNodeWithTag("meet-spot-report"))
             check("Still in chip", onNodeWithText("Registration"))
@@ -78,6 +91,7 @@ class TouchTargetDensityUiTest {
             // The web's rows are 48 dp tall on both platforms.
             check("Switch row", onNodeWithTag("switch-row"), minWidth = null, minHeight = 48.dp)
             check("Option row", onNodeWithTag("option-row"), minWidth = null, minHeight = 48.dp)
+            check("Row at its intrinsic height", onNodeWithTag("intrinsic-row"), minWidth = null, minHeight = 48.dp)
         }
         assertTrue(short.isEmpty(), "Touch targets under their minimum:\n" + short.joinToString("\n"))
     }
