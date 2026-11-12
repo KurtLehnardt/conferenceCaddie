@@ -867,18 +867,22 @@ runs this command for you. It has two jobs:
   recorded too. In write mode Gradle verifies nothing, so the update's code runs unverified in this
   job. Treat everything it produces as untrusted, its job summary included.
 - **Check and publish the diff** runs no project code. It reads the written file as data and refuses
-  it when the `<configuration>` block changed. It reports every added component, every additional
-  trusted checksum (`<also-trust>`, which Gradle adds when a published file differs from the pinned
-  one) and every removed checksum. It compares each new SHA-256 with the file on Maven Central,
-  Google's Maven repository or the Gradle Plugin Portal, and fails on a mismatch. It uploads a diff
-  that touches only this file as the artifact `verification-metadata-pr-<number>`, and its job
-  summary prints the commands that apply it. Those commands include the diff's SHA-256:
+  it unless its structure is exactly what Gradle writes. That means the `<configuration>` block
+  unchanged, no duplicate entry, every element in Gradle's namespace, and every added line in Gradle's
+  format. Gradle's own reader is lax, so anything else could hide a checksum. It reports every added
+  component, every additional trusted checksum (`<also-trust>`, which Gradle adds when a published
+  file differs from the pinned one) and every removed checksum. It compares each new SHA-256 with the
+  file on Maven Central, Google's Maven repository or the Gradle Plugin Portal, and fails on a
+  mismatch. It uploads a diff that touches only this file as the artifact
+  `verification-metadata-pr-<number>`. Its job summary prints the commands that apply it, with the
+  diff's SHA-256. Only the summary section under the job named "Check and publish the diff" counts.
+  The regenerate job can write anything into its own section, including a copy of that heading.
 
 ```sh
-gh run download <run id> -R KurtLehnardt/conferenceCaddie -n verification-metadata-pr-<number> -D /tmp/<name>-<run id>
-echo '<sha256>  /tmp/<name>-<run id>/verification-metadata.diff' | shasum -a 256 -c
-git apply --include=native/gradle/verification-metadata.xml /tmp/<name>-<run id>/verification-metadata.diff
-git status --short   # only native/gradle/verification-metadata.xml may be listed
+gh run download <run id> -R KurtLehnardt/conferenceCaddie -n verification-metadata-pr-<number> -D /tmp/<name>-<run id> &&
+  echo '<sha256>  /tmp/<name>-<run id>/verification-metadata.diff' | shasum -a 256 -c &&
+  git apply --include=native/gradle/verification-metadata.xml /tmp/<name>-<run id>/verification-metadata.diff &&
+  git status --short   # only native/gradle/verification-metadata.xml may be listed
 ```
 
 Then review it as above before you push it: remove the entries that only the replaced versions

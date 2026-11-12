@@ -1041,13 +1041,14 @@ PR #83 holds the detail of each item: the full option mapping, the README change
   Nothing it does may reach `main` without a maintainer's review, and it must get nothing to steal.
 - **Controls.**
   - *Trigger and access.* The trigger is `pull_request`, not `pull_request_target`. The workflow grants no permissions, and each job gets only `contents: read`: no write scope, no `id-token`, no environment, no secret. The jobs run only for pull requests that Dependabot opened from a branch of this repository, and only in runs Dependabot started.
-  - *Caches.* Gradle's cache is off, and the other caches are only restored. A pull request run can write only to its own cache scope, which `main` does not read.
+  - *Caches.* Gradle's cache is off, and this workflow saves no cache. Code in the build could still save to the pull request's own cache scope with the runner's token. Only that pull request's runs, which have no secrets either, read that scope; `main` does not.
+  - *What reaches the summary.* Only names that match `[A-Za-z0-9._+-]`, hex digits and the check's own words. Every printed string is cleaned to a small character set again, so a hostile file cannot inject Markdown or workflow commands.
   - *The publish job.* A second job, "Check and publish the diff", runs no project code. It checks out only the metadata file and reads the regenerate job's file as data. Then it:
-    - refuses the file when the `<configuration>` block changed;
+    - refuses the file unless its structure is exactly what Gradle writes: one unchanged `<configuration>` block, then `<components>`; components, artifacts, one `<sha256>` per artifact with any `<also-trust>` inside it; every element in Gradle's namespace, no other attribute, no duplicate component or artifact; and every added line of the diff in the form Gradle's writer produces. Gradle's reader ignores namespaces, accepts elements anywhere and merges duplicates. The critic of round 2 showed four files that turned a fake checksum into the pin, or verification off, and passed a looser check. The check refuses each of them;
     - reports every added component, every `<also-trust>` value and every removed checksum;
     - compares each new SHA-256 with the published file on Maven Central, Google's Maven repository or the Gradle Plugin Portal, and fails on a mismatch;
     - writes a diff of that one file and prints the diff's SHA-256 in its own summary.
-  - *Applying the diff.* The printed commands check that SHA-256, apply with `git apply --include=native/gradle/verification-metadata.xml`, and end with a `git status` that must list only that file. An artifact that the regenerate job uploads under the same name fails the check, or makes the publish job's upload fail, and the summary says so.
+  - *Applying the diff.* The printed commands are chained with `&&`. They check that SHA-256, apply with `git apply --include=native/gradle/verification-metadata.xml`, and end with a `git status` that must list only that file. Only the summary section under "Check and publish the diff" counts. An artifact that the regenerate job uploads under the same name fails the check, or makes the publish job's upload fail, and the summary says so.
 - **What it does not do.**
   - It records only what macOS resolves, so a Kotlin or AGP update still needs the Linux-only entries from the first failing CI run.
   - A checksum that matches the published file is only as trustworthy as the repository that serves it, the same trust-on-first-use as a local regeneration.
