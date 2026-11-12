@@ -625,10 +625,12 @@ class CaddieCore(
 
     /**
      * Waits until every call made before it has run and every fetch they started has finished, as
-     * the next call would see it. For tests, and for a host that must close the database. It does
-     * not wait for the query embedder to load or be released; [CoreState.semantic] tells that.
+     * the next call would see it, the writes of [setUiSetting] included. For tests, and for a host
+     * that must close the database. It does not wait for the query embedder to load or be released;
+     * [CoreState.semantic] tells that.
      */
     suspend fun awaitIdle() {
+        withContext(uiSerial) { uiMutex.withLock {} }
         while (true) {
             // Through the same queue and lock as the calls, so the ones made earlier run first.
             val running = withContext(serial) { mutex.withLock { listOfNotNull(backendJob, bundleJob).filter { it.isActive } } }
@@ -637,16 +639,29 @@ class CaddieCore(
         }
     }
 
-    /** A setting of the screens (such as the theme), kept on this device for every backend. */
-    suspend fun uiSetting(name: String): String? = database.setting(KEY_UI + name)
+    // The settings of the screens have a queue and a lock of their own, apart from the core's, so a
+    // write never waits for a call of the core's. Writes, reads and awaitIdle all go through them:
+    // the writes of one setting are stored in the order they were made, and a read or awaitIdle
+    // comes after every write made before it.
+    private val uiSerial = Dispatchers.Default.limitedParallelism(1)
+    private val uiMutex = Mutex()
 
-    /**
-     * Stores a setting of the screens, through the core's queue like every other call: two writes of
-     * one setting are stored in the order they were made, and [awaitIdle] returns only once the
-     * writes made before it are stored.
-     */
-    fun setUiSetting(name: String, value: String?) = command {
-        database.setSetting(KEY_UI + name, value)
+    /** A setting of the screens (such as the theme), kept on this device for every backend. */
+    suspend fun uiSetting(name: String): String? =
+        withContext(uiSerial) { uiMutex.withLock { database.setting(KEY_UI + name) } }
+
+    /** Stores a setting of the screens, after every write made before it. */
+    fun setUiSetting(name: String, value: String?) {
+        scope.launch(uiSerial) {
+            try {
+                uiMutex.withLock { database.setSetting(KEY_UI + name, value) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // As in command(): a write that fails leaves the stored setting as it was, and the
+                // app running.
+            }
+        }
     }
 
     /** Bytes of stored bundles. */

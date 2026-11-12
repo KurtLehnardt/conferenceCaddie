@@ -19,6 +19,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -26,10 +27,13 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -341,20 +345,27 @@ class CaddieCoreTest {
     }
 
     /**
-     * A setting of the screens goes through the core's queue like every other call: the writes of
-     * one setting are stored in the order they were made, and awaitIdle returns only once they are
-     * stored. The Capacitor migration's count of tries relies on it (CapacitorMigrationTest).
+     * The settings of the screens have a queue of their own: the writes of one setting are stored
+     * in the order they were made, and a read or awaitIdle comes after every write made before it.
+     * The core's scope here never runs anything, so a write launched on that scope's dispatcher
+     * instead would never be stored, and the test would fail every time.
      */
     @Test
-    fun uiSettingsAreStoredInTheirOrderBeforeAwaitIdleReturns() = runTest {
-        val core = launch(online())
-        core.awaitIdle()
-        for (i in 1..20) core.setUiSetting("order", i.toString())
-        core.awaitIdle()
-        assertEquals("20", core.uiSetting("order"))
-        core.setUiSetting("order", null)
-        core.awaitIdle()
-        assertEquals(null, core.uiSetting("order"))
+    fun uiSettingsAreStoredInTheirOrderBeforeAReadOrAwaitIdle() = runTest {
+        val database = CaddieDatabase.open(dbPath).also { databases += it }
+        val stopped = StandardTestDispatcher(TestCoroutineScheduler())
+        val scope = CoroutineScope(SupervisorJob() + stopped)
+        try {
+            val core = CaddieCore(database, files, online(), scope, allowLocalHttp = false, clock = clock)
+            for (i in 1..20) core.setUiSetting("order", i.toString())
+            assertEquals("20", core.uiSetting("order"), "a read comes after the writes made before it")
+            core.setUiSetting("order", null)
+            core.awaitIdle()
+            assertNull(database.setting("ui:order"), "awaitIdle comes after the writes made before it")
+        } finally {
+            // Not joined: a coroutine launched on the stopped dispatcher would never end.
+            scope.cancel()
+        }
     }
 
     @Test
