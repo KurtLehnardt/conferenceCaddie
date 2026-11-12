@@ -322,14 +322,17 @@ over the lines `caddie-admin-v1`, the method, the path with its query, `bodySha2
 `nonce`, each followed by a newline. The token never travels. A header that leaks from a log can
 be used at most once, for the same method, path, query and body, and only while its timestamp is
 within five minutes of the Worker's clock. `scripts/lib/admin-sign.mjs` signs and
-`src/lib/admin-auth.js` verifies; both are tested against `test/fixtures/admin-sign.v1.json`. The
-signer refuses a path or query that would be percent-encoded, so both sides always sign the same
-bytes, and flags such as `allow_shrink` travel in the JSON body, which the hash covers.
+`src/lib/admin-auth.js` verifies; both are tested against `test/fixtures/admin-sign.v1.json` and
+`test/fixtures/admin-sign.v2.json`. The signer refuses a path or query that would be
+percent-encoded, so both sides always sign the same bytes, and flags such as `allow_shrink` travel
+in the JSON body, which the hash covers. The Worker also accepts version 2 of the header, which
+binds the request to the origin it was sent to; see [Signature v2](#signature-v2).
 
-The Worker checks, in this order: an `Origin` header, an `ADMIN_TOKEN` of at least 32 characters,
-the shape of the header, the empty-body hash on GET, HEAD and DELETE, the failed-auth limit of the
-caller's address, and the signature, which it compares in constant time with `ADMIN_TOKEN` and,
-during a rotation, `ADMIN_TOKEN_NEXT`. Any failure so far answers `404 {"error":"Not found"}`, as
+The Worker checks, in this order: an `Origin` header, its own configuration (`ADMIN_SIG_MIN` and
+`ADMIN_ORIGIN`, see [Signature v2](#signature-v2)), an `ADMIN_TOKEN` of at least 32 characters,
+the shape and version of the header, the empty-body hash on GET, HEAD and DELETE, the failed-auth
+limit of the caller's address, and the signature, which it compares in constant time with
+`ADMIN_TOKEN` and, during a rotation, `ADMIN_TOKEN_NEXT`. Any failure so far answers `404 {"error":"Not found"}`, as
 an unknown path does, and the body has not been read. A valid signature whose timestamp is more
 than 300 seconds from the Worker's clock answers `401 admin_skew`. Only then does the Worker read
 the body (at most 4 MB). It checks the clock again once the body is in, because a body can be
@@ -391,6 +394,61 @@ and are harmless to the older code, which never reads them. After a rollback the
 stay at `schema_version` 3, so the next schema change must use version 4: a later change that bumps
 to 3 again would be skipped silently, because `migrate()` in `src/schema.js` does nothing when the
 stored version is at least `SCHEMA_VERSION`.
+
+### Signature v2
+
+A v1 signature does not cover the host, so a signed request that reaches another host (a typo in
+the base, a hostile mirror, a staging Worker that holds the same token) could be replayed here
+within the five-minute window; the nonce table does not stop it, because that replay is the
+nonce's first use here. Version 2 closes this. Its header has the v1 fields with `v2` in front:
+
+```
+X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>
+```
+
+and `sig` covers the lines `caddie-admin-v2`, the method, the path with its query, `bodySha256`,
+`ts`, `nonce` and the origin the client sent the request to (for example
+`https://conference-caddie.<subdomain>.workers.dev`), each followed by a newline. The origin is not
+in the header: the Worker tries every origin it serves, with every key, and runs every comparison
+even after one matched. A v2 signature made for another origin is an ordinary bad signature: 404,
+and one token from the failed-auth bucket. The nonce table and the Durable Objects' 305-second
+clock check are the same for both versions, and v1 and v2 nonces share the table.
+
+The move to v2 is in four steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
+a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
+Worker refuses v1. Until step c every client still signs v1, so deploying step b changes nothing
+for them.
+
+Two optional Worker variables decide what is accepted. Neither is set in `wrangler.toml` today.
+
+- `ADMIN_ORIGIN`: the comma-separated list of the origins this Worker serves admin requests on,
+  for example `"https://caddie.example.org,https://conference-caddie.<subdomain>.workers.dev"`.
+  Each entry must be a plain `http://` or `https://` origin with no path, query, credentials, `%`
+  or non-ASCII character (an internationalised host in its `xn--` form); it is lowercased and the
+  default port is dropped. When it is unset or empty, the Worker expects the origin of the request
+  URL it was invoked with, which on Cloudflare is always one of its own hostnames, never one taken
+  from a `Host` header. That is right for the plain `workers.dev` deployment. A Worker behind a
+  custom domain, or behind Cloudflare Access or another proxy in front of `/admin/*`, needs
+  `ADMIN_ORIGIN` in `[vars]`, listing every hostname that routes to it. Never list another
+  deployment's origin: a request signed for that deployment would then verify here.
+- `ADMIN_SIG_MIN`: the oldest version accepted. Unset means the default in the source,
+  `WORKER_DEFAULT_SIG_MIN` in `src/lib/admin-auth.js`, which is `"1"` until step d changes it to
+  `"2"`. The value is matched exactly: `"1"` accepts v1 and v2, `"2"` accepts v2 only, and a v1
+  header is then a malformed header (404).
+
+Security warning: any other value is invalid configuration, and the Worker then answers 404 to
+every admin request, v1 included, without charging the failed-auth bucket. It logs one line,
+`admin config invalid: ADMIN_ORIGIN` or `admin config invalid: ADMIN_SIG_MIN`, which names the
+setting and never its value. That covers an `ADMIN_ORIGIN` entry that is not a plain origin
+(including the empty entry a trailing comma leaves) and an `ADMIN_SIG_MIN` that is empty, has
+surrounding whitespace, is `"02"` or `"v2"`, or is a TOML number rather than a quoted string.
+
+Security warning: set both only in `[vars]` of `wrangler.toml`, committed. Never set either from
+the Cloudflare dashboard or with `wrangler deploy --var`: `deploy.sh` runs `wrangler deploy`,
+which replaces the Worker's variables with those of `wrangler.toml` on every deploy, so such a
+value would vanish at the next routine deploy. For `ADMIN_ORIGIN` that would silently fall back to
+the request URL's origin, which is wrong behind a proxy; that is also why the minimum's default
+lives in the source rather than in a variable.
 
 ### Rotating the admin token
 
