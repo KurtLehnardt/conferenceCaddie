@@ -85,7 +85,8 @@ class PresenceUiTest {
             body,
         )
         u3WaitForTag("presence-on")
-        onNodeWithTag("presence-setup").assertDoesNotExist()
+        // The panel closes when turnOnPresence returns, which is after the state above was published.
+        u3WaitForNoTag("presence-setup")
         onNodeWithText("Hallway · by the coffee cart").assertIsDisplayed()
         onNodeWithText(ConnectStrings.turnsOffIn(60)).assertIsDisplayed()
         // The position step follows the first time.

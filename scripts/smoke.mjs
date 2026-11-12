@@ -144,6 +144,7 @@ import { configuredWorkerOrigins, resolveAdminTokenFile } from './lib/admin-toke
 import { CREDENTIAL_SOURCES, readCredential } from './admin/credentials.mjs';
 import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
+import { effectiveCapabilities } from '../contracts/js/capabilities.mjs';
 import { WINDOW_S, decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
 import { readConferenceIndex, sha256hex, BUNDLE_FILE } from '../contracts/js/bundle.mjs';
 
@@ -2628,6 +2629,61 @@ try {
     await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: BT, label: 'BT-presence' });
     report(problems.length === 0, 'ble1: Bluetooth sessions follow ble.mode, and sightings need a live session', problems.length ? problems.join('; ') : `${capsDoc.ble?.mode}: ${derived ? 'key and key id once, ' : ''}own and unknown tokens resolve nobody, 403 ble_required after ble:false`);
   });
+
+  // until: 'keep' (people.presence_keep_until): a write while presence is on keeps its end, and a
+  // keep with no live presence is refused. Tier 3 advertises it; the Worker is skipped until it
+  // does. One test profile with only the common topic, so it is safe anywhere; deleted at the end
+  // with the others, and its presence is ended here.
+  const KEEP1 = "keep1: until 'keep' with ble:false keeps presence_until";
+  const KEEP2 = "keep2: until 'keep' after DELETE /api/presence answers 400 presence_not_active";
+  // By the consumer rules (docs/contracts/capabilities.md): the flag counts only with people
+  // enabled, reports and presence.
+  const keepOffered = capsDoc ? effectiveCapabilities(capsDoc).people.presence_keep_until : false;
+  if (!keepOffered) {
+    const why = !capsDoc ? 'no capabilities document'
+      : IS_WORKER ? 'the Worker does not advertise people.presence_keep_until yet'
+        : 'this backend does not advertise people.presence_keep_until';
+    skip(KEEP1, why);
+    skip(KEEP2, why);
+  } else {
+    const KP = newDevice();
+    let kpOn = false;
+    await check(KEEP1, async () => {
+      const made = await putProfile(KP, PRIMARY, 'KP', { speak: [COMMON_TOPIC] }, { open: true });
+      if (made.status !== 200) throw new Error(`the test profile could not be created (status ${made.status})`);
+      const on = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', until: 'hour' }, { device: KP, label: 'KP-presence' });
+      if (on.status !== 200 || typeof on.json?.presence_until !== 'string') throw new Error(`turning presence on gave ${on.status}`);
+      kpOn = true;
+      // Long enough that a write which started the hour again would move the end.
+      await pause(1100);
+      const kept = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', until: 'keep', ble: false }, { device: KP, label: 'KP-presence' });
+      const problems = [];
+      const v = validator('people-api.v1', 'PresencePutResponse')(kept.json, { closed: true });
+      if (kept.status !== 200 || !v.valid) problems.push(`keep gave ${kept.status}${v.valid ? '' : `, schema: ${v.errors[0]?.path} ${v.errors[0]?.message}`}`);
+      if (kept.json?.until !== 'keep') problems.push(`until ${JSON.stringify(kept.json?.until)}`);
+      if (kept.json?.presence_until !== on.json.presence_until) problems.push(`presence_until moved from ${on.json.presence_until} to ${kept.json?.presence_until}`);
+      if (kept.json?.presence_since !== on.json.presence_since) problems.push('presence_since changed');
+      report(problems.length === 0, KEEP1, problems.length ? problems.join('; ') : `presence_until stays ${on.json.presence_until}`);
+    });
+    await check(KEEP2, async () => {
+      if (!kpOn) {
+        skip(KEEP2, 'keep1 could not turn presence on');
+        return;
+      }
+      const off = await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: KP, label: 'KP-presence' });
+      if (off.status !== 200) throw new Error(`DELETE /api/presence gave ${off.status}`);
+      kpOn = false;
+      const refused = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', until: 'keep', ble: true }, { device: KP, label: 'KP-presence' });
+      const problems = [];
+      if (refused.status !== 400 || refused.json?.error !== 'presence_not_active') problems.push(`keep gave ${refused.status} ${JSON.stringify(refused.json)}`);
+      if (refused.json?.ble_key || refused.json?.ble) problems.push('a refused keep answered with a Bluetooth session');
+      // Nothing came back on: a second keep is refused the same way.
+      const again = await api('PUT', '/api/presence', { event: PRIMARY, zone: ZONE_A, spot: '', until: 'keep' }, { device: KP, label: 'KP-presence' });
+      if (again.status !== 400 || again.json?.error !== 'presence_not_active') problems.push(`a second keep gave ${again.status} ${JSON.stringify(again.json)}`);
+      report(problems.length === 0, KEEP2, problems.length ? problems.join('; ') : '400 presence_not_active, twice; presence stays off');
+    });
+    if (kpOn) await api('DELETE', `/api/presence?event=${PRIMARY}`, undefined, { device: KP, label: 'KP-presence' }).catch(() => {});
+  }
 
   const BLE2 = 'ble2: sightings resolve only co-located people, with a zone only in the requester\'s zone, at most 10 new people per window';
   await check(BLE2, async () => {

@@ -106,6 +106,24 @@ test('the derived-v1 presence response carries ble_key; the legacy one carries b
   assert.equal(inbox({ incoming: [{ ...read, from: { ref: '0123456789abcdef', display_name: 'X', about: '' } }], outgoing: [] }).valid, false, 'the inbox never carries a distance');
 });
 
+test('an example that needs an optional capability names a boolean flag of the capabilities schema', () => {
+  const caps = loadSchemas().get('capabilities.v1');
+  const needing = [];
+  for (const [id, f] of fixtures) {
+    for (const ex of f.examples.filter((e) => e.requires !== undefined)) {
+      const [section, flag, ...rest] = String(ex.requires).split('.');
+      assert.equal(rest.length, 0, `${id}: ${ex.name}`);
+      assert.equal(caps.properties[section]?.properties?.[flag]?.type, 'boolean', `${id}: ${ex.name} requires ${ex.requires}`);
+      needing.push(`${id}: ${ex.name}`);
+    }
+  }
+  // until: 'keep' is optional: every example that sends it says so.
+  for (const ex of fixtures.get('presence.put').examples.filter((e) => e.request.body?.until === 'keep')) {
+    assert.equal(ex.requires, 'people.presence_keep_until', ex.name);
+  }
+  assert.ok(needing.length >= 3, needing.join(', '));
+});
+
 test('requests that every tier must refuse are invalid', () => {
   const v = (def, body) => validator('people-api.v1', def)(body).valid;
   assert.equal(v('SightingsRequest', { event: 'e', sightings: Array.from({ length: 51 }, () => ({ token: 'A'.repeat(22), rssi: -60 })) }), false, '51 sightings');
@@ -113,6 +131,8 @@ test('requests that every tier must refuse are invalid', () => {
   assert.equal(v('SightingsRequest', { event: 'e', sightings: [{ token: 'A'.repeat(22), rssi: -60, mac: 'x' }] }), false, 'extra key');
   assert.equal(v('PresencePutRequest', { event: 'e', zone: 'Hallway', location: { lat: 1, lon: 2 } }), false, 'location without accuracy');
   assert.equal(v('PresencePutRequest', { event: 'e', zone: 'Hallway', until: 'week' }), false);
+  assert.equal(v('PresencePutRequest', { event: 'e', zone: 'Hallway', until: 'KEEP' }), false);
+  assert.equal(v('PresencePutRequest', { event: 'e', zone: 'Hallway', until: 'keep' }), true);
   assert.equal(v('ProfilePutRequest', { event: 'e', profile: { display_name: 'x', linkedin_url: 'https://evil.example/in/x' }, open_to_meet: true }), false);
   assert.equal(v('ReportRequest', { event: 'e', ref: '0123456789abcdef', context: { kind: 'meet', id: '0123456789abcdef' }, reason: 'spam' }), false, 'a meet report names a meet id');
   assert.equal(v('ReportRequest', { event: 'e', ref: '0123456789abcdef', context: { kind: 'profile', id: '0123456789abcdef' }, reason: 'spam' }), true);

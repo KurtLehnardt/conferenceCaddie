@@ -20,7 +20,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -92,7 +91,12 @@ fun PresenceControls(
 ) {
     if (!state.features.presence) return
     val controller = host.controller
-    val scope = rememberCoroutineScope()
+    // The card's actions run on the app's scope (PeopleHost.scope), not one of the card's own: the
+    // card is an item of the People home's list, so scrolling it away or leaving the tab while an
+    // action is under way would cancel the action's caller and lose its toast or error. An outcome
+    // the card shows itself goes in a toast once the card has left ([shown]). busy is set before
+    // the launch, so a second tap in the same frame starts nothing.
+    val shown = rememberInComposition()
     val presence = state.presence
     val zones = state.zones
     val currentState by rememberUpdatedState(state)
@@ -138,14 +142,20 @@ fun PresenceControls(
     }
 
     fun applyPanel() {
+        if (busy) return
         val z = zone.ifEmpty { zones.firstOrNull() ?: return }
-        scope.launch {
-            busy = true
-            error = null
-            val err = controller.turnOnPresence(z, spot, mode)
-            busy = false
+        val s = spot
+        val m = mode
+        busy = true
+        error = null
+        host.scope.launch {
+            val err = try {
+                controller.turnOnPresence(z, s, m)
+            } finally {
+                busy = false
+            }
             if (err != null) {
-                error = err
+                if (shown.value) error = err else host.showMessage(err)
             } else {
                 panel = false
                 unknownZone = false
@@ -164,12 +174,16 @@ fun PresenceControls(
     }
 
     fun extend() {
-        scope.launch {
-            busy = true
-            val err = controller.extendPresence()
-            busy = false
+        if (busy) return
+        busy = true
+        host.scope.launch {
+            val err = try {
+                controller.extendPresence()
+            } finally {
+                busy = false
+            }
             // The web keeps the error for the closed panel, where it is never seen; here it is a toast.
-            host.showToast(err ?: ConnectStrings.EXTENDED)
+            if (err != null) host.showMessage(err) else host.showToast(ConnectStrings.EXTENDED)
         }
     }
 
@@ -178,14 +192,19 @@ fun PresenceControls(
     val askPosition = presence.on && !panel && canLocate && presence.positionChoice == null
 
     fun choosePosition(on: Boolean) {
-        scope.launch {
-            busy = true
-            positionProblem = null
-            val outcome = controller.sharePosition(on)
-            busy = false
+        if (busy) return
+        busy = true
+        positionProblem = null
+        host.scope.launch {
+            val outcome = try {
+                controller.sharePosition(on)
+            } finally {
+                busy = false
+            }
             when (outcome) {
                 PositionOutcome.On -> if (on) host.showToast(ConnectStrings.USING_POSITION_TOAST)
-                PositionOutcome.Denied, PositionOutcome.Approximate -> positionProblem = outcome
+                PositionOutcome.Denied, PositionOutcome.Approximate ->
+                    if (shown.value) positionProblem = outcome else host.showPermissionProblem(positionProblemText(outcome))
                 PositionOutcome.Off, PositionOutcome.Unavailable -> Unit
             }
         }
@@ -328,10 +347,14 @@ private fun PositionProblem(outcome: PositionOutcome, host: PeopleHost) {
         Modifier.fillMaxWidth().testTag("position-problem").semantics { liveRegion = LiveRegionMode.Polite },
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        HintText(if (outcome == PositionOutcome.Approximate) ConnectStrings.POSITION_APPROXIMATE else ConnectStrings.POSITION_DENIED)
+        HintText(positionProblemText(outcome))
         if (host.canOpenAppSettings) CaddieButton(ConnectStrings.OPEN_SETTINGS, host::openAppSettings, variant = ButtonVariant.Text, small = true)
     }
 }
+
+/** Why no position is sent, for [outcome] Approximate or Denied. */
+private fun positionProblemText(outcome: PositionOutcome): String =
+    if (outcome == PositionOutcome.Approximate) ConnectStrings.POSITION_APPROXIMATE else ConnectStrings.POSITION_DENIED
 
 /** .pp-presence-setup: the first-time notice, the zone, how long, the spot line and I'm around / Save. */
 @Composable
@@ -424,21 +447,26 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
     val zone = state.presence.zone
     if (!state.presence.on || !state.presence.confirmPending || zone == null) return
     val c = Caddie.colors
-    val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var picking by rememberSaveable { mutableStateOf(false) }
     var other by rememberSaveable { mutableStateOf("") }
     val zones = state.zones
     val likely = state.likelyZones
 
+    // On the app's scope, not this row's: the answer ends the question, and the controller publishes
+    // that before confirmZone returns, so the row can leave the composition (cancelling a scope of its
+    // own) before the answer comes back, and "Now in {zone}" would never show.
     fun answer(z: String) {
         if (busy || z.isEmpty()) return
-        scope.launch {
-            busy = true
-            val err = host.controller.confirmZone(z)
-            busy = false
+        busy = true
+        host.scope.launch {
+            val err = try {
+                host.controller.confirmZone(z)
+            } finally {
+                busy = false
+            }
             if (err != null) {
-                host.showToast(err)
+                host.showMessage(err)
             } else {
                 picking = false
                 if (z != zone) host.showToast(ConnectStrings.nowIn(z))

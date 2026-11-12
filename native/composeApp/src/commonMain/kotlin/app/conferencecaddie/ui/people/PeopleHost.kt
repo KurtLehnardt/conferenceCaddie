@@ -1,11 +1,13 @@
 package app.conferencecaddie.ui.people
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import app.conferencecaddie.shared.AppLink
@@ -25,10 +27,11 @@ import kotlinx.coroutines.launch
  * take it as a parameter, next to the `PeopleUiState` they draw, and never reach for the app in any
  * other way:
  *
- * - [controller]: the people features. Its actions are suspend functions; call them from a
- *   `rememberCoroutineScope()` of the screen.
+ * - [controller]: the people features. Its actions are suspend functions. Call an action whose
+ *   answer must still be shown after its composable has left (a card in a list, a row the answer
+ *   removes) from [scope]; other actions can use a `rememberCoroutineScope()` of the screen.
  * - Moving around: [openProfile], [openInbox], [openMeet], [openPeople], [openSettings] and [back].
- * - The shell's one toast: [showToast].
+ * - The shell's one toast: [showToast], and [showMessage] for an action's message.
  * - The sheets and the dialog that more than one screen opens, drawn once by the People layer:
  *   [ask] (AskSheet), [report] (ReportSheet) and [confirmBlock] (the block confirmation, then the
  *   block, its toast and Undo).
@@ -46,8 +49,9 @@ class PeopleHost(
     private val navigator: ShellNavigator,
     /**
      * A scope that lives as long as the app's composition, for work that must finish after a screen
-     * leaves (`controller.setInboxVisible(false)` from a DisposableEffect). Everything else uses
-     * the screen's own `rememberCoroutineScope()`.
+     * leaves (`controller.setInboxVisible(false)` from a DisposableEffect), and for an action whose
+     * answer must still be shown after its card has left (scrolled out of a list, another tab), or
+     * after the answer itself removed it. Other actions use the screen's own `rememberCoroutineScope()`.
      */
     val scope: CoroutineScope,
     private val toast: (message: String, action: PeopleToastAction?) -> Unit,
@@ -109,6 +113,20 @@ class PeopleHost(
 
     /** Shows [message] in the shell's toast, with an optional action such as Undo. */
     fun showToast(message: String, action: PeopleToastAction? = null) = toast(message, action)
+
+    /**
+     * An action's message as a toast, with "Open profile" when the fix is on the profile screen
+     * ([opensProfile]), as a screen that shows the message itself offers it.
+     */
+    fun showMessage(message: String) =
+        showToast(message, if (opensProfile(message)) PeopleToastAction(PeopleCommonStrings.OPEN_PROFILE, ::openProfile) else null)
+
+    /**
+     * A refused permission's words as a toast, with "Open settings" where this platform can open the
+     * app's page in the system settings, as a screen that shows the words itself offers it.
+     */
+    fun showPermissionProblem(message: String) =
+        showToast(message, if (canOpenAppSettings) PeopleToastAction(ConnectStrings.OPEN_SETTINGS, ::openAppSettings) else null)
 
     // ---------------------------------------------------------------------------------------------
     // Sheets and dialogs that more than one screen opens
@@ -378,5 +396,33 @@ sealed interface PeopleLaunch {
                 else -> null
             }
         }
+    }
+}
+
+/**
+ * Whether the composable that remembered it ([rememberInComposition]) is still in the composition.
+ * An action that runs on [PeopleHost.scope] reads it when its answer comes, from any thread: an
+ * outcome its composable would show itself (an error under a form) goes in a toast instead once the
+ * composable has left (scrolled away, or another tab), so it is not lost.
+ */
+internal class InComposition {
+    @kotlin.concurrent.Volatile
+    var value: Boolean = false
+        internal set
+}
+
+/** An [InComposition] that is true from when this composable enters the composition until it leaves. */
+@Composable
+internal fun rememberInComposition(): InComposition = remember { InComposition() }.also { it.Track() }
+
+/**
+ * Makes this [InComposition] true while the call is in the composition, for a composable that
+ * remembers it before an early return and is shown only after it.
+ */
+@Composable
+internal fun InComposition.Track() {
+    DisposableEffect(this) {
+        value = true
+        onDispose { value = false }
     }
 }

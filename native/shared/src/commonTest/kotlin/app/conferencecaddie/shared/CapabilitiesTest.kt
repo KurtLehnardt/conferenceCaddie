@@ -42,7 +42,7 @@ class CapabilitiesTest {
     fun aCompleteV1DocumentIsItsOwnEffectiveFeatureSet() {
         for (name in listOf("tier2-free.json", "tier3-paid.json", "tier3-transition.json")) {
             val fixture = Fixtures.capabilities(name)
-            assertEquals(Fixtures.asWritten(fixture), Capabilities.effective(fixture).toJson(), name)
+            assertEquals(fixture, Capabilities.effective(fixture).toJson(), name)
         }
     }
 
@@ -60,7 +60,7 @@ class CapabilitiesTest {
 
     @Test
     fun legacyIsTheContractsLegacySet() {
-        assertEquals(Fixtures.asWritten(Fixtures.capabilities("legacy-effective.json")), Capabilities.Legacy.toJson())
+        assertEquals(Fixtures.capabilities("legacy-effective.json"), Capabilities.Legacy.toJson())
         assertEquals(Capabilities.Legacy, Capabilities.effective(Capabilities.Legacy.toJson()))
         assertEquals(Capabilities.BleMode.ServerRotate, Capabilities.Legacy.ble.mode)
         assertNull(Capabilities.Legacy.talks.bundleBase)
@@ -156,6 +156,19 @@ class CapabilitiesTest {
 
         val notEnabled = Capabilities.effective(tier2.with("people", "enabled", JsonPrimitive("yes")))
         assertFalse(notEnabled.people.enabled, "only the literal true turns a flag on")
+    }
+
+    @Test
+    fun keepUntilIsOnlyOnWhenTheBackendSaysTrueAndHasPresence() {
+        val tier3 = Fixtures.capabilities("tier3-paid.json")
+        assertTrue(Capabilities.effective(tier3).people.presenceKeepUntil)
+        assertTrue(Capabilities.effective(Fixtures.capabilities("tier2-free.json")).people.presenceKeepUntil, "the Worker takes until: keep too")
+        assertFalse(Capabilities.effective(tier3.with("people", "presence_keep_until", JsonPrimitive(false))).people.presenceKeepUntil, "an explicit false is off")
+        assertFalse(Capabilities.Legacy.people.presenceKeepUntil, "the legacy server refuses until: keep")
+        assertFalse(Capabilities.effective(tier3.with("people", "presence", JsonPrimitive(false))).people.presenceKeepUntil, "it needs presence")
+        assertFalse(Capabilities.effective(tier3.with("people", "presence_keep_until", JsonPrimitive("yes"))).people.presenceKeepUntil)
+        val without = JsonObject(tier3 + ("people" to JsonObject(tier3.getValue("people").jsonObject - "presence_keep_until")))
+        assertFalse(Capabilities.effective(without).people.presenceKeepUntil, "missing is off")
     }
 
     @Test

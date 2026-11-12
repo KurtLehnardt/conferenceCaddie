@@ -60,6 +60,26 @@ class InboxUiTest {
     }
 
     @Test
+    fun aDoubleTapOnAcceptAcceptsOnce() = runComposeUiTest {
+        val rig = rig()
+        val ada = setUp(rig)
+        val id = u3Await(rig) { rig.askMe(ada, "Can we compare eBPF notes?") }
+        u3Show(rig) { state -> InboxScreen(state, rig.host) }
+        u3WaitForTag("accept-$id")
+
+        // The first Accept is held on its way to the server, so it cannot finish between the taps.
+        val path = "/api/meet/$id/accept"
+        val hold = rig.server.hold("POST", path)
+        doubleTap(onNodeWithTag("accept-$id"))
+        waitUntil(timeoutMillis = 20_000) { hold.hasArrived }
+        hold.release()
+        waitUntil(timeoutMillis = 20_000) { rig.nav.pages == listOf(PeoplePage.Meet(id)) }
+        // A later request queues behind any second Accept on its way to the server.
+        u3Await(rig) { rig.controller.refreshInbox() }
+        assertEquals(1, rig.calls("POST", path).size)
+    }
+
+    @Test
     fun notNowIsSilentForTheAsker() = runComposeUiTest {
         val rig = rig()
         val ada = setUp(rig, adaZone = "Expo hall")

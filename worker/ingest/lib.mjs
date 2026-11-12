@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contentHash } from '../../scripts/lib/hash.mjs';
-import { HEADER_NAME, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
+import { HEADER_NAME, SIG_VERSION_ENV, UsageError as SignUsageError, canonicalOrigin, signAdminRequest, signVersionFromEnv } from '../../scripts/lib/admin-sign.mjs';
 import { adminTokenFileToRead } from './admin-token-file.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -124,33 +124,62 @@ export function withTopics(doc, topics) {
 // The token comes from ADMIN_TOKEN, else from the file named by ADMIN_TOKEN_FILE, else from the
 // operator file that worker/scripts/setup-secrets.mjs writes, at the default place of
 // admin-token-file.mjs (the caddie-admin CLI's config directory). When only the old default
-// ~/.config/conference-caddie/admin-token exists, that file is read and warn gets one line naming
-// both paths (never the value). When both exist as two files with different tokens, or the old one
-// cannot be read, the default one is read and warn gets one line naming both paths (never the
-// values). Two paths that lead to one file through a symbolic or a hard link count as one file. The
-// value returned is the one admin-token-file.mjs read and compared, not a second read. Returns ''
-// when none is available. env, home and warn are for tests.
-export function readAdminToken({ env = process.env, home = homedir(), warn = (line) => process.stderr.write(`${line}\n`) } = {}) {
+// ~/.config/conference-caddie/admin-token exists, and CADDIE_ADMIN_HOME is not set, that file is
+// read and warn gets one line naming both paths (never the value). With apiOrigin, the origin of
+// the API the token is for, that fallback also needs the old directory's config.json, when there is
+// one, to list apiOrigin as a tier 2 api, as in the smoke; otherwise the old file is not read and
+// warn gets one line that says why. With CADDIE_ADMIN_HOME set the old file is never read, and when
+// it exists warn gets one line naming both paths; when ADMIN_TOKEN_FILE names the old file itself
+// then, it is read, because ADMIN_TOKEN_FILE comes first, and warn gets one line that says so. When
+// both exist as two files with different tokens, or the old one cannot be read, the default one is
+// read and warn gets one line naming both paths (never the values). Two paths that lead to one file
+// through a symbolic or a hard link count as one file. The value returned is the one
+// admin-token-file.mjs read and compared, not a second read. Returns '' when none is available.
+// env, home and warn are for tests.
+export function readAdminToken({ env = process.env, home = homedir(), warn = (line) => process.stderr.write(`${line}\n`), apiOrigin } = {}) {
   const direct = (env.ADMIN_TOKEN || '').trim();
   if (direct) return direct;
-  const { value, note } = adminTokenFileToRead(env, home);
-  if (value === null) return '';
+  const { value, note } = adminTokenFileToRead(env, home, { apiOrigin });
   if (note) warn(note);
-  return value;
+  return value ?? '';
 }
 
+// The hosts on which the API base may be plain http.
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+
+// The API base as the admin routes need it: the Worker's origin, such as
+// https://conference-caddie.<subdomain>.workers.dev or http://127.0.0.1:8787. The raw value (--api,
+// which the CI workflow fills from CADDIE_API_BASE) goes through canonicalOrigin from
+// scripts/lib/admin-origin.mjs before anything else reads it, so a value the URL parser would map
+// to another host without a word is refused rather than normalised: a full-width or other
+// non-ASCII character, a percent-encoded host ("%E3%80%82" becomes a dot), a user name or
+// password, a backslash, a path, a query or a fragment. The result is the origin a v2 signature
+// binds, with the scheme and host in lower case and the default port dropped. Plain http is
+// allowed for loopback only. The message never repeats the value, which may hold a password.
 export function normalizeApiBase(api) {
   if (!api) throw new UsageError('--api <base URL> is required.');
-  let u;
-  try {
-    u = new URL(api);
-  } catch {
-    throw new UsageError('--api is not a valid URL.');
+  const origin = canonicalOrigin(api);
+  if (origin === null) {
+    throw new UsageError('--api must be the Worker\'s origin only: a plain https:// URL (http:// for localhost only) in printable ASCII, with no path, query, fragment, user name, password, backslash, "%" or ",", and an internationalised host in its punycode (xn--) form.');
   }
-  if (u.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) {
+  if (!origin.startsWith('https:') && !LOOPBACK_HOSTS.includes(new URL(origin).hostname)) {
     throw new UsageError('--api must be https (plain http is allowed for localhost only).');
   }
-  return u.origin + u.pathname.replace(/\/+$/, '');
+  return origin;
+}
+
+// The admin signature version this process signs: CADDIE_ADMIN_SIG_VERSION through
+// signVersionFromEnv (scripts/lib/admin-origin.mjs). Unset or empty means 2, which binds every
+// request to the origin of the API base; exactly "1" rolls back to v1 while the Worker still
+// accepts it (until step d of the migration, DECISIONS.md "Admin signature v2"). Any other value is
+// a UsageError that names the variable and never repeats its value.
+export function adminSignVersion(env = process.env) {
+  try {
+    return signVersionFromEnv(env);
+  } catch (e) {
+    if (e instanceof SignUsageError) throw new UsageError(`${e.message} Leave ${SIG_VERSION_ENV} unset to sign v2, or set it to 1 to sign v1.`);
+    throw e;
+  }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -257,10 +286,18 @@ export function accessHeaders(env = process.env) {
 // status_mismatch that followed a 5xx or no answer, the message says what to do next. Nothing in
 // the message comes from the request or a header. A redirect is never followed and is an AdminError at once,
 // not retried: fetch drops only Authorization on a cross-origin redirect, so following one would
-// hand the signed header and the Access secret to another origin. `api` must be an origin (the
-// admin routes live at its root); a path or query outside the signer's charset is a UsageError
-// before anything is sent.
+// hand the signed header and the Access secret to another origin.
+//
+// `api` must be the Worker's origin (the admin routes live at its root). It is read with
+// normalizeApiBase when the client is created, so a base that canonicalOrigin refuses, or plain
+// http to anything but loopback, is a UsageError before any request exists. The signature version
+// is also fixed at creation, from CADDIE_ADMIN_SIG_VERSION in `env` (adminSignVersion): v2 by
+// default, which binds every request to that origin, and v1 when the variable is "1"; any other
+// value is a UsageError at creation. Every attempt, retries included, is signed with that version.
+// A path or query outside the signer's charset is a UsageError before anything is sent.
 export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env = process.env } = {}) {
+  const base = normalizeApiBase(api);
+  const version = adminSignVersion(env);
   const access = accessHeaders(env);
   return async function admin(method, path, body) {
     const where = `${method} ${path.split('?')[0]}`;
@@ -302,7 +339,7 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
     for (let attempt = 0; attempt <= retries; attempt++) {
       let signed;
       try {
-        signed = signAdminRequest({ method, path, base: api, body: payload, key: token });
+        signed = signAdminRequest({ method, path, base, body: payload, key: token, version });
       } catch (e) {
         throw new UsageError(`${where}: ${e.message}`);
       }

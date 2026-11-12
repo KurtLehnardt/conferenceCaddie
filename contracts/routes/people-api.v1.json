@@ -82,10 +82,11 @@
     {
       "id": "presence.put", "method": "PUT", "path": "/api/presence", "status": "frozen", "auth": "device",
       "query": [], "request": "PresencePutRequest", "response": "PresencePutResponse", "limits": ["people-write"], "capability": "people.presence",
-      "summary": "Around and up for a conversation: zone, spot line, optional position, hour or day. With ble: true it also starts Bluetooth proximity; in derived-v1 the response carries the new ble_key (the one new field of v1).",
-      "notes": "ble_key is new in v1 (docs/contracts/ble-tokens.md) and is sent only by backends whose capabilities say ble.mode derived-v1. The legacy ble { token, rotate_at } is sent only in server-rotate mode. A backend serving both during the transition may send both.",
+      "summary": "Around and up for a conversation: zone, spot line, optional position, hour or day, or keep to leave the stored end as it is. With ble: true it also starts Bluetooth proximity; in derived-v1 the response carries the new ble_key (the one new field of v1).",
+      "notes": "ble_key is new in v1 (docs/contracts/ble-tokens.md) and is sent only by backends whose capabilities say ble.mode derived-v1. The legacy ble { token, rotate_at } is sent only in server-rotate mode. A backend serving both during the transition may send both. until: 'keep' is an optional addition to v1, sent only to backends whose capabilities say people.presence_keep_until: it keeps the stored presence_until (never past the end of the conference) and never starts presence, with or without ble and with any zone, spot or location; the response echoes until: 'keep'.",
       "errors": [
         { "status": 400, "error": "filtered", "extra": ["message"], "when": "the spot line hit the filter" },
+        { "status": 400, "error": "presence_not_active", "extra": ["message"], "when": "until: 'keep' while no presence is live: none is stored, or it has run out. Nothing is written; the client turns presence on with hour or day if the user still wants it." },
         { "status": 400, "error": "*", "when": "a zone that is not one of the conference's, a malformed location, or the conference has ended" },
         { "status": 403, "error": "profile_required", "when": "no live profile with open_to_meet: true, including one hidden for deletion or deleted during the write" },
         { "status": 409, "error": "*", "when": "a concurrent write to the same profile won after the server retried once (\"The profile changed at the same time; try again\"). Retry once." }

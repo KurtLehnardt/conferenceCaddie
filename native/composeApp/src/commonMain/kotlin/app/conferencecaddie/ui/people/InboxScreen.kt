@@ -119,12 +119,18 @@ private fun IncomingCard(meet: MeetView, host: PeopleHost, nowMs: Long, scope: C
     }
     val expires = if (waiting) expiresIn(meet.expiresAt, nowMs) else null
 
+    // busy is set before the launch, so a second tap in the same frame (Accept twice, or Accept then
+    // Not now) starts nothing.
     fun act(accept: Boolean) {
+        if (busy) return
+        busy = true
+        error = null
         scope.launch {
-            busy = true
-            error = null
-            val res = if (accept) host.controller.acceptMeet(meet.meetId) else host.controller.declineMeet(meet.meetId)
-            busy = false
+            val res = try {
+                if (accept) host.controller.acceptMeet(meet.meetId) else host.controller.declineMeet(meet.meetId)
+            } finally {
+                busy = false
+            }
             when (res) {
                 is ApiResult.Ok -> if (accept) host.openMeet(meet.meetId)
                 is ApiResult.Failed -> {

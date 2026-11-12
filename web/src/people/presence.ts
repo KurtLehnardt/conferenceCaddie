@@ -7,13 +7,16 @@
 // ten minutes ago, the People tab asks "Still in {zone}?" (hour mode too). It also owns the
 // geolocation watch: with the user's say-so, watchPosition with high accuracy, at most one PUT
 // every 15 s, only while the page is visible, stopped when it is hidden and when presence turns
-// off. Denied or unavailable means zone-only, silently.
+// off. Denied or unavailable means zone-only, silently. Writes that only carry a position (a fix,
+// or the position turned off) do not restart the server's hour where the backend offers
+// until: 'keep' (capabilities.ts); turning presence on, moving zone, confirming it and Extend do.
 import { useEffect, useState } from 'preact/hooks';
 import { pacedMs } from '../lib/pace';
 import { loadSchedule } from '../offline/status';
 import { deletePresence, PeopleApiError, putPresence } from './api';
+import { keepUntilOffered, resetCapabilities } from './capabilities';
 import { getPresence, onPresenceFromOtherTab, setPresence } from './storage';
-import type { Presence, Position, PresenceMode, TalkLike } from './types';
+import type { Presence, Position, PresenceMode, PresenceUntil, TalkLike } from './types';
 
 export const PRESENCE_NOTICE =
   "While this is on, people you can see can also see that you're around and which zone you're in. How to spot you is shared only with someone you accept, only until you meet, and never stored after. Your exact position is shared only with someone you accept, only until you meet, and never stored after. It turns off by itself after an hour unless you choose to stay around for the day.";
@@ -168,8 +171,60 @@ function toPosition(pos: GeolocationPosition): Position | null {
   return { lat: latitude, lon: longitude, accuracy: Number.isFinite(accuracy) ? accuracy : 1e6 };
 }
 
-// Sends the newest fix with the current zone and spot. The server extends presence_until on
-// every write, but the device keeps its own hour, so the switch still goes off on time.
+/** True for the server's 400 presence_not_active: a 'keep' while presence is not live there. */
+export function isPresenceNotActive(err: unknown): boolean {
+  return err instanceof PeopleApiError && err.status === 400 && err.code === 'presence_not_active';
+}
+
+/**
+ * A presence write while presence is on that the person did not ask for as a new end (a position
+ * fix, the position or Bluetooth turned on or off), run from inside a presenceWrite callback.
+ * `write(until)` is sent with 'keep' where the backend offers it (`keep`), so it never moves the
+ * end the person chose, and with `mode` otherwise (the server then extends presence_until, but the
+ * device keeps its own hour, so the switch still goes off on time).
+ *
+ * A 'keep' refused with 400 presence_not_active means the device holds presence as on and the
+ * server does not: presence ends on the device (endedUnderKeep) and the error is rethrown. Any other
+ * 400 to a 'keep' may mean the backend no longer takes it, so the capabilities are read again next
+ * time; with `retry` the write is sent once more with the mode, for a write that must still land
+ * (clearing the stored position, starting or ending Bluetooth).
+ */
+export async function writeWhileOn<T>(slug: string, keep: boolean, mode: PresenceMode, write: (until: PresenceUntil) => Promise<T>, { retry = false }: { retry?: boolean } = {}): Promise<T> {
+  if (!keep) return write(mode);
+  const started = epoch;
+  try {
+    return await write('keep');
+  } catch (err) {
+    if (isPresenceNotActive(err)) {
+      endedUnderKeep(slug, started);
+      throw err;
+    }
+    if (err instanceof PeopleApiError && err.status === 400) {
+      resetCapabilities();
+      if (retry) return write(mode);
+    }
+    throw err;
+  }
+}
+
+/**
+ * The server refused a 'keep' with presence_not_active: the presence this device holds as on is
+ * not live there (it ran out, or a delete, the purge or another device cleared it), and 'keep'
+ * never starts it. Presence ends on the device as it does at its `until`: no request, the timers
+ * and the position watch stop, and the screens follow the stored state (BleControls stops
+ * Bluetooth). Presence turned off here while the write was under way is off already, with its
+ * delete queued (the epoch moved on).
+ *
+ * It runs inside the presence write queue and leaves the epoch alone, unlike
+ * presenceEndedOnServer: a turnOn queued behind the refused write was asked for after it, and its
+ * answer (presence started again with the hour or the day) must still be recorded.
+ */
+function endedUnderKeep(slug: string, started: number): void {
+  if (epoch !== started) return;
+  endOnDevice(slug);
+}
+
+// Sends the newest fix with the current zone and spot.
 async function sendFix(slug: string) {
   window.clearTimeout(sendTimer);
   sendTimer = undefined;
@@ -188,14 +243,17 @@ async function sendFix(slug: string) {
   sending = true;
   lastSentAt = Date.now();
   try {
+    const keep = await keepUntilOffered();
     await presenceWrite(async () => {
       // Presence may have been turned off (here or in another tab) while this waited its turn.
       const p = wanted();
       if (!p) return;
-      await putPresence(slug, p.zone as string, p.spot, fix, p.mode);
+      await writeWhileOn(slug, keep, p.mode, (until) => putPresence(slug, p.zone as string, p.spot, fix, until));
       lastSentFix = fix;
     });
   } catch (err) {
+    // Ended on the device inside the queue (writeWhileOn), or turned off meanwhile.
+    if (isPresenceNotActive(err)) return;
     // A profile that is gone, or presence the server no longer accepts: stop sending positions;
     // the zone-only timers decide the rest. A 409 means the profile changed while the server
     // wrote, and 429 a short limit: the next fix tries again.
@@ -275,12 +333,14 @@ export async function sharePosition(slug: string, on: boolean): Promise<void> {
   } else {
     syncPositionWatch(slug);
     try {
+      const keep = await keepUntilOffered();
       await presenceWrite(async () => {
         const now = getPresence(slug);
-        if (now.on && now.zone) await putPresence(slug, now.zone, now.spot, null, now.mode);
+        if (now.on && now.zone) await writeWhileOn(slug, keep, now.mode, (until) => putPresence(slug, now.zone as string, now.spot, null, until), { retry: true });
       });
     } catch {
-      // It lapses with the presence; the hour on the device is unchanged.
+      // presence_not_active ended presence on the device inside the queue (writeWhileOn). Anything
+      // else lapses with the presence; the hour on the device is unchanged.
     }
   }
 }
@@ -364,27 +424,32 @@ export function dismissZoneCheck(slug: string): void {
   setPresence(slug, { confirm_pending: false, confirmed_at: new Date().toISOString() });
 }
 
+/**
+ * Installs the background and expiry timers (and the position watch) for one conference, and
+ * returns the function that removes them. usePresenceWatch runs it for the shell.
+ */
+export function watchPresence(slug: string): () => void {
+  watchedSlug = slug;
+  document.addEventListener('visibilitychange', onVisibility);
+  scheduleExpiry(slug);
+  if (document.visibilityState === 'hidden') onVisibility();
+  else {
+    // Opening the app again counts as coming to the foreground.
+    checkZoneAge(slug);
+    syncPositionWatch(slug);
+  }
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    clearTimers();
+    stopPositionWatch();
+    hiddenAt = null;
+    if (watchedSlug === slug) watchedSlug = null;
+  };
+}
+
 /** Installs the background and expiry timers (and the position watch) for one conference. Call from the shell. */
 export function usePresenceWatch(slug: string | null): void {
-  useEffect(() => {
-    if (!slug) return;
-    watchedSlug = slug;
-    document.addEventListener('visibilitychange', onVisibility);
-    scheduleExpiry(slug);
-    if (document.visibilityState === 'hidden') onVisibility();
-    else {
-      // Opening the app again counts as coming to the foreground.
-      checkZoneAge(slug);
-      syncPositionWatch(slug);
-    }
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      clearTimers();
-      stopPositionWatch();
-      hiddenAt = null;
-      if (watchedSlug === slug) watchedSlug = null;
-    };
-  }, [slug]);
+  useEffect(() => (slug ? watchPresence(slug) : undefined), [slug]);
 }
 
 // Another tab turned presence off, or on, or changed it: this tab's timers and position watch
@@ -408,6 +473,11 @@ onPresenceFromOtherTab((changed) => {
  */
 export function presenceEndedOnServer(slug: string): void {
   epoch++;
+  endOnDevice(slug);
+}
+
+// Presence off on the device, with its timers and the position watch, without a request.
+function endOnDevice(slug: string): void {
   const p = getPresence(slug);
   if (p.on) {
     lastZone = p.zone;
@@ -446,8 +516,17 @@ export async function turnOn(slug: string, zone: string, spot: string, mode: Pre
   const started = epoch;
   try {
     const res = await presenceWrite(() => putPresence(slug, zone, spot, null, mode));
-    // Turned off while the write was under way: the delete queued behind it has the last word.
-    if (epoch !== started) return null;
+    if (epoch !== started) {
+      // Turned off while the write was under way: here (its delete is queued behind this write),
+      // in another tab, or by the server (visibility off). The answer is not recorded, so the
+      // device stays off; fail closed and tell the server too, after anything still queued,
+      // unless presence was turned on again meanwhile. A second delete after this tab's own is
+      // harmless.
+      void presenceWrite(async () => {
+        if (!getPresence(slug).on) await deletePresence(slug).catch(() => undefined);
+      });
+      return null;
+    }
     const until =
       typeof res.presence_until === 'string' && Number.isFinite(Date.parse(res.presence_until))
         ? res.presence_until

@@ -12,17 +12,27 @@
 // - Presence ends 60 minutes after it was turned on ('hour'), or at the end of the conference day
 //   in its time zone ('day'), and never after the end of the conference. Turning it on again
 //   while it is on keeps the first `since`.
+// - until: 'keep' keeps the stored end (only ever lowered to the end of the conference) and the
+//   first `since`, so a write that only changes Bluetooth, the zone, the spot or the position
+//   never makes someone visible for longer than they chose. It needs live presence and never
+//   starts it: without live presence the answer is 400 presence_not_active and nothing is
+//   written, neither the presence row, nor a position, nor a Bluetooth session. As on tier 3
+//   (server/connect.mjs), until and ble are checked before the spot line goes to the filter, and a
+//   'keep' without live presence is refused on the profile read, also before the filter.
 // - A position is optional: rounded to 5 decimals, dropped when its accuracy is worse than 200 m,
 //   dropped too when it implies the device moved faster than 7 m/s since its previous fix of the
 //   last ten minutes. It is held in memory only (Store.setLocation), never written to a row and
 //   never returned; only an active meet turns it into a distance and a bearing (meets.js).
 // - The presence row is written only on a real change: presence was off, or the zone, spot line,
 //   mode or Bluetooth flag changed, or the write carries no position (an explicit turn-on, which
-//   restarts the hour). A position-only update, the client's every-30-seconds fix, writes no row.
+//   restarts the hour for 'hour' and 'day'). A position-only update, the client's every-30-seconds fix, writes no row.
+//   With 'keep' the mode never counts as a change, and the row is written when the kept end has
+//   to be lowered to the end of the conference.
 // - After a presence row was written and the answer built, the nudge rule runs for this person
 //   (push/nudge.js afterPresence, which never throws). A position-only update cannot change who
 //   is in the same zone, so it does not run the rule.
-// - Turning presence off closes the person's active meets.
+// - Turning presence off deletes the presence row and the position whatever the person read before
+//   the secret check held, and closes the person's active meets.
 // - Bluetooth (lib/ble.js, docs/contracts/ble-tokens.md): ble: true starts a new session. It
 //   always mints a legacy 22-character token valid 10 minutes (never past the presence) for the
 //   old Android companion, and with the master keyring (derived-v1) also a fresh 16-byte
@@ -50,9 +60,13 @@ const JUMP_WINDOW_MS = 10 * 60_000;
 const JUMP_MAX_MPS = 7;
 
 const PRESENCE_KEYS = new Set(['event', 'zone', 'spot', 'location', 'until', 'ble']);
-const PRESENCE_MODES = new Set(['hour', 'day']);
+// 'keep' keeps the stored end of presence; it never starts presence (putPresence).
+const PRESENCE_MODES = new Set(['hour', 'day', 'keep']);
 const LOCATION_KEYS = new Set(['lat', 'lon', 'accuracy']);
 const ROTATE_KEYS = new Set(['event']);
+
+// The answer to until: 'keep' without live presence, word for word as tier 3 gives it.
+const presenceNotActive = () => new HttpError(400, { error: 'presence_not_active', message: "until: 'keep' needs presence that is on; turn it on with 'hour' or 'day'." });
 
 // The optional position of a presence write: { lat, lon, accuracy } with accuracy in metres.
 // Returns { lat, lon, accuracy } rounded to 5 decimals and whole metres, or null when there is no
@@ -82,9 +96,15 @@ function implausibleJump(prev, next, nowMs) {
 }
 
 // The caller's live, conference-wide visible profile, else 403 profile_required.
+// authenticate reads the cached person before it awaits the secret check, and the people cache can
+// be dropped and rebuilt in that gap (a talks finalize does that), so the person is read from the
+// cache again once the check is done. A write then never acts on a stale copy, such as one that
+// still holds a presence that a DELETE /api/presence removed in the gap. A row for the profile that
+// no longer carries the secret hash that was checked is not the caller's, so it is profile_required.
 async function visibleProfile(ctx, device) {
-  const me = await ctx.store.authenticate(device);
-  if (!me || !me.open_to_meet) throw profileRequired();
+  const checked = await ctx.store.authenticate(device);
+  const me = checked ? ctx.store.person(checked.profile_id) : null;
+  if (!me || me.secret_hash !== checked.secret_hash || !ctx.store.isLive(me) || !me.open_to_meet) throw profileRequired();
   return me;
 }
 
@@ -93,26 +113,44 @@ async function putPresence(ctx, req) {
   const body = await readJson(req, PRESENCE_KEYS);
   if (typeof body.zone !== 'string') throw bad('zone must be a string');
   const zone = body.zone.trim();
-  const { text: spot, pending: spotPending } = line(body.spot, 'spot', SPOT_MAX);
-  const location = parseLocation(body.location);
+  // The mode and ble are checked before the spot line goes to the filter.
   const mode = body.until === undefined || body.until === null ? 'hour' : body.until;
-  if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour' or 'day'");
+  if (!PRESENCE_MODES.has(mode)) throw bad("until must be 'hour', 'day' or 'keep'");
   if (body.ble !== undefined && typeof body.ble !== 'boolean') throw bad('ble must be a boolean');
-  const me = await visibleProfile(ctx, device);
-  // From here on nothing awaits, so the read of the current presence and the write that follows
-  // cannot interleave with another request.
+  const location = parseLocation(body.location);
   const store = ctx.store;
+  // 'keep' needs live presence, which needs the profile: it is read first, so a 'keep' without
+  // live presence is refused before the filter and before anything is written. visibleProfile
+  // reads the person again after its last await, and nothing awaits from there to the write, so
+  // the read of the current presence and the write that follows cannot interleave with another
+  // request, and a presence ended in between is never brought back.
+  let me = null;
+  if (mode === 'keep') {
+    me = await visibleProfile(ctx, device);
+    if (!store.isAround(me)) throw presenceNotActive();
+  }
+  const { text: spot, pending: spotPending } = line(body.spot, 'spot', SPOT_MAX);
+  me ??= await visibleProfile(ctx, device);
   if (!store.zones().has(zone)) throw bad("zone must be one of the conference's zones");
   const now = Date.now();
+  const around = store.isAround(me);
+  // Checked again on the clock of this write: isAround reads the clock after `now`, so `around`
+  // already means the presence ends after `now`. On Workers the clock does not move while
+  // synchronous code runs, so this agrees with the first check there; where the clock does move
+  // (Node), an end reached in between answers presence_not_active instead of reading the end of no
+  // presence below.
+  if (mode === 'keep' && !around) throw presenceNotActive();
+  const cur = around ? me.presence : null;
   const end = Number.isFinite(ctx.conf.visible_until_ms) ? ctx.conf.visible_until_ms : Infinity;
   // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
-  // the client's zone confirmation does the safeguarding instead. Never past the conference end.
+  // the client's zone confirmation does the safeguarding instead. 'keep' keeps the stored end,
+  // which it may only lower to the end of the conference, never raise. Never past the conference
+  // end.
   const dayUntil = Math.min(dayBounds(now, ctx.conf.time_zone).end, end);
-  const untilMs = mode === 'day' ? dayUntil : Math.min(now + PRESENCE_MS, end);
+  const untilMs = mode === 'keep' ? Math.min(cur.until_ms, end)
+    : mode === 'day' ? dayUntil : Math.min(now + PRESENCE_MS, end);
   if (untilMs <= now) throw bad('conference has ended');
 
-  const around = store.isAround(me);
-  const cur = around ? me.presence : null;
   // A spot line hidden after reports stays off until the operator unhides it.
   const storedSpot = me.spot_hidden ? null : spot;
   const held = Boolean(storedSpot) && spotPending;
@@ -120,13 +158,15 @@ async function putPresence(ctx, req) {
   const curMode = cur ? (cur.until_ms === dayUntil ? 'day' : 'hour') : null;
   const explicit = body.location === undefined || body.location === null;
   const bleChange = body.ble === true || (body.ble === false && Boolean(cur?.ble_token || cur?.presence_nonce));
+  // 'keep' is not a mode of its own, so it never counts as a change of mode; a kept end that the
+  // end of the conference lowers does.
   const changed = !cur || explicit || bleChange || cur.zone !== zone || (cur.spot ?? null) !== storedSpot
-    || Boolean(cur.spot_pending) !== held || curMode !== mode;
+    || Boolean(cur.spot_pending) !== held || (mode === 'keep' ? cur.until_ms !== untilMs : curMode !== mode);
 
   let presence = cur;
   let session = null;
   if (changed) {
-    // Turning it on again while it is on extends it; since keeps the first time.
+    // Turning it on again while it is on extends it ('hour', 'day'); since keeps the first time.
     const since = cur && Number.isFinite(cur.since_ms) ? cur.since_ms : now;
     const fields = { zone, spot: storedSpot, spot_pending: held, since_ms: since, until_ms: untilMs };
     if (body.ble === true) session = mintBleSession(bleConfig(ctx.env), me.profile_id, now, untilMs);
@@ -161,12 +201,16 @@ async function putPresence(ctx, req) {
   return res;
 }
 
+// Turning presence off. The person that authenticate returns was read before its await on the
+// secret check, and the people cache can be dropped and a presence written in that gap (a talks
+// finalize and a PUT /api/presence), so the copy may say there is no presence when there is one.
+// The delete therefore never looks at it: clearPresence deletes the row, when there is one, and
+// forgets the position either way, as tier 3's delete does.
 async function deletePresence(ctx, req) {
   const device = writer(ctx, req);
   const me = await ctx.store.authenticate(device);
   if (me) {
-    if (me.presence) ctx.store.clearPresence(me.profile_id);
-    else ctx.store.setLocation(me.profile_id, null);
+    ctx.store.clearPresence(me.profile_id);
     // A meet that was active ends when either presence ends.
     closeActiveMeetsOf(ctx, me.profile_id);
   }
