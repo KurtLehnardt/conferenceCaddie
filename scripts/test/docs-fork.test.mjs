@@ -232,6 +232,23 @@ test('the CLI messages quoted in ADMIN_CLI.md exist in scripts/admin', () => {
     'run the removal again (after the Retry-After the Worker sent, if any)',
     'an unretire overtook the removal of',
     'nothing further was done',
+    // The tier 2 unretire's expect_status precondition (#81): 409 status_mismatch, skipped_retired
+    // and unretire_refused. The arrow of `expected->actual` is a → escape in the source, so
+    // the quotes stop before it.
+    'not applied: the directory holds another status than this command expected (expected',
+    '(no row)',
+    'nothing was written by this attempt',
+    'something else changed the conference after this command read it (another remove, unretire, hide or unhide, or an ingest run)',
+    'and may have been applied',
+    'earlier attempts of this command may have been applied (',
+    'again until it answers 200: each run re-reads the status and expects that',
+    "a status that a directory row never holds in this CLI's version",
+    'so the Worker and this CLI are not from the same version; do not run the unretire again until they are',
+    'not applied (retired): the Worker answered status 200 and listed',
+    'and the unretire would send it as',
+    'refused, because that would change a live conference',
+    'which is not one status a directory row stores (',
+    'so this command cannot tell what to expect; refused, nothing was sent',
   ];
   assert.deepEqual(quoted.filter((q) => !sources.includes(q)), [], 'quoted in the test list but not printed by the CLI');
   assert.deepEqual(quoted.filter((q) => !doc.includes(q)), [], 'printed by the CLI but not quoted in ADMIN_CLI.md');

@@ -77,13 +77,15 @@ A different endpoint name works too: the setup scripts take `--inference-id <id>
 
 ## 3. `deploy.env`
 
-`scripts/deploy.sh` reads its settings from the environment or, for the ones that are not set there, from an optional file of `KEY=VALUE` lines at `~/.config/conference-caddie/deploy.env`. The file is never committed and is not executed; only six keys are read from it. `CADDIE_DEPLOY_ENV` changes its path. The environment wins over the file, and the script prints which one it used before it calls `gcloud`. Create it with mode 0600:
+`scripts/deploy.sh` reads its settings from the environment or, for the ones that are not set there, from an optional file of `KEY=VALUE` lines at `~/.config/conference-caddie/deploy.env` (under `XDG_CONFIG_HOME` instead when that is set). The file is never committed and is not executed; only six keys are read from it. `CADDIE_DEPLOY_ENV` changes its path. The environment wins over the file, and the script prints which one it used before it calls `gcloud`. If you have no `deploy.env` yet, create it with mode 0600. The commands below write to the path the script reads and never overwrite a file that exists (`set -o noclobber`); if you already have one, they change nothing and say so, and you add the missing keys to it with an editor instead:
 
 ```sh
 (
   umask 077
-  mkdir -m 700 -p ~/.config/conference-caddie
-  cat > ~/.config/conference-caddie/deploy.env <<'EOT'
+  set -o noclobber   # an existing deploy.env is never overwritten
+  f="${CADDIE_DEPLOY_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/conference-caddie/deploy.env}"
+  mkdir -m 700 -p "$(dirname "$f")"
+  cat > "$f" <<'EOT' || echo "$f exists: add the missing keys to it with an editor instead" >&2
 GC_PROJECT=<your project id>
 GC_REGION=us-west1
 ES_URL=https://<deployment-id>.<region>.<provider>.cloud.es.io:443
@@ -161,7 +163,7 @@ Native push to iOS and Android (APNs and FCM) is off unless a deploy sets `NATIV
 
 ### The operator key
 
-The command line needs its own key, much narrower than the setup key. This mints it and writes it to `~/.config/conference-caddie/es-admin-key` with mode 0600, without printing it (it refuses to overwrite an existing file):
+The command line needs its own key, much narrower than the setup key. This mints it and writes it to `es-admin-key` in the command line's config directory (`~/.config/conference-caddie` unless `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` says otherwise; `ES_ADMIN_KEY_FILE` or `--out <path>` names another file) with mode 0600, without printing it (it refuses to overwrite an existing file):
 
 ```sh
 node scripts/create-es-keys.mjs --operator                    # expires in 90 days
@@ -234,7 +236,7 @@ Once the operator command line is installed, you can do the ingest with `caddie-
 
 - After a conference ends: `npm run people:purge` finishes profile deletes that failed part way and deletes expired profiles, presence, meets, push subscriptions, nudge records and blocks (`caddie-admin moderation purge-expired` wraps it), and `caddie-admin moderation purge-reports --event <slug>` deletes the reports.
 - Rotating the Bluetooth master: three steps with a deploy after each; see `docs/OPERATOR_CHECKLIST.md`, "Rotating the Bluetooth master".
-- Admin access is a key you hold, not a route: the tier 3 server has no admin endpoint at all. The operator command line talks to Elasticsearch directly with your operator key. Keep that key in `~/.config/conference-caddie/es-admin-key` with mode 0600 (step 5 wrote it there), or in `ELASTISEARCH_API_KEY` for one shell, as [ADMIN_CLI.md](../ADMIN_CLI.md#install-and-configuration) describes.
+- Admin access is a key you hold, not a route: the tier 3 server has no admin endpoint at all. The operator command line talks to Elasticsearch directly with your operator key. Keep that key in the `es-admin-key` file that step 5 wrote with mode 0600 (`~/.config/conference-caddie/es-admin-key` by default), or in `ELASTISEARCH_API_KEY` for one shell, as [ADMIN_CLI.md](../ADMIN_CLI.md#install-and-configuration) describes.
 
 ## Cost control
 
