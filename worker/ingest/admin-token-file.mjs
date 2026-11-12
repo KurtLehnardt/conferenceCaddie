@@ -136,11 +136,7 @@ function readOnce(path) {
 // the file, else null: the rule of resolveAdminTokenFile in scripts/lib/admin-token-file.mjs, so
 // one setup's config never sends another setup's token. It refuses when it exists and does not
 // list apiOrigin as a tier 2 api, and when it cannot be checked (its directory cannot be
-// searched); the clause says which. It is a copy rather than a call to resolveAdminTokenFile, which
-// decides differently when the old place cannot be searched (it returns the old path for a read
-// that fails, with no note). worker/test/admin-token-parity.test.mjs runs both modules over old
-// config.json files that are not valid JSON, have a tier 3 backend only, or have a tier 2 api with
-// a path, so a change to either copy of the rule fails there.
+// searched); the clause says which.
 function oldConfigRefuses(legacy, apiOrigin) {
   const oldDir = dirname(legacy);
   const config = join(oldDir, 'config.json');

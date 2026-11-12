@@ -131,11 +131,10 @@ The talk checks read your published bundles (tier 1 must have run first, and the
 BASE_URL="$CADDIE_APP_URL" \
 SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" \
 ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token \
-SMOKE_ADMIN_AUTH=signed \
 node scripts/smoke.mjs
 ```
 
-`BASE_URL` is the app; the API is on the same origin. The admin token makes it a Worker run. Name the token file as shown: the smoke reads the caddie-admin token file by itself only for a deployed Worker that caddie-admin's `config.json` lists, and only for signed calls ([ADMIN_CLI.md](../ADMIN_CLI.md#the-smoke-test-and-the-token-file)). `caddie-admin stats health` prints a smoke command with the token file already named. `SMOKE_BUNDLE_BASE` is your bundle base, which the smoke compares with what your Worker's capabilities document says (check `cap1`) and uses to read the bundles. The smoke tests the people features with test profiles that it creates and deletes itself, checks the static files' security headers, and scans `web/dist-worker/` for leaked keys. A line that starts with FAIL needs attention. On a deployed Worker some checks print SKIP and name `ADMIN_TEST_ROUTES`; that is expected and explained next.
+`BASE_URL` is the app; the API is on the same origin. The admin token makes it a Worker run. Name the token file as shown: the smoke reads the caddie-admin token file by itself only for a deployed Worker that caddie-admin's `config.json` lists ([ADMIN_CLI.md](../ADMIN_CLI.md#the-smoke-test-and-the-token-file)). Its admin calls are signed with version 2, bound to the app's origin ([below](#the-admin-key-and-how-requests-are-signed)); there is no bearer mode. `caddie-admin stats health` prints a smoke command with the token file already named. `SMOKE_BUNDLE_BASE` is your bundle base, which the smoke compares with what your Worker's capabilities document says (check `cap1`) and uses to read the bundles. The smoke tests the people features with test profiles that it creates and deletes itself, checks the static files' security headers, and scans `web/dist-worker/` for leaked keys. A line that starts with FAIL needs attention. On a deployed Worker some checks print SKIP and name `ADMIN_TEST_ROUTES`; that is expected and explained next.
 
 ### ADMIN_TEST_ROUTES: the smoke fixtures
 
@@ -148,7 +147,7 @@ To run them against a deployed Worker, deploy once with the variable, run the sm
   set -u
   trap 'bash worker/scripts/deploy.sh' EXIT      # always redeploy without the variable, on success, failure or Ctrl-C
   (cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1)
-  BASE_URL="$CADDIE_APP_URL" SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token SMOKE_ADMIN_AUTH=signed node scripts/smoke.mjs
+  BASE_URL="$CADDIE_APP_URL" SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token node scripts/smoke.mjs
 )
 ```
 
@@ -159,10 +158,21 @@ Never set `ADMIN_TEST_ROUTES` with `wrangler secret put`. A secret survives ever
 Every request to an `/admin/*` route carries one header and no other credential:
 
 ```
-X-Caddie-Admin: v1 <ts> <nonce> <bodySha256> <sig>
+X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>
 ```
 
-`ts` is the Unix time in seconds, `nonce` is 16 random bytes as base64url, `bodySha256` is the SHA-256 of the body bytes (the empty-body hash for GET, HEAD and DELETE), and `sig` is an HMAC-SHA256 over the method, the path with its query, the body hash, the time and the nonce, keyed with the admin token after trimming. The token itself never travels. The Worker checks the signature and the time, which must be within five minutes of its own clock, before it reads any body, and its Durable Object refuses a nonce it has seen, so a captured header works at most once and only briefly. A wrong or missing signature answers `404`, the same as an unknown path, so a scanner learns nothing. The exact rules are in `worker/README.md`, "Admin requests". Clients that sign are the ingest scripts, `caddie-admin` and the smoke; they all use the same module, `scripts/lib/admin-sign.mjs`. A client that still sends the token as a bearer gets 404.
+`ts` is the Unix time in seconds, `nonce` is 16 random bytes as base64url, `bodySha256` is the SHA-256 of the body bytes (the empty-body hash for GET, HEAD and DELETE), and `sig` is an HMAC-SHA256 over the method, the path with its query, the body hash, the time, the nonce and the origin the request is sent to (for example `https://conference-caddie.<your-subdomain>.workers.dev`), keyed with the admin token after trimming. The token itself never travels, and the origin is not in the header: the Worker checks the signature against the origins it serves (the Worker's `ADMIN_ORIGIN` setting when it is set, else the origin of the request), so a signed request that reaches another host, through a typo or a hostile mirror, cannot be replayed to your Worker. The Worker checks the signature and the time, which must be within five minutes of its own clock, before it reads any body, and its Durable Object refuses a nonce it has seen, so a captured header works at most once and only briefly. A wrong or missing signature, or one made for another origin, answers `404`, the same as an unknown path, so a scanner learns nothing. The exact rules are in `worker/README.md`, "Admin requests" and "Signature v2"; a Worker on a custom domain, a zone route or behind a proxy that forwards another `Host` needs `ADMIN_ORIGIN` there. Clients that sign are the ingest scripts, `caddie-admin` and the smoke; they all use the same module, `scripts/lib/admin-sign.mjs`. A client that sends the token as a bearer gets 404, and the smoke has no bearer mode any more.
+
+### Version 1, the temporary rollback
+
+Version 1 (`v1` in the header) is the same HMAC without the origin. The Worker accepts both versions until step d of the migration (DECISIONS.md, "Admin signature v2"), which makes it refuse version 1. Until then, `CADDIE_ADMIN_SIG_VERSION=1` makes `caddie-admin` and the smoke sign version 1 again, for example if a Worker you roll back to does not accept version 2 yet:
+
+```sh
+CADDIE_ADMIN_SIG_VERSION=1 caddie-admin stats counts --event <slug>
+BASE_URL="$CADDIE_APP_URL" SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token CADDIE_ADMIN_SIG_VERSION=1 node scripts/smoke.mjs
+```
+
+Unset or empty means version 2, and `2` means version 2. Any other value is refused with exit code 2 before anything is sent, never read as a default. While the variable is `1`, `caddie-admin` prints one warning on stderr and the smoke one `NOTE` line, saying that version 1 is not bound to a host; unset the variable as soon as the rollback is over. The CI ingest has its own switch, the repository variable `CADDIE_ADMIN_SIG_VERSION` ([step 5](#5-repository-variables-the-ingest-secret-and-the-first-conference)); `worker/README.md`, "Signature v2", describes the ingest side.
 
 This is the whole admin surface of the Worker. There is no web admin page and no other credential. The CLI is the only intended client.
 
@@ -215,7 +225,7 @@ When you remove a conference with the operator command line, the Worker keeps a 
 
 ## Rolling back
 
-A Worker from before signed admin requests reads only the bearer, and current clients send only the signature. Rolling the Worker back therefore also means rolling the clients back; `worker/README.md`, "Admin requests", describes it. In normal operation you never need this.
+A Worker from before version 2 of the signature reads only version 1: set `CADDIE_ADMIN_SIG_VERSION=1` for `caddie-admin` and the smoke ([above](#version-1-the-temporary-rollback)), and the repository variable of the same name for the CI ingest ([step 5](#5-repository-variables-the-ingest-secret-and-the-first-conference)), until the Worker is current again; then unset both. A Worker from before signed admin requests reads only the bearer, and current clients send only the signature, so rolling the Worker back that far also means rolling the clients back; `worker/README.md`, "Admin requests", describes it. The smoke of this version has no bearer mode, so run the smoke from the commit you roll back to. In normal operation you never need this.
 
 ## Next
 

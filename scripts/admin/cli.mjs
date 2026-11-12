@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { appendAudit } from './audit.mjs';
 import { createAdapter as defaultCreateAdapter } from './backends/index.mjs';
+import { V1_ROLLBACK_WARNING, workerOrigin, workerSignVersion } from './backends/worker.mjs';
 import { configDir, loadConfig, selectBackend } from './config.mjs';
 import { resolveMode } from './confirm.mjs';
 import { CREDENTIAL_SOURCES, readCredential, redactor } from './credentials.mjs';
@@ -494,9 +495,19 @@ export async function main(argv, deps = {}) {
   const json = argv.includes('--json');
   const secrets = [];
   const redact = (text) => redactor(secrets)(text);
+  // One warning on standard error. With --json every stderr line is one JSON object, so a warning
+  // is { "ok": true, "warning": "<code>", "message": "<text>" } (the shape of the error object, with
+  // "ok": true because a warning alone is not a failure); without it, a "caddie-admin: warning:"
+  // line. The text is redacted and escaped like every other output.
+  const warn = (code, text) => {
+    const message = redact(text);
+    stderr.write(json
+      ? `${escapeJsonControls(JSON.stringify({ ok: true, warning: code, message }))}\n`
+      : `caddie-admin: warning: ${escapeControls(message)}\n`);
+  };
 
   try {
-    return await run(argv, { env, stdout, stderr, d, secrets, redact });
+    return await run(argv, { env, stdout, stderr, d, secrets, redact, warn });
   } catch (raw) {
     // A UsageError of the signer or another module carries its own exitCode (an integer of 1 or
     // more); anything else is 1. The code names the exit codes this CLI defines.
@@ -513,7 +524,7 @@ export async function main(argv, deps = {}) {
 }
 
 async function run(argv, ctx) {
-  const { env, stdout, stderr, d, secrets, redact } = ctx;
+  const { env, stdout, stderr, d, secrets, redact, warn } = ctx;
 
   // Help at the root and area levels.
   const [first, second] = argv;
@@ -563,6 +574,12 @@ async function run(argv, ctx) {
 
   const config = loadConfig(env);
   const backend = selectBackend(config, values.backend);
+  // Tier 2: the api and the signature version are checked here, before the credential is read and
+  // before any confirmation is asked for, so a bad value is exit 2 with nothing read or prompted.
+  if (backend.tier === 2) {
+    workerOrigin(backend);
+    if (workerSignVersion(env) === 1) warn('sig_version_1', V1_ROLLBACK_WARNING);
+  }
   const source = CREDENTIAL_SOURCES[backend.tier];
   const credential = readCredential({ env, ...source });
   secrets.push(credential);
@@ -579,7 +596,7 @@ async function run(argv, ctx) {
     try {
       appendAudit(configDir(env), { ts: d.now(), ...audit, ...extra });
     } catch {
-      stderr.write('caddie-admin: warning: the audit log could not be written\n');
+      warn('audit_not_written', 'the audit log could not be written');
     }
   };
 
@@ -605,7 +622,7 @@ async function run(argv, ctx) {
     stdout.write(redact(text));
     // A command that did its work but reports warnings (for example a delete whose best-effort
     // second pass failed) says so on stderr and exits 1, so a script notices.
-    for (const warning of warnings) stderr.write(`caddie-admin: warning: ${escapeControls(redact(warning))}\n`);
+    for (const warning of warnings) warn('result', warning);
     return warnings.length ? 1 : 0;
   } catch (error) {
     writeAudit({ mode, result: auditResult(error), error: error?.code });

@@ -73,6 +73,14 @@ function portOrigin(value) {
   }
   if (!fixture.origin_protocols.includes(u.protocol)) return null;
   if (u.pathname !== '/' || u.search !== '' || u.hash !== '' || u.username !== '' || u.password !== '') return null;
+  // The parser rewrote nothing: its host is the typed one in lower case, its port the typed one
+  // with the scheme's default (or an empty port) dropped.
+  const authority = text.slice(text.indexOf('//') + 2).replace(/\/$/, '');
+  const colon = authority.startsWith('[') ? authority.indexOf(':', authority.indexOf(']')) : authority.indexOf(':');
+  const typedHost = colon === -1 ? authority : authority.slice(0, colon);
+  const typedPort = colon === -1 ? '' : authority.slice(colon + 1);
+  if (u.hostname !== typedHost.toLowerCase()) return null;
+  if (u.port !== (typedPort === { 'http:': '80', 'https:': '443' }[u.protocol] ? '' : typedPort)) return null;
   return u.origin;
 }
 
@@ -150,9 +158,11 @@ describe('the v2 fixture file states the scheme the module implements', () => {
     assert.equal(HEADER_RE_V2.source.slice(3), HEADER_RE.source.slice(3));
     assert.equal(HEADER_RE_V2.source.slice(0, 3), '^v2');
     assert.equal(HEADER_RE.source.slice(0, 3), '^v1');
-    // The defaults stay on v1 until step (c).
-    assert.equal(fixture.default_sign_version, 1);
-    assert.equal(DEFAULT_SIGN_VERSION, 1);
+    // From step (c) the signer signs v2 by default, as signVersionFromEnv() does with
+    // CADDIE_ADMIN_SIG_VERSION unset; the Node verifier still accepts v1 only unless told otherwise.
+    assert.equal(fixture.default_sign_version, 2);
+    assert.equal(DEFAULT_SIGN_VERSION, 2);
+    assert.equal(signVersionFromEnv({}), DEFAULT_SIGN_VERSION);
     assert.deepEqual(fixture.default_allowed_versions, [1]);
   });
 
@@ -357,17 +367,30 @@ describe('v2 sign cases: every vector recomputed from scratch', () => {
       assert.throws(() => signAdminRequest({ method: 'GET', path: '/admin/stats', base, key, version: 2 }), (e) => e instanceof UsageError && e.code === 'url', String(base));
     }
     // v1 kept accepting these bases (it binds no origin), and still does.
-    for (const base of lax.slice(2)) assert.match(signAdminRequest({ method: 'GET', path: '/admin/stats', base, key }).header, HEADER_RE, base);
-    assert.match(signAdminRequest({ method: 'GET', path: '/admin/stats', base: new URL('https://caddie.example'), key }).header, HEADER_RE);
+    for (const base of lax.slice(2)) assert.match(signAdminRequest({ method: 'GET', path: '/admin/stats', base, key, version: 1 }).header, HEADER_RE, base);
+    assert.match(signAdminRequest({ method: 'GET', path: '/admin/stats', base: new URL('https://caddie.example'), key, version: 1 }).header, HEADER_RE);
+    // From step (c) the default is v2, so the same bases are refused when no version is named.
+    for (const base of [...lax, new URL('https://caddie.example')]) {
+      assert.throws(() => signAdminRequest({ method: 'GET', path: '/admin/stats', base, key }), (e) => e instanceof UsageError && e.code === 'url', String(base));
+    }
   });
 
-  test('the default is v1: no version signs exactly the v1 vector, with the v1 result shape', () => {
+  test('version 1 signs exactly the v1 vector, with the v1 result shape', () => {
     const c = v1.cases.find((x) => x.id === 'get-stats');
-    const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, key: c.key, now: c.ts * 1000, nonce: c.nonce });
-    const explicit = signAdminRequest({ method: c.method, path: c.path, base: c.base, key: c.key, now: c.ts * 1000, nonce: c.nonce, version: 1 });
+    const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, key: c.key, now: c.ts * 1000, nonce: c.nonce, version: 1 });
     assert.equal(r.header, c.header);
-    assert.deepEqual(explicit, r);
     assert.deepEqual(Object.keys(r).sort(), ['bodySha256', 'canonical', 'header', 'method', 'nonce', 'pathWithQuery', 'ts', 'url']);
+  });
+
+  test('the default is v2 from step (c): no version signs exactly the v2 vector, with the v2 result shape', () => {
+    const c = signCases.find((x) => x.id === 'get-stats');
+    const r = signAdminRequest({ method: c.method, path: c.path, base: c.base, key: c.key, now: c.ts * 1000, nonce: c.nonce });
+    const explicit = signAdminRequest({ method: c.method, path: c.path, base: c.base, key: c.key, now: c.ts * 1000, nonce: c.nonce, version: 2 });
+    assert.equal(r.header, c.header);
+    assert.match(r.header, HEADER_RE_V2);
+    assert.deepEqual(explicit, r);
+    assert.equal(r.version, 2);
+    assert.equal(r.origin, c.origin);
   });
 
   test('a fresh v2 signature has a fresh nonce and verifies for its origin only', () => {
@@ -728,7 +751,7 @@ describe('mutation checks: the vectors catch a canonical string that loses a lin
         // The v1 vectors do not depend on the v2 line, so the mutant still signs them: the
         // failure above is the v2 vectors' doing.
         const c1 = v1.cases.find((x) => x.id === 'get-stats');
-        assert.equal(m.signAdminRequest({ method: c1.method, path: c1.path, base: c1.base, key: c1.key, now: c1.ts * 1000, nonce: c1.nonce }).header, c1.header);
+        assert.equal(m.signAdminRequest({ method: c1.method, path: c1.path, base: c1.base, key: c1.key, now: c1.ts * 1000, nonce: c1.nonce, version: 1 }).header, c1.header);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

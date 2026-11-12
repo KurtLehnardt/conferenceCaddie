@@ -48,7 +48,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BODYLESS_METHODS, HEADER_NAME, bodyMatches, signAdminRequest, verifyAdminSignature } from '../scripts/lib/admin-sign.mjs';
 import { main } from '../scripts/admin/cli.mjs';
-import { createWorkerAdapter } from '../scripts/admin/backends/worker.mjs';
+import { createWorkerAdapter, workerOrigin } from '../scripts/admin/backends/worker.mjs';
 import { shellPath } from '../scripts/lib/admin-token-file.mjs';
 
 const realFetch = globalThis.fetch;
@@ -387,8 +387,11 @@ function stubWorker() {
       // The failed-signature limiter is peeked before the signature is checked: once it is empty,
       // every request is refused, a valid one included.
       if (state.failedSignatures >= 10) return json(res, 404, { error: 'Not found' });
-      const v = verifyAdminSignature({ headerValue: req.headers['x-caddie-admin'] ?? null, method: req.method, pathWithQuery: record.pathWithQuery, keys: [TOKEN] });
+      // As the Worker with ADMIN_ORIGIN unset: v1 or v2, a v2 signature bound to this stand-in's
+      // own origin (the api in the config), so one signed for any other origin is refused.
+      const v = verifyAdminSignature({ headerValue: req.headers['x-caddie-admin'] ?? null, method: req.method, pathWithQuery: record.pathWithQuery, keys: [TOKEN], allowedVersions: [1, 2], expectedOrigins: [`http://127.0.0.1:${server.address().port}`] });
       record.nonce = v.nonce ?? null;
+      record.version = v.ok ? (v.version ?? 1) : null;
       if (!v.ok) {
         if (v.reason === 'signature') state.failedSignatures += 1;
         problems.push(`${record.method} ${record.pathWithQuery}: signature ${v.reason}`);
@@ -462,6 +465,8 @@ function auditLines() {
 // instead of starting them. Every run checks the token leaks nowhere and the stand-in saw no bad
 // request.
 async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false, fetch = realFetch, trackSend } = {}) {
+  // The version every verified admin request must carry: v2 unless CADDIE_ADMIN_SIG_VERSION is "1".
+  const signVersion = env.CADDIE_ADMIN_SIG_VERSION === '1' ? 1 : 2;
   const spawned = [];
   const spawn = (file, args, options) => {
     spawned.push({ file, args, options });
@@ -500,6 +505,7 @@ async function invoke(argv, { spawnResult, env = {}, tolerateProblems = false, f
       assert.deepEqual(r.query, r.path === '/api/conferences' ? ['fresh'] : [], `${r.path} query`);
     } else {
       for (const key of r.query) assert.ok(ALLOWED_QUERY_KEYS.has(key), `query key ${key} on ${r.path} (CONF-13: flags travel in the body)`);
+      if (r.version !== null && r.version !== undefined) assert.equal(r.version, signVersion, `${r.method} ${r.path} is signed v${signVersion}`);
     }
   }
   if (!tolerateProblems) assert.deepEqual(stub.problems, [], 'the stand-in saw a bad admin request');
@@ -568,7 +574,79 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
     const r = await invoke(['stats', 'counts', '--event', EVENT]);
     assert.equal(r.code, 0, r.stderr);
     assert.equal(admins(r.requests).length, 1);
-    assert.match(admins(r.requests)[0].headers['x-caddie-admin'], /^v1 \d+ [A-Za-z0-9_-]{22} [0-9a-f]{64} [0-9a-f]{64}$/);
+    assert.match(admins(r.requests)[0].headers['x-caddie-admin'], /^v2 \d+ [A-Za-z0-9_-]{22} [0-9a-f]{64} [0-9a-f]{64}$/);
+  });
+
+  // Step c of the migration (DECISIONS.md, "Admin signature v2"): v2 by default, bound to the
+  // configured api's origin; CADDIE_ADMIN_SIG_VERSION=1 is the rollback to v1 until step d; empty
+  // counts as unset (GitHub Actions passes an undefined variable as "").
+  test('the signature is v2 by default, bound to the api origin; CADDIE_ADMIN_SIG_VERSION=1 signs v1 and "" means 2', async () => {
+    const verify = (call, allowedVersions, expectedOrigins) => verifyAdminSignature({ headerValue: call.headers['x-caddie-admin'], method: call.method, pathWithQuery: call.pathWithQuery, keys: [TOKEN], allowedVersions, expectedOrigins });
+    for (const [env, version] of [[{}, 2], [{ CADDIE_ADMIN_SIG_VERSION: '' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '2' }, 2], [{ CADDIE_ADMIN_SIG_VERSION: '1' }, 1]]) {
+      const r = await invoke(['stats', 'counts', '--event', EVENT], { env });
+      assert.equal(r.code, 0, `${JSON.stringify(env)}: ${r.stderr}`);
+      const [call] = admins(r.requests);
+      assert.equal(call.version, version, JSON.stringify(env));
+      // The rollback is never silent: one warning under "1", none otherwise.
+      assert.equal(r.stderr.split('\n').filter((l) => l.startsWith('caddie-admin: warning: CADDIE_ADMIN_SIG_VERSION=1: ')).length, version === 1 ? 1 : 0, r.stderr);
+      assert.ok(call.headers['x-caddie-admin'].startsWith(`v${version} `));
+      if (version === 2) {
+        assert.equal(verify(call, [2], [stub.url]).origin, stub.url);
+        // The same header for another origin is a plain signature failure, and a v1-only verifier
+        // reads it as malformed.
+        for (const origin of [stub.url.replace('127.0.0.1', 'localhost'), stub.url.replace('http:', 'https:'), 'https://conference-caddie.example']) {
+          assert.equal(verify(call, [2], [origin]).reason, 'signature', origin);
+        }
+        assert.equal(verify(call, [1]).reason, 'malformed');
+      } else {
+        assert.equal(verify(call, [1]).ok, true);
+        assert.equal(verify(call, [2], [stub.url]).reason, 'malformed', 'a v2-only Worker (step d) refuses it');
+      }
+    }
+  });
+
+  test('a CADDIE_ADMIN_SIG_VERSION other than unset, empty, "1" or "2" is a usage error (exit 2) before any request', async () => {
+    for (const raw of ['3', ' 2', '02', 'v2', '1 ', 'true']) {
+      const r = await invoke(['stats', 'counts', '--event', EVENT], { env: { CADDIE_ADMIN_SIG_VERSION: raw } });
+      assert.equal(r.code, 2, JSON.stringify(raw));
+      assert.match(r.stderr, /CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set/);
+      assert.equal(r.requests.length, 0, JSON.stringify(raw));
+      const j = await invoke(['stats', 'counts', '--event', EVENT, '--json'], { env: { CADDIE_ADMIN_SIG_VERSION: raw } });
+      assert.equal(JSON.parse(j.stderr).error, 'usage');
+    }
+    // The adapter reads the env it is given, never process.env.
+    assert.throws(() => createWorkerAdapter({ name: 't2', tier: 2, api: stub.url }, { credential: TOKEN, env: { CADDIE_ADMIN_SIG_VERSION: '3' } }), (e) => e.exitCode === 2 && /CADDIE_ADMIN_SIG_VERSION/.test(e.message));
+    assert.doesNotThrow(() => createWorkerAdapter({ name: 't2', tier: 2, api: stub.url }, { credential: TOKEN, env: { CADDIE_ADMIN_SIG_VERSION: '1' } }));
+  });
+
+  // The api as configured goes through canonicalOrigin before any URL parsing: each of these parses
+  // to the stand-in's own origin, so the code before step c would have signed and sent to it.
+  test('the api as configured must pass canonicalOrigin: a full-width, percent-encoded or user-name api is exit 2 before any request', async () => {
+    const port = new URL(stub.url).port;
+    const apis = [`http://\uff11\uff12\uff17.0.0.1:${port}`, `http://127.0.0.%31:${port}`, `http://ops@127.0.0.1:${port}`];
+    for (const api of apis) {
+      assert.equal(new URL(api).origin, stub.url, `${api} parses to the stand-in`);
+      writeConfig({ default: 't2', backends: { t2: { tier: 2, api } } });
+      const r = await invoke(['stats', 'counts', '--event', EVENT]);
+      assert.equal(r.code, 2, api);
+      assert.match(r.stderr, /api must be the Worker's origin as plain ASCII/);
+      assert.equal(stub.requests.length, 0);
+    }
+    // Typed plainly (upper case, a final "/"), the same origin works and signs v2 for it.
+    writeConfig({ default: 't2', backends: { t2: { tier: 2, api: `HTTP://127.0.0.1:${port}/` } } });
+    const ok = await invoke(['stats', 'counts', '--event', EVENT]);
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.equal(admins(ok.requests)[0].version, 2);
+  });
+
+  test('workerOrigin reads the configured api strictly and returns its origin', () => {
+    const origin = (api) => workerOrigin({ name: 't2', api });
+    assert.equal(origin('https://Caddie.Example:443/'), 'https://caddie.example');
+    assert.equal(origin('https://xn--bcher-kva.example'), 'https://xn--bcher-kva.example');
+    assert.equal(origin('http://localhost:8787'), 'http://localhost:8787');
+    for (const api of ['https://caddie.example%E3%80%82evil.example', 'https://b\u00fccher.example', 'https://caddie\uff0eexample', 'https://caddie.example\\', 'https://@caddie.example', 'https://caddie.example/admin', 'https://caddie.example/?x=1', 'https:caddie.example', 'http://10.0.0.5:8787', 'ftp://caddie.example', '', undefined]) {
+      assert.throws(() => origin(api), (e) => e.exitCode === 2, String(api));
+    }
   });
 
   test('a retry is signed afresh with a new nonce; a 503 and a 429 are retried, a 404 and a 400 are not', async () => {
