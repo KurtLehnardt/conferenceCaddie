@@ -109,6 +109,13 @@ jobs:
       - name: Shared tests and debug APK
         run: ./gradlew :shared:allTests :androidApp:assembleDebug
 
+      # The build tools' floors (native/build.gradle.kts) must still reach Android Lint, the Unified
+      # Test Platform and Swift export. Fails when one of those configurations is missing (a plugin
+      # renamed it) or resolves a floored module below its floor; resolving their files also runs
+      # dependency verification on them.
+      - name: Check the build tools' floors
+        run: ./gradlew checkToolingFloors
+
       - name: Keep the test reports
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

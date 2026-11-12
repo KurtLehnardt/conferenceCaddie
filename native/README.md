@@ -225,6 +225,20 @@ Normal test runs skip them. On Android, pass the instrumentation argument `caddi
 (optionally `caddieParityOnly=<state>,<state>`) and pull the PNGs from
 `/data/local/tmp/caddie-parity` with `adb pull`; on iOS, set `SIMCTL_CHILD_CADDIE_PARITY_DIR` to a folder on this Mac (and optionally
 `SIMCTL_CHILD_CADDIE_PARITY_ONLY`) for `:composeApp:iosSimulatorArm64Test`.
+The states run at a fixed instant, 09:00 on the sample summit's second day (`ParitySample.pinnedNowMs`),
+not on the wall clock, so they look the same on any day; `ParityClockTest` checks that with the
+other UI tests.
+
+On Android the shots change the device while they run: its display size and density, its text size,
+and SystemUI's demo mode, which keeps the status bar's clock at the pinned 09:00. Use an AVD of
+their own, not one you use for anything else. Each window writes the values it changes to
+`/data/local/tmp/caddie-parity/.restore` first and puts them back when it ends; if a run is killed
+in between, the next run puts them back from that file before it starts, so clear old PNGs with
+`adb shell rm /data/local/tmp/caddie-parity/*.png` rather than removing the folder. To put an
+emulator back by hand:
+`adb shell am broadcast -a com.android.systemui.demo -e command exit; adb shell settings delete global sysui_demo_allowed; adb shell wm size reset; adb shell wm density reset`.
+Some Android shots still show the status bar, part faded, where a window brought it back just
+before the shot; two runs of a state can differ by that bar, never by the time on it.
 
 ## Build and run on iOS
 
@@ -748,11 +762,11 @@ build the people controller.
 
 `gradle/verification-metadata.xml` holds the SHA-256 of every dependency and plugin the build
 resolves, and Gradle refuses an artifact whose checksum is missing or different. After changing a
-version in `gradle/libs.versions.toml` (Dependabot's Gradle updates included), regenerate it on a
-Mac, so the iOS artifacts are covered, and review the diff:
+version in `gradle/libs.versions.toml` or a floor in `build.gradle.kts` (Dependabot's Gradle updates
+included), regenerate it on a Mac, so the iOS artifacts are covered, and review the diff:
 
 ```sh
-./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help \
+./gradlew --write-verification-metadata sha256 --no-configuration-cache --rerun-tasks help checkToolingFloors \
   :shared:allTests :androidApp:assembleDebug :androidApp:assembleRelease \
   :androidApp:assembleDebugAndroidTest :composeApp:assembleAndroidDeviceTest \
   :composeApp:compileTestKotlinIosSimulatorArm64 :composeApp:linkReleaseFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64 \
@@ -762,6 +776,14 @@ Mac, so the iOS artifacts are covered, and review the diff:
 
 Then build the iOS app once with `xcodebuild` (see above), since Xcode's build phase resolves a few
 more artifacts; if it reports a missing checksum, add the task it names to the command.
+
+`checkToolingFloors` resolves the tool classpaths that only Android Lint, the device tests and Swift
+export use, so their artifacts are covered too. Those classpaths get security floors from the root
+`build.gradle.kts`: a dependency of a build tool that Dependabot reports is raised there, never in the
+version catalog (DECISIONS.md, "Security floors for the native build's tools"). The task fails when a
+floor no longer applies, for example because a plugin renamed one of the configurations, when any
+resolvable configuration resolves a floored module below its floor, and when Bouncy Castle's three jars
+are not on one release.
 
 Files that are not Maven artifacts (the query model, its vocabulary and ONNX Runtime's iOS archive)
 are pinned in `gradle/pinned-downloads.properties` by URL, size and SHA-256 instead. When ONNX

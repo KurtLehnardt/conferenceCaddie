@@ -1,7 +1,25 @@
 // Polite HTTP for the ingestion CLI: a descriptive User-Agent, each distinct URL fetched at most once
 // per run, a pause after every network call and a 30 second timeout. Node built-ins only.
 
-export const USER_AGENT = 'ConferenceCaddie-ingest/0.2 (+https://github.com/KurtLehnardt/conferenceCaddie)';
+// The ingest identifies itself to the sites it reads. CADDIE_USER_AGENT sets the whole string (put your
+// own contact in it); the default names no one, so a fork never presents itself as the original project.
+// The value becomes a header, so it must be printable ASCII (no CR, LF or other control character, which
+// could inject headers) and at most 200 characters; anything else is replaced by the default, with one
+// warning on stderr that never prints the rejected value.
+export const DEFAULT_USER_AGENT = 'conference-caddie-ingest (+set CADDIE_USER_AGENT)';
+export const USER_AGENT_MAX = 200;
+
+export function resolveUserAgent(raw, warn = (m) => process.stderr.write(`${m}\n`)) {
+  if (raw === undefined || String(raw).trim() === '') return DEFAULT_USER_AGENT;
+  const value = String(raw).trim();
+  if (!/^[\x20-\x7e]+$/.test(value) || value.length > USER_AGENT_MAX) {
+    warn(`CADDIE_USER_AGENT ignored: it must be printable ASCII of at most ${USER_AGENT_MAX} characters; using the default.`);
+    return DEFAULT_USER_AGENT;
+  }
+  return value;
+}
+
+export const USER_AGENT = resolveUserAgent(process.env.CADDIE_USER_AGENT);
 const PAUSE_MS = 1000;
 const TIMEOUT_MS = 30_000;
 
