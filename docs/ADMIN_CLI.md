@@ -17,6 +17,8 @@ npm run admin -- -h                     # the same, through npm
 npm link && caddie-admin -h             # optional: a `caddie-admin` command on your PATH (the `bin` entry of package.json)
 ```
 
+The examples in this guide are written as `caddie-admin ...`, which assumes you ran `npm link`. Without it, write `node scripts/caddie-admin.mjs ...` (or `npm run admin -- ...`) in its place.
+
 The CLI itself needs no installed packages, so the first command works straight after cloning; `npm ci` is for the repository's other scripts. The conference commands read and write `data/<slug>/conference.json` and `data/conference-operator.json` in the clone that holds the script. `CADDIE_ADMIN_ROOT` points them at another repository root.
 
 ### Backends: `config.json`
@@ -24,7 +26,7 @@ The CLI itself needs no installed packages, so the first command works straight 
 The file `config.json` names your backends and says which tier each one is. It holds **no secrets**. It lives in the config directory: `CADDIE_ADMIN_HOME` if that is set, otherwise `$XDG_CONFIG_HOME/conference-caddie`, otherwise `~/.config/conference-caddie`. Create it:
 
 ```sh
-mkdir -p ~/.config/conference-caddie
+mkdir -m 700 -p ~/.config/conference-caddie
 cat > ~/.config/conference-caddie/config.json <<'EOT'
 {
   "default": "free",
@@ -55,12 +57,14 @@ The credential is a secret and is never in `config.json`. For each tier the tool
 | 2 (the Worker) | `ADMIN_TOKEN` | the path in `ADMIN_TOKEN_FILE` | `<config dir>/admin-token` |
 | 3 (Elasticsearch) | `ELASTISEARCH_API_KEY` | the path in `ES_ADMIN_KEY_FILE` | `<config dir>/es-admin-key` |
 
-The tier 2 file is the one that `node worker/scripts/setup-secrets.mjs` already wrote when you installed the Worker's secrets ([TIER2_CLOUDFLARE.md](fork/TIER2_CLOUDFLARE.md)), so on tier 2 there is nothing more to do. For tier 3, put your admin key in the file:
+The tier 2 file is the one that `node worker/scripts/setup-secrets.mjs` already wrote when you installed the Worker's secrets ([TIER2_CLOUDFLARE.md](fork/TIER2_CLOUDFLARE.md)), so on tier 2 there is nothing more to do. For tier 3 the credential is the **operator key**, a limited Elasticsearch key that is restricted to the `caddie-*` indices and holds no security privilege. Do not use your setup or superuser key here. `scripts/create-es-keys.mjs --operator` mints it and writes it to the default file with mode 0600, without printing it ([TIER3_GCP_ELASTIC.md](fork/TIER3_GCP_ELASTIC.md#the-operator-key)). If you have a key from elsewhere, store it without echoing it:
 
 ```sh
-umask 077
-cat > ~/.config/conference-caddie/es-admin-key      # paste the key, press Enter, then Ctrl-D
-chmod 600 ~/.config/conference-caddie/es-admin-key
+(
+  umask 077
+  mkdir -m 700 -p ~/.config/conference-caddie
+  read -rs KEY && printf '%s' "$KEY" > ~/.config/conference-caddie/es-admin-key     # the key is not echoed and not in your history
+)
 ```
 
 Values are trimmed. A credential file whose mode allows anyone but its owner to read it is refused with exit code 1; the message names the file and the mode, never the value. On Windows a file's mode cannot be checked, so a credential file is not read there and the environment variable is the only source. The credential is held in the process only. It is never printed, never put in a URL, a child process's argument list or the audit log, and error messages have it replaced with `[REDACTED]`. One credential is read per tier and per run. To work two backends of the same tier, give each its own file and set `ADMIN_TOKEN_FILE` or `ES_ADMIN_KEY_FILE` for the run.
@@ -182,7 +186,7 @@ caddie-admin conferences unretire --event <slug> --yes --confirm <slug>
 ```
 
 - `list` prints slug, name, dates, status and talk count; `--all` includes the unavailable ones.
-- `add` and `refresh` index a Linux Foundation conference by slug (only those in this version; a URL or a Sessionize address is refused with exit 2). On tier 3 they run `scripts/ingest.mjs --event <slug>` and then `scripts/build-facets.mjs <slug>` with `ES_URL` and the key in the child's environment only. On tier 2 they run `gh workflow run ingest.yml -f events=<slug>`, plus `-f allow_shrink=true` for `refresh --allow-shrink`, so the GitHub CLI must be installed and signed in, and its default repository must be your fork (set it once with `gh repo set-default <owner>/<repo>`). The ingest workflow does the fetching and pushing; watch it with `gh run list --workflow ingest.yml`. A conference that was removed is refused with a message until `unretire`.
+- `add` and `refresh` index a Linux Foundation conference by slug (only those in this version; a URL or a Sessionize address is refused with exit 2). On tier 3 they run `scripts/ingest.mjs --event <slug>` and then `scripts/build-facets.mjs <slug>` with `ES_URL` and the key in the child's environment only. On tier 2 they start the `ingest.yml` workflow with the GitHub CLI, with the input `events=<slug>` (and `allow_shrink=true` for `refresh --allow-shrink`). The CLI does not pass `--repo`, so it acts on the GitHub CLI's default repository: the GitHub CLI must be installed and signed in, and its default must be your fork (set it once with `gh repo set-default <owner>/<repo>`; after `gh repo fork --clone` the default can be the original project). The ingest workflow does the fetching and pushing; watch it with `gh run list --workflow ingest.yml --repo <owner>/<repo>`. A conference that was removed is refused with a message until `unretire`.
 - `hide` keeps a conference's data but removes it from clients. It sends the conference with `status: 'unavailable'` to the backend, rewrites `data/<slug>/conference.json` (status `unavailable`, reason `operator_hidden`, a new `raw_fetched_at`), records the slug under `hidden` in `data/conference-operator.json`, and prints the files to commit. The next Pages build leaves the conference out of the bundle index. `unhide` reverses all three, restoring the status the conference had before, and tells you to run `conferences refresh`.
 - `remove` wipes the conference from the backend and retires it. On tier 3 it deletes the talks, topics and facets of the conference, and the people, meets, blocks, push subscriptions, nudges and reports of the event, then the conference document, and prints the counts; another conference's documents are untouched. On tier 2 it sends `DELETE /admin/conference` and prints the returned counts; the Worker also leaves a tombstone for the slug. Locally it rewrites `data/<slug>/conference.json` as retired (`operator_removed`) and keeps it, because the bundle build needs it to drop the conference, and records the slug under `removed` in the operator file. `--purge-local` also deletes `data/raw/<slug>/` and `data/<slug>/talks.ndjson` and nothing else. The preview prints the same counts and deletes nothing. Commit the printed files and let `pages.yml` run; the bundle directory is carried forward for one more day.
 - `unretire` lifts the retired state: see the next section.
@@ -201,12 +205,12 @@ caddie-admin stats health
 ```
 
 - `counts --event <slug>` prints document counts per index on tier 3 and row counts per table on tier 2. Without `--event` it prints totals per index (tier 3) or requests per conference for the day (tier 2).
-- `usage` on tier 2 prints, per conference and in total, the day, requests, rows read, rows written and the pace, which tells you how close you are to the Free plan's limits. On tier 3 it prints cluster health and the document counts and sizes of the indices, from `_cluster/health` and `_cat/indices`, which need the `monitor` privilege that the admin key normally holds.
+- `usage` on tier 2 prints, per conference and in total, the day, requests, rows read, rows written and the pace, which tells you how close you are to the Free plan's limits. On tier 3 it prints cluster health and the document counts and sizes of the indices, from `_cluster/health` and `_cat/indices`, which need the cluster privilege `monitor`, which the operator key holds.
 - `health` prints the tier, the Bluetooth mode and the push flags from `GET /api/capabilities` and the health status, then the exact commands: the smoke test, and the log-tail command for this backend (on tier 2 `wrangler tail` through a filter, never unfiltered; on tier 3 a `gcloud logging read` of the service's errors).
 
 ## The audit log
 
-Every run appends one line to `audit.jsonl` in the config directory, a file the tool creates with mode 0600 (and repairs if it finds wider permissions). It is append-only. A line holds only values that have the shape of their field, so free text cannot get in:
+Every run that gets past reading the config and the credential appends one line to `audit.jsonl`, including previews and refused or failed runs. Runs that stop earlier are not audited: help (`-h`), an unknown area, command or flag, a bad target or `--reason`, and a missing or malformed `config.json` (all usage errors, exit 2). A credential error is not recorded either, because it stops before the command starts. The file is `audit.jsonl` in the config directory, a file the tool creates with mode 0600 (and repairs if it finds wider permissions). It is append-only. A line holds only values that have the shape of their field, so free text cannot get in:
 
 | Field | Content |
 |---|---|
@@ -227,11 +231,11 @@ It **never** holds `--note` text, the `--name` search text, the text of a `moder
 
 | | Tier 2 (Cloudflare Worker) | Tier 3 (Elasticsearch) |
 |---|---|---|
-| How the tool reaches the backend | HMAC-signed requests to the Worker's `/admin/*` routes | Directly to Elasticsearch with your admin key |
+| How the tool reaches the backend | HMAC-signed requests to the Worker's `/admin/*` routes | Directly to Elasticsearch with your operator key |
 | Credential | The admin token (the HMAC key) | The Elasticsearch admin API key |
 | `moderation purge-expired` | Exit 5 (the Worker's cron does it) | Runs `scripts/purge-expired-people.mjs` |
 | `moderation rules test`, `reload` | Exit 5 (compiled into the Worker) | Wraps `scripts/moderation-rules.mjs` |
-| `conferences add`, `refresh` | `gh workflow run ingest.yml` | `scripts/ingest.mjs` then `scripts/build-facets.mjs` |
+| `conferences add`, `refresh` | Starts the `ingest.yml` workflow (GitHub CLI, default repository) | `scripts/ingest.mjs` then `scripts/build-facets.mjs` |
 | `stats usage` | Meters per conference and totals | Cluster health and index sizes |
 | `attendees view`, push registrations | `web` only | `web`, `apns` and `fcm` |
 | Removal tombstone | Kept by the Worker until `unretire` | The operator file only |
@@ -271,7 +275,7 @@ The aim is the smallest attack surface that still lets you operate the service.
 
 **`conferences add` or `refresh` fails on tier 2 with "gh could not start" or "gh exited".** Install the GitHub CLI, run `gh auth login`, and make sure `gh repo set-default` names your fork. The ingest workflow needs the secret `CADDIE_ADMIN_TOKEN` and the variable `CADDIE_API_BASE` in the repository.
 
-**`stats usage` fails on tier 3 with a 403.** The admin key lacks the `monitor` privilege that `_cluster/health` and `_cat/indices` need. Use a key that has it.
+**`stats usage` fails on tier 3 with a 403.** The key lacks the cluster privilege `monitor` that `_cluster/health` and `_cat/indices` need. The operator key from `scripts/create-es-keys.mjs --operator` has it; mint a new one if yours came from elsewhere.
 
 **The Worker refuses a refresh with 409 (a short feed).** Finalize refuses to delete more than 10 talks and more than 10 percent of a conference's talks, so that a short feed cannot erase people's sharing. If the schedule really shrank, run `conferences refresh --event <slug> --allow-shrink`.
 
@@ -279,6 +283,6 @@ The aim is the smallest attack surface that still lets you operate the service.
 
 **Tier 2.** The admin token is the HMAC key. Rotate it with `node worker/scripts/setup-secrets.mjs --rotate-admin-token`, then the two finishing commands it prints. The Worker accepts the old and the new token during the change, so no client is ever refused. The new value goes to your token file and the repository secret; copy it to any other computer that runs the CLI. The full procedure and the recovery cases are in [TIER2_CLOUDFLARE.md](fork/TIER2_CLOUDFLARE.md#rotating-the-admin-token).
 
-**Tier 3.** Your admin key is an Elasticsearch API key that you control. To rotate it, create a new API key in Kibana or with the Elasticsearch API, write it to `~/.config/conference-caddie/es-admin-key` (mode 0600) and into any shell that sets `ELASTISEARCH_API_KEY`, check that `caddie-admin stats health` and `stats usage` still work, and then invalidate the old key (Elastic's `DELETE /_security/api_key`, or Kibana's API keys page). The deployed service does not hold the admin key. To rotate the two scoped keys that the service holds, run `GC_PROJECT=<id> ELASTISEARCH_API_KEY=... node scripts/create-es-keys.mjs --only caddie-es-readonly` (or `caddie-es-people`), deploy again with `npm run deploy` so the new secret version is mounted, and invalidate the old key.
+**Tier 3.** The operator key expires by itself (90 days unless you chose another time), which is the rotation reminder. To rotate it, make a short-lived setup key as in [TIER3_GCP_ELASTIC.md](fork/TIER3_GCP_ELASTIC.md#2-elastic-deployment-a-short-lived-setup-key-and-the-inference-endpoint), move the old file away (`mv ~/.config/conference-caddie/es-admin-key ~/.config/conference-caddie/es-admin-key.old`, because the script never overwrites a key file), run `node scripts/create-es-keys.mjs --operator`, check that `caddie-admin stats usage` works, then invalidate the old key (Elastic's `DELETE /_security/api_key`, or Kibana's API keys page), delete the `.old` file and end the setup key. The deployed service holds neither of these. To rotate the two scoped keys that the service holds, run `GC_PROJECT=<id> node scripts/create-es-keys.mjs --only caddie-es-readonly` (or `caddie-es-people`) with a setup key in `ELASTISEARCH_API_KEY`, deploy again with `npm run deploy` so the new secret version is mounted, and invalidate the old key.
 
 After any suspected leak, rotate first, then look at `audit.jsonl` and your Cloudflare or Elastic logs for activity you do not recognise.

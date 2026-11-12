@@ -49,6 +49,7 @@ npm run deploy                                                          # Cloud 
 | `GC_REGION` | Cloud Run region. Default `us-west1`. |
 | `ES_URL` | The Elasticsearch address. Required. Passed to the service as `ES_URL`. |
 | `CADDIE_BUNDLE_BASE` | The published talk bundles' base URL, an https URL ending in `/`. Required by `deploy.sh`. Passed to the service as `TALKS_BUNDLE_BASE` (the server's own built-in default stays for tests and local development). |
+| `VAPID_SUBJECT` | The contact the push services receive: an `https:` URL or a `mailto:` address you control. Required, no default. |
 | `SERVICE` | Cloud Run service name. Default `conference-caddie`. |
 
 Other maintainer-specific addresses are read from the environment too: `CADDIE_APP_URL` (or `APP_URL`) for `scripts/make-dummy-people.mjs`, `CADDIE_BUNDLE_BASE`, `CADDIE_SITE_URL` and `CADDIE_SMOKE_CONFERENCE` for the bundle, landing-page and smoke scripts, and `CADDIE_BACKEND` plus `CADDIE_BUNDLE_BASE` for `native/scripts/release-smoke.sh`. `scripts/test/fork-values.test.mjs` fails when the maintainer's cluster id, project id, Cloud Run address or `workers.dev` host appears in code outside a short allow-list of documents and CI files.

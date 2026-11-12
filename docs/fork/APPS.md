@@ -8,7 +8,7 @@ There are three ways to put Conference Caddie on a phone, and all of them can ta
 
 This guide needs your own backend ([tier 2](TIER2_CLOUDFLARE.md) or [tier 3](TIER3_GCP_ELASTIC.md), plus [tier 1](TIER1_PAGES.md) for the talk bundles) and a GitHub fork. Everything here is free except one optional item: the Apple Developer Program fee of 99 USD per membership year, which you need only to distribute the iOS app through TestFlight or the App Store. A free Apple ID is enough to run the iOS app from Xcode on your own device, for seven days at a time. Android needs no fee.
 
-A private fork has a monthly GitHub Actions allowance of about 2,000 Linux minutes, and **macOS minutes count ten times as much**. The iOS jobs in `.github/workflows/native.yml` run on macOS, so a private fork that builds iOS on every push to `main` can use up its allowance quickly. A public fork has no such limit. See [FORK.md](../FORK.md#what-each-thing-costs).
+A private repository has a monthly GitHub Actions allowance of about 2,000 Linux minutes, and **macOS minutes count ten times as much**. The iOS jobs in `.github/workflows/native.yml` run on macOS, and that workflow also runs on a push to `main` that changes `data/**`, so a private copy can use up its allowance quickly. A public fork has no such limit. If you keep a private copy and do not build the native apps, switch the workflow off: `gh workflow disable native.yml --repo <owner>/<repo>`. See [FORK.md](../FORK.md#private-copies-and-actions-minutes).
 
 ## Order of steps
 
@@ -34,9 +34,9 @@ The apps are built to find a backend in three ways, from least to most effort:
 
 | What | Where | Value for your build |
 |---|---|---|
-| The default backend | `Defaults.BACKEND` in `native/shared/src/commonMain/kotlin/app/conferencecaddie/shared/core/CaddieCore.kt` (line 64 on main) and `BuildDefaults.OFFICIAL_SERVER` in `native/composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/shell/StandaloneShell.kt` (line 17) | Your tier 2 or tier 3 address, https, no trailing slash. Set both to the same value. |
-| The tier 1 fallback, used when the default backend cannot be reached | `Defaults.FALLBACK_BACKEND` (line 67) | Your Pages site address, for example `https://<owner>.github.io/<repository>` |
-| The bundle base for a backend that publishes none | `Defaults.FALLBACK_BUNDLE_BASE` (line 73) | Your bundle base, ending in `/` |
+| The default backend | `Defaults.BACKEND` in `native/shared/src/commonMain/kotlin/app/conferencecaddie/shared/core/CaddieCore.kt` and `BuildDefaults.OFFICIAL_SERVER` in `native/composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/shell/StandaloneShell.kt` | Your tier 2 or tier 3 address, https, no trailing slash. Set both to the same value. |
+| The tier 1 fallback, used when the default backend cannot be reached | `Defaults.FALLBACK_BACKEND` | Your Pages site address, for example `https://<owner>.github.io/<repository>` |
+| The bundle base for a backend that publishes none | `Defaults.FALLBACK_BUNDLE_BASE` | Your bundle base, ending in `/` |
 
 The Server field accepts only https, with no user name, password, query or fragment; debug builds also accept plain http to localhost and to `10.0.2.2` (`native/README.md`, "Pointing the app at a backend"). After editing, run the shared tests from `native/` with `./gradlew :shared:allTests`.
 
@@ -44,7 +44,7 @@ The release smoke script `native/scripts/release-smoke.sh` checks a release buil
 
 ### The Capacitor Android app
 
-The Capacitor app calls the API at the origin named by `VITE_API_ORIGIN` when the web app is built (`web/src/native.ts`). In the repository's workflow `.github/workflows/android-apk.yml` that value is set on line 40 and names the maintainer's older Cloud Run service. Edit it to your backend address in your fork. To build locally, follow `docs/ANDROID.md`: build the web app with `VITE_API_ORIGIN=https://<your host> npm run build` from `web/`, run `npx cap sync android` and open `web/android` in Android Studio. A push to a branch named `android/**` runs the workflow, and the debug APK is kept as a workflow artifact.
+The Capacitor app calls the API at the origin named by `VITE_API_ORIGIN` when the web app is built (`web/src/native.ts`). In the repository's workflow `.github/workflows/android-apk.yml` that value is set in the `env:` of the `apk` job and names the maintainer's older Cloud Run service. Edit it to your backend address in your fork. To build locally, follow `docs/ANDROID.md`: build the web app with `VITE_API_ORIGIN=https://<your host> npm run build` from `web/`, run `npx cap sync android` and open `web/android` in Android Studio. A push to a branch named `android/**` runs the workflow, and the debug APK is kept as a workflow artifact.
 
 ## The application id
 
@@ -57,11 +57,11 @@ Change it in every place, choosing an id in a domain you control (for example `o
 
 | File | What to change |
 |---|---|
-| `native/androidApp/build.gradle.kts` (line 64) | `applicationId` |
-| `native/iosApp/Configuration/Config.xcconfig` (line 6) | `BUNDLE_ID` |
-| `.github/workflows/native.yml` (line 818) | the key `provisioningProfiles:app.conferencecaddie` of the export options |
-| `native/scripts/release-smoke.sh` (line 24) | `PKG` |
-| `web/android/app/build.gradle` (line 8), `web/capacitor.config.ts` (`appId`) and `web/android/app/src/main/res/values/strings.xml` (`package_name`, `custom_url_scheme`) | the Capacitor app's id |
+| `native/androidApp/build.gradle.kts` | `applicationId` |
+| `native/iosApp/Configuration/Config.xcconfig` | `BUNDLE_ID` |
+| `.github/workflows/native.yml` | the key `provisioningProfiles:app.conferencecaddie` of the export options |
+| `native/scripts/release-smoke.sh` | `PKG` |
+| `web/android/app/build.gradle`, `web/capacitor.config.ts` (`appId`) and `web/android/app/src/main/res/values/strings.xml` (`package_name`, `custom_url_scheme`) | the Capacitor app's id |
 
 Leave the Kotlin package names (`app.conferencecaddie...`) and the `namespace` alone. They are code, not the install id. For APNs, set `APNS_BUNDLE_ID` to your id when you deploy tier 3 (see below).
 
@@ -71,12 +71,16 @@ An unsigned or debug-signed build runs on your own phone. For a release APK that
 
 ### Create the keystore
 
+Create the keystore outside the repository, in a directory only you can enter, never in the repository root:
+
 ```sh
-keytool -genkeypair -v -storetype PKCS12 -keystore release.jks -alias <alias> \
+mkdir -m 700 -p ~/.config/conference-caddie
+keytool -genkeypair -v -storetype PKCS12 -keystore ~/.config/conference-caddie/release.jks -alias <alias> \
   -keyalg RSA -keysize 4096 -validity 10000
+chmod 600 ~/.config/conference-caddie/release.jks
 ```
 
-`keytool` asks for the passwords and your details. Keep `release.jks` outside the repository, for example in `~/.config/conference-caddie/release.jks`. A PKCS12 key uses the same password for the key and the keystore. Print the public certificate fingerprint, which is not secret:
+`keytool` asks for the passwords and your details itself, so they never appear on a command line. A PKCS12 key uses the same password for the key and the keystore. Print the public certificate fingerprint, which is not secret:
 
 ```sh
 keytool -list -v -keystore ~/.config/conference-caddie/release.jks -alias <alias> | grep 'SHA256:'
@@ -89,7 +93,7 @@ A local release build is signed when all four variables are set; when none is se
 ```sh
 (
   export ANDROID_KEYSTORE_FILE="$HOME/.config/conference-caddie/release.jks"
-  export ANDROID_KEYSTORE_PASSWORD=...     # from your password manager
+  read -rs ANDROID_KEYSTORE_PASSWORD && export ANDROID_KEYSTORE_PASSWORD     # type it; not shown, not in history
   export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
   export ANDROID_KEY_ALIAS=<alias>
   ./gradlew --no-configuration-cache :androidApp:assembleRelease
@@ -102,6 +106,8 @@ Use `--no-configuration-cache` so the passwords are not written into Gradle's co
 
 In CI, Gradle never sees the key. The build job makes an unsigned release APK, and a separate job in the GitHub environment `release` signs that file with the runner's own Android tools, without checking out or running project code. Create the environment, restrict it to `main`, and add the four secrets there:
 
+**GitHub plan note.** Environments with their own secrets and branch rules are available for private repositories only on a paid GitHub plan (Pro, Team or Enterprise); a public repository has them on every plan. On a **private repository under GitHub Free**, `--env release` does not work. Set the same secrets at repository level (leave out `--env release`; the first run creates an empty `release` environment by itself), and understand the cost: a repository secret can be read by a workflow on any branch that someone with write access pushes, so the signing key is no longer limited to `main`. For that reason a public fork is the better home for signing keys, or keep the keys off GitHub and sign locally.
+
 ```sh
 gh api -X PUT repos/<owner>/<repo>/environments/release --input - <<'EOT'
 {"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
@@ -109,7 +115,7 @@ EOT
 gh api -X POST repos/<owner>/<repo>/environments/release/deployment-branch-policies -f name=main
 
 base64 < ~/.config/conference-caddie/release.jks | tr -d '\n' | gh secret set ANDROID_KEYSTORE_BASE64 --env release --repo <owner>/<repo>
-gh secret set ANDROID_KEYSTORE_PASSWORD --env release --repo <owner>/<repo>     # prompts; type or paste the value
+gh secret set ANDROID_KEYSTORE_PASSWORD --env release --repo <owner>/<repo>     # prompts; type or paste the value, which is not echoed
 gh secret set ANDROID_KEY_ALIAS --env release --repo <owner>/<repo>
 gh secret set ANDROID_KEY_PASSWORD --env release --repo <owner>/<repo>
 gh variable set ANDROID_RELEASE_CERT_SHA256 --repo <owner>/<repo> --body "<the SHA256 fingerprint>"
@@ -125,7 +131,16 @@ You need a Mac with Xcode 26 or newer. The first iOS build downloads Kotlin/Nati
 
 1. Change the bundle id in `native/iosApp/Configuration/Config.xcconfig` as above.
 2. Copy `native/iosApp/Configuration/Local.xcconfig.example` to `native/iosApp/Configuration/Local.xcconfig` and set `TEAM_ID` to your Apple team id, shown at https://developer.apple.com/account under Membership details. Git ignores that file, so no team id is ever committed.
-3. Open `native/iosApp/iosApp.xcodeproj`, pick a simulator or your device and press Run. Simulator builds need no signing. A free Apple ID can run the app on your own device for seven days at a time, but a personal team cannot use Push Notifications, so the app's push capability needs the paid program.
+3. Open `native/iosApp/iosApp.xcodeproj`, pick a simulator or your device and press Run. Simulator builds need no signing.
+
+**With a free Apple ID (a personal team).** A free Apple ID can run the app on your own device for seven days at a time, but a personal team cannot use the Push Notifications capability. The app is built with the entitlement `aps-environment` (`native/iosApp/iosApp/iosApp.entitlements`), which Xcode then refuses to sign. Build without the entitlement, and do not commit that change. Either remove the Push Notifications capability in Xcode (target `iosApp`, Signing & Capabilities) on your own machine and leave the resulting changes to the entitlements file and project out of your commits (`git checkout` them afterwards), or override the setting on the command line:
+
+```sh
+xcodebuild -project native/iosApp/iosApp.xcodeproj -scheme iosApp -configuration Debug \
+  -destination 'generic/platform=iOS' DEVELOPMENT_TEAM=<your team id> CODE_SIGN_ENTITLEMENTS= build
+```
+
+An app built this way runs and works, but it cannot receive native push. Push needs the paid program.
 
 To build from the command line for a simulator:
 
@@ -178,16 +193,16 @@ Native push is off by default and a fork does not need it. Web Push (the notific
 
 - **Tier 2.** The Worker sends Web Push only. Native push to the iOS and Android apps is a tier 3 feature (`push.apns` and `push.fcm` in `GET /api/capabilities` are false on tier 2).
 - **Tier 3, APNs.** In Apple Developer, Keys, create a key with the Apple Push Notifications service enabled, and download `AuthKey_<KEY ID>.p8` (once). Store the file as the secret `caddie-apns-key` and the string `<KEY ID> <TEAM ID>` as the secret `caddie-apns-ids` in your Google Cloud project, then deploy with `NATIVE_PUSH_APNS=1` and, if you changed the bundle id, `APNS_BUNDLE_ID=<your bundle id>`. The exact `gcloud secrets create` commands and the rotation steps are in step 7a of `docs/OPERATOR_CHECKLIST.md`; use your own project id there. The key serves both the sandbox and the production environment.
-- **Tier 3, FCM.** There is no key to store. The service sends with the access token of the runtime service account `caddie-runtime`, which needs the role Firebase Cloud Messaging API Admin on your Firebase project (step 7a of the checklist). Set `FCM_PROJECT_ID` in `deploy.env` and deploy with `NATIVE_PUSH_FCM=1`. The native Android app has no Firebase and gets no native push by design (`DECISIONS.md`); FCM matters only for a Capacitor build that you give your own `google-services.json` (git-ignored, at `web/android/app/google-services.json`).
+- **Tier 3, FCM.** There is no key to store. The service sends with the access token of the runtime service account `caddie-runtime`, which needs the role Firebase Cloud Messaging API Admin on your Firebase project (step 7a of the checklist). Set `FCM_PROJECT_ID` in `deploy.env` and deploy with `NATIVE_PUSH_FCM=1`. The native Android app has no Firebase and gets no native push by design (`DECISIONS.md`); FCM matters only for a Capacitor build that you give your own `google-services.json` (at `web/android/app/google-services.json`; `web/android/.gitignore` ignores that file name, and `git check-ignore -v web/android/app/google-services.json` confirms it before you commit anything).
 
 ## What an installed app does when the operator changes things
 
 These behaviours are what an installed app shows after an operator action, checked against the code of this repository. The CLI guide refers to them.
 
 - **A conference leaves `conferences.json`.** The apps keep the last good copy of `conferences.json` per backend address and use it offline, and they fetch a new one with an ETag (`BundleSync.kt`, the header comment of `native/shared/src/commonMain/kotlin/app/conferencecaddie/shared/bundle/BundleSync.kt`). A bundle that is already installed stays in use until a newer one replaces it; the previous bundle's folder is deleted only after a new one is installed. A review of the shared code found nothing that deletes an installed bundle because its conference left the list, so a person who already opened the conference can keep reading its schedule on that device. The conference disappears from the list when the app next refreshes the index. For the people features the server decides: see the next two points.
-- **The operator deleted a person's profile.** Every people call that needs the profile then answers `403 profile_required` (tier 2: `profileRequired` in `worker/src/connect/common.js`, line 25; tier 3: `server/connect.mjs`, line 89, and `server/people.mjs`, line 1256). The web app and the native apps treat that code as "no profile here any more": the web client empties its local inbox (`web/src/people/connect.ts`), the push code reports that a profile is needed (`web/src/people/push.ts`, `PeopleController.kt`), and the screens say "Make your profile visible first." (`native/shared/src/commonMain/kotlin/app/conferencecaddie/shared/people/PeopleText.kt`). The person can create a new profile. Whether an app also clears its own stored copy of the profile was not verified.
-- **Tier 2 after a conference is removed.** The Worker caches its list of conferences for up to five minutes (`DIRECTORY_TTL_MS` in `worker/src/index.js`, line 23). During that time a request can still be routed to the conference's object, which has no document any more and answers `400 conference is not available` (`worker/src/conference.js`, line 240). After the cache expires, the Worker answers the same from the directory (`worker/src/index.js`, line 459 for the admin routes). Clients show the conference as unavailable.
-- **Tier 3 after a conference is removed.** The server keeps its conference list for 60 seconds (`TTL_MS` in `server/conferences.mjs`, line 11). After that, `searchableConference` finds nothing and the people routes answer `conference is not available` (`server/people.mjs`, line 394).
+- **The operator deleted a person's profile.** Every people call that needs the profile then answers `403 profile_required` (tier 2: `profileRequired` in `worker/src/connect/common.js`; tier 3: `profileRequired` in `server/connect.mjs`, and the 404-to-403 mapping in `server/people.mjs`). The web app and the native apps treat that code as "no profile here any more": the web client empties its local inbox (`web/src/people/connect.ts`), the push code reports that a profile is needed (`web/src/people/push.ts`, `PeopleController.kt`), and the screens say "Make your profile visible first." (`native/shared/src/commonMain/kotlin/app/conferencecaddie/shared/people/PeopleText.kt`). The person can create a new profile. Whether an app also clears its own stored copy of the profile was not verified.
+- **Tier 2 after a conference is removed.** The Worker caches its list of conferences for up to five minutes (`DIRECTORY_TTL_MS` in `worker/src/index.js`). During that time a request can still be routed to the conference's object, which has no document any more and answers `400 conference is not available` (`worker/src/conference.js`, the "conference is not available" answer for an object without a conference). After the cache expires, the Worker answers the same from the directory (`worker/src/index.js`, in the admin routing, where the directory is read fresh). Clients show the conference as unavailable.
+- **Tier 3 after a conference is removed.** The server keeps its conference list for 60 seconds (`TTL_MS` in `server/conferences.mjs`). After that, `searchableConference` finds nothing and the people routes answer `conference is not available` (`server/people.mjs`, where the conference is looked up).
 
 ## Next
 

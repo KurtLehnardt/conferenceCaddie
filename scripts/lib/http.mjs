@@ -1,7 +1,9 @@
 // Polite HTTP for the ingestion CLI: a descriptive User-Agent, each distinct URL fetched at most once
 // per run, a pause after every network call and a 30 second timeout. Node built-ins only.
 
-export const USER_AGENT = 'ConferenceCaddie-ingest/0.2 (+https://github.com/KurtLehnardt/conferenceCaddie)';
+// The ingest identifies itself to the sites it reads. CADDIE_USER_AGENT sets the whole string (put your
+// own contact in it); the default names no one, so a fork never presents itself as the original project.
+export const USER_AGENT = (process.env.CADDIE_USER_AGENT || '').trim() || 'conference-caddie-ingest (+set CADDIE_USER_AGENT)';
 const PAUSE_MS = 1000;
 const TIMEOUT_MS = 30_000;
 

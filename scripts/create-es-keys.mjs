@@ -1,7 +1,16 @@
 // Mints the two scoped Elasticsearch API keys the deployed service uses and stores them in
-// Google Secret Manager. It never prints, logs or writes a key value or a password.
+// Google Secret Manager. It never prints or logs a key value or a password; the operator key (--operator) is written only to a new file of mode 0600.
 //
-//   ELASTISEARCH_API_KEY=... node scripts/create-es-keys.mjs [--verify-only] [--only <secret>]
+//   GC_PROJECT=... ELASTISEARCH_API_KEY=... node scripts/create-es-keys.mjs [--verify-only] [--only <secret>]
+//   ELASTISEARCH_API_KEY=... node scripts/create-es-keys.mjs --operator [--out <file>] [--expiration <90d>]
+//
+// --operator mints the third key, the one the caddie-admin command line uses, and writes it to a
+// file (default <config dir>/es-admin-key, mode 0600; --out changes the path) instead of Secret
+// Manager. It is limited to the caddie-* indices (read, write, delete, maintenance,
+// view_index_metadata) plus the cluster privilege monitor, and holds no security, inference or
+// index-management privilege, so a leak of it cannot create users, keys or indices. It expires
+// after 90 days unless --expiration says otherwise (an Elasticsearch duration such as 30d).
+// This mode needs no GC_PROJECT and no gcloud. It refuses to overwrite an existing file.
 //
 // --only caddie-es-readonly (or caddie-es-people) re-mints just that key; the other is only
 // verified.
@@ -25,10 +34,14 @@
 // check.
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, openSync, closeSync, writeSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { esUrlOrExit } from './lib/es-url.mjs';
+const OPERATOR_MODE = process.argv.includes('--operator');
 const PROJECT = process.env.GC_PROJECT;
-if (!PROJECT) {
+if (!PROJECT && !OPERATOR_MODE) {
   console.error('Set GC_PROJECT to your Google Cloud project id.');
   process.exit(1);
 }
@@ -65,6 +78,17 @@ const KEYS = [
     indices: [{ names: ['caddie-people*'], privileges: ['read', 'write', 'view_index_metadata'] }],
   },
 ];
+
+// The operator key (caddie-admin). Everything the CLI does fits in these: document reads and writes,
+// delete-by-query with refresh (delete, maintenance), index metadata and _cat/_cluster reads
+// (view_index_metadata, monitor). Creating indices, roles, users and keys is the setup key's job.
+const OPERATOR = {
+  user: 'caddie-operator-svc',
+  role: 'caddie_operator',
+  name: 'caddie-operator',
+  cluster: ['monitor'],
+  indices: [{ names: ['caddie-*'], privileges: ['read', 'write', 'delete', 'maintenance', 'view_index_metadata'] }],
+};
 
 async function es(method, path, body, auth = `ApiKey ${ADMIN}`) {
   const res = await fetch(esUrlOrExit() + path, {
@@ -138,6 +162,75 @@ async function mint(k) {
   must(await es('POST', `/_security/user/${k.user}/_password`, { password: randomPassword() }), `Password reset for ${k.user}`);
   console.log(`Minted the key for ${k.user} and reset its password to a discarded value.`);
   storeSecret(k.secret, key.encoded);
+}
+
+function argValue(flag) {
+  const i = process.argv.indexOf(flag);
+  return i === -1 ? null : process.argv[i + 1];
+}
+
+function operatorFile() {
+  const out = argValue('--out');
+  if (out) return out;
+  if (process.env.ES_ADMIN_KEY_FILE) return process.env.ES_ADMIN_KEY_FILE;
+  const base = process.env.CADDIE_ADMIN_HOME || join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'conference-caddie');
+  return join(base, 'es-admin-key');
+}
+
+// Writes the key to a new file readable by its owner only. The key is never printed.
+function writeKeyFile(file, value) {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const fd = openSync(file, 'wx', 0o600);
+  try {
+    writeSync(fd, value);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(file, 0o600);
+}
+
+async function mintOperator() {
+  const file = operatorFile();
+  if (existsSync(file)) throw new Error(`${file} exists; move it away first (this script never overwrites a key file)`);
+  const expiration = argValue('--expiration') ?? '90d';
+  if (!/^[1-9][0-9]{0,4}[dhm]$/.test(expiration)) throw new Error('--expiration takes a duration such as 30d, 12h or 90d');
+  const k = OPERATOR;
+  must(await es('PUT', `/_security/role/${k.role}`, { cluster: [...k.cluster, 'manage_own_api_key'], indices: k.indices }), `Role ${k.role}`);
+  const password = randomPassword();
+  must(await es('PUT', `/_security/user/${k.user}`, { password, roles: [k.role], full_name: 'Conference Caddie operator service user', metadata: { purpose: 'mints the operator key of caddie-admin' } }), `User ${k.user}`);
+  const basic = 'Basic ' + Buffer.from(`${k.user}:${password}`).toString('base64');
+  const key = must(
+    await es('POST', '/_security/api_key', { name: `${k.name}-${new Date().toISOString().slice(0, 10)}`, expiration, role_descriptors: { [k.role]: { cluster: k.cluster, indices: k.indices } } }, basic),
+    `API key for ${k.user}`,
+  );
+  must(await es('POST', `/_security/user/${k.user}/_password`, { password: randomPassword() }), `Password reset for ${k.user}`);
+  writeKeyFile(file, key.encoded);
+  console.log(`Minted the operator key (expires in ${expiration}) and wrote it to ${file} with mode 0600.`);
+  const O = `ApiKey ${key.encoded}`;
+  const checks = [];
+  const check = (ok, label) => {
+    checks.push(ok);
+    console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`);
+  };
+  const health = await es('GET', '/_cluster/health', undefined, O);
+  check(health.status === 200, 'operator key: cluster health (monitor)');
+  const cat = await es('GET', '/_cat/indices/caddie-*?format=json&h=index', undefined, O);
+  check(cat.status === 200, 'operator key: list the caddie-* indices');
+  const other = await es('POST', '/caddie-keycheck-not-ours-never/_search', { size: 0 }, O);
+  check(other.status === 403, 'operator key: cannot read an index outside caddie-*');
+  const roles = await es('GET', '/_security/role', undefined, O);
+  check(roles.status === 403, 'operator key: cannot read security settings');
+  const priv = await es(
+    'POST',
+    '/_security/user/_has_privileges',
+    { cluster: ['monitor', 'manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'], index: [{ names: ['caddie-people'], privileges: ['read', 'write', 'delete', 'maintenance', 'view_index_metadata', 'manage', 'create_index'] }] },
+    O,
+  );
+  const cl = priv.json?.cluster ?? {};
+  const ix = priv.json?.index?.['caddie-people'] ?? {};
+  check(priv.status === 200 && cl.monitor === true && ['manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'].every((p) => cl[p] === false), 'operator key: monitor only at cluster level, no security, inference or manage privileges');
+  check(['read', 'write', 'delete', 'maintenance', 'view_index_metadata'].every((p) => ix[p] === true) && ix.manage === false && ix.create_index === false, 'operator key: read, write, delete, maintenance and metadata on caddie-*, but not manage or create_index');
+  return checks.every(Boolean);
 }
 
 async function verify(readKey, peopleKey) {
@@ -219,6 +312,7 @@ async function verify(readKey, peopleKey) {
 }
 
 try {
+  if (OPERATOR_MODE) process.exit((await mintOperator()) ? 0 : 1);
   const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
   if (only && !KEYS.some((k) => k.secret === only)) throw new Error(`--only takes ${KEYS.map((k) => k.secret).join(' or ')}`);
   if (!process.argv.includes('--verify-only')) {

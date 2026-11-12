@@ -7,8 +7,7 @@
 # Web Push nudges: when the secret caddie-vapid-private exists (scripts/vapid-keys.mjs creates
 # both VAPID secrets), it is mounted as VAPID_PRIVATE_KEY, the public key is read from
 # caddie-vapid-public into the env var VAPID_PUBLIC_KEY (every browser receives it; it is not a
-# secret) and VAPID_SUBJECT is set from the shell's VAPID_SUBJECT (a mailto: address) or the
-# repository URL. Without the secret the app deploys with nudges off.
+# secret) and VAPID_SUBJECT is set from VAPID_SUBJECT (required: a mailto: address or an https URL). Without the secret the app deploys with nudges off.
 #
 # Native push (official deployment only) is off unless this deploy turns it on, one channel at a
 # time, from the shell: NATIVE_PUSH_APNS=1 for APNs and NATIVE_PUSH_FCM=1 for FCM. Unset or 0
@@ -60,6 +59,8 @@ set -euo pipefail
 #   GC_PROJECT          Google Cloud project id (required)
 #   GC_REGION           Cloud Run region (default us-west1)
 #   ES_URL              the Elasticsearch address, https://<deployment>.es.io:443 (required, no default)
+#   VAPID_SUBJECT       the contact the push services receive: an https URL or a mailto: address
+#                       (required, no default)
 #   FCM_PROJECT_ID      the Firebase project id of the Android app (optional; used only with
 #                       NATIVE_PUSH_FCM=1, step 7a of docs/OPERATOR_CHECKLIST.md)
 #   CADDIE_BUNDLE_BASE  the published talk bundles' base URL, an https URL ending in "/" (required;
@@ -83,14 +84,14 @@ if [ -n "$DEPLOY_ENV_FILE" ] && [ -f "$DEPLOY_ENV_FILE" ]; then
     if [ "$first" = 1 ]; then line="${line#$BOM}"; first=0; fi
     line="$(printf '%s' "$line" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/^export[[:space:]][[:space:]]*//' -e 's/[[:space:]]*$//')"
     case "$line" in
-      GC_PROJECT=*|GC_REGION=*|ES_URL=*|CADDIE_BUNDLE_BASE=*|FCM_PROJECT_ID=*)
+      GC_PROJECT=*|GC_REGION=*|ES_URL=*|CADDIE_BUNDLE_BASE=*|FCM_PROJECT_ID=*|VAPID_SUBJECT=*)
         key="${line%%=*}"
         value="${line#*=}"
         # One pair of matching quotes around the value.
         value="$(printf '%s' "$value" | sed -e "s/^\"\(.*\)\"$/\1/" -e "s/^'\(.*\)'$/\1/")"
         printf -v "FILE_$key" '%s' "$value"
         ;;
-      GC_PROJECT[[:space:]]*=*|GC_REGION[[:space:]]*=*|ES_URL[[:space:]]*=*|CADDIE_BUNDLE_BASE[[:space:]]*=*|FCM_PROJECT_ID[[:space:]]*=*)
+      GC_PROJECT[[:space:]]*=*|GC_REGION[[:space:]]*=*|ES_URL[[:space:]]*=*|CADDIE_BUNDLE_BASE[[:space:]]*=*|FCM_PROJECT_ID[[:space:]]*=*|VAPID_SUBJECT[[:space:]]*=*)
         echo "Ignoring the line of ${line%%[[:space:]=]*} in $DEPLOY_ENV_FILE: no blanks are allowed before the =." >&2
         ;;
     esac
@@ -99,7 +100,7 @@ fi
 # The environment wins over the file. SETTINGS_FROM says which of the two supplied the values.
 USED_ENV=0
 USED_FILE=0
-for key in GC_PROJECT GC_REGION ES_URL CADDIE_BUNDLE_BASE FCM_PROJECT_ID; do
+for key in GC_PROJECT GC_REGION ES_URL CADDIE_BUNDLE_BASE FCM_PROJECT_ID VAPID_SUBJECT; do
   if [ -n "${!key:-}" ]; then
     USED_ENV=1
   elif file_key="FILE_$key"; [ -n "${!file_key:-}" ]; then
@@ -112,6 +113,7 @@ elif [ "$USED_FILE" = 1 ]; then SETTINGS_FROM="$DEPLOY_ENV_FILE"
 else SETTINGS_FROM="environment"; fi
 : "${GC_PROJECT:?Set GC_PROJECT to your Google Cloud project id (environment or $DEPLOY_ENV_LABEL).}"
 : "${ES_URL:?Set ES_URL to your Elasticsearch address, https://<deployment>.es.io:443 (environment or $DEPLOY_ENV_LABEL).}"
+: "${VAPID_SUBJECT:?Set VAPID_SUBJECT to the contact the push services receive: an https URL or a mailto: address you control (environment or $DEPLOY_ENV_LABEL).}"
 : "${CADDIE_BUNDLE_BASE:?Set CADDIE_BUNDLE_BASE to the published talk bundles base URL, an https URL ending in / (environment or $DEPLOY_ENV_LABEL).}"
 PROJECT="$GC_PROJECT"
 REGION="${GC_REGION:-us-west1}"
@@ -162,7 +164,10 @@ BLE_NEAR_RSSI="${BLE_NEAR_RSSI:--75}"
 PEOPLE_SEMANTIC_MIN_SIMILARITY="${PEOPLE_SEMANTIC_MIN_SIMILARITY:-}"
 PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PROFILE_MIN_SIMILARITY:-}"
 PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY="${PEOPLE_SEMANTIC_PUSH_MIN_SIMILARITY:-}"
-VAPID_SUBJECT="${VAPID_SUBJECT:-https://github.com/KurtLehnardt/conferenceCaddie}"
+if ! [[ "$VAPID_SUBJECT" =~ ^(https://[^[:space:],=]+|mailto:[^[:space:],=@]+@[^[:space:],=]+)$ ]]; then
+  echo "VAPID_SUBJECT must be an https URL or a mailto: address, with no spaces, commas or =." >&2
+  exit 1
+fi
 ES_INDEX="caddie-talks"
 
 # Filter (server/moderation.mjs). The rules index is read with the people key, so it stays

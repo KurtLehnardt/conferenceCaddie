@@ -12,7 +12,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASH = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash';
 const ES = 'https://es.example.invalid:443';
 const BUNDLES = 'https://bundles.example.invalid/caddie/bundles/';
-const GOOD = { GC_PROJECT: 'proj-test-12345', ES_URL: ES, CADDIE_BUNDLE_BASE: BUNDLES };
+const GOOD = { GC_PROJECT: 'proj-test-12345', ES_URL: ES, CADDIE_BUNDLE_BASE: BUNDLES, VAPID_SUBJECT: 'mailto:ops@example.org' };
 
 function sandbox() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caddie-deploy-'));
@@ -31,13 +31,13 @@ exit 0
   return { dir, bin, calls, file: path.join(dir, 'deploy.env') };
 }
 
-function deploy(sb, { file, env = {}, extra = {} } = {}) {
+function deploy(sb, { file, env = {}, extra = {}, noVapid = false } = {}) {
   if (file !== undefined) fs.writeFileSync(sb.file, file);
   const r = spawnSync(BASH, ['scripts/deploy.sh'], {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: 60_000,
-    env: { PATH: `${sb.bin}:/usr/bin:/bin`, HOME: sb.dir, CADDIE_DEPLOY_ENV: sb.file, ...extra, ...env },
+    env: { PATH: `${sb.bin}:/usr/bin:/bin`, HOME: sb.dir, CADDIE_DEPLOY_ENV: sb.file, ...(noVapid ? {} : { VAPID_SUBJECT: 'mailto:ops@example.org' }), ...extra, ...env },
   });
   const deployCall = sb.calls().find((c) => c.startsWith('run deploy'));
   const envVars = deployCall?.match(/--set-env-vars (\S+)/)?.[1];
@@ -76,7 +76,7 @@ test('the file: plain, quoted, CRLF, export prefix, leading spaces, a repeated k
   };
   for (const [name, file] of Object.entries(cases)) {
     fs.rmSync(path.join(sb.dir, 'gcloud.log'), { force: true });
-    const r = deploy(sb, { file });
+    const r = deploy(sb, { file: `${file}VAPID_SUBJECT=mailto:ops@example.org\n`, noVapid: true });
     assert.equal(r.status, 0, `${name}: ${r.stderr}`);
     assert.equal(r.envVars, EXPECTED_ENV(), name);
     assert.match(r.stderr, new RegExp(`\\(from: ${sb.file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`), name);
@@ -154,4 +154,19 @@ test('a byte order mark, a blank before the =, an unset HOME and FCM_PROJECT_ID 
   assert.equal(bare.status, 1);
   assert.match(bare.stderr, /Set GC_PROJECT .*HOME is unset/);
   assert.doesNotMatch(bare.stderr, /unbound variable/);
+}));
+
+test('VAPID_SUBJECT is required, has no default, and must be an https URL or a mailto: address', withSandbox((sb) => {
+  const { VAPID_SUBJECT, ...without } = GOOD;
+  const missing = deploy(sb, { env: without, noVapid: true });
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /Set VAPID_SUBJECT/);
+  assert.doesNotMatch(missing.stderr + (missing.deployCall ?? ''), /github\.com\/[A-Za-z]/);
+  assert.deepEqual(sb.calls(), []);
+  const bad = deploy(sb, { env: { ...GOOD, VAPID_SUBJECT: 'ops at example.org' } });
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /VAPID_SUBJECT must be/);
+  assert.deepEqual(sb.calls(), []);
+  const fromFile = deploy(sb, { env: without, noVapid: true, file: 'VAPID_SUBJECT=https://example.org/contact\n' + Object.entries(without).map(([k, v]) => `${k}=${v}`).join('\n') + '\n' });
+  assert.equal(fromFile.status, 0, fromFile.stderr);
 }));
