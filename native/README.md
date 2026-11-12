@@ -781,7 +781,9 @@ more artifacts; if it reports a missing checksum, add the task it names to the c
 export use, so their artifacts are covered too. Those classpaths get security floors from the root
 `build.gradle.kts`: a dependency of a build tool that Dependabot reports is raised there, never in the
 version catalog (DECISIONS.md, "Security floors for the native build's tools"). The task fails when a
-floor no longer applies, for example because a plugin renamed one of the configurations.
+floor no longer applies, for example because a plugin renamed one of the configurations, when any
+resolvable configuration resolves a floored module below its floor, and when Bouncy Castle's three jars
+are not on one release.
 
 Files that are not Maven artifacts (the query model, its vocabulary and ONNX Runtime's iOS archive)
 are pinned in `gradle/pinned-downloads.properties` by URL, size and SHA-256 instead. When ONNX

@@ -88,8 +88,10 @@ subprojects {
 }
 
 /**
- * Fails when a tool classpath that the floors must cover is missing, or when a floored module resolves
- * below its floor. Resolving the classpaths' files also runs dependency verification on them.
+ * Fails when a tool classpath that the floors must cover is missing, when a floored module resolves below
+ * its floor in any resolvable configuration of the project (the tool classpaths, whatever else holds one,
+ * and the build script's classpath), or when Bouncy Castle's jars are not on one release. Resolving the
+ * tool classpaths' files also runs dependency verification on them.
  */
 abstract class CheckToolingFloors : DefaultTask() {
     /** Lowest allowed version per "group:name", or per "group:*" for every module of a group on the same major. */
@@ -100,20 +102,26 @@ abstract class CheckToolingFloors : DefaultTask() {
     @get:Input
     abstract val requiredConfigurations: ListProperty<String>
 
+    /** Floored configurations that cannot be resolved (swiftExportClasspath), so they have no graph. */
     @get:Input
-    abstract val presentConfigurations: ListProperty<String>
+    abstract val declaredOnlyConfigurations: ListProperty<String>
+
+    @get:Input
+    abstract val projectPath: Property<String>
 
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val toolClasspaths: ConfigurableFileCollection
 
+    /** The graph of every resolvable configuration, by configuration name. */
     @get:Internal
     abstract val resolvedGraphs: MapProperty<String, ResolvedComponentResult>
 
     @TaskAction
     fun check() {
         val problems = mutableListOf<String>()
-        val present = presentConfigurations.get().toSet()
+        val graphs = resolvedGraphs.get()
+        val present = graphs.keys + declaredOnlyConfigurations.get()
         for (required in requiredConfigurations.get()) {
             val found = if (required.endsWith("*")) {
                 present.any { it.startsWith(required.dropLast(1)) }
@@ -123,8 +131,13 @@ abstract class CheckToolingFloors : DefaultTask() {
             if (!found) problems += "no configuration $required; was it renamed? Its floors no longer apply."
         }
         val floorVersions = floors.get()
-        for ((configuration, root) in resolvedGraphs.get()) {
-            for (component in components(root)) {
+        val bouncyCastleFloors = floorVersions.filterKeys { it.startsWith("org.bouncycastle:") }.values.toSet()
+        if (bouncyCastleFloors.size > 1) {
+            problems += "the Bouncy Castle floors name different releases ${bouncyCastleFloors.sorted()}; raise all three together"
+        }
+        for ((configuration, root) in graphs) {
+            val components = components(root)
+            for (component in components) {
                 val floor = floorVersions["${component.group}:${component.name}"]
                     ?: floorVersions["${component.group}:*"]?.takeIf { major(it) == major(component.version) }
                     ?: continue
@@ -132,25 +145,28 @@ abstract class CheckToolingFloors : DefaultTask() {
                     problems += "$configuration resolves ${component.group}:${component.name}:${component.version}, below its floor $floor"
                 }
             }
+            val bouncyCastle = components.filter { it.group == "org.bouncycastle" }
+            if (bouncyCastle.map { it.version }.toSet().size > 1) {
+                problems += "$configuration mixes Bouncy Castle releases: " +
+                    bouncyCastle.map { "${it.name}:${it.version}" }.sorted().joinToString()
+            }
         }
+        val where = projectPath.get()
         if (problems.isNotEmpty()) {
-            throw GradleException("Tooling floors in $path:\n" + problems.joinToString("\n") { "  - $it" })
+            throw GradleException("Tooling floors in $where:\n" + problems.joinToString("\n") { "  - $it" })
         }
-        logger.lifecycle("Tooling floors hold in $path for ${resolvedGraphs.get().keys.sorted().joinToString()}.")
+        logger.lifecycle("Tooling floors hold in $where (${graphs.size} resolvable configurations).")
     }
 
+    // Unresolved edges are skipped: the tool classpaths' files are resolved as an input, so a failure
+    // there stops the task before this runs, and an unresolved edge elsewhere selects no version.
     private fun components(root: ResolvedComponentResult): Set<ModuleVersionIdentifier> {
         val seen = mutableSetOf<ResolvedComponentResult>()
         val queue = ArrayDeque(listOf(root))
         while (queue.isNotEmpty()) {
             val component = queue.removeFirst()
             if (!seen.add(component)) continue
-            for (dependency in component.dependencies) {
-                when (dependency) {
-                    is ResolvedDependencyResult -> queue += dependency.selected
-                    is UnresolvedDependencyResult -> throw GradleException("Unresolved ${dependency.attempted}: ${dependency.failure}")
-                }
-            }
+            component.dependencies.filterIsInstance<ResolvedDependencyResult>().forEach { queue += it.selected }
         }
         return seen.mapNotNull { it.moduleVersion }.filter { it.group.isNotEmpty() }.toSet()
     }
@@ -173,18 +189,8 @@ abstract class CheckToolingFloors : DefaultTask() {
     }
 }
 
-tasks.register<CheckToolingFloors>("checkToolingFloors") {
-    group = "verification"
-    description = "Checks that the plugin classpath resolves no floored module below its floor."
-    val classpath = buildscript.configurations.getByName("classpath")
-    floors.set(toolingFloorVersions)
-    requiredConfigurations.set(emptyList())
-    presentConfigurations.set(listOf("classpath"))
-    toolClasspaths.from(classpath)
-    resolvedGraphs.put("classpath", classpath.incoming.resolutionResult.rootComponent)
-}
-
-// Every module checks the tool classpaths it must have; ./gradlew checkToolingFloors runs all four.
+// Every module checks the tool classpaths it must have and scans all of its resolvable configurations,
+// and the root project checks the plugin classpath; ./gradlew checkToolingFloors runs all four.
 val requiredToolClasspaths = mapOf(
     ":shared" to listOf("androidLintTool", "swiftExportClasspath", "swiftExportClasspathResolvable"),
     ":composeApp" to listOf(
@@ -192,19 +198,31 @@ val requiredToolClasspaths = mapOf(
     ),
     ":androidApp" to listOf("androidLintTool", "unified-test-platform-*"),
 )
-subprojects {
+allprojects {
     val required = requiredToolClasspaths[path].orEmpty()
+    val modulePath = path
     tasks.register<CheckToolingFloors>("checkToolingFloors") {
         group = "verification"
-        description = "Checks that the floored tool classpaths exist and resolve no floored module below its floor."
+        description = "Checks that the floored tool classpaths exist and that no configuration resolves a floored module below its floor."
         floors.set(toolingFloorVersions)
         requiredConfigurations.set(required)
-        presentConfigurations.set(project.provider { project.configurations.names.toList() })
-        project.configurations
-            .filter { it.name == "androidLintTool" || it.name == "swiftExportClasspathResolvable" || it.name.startsWith("unified-test-platform-") }
-            .forEach { configuration ->
+        projectPath.set(modulePath)
+        // Read once, when the task is configured, so the names checked are the configurations scanned.
+        val resolvable = project.configurations.filter { it.isCanBeResolved }
+        declaredOnlyConfigurations.set(
+            project.configurations.filter { !it.isCanBeResolved && isFlooredToolClasspath(it.name) }.map { it.name },
+        )
+        for (configuration in project.buildscript.configurations.filter { it.isCanBeResolved }) {
+            resolvedGraphs.put("buildscript ${configuration.name}", configuration.incoming.resolutionResult.rootComponent)
+            if (modulePath == ":") toolClasspaths.from(configuration)
+        }
+        for (configuration in resolvable) {
+            resolvedGraphs.put(configuration.name, configuration.incoming.resolutionResult.rootComponent)
+            if (configuration.name == "androidLintTool" || configuration.name == "swiftExportClasspathResolvable" ||
+                configuration.name.startsWith("unified-test-platform-")
+            ) {
                 toolClasspaths.from(configuration.incoming.files)
-                resolvedGraphs.put(configuration.name, configuration.incoming.resolutionResult.rootComponent)
             }
+        }
     }
 }
