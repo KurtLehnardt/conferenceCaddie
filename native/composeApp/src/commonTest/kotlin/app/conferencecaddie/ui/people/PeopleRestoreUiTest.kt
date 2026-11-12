@@ -9,7 +9,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import app.conferencecaddie.shared.people.Person
 import app.conferencecaddie.shared.people.ReportKind
 import app.conferencecaddie.ui.shell.rememberShellNavigation

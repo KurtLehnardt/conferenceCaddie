@@ -257,6 +257,20 @@ class CaddieCore(
     private var bundleJob: Job? = null
     private var bundleJobKey: String? = null
 
+    // Test hooks, which do nothing in the app. They let a test hold the core at the edge of a race:
+    // afterSelectionRead runs in a revalidation between reading the newly chosen conference's stored
+    // state and taking the lock to publish it; afterEmbedderLoad at the end of a load of the query
+    // embedder, after its state is queued and before its job ends; beforeSemanticPublish in each
+    // queued publish of the embedder's state, before it is checked and written.
+    @kotlin.concurrent.Volatile
+    internal var afterSelectionRead: suspend () -> Unit = {}
+
+    @kotlin.concurrent.Volatile
+    internal var afterEmbedderLoad: suspend () -> Unit = {}
+
+    @kotlin.concurrent.Volatile
+    internal var beforeSemanticPublish: suspend () -> Unit = {}
+
     /** Shows what is stored, then fetches everything again behind it. Call once at start-up. */
     fun start() = command {
         val reset = database.wasReset()
@@ -331,6 +345,7 @@ class CaddieCore(
     // search, or For you with learn text), not at every start, and is guarded by embedderMutex.
     // embedderGeneration counts the loads and releases, so a state written for one of them is
     // dropped once another has happened; releaseRequested is a release asked for during a load.
+    // embedderJob is the load in progress until it has recorded its result.
     @kotlin.concurrent.Volatile
     private var embedder: Embedder? = null
     private var loader: (suspend () -> Embedder?)? = null
@@ -375,7 +390,13 @@ class CaddieCore(
                 e to ++embedderGeneration
             }
             released.close()
-            publishSemantic(generation) { if (it == SemanticState.Ready) SemanticState.Idle else it }
+            embedderMutex.withLock {
+                // Worked out under the lock. With no load running, the model is gone, so the state
+                // is Idle, Loading included: the load that loaded it may have had its Ready dropped
+                // for this release. A load started meanwhile keeps its own state.
+                val running = embedderJob?.isActive == true
+                publishSemantic(generation) { if (!running && (it == SemanticState.Ready || it == SemanticState.Loading)) SemanticState.Idle else it }
+            }
         }
 
     /** Starts loading the embedder when it is offered, not loaded, not loading and not resting after a failure. */
@@ -398,7 +419,12 @@ class CaddieCore(
         } catch (_: Throwable) {
             null
         }
-        val (generation, unwanted) = embedderMutex.withLock {
+        // One section records the result, ends the load and queues its state. The load is over
+        // here, a little before this job ends: without clearing embedderJob, a search made as soon
+        // as the state is seen could find the job still active and start no load. A release finds
+        // either this load or its model, never neither, and the state is queued before that of any
+        // load started after this one.
+        val unwanted = embedderMutex.withLock {
             val unwanted = loaded?.takeIf { releaseRequested }
             releaseRequested = false
             embedder = if (unwanted != null) null else loaded
@@ -410,19 +436,23 @@ class CaddieCore(
                 embedderFailures = 0
                 embedderRetryAt = null
             }
-            ++embedderGeneration to unwanted
+            embedderJob = null
+            val next = when {
+                loaded == null -> SemanticState.Unavailable
+                unwanted != null -> SemanticState.Idle
+                else -> SemanticState.Ready
+            }
+            publishSemantic(++embedderGeneration) { next }
+            unwanted
         }
+        // A model released during its load is closed outside the lock, so closing holds up no search.
         unwanted?.close()
-        val next = when {
-            loaded == null -> SemanticState.Unavailable
-            unwanted != null -> SemanticState.Idle
-            else -> SemanticState.Ready
-        }
-        publishSemantic(generation) { next }
+        afterEmbedderLoad()
     }
 
     // Publishes the embedder's state for [generation], unless a later load or release has happened.
     private fun publishSemantic(generation: Long, next: (SemanticState) -> SemanticState) = command {
+        beforeSemanticPublish()
         if (embedderMutex.withLock { embedderGeneration } != generation) return@command
         _state.update { it.copy(semantic = next(it.semantic)) }
     }
@@ -639,7 +669,8 @@ class CaddieCore(
     // Under the lock
 
     // Runs [block] under the lock, after every call made before it. A failure leaves the state as
-    // it was rather than ending the app.
+    // it was rather than ending the app. It never runs [block] inline: publishSemantic calls it while
+    // holding embedderMutex, and the block takes embedderMutex again.
     private fun command(block: suspend () -> Unit) {
         scope.launch(serial) {
             try {
@@ -698,7 +729,10 @@ class CaddieCore(
     }
 
     /** [s] with [slug] selected: its installed bundle and its marked talks, in one value. */
-    private suspend fun withSelection(s: CoreState, slug: String): CoreState {
+    private suspend fun withSelection(s: CoreState, slug: String): CoreState = withStoredMarks(withInstalledBundle(s, slug))
+
+    /** [s] with [slug] selected and its installed bundle, but not yet its marks ([withStoredMarks]). */
+    private suspend fun withInstalledBundle(s: CoreState, slug: String): CoreState {
         val key = BundleSync.scope(s.backend.base, slug)
         val current = (s.bundle as? BundleState.Ready)?.takeIf { s.selectedSlug == slug }
         val installed = current?.bundle ?: sync.installed(s.backend.base, key)
@@ -706,10 +740,13 @@ class CaddieCore(
         return s.copy(
             selectedSlug = slug,
             bundle = installed?.let { current ?: ready(it, key, offline = false, updateApp = false, previous = null) } ?: BundleState.Loading(slug),
-            interested = database.interested(key),
-            interestedSnapshots = database.interestedSnapshots(key),
-            learn = learnInput(key),
         )
+    }
+
+    /** [s] with the marked talks and the learn input stored for its selected conference. */
+    private suspend fun withStoredMarks(s: CoreState): CoreState {
+        val key = BundleSync.scope(s.backend.base, s.selectedSlug ?: return s)
+        return s.copy(interested = database.interested(key), interestedSnapshots = database.interestedSnapshots(key), learn = learnInput(key))
     }
 
     /**
@@ -802,21 +839,20 @@ class CaddieCore(
         val seen = _state.value
         val list = (conferences as? ConferencesState.Ready)?.conferences
         val wanted = list?.let { chooseSlug(backend, it, current = seen.selectedSlug) } ?: seen.selectedSlug
-        // The newly chosen conference's stored state, read before taking the lock.
-        val selection = if (wanted != null && wanted != seen.selectedSlug) withSelection(seen, wanted) else null
+        // The newly chosen conference's installed bundle, read before taking the lock; its marks are
+        // read under the lock, below.
+        val selection = if (wanted != null && wanted != seen.selectedSlug) withInstalledBundle(seen, wanted) else null
+        afterSelectionRead()
         mutex.withLock {
             if (session != id) return
             val now = _state.value
             var next = now.copy(conferences = conferences)
             // A conference the person chose meanwhile wins over the list's choice.
             if (selection != null && now.selectedSlug == seen.selectedSlug) {
-                next = next.copy(
-                    selectedSlug = selection.selectedSlug,
-                    bundle = selection.bundle,
-                    interested = selection.interested,
-                    interestedSnapshots = selection.interestedSnapshots,
-                    learn = selection.learn,
-                )
+                // The marks and the learn text are read under the lock: a call made since the read
+                // above stored its change but showed it in no list, as this conference was not
+                // selected yet (a talk marked, or the Capacitor app's marks kept, at the first start).
+                next = withStoredMarks(next.copy(selectedSlug = selection.selectedSlug, bundle = selection.bundle))
             }
             _state.value = ensureBundle(next)
         }
