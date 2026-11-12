@@ -50,6 +50,7 @@ import { BODYLESS_METHODS, HEADER_NAME, bodyMatches, signAdminRequest, verifyAdm
 import { main } from '../scripts/admin/cli.mjs';
 import { createWorkerAdapter, workerOrigin } from '../scripts/admin/backends/worker.mjs';
 import { shellPath } from '../scripts/lib/admin-token-file.mjs';
+import { SIG_VERSION_REMOVED_WARNING } from '../scripts/lib/admin-origin.mjs';
 
 const realFetch = globalThis.fetch;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -644,6 +645,67 @@ describe('SEC-4, SEC-13, SEC-15, SEC-16, CLI-8 transport', () => {
       if (had) process.env[NAME] = saved;
       else delete process.env[NAME];
     }
+  });
+
+  // Every test above injects env into main(), so none of them runs the CLI's own entry path. This
+  // one starts scripts/caddie-admin.mjs as a child process with CADDIE_ADMIN_SIG_VERSION=1 in its
+  // real process.env and the token in the default token file (CADDIE_ADMIN_HOME/admin-token, 0600),
+  // never in the environment, against the stand-in. One read (stats usage) and one write (attendees
+  // block) each run with and without --json: every admin header the stand-in receives is v2, the
+  // warning about the stale setting is on stderr exactly once (one JSON line with --json), and the
+  // token is in neither stdout nor stderr nor any request.
+  test('the CLI run as a process with CADDIE_ADMIN_SIG_VERSION=1 in its environment signs v2 for a read and a write and warns once', async () => {
+    const NAME = 'CADDIE_ADMIN_SIG_VERSION';
+    writeFileSync(join(home, 'admin-token'), `${TOKEN}\n`, { mode: 0o600 });
+    const env = { PATH: process.env.PATH, HOME: home, CADDIE_ADMIN_HOME: home, CADDIE_ADMIN_ROOT: root, [NAME]: '1' };
+    const run = (argv) => new Promise((resolvePromise, reject) => {
+      const child = spawn(process.execPath, [join(ROOT, 'scripts/caddie-admin.mjs'), ...argv], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (c) => { stdout += c; });
+      child.stderr.on('data', (c) => { stderr += c; });
+      child.on('error', reject);
+      child.on('close', (code) => resolvePromise({ code, stdout, stderr }));
+    });
+    const p = person('Process Blocked');
+    const commands = [
+      ['stats', 'usage'],
+      ['stats', 'usage', '--json'],
+      confirmed(['attendees', 'block', '--event', EVENT, p.ref, '--reason', 'spam'], p.ref),
+      confirmed(['attendees', 'block', '--event', EVENT, p.ref, '--reason', 'spam', '--json'], p.ref),
+    ];
+    for (const argv of commands) {
+      const before = stub.requests.length;
+      const r = await run(argv);
+      const label = argv.join(' ');
+      assert.equal(r.code, 0, `${label}: ${r.stderr}`);
+      for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr]]) assert.ok(!text.includes(TOKEN), `${label}: the token leaked into ${where}`);
+      const requests = stub.requests.slice(before);
+      assert.ok(!JSON.stringify(requests).includes(TOKEN), `${label}: the token leaked into a request`);
+      const calls = admins(requests);
+      assert.ok(calls.length >= 1, `${label}: no admin request reached the stand-in`);
+      if (argv[0] === 'attendees') assert.deepEqual(calls.map((c) => c.pathWithQuery), [`/admin/people/block?event=${EVENT}`], label);
+      for (const call of calls) {
+        assert.equal(typeof call.headers['x-caddie-admin'], 'string', `${label}: ${call.pathWithQuery} is signed`);
+        assert.ok(call.headers['x-caddie-admin'].startsWith('v2 '), `${label}: ${call.pathWithQuery} carries ${call.headers['x-caddie-admin'].split(' ')[0]}`);
+        assert.equal(call.version, 2, `${label}: ${call.pathWithQuery}`);
+      }
+      for (const call of requests) {
+        if (call.headers['x-caddie-admin'] !== undefined) assert.ok(call.headers['x-caddie-admin'].startsWith('v2 '), `${label}: ${call.pathWithQuery}`);
+      }
+      assert.deepEqual(stub.problems, [], `${label}: the stand-in saw a bad admin request`);
+      // The variable's name is in the warning once, and nowhere else on stderr.
+      assert.equal(r.stderr.split(NAME).length - 1, 1, `${label}: ${r.stderr}`);
+      const lines = r.stderr.split('\n').filter(Boolean);
+      if (argv.includes('--json')) {
+        const parsed = lines.map((l) => JSON.parse(l));
+        assert.deepEqual(parsed.filter((l) => l.warning === 'sig_version_removed'), [{ ok: true, warning: 'sig_version_removed', message: SIG_VERSION_REMOVED_WARNING }], label);
+        assert.equal(typeof JSON.parse(r.stdout), 'object', `${label}: stdout is one JSON object`);
+      } else {
+        assert.deepEqual(lines.filter((l) => l.includes(NAME)), [`caddie-admin: warning: ${SIG_VERSION_REMOVED_WARNING}`], label);
+      }
+    }
+    assert.equal(p.hidden, true, 'the block reached the stand-in');
   });
 
   // The api as configured goes through canonicalOrigin before any URL parsing: each of these parses
