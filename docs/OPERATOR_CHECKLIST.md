@@ -1,5 +1,7 @@
 # Operator checklist: from `main` to `then/integration`
 
+> Running your own deployment? Start with [FORK.md](FORK.md) and [fork/TIER3_GCP_ELASTIC.md](fork/TIER3_GCP_ELASTIC.md), which describe tier 3 (a paid stack) with your own project and keys. This checklist records the maintainer's own deployment and stays the detailed step list.
+
 The exact steps, in order, to take the live service from what `main` deploys to this branch: the Find & connect MVP, GPS bands, reports, the percolator rules (and the optional classifier, off by default), in-app and push nudges, the filter's hold, "Home is Around", the Android companion's Bluetooth proximity, and native push to the official apps. Every step names the env vars it reads and never a value. Run everything from the repository root on this branch with Node 26 and `gcloud` signed in to the project in `docs/CONTRACT.md`.
 
 Rules that apply to every step: keys are passed inline (`VAR="$OTHER_VAR" command`) or through the shell's environment, never written to a file, never printed, never `set -x`. The admin key `ELASTISEARCH_API_KEY` is used by the CLI only and is never deployed. Each setup script is idempotent: running it again changes nothing.
