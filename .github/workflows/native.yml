@@ -58,6 +58,7 @@ defaults:
 jobs:
   android:
     name: Shared tests and Android build
+    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -379,7 +380,7 @@ jobs:
       # infrastructure retry below covers attempt 1.
       - name: Create the emulator snapshot
         id: avd_create
-        if: steps.avd.outputs.cache-hit != 'true'
+        if: true # SCRATCH (reverted before merge): the snapshot step runs and fails.
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
@@ -390,7 +391,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
           working-directory: native
-          script: echo "The emulator snapshot is ready."
+          script: exit 1 # SCRATCH (reverted before merge)
 
       - name: Discard the AVD whose snapshot failed
         if: steps.avd_create.outcome == 'failure'
@@ -500,6 +501,7 @@ jobs:
 
   ios:
     name: iOS simulator build
+    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -594,6 +596,7 @@ jobs:
   # pinned-download caches without writing them; on main it saves Kotlin/Native under its own key.
   ios-device-link:
     name: iOS device Release link
+    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -643,6 +646,7 @@ jobs:
   # shipped query model. No secrets; pull requests and main.
   talk-smoke:
     name: Talk checks against the on-device search
+    if: false # SCRATCH (reverted before merge): only the emulator job runs for the proof.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
