@@ -26,13 +26,19 @@
 //
 // The backup is read from the git-ignored data/exports/ and personal data travels only to the
 // admin endpoint. The script prints counts per table only: no names, texts, hashes or emails.
+//
+// Exit code: 0 when everything was sent (conferences the Worker holds as removed are skipped by
+// design and named in the summary); 3 when the run finished but at least one conference was
+// skipped because its object answered "conference is not available", so its talks, topics,
+// facets, people or reports were not all sent (the summary names each one; see send() below); 2
+// when a request failed and the run stopped; 1 on a usage error.
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, normalizeApiBase,
+  PEOPLE_BATCH, REPORT_BATCH, ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase,
   parseArgs, readAdminToken, readNdjson, withTopics,
 } from './lib.mjs';
 
@@ -53,6 +59,9 @@ export function personPayload(row) {
 }
 
 const dropId = ({ _id, ...rest }) => rest;
+// A conference document as the backup holds it, without its _id and without an `unretire` key, so
+// a migration can never bring back a conference the operator removed, whatever the backup holds.
+const conferenceDoc = ({ _id, unretire, ...rest }) => rest;
 
 function groupBy(rows, key) {
   const m = new Map();
@@ -87,7 +96,7 @@ export function plan(backup, { include, includeReal, now = Date.now() }) {
 
   if (include.has('conferences')) {
     const rows = file('caddie-conferences-v1');
-    out.conferences = { read: rows.length, send: rows.map(dropId) };
+    out.conferences = { read: rows.length, send: rows.map(conferenceDoc) };
   }
 
   if (include.has('talks')) {
@@ -154,18 +163,51 @@ function describePlan(p, { dryRun, includeReal }) {
   return lines;
 }
 
-async function send(p, admin) {
+// Sends the plan. A conference the Worker skipped as removed (skipped_retired in the answer to
+// PUT /admin/conferences, a tombstone of DELETE /admin/conference) is logged by name and none of
+// its talks, topics, facets, people or reports is sent, because a removal must not be undone by a
+// re-run of the migration. A conference whose object answers 400 "conference is not available"
+// (it holds no conference document: never searchable, its document did not reach it, or it was
+// removed) is likewise logged by name and skipped from then on, and the run carries on with the
+// others instead of stopping at the first. Any other failure, a 400 with another message included,
+// stops the run. Returns {lines, retired, unavailable}: the lines to print, and the slugs skipped
+// as removed and as not available, for the summary and the exit code.
+export async function send(p, admin) {
   const generation = Date.now();
   const q = (slug) => `?event=${encodeURIComponent(slug)}`;
   const lines = [];
+  const skip = new Set();
+  const retired = [];
+  const unavailable = [];
+  // Runs fn(slug, value) for every entry of the map whose conference is not skipped. A 400
+  // "conference is not available" skips that conference for the rest of the run.
+  const each = async (map, fn) => {
+    for (const [slug, value] of map) {
+      if (skip.has(slug)) continue;
+      try {
+        await fn(slug, value);
+      } catch (e) {
+        if (!(e?.status === 400 && /conference is not available/.test(String(e.message)))) throw e;
+        skip.add(slug);
+        unavailable.push(slug);
+        lines.push(`${slug}: skipped, the Worker answered that the conference is not available (its object holds no conference document); nothing more of it is sent.`);
+      }
+    }
+  };
 
   if (p.conferences) {
     const r = await admin('PUT', '/admin/conferences', { conferences: p.conferences.send });
     lines.push(`conferences: upserted ${r.upserted ?? '?'}`);
+    for (const slug of Array.isArray(r.skipped_retired) ? r.skipped_retired : []) {
+      if (typeof slug !== 'string' || !isSlug(slug) || skip.has(slug)) continue;
+      skip.add(slug);
+      retired.push(slug);
+      lines.push(`${slug}: skipped, the Worker holds it as removed (DELETE /admin/conference); nothing of it is sent. To bring it back, run caddie-admin conferences unretire --event ${slug}.`);
+    }
   }
   if (p.talks) {
     const sum = { upserted: 0, unchanged: 0, embedded: 0, pending: 0, deleted: 0 };
-    for (const [slug, talks] of p.talks.byConf) {
+    await each(p.talks.byConf, async (slug, talks) => {
       for (const batch of chunk(talks, TALK_BATCH)) {
         const r = await admin('POST', `/admin/talks${q(slug)}`, { generation, talks: batch });
         for (const k of ['upserted', 'unchanged', 'embedded', 'pending']) sum[k] += Number(r[k]) || 0;
@@ -173,74 +215,95 @@ async function send(p, admin) {
       if (sum.pending > 0) await drainPending(admin, slug);
       const f = await admin('POST', `/admin/talks/finalize${q(slug)}`, { generation });
       sum.deleted += Number(f.deleted) || 0;
-    }
+    });
     lines.push(`talks: upserted ${sum.upserted}, unchanged ${sum.unchanged}, embedded ${sum.embedded}, pending ${sum.pending}, deleted by finalize ${sum.deleted}`);
   }
   if (p.topics) {
     let stored = 0;
-    for (const [slug, topics] of p.topics.byConf) stored += Number((await admin('PUT', `/admin/topics${q(slug)}`, { topics })).topics) || 0;
+    await each(p.topics.byConf, async (slug, topics) => {
+      stored += Number((await admin('PUT', `/admin/topics${q(slug)}`, { topics })).topics) || 0;
+    });
     lines.push(`topics: stored ${stored}`);
   }
   if (p.facets) {
     let stored = 0;
-    for (const [slug, facets] of p.facets.byConf) stored += Number((await admin('PUT', `/admin/facets${q(slug)}`, { facets })).facets) || 0;
+    await each(p.facets.byConf, async (slug, facets) => {
+      stored += Number((await admin('PUT', `/admin/facets${q(slug)}`, { facets })).facets) || 0;
+    });
     lines.push(`facets: stored ${stored}`);
   }
   if (p.people) {
     const sum = { upserted: 0, skipped: 0, embedded: 0, pending: 0 };
-    for (const [slug, people] of p.people.byEvent) {
+    await each(p.people.byEvent, async (slug, people) => {
       for (const batch of chunk(people, PEOPLE_BATCH)) {
         const r = await admin('POST', `/admin/people${q(slug)}`, { people: batch });
         for (const k of Object.keys(sum)) sum[k] += Number(r[k]) || 0;
       }
       if (sum.pending > 0) await drainPending(admin, slug);
-    }
+    });
     lines.push(`people: upserted ${sum.upserted}, skipped ${sum.skipped}, embedded ${sum.embedded}, pending ${sum.pending}`);
   }
   if (p.reports) {
     const sum = { inserted: 0, skipped: 0 };
-    for (const [slug, reports] of p.reports.byEvent) {
+    await each(p.reports.byEvent, async (slug, reports) => {
       for (const batch of chunk(reports, REPORT_BATCH)) {
         const r = await admin('POST', `/admin/reports${q(slug)}`, { reports: batch });
         for (const k of Object.keys(sum)) sum[k] += Number(r[k]) || 0;
       }
-    }
+    });
     lines.push(`reports: inserted ${sum.inserted}, skipped ${sum.skipped}`);
   }
-  return lines;
+  return { lines, retired, unavailable };
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'include-real'], values: ['backup', 'api', 'only'] });
-  if (!args.backup) throw new UsageError('--backup <dir> is required.');
-  const api = normalizeApiBase(args.api);
-  const backup = resolve(args.backup);
-  if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
-
-  const only = args.only ? args.only.split(',').map((s) => s.trim()).filter(Boolean) : TABLES;
-  const bad = only.filter((t) => !TABLES.includes(t));
-  if (bad.length) throw new UsageError(`Unknown table in --only: ${bad.join(', ')}. Known: ${TABLES.join(', ')}.`);
-  const dryRun = args['dry-run'];
-  const token = readAdminToken();
-  if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to migrate, or pass --dry-run.');
-
-  const p = plan(backup, { include: new Set(only), includeReal: args['include-real'] });
-  for (const line of describePlan(p, { dryRun, includeReal: args['include-real'] })) console.log(line);
-  if (dryRun) {
-    console.log('Dry run: nothing was sent.');
-    return 0;
+// The closing lines and the exit code of a run that sent its plan: 0 unless a conference was
+// skipped as not available (3), whose data was then not all sent.
+export function summary({ retired, unavailable }) {
+  const lines = [];
+  if (retired.length) lines.push(`Skipped as removed (by design, nothing of them was sent): ${retired.join(', ')}.`);
+  if (unavailable.length) {
+    lines.push(`Skipped as not available, so their data was not all sent: ${unavailable.join(', ')}. Check that the Worker lists them, then run the migration again.`);
+    lines.push('Done, with skipped conferences.');
+    return { lines, code: 3 };
   }
-  for (const line of await send(p, adminClient(api, token))) console.log(line);
-  console.log('Done.');
-  return 0;
+  lines.push('Done.');
+  return { lines, code: 0 };
+}
+
+// The whole run, from the command-line arguments to the exit code of the header, which it returns
+// instead of setting, so a test can check it. The admin client, the token reader and the output
+// can be replaced for a test; by default they are the real ones.
+export async function run(argv, { client = adminClient, readToken = readAdminToken, log = console.log, error = console.error } = {}) {
+  try {
+    const args = parseArgs(argv, { flags: ['dry-run', 'include-real'], values: ['backup', 'api', 'only'] });
+    if (!args.backup) throw new UsageError('--backup <dir> is required.');
+    const api = normalizeApiBase(args.api);
+    const backup = resolve(args.backup);
+    if (!existsSync(backup)) throw new UsageError('The backup directory does not exist.');
+
+    const only = args.only ? args.only.split(',').map((s) => s.trim()).filter(Boolean) : TABLES;
+    const bad = only.filter((t) => !TABLES.includes(t));
+    if (bad.length) throw new UsageError(`Unknown table in --only: ${bad.join(', ')}. Known: ${TABLES.join(', ')}.`);
+    const dryRun = args['dry-run'];
+    const token = readToken();
+    if (!dryRun && !token) throw new UsageError('Set ADMIN_TOKEN (or ADMIN_TOKEN_FILE) to migrate, or pass --dry-run.');
+
+    const p = plan(backup, { include: new Set(only), includeReal: args['include-real'] });
+    for (const line of describePlan(p, { dryRun, includeReal: args['include-real'] })) log(line);
+    if (dryRun) {
+      log('Dry run: nothing was sent.');
+      return 0;
+    }
+    const result = await send(p, client(api, token));
+    const end = summary(result);
+    for (const line of [...result.lines, ...end.lines]) log(line);
+    return end.code;
+  } catch (e) {
+    error(e.message);
+    return e instanceof UsageError ? 1 : 2;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().then(
-    (code) => { process.exitCode = code; },
-    (e) => {
-      console.error(e.message);
-      process.exitCode = e instanceof UsageError ? 1 : 2;
-    },
-  );
+  run(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }

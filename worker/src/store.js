@@ -10,14 +10,21 @@
 //
 // Positions (lat, lon, accuracy) live in memory only, so the server never stores a trail.
 
-import { forbidden } from './lib/http.js';
+import { HttpError, forbidden } from './lib/http.js';
 import { hashSecret, secretMatches, refFor, sha256Hex } from './lib/device.js';
 import { toBlob, fromBlob } from './lib/vectors.js';
 import { embedPassages, semanticAvailable, EmbedUnavailable, conventionsId, documentText } from './lib/embed.js';
 import { visibleUntilMs } from './lib/time.js';
+import { stripControls } from './lib/text.js';
 
 // Zones a person can say they are in, besides the conference's room names.
 export const FIXED_ZONES = ['Expo hall', 'Registration', 'Food and coffee', 'Hallway', 'Outside'];
+// Distinct reporters at which a target is hidden from everyone but its owner.
+export const HIDE_AT = 2;
+// The reporter_id of the operator's own report (POST /admin/people/block, and POST /admin/moderation
+// with action "hide"). One such report reaches HIDE_AT on its own. A device's profile_id is 22
+// characters, so no device can report under this id.
+export const OPERATOR = 'operator';
 const COMMON_TOPICS = 10;
 const CHUNK_WORDS = 250;
 const RETRY_BATCH = 25;
@@ -56,17 +63,20 @@ export function chunkWords(textValue, max = CHUNK_WORDS) {
 }
 
 // The columns of a people row that savePerson may change: [to the SQL value, to the cached value].
-const str = (v) => String(v ?? '');
+// The text columns drop control characters here too (lib/text.js stripControls), whatever path
+// wrote them: the people routes, the migration, a fixture.
 const orNull = (v) => (v ? String(v) : null);
+const txt = (v) => stripControls(String(v ?? ''));
+const txtOrNull = (v) => (v ? stripControls(String(v)) || null : null);
 const PERSON_COLUMNS = {
-  display_name: [str, str],
-  about: [str, str],
-  interests: [str, str],
-  expertise: [str, str],
+  display_name: [txt, txt],
+  about: [txt, txt],
+  interests: [txt, txt],
+  expertise: [txt, txt],
   learn_topics: [(v) => JSON.stringify(arr(v)), arr],
   speak_topics: [(v) => JSON.stringify(arr(v)), arr],
   linkedin_url: [orNull, orNull],
-  contact_note: [orNull, orNull],
+  contact_note: [txtOrNull, txtOrNull],
   open_to_meet: [b, Boolean],
   sample: [b, Boolean],
   hidden: [b, Boolean],
@@ -171,10 +181,31 @@ export class Store {
     // Incremented whenever talks, vectors, topics or facets change, so a route module can key its
     // own caches (lexical results, the schedule export) on it.
     this.talksEpoch = 0;
+    // Set by close() when the conference is wiped (DELETE /admin/conference).
+    this.closed = false;
   }
 
   sql(query, ...bindings) {
+    if (this.closed) throw new HttpError(400, { error: 'conference is not available' });
     return this.owner.exec(query, ...bindings);
+  }
+
+  // Retires this Store after a wipe: the caches are dropped and every later statement throws
+  // 400 conference is not available. A request that was waiting on an await (an embedding call, a
+  // hash) when the wipe ran still holds this Store, and so can neither read what was wiped from a
+  // cache nor write a row back into the emptied object. The object makes a new Store for the
+  // requests that follow.
+  close() {
+    this.closed = true;
+    this.locations.clear();
+    this.peopleC = null;
+    this.blocksC = null;
+    this.talksC = null;
+    this.vectorsC = null;
+    this.topicsC = null;
+    this.facetsC = null;
+    this.zonesC = null;
+    this.talksEpoch += 1;
   }
 
   // The number of rows a statement with RETURNING produced.
@@ -420,14 +451,14 @@ export class Store {
       profile_id: doc.profile_id,
       ref: await refFor(this.owner.env, this.slug, doc.profile_id),
       secret_hash: doc.secret_hash,
-      display_name: String(doc.display_name ?? ''),
-      about: String(doc.about ?? ''),
-      interests: String(doc.interests ?? ''),
-      expertise: String(doc.expertise ?? ''),
+      display_name: txt(doc.display_name),
+      about: txt(doc.about),
+      interests: txt(doc.interests),
+      expertise: txt(doc.expertise),
       learn_topics: arr(doc.learn_topics),
       speak_topics: arr(doc.speak_topics),
       linkedin_url: doc.linkedin_url || null,
-      contact_note: doc.contact_note || null,
+      contact_note: txtOrNull(doc.contact_note),
       open_to_meet: doc.open_to_meet === true || doc.open_to_meet === 1,
       sample: doc.sample === true || doc.sample === 1,
       hidden: doc.hidden === true || doc.hidden === 1,
@@ -437,6 +468,12 @@ export class Store {
     };
     p.text_hash = await textHashOf(p);
     p.text_pending = TEXT_FIELDS.some((f) => p[f].trim());
+    // The operator's report outlives the profile row, as every report does, so a profile made again
+    // from the same device, a migration re-run or a fixture with this profile_id is hidden at once,
+    // whatever the document says. Only the operator lifts it (unblock, or unhide).
+    const held = this.operatorHolds(p.ref);
+    if (held.profile) p.hidden = true;
+    if (held.spot) p.spot_hidden = true;
     const shared = [...new Set(arr(doc.shared_talk_ids))];
     let rowid;
     this.tx(() => {
@@ -619,6 +656,7 @@ export class Store {
       if (k in fields && fields[k] !== undefined) n[k] = fields[k];
       else if (k in cur) n[k] = cur[k];
     }
+    if (typeof n.spot === 'string') n.spot = stripControls(n.spot) || null;
     if (!Number.isFinite(n.until_ms)) throw new TypeError('setPresence needs until_ms');
     this.sql(
       `INSERT INTO presence (profile_id, zone, spot, spot_pending, since_ms, until_ms, ble_token, ble_token_until_ms, presence_nonce, ble_master_id, ble_rotated)
@@ -791,8 +829,12 @@ export class Store {
     return false;
   }
 
-  // Clears a target's hidden flag and removes its reports, so it needs two fresh reports to be
-  // hidden again. Returns { found, removed }.
+  // Clears a target's hidden flag and removes its reports, the operator's included, so it needs two
+  // fresh reports to be hidden again. A target that is gone (a deleted profile, whose reports are
+  // kept) has its reports removed all the same, so a profile made again from the same device is not
+  // hidden by them; for a target with neither a row nor a report nothing is written. Returns
+  // { found, removed }: found says whether the target exists, removed counts the reports deleted
+  // (the caller answers 404 when both are nothing).
   unhideTarget(kind, id) {
     let found = false;
     if (kind === 'meet') {
@@ -812,6 +854,63 @@ export class Store {
     }
     const removed = this.#count('DELETE FROM reports WHERE target_kind = ? AND target_id = ? RETURNING 1', kind, id);
     return { found, removed };
+  }
+
+  // The hide rule of reports, for one target: hidden once HIDE_AT distinct people reported it
+  // (a report's id is kind:target:reporter, so each row is one reporter), or as soon as the
+  // operator did.
+  reportHides(kind, id) {
+    const r = this.sql(`SELECT COUNT(*) AS n, MAX(reporter_id = '${OPERATOR}') AS op FROM reports WHERE target_kind = ? AND target_id = ?`, kind, id).one();
+    return Number(r?.n ?? 0) >= HIDE_AT || Number(r?.op ?? 0) === 1;
+  }
+
+  // The same rule for both flags of the person with this ref, in one read: { hidden, spot_hidden }.
+  // A profile being created takes these, because reports outlive the profile row.
+  reportFlags(ref) {
+    const out = { profile: false, spot: false };
+    const rows = this.sql(
+      `SELECT target_kind, COUNT(*) AS n, MAX(reporter_id = '${OPERATOR}') AS op FROM reports WHERE target_kind IN ('profile', 'spot') AND target_id = ? GROUP BY target_kind`,
+      ref,
+    );
+    for (const r of rows) out[r.target_kind] = Number(r.n) >= HIDE_AT || Number(r.op) === 1;
+    return { hidden: out.profile, spot_hidden: out.spot };
+  }
+
+  // Which of the operator's reports exist for this ref: { profile, spot }. Read by primary key.
+  operatorHolds(ref) {
+    const ids = this.sql('SELECT id FROM reports WHERE id IN (?, ?)', `profile:${ref}:${OPERATOR}`, `spot:${ref}:${OPERATOR}`).toArray().map((r) => r.id);
+    return { profile: ids.includes(`profile:${ref}:${OPERATOR}`), spot: ids.includes(`spot:${ref}:${OPERATOR}`) };
+  }
+
+  // The operator hides a person's profile or spot line: the operator's report (id
+  // kind:ref:operator, reason 'operator'), inserted once, and the hide itself. Both steps are
+  // idempotent, so a retried request leaves the same rows. p is the person (a cached object).
+  operatorHide(kind, p) {
+    this.sql(
+      `INSERT INTO reports (id, target_kind, target_id, target_profile_id, reporter_id, reason, created_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+      `${kind}:${p.ref}:${OPERATOR}`, kind, p.ref, p.profile_id, OPERATOR, OPERATOR, Date.now(),
+    );
+    this.hideTarget(kind, p.ref, p.profile_id);
+  }
+
+  // Deletes the operator's report of this kind on the ref, whether or not the person still exists.
+  // Returns whether there was one.
+  removeOperatorReport(kind, ref) {
+    return this.#count('DELETE FROM reports WHERE id = ? RETURNING 1', `${kind}:${ref}:${OPERATOR}`) > 0;
+  }
+
+  // Removes the operator's report on a person's profile and, when there was one, sets the hidden
+  // flag to what the remaining reports say (HIDE_AT distinct reporters). Without an operator's
+  // report nothing changes. Returns { removed, hidden }, hidden being the flag as it now stands.
+  operatorUnhide(p) {
+    const removed = this.removeOperatorReport('profile', p.ref);
+    if (removed) {
+      const hidden = this.reportHides('profile', p.ref);
+      this.sql('UPDATE people SET hidden = ? WHERE profile_id = ?', b(hidden), p.profile_id);
+      p.hidden = hidden;
+    }
+    return { removed, hidden: p.hidden };
   }
 
   // Removes a target: a profile everywhere, a meet row, or the spot line (which stays hidden).
