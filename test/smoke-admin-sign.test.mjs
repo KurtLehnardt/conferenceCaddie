@@ -245,19 +245,49 @@ test('gated fixtures FAIL with the .dev.vars hint against a loopback API, and SK
   const { server, port } = await stubWorker({ authOk: signedOk });
   try {
     const local = await runSmoke(port, { SMOKE_TREAT_AS_REMOTE: '' });
-    const hint = 'set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (npm --prefix worker run dev-vars)';
+    const hint = 'set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (or run npm --prefix worker run dev-vars, which adds it when absent)';
     for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
       const fail = local.lines.find((l) => l.startsWith(`FAIL ${check}:`));
       assert.ok(fail?.includes(hint), `${check} must FAIL with the hint:\n${local.lines.filter((l) => l.includes(`${check}:`)).join('\n')}`);
       assert.ok(!skipLine(local.lines, check), `${check} must not SKIP against a loopback API`);
     }
+    assert.ok(!local.lines.some((l) => l.includes('SMOKE_TREAT_AS_REMOTE')), 'no NOTE when the override is off');
     const remote = await runSmoke(port, {});
+    assert.ok(remote.lines.includes('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed'), 'the override prints its NOTE');
     for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
       assert.ok(skipLine(remote.lines, check)?.includes('ADMIN_TEST_ROUTES'), `${check} must SKIP against a deployed Worker`);
       assert.ok(!remote.lines.some((l) => l.startsWith(`FAIL ${check}:`)));
     }
   } finally {
     server.close();
+  }
+});
+
+// A redirect on a device-header request (api()) is never followed either: the target is never called and
+// the check FAILs naming 302.
+test('a 302 on an API request is a FAIL naming 302, never followed or retried', async () => {
+  const other = await stubWorker({ authOk: () => true });
+  const { server, port } = await stubWorker({ authOk: signedOk });
+  const base = server.listeners('request')[0];
+  server.removeAllListeners('request');
+  let searches = 0;
+  server.on('request', (req, res) => {
+    if (req.url.startsWith('/api/search')) {
+      searches++;
+      res.writeHead(302, { location: `http://127.0.0.1:${other.port}${req.url}` });
+      return res.end('moved');
+    }
+    return base(req, res);
+  });
+  try {
+    const run = await runSmoke(port, {});
+    assert.equal(other.requests.length, 0, 'the redirect target was called');
+    assert.ok(run.lines.some((l) => l.startsWith('FAIL ') && l.includes('answered 302')), 'a FAIL names 302');
+    assert.ok(!run.lines.some((l) => l.startsWith('NOTE ') && l.includes('/api/search')), 'no retry NOTE for the redirect');
+    assert.ok(searches > 0);
+  } finally {
+    server.close();
+    other.server.close();
   }
 });
 

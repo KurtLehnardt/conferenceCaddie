@@ -97,6 +97,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
+import { isLoopbackHost } from './lib/loopback-host.mjs';
 import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
 import { decodeKey, deriveToken, encodeToken, windowOf } from '../contracts/js/ble-token.mjs';
@@ -187,7 +188,7 @@ const DIST_DIR = process.env.SMOKE_DIST || (WORKER_SERVES_APP ? 'web/dist-worker
 // Where the expected talks of a conference come from (SMOKE_TALKS above). A Worker on this machine
 // is loaded from the committed data/, not from the schedules the ingest published, so it is compared
 // with data/ by default.
-const LOCAL_API = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(API_BASE).hostname);
+const LOCAL_API = isLoopbackHost(new URL(API_BASE).hostname);
 const TALKS_FROM = (process.env.SMOKE_TALKS || (IS_WORKER && !LOCAL_API ? 'bundle' : 'data')).toLowerCase();
 if (!['bundle', 'data'].includes(TALKS_FROM)) {
   console.log('FAIL config: SMOKE_TALKS must be bundle or data');
@@ -290,6 +291,16 @@ function report(ok, name, detail = '') {
   if (!ok) failures++;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`);
 }
+// No request of this script follows a redirect: one that carries a credential (the admin header, the device
+// header, an Elasticsearch ApiKey) would hand it to whatever host the Location names. A redirect is a
+// failure that names the status, and the retry loops rethrow it. 304 is not one.
+class RedirectError extends Error {}
+const isRedirect = (status) => [301, 302, 303, 307, 308].includes(status);
+async function failOnRedirect(res, what) {
+  if (!isRedirect(res.status)) return;
+  await res.body?.cancel();
+  throw new RedirectError(`${what} answered ${res.status}, a redirect; requests never follow redirects`);
+}
 function skip(name, why) {
   console.log(`SKIP ${name} (${why})`);
 }
@@ -349,8 +360,10 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: 'manual',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      await failOnRedirect(res, `${method} ${path.split('?')[0]} (${label || 'no label'})`);
       const text = await res.text();
       // A local server answers fast enough for the checks to outrun the per-address search limit
       // (60 per minute), so a 429 waits for its Retry-After and asks again. Only the rate-limit
@@ -395,6 +408,7 @@ async function api(method, path, body, { device, label = '', origin } = {}) {
       result = { status: res.status, json, headers: res.headers };
       break;
     } catch (err) {
+      if (err instanceof RedirectError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -442,7 +456,6 @@ async function readBackShared(device, event, requested, before, label) {
 // upserts, the fixture delete and the unhide are no-ops the second time), so that is safe. Flags
 // for a route go in the JSON body, never in the query string, so the body hash covers them.
 // Nothing here prints the token, a request body or a response body.
-class AdminRedirectError extends Error {}
 async function admin(method, path, body) {
   const serialised = body === undefined ? undefined : JSON.stringify(body);
   let lastError;
@@ -459,10 +472,7 @@ async function admin(method, path, body) {
       });
       // A redirect is never followed: it would carry the admin credentials (and a signed body) to
       // wherever the Location points. It is a failure, not a network error, so it is never retried.
-      if (res.status >= 300 && res.status < 400) {
-        await res.body?.cancel();
-        throw new AdminRedirectError(`${method} ${path.split('?')[0]} (admin) answered ${res.status}, a redirect; admin requests never follow redirects`);
-      }
+      await failOnRedirect(res, `${method} ${path.split('?')[0]} (admin)`);
       const text = await res.text();
       if (res.status >= 500 && attempt === 0) {
         retried++;
@@ -480,7 +490,7 @@ async function admin(method, path, body) {
       return { status: res.status, json, headers: res.headers };
     } catch (err) {
       // A request the signer refuses is a bug in this script, not a network failure: no retry.
-      if (err instanceof UsageError || err instanceof AdminRedirectError) throw err;
+      if (err instanceof UsageError || err instanceof RedirectError) throw err;
       lastError = err;
       if (attempt === 0) {
         retried++;
@@ -501,8 +511,9 @@ let fixturesGated = null;
 // developer's .dev.vars, so it FAILs with a hint instead of a SKIP that hides it. A deployed Worker keeps
 // the SKIP. SMOKE_TREAT_AS_REMOTE=1 is test-only: it makes a loopback API count as deployed, so the
 // loopback stub of test/smoke-admin-sign.test.mjs can exercise the SKIP path.
-const API_IS_LOOPBACK = process.env.SMOKE_TREAT_AS_REMOTE !== '1' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(new URL(API_BASE).hostname);
-const FIXTURES_GATED_LOCAL_HINT = 'the Worker answers 404 to /admin/test/*: set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (npm --prefix worker run dev-vars)';
+const API_IS_LOOPBACK = process.env.SMOKE_TREAT_AS_REMOTE !== '1' && LOCAL_API;
+if (process.env.SMOKE_TREAT_AS_REMOTE === '1') console.log('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed');
+const FIXTURES_GATED_LOCAL_HINT = 'the Worker answers 404 to /admin/test/*: set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (or run npm --prefix worker run dev-vars, which adds it when absent)';
 function gatedFixtures() {
   throw API_IS_LOOPBACK ? new Error(FIXTURES_GATED_LOCAL_HINT) : new SkipCheck(FIXTURES_GATED_WHY);
 }
@@ -540,6 +551,7 @@ async function agePresence(device, who) {
   }
   const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_bulk?refresh=wait_for`, {
     method: 'POST',
+    redirect: 'manual',
     headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/x-ndjson' },
     body: `${JSON.stringify({ update: { _id: `${PRIMARY}:${device.profileId}` } })}\n${JSON.stringify({ doc: { presence_until: new Date(Date.now() - 60_000).toISOString() } })}\n`,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -841,7 +853,7 @@ if (!IS_WORKER) {
     const probe = async (label, headers) => {
       const res = await fetch(`${API_BASE}/admin/stats?event=${encodeURIComponent(PRIMARY)}`, { headers, redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       // Never follow a redirect with admin headers on it (see admin()); the probe fails naming the status.
-      if (res.status >= 300 && res.status < 400) {
+      if (isRedirect(res.status)) {
         await res.body?.cancel();
         return [`${label} gave ${res.status}, a redirect that was not followed`];
       }
@@ -991,15 +1003,21 @@ await check('e1: include_events adds co-located events and showcases, and nothin
 // with end > now) have nothing to return for it, so the checks that need upcoming talks print SKIP
 // instead of failing on "no results" or passing vacuously.
 const PRIMARY_OVER_WHY = 'no talk of the primary conference is still to come (the server only suggests talks whose end is after now)';
-function skipIfPrimaryOver() {
-  const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+function skipIfPrimaryOver(passed = '') {
+  let talks;
+  try {
+    talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
+  } catch {
+    return; // the talks could not be loaded (a bundle that is down): run the check, do not couple it to Pages
+  }
   const now = Date.now();
-  if (talks.length && !talks.some((d) => Date.parse(d.end) > now)) throw new SkipCheck(PRIMARY_OVER_WHY);
+  if (talks.length && !talks.some((d) => Date.parse(d.end) > now)) throw new SkipCheck(`${passed}${PRIMARY_OVER_WHY}`);
 }
 
 await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
-  skipIfPrimaryOver();
   const bad = await search({ query: 'kubernetes', filters: { include_events: 'yes' } });
+  if (bad.status !== 400) throw new Error(`include_events: "yes" gave ${bad.status}, not 400`);
+  skipIfPrimaryOver('the boolean check passed (include_events "yes" gave 400); the For-you part: ');
   const ambient = new Set(readNdjson(PRIMARY).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
   const recs = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: ['kubernetes', 'ebpf'], interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
   if (recs.status !== 200) throw new Error(`recommendations status ${recs.status}`);
@@ -1097,18 +1115,20 @@ await check('n1: Happening now is available exactly when the conference has talk
 });
 
 await check('n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', async () => {
-  skipIfPrimaryOver();
   const slack = 2 * 60_000;
   const at = Date.now();
+  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
+  if (bad.status !== 400) throw new Error(`happening_now: "yes" gave ${bad.status}, not 400`);
+  skipIfPrimaryOver('the boolean check passed (happening_now "yes" gave 400); the window part: ');
   const r = await search({ query: '', size: 50, filters: { happening_now: true } });
   const all = await search({ query: '', size: 1 });
-  const bad = await search({ query: '', filters: { happening_now: 'yes' } });
   if (r.status !== 200 || all.status !== 200) throw new Error(`status ${r.status} and ${all.status}`);
   const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
   const talks = readNdjson(PRIMARY).filter((d) => d.kind === 'talk');
   const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
-  // An empty window makes the bound above vacuous, and no talk is then inspected for being outside it.
-  if (r.status === 200 && r.json.total === 0) throw new SkipCheck('no talk is in progress or starting within 60 minutes, so the window has nothing to check');
+  // An empty window makes the bound vacuous. Skip only when the data agrees that none is in the window:
+  // an empty answer where the data expects talks is the failure the check is for (total >= expected below).
+  if (r.json.total === 0 && expected === 0) throw new SkipCheck('the boolean check passed (400); no talk is in progress or starting within 60 minutes, so the window has nothing to check');
   const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
   report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
 });
@@ -1376,6 +1396,7 @@ function extractPdfText(pdf) {
 // The deployed import key cannot write any index at all; scripts/create-es-keys.mjs checks that.
 async function indexCounts() {
   const res = await fetch(`${ES_URL}/_cat/indices?format=json&h=index,docs.count&expand_wildcards=open`, {
+    redirect: 'manual',
     headers: { Authorization: `ApiKey ${process.env.ELASTISEARCH_API_KEY}` },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -1557,6 +1578,7 @@ try {
   } else if (WRITE_MODE === 'es') {
     const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'PUT',
+      redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event_id: PRIMARY,
@@ -2168,7 +2190,7 @@ try {
       candidates.push({ topic_id: t.topic_id, label: t.label, upcoming: countUpcoming(r.json.results ?? [], t.topic_id, Date.now()) });
     }
     const topic = pickUpcomingTopic(candidates);
-    if (!topic) throw new SkipCheck(`no topic has ${MIN_UPCOMING} or more talks that have not ended`);
+    if (!topic) throw new SkipCheck(`none of the first 12 topics has ${MIN_UPCOMING} or more talks that have not ended`);
     const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: [], size: 20 }, { label: 'recs' });
     if (first.status !== 200) throw new Error(`status ${first.status}`);
     const marked = (first.json.results ?? []).slice(0, 2).map((r) => r.talk_id);
@@ -2481,6 +2503,7 @@ try {
   } else if (expiredWritten) {
     const res = await fetch(`${ES_URL}/${encodeURIComponent(PEOPLE_INDEX)}/_doc/${encodeURIComponent(expiredId)}?refresh=wait_for`, {
       method: 'DELETE',
+      redirect: 'manual',
       headers: { Authorization: `ApiKey ${ES_WRITE_KEY}` },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }).catch(() => null);
