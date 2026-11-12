@@ -133,6 +133,9 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
 
     private fun <T> locked(block: () -> T): T = runBlocking { lock.withLock { block() } }
 
+    /** Reads a stored field of a person under the lock, for [FakePerson]. */
+    internal fun <T> read(block: () -> T): T = locked(block)
+
     private val docs = ArrayList<Doc>()
     private val meets = ArrayList<Meet>()
     private val reports = ArrayList<Report>()
@@ -1138,20 +1141,20 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
  */
 class FakePerson internal constructor(private val server: FakePeopleServer, internal val doc: FakePeopleServer.Doc) {
     val ref: String get() = doc.ref
-    val displayName: String get() = doc.displayName
+    val displayName: String get() = server.read { doc.displayName }
     val slug: String get() = doc.slug
 
     /** True while this person is visible conference-wide, as the server stores it. */
-    val openToMeet: Boolean get() = doc.openToMeet
+    val openToMeet: Boolean get() = server.read { doc.openToMeet }
 
     /** The talk ids this person shares for, as the server stores them. */
-    val sharedTalkIds: List<String> get() = doc.shared
+    val sharedTalkIds: List<String> get() = server.read { doc.shared }
 
     /** The zone this person's presence is on in, or null while presence is off, as the server stores it. */
-    val zone: String? get() = doc.zone
+    val zone: String? get() = server.read { doc.zone }
 
     /** True while the profile is hidden after reports. */
-    val hidden: Boolean get() = doc.hidden
+    val hidden: Boolean get() = server.read { doc.hidden }
 
     private fun call(method: String, path: String, build: JsonObjectBuilder.() -> Unit = {}): JsonObject =
         server.actAs(doc, method, path, buildJsonObject { put("event", doc.slug); build() })
@@ -1202,7 +1205,8 @@ class FakePerson internal constructor(private val server: FakePeopleServer, inte
 
     /** Moves the stored position, keeping the zone and the hour (presence must be on). */
     fun locate(lat: Double, lon: Double) {
-        goAround(doc.zone ?: error("Not around"), doc.spot ?: "", located = true, lat = lat, lon = lon)
+        val (zone, spot) = server.read { doc.zone to doc.spot }
+        goAround(zone ?: error("Not around"), spot ?: "", located = true, lat = lat, lon = lon)
     }
 
     fun leave() {

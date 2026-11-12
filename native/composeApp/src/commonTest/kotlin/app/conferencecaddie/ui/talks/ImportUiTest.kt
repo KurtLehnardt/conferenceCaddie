@@ -131,6 +131,22 @@ class ImportUiTest {
         onNodeWithTag("import-find").performScrollTo().assertIsEnabled().performSemanticsAction(SemanticsActions.OnClick)
     }
 
+    /**
+     * Waits until [tag]'s bounds have stayed the same for two frames in a row, so the keyboard has
+     * stopped moving the sheet, for a test that taps the button where it is on the screen.
+     */
+    private fun ComposeUiTest.waitForStillBounds(tag: String) {
+        var last = onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        var still = 0
+        waitUntil(timeoutMillis = 20_000) {
+            mainClock.advanceTimeByFrame()
+            val now = onNodeWithTag(tag).getUnclippedBoundsInRoot()
+            still = if (now == last) still + 1 else 0
+            last = now
+            still >= 2
+        }
+    }
+
     @Test
     fun pastedTextFindsTheTalksAndMarksTheStrongOnes() = runComposeUiTest {
         start()
@@ -295,7 +311,9 @@ class ImportUiTest {
         openImport()
         onNodeWithTag("import-paste-toggle").performScrollTo().performClick()
         onNodeWithTag("import-paste").performScrollTo().performTextReplacement(schedule)
-        findTalks()
+        // A real tap here, once the sheet has stopped moving: the other tests click through the action.
+        waitForStillBounds("import-find")
+        onNodeWithTag("import-find").performScrollTo().assertIsDisplayed().performClick()
         waitFor(tag = "import-review")
         // The footer's buttons stay on screen however long the review is.
         onNodeWithTag("import-mark").assertIsDisplayed().performClick()
