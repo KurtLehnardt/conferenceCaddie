@@ -1,11 +1,31 @@
 // Admin routes served by a ConferenceDO (PLAN section 2). The Worker has already checked the
-// bearer token, refused any request with an Origin header, and resolved ?event= to a searchable
-// conference. Ingest, migration, moderation, stats and the smoke fixtures use these routes; the
-// web app never does. Responses carry counts, never document contents, and nothing here logs.
+// signed X-Caddie-Admin header, refused any request with an Origin header, and resolved ?event= to
+// a conference the directory knows; the object has recorded the request's nonce. Ingest,
+// migration, moderation, stats, the operator's CLI and the smoke fixtures use these routes; the
+// web app never does. Responses carry counts, never document contents, except the people search
+// and view the operator asks for, which carry names and, on request, profile text; never an
+// internal id. Nothing here logs.
 
 import { HttpError, bad, json, readJson, isPlainObject, REF_RE, MEET_ID_RE } from './lib/http.js';
 import { sha256Hex } from './lib/device.js';
 import { visibleUntilMs } from './lib/time.js';
+import { stripControls } from './lib/text.js';
+
+// A stored string as the operator's routes answer it: without control characters. Every write
+// strips them (lib/text.js), but rows written before that may still hold some, and an answer must
+// not carry them to a terminal. The CLI escapes what it prints as well; this is the Worker's layer.
+const clean = (v) => (typeof v === 'string' ? stripControls(v) : v);
+// Counts keyed by a stored string, cleaned; two keys that clean to the same text are added up.
+// Built in a Map and turned into own keys by fromEntries, so a key of any spelling (__proto__
+// included) stays a plain key.
+function countsBy(rows, key) {
+  const out = new Map();
+  for (const r of rows) {
+    const k = String(clean(r[key]));
+    out.set(k, (out.get(k) ?? 0) + Number(r.n));
+  }
+  return Object.fromEntries(out);
+}
 
 const MAX_TALKS = 50;
 const MAX_PEOPLE = 25;
@@ -319,18 +339,18 @@ async function postReports(ctx, req) {
 // Moderation (port of scripts/moderation.mjs). People appear by display_name and ref only.
 
 function reportSummary(ctx) {
-  const map = new Map();
+  const rows = new Map();
   for (const r of ctx.sql.exec('SELECT target_kind, target_id, reason, COUNT(*) AS n FROM reports GROUP BY target_kind, target_id, reason')) {
     const key = `${r.target_kind}:${r.target_id}`;
-    const e = map.get(key) ?? { reports: 0, reasons: {} };
-    e.reports += r.n;
-    e.reasons[r.reason] = r.n;
-    map.set(key, e);
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key).push(r);
   }
+  const map = new Map();
+  for (const [key, list] of rows) map.set(key, { reports: list.reduce((n, r) => n + r.n, 0), reasons: countsBy(list, 'reason') });
   return map;
 }
 
-const nameOf = (ctx, id) => ctx.store.person(id)?.display_name ?? '(profile deleted)';
+const nameOf = (ctx, id) => clean(ctx.store.person(id)?.display_name) ?? '(profile deleted)';
 
 function meetView(ctx, m) {
   return { kind: 'meet', meet_id: m.meet_id, state: m.state, between: [nameOf(ctx, m.requester_id), nameOf(ctx, m.recipient_id)] };
@@ -344,8 +364,8 @@ function getModeration(ctx, req) {
   const people = [...ctx.sql.exec('SELECT profile_id FROM people WHERE hidden = 1 OR spot_hidden = 1')].map((r) => ctx.store.person(r.profile_id)).filter(Boolean);
   people.sort((a, c) => a.display_name.localeCompare(c.display_name));
   for (const p of people) {
-    if (p.hidden) hidden.push(withCounts(`profile:${p.ref}`, { kind: 'profile', display_name: p.display_name, ref: p.ref }));
-    if (p.spot_hidden) hidden.push(withCounts(`spot:${p.ref}`, { kind: 'spot', display_name: p.display_name, ref: p.ref }));
+    if (p.hidden) hidden.push(withCounts(`profile:${p.ref}`, { kind: 'profile', display_name: clean(p.display_name), ref: p.ref }));
+    if (p.spot_hidden) hidden.push(withCounts(`spot:${p.ref}`, { kind: 'spot', display_name: clean(p.display_name), ref: p.ref }));
   }
   for (const m of ctx.sql.exec('SELECT meet_id, state, requester_id, recipient_id FROM meets WHERE hidden = 1 ORDER BY created_at_ms DESC LIMIT ?', PAGE)) {
     hidden.push(withCounts(`meet:${m.meet_id}`, meetView(ctx, m)));
@@ -364,13 +384,22 @@ function getModeration(ctx, req) {
       target = m ? meetView(ctx, m) : { kind: 'meet', meet_id: r.target_id, deleted: true };
     } else {
       const p = ctx.store.personByRef(r.target_id);
-      target = { kind: r.target_kind, ref: r.target_id, display_name: p?.display_name ?? '(profile deleted)' };
+      target = { kind: r.target_kind, ref: r.target_id, display_name: clean(p?.display_name) ?? '(profile deleted)' };
     }
-    reports.push({ created_at: iso(r.created_at_ms), kind: r.target_kind, reason: r.reason, target });
+    reports.push({ created_at: iso(r.created_at_ms), kind: r.target_kind, reason: clean(r.reason), target });
   }
   return json(200, { hidden, reports });
 }
 
+// POST /admin/moderation?event= {action, kind?, id?}:
+//   purge   deletes the reports of a conference that has ended;
+//   hide    (profile or spot) hides the target and files the operator's report, so the hide
+//           survives a profile write and a re-creation from the same device: {ok}; 404 for an
+//           unknown ref; kind meet is 400. Idempotent;
+//   unhide  clears the hidden flag and deletes the target's reports, the operator's included:
+//           {ok, found, removed}. A target that is gone but still has reports gets them deleted
+//           (found false); one with neither is 404;
+//   delete  removes the target (a profile everywhere): {ok}; 404 when it is already gone.
 async function postModeration(ctx, req) {
   const body = await readJson(req, new Set(['action', 'kind', 'id']));
   const { action, kind, id } = body;
@@ -382,16 +411,245 @@ async function postModeration(ctx, req) {
     const purged = ctx.sql.exec('DELETE FROM reports WHERE created_at_ms < ? RETURNING 1', endMs).toArray().length;
     return json(200, { ok: true, purged });
   }
-  if (action !== 'unhide' && action !== 'delete') throw bad("action must be 'unhide', 'delete' or 'purge'");
+  if (action !== 'hide' && action !== 'unhide' && action !== 'delete') throw bad("action must be 'hide', 'unhide', 'delete' or 'purge'");
   if (!KINDS.has(kind)) throw bad("kind must be 'profile', 'spot' or 'meet'");
+  if (action === 'hide' && kind === 'meet') throw bad("kind must be 'profile' or 'spot' to hide");
   if (typeof id !== 'string' || !(kind === 'meet' ? MEET_ID_RE : REF_RE).test(id)) throw bad(kind === 'meet' ? 'id must be a meet id' : 'id must be a ref');
+  if (action === 'hide') {
+    const p = ctx.store.personByRef(id);
+    if (!p) throw new HttpError(404, { error: 'not_found' });
+    ctx.store.operatorHide(kind, p);
+    return json(200, { ok: true });
+  }
   if (action === 'unhide') {
     const { found, removed } = ctx.store.unhideTarget(kind, id);
-    if (!found) throw new HttpError(404, { error: 'not_found' });
-    return json(200, { ok: true, removed });
+    if (!found && !removed) throw new HttpError(404, { error: 'not_found' });
+    return json(200, { ok: true, found, removed });
   }
   if (!ctx.store.deleteTarget(kind, id)) throw new HttpError(404, { error: 'not_found' });
   return json(200, { ok: true });
+}
+
+// ---------------------------------------------------------------------------------------------
+// People: search, view and the operator's block. The operator finds people by display name or
+// ref only. No answer here ever carries a profile_id, a secret hash, a reporter id, a push
+// endpoint or key, a zone, a position, a cell or a Bluetooth field.
+
+const SEARCH_DEFAULT = 50;
+const SEARCH_MAX = 200;
+const Q64_MAX_BYTES = 200;
+const VIEW_TEXT_MAX = 300;
+const VIEW_FIELDS = new Set(['text', 'contact']);
+
+// The query of an admin GET as a Map: only the keys the route reads (event included), each at most
+// once, so a misspelt or repeated parameter is a 400 instead of being ignored.
+function queryOf(req, allowed) {
+  const out = new Map();
+  for (const [k, v] of new URL(req.url).searchParams) {
+    if (!allowed.has(k)) throw bad(`Unknown parameter: ${k.slice(0, 40)}`);
+    if (out.has(k)) throw bad(`${k} must be given once`);
+    out.set(k, v);
+  }
+  return out;
+}
+
+// q64: base64url without padding of 1 to 200 bytes of UTF-8 (the signer's query charset has no
+// room for free text), with no NUL. Anything else is a 400.
+function decodeQ64(value) {
+  const fail = () => bad(`q64 must be base64url without padding of 1 to ${Q64_MAX_BYTES} bytes of UTF-8 with no NUL`);
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1 || value.length > Math.ceil((Q64_MAX_BYTES * 4) / 3)) throw fail();
+  let bin;
+  try {
+    bin = atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (value.length % 4)) % 4));
+  } catch {
+    throw fail();
+  }
+  // A NUL would end the text early in SQLite's string functions, so q64=AA would match everyone.
+  if (bin.length === 0 || bin.length > Q64_MAX_BYTES || bin.includes('\0')) throw fail();
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+  } catch {
+    throw fail();
+  }
+}
+
+const flag = (v) => v === 1 || v === true;
+
+// One search row: the person's ref, name, flags and visibility end. Nothing else.
+const searchRow = (r) => ({
+  ref: r.ref,
+  display_name: clean(r.display_name),
+  hidden: flag(r.hidden),
+  spot_hidden: flag(r.spot_hidden),
+  open_to_meet: flag(r.open_to_meet),
+  sample: flag(r.sample),
+  visible_until: iso(r.visible_until_ms),
+});
+const SEARCH_COLUMNS = 'ref, display_name, hidden, spot_hidden, open_to_meet, sample, visible_until_ms';
+
+// GET /admin/people/search?event=&q64=<base64url>|&ref=<ref>[&limit=<n>][&include_hidden=0|1]:
+// {people: [rows], matched}. limit and include_hidden are checked in both forms. With ref, the
+// one person with that ref, hidden or not (404 when there is none). With q64, the people whose
+// display_name holds the decoded text as a substring, case-insensitive for ASCII letters (SQLite's
+// lower()), hidden ones only with include_hidden=1, ordered by display_name, at most limit
+// (default 50, at most 200); matched counts every match before the limit. instr() matches the text
+// literally, so %, _ and \ are plain characters, and a stored name with a NUL in it is still
+// searched past the NUL.
+function searchPeople(ctx, req) {
+  const q = queryOf(req, new Set(['event', 'q64', 'ref', 'limit', 'include_hidden']));
+  if (q.has('q64') === q.has('ref')) throw bad('give exactly one of q64 and ref');
+  let limit = SEARCH_DEFAULT;
+  if (q.has('limit')) {
+    if (!/^[1-9][0-9]{0,2}$/.test(q.get('limit')) || Number(q.get('limit')) > SEARCH_MAX) throw bad(`limit must be an integer from 1 to ${SEARCH_MAX}`);
+    limit = Number(q.get('limit'));
+  }
+  const inc = q.get('include_hidden');
+  if (inc !== undefined && inc !== '0' && inc !== '1') throw bad('include_hidden must be 0 or 1');
+  if (q.has('ref')) {
+    const ref = q.get('ref');
+    if (!REF_RE.test(ref)) throw bad('ref must be a ref');
+    const row = ctx.sql.exec(`SELECT ${SEARCH_COLUMNS} FROM people WHERE ref = ?`, ref).toArray()[0];
+    if (!row) throw new HttpError(404, { error: 'not_found' });
+    return json(200, { people: [searchRow(row)], matched: 1 });
+  }
+  const text = decodeQ64(q.get('q64'));
+  const rows = ctx.sql.exec(
+    `SELECT ${SEARCH_COLUMNS}, COUNT(*) OVER () AS matched FROM people
+     WHERE instr(lower(display_name), lower(?)) > 0${inc === '1' ? '' : ' AND hidden = 0'}
+     ORDER BY display_name, ref LIMIT ?`,
+    text, limit,
+  ).toArray();
+  return json(200, { people: rows.map(searchRow), matched: Number(rows[0]?.matched ?? 0) });
+}
+
+// A text without control characters, cut to at most 300 UTF-16 units without leaving half of a
+// surrogate pair; null stays null.
+function cut(raw) {
+  if (typeof raw !== 'string') return null;
+  const value = stripControls(raw);
+  if (value.length <= VIEW_TEXT_MAX) return value;
+  const end = /[\uD800-\uDBFF]/.test(value[VIEW_TEXT_MAX - 1]) ? VIEW_TEXT_MAX - 1 : VIEW_TEXT_MAX;
+  return value.slice(0, end);
+}
+
+// The meets of a person by state, as the operator reads them: requested; accepted (an accepted
+// meet is stored as active); declined; ended (found, which is how a meet that worked ends,
+// connect/meets.js; cancelled; expired; accepted, a state older versions stored; and an open meet
+// whose time ran out, which its participants already see as expired); other (any other state).
+function meetCounts(ctx, profileId) {
+  const out = { requested: 0, accepted: 0, declined: 0, ended: 0, other: 0 };
+  const rows = ctx.sql.exec(
+    `SELECT CASE WHEN state IN ('requested', 'active') AND expires_at_ms <= ? THEN 'expired' ELSE state END AS s, COUNT(*) AS n
+     FROM meets WHERE requester_id = ? OR recipient_id = ? GROUP BY s`,
+    ctx.now, profileId, profileId,
+  );
+  const bucket = { requested: 'requested', active: 'accepted', declined: 'declined', found: 'ended', cancelled: 'ended', expired: 'ended', accepted: 'ended' };
+  for (const r of rows) out[bucket[r.s] ?? 'other'] += Number(r.n);
+  return out;
+}
+
+const countOf = (ctx, q, ...b) => Number(ctx.sql.exec(q, ...b).one()?.n ?? 0);
+
+// GET /admin/people/view?event=&ref=<ref>[&fields=text,contact]: {person}. Always the ref, name,
+// flags, visibility, updated_at, presence (on or off, nothing about where) and counts: shared
+// talks; meets by state; blocks made and received that have not run out; live push subscriptions
+// (Web Push is the only channel here); reports against the person (of the profile, the spot line
+// and the meets they took part in) by reason, the operator's included. fields=text adds about,
+// interests, expertise, contact_note, the current spot line and the held lines (pending), each cut
+// to 300 characters; fields=contact adds linkedin_url. 404 not_found for an unknown ref.
+function viewPerson(ctx, req) {
+  const q = queryOf(req, new Set(['event', 'ref', 'fields']));
+  const ref = q.get('ref') ?? '';
+  if (!REF_RE.test(ref)) throw bad('ref must be a ref');
+  const fields = new Set();
+  for (const f of (q.get('fields') ?? '').split(',')) {
+    if (!f) continue;
+    if (!VIEW_FIELDS.has(f)) throw bad("fields must be a comma list of 'text' and 'contact'");
+    fields.add(f);
+  }
+  const p = ctx.store.personByRef(ref);
+  if (!p) throw new HttpError(404, { error: 'not_found' });
+  const id = p.profile_id;
+  const around = ctx.store.isAround(p);
+  const reasons = ctx.sql.exec(
+    `SELECT reason, COUNT(*) AS n FROM reports
+     WHERE (target_kind IN ('profile', 'spot') AND target_id = ?) OR (target_kind = 'meet' AND target_profile_id = ?)
+     GROUP BY reason ORDER BY reason`,
+    p.ref, id,
+  ).toArray();
+  const person = {
+    ref: p.ref,
+    display_name: clean(p.display_name),
+    hidden: p.hidden === true,
+    spot_hidden: p.spot_hidden === true,
+    open_to_meet: p.open_to_meet === true,
+    sample: p.sample === true,
+    visible_until: iso(p.visible_until_ms),
+    updated_at: iso(p.updated_at_ms),
+    presence: around ? 'on' : 'off',
+    counts: {
+      shared_talks: p.shared_talk_ids.length,
+      meets: meetCounts(ctx, id),
+      blocks_made: countOf(ctx, 'SELECT COUNT(*) AS n FROM blocks WHERE blocker_id = ? AND (expires_at_ms IS NULL OR expires_at_ms > ?)', id, ctx.now),
+      blocks_received: countOf(ctx, 'SELECT COUNT(*) AS n FROM blocks WHERE blocked_id = ? AND (expires_at_ms IS NULL OR expires_at_ms > ?)', id, ctx.now),
+      push: { web: countOf(ctx, 'SELECT COUNT(*) AS n FROM push_subs WHERE profile_id = ? AND expires_at_ms > ?', id, ctx.now) },
+      reports: {
+        total: reasons.reduce((sum, r) => sum + Number(r.n), 0),
+        reasons: countsBy(reasons, 'reason'),
+      },
+    },
+  };
+  if (fields.has('text')) {
+    // A spot line is shown only while the person is around; one held back for moderation
+    // (spot_pending) goes under pending instead.
+    const spot = around && p.presence.spot ? p.presence.spot : null;
+    const held = around && p.presence.spot_pending === true;
+    Object.assign(person, {
+      about: cut(p.about),
+      interests: cut(p.interests),
+      expertise: cut(p.expertise),
+      contact_note: cut(p.contact_note),
+      spot: held ? null : cut(spot),
+      pending: held && spot ? { spot: cut(spot) } : {},
+    });
+  }
+  if (fields.has('contact')) person.linkedin_url = clean(p.linkedin_url) ?? null;
+  return json(200, { person });
+}
+
+// POST /admin/people/block?event= {ref, action: "block" | "unblock"}.
+//   block    files the operator's report on the profile (id profile:<ref>:operator, reporter and
+//            reason 'operator') with ON CONFLICT DO NOTHING and hides the profile: {ok, hidden:
+//            true}; 404 not_found when no person has the ref. The report reaches HIDE_AT on its
+//            own, and reports outlive the profile row, so the hide survives a profile write and a
+//            re-creation from the same device (store.reportFlags and insertPerson). A new device is
+//            a new person and is not covered.
+//   unblock  deletes that one report, and no other:
+//            - the person exists: hidden is set to what the remaining reports say (two other
+//              distinct reporters keep the profile hidden): {ok, hidden, found: true, removed: true};
+//            - the person is gone (a deleted profile, whose reports are kept): {ok, hidden: null,
+//              found: false, removed: true}, so a profile made again from that device is not hidden;
+//            - the person exists without an operator's report: 404 no_operator_block, nothing
+//              changes;
+//            - neither: 404 not_found.
+//            A retried unblock whose first answer was lost therefore answers 404 the second time.
+async function blockPerson(ctx, req) {
+  const body = await readJson(req, new Set(['ref', 'action']));
+  if (typeof body.ref !== 'string' || !REF_RE.test(body.ref)) throw bad('ref must be a ref');
+  if (body.action !== 'block' && body.action !== 'unblock') throw bad("action must be 'block' or 'unblock'");
+  const p = ctx.store.personByRef(body.ref);
+  if (body.action === 'block') {
+    if (!p) throw new HttpError(404, { error: 'not_found' });
+    ctx.store.operatorHide('profile', p);
+    return json(200, { ok: true, hidden: true });
+  }
+  if (!p) {
+    if (!ctx.store.removeOperatorReport('profile', body.ref)) throw new HttpError(404, { error: 'not_found' });
+    return json(200, { ok: true, hidden: null, found: false, removed: true });
+  }
+  const { removed, hidden } = ctx.store.operatorUnhide(p);
+  if (!removed) throw new HttpError(404, { error: 'no_operator_block' });
+  return json(200, { ok: true, hidden, found: true, removed: true });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -468,6 +726,9 @@ export default [
   { method: 'POST', path: '/admin/reports', fail: FAIL, handler: postReports },
   { method: 'GET', path: '/admin/moderation', fail: FAIL, handler: getModeration },
   { method: 'POST', path: '/admin/moderation', fail: FAIL, handler: postModeration },
+  { method: 'GET', path: '/admin/people/search', fail: FAIL, handler: searchPeople },
+  { method: 'GET', path: '/admin/people/view', fail: FAIL, handler: viewPerson },
+  { method: 'POST', path: '/admin/people/block', fail: FAIL, handler: blockPerson },
   { method: 'POST', path: '/admin/embed-pending', fail: FAIL, handler: embedPending },
   { method: 'GET', path: '/admin/stats', fail: FAIL, handler: stats },
   { method: 'POST', path: '/admin/test/profile', fail: FAIL, handler: testProfile },
@@ -478,8 +739,10 @@ export default [
 
 // The admin paths the Worker may forward to a ConferenceDO (PUT /admin/conferences goes to the
 // DirectoryDO instead).
+// GET /admin/stats without event goes to the DirectoryDO too, and DELETE /admin/conference is
+// served by the Worker itself (src/index.js), through the object's /internal/wipe.
 export const CONFERENCE_ADMIN_PATHS = new Set([
   '/admin/talks', '/admin/talks/finalize', '/admin/topics', '/admin/facets', '/admin/people', '/admin/reports',
   '/admin/moderation', '/admin/embed-pending', '/admin/stats', '/admin/test/profile', '/admin/test/age-presence',
-  '/admin/test/meter-restart',
+  '/admin/test/meter-restart', '/admin/people/search', '/admin/people/view', '/admin/people/block',
 ]);

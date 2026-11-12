@@ -1,7 +1,7 @@
 // Adapter factory of the caddie-admin CLI. An adapter serves the commands of one backend tier:
 // tier 3 talks to Elasticsearch with the admin key (es.mjs), tier 2 to the Worker's signed /admin
-// routes (PR C; every method throws until then). The conference commands that write files
-// (commands/conferences.mjs) wrap the tier adapter, so both tiers share them.
+// routes (worker.mjs). The conference commands that write files (commands/conferences.mjs) wrap
+// the tier adapter, so both tiers share them.
 //
 // Adapter interface. Each method takes one object of named arguments and returns a result object
 // `{ items?: [...], summary?: '<one line>', counts?: { <name>: <integer> }, ... }`, or throws one
@@ -23,8 +23,7 @@
 import { AdminError } from '../errors.mjs';
 import { adminRoot, withConferenceFiles } from '../commands/conferences.mjs';
 import { createEsAdapter } from './es.mjs';
-
-const NOT_IMPLEMENTED = 'not implemented in this release (PR C adds tier 2)';
+import { createWorkerAdapter } from './worker.mjs';
 
 // Method name, the command it serves, and the arguments it reads.
 export const ADAPTER_METHODS = {
@@ -51,21 +50,16 @@ export const ADAPTER_METHODS = {
   health: 'stats health: { mode }',
 };
 
-function notImplemented() {
-  const adapter = {};
-  for (const method of Object.keys(ADAPTER_METHODS)) {
-    adapter[method] = async () => {
-      throw new AdminError(NOT_IMPLEMENTED);
-    };
-  }
-  return adapter;
-}
-
 // `credential` is the admin key (tier 3) or admin token (tier 2). It is used only to sign or
 // authorize requests and is never returned, printed or logged. `env` is the process environment
-// (index names, CADDIE_ADMIN_ROOT); `spawn`, `fetch` and `now` are injectable for the tests.
-export function createAdapter(backend, { credential, env = {}, spawn, fetch, now = () => new Date() } = {}) {
+// (index names, CADDIE_ADMIN_ROOT); `spawn`, `fetch`, `now` and `trackSend` (tier 2: whether an
+// attempt was written to a socket) are injectable for the tests.
+export function createAdapter(backend, { credential, env = {}, spawn, fetch, now = () => new Date(), trackSend } = {}) {
   const root = adminRoot(env);
-  const tier = backend.tier === 3 ? createEsAdapter(backend, { credential, env, spawn, fetch, root, now }) : notImplemented();
-  return withConferenceFiles(tier, { root, now });
+  const deps = { credential, env, spawn, fetch, root, now, trackSend };
+  let tier;
+  if (backend.tier === 3) tier = createEsAdapter(backend, deps);
+  else if (backend.tier === 2) tier = createWorkerAdapter(backend, deps);
+  else throw new AdminError(`backend "${backend.name}" has tier ${backend.tier}; only 2 and 3 exist`);
+  return withConferenceFiles(tier, { root, now, tier: backend.tier });
 }

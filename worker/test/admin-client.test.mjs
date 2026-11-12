@@ -140,6 +140,169 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
     assert.ok(seen.every((r) => r.body.equals(seen[0].body)));
   });
 
+  test('an unretire_incomplete answer names its cause and the slugs not unretired; with cause daily_limit first it stops at once, otherwise it is retried', async () => {
+    const body = (status, cause) => ({ status, headers: { 'Retry-After': '1' }, body: { cause, error: 'unretire_incomplete', unretire_failed: [SLUG, 'Bad Slug\nFAKE', 7, SLUG], upserted: 3, searchable: 2, synced: 1, skipped_retired: [] } });
+    const limited = await recorder([body(503, 'daily_limit')]);
+    await assert.rejects(adminClient(limited.base, KEY, { retries: 3, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+      assert.equal(e.status, 503);
+      assert.match(e.message, /status 503 \(unretire_incomplete, cause daily_limit\)/);
+      assert.ok(e.message.includes(`not unretired, the object did not take the document: ${SLUG};`), e.message);
+      assert.ok(e.message.includes('the rest of the batch was applied (upserted 3)'), e.message);
+      assert.ok(!e.message.includes('FAKE') && !e.message.includes('Bad Slug'), e.message);
+      assert.match(e.message, /daily limit is reached/);
+      return true;
+    });
+    assert.equal(limited.seen.length, 1, 'a daily limit is not retried');
+    const superseded = await recorder([body(502, 'unretire_superseded'), { body: { upserted: 3, searchable: 2, synced: 2, skipped_retired: [] } }]);
+    assert.deepEqual(await adminClient(superseded.base, KEY, { retries: 1, env: {} })('PUT', '/admin/conferences', { conferences: [] }), { upserted: 3, searchable: 2, synced: 2, skipped_retired: [] });
+    assert.equal(superseded.seen.length, 2, 'a 502 is retried');
+    const gaveUp = await recorder([body(502, 'unretire_superseded')]);
+    await assert.rejects(adminClient(gaveUp.base, KEY, { retries: 0, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+      assert.ok(e.message.includes(`status 502 (unretire_incomplete, cause unretire_superseded): not unretired, the object did not take the document: ${SLUG}; the rest of the batch was applied (upserted 3)`), e.message);
+      return true;
+    });
+  });
+
+  // Asserts that nothing the client sent in a header (the signed header, its nonce and signature,
+  // the Access secret) or the key reaches the error's message, `earlier` or `body`, and that the
+  // error carries no other own property.
+  function assertNoSecret(e, seen) {
+    assert.deepEqual(Object.keys(e).sort(), ['body', 'earlier', 'status']);
+    const shown = [e.message, JSON.stringify(e.earlier), JSON.stringify(e.body)].join('\n');
+    const secrets = [KEY, ACCESS.CF_ACCESS_CLIENT_ID, ACCESS.CF_ACCESS_CLIENT_SECRET];
+    for (const r of seen) {
+      const h = parseAdminHeader(r.headers['x-caddie-admin']);
+      secrets.push(r.headers['x-caddie-admin'], h.nonce, h.sig);
+    }
+    for (const s of secrets) assert.ok(!shown.includes(s), 'a header value or the key reached the error');
+  }
+  const mismatch = (mismatched) => ({ status: 409, body: { error: 'status_mismatch', mismatched } });
+
+  test('a 409 status_mismatch after a 502 unretire_incomplete keeps the answer, shows expected→actual and the earlier attempt, and says to repeat the unretire', async () => {
+    const incomplete = { status: 502, headers: { 'Retry-After': '1' }, body: { cause: 'unretire_superseded', error: 'unretire_incomplete', unretire_failed: [SLUG], upserted: 1, searchable: 1, synced: 0, skipped_retired: [] } };
+    const answer = mismatch([
+      { slug: SLUG, expected: null, actual: 'searchable' },
+      { slug: 'Bad Slug\nFAKE', expected: null, actual: 'searchable' },
+      { slug: 'other-fixture-2099', expected: 'x\u001b[31mFAKE', actual: null },
+      'FAKE',
+    ]);
+    const { seen, base } = await recorder([incomplete, answer]);
+    const admin = adminClient(base, KEY, { retries: 3, env: ACCESS });
+    await assert.rejects(admin('PUT', '/admin/conferences', { conferences: [{ slug: SLUG, unretire: true, expect_status: null }] }), (e) => {
+      assert.ok(e instanceof AdminError);
+      assert.equal(e.status, 409);
+      assert.deepEqual(e.body, answer.body);
+      assert.deepEqual(e.earlier, ['status 502 (unretire_incomplete, cause unretire_superseded)']);
+      assert.equal(e.message, `PUT /admin/conferences: status 409 (status_mismatch): the directory holds another status (expected→actual): ${SLUG} (no row)→searchable (3 malformed entries not shown). An earlier attempt answered status 502 (unretire_incomplete, cause unretire_superseded); it may have been applied, so the actual status can be the one it set; repeat the unretire without expect_status until it answers 200.`);
+      assert.ok(!e.message.includes('FAKE') && !e.message.includes('\u001b'), e.message);
+      assertNoSecret(e, seen);
+      return true;
+    });
+    assert.equal(seen.length, 2, 'the 409 is not retried');
+  });
+
+  test('a status_mismatch after no answer says the attempt may have been applied; after a 429, or for another error, the earlier attempts are only listed', async () => {
+    const dropped = await recorder([{ drop: true }, mismatch([{ slug: SLUG, expected: 'searchable', actual: 'unavailable' }])]);
+    await assert.rejects(adminClient(dropped.base, KEY, { retries: 1, env: ACCESS })('PUT', '/admin/conferences', { conferences: [{ slug: SLUG, status: 'unavailable', expect_status: 'searchable' }] }), (e) => {
+      assert.deepEqual([e.status, e.earlier], [409, ['no answer (network error)']]);
+      assert.ok(e.message.endsWith(`${SLUG} searchable→unavailable. An earlier attempt got no answer (network error); it may have been applied, so the actual status can be the one it set; check the conference, then send the request again with the actual status or without expect_status.`), e.message);
+      assertNoSecret(e, dropped.seen);
+      return true;
+    });
+    const limited = await recorder([{ status: 429, headers: { 'Retry-After': '1' }, body: { error: 'rate_limited' } }, mismatch([{ slug: SLUG, expected: null, actual: 'searchable' }])]);
+    await assert.rejects(adminClient(limited.base, KEY, { retries: 1, env: {} })('PUT', '/admin/conferences', { conferences: [{ slug: SLUG, unretire: true, expect_status: null }] }), (e) => {
+      assert.deepEqual([e.status, e.earlier], [409, ['status 429 (rate_limited)']]);
+      assert.ok(e.message.endsWith(`${SLUG} (no row)→searchable. An earlier attempt answered status 429 (rate_limited).`), e.message);
+      return true;
+    });
+    const other = await recorder([{ status: 503, headers: { 'Retry-After': '1' }, body: { error: 'busy' } }, { drop: true }, { status: 404, body: { error: 'not_found', detail: 'FAKE' } }]);
+    await assert.rejects(adminClient(other.base, KEY, { retries: 2, env: ACCESS })('GET', `/admin/stats?event=${SLUG}`), (e) => {
+      assert.deepEqual([e.status, e.body, e.earlier], [404, { error: 'not_found', detail: 'FAKE' }, ['status 503 (busy)', 'no answer (network error)']]);
+      assert.equal(e.message, 'GET /admin/stats: status 404 (not_found). Earlier attempts: answered status 503 (busy); got no answer (network error).');
+      assertNoSecret(e, other.seen);
+      return true;
+    });
+  });
+
+  test('a first answer of 409 status_mismatch carries its body and no earlier attempt; giving up keeps the last answer and lists the attempts before it', async () => {
+    const first = await recorder([mismatch([{ slug: SLUG, expected: 'unavailable', actual: 'searchable' }])]);
+    await assert.rejects(adminClient(first.base, KEY, { retries: 3, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+      assert.deepEqual([e.status, e.earlier, e.body.mismatched], [409, [], [{ slug: SLUG, expected: 'unavailable', actual: 'searchable' }]]);
+      assert.equal(e.message, `PUT /admin/conferences: status 409 (status_mismatch): the directory holds another status (expected→actual): ${SLUG} unavailable→searchable`);
+      return true;
+    });
+    const busy = (n) => ({ status: 502, headers: { 'Retry-After': '1' }, body: { error: 'busy', n } });
+    const gaveUp = await recorder([busy(1), busy(2), busy(3)]);
+    await assert.rejects(adminClient(gaveUp.base, KEY, { retries: 2, env: {} })('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), (e) => {
+      assert.deepEqual([e.status, e.body, e.earlier], [0, { error: 'busy', n: 3 }, ['status 502 (busy)', 'status 502 (busy)']]);
+      assert.equal(e.message, 'POST /admin/moderation: status 502 (busy) (gave up after 3 attempts). Earlier attempts: answered status 502 (busy); answered status 502 (busy).');
+      return true;
+    });
+    // A last answer that is not a JSON object gives no body.
+    const notObject = await recorder([{ status: 502, body: ['not', 'an', 'object'] }]);
+    await assert.rejects(adminClient(notObject.base, KEY, { retries: 0, env: {} })('POST', `/admin/moderation?event=${SLUG}`, { action: 'purge' }), (e) => {
+      assert.deepEqual([e.status, e.body, e.earlier], [0, null, []]);
+      assert.equal(e.message, 'POST /admin/moderation: status 502 (gave up after 1 attempts)');
+      return true;
+    });
+  });
+
+  test('a status_mismatch shows no row as (no row) and quotes a status that reads as null, and names at most 20 entries', async () => {
+    const OTHER = 'other-fixture-2099';
+    const shown = await recorder([mismatch([
+      { slug: SLUG, expected: 'searchable', actual: null },
+      { slug: OTHER, expected: 'null', actual: null },
+      { slug: SLUG, expected: null, actual: 'NULL' },
+    ])]);
+    await assert.rejects(adminClient(shown.base, KEY, { retries: 0, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+      assert.equal(e.message, `PUT /admin/conferences: status 409 (status_mismatch): the directory holds another status (expected→actual): ${SLUG} searchable→(no row), ${OTHER} "null"→(no row), ${SLUG} (no row)→"NULL"`);
+      return true;
+    });
+    const many = Array.from({ length: 23 }, (_, i) => ({ slug: `fixture-${i}-2099`, expected: null, actual: 'searchable' }));
+    const long = await recorder([mismatch(many)]);
+    await assert.rejects(adminClient(long.base, KEY, { retries: 0, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+      assert.ok(e.message.includes('fixture-19-2099 (no row)→searchable and 3 more'), e.message);
+      assert.ok(!e.message.includes('fixture-20-2099'), e.message);
+      return true;
+    });
+  });
+
+  test('the unretire advice is given only when a mismatching document is one the request unretires', async () => {
+    const OTHER = 'other-fixture-2099';
+    const batch = { conferences: [{ slug: SLUG, unretire: true, expect_status: null }, { slug: OTHER, status: 'unavailable', expect_status: 'searchable' }] };
+    const busy = { status: 502, headers: { 'Retry-After': '1' }, body: { error: 'busy' } };
+    const notUnretired = await recorder([busy, mismatch([{ slug: OTHER, expected: 'searchable', actual: 'unavailable' }])]);
+    await assert.rejects(adminClient(notUnretired.base, KEY, { retries: 1, env: {} })('PUT', '/admin/conferences', batch), (e) => {
+      assert.ok(e.message.endsWith(`${OTHER} searchable→unavailable. An earlier attempt answered status 502 (busy); it may have been applied, so the actual status can be the one it set; check the conference, then send the request again with the actual status or without expect_status.`), e.message);
+      return true;
+    });
+    const unretired = await recorder([busy, mismatch([{ slug: SLUG, expected: null, actual: 'searchable' }])]);
+    await assert.rejects(adminClient(unretired.base, KEY, { retries: 1, env: {} })('PUT', '/admin/conferences', batch), (e) => {
+      assert.ok(e.message.endsWith(`${SLUG} (no row)→searchable. An earlier attempt answered status 502 (busy); it may have been applied, so the actual status can be the one it set; repeat the unretire without expect_status until it answers 200.`), e.message);
+      return true;
+    });
+  });
+
+  test('a message that ends a sentence gets no second period before the earlier attempts', async () => {
+    const limited = await recorder([{ status: 503, headers: { 'Retry-After': '1' }, body: { error: 'busy' } }, { status: 503, body: { error: 'daily_limit' } }]);
+    await assert.rejects(adminClient(limited.base, KEY, { retries: 3, env: {} })('GET', `/admin/stats?event=${SLUG}`), (e) => {
+      assert.equal(e.message, 'GET /admin/stats: status 503 (daily_limit). The daily limit is reached; try again after the reset. An earlier attempt answered status 503 (busy).');
+      return true;
+    });
+    assert.equal(limited.seen.length, 2);
+  });
+
+  test('the 400 for a misspelt expect_status or unretire key reaches the message and names the key as it must be written', async () => {
+    for (const key of ['expect_status', 'unretire']) {
+      const { base } = await recorder([{ status: 400, body: { error: `the key must be written exactly as ${key}` } }]);
+      await assert.rejects(adminClient(base, KEY, { retries: 3, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+        assert.equal(e.status, 400);
+        assert.equal(e.message, `PUT /admin/conferences: status 400 (the key must be written exactly as ${key})`);
+        return true;
+      });
+    }
+  });
+
   test('a 401 is not retried and names its code', async () => {
     const { seen, base } = await recorder([{ status: 401, body: { error: 'admin_skew' } }]);
     const admin = adminClient(base, KEY, { retries: 3, env: {} });

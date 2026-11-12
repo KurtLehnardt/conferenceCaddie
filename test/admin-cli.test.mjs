@@ -173,20 +173,94 @@ describe('CLI-2 output', () => {
     assert.equal(r.stdout, '');
     assert.deepEqual(JSON.parse(r.stderr), { ok: false, error: 'not_found', message: 'gone' });
   });
+
+  test('control and bidi characters in any printed value are escaped, in human output, --json, errors and warnings', async () => {
+    // OSC 52, CSI 2J, a right-to-left override, a C1 CSI (0x9B), DEL and a newline; tab stays.
+    const hostile = 'Eve\u001b]52;c;aGk=\u0007 \u001b[2J \u202Eevil\u202C \u009b31m \u007f\tt\nnext';
+    const raw = ['\u001b', '\u0007', '\u202e', '\u202c', '\u009b', '\u007f'];
+    const clean = (text) => raw.every((c) => !text.includes(c));
+    const result = { items: [{ display_name: hostile, nested: { about: hostile }, [hostile]: 1 }], summary: `done ${hostile}`, warnings: [`careful ${hostile}`] };
+    const human = await invoke(['stats', 'usage'], { behavior: () => result });
+    assert.equal(human.code, 1, 'warnings exit 1');
+    assert.ok(clean(human.stdout) && clean(human.stderr));
+    assert.equal(human.stdout.trimEnd().split('\n').length, 2, 'the newline inside a value adds no line');
+    assert.match(human.stdout, /^display_name=Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} \\u\{1B\}\[2J \\u\{202E\}evil\\u\{202C\} \\u\{9B\}31m \\u\{7F\}\tt\\u\{A\}next nested=/);
+    assert.match(human.stdout, /\\u\{202E\}evil\\u\{202C\} \\u\{9B\}31m \\u\{7F\}\tt\\u\{A\}next=1\n/, 'keys too');
+    assert.match(human.stderr, /^caddie-admin: warning: careful Eve\\u\{1B\}/);
+    const asJson = await invoke(['stats', 'usage', '--json'], { behavior: () => result });
+    assert.ok(clean(asJson.stdout) && clean(asJson.stderr));
+    const parsed = JSON.parse(asJson.stdout);
+    assert.equal(parsed.result.items[0].display_name, hostile, 'the JSON is the same document once parsed');
+    assert.match(asJson.stdout, /\\u001b\]52;c;aGk=\\u0007 \\u001b\[2J \\u202eevil\\u202c \\u009b31m \\u007f\\tt\\nnext/);
+    const err = await invoke(['stats', 'usage'], { behavior: throwing(new NotFoundError(`gone ${hostile}`)) });
+    assert.ok(clean(err.stderr));
+    assert.match(err.stderr, /^caddie-admin: gone Eve\\u\{1B\}\]52;c;aGk=\\u\{7\} /);
+    // The message is redacted, then escaped as a whole: its newline becomes \u{A}, so it is one
+    // line and the text after the newline is still there.
+    assert.equal(err.stderr.trimEnd().split('\n').length, 1, 'one line: the newline in the message is escaped');
+    assert.match(err.stderr, /\\u\{A\}next\n$/, 'nothing after the newline is lost');
+    const errJson = await invoke(['stats', 'usage', '--json'], { behavior: throwing(new NotFoundError(`gone ${hostile}`)) });
+    assert.ok(clean(errJson.stderr));
+    assert.equal(JSON.parse(errJson.stderr).message, `gone ${hostile}`);
+    assert.equal(readFileSync(join(home, 'audit.jsonl'), 'utf8').includes('Eve'), false, 'no free text in the audit');
+  });
+});
+
+describe('SEC terminal output: format characters, separators, tags and the backslash', () => {
+  // U+2028 (line separator), U+FEFF (byte-order mark), U+200B (zero-width space), U+E0041 (a tag
+  // character, outside the BMP), U+00AD (soft hyphen), a backslash before text that looks like an
+  // escape, a joiner between letters, and an emoji ZWJ sequence (woman, joiner, laptop).
+  const cp = (...points) => String.fromCodePoint(...points);
+  const EMOJI = cp(0x1f469, 0x200d, 0x1f4bb);
+  const hostile = `a${cp(0x2028)}b${cp(0xfeff)}c${cp(0x200b)}d${cp(0xe0041)}e${cp(0xad)}f\\u{1B}g A${cp(0x200d)}B ${EMOJI}`;
+  const raw = [0x2028, 0xfeff, 0x200b, 0xe0041, 0xad].map((p) => cp(p));
+
+  test('human output shows each as \\u{XX}, a backslash as \\\\, and keeps the joiner only inside an emoji sequence', async () => {
+    const r = await invoke(['stats', 'usage'], { behavior: () => ({ items: [{ name: hostile }], summary: 'done' }) });
+    assert.equal(r.code, 0, r.stderr);
+    for (const c of raw) assert.ok(!r.stdout.includes(c), `U+${c.codePointAt(0).toString(16)} printed raw`);
+    const line = r.stdout.split('\n')[0];
+    assert.equal(line, `name=a\\u{2028}b\\u{FEFF}c\\u{200B}d\\u{E0041}e\\u{AD}f\\\\u{1B}g A\\u{200D}B ${EMOJI}`);
+    assert.ok(!line.includes(`A${cp(0x200d)}B`), 'a joiner between letters is escaped');
+  });
+
+  test('--json writes them as \\uXXXX escapes, a surrogate pair above U+FFFF, and parses to the same text', async () => {
+    const r = await invoke(['stats', 'usage', '--json'], { behavior: () => ({ items: [{ name: hostile }], summary: 'done' }) });
+    assert.equal(r.code, 0, r.stderr);
+    for (const c of [...raw, cp(0x200d)]) assert.ok(!r.stdout.includes(c), `U+${c.codePointAt(0).toString(16)} printed raw`);
+    assert.match(r.stdout, /a\\u2028b\\ufeffc\\u200bd\\udb40\\udc41e\\u00adf\\\\u\{1B\}g A\\u200dB /);
+    assert.equal(JSON.parse(r.stdout).result.items[0].name, hostile, 'the same text once parsed');
+  });
+
+  test('default-ignorable code points are escaped; U+FE0F stays only after a pictograph or in a keycap', async () => {
+    // Hangul fillers U+3164, U+115F, U+FFA0; variation selectors U+FE00 and U+E0100; the
+    // combining grapheme joiner U+034F; U+FE0F after a letter. Kept: a red heart with U+FE0F, and
+    // the keycap "1", U+FE0F, U+20E3.
+    const ignorable = [0x3164, 0x115f, 0xffa0, 0xfe00, 0xe0100, 0x34f];
+    const heart = cp(0x2764, 0xfe0f);
+    const keycap = cp(0x31, 0xfe0f, 0x20e3);
+    const name = `${ignorable.map((p) => `x${cp(p)}`).join('')} A${cp(0xfe0f)}B ${heart} ${keycap}`;
+    const human = await invoke(['stats', 'usage'], { behavior: () => ({ items: [{ name }], summary: 'done' }) });
+    assert.equal(human.code, 0, human.stderr);
+    const line = human.stdout.split('\n')[0];
+    assert.equal(line, `name=x\\u{3164}x\\u{115F}x\\u{FFA0}x\\u{FE00}x\\u{E0100}x\\u{34F} A\\u{FE0F}B ${heart} ${keycap}`);
+    const asJson = await invoke(['stats', 'usage', '--json'], { behavior: () => ({ items: [{ name }], summary: 'done' }) });
+    for (const p of [...ignorable, 0xfe0f]) assert.ok(!asJson.stdout.includes(cp(p)), `U+${p.toString(16)} raw in --json`);
+    assert.match(asJson.stdout, /x\\u3164x\\u115fx\\uffa0x\\ufe00x\\udb40\\udd00x\\u034f A\\ufe0fB /);
+    assert.equal(JSON.parse(asJson.stdout).result.items[0].name, name);
+  });
 });
 
 describe('CLI-3 exit codes', () => {
   test('0 on success', async () => {
     assert.equal((await invoke(['stats', 'usage'])).code, 0);
   });
-  test('1 on a backend failure, and for the unimplemented real tier 2 adapter', async () => {
+  test('1 on a backend failure', async () => {
     const r = await invoke(['stats', 'usage'], { behavior: throwing(new AdminError('boom')) });
     assert.equal(r.code, 1);
-    // The real tier 2 adapter still throws (PR C); tier 3 is real now and is tested in admin-es.test.mjs.
-    const real = await invoke(['stats', 'usage', '--backend', 't2'], { noStub: true });
-    assert.equal(real.code, 1);
-    assert.match(real.stderr, /not implemented in this release/);
-    assert.equal(JSON.parse(real.audit.trim().split('\n').at(-1)).result, 'failed');
+    assert.equal(JSON.parse(r.audit.trim().split('\n').at(-1)).result, 'failed');
+    // The real adapters are tested against loopback stand-ins: tier 3 in admin-es.test.mjs, tier 2
+    // in admin-worker.test.mjs.
   });
   test('2 on usage', async () => {
     assert.equal((await invoke(['stats', 'usage'], { behavior: throwing(new UsageError('x')) })).code, 2);
@@ -493,7 +567,7 @@ describe('SEC-11 confirmation', () => {
 });
 
 describe('SEC-12 audit log', () => {
-  const ALLOWED = new Set(['ts', 'backend', 'tier', 'command', 'target', 'reason', 'mode', 'result', 'counts', 'flags']);
+  const ALLOWED = new Set(['ts', 'backend', 'tier', 'command', 'target', 'reason', 'mode', 'result', 'counts', 'flags', 'error']);
 
   test('one whitelisted line per run, file mode 0600, no free text', async () => {
     await invoke(['attendees', 'search', '--event', SLUG, '--name', NAME]);
@@ -558,13 +632,35 @@ describe('SEC-12 audit log', () => {
     });
     const entry = JSON.parse(auditLines().at(-1));
     assert.deepEqual(entry, { ts: '2026-11-11T10:00:00.000Z', command: 'stats usage', mode: 'dry-run', result: 'ok', counts: { rows: 2 }, flags: ['text', 'all'] });
+    // A result note is kept only as one of the enum values.
+    appendAudit(home, { command: 'conferences remove', result: 'ok', note: 'earlier_attempt_may_have_run' });
+    assert.equal(JSON.parse(auditLines().at(-1)).note, 'earlier_attempt_may_have_run');
+    appendAudit(home, { command: 'conferences remove', result: 'ok', note: 'already_done_soon' });
+    assert.equal(JSON.parse(auditLines().at(-1)).note, undefined);
   });
 
-  test('failures are audited too, with the failure result', async () => {
+  test('failures are audited too, with the failure result and the short error code, never the message', async () => {
     await invoke(['stats', 'usage'], { behavior: throwing(new AdminError(NOTE)) });
     const entry = JSON.parse(auditLines()[0]);
     assert.equal(entry.result, 'failed');
+    assert.equal(entry.error, 'failed');
     assert.ok(!auditLines()[0].includes(NOTE));
+    const coded = new AdminError(NOTE);
+    coded.code = 'removal_superseded';
+    await invoke(['stats', 'usage'], { behavior: throwing(coded) });
+    assert.equal(JSON.parse(auditLines()[1]).error, 'removal_superseded');
+    const notFound = await invoke(['stats', 'usage'], { behavior: throwing(new NotFoundError('gone')) });
+    assert.equal(notFound.code, 4);
+    assert.equal(JSON.parse(auditLines()[2]).error, 'not_found');
+    // A code outside the token shape (free text, a space, upper case) is dropped.
+    const loose = new AdminError('x');
+    loose.code = `Bad code ${NOTE}`;
+    await invoke(['stats', 'usage'], { behavior: throwing(loose) });
+    assert.equal(JSON.parse(auditLines()[3]).error, undefined);
+    assert.ok(!auditLines()[3].includes(NOTE));
+    // A success carries no error key.
+    await invoke(['stats', 'usage']);
+    assert.equal(JSON.parse(auditLines()[4]).error, undefined);
   });
 });
 
@@ -705,7 +801,7 @@ describe('round-1 fixes', () => {
   test('a refused confirmation is audited as the run the operator asked for', async () => {
     let r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes', '--confirm', 'wrong']);
     assert.equal(r.code, 3);
-    assert.deepEqual(JSON.parse(r.audit.trim()), { ts: '2026-11-11T10:00:00.000Z', backend: 't3', tier: 3, command: 'attendees delete', target: REF, mode: 'run', result: 'refused', flags: [] });
+    assert.deepEqual(JSON.parse(r.audit.trim()), { ts: '2026-11-11T10:00:00.000Z', backend: 't3', tier: 3, command: 'attendees delete', target: REF, mode: 'run', result: 'refused', error: 'confirm', flags: [] });
     rmSync(join(home, 'audit.jsonl'));
     r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes']);
     assert.equal(r.code, 3);
