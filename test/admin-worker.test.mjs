@@ -62,15 +62,15 @@ const NOTE = 'fixture-note-text-that-must-not-travel';
 const LINE = 'fixture rules test line that must not be logged';
 const MEET = 'AbCdEfGhIjKlMnOpQrSt_-';
 const ALLOWED_QUERY_KEYS = new Set(['event', 'ref', 'q64', 'limit', 'include_hidden', 'fields', 'since']);
-// The position's sentinels are numbers no timestamp can hold. An ISO time has a "." only after its
-// seconds (00 to 59), so "78.5" and "100.25" never appear in one. The latitude was 51.5, which the
+// The position's sentinels are numbers no ISO time can hold. An ISO time has a "." only after its
+// seconds (00 to 59), so "78.5" and "100.5" never appear in one. The latitude was 51.5, which the
 // wall-clock ts of an audit line holds when it is written at hh:mm:51.500 to 51.599, a 100 ms
 // window every minute, and the audit check below then failed.
 const SENTINELS = {
-  profile_id: 'SENTINEL-PROFILE-ID', secret_hash: 'SENTINEL-SECRET-HASH', zone: 'SENTINEL-ZONE', position: { lat: 78.5, lon: -100.25 }, cell: 'SENTINEL-CELL',
+  profile_id: 'SENTINEL-PROFILE-ID', secret_hash: 'SENTINEL-SECRET-HASH', zone: 'SENTINEL-ZONE', position: { lat: 78.5, lon: -100.5 }, cell: 'SENTINEL-CELL',
   ble_token: 'SENTINEL-BLE-TOKEN', push_endpoint: 'https://push.example/SENTINEL-ENDPOINT', reporter_ids: ['SENTINEL-REPORTER'], leaked_extra: 'SENTINEL-EXTRA',
 };
-const NEVER = ['SENTINEL-PROFILE-ID', 'SENTINEL-SECRET-HASH', 'SENTINEL-ZONE', '78.5', '100.25', 'SENTINEL-CELL', 'SENTINEL-BLE-TOKEN', 'SENTINEL-ENDPOINT', 'SENTINEL-REPORTER', 'SENTINEL-EXTRA'];
+const NEVER = ['SENTINEL-PROFILE-ID', 'SENTINEL-SECRET-HASH', 'SENTINEL-ZONE', '78.5', '100.5', 'SENTINEL-CELL', 'SENTINEL-BLE-TOKEN', 'SENTINEL-ENDPOINT', 'SENTINEL-REPORTER', 'SENTINEL-EXTRA'];
 const TEXT = ['SENTINEL-ABOUT', 'SENTINEL-INTERESTS', 'SENTINEL-EXPERTISE', 'SENTINEL-CONTACT-NOTE', 'SENTINEL-SPOT', 'SENTINEL-PENDING'];
 const CONTACT = ['SENTINEL-LINKEDIN'];
 
