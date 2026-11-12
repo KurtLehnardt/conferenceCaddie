@@ -11,7 +11,7 @@
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EMPTY_BODY_SHA256, bodyMatches, parseVersionedAdminHeader, verifyAdminSignature } from '../../scripts/lib/admin-sign.mjs';
 import { AdminError, UsageError, adminClient, drainPending, normalizeApiBase } from '../ingest/lib.mjs';
+import { run as migrateFromBackup } from '../ingest/migrate-from-backup.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
 const KEY = fixture.keys.key1;
@@ -654,6 +655,38 @@ describe('adminClient: CADDIE_ADMIN_SIG_VERSION from the process environment (th
     assert.equal(good.code, 0, good.stderr);
     assert.match(good.stdout, /\(dry run\)/);
     assert.equal(seen.length, 0);
+  });
+
+  test('migrate-from-backup.mjs checks CADDIE_ADMIN_SIG_VERSION before it reads the backup, also in a dry run, and never repeats the value', async () => {
+    const backup = mkdtempSync(join(home, 'backup-'));
+    writeFileSync(join(backup, 'caddie-conferences-v1.ndjson'), '');
+    const had = Object.prototype.hasOwnProperty.call(process.env, ENV_NAME);
+    const saved = process.env[ENV_NAME];
+    const { seen, base } = await recorder();
+    const args = ['--backup', backup, '--api', base, '--only', 'conferences', '--dry-run'];
+    const attempt = async () => {
+      const out = [];
+      const err = [];
+      const code = await migrateFromBackup(args, { readToken: () => '', log: (l) => out.push(l), error: (l) => err.push(l) });
+      return { code, out, err };
+    };
+    try {
+      process.env[ENV_NAME] = 'fake-invalid-sig-version';
+      const bad = await attempt();
+      assert.equal(bad.code, 1, bad.err.join('\n'));
+      assert.deepEqual(bad.out, [], 'the plan is not read or printed');
+      assert.ok(bad.err.join('\n').includes(ENV_NAME), bad.err.join('\n'));
+      assert.ok(![...bad.out, ...bad.err].join('\n').includes('fake-invalid-sig-version'));
+      // The same dry run with the switch empty gets through: the failure above is the value's.
+      process.env[ENV_NAME] = '';
+      const good = await attempt();
+      assert.equal(good.code, 0, good.err.join('\n'));
+      assert.ok(good.out.includes('Dry run: nothing was sent.'), good.out.join('\n'));
+      assert.equal(seen.length, 0);
+    } finally {
+      if (had) process.env[ENV_NAME] = saved;
+      else delete process.env[ENV_NAME];
+    }
   });
 });
 
