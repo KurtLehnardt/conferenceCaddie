@@ -249,8 +249,9 @@ test('the CLI messages quoted in ADMIN_CLI.md exist in scripts/admin', () => {
     'refused, because that would change a live conference',
     'which is not one status a directory row stores (',
     'so this command cannot tell what to expect; refused, nothing was sent',
-    // The signature version and the strict reading of a tier 2 api (step c of "Admin signature v2").
-    'CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set',
+    // The warning code for the removed CADDIE_ADMIN_SIG_VERSION (step e of "Admin signature v2") and
+    // the strict reading of a tier 2 api (step c).
+    'sig_version_removed',
     "api must be the Worker's origin as plain ASCII",
   ];
   assert.deepEqual(quoted.filter((q) => !sources.includes(q)), [], 'quoted in the test list but not printed by the CLI');
@@ -290,8 +291,12 @@ test('google-services.json is git-ignored', () => {
 
 test('the setup guides keep the flags and variables of the scripts they describe', () => {
   const tier2 = read('docs/fork/TIER2_CLOUDFLARE.md');
-  for (const needle of ['--rotate-admin-token', '--only-missing', '--dry-run', '--subdomain-only', 'CADDIE_ADMIN_SIG_VERSION=1']) {
+  for (const needle of ['--rotate-admin-token', '--only-missing', '--dry-run', '--subdomain-only']) {
     assert.ok(tier2.includes(needle), `TIER2_CLOUDFLARE.md lost ${needle}`);
+  }
+  // Step e of "Admin signature v2" removed the client override, so no guide may set it any more.
+  for (const doc of ['docs/fork/TIER2_CLOUDFLARE.md', 'docs/FREE_HOSTING.md', 'docs/ADMIN_CLI.md', 'docs/FORK.md', 'worker/README.md']) {
+    assert.ok(!/CADDIE_ADMIN_SIG_VERSION=1 |CADDIE_ADMIN_SIG_VERSION: \$\{\{ vars\.CADDIE_ADMIN_SIG_VERSION/.test(read(doc)), `${doc} still sets CADDIE_ADMIN_SIG_VERSION`);
   }
   // Bearer mode is gone from the smoke, so no guide may offer it, nor SMOKE_ADMIN_AUTH at all.
   assert.ok(!tier2.includes('SMOKE_ADMIN_AUTH'), 'TIER2_CLOUDFLARE.md still sets SMOKE_ADMIN_AUTH');

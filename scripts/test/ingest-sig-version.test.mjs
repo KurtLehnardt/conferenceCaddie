@@ -1,9 +1,9 @@
-// .github/workflows/ingest.yml carries the admin signature rollback switch (step c of
-// DECISIONS.md, "Admin signature v2"): the repository variable CADDIE_ADMIN_SIG_VERSION reaches the
-// push step's environment, which is the only way push-ingest.mjs sees it in CI, and the first step
-// refuses a value other than unset, 1 or 2 before anything is fetched, without printing it. The
-// secrets stay in the environment of the two steps that need them, never the job's or the
-// workflow's. The workflow is read as text, line by line, since the repository has no YAML parser.
+// .github/workflows/ingest.yml no longer carries the admin signature rollback switch: step e of
+// DECISIONS.md, "Admin signature v2", removed it, so nothing in the workflow reads the repository
+// variable CADDIE_ADMIN_SIG_VERSION and the push step always signs v2. The configuration check still
+// decides whether the run goes ahead from the token and the API base alone. The secrets stay in the
+// environment of the two steps that need them, never the job's or the workflow's. The workflow is
+// read as text, line by line, since the repository has no YAML parser.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LINES = readFileSync(path.join(ROOT, '.github/workflows/ingest.yml'), 'utf8').split('\n');
-const SWITCH = 'CADDIE_ADMIN_SIG_VERSION: ${{ vars.CADDIE_ADMIN_SIG_VERSION }}';
+const TEXT = LINES.join('\n');
 
 const indent = (line) => line.length - line.trimStart().length;
 
@@ -44,9 +44,16 @@ function step(name) {
   };
 }
 
-test('the push step maps CADDIE_ADMIN_SIG_VERSION to the repository variable, beside its secrets', () => {
+test('nothing in the workflow reads or names CADDIE_ADMIN_SIG_VERSION any more, comments included', () => {
+  assert.ok(!TEXT.includes('vars.CADDIE_ADMIN_SIG_VERSION'), 'the workflow reads the repository variable');
+  assert.ok(!TEXT.includes('CADDIE_ADMIN_SIG_VERSION'), 'the workflow names the removed switch');
+  for (const name of ['Check the configuration', 'Push to the Worker']) {
+    assert.ok(!step(name).env.some((l) => l.startsWith('CADDIE_ADMIN_SIG_VERSION')), name);
+  }
+});
+
+test('the push step gets its secrets and runs push-ingest.mjs against the API base', () => {
   const push = step('Push to the Worker');
-  assert.ok(push.env.includes(SWITCH), push.env.join('\n'));
   assert.ok(push.env.includes('ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}'));
   assert.match(push.run, /node worker\/ingest\/push-ingest\.mjs --api "\$CADDIE_API_BASE"/);
 });
@@ -64,14 +71,8 @@ test('no secret sits in the job\'s or the workflow\'s environment: only the conf
   for (const { line } of block(jobEnv)) assert.ok(!line.includes('secrets.'), line);
 });
 
-test('the header documents CADDIE_ADMIN_SIG_VERSION as the rollback switch', () => {
-  const header = LINES.filter((l) => l.startsWith('#')).join('\n');
-  assert.match(header, /variable CADDIE_ADMIN_SIG_VERSION\s+optional rollback switch/);
-});
-
-test('the configuration check refuses a CADDIE_ADMIN_SIG_VERSION other than unset, 1 or 2 first, and never prints it', () => {
+test('the configuration check goes ahead with the token and the API base, and ignores a stale CADDIE_ADMIN_SIG_VERSION', () => {
   const check = step('Check the configuration');
-  assert.ok(check.env.includes(SWITCH), check.env.join('\n'));
   const dir = mkdtempSync(path.join(tmpdir(), 'caddie-ingest-check-'));
   try {
     const run = (env) => {
@@ -83,25 +84,22 @@ test('the configuration check refuses a CADDIE_ADMIN_SIG_VERSION other than unse
       } catch {}
       return { ...r, out };
     };
-    for (const value of ['', '1', '2']) {
-      const r = run({ CADDIE_ADMIN_SIG_VERSION: value });
-      assert.equal(r.status, 0, `${JSON.stringify(value)}: ${r.stdout}${r.stderr}`);
+    // A value the removed check used to refuse no longer stops the run, and is never printed.
+    for (const env of [{}, { CADDIE_ADMIN_SIG_VERSION: '' }, { CADDIE_ADMIN_SIG_VERSION: '1' }, { CADDIE_ADMIN_SIG_VERSION: 'fake-stale-sig-version' }]) {
+      const r = run(env);
+      assert.equal(r.status, 0, `${JSON.stringify(env)}: ${r.stdout}${r.stderr}`);
       assert.equal(r.out, 'ready=true\n');
+      assert.ok(!r.stdout.includes('fake-stale-sig-version') && !r.stderr.includes('fake-stale-sig-version'));
     }
-    for (const value of ['3', '0', 'v2', ' 2', '2 ', '1\n', '01', 'fake-invalid-sig-version']) {
-      const r = run({ CADDIE_ADMIN_SIG_VERSION: value });
-      assert.equal(r.status, 1, JSON.stringify(value));
-      assert.match(r.stdout, /::error::The CADDIE_ADMIN_SIG_VERSION variable must be unset, 1 or 2\./);
-      if (value.trim().length > 1) assert.ok(!r.stdout.includes(value.trim()) && !r.stderr.includes(value.trim()), r.stdout);
-      assert.equal(r.out, '', 'no ready output');
-    }
-    // It is checked before the missing token and base: a scheduled run that would only log a
-    // notice still fails on a bad value.
-    const early = run({ CADDIE_ADMIN_SIG_VERSION: 'fake-invalid-sig-version', ADMIN_TOKEN: '', CADDIE_API_BASE: '' });
-    assert.equal(early.status, 1);
-    // An unset variable behaves like the empty one.
-    const unset = run({});
-    assert.equal(unset.status, 0, unset.stdout + unset.stderr);
+    // Without the token or the base, a scheduled run logs a notice and succeeds without going
+    // ahead, and a manual run fails naming what is missing.
+    const scheduled = run({ ADMIN_TOKEN: '', CADDIE_API_BASE: '' });
+    assert.equal(scheduled.status, 0, scheduled.stdout + scheduled.stderr);
+    assert.match(scheduled.stdout, /::notice::Skipping the ingest: the CADDIE_ADMIN_TOKEN secret and the CADDIE_API_BASE variable is not set/);
+    assert.equal(scheduled.out, 'ready=false\n');
+    const manual = run({ GITHUB_EVENT_NAME: 'workflow_dispatch', CADDIE_API_BASE: '' });
+    assert.equal(manual.status, 1);
+    assert.match(manual.stdout, /::error::the CADDIE_API_BASE variable is not set\./);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

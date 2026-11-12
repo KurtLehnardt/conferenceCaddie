@@ -8,9 +8,10 @@
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
+import { SIG_VERSION_REMOVED_WARNING, sigVersionSettingStale } from '../lib/admin-origin.mjs';
 import { appendAudit } from './audit.mjs';
 import { createAdapter as defaultCreateAdapter } from './backends/index.mjs';
-import { V1_ROLLBACK_WARNING, workerOrigin, workerSignVersion } from './backends/worker.mjs';
+import { workerOrigin } from './backends/worker.mjs';
 import { configDir, loadConfig, selectBackend } from './config.mjs';
 import { resolveMode } from './confirm.mjs';
 import { CREDENTIAL_SOURCES, readCredential, redactor } from './credentials.mjs';
@@ -574,11 +575,13 @@ async function run(argv, ctx) {
 
   const config = loadConfig(env);
   const backend = selectBackend(config, values.backend);
-  // Tier 2: the api and the signature version are checked here, before the credential is read and
-  // before any confirmation is asked for, so a bad value is exit 2 with nothing read or prompted.
+  // Tier 2: the api is checked here, before the credential is read and before any confirmation is
+  // asked for, so a bad value is exit 2 with nothing read or prompted. Every request is signed with
+  // v2; a CADDIE_ADMIN_SIG_VERSION left over from the override that step e removed is ignored with
+  // one warning.
   if (backend.tier === 2) {
     workerOrigin(backend);
-    if (workerSignVersion(env) === 1) warn('sig_version_1', V1_ROLLBACK_WARNING);
+    if (sigVersionSettingStale(env)) warn('sig_version_removed', SIG_VERSION_REMOVED_WARNING);
   }
   const source = CREDENTIAL_SOURCES[backend.tier];
   const credential = readCredential({ env, ...source });

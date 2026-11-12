@@ -58,7 +58,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ROOT, TALK_BATCH, UsageError, adminClient, adminSignVersion, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, withTopics, withoutOperatorKeys } from './lib.mjs';
+import { ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, warnRemovedSigVersion, withTopics, withoutOperatorKeys } from './lib.mjs';
 import { resolveTopics, loadStoplist } from './topics-local.mjs';
 import { buildFacets, countByKind } from './facets-local.mjs';
 import { MODEL } from '../../contracts/js/bundle.mjs';
@@ -242,10 +242,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty'], values: ['api', 'report', 'events-from'], multi: ['event'] });
   reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
-  // CADDIE_ADMIN_SIG_VERSION is checked here, before anything is read or fetched, and not only when
-  // the admin client is created: a dry run without a token and a run with no conference to push
-  // create no client, and a bad value should stop every run at once rather than after the work.
-  if (adminSignVersion() === 1) console.warn('Admin signature: v1 (CADDIE_ADMIN_SIG_VERSION=1, the rollback). The Worker refuses v1 since step d unless its ADMIN_SIG_MIN is "1" (the rollback of step d, which belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret); remove the setting once v2 works again.');
+  // Every admin request is signed with v2. A CADDIE_ADMIN_SIG_VERSION left over from the rollback
+  // switch that step e removed is ignored with one warning, here, before anything is read or
+  // fetched, so a dry run that creates no client says it too.
+  warnRemovedSigVersion();
   for (const e of args.event) if (!isSlug(e)) throw new UsageError('--event needs a conference slug.');
   const dryRun = args['dry-run'];
   // The origin lets readAdminToken check a fallback to the old token file against caddie-admin's

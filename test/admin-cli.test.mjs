@@ -798,59 +798,52 @@ describe('round-1 fixes', () => {
     }
   });
 
-  // Tier 2 checks its api and CADDIE_ADMIN_SIG_VERSION right after choosing the backend: before
-  // the credential is read (none is set here, which would otherwise fail first) and before the
-  // confirmation prompt of a destructive command.
-  test('tier 2: a bad CADDIE_ADMIN_SIG_VERSION or api is exit 2 before the credential is read and before any prompt', async () => {
+  // Tier 2 checks its api right after choosing the backend: before the credential is read (none is
+  // set here, which would otherwise fail first) and before the confirmation prompt of a destructive
+  // command. CADDIE_ADMIN_SIG_VERSION, removed in step e, never fails a run, whatever it holds.
+  test('tier 2: a bad api is exit 2 before the credential is read and before any prompt; CADDIE_ADMIN_SIG_VERSION never is', async () => {
     const run = async (env) => {
       let prompted = false;
       const r = await invoke(['attendees', 'delete', '--event', SLUG, REF, '--yes'], { env: { ADMIN_TOKEN: '', ...env }, isTTY: true, prompt: async () => { prompted = true; return REF; } });
       return { ...r, prompted };
     };
-    writeConfig({ default: 't2', backends: { t2: { tier: 2, api: 'https://api.example.test' } } });
-    for (const raw of ['3', ' 2', 'v1']) {
-      const r = await run({ CADDIE_ADMIN_SIG_VERSION: raw });
-      assert.equal(r.code, 2, JSON.stringify(raw));
-      assert.match(r.stderr, /CADDIE_ADMIN_SIG_VERSION must be exactly "1" or "2" when it is set/);
-      assert.ok(!r.stderr.includes('no credential'), 'the credential was not read first');
-      assert.equal(r.prompted, false, 'no prompt');
-      assert.equal(r.calls.length, 0);
-      assert.equal(r.audit, '');
-    }
     writeConfig({ default: 't2', backends: { t2: { tier: 2, api: 'https://api\uff0eexample.test' } } });
     const wide = await run({});
     assert.equal(wide.code, 2);
     assert.match(wide.stderr, /api must be the Worker's origin as plain ASCII/);
     assert.equal(wide.prompted, false);
     assert.equal(wide.calls.length, 0);
-    // With good values the same command reaches the credential (none here: refused) and no prompt.
+    // A value the removed override used to refuse with exit 2 now reaches the credential (none
+    // here: refused) like no value at all, with no prompt.
     writeConfig({ default: 't2', backends: { t2: { tier: 2, api: 'https://api.example.test' } } });
-    const good = await run({ CADDIE_ADMIN_SIG_VERSION: '2' });
-    assert.match(good.stderr, /no credential/);
-    assert.equal(good.prompted, false);
+    for (const raw of [undefined, '', '1', '2', '3', ' 2', 'v1']) {
+      const r = await run(raw === undefined ? {} : { CADDIE_ADMIN_SIG_VERSION: raw });
+      assert.match(r.stderr, /no credential/, JSON.stringify(raw));
+      assert.ok(!r.stderr.includes('must be exactly'), r.stderr);
+      assert.equal(r.prompted, false, 'no prompt');
+      assert.equal(r.calls.length, 0);
+    }
     // Tier 3 does not sign, so the variable means nothing there.
     writeConfig({ default: 't3', backends: { t3: { tier: 3, es_url: 'https://es.example.test' } } });
     const t3 = await invoke(['stats', 'usage'], { env: { CADDIE_ADMIN_SIG_VERSION: '3' } });
     assert.equal(t3.code, 0, t3.stderr);
   });
 
-  test('tier 2: CADDIE_ADMIN_SIG_VERSION=1 prints one warning on stderr that v1 is not bound to a host; unset, empty and 2 print none', async () => {
-    for (const [env, warned] of [[{}, false], [{ CADDIE_ADMIN_SIG_VERSION: '' }, false], [{ CADDIE_ADMIN_SIG_VERSION: '2' }, false], [{ CADDIE_ADMIN_SIG_VERSION: '1' }, true]]) {
+  test('tier 2: a non-empty CADDIE_ADMIN_SIG_VERSION prints one warning on stderr that it was removed in step e and is ignored; unset and empty print none', async () => {
+    const MESSAGE = 'CADDIE_ADMIN_SIG_VERSION was removed in step e of the admin signature migration (DECISIONS.md, "Admin signature v2") and is ignored: every admin request is signed with v2; unset it';
+    for (const [env, warned] of [[{}, false], [{ CADDIE_ADMIN_SIG_VERSION: '' }, false], [{ CADDIE_ADMIN_SIG_VERSION: '1' }, true], [{ CADDIE_ADMIN_SIG_VERSION: '2' }, true], [{ CADDIE_ADMIN_SIG_VERSION: 'fake-stale-sig-version' }, true]]) {
       for (const json of [false, true]) {
         const r = await invoke(['stats', 'usage', '--backend', 't2', ...(json ? ['--json'] : [])], { env });
         assert.equal(r.code, 0, `${JSON.stringify(env)}: ${r.stderr}`);
-        const lines = r.stderr.split('\n').filter((l) => l.includes('CADDIE_ADMIN_SIG_VERSION=1'));
+        const lines = r.stderr.split('\n').filter((l) => l.includes('CADDIE_ADMIN_SIG_VERSION'));
         assert.equal(lines.length, warned ? 1 : 0, `${JSON.stringify(env)}: ${r.stderr}`);
+        assert.ok(!r.stderr.includes('fake-stale-sig-version') && !r.stdout.includes('fake-stale-sig-version'), 'the value is never printed');
         if (warned) {
           // With --json the warning is a JSON line, so every stderr line still parses.
-          const text = json ? JSON.parse(lines[0]).message : lines[0].replace(/^caddie-admin: warning: /, '');
-          if (json) assert.deepEqual(Object.keys(JSON.parse(lines[0])), ['ok', 'warning', 'message']);
-          if (json) assert.equal(JSON.parse(lines[0]).warning, 'sig_version_1');
-          if (!json) assert.ok(lines[0].startsWith('caddie-admin: warning: '));
-          assert.match(text, /^CADDIE_ADMIN_SIG_VERSION=1: admin requests are signed with v1, which is not bound to a host/);
-          assert.match(text, /since step d the Worker accepts v1 only while its ADMIN_SIG_MIN is "1" \(the rollback, which belongs in \[vars\] of worker\/wrangler\.toml, committed and deployed, never a secret\);/);
-          assert.match(text, /unset CADDIE_ADMIN_SIG_VERSION as soon as the rollback is over$/);
+          if (json) assert.deepEqual(JSON.parse(lines[0]), { ok: true, warning: 'sig_version_removed', message: MESSAGE });
+          else assert.equal(lines[0], `caddie-admin: warning: ${MESSAGE}`);
         }
+        if (json) JSON.parse(r.stdout);
       }
     }
     const t3 = await invoke(['stats', 'usage'], { env: { CADDIE_ADMIN_SIG_VERSION: '1' } });
@@ -861,11 +854,11 @@ describe('round-1 fixes', () => {
   // as { ok: true, warning, message } and an error as { ok: false, error, message }, last.
   test('--json: every stderr line is one JSON object, warnings first and the error last', { skip: process.getuid?.() === 0 ? 'root can write a read-only file' : false }, async () => {
     const parsed = (stderr) => stderr.split('\n').filter(Boolean).map((l) => JSON.parse(l));
-    // The v1 warning, then a failure.
+    // The warning about the removed CADDIE_ADMIN_SIG_VERSION, then a failure.
     let r = await invoke(['stats', 'usage', '--backend', 't2', '--json'], { env: { CADDIE_ADMIN_SIG_VERSION: '1' }, behavior: throwing(new AdminError('boom')) });
     assert.equal(r.code, 1);
     let lines = parsed(r.stderr);
-    assert.deepEqual(lines.map((l) => [l.ok, l.warning ?? l.error]), [[true, 'sig_version_1'], [false, 'failed']]);
+    assert.deepEqual(lines.map((l) => [l.ok, l.warning ?? l.error]), [[true, 'sig_version_removed'], [false, 'failed']]);
     // Result warnings (exit 1) and an audit log that cannot be written.
     // A read-only audit file: the append fails, the run goes on with a warning.
     writeFileSync(join(home, 'audit.jsonl'), '', { mode: 0o400 });

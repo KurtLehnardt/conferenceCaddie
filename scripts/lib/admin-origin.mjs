@@ -101,21 +101,19 @@ export function parseAdminSigMin(raw) {
   return null;
 }
 
-// The client's override of the version it signs, from step c of the migration until step e, which
-// removes it once the first weekly CI ingest under step d has passed: CADDIE_ADMIN_SIG_VERSION
-// unset or empty means 2 (GitHub Actions passes an undefined repository variable as the empty
-// string), exactly "1" or "2" means that version, and anything else is a UsageError ("version",
-// exit 2). Since step d the Worker refuses v1 unless its ADMIN_SIG_MIN is "1" (the rollback, which
-// belongs in [vars] of worker/wrangler.toml, committed and deployed, never a secret), so "1" is
-// useful only together with that rollback. `env` is passed in (process.env in Node), so this module
-// needs no process.
+// The client's override of the version it signs, CADDIE_ADMIN_SIG_VERSION, existed from step c of
+// the migration until step e, which removed it once the first weekly CI ingest under step d had
+// passed: every client now signs v2 and never reads the variable for the version. A client that
+// still finds it set to a non-empty value (sigVersionSettingStale) prints
+// SIG_VERSION_REMOVED_WARNING once and signs v2 anyway; the value itself is never printed. An empty
+// value is how GitHub Actions passes an undefined repository variable, so it counts as unset. `env`
+// is passed in (process.env in Node), so this module needs no process.
 export const SIG_VERSION_ENV = 'CADDIE_ADMIN_SIG_VERSION';
 
-export function signVersionFromEnv(env) {
-  if (env === null || typeof env !== 'object') throw new TypeError('signVersionFromEnv needs the environment object as its argument.');
+export const SIG_VERSION_REMOVED_WARNING = 'CADDIE_ADMIN_SIG_VERSION was removed in step e of the admin signature migration (DECISIONS.md, "Admin signature v2") and is ignored: every admin request is signed with v2; unset it';
+
+export function sigVersionSettingStale(env) {
+  if (env === null || typeof env !== 'object') throw new TypeError('sigVersionSettingStale needs the environment object as its argument.');
   const raw = env[SIG_VERSION_ENV];
-  if (raw === undefined || raw === '') return 2;
-  if (raw === '1') return 1;
-  if (raw === '2') return 2;
-  throw new UsageError(`${SIG_VERSION_ENV} must be exactly "1" or "2" when it is set.`, 'version');
+  return raw !== undefined && raw !== null && raw !== '';
 }

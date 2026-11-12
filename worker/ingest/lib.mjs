@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contentHash } from '../../scripts/lib/hash.mjs';
-import { HEADER_NAME, SIG_VERSION_ENV, UsageError as SignUsageError, canonicalOrigin, signAdminRequest, signVersionFromEnv } from '../../scripts/lib/admin-sign.mjs';
+import { HEADER_NAME, SIG_VERSION_REMOVED_WARNING, canonicalOrigin, sigVersionSettingStale, signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
 import { adminTokenFileToRead } from './admin-token-file.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -168,20 +168,16 @@ export function normalizeApiBase(api) {
   return origin;
 }
 
-// The admin signature version this process signs: CADDIE_ADMIN_SIG_VERSION through
-// signVersionFromEnv (scripts/lib/admin-origin.mjs). Unset or empty means 2, which binds every
-// request to the origin of the API base; exactly "1" rolls back to v1, which the Worker accepts
-// since step d of the migration (DECISIONS.md "Admin signature v2") only while its ADMIN_SIG_MIN is
-// "1" (the rollback, which belongs in [vars] of worker/wrangler.toml, committed and deployed, never
-// a secret). The switch stays until step e. Any other value is a UsageError that names the variable
-// and never repeats its value.
-export function adminSignVersion(env = process.env) {
-  try {
-    return signVersionFromEnv(env);
-  } catch (e) {
-    if (e instanceof SignUsageError) throw new UsageError(`${e.message} Leave ${SIG_VERSION_ENV} unset to sign v2, or set it to 1 to sign v1.`);
-    throw e;
-  }
+// Every admin request is signed with v2, which binds it to the origin of the API base. The
+// override CADDIE_ADMIN_SIG_VERSION was removed in step e of the migration (DECISIONS.md "Admin
+// signature v2"); adminClient never reads it. push-ingest.mjs, migrate-from-backup.mjs and
+// topics-local.mjs --api call warnRemovedSigVersion once, before their first admin request, so a
+// run that still has the variable set to a non-empty value says once, on stderr, that it is
+// ignored. It returns whether it warned, and never prints the value.
+export function warnRemovedSigVersion({ env = process.env, warn = console.warn } = {}) {
+  if (!sigVersionSettingStale(env)) return false;
+  warn(`Admin signature: ${SIG_VERSION_REMOVED_WARNING}.`);
+  return true;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -293,13 +289,11 @@ export function accessHeaders(env = process.env) {
 // `api` must be the Worker's origin (the admin routes live at its root). It is read with
 // normalizeApiBase when the client is created, so a base that canonicalOrigin refuses, or plain
 // http to anything but loopback, is a UsageError before any request exists. The signature version
-// is also fixed at creation, from CADDIE_ADMIN_SIG_VERSION in `env` (adminSignVersion): v2 by
-// default, which binds every request to that origin, and v1 when the variable is "1"; any other
-// value is a UsageError at creation. Every attempt, retries included, is signed with that version.
+// is always v2, which binds every request to that origin, retries included; nothing in `env`
+// changes it.
 // A path or query outside the signer's charset is a UsageError before anything is sent.
 export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env = process.env } = {}) {
   const base = normalizeApiBase(api);
-  const version = adminSignVersion(env);
   const access = accessHeaders(env);
   return async function admin(method, path, body) {
     const where = `${method} ${path.split('?')[0]}`;
@@ -341,7 +335,7 @@ export function adminClient(api, token, { retries = 3, timeoutMs = 60_000, env =
     for (let attempt = 0; attempt <= retries; attempt++) {
       let signed;
       try {
-        signed = signAdminRequest({ method, path, base, body: payload, key: token, version });
+        signed = signAdminRequest({ method, path, base, body: payload, key: token, version: 2 });
       } catch (e) {
         throw new UsageError(`${where}: ${e.message}`);
       }
