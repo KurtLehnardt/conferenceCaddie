@@ -2,7 +2,7 @@
 // Run it after scripts/es-setup-people.mjs.
 //
 // Usage: node scripts/es-setup-push.mjs [--push index] [--nudges index] [--no-alias]
-// Env:   ES_URL (default: the Elastic Cloud deployment), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.
+// Env:   ES_URL (required, no default), ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.
 //
 // Defaults: caddie-people-push-v1 behind caddie-people-push, and caddie-people-nudges-v1 behind
 // caddie-people-nudges. Both are caddie-people-*, so the people key covers them. Every step is
@@ -16,7 +16,7 @@
 // share the push index: their platform, token and environment are not mapped, so dynamic: false
 // keeps them in _source only, and they needed no mapping change.
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_PEOPLE_API_KEY || process.env.ELASTISEARCH_API_KEY;
 if (!API_KEY) {
   console.error('Set ES_PEOPLE_API_KEY or ELASTISEARCH_API_KEY.');
@@ -45,7 +45,7 @@ for (const name of [pushIndex, nudgesIndex]) {
 async function es(method, path, body) {
   let res;
   try {
-    res = await fetch(ES_URL + path, {
+    res = await fetch(esUrlOrExit() + path, {
       method,
       headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),

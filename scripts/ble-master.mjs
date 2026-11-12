@@ -33,8 +33,9 @@ import { parseKeyring, serializeKeyring, newKeyId, newMasterSecret, KeyringError
 
 const SECRET = 'caddie-ble-master';
 const ENV_NAME = 'BLE_MASTER_KEYRING';
-const DEFAULT_PROJECT = 'project-9205d6eb-366e-4844-b77';
-const REGION = 'us-west1';
+// No default project: a fork must name its own (GC_PROJECT or --project).
+const DEFAULT_PROJECT = process.env.GC_PROJECT || '';
+const REGION = process.env.GC_REGION || 'us-west1';
 const SERVICE = process.env.SERVICE || 'conference-caddie';
 const USAGE = 'Usage: node scripts/ble-master.mjs --init | --add-next | --promote <id> | --retire <id> | --status [--project <id>]';
 // gcloud's own logging, turned down so that nothing it writes can carry a payload.
@@ -66,6 +67,7 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 if (!command) fail(USAGE, 2);
+if (!project) fail('Set GC_PROJECT or pass --project <id>.\n' + USAGE, 2);
 if (!/^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/.test(SERVICE)) fail('SERVICE must be a Cloud Run service name.', 2);
 
 // Runs gcloud with the project. Its standard output is returned to the caller and never printed
