@@ -58,7 +58,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, withTopics } from './lib.mjs';
+import { ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, withTopics, withoutOperatorKeys } from './lib.mjs';
 import { resolveTopics, loadStoplist } from './topics-local.mjs';
 import { buildFacets, countByKind } from './facets-local.mjs';
 import { MODEL } from '../../contracts/js/bundle.mjs';
@@ -133,11 +133,13 @@ export function workerTalks(slug, talks, takedowns) {
  * The conference document as PUT /admin/conferences gets it: without the `unretire` key, so a run
  * of the ingest (in CI or by hand) can never bring back a conference the operator removed, whatever
  * a committed conference.json holds; without the `expect_status` key, the operator's precondition,
- * which an ingest run never sends; and with its counts recomputed when takedowns dropped talks.
- * `prepared` is the conference's workerTalks() result, or undefined.
+ * which an ingest run never sends; with any key that differs from either only in letter case or
+ * surrounding whitespace dropped too, because the Worker refuses such a key with 400 and would fail
+ * the whole batch (withoutOperatorKeys in lib.mjs); and with its counts recomputed when takedowns
+ * dropped talks. `prepared` is the conference's workerTalks() result, or undefined.
  */
 export function conferenceForWorker(conf, prepared) {
-  const { unretire, expect_status, ...doc } = conf;
+  const doc = withoutOperatorKeys(conf);
   return prepared?.dropped ? { ...doc, counts: countsAfterTakedowns(doc.counts ?? {}, prepared.talks) } : doc;
 }
 

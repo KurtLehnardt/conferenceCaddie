@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import { skip, ConferenceDO, DirectoryDO, worker, adminRoutes, fakeState, namespace, withFixedClock } from './helpers/harness.mjs';
 import { signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
+import { SHORT_CODE } from '../ingest/lib.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
 const KEY = fixture.keys.key1;
@@ -1708,6 +1709,9 @@ describe('the expect_status precondition on PUT /admin/conferences', { skip }, (
       for (const doc of [conf(SLUG, { name: 'renamed' }), { slug: 'Not A Slug' }]) {
         const r = await refused(ctx, [conf(NEW), { ...doc, [key]: value }], [SLUG]);
         assert.deepEqual(r, [400, { error: `the key must be written exactly as ${canonical}` }], JSON.stringify(key));
+        // adminClient shows an error code only when it matches SHORT_CODE, so the operator would see a
+        // bare "status 400" if this text ever stopped matching it.
+        assert.match(r[1].error, SHORT_CODE, JSON.stringify(key));
       }
     }
     assert.equal(docOf(ctx, NEW), null);
