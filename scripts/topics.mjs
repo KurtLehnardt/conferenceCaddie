@@ -3,7 +3,7 @@
 //
 // Usage: node scripts/topics.mjs --event <slug> [--dry-run] [--allow-empty] [--allow-shrink]
 //        [--talks-index name] [--topics-index name] [--work-index name]
-// Env:   ES_URL (default: the Elastic Cloud deployment), and an admin-capable key in ES_ADMIN_API_KEY,
+// Env:   ES_URL (required, no default), and an admin-capable key in ES_ADMIN_API_KEY,
 //        ELASTISEARCH_API_KEY or ES_API_KEY (the topics step writes, so the read-only key is not enough).
 //
 // How it works:
@@ -31,7 +31,7 @@ import path from 'node:path';
 import { candidatesWithTargets, checkNotShrinking, checkWorkIndexCount } from './lib/topics-candidates.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const API_KEY = process.env.ES_ADMIN_API_KEY || process.env.ELASTISEARCH_API_KEY || process.env.ES_API_KEY;
 if (!API_KEY) {
   console.error('Set ELASTISEARCH_API_KEY (or ES_ADMIN_API_KEY). The topics step writes, so it needs a key with write access.');
@@ -80,7 +80,7 @@ const COLLAPSE_COVERAGE = 0.75;
 const CANDIDATES = 400; // the aggregation returns more than the cap so fix-ups can remove some
 
 async function es(method, urlPath, body, ndjson = false) {
-  const res = await fetch(ES_URL + urlPath, {
+  const res = await fetch(esUrlOrExit() + urlPath, {
     method,
     headers: { Authorization: `ApiKey ${API_KEY}`, 'Content-Type': ndjson ? 'application/x-ndjson' : 'application/json' },
     body: body === undefined ? undefined : ndjson ? body : JSON.stringify(body),

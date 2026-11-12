@@ -8,7 +8,10 @@
 // first and then deletes that conference's documents from earlier runs, so a search never sees an
 // empty index. Run it again after ingesting a conference.
 import { es, hasKey } from './lib/es.mjs';
-import { normalizeKey } from '../server/facets.mjs';
+import { esUrlOrExit } from './lib/es-url.mjs';
+// Before the server module below, which refuses to load without ES_URL: print "Set ES_URL.", not a stack.
+esUrlOrExit();
+const { normalizeKey } = await import('../server/facets.mjs');
 import { createHash } from 'node:crypto';
 
 if (!hasKey()) {

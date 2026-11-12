@@ -2,7 +2,7 @@
 //
 // Usage: node scripts/make-dummy-people.mjs [--event <slug>] [--out <path>]
 // Env:   ES_API_KEY (or ELASTISEARCH_API_KEY) to search the talks index; ES_URL; ES_INDEX;
-//        APP_URL for the topic list (default: the live service).
+//        APP_URL or CADDIE_APP_URL for the topic list (required: the app's address, no default).
 //
 // Everything except the shared talks is deterministic: names, topics and texts come from fixed lists
 // and a seeded shuffle, so a re-run writes the same profiles. The shared talks come from Elasticsearch
@@ -28,10 +28,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ES_URL = (process.env.ES_URL || 'https://fc875c88f9f44f159f1a359ee724d82b.us-west1.gcp.cloud.es.io:443').replace(/\/$/, '');
+import { esUrlOrExit } from './lib/es-url.mjs';
 const KEY = process.env.ES_API_KEY || process.env.ELASTISEARCH_API_KEY;
 const TALKS_INDEX = process.env.ES_INDEX || 'caddie-talks';
-const APP_URL = (process.env.APP_URL || 'https://conference-caddie-265846417372.us-west1.run.app').replace(/\/$/, '');
+const APP_URL = (process.env.APP_URL || process.env.CADDIE_APP_URL || '').replace(/\/$/, '');
+if (!APP_URL) {
+  console.error('Set APP_URL or CADDIE_APP_URL to the app address (for example https://caddie.example.workers.dev).');
+  process.exit(1);
+}
 const COUNT = 100;
 const SET_SIZE = 10;
 const SHARED = 10;
@@ -176,7 +180,7 @@ function balanceSets(topicCount) {
 }
 
 async function search(body) {
-  const res = await fetch(`${ES_URL}/${TALKS_INDEX}/_search`, {
+  const res = await fetch(`${esUrlOrExit()}/${TALKS_INDEX}/_search`, {
     method: 'POST',
     headers: { Authorization: `ApiKey ${KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
