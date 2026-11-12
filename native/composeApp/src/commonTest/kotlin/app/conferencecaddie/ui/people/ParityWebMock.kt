@@ -233,7 +233,7 @@ internal class ParityWebMock(
                 else -> request.str("talk_id")?.takeIf { it in me.shared }?.let { circle(it, me) }
             }
             if (answer != null) {
-                server.requests += RecordedRequest(method, url, headers, body?.decodeToString())
+                server.record(RecordedRequest(method, url, headers, body?.decodeToString()))
                 return HttpResponse(200, answer.toString().encodeToByteArray(), headers = mapOf("content-type" to "application/json"))
             }
         }
