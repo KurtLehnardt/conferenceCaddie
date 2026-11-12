@@ -73,8 +73,9 @@ function adminOriginOf(raw) {
   return { mode: 'list', origins: [...new Set(origins)] };
 }
 
-// The Worker's ADMIN_SIG_MIN: unset or exactly "1" is [1, 2], exactly "2" is [2], else invalid.
-const sigMinOf = (raw) => (raw === undefined || raw === '1' ? [1, 2] : raw === '2' ? [2] : null);
+// The Worker's ADMIN_SIG_MIN: unset is [2] (its source default since step d), exactly "1" is
+// [1, 2], exactly "2" is [2], else invalid.
+const sigMinOf = (raw) => (raw === '1' ? [1, 2] : raw === undefined || raw === '2' ? [2] : null);
 
 // How many constant-time comparisons a verifier makes for a verify case: none when it stops before
 // the HMAC (malformed or not-allowed version, bodyless rule, no usable key), else one per usable
@@ -465,7 +466,7 @@ export function buildFixture() {
     origin_forbidden_re: '[@\\\\%,]',
     origin_allow_re: ALLOW_SRC,
     worker_admin_origin: 'ADMIN_ORIGIN set (non-empty after trimming): split on ",", apply origin_rule to each entry, drop duplicates (mode "list"); any refused entry, including the empty one a stray comma leaves, is invalid configuration (mode "invalid": 404 for every admin request, v1 included, no failed-auth charge). ADMIN_ORIGIN unset, or empty after trimming (mode "fallback"): the expected origins are [new URL(request.url).origin], computed without origin_rule. List only hostnames that route to this Worker, never another deployment\'s origin.',
-    worker_admin_sig_min: 'ADMIN_SIG_MIN unset, or exactly "1": allowed_versions [1, 2]. Exactly "2": allowed_versions [2]. Any other value, the empty string, surrounding whitespace and "02" included, is invalid configuration (allowed_versions null: 404 for every admin request, no failed-auth charge). The match is exact because a loose reading would fail open at step d.',
+    worker_admin_sig_min: 'ADMIN_SIG_MIN unset: allowed_versions [2], the Worker\'s source default (WORKER_DEFAULT_SIG_MIN in worker/src/lib/admin-auth.js, "2" since step d). Exactly "1": allowed_versions [1, 2], the rollback of step d, committed in [vars] of worker/wrangler.toml. Exactly "2": allowed_versions [2]. Any other value, the empty string, surrounding whitespace and "02" included, is invalid configuration (allowed_versions null: 404 for every admin request, no failed-auth charge). The match is exact because a loose reading would fail open at step d.',
     origin_protocols: ['http:', 'https:'],
     query_re: '^[A-Za-z0-9_.:=&,-]*$',
     path_re: '^\\/(?:[A-Za-z0-9_.-]+\\/)*[A-Za-z0-9_.-]*$',
@@ -524,7 +525,7 @@ function workerConfigCases() {
   origin('admin-origin-loopbacks', 'A canonical dotted quad and the canonical IPv6 loopback, each with a port', 'http://127.0.0.1:8787,http://[::1]:8787');
   origin('admin-origin-dotted-quad', 'A canonical private dotted quad', 'https://192.168.1.10');
   const sigMin = (id, title, raw) => out.push({ id, setting: 'ADMIN_SIG_MIN', title, ...(raw === undefined ? { unset: true } : { raw }), expect: { allowed_versions: sigMinOf(raw) } });
-  sigMin('sig-min-unset', 'Unset: v1 and v2', undefined);
+  sigMin('sig-min-unset', 'Unset: v2 only, the source default since step d', undefined);
   sigMin('sig-min-1', '"1": v1 and v2', '1');
   sigMin('sig-min-2', '"2": v2 only', '2');
   sigMin('sig-min-empty', 'The empty string: invalid, never read as unset', '');

@@ -13,7 +13,7 @@
   "origin_forbidden_re": "[@\\\\%,]",
   "origin_allow_re": "^https?:\\/\\/(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:.]+\\])(?::[0-9]*)?\\/?$",
   "worker_admin_origin": "ADMIN_ORIGIN set (non-empty after trimming): split on \",\", apply origin_rule to each entry, drop duplicates (mode \"list\"); any refused entry, including the empty one a stray comma leaves, is invalid configuration (mode \"invalid\": 404 for every admin request, v1 included, no failed-auth charge). ADMIN_ORIGIN unset, or empty after trimming (mode \"fallback\"): the expected origins are [new URL(request.url).origin], computed without origin_rule. List only hostnames that route to this Worker, never another deployment's origin.",
-  "worker_admin_sig_min": "ADMIN_SIG_MIN unset, or exactly \"1\": allowed_versions [1, 2]. Exactly \"2\": allowed_versions [2]. Any other value, the empty string, surrounding whitespace and \"02\" included, is invalid configuration (allowed_versions null: 404 for every admin request, no failed-auth charge). The match is exact because a loose reading would fail open at step d.",
+  "worker_admin_sig_min": "ADMIN_SIG_MIN unset: allowed_versions [2], the Worker's source default (WORKER_DEFAULT_SIG_MIN in worker/src/lib/admin-auth.js, \"2\" since step d). Exactly \"1\": allowed_versions [1, 2], the rollback of step d, committed in [vars] of worker/wrangler.toml. Exactly \"2\": allowed_versions [2]. Any other value, the empty string, surrounding whitespace and \"02\" included, is invalid configuration (allowed_versions null: 404 for every admin request, no failed-auth charge). The match is exact because a loose reading would fail open at step d.",
   "origin_protocols": [
     "http:",
     "https:"
@@ -3760,11 +3760,10 @@
     {
       "id": "sig-min-unset",
       "setting": "ADMIN_SIG_MIN",
-      "title": "Unset: v1 and v2",
+      "title": "Unset: v2 only, the source default since step d",
       "unset": true,
       "expect": {
         "allowed_versions": [
-          1,
           2
         ]
       }
