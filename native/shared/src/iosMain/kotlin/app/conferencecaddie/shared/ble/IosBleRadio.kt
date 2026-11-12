@@ -66,10 +66,12 @@ import platform.darwin.dispatch_walltime
  *   managers ask for state restoration ([CENTRAL_RESTORE_ID], [PERIPHERAL_RESTORE_ID]), so iOS keeps
  *   advertising and scanning while the app is suspended, wakes it for discoveries and read
  *   requests, and relaunches it after it ended the app. On such a launch [IosBle.restoreAfterLaunch]
- *   recreates the managers before `didFinishLaunching` returns, as Core Bluetooth requires, and read
- *   requests that arrive before the common runtime has started the radio are held for
- *   [READ_HOLD_MS] rather than refused. An event delivered in the background holds the app awake a
- *   little longer ([WakeHold]) for the runtime's sightings upload.
+ *   recreates the managers before `didFinishLaunching` returns, as Core Bluetooth requires, and holds
+ *   the app awake for the cold start. Read requests that arrive before the common runtime has started
+ *   the radio are held for [READ_HOLD_MS] rather than refused, and discoveries are kept
+ *   ([HeldDiscoveries]) and taken up once it runs. An event delivered in the background, and a read
+ *   started there, hold the app awake a little longer ([WakeHold]), so the read finishes and the
+ *   runtime's sightings upload goes out; [keepAwakeUntil] holds it until the runtime's next report.
  * - **Threads.** Both managers deliver on one serial dispatch queue, where all of the radio's state
  *   lives; the public methods hand their work to it and never wait for it, so they can be called
  *   from any thread, the queue included. Events are called on that queue.
@@ -100,6 +102,10 @@ class IosBleRadio internal constructor(
     @kotlin.concurrent.Volatile
     private var started = false
 
+    /** The central manager's last reported state, for [state] on any thread; written on the queue. */
+    @kotlin.concurrent.Volatile
+    private var centralState: Long = CBManagerStateUnknown
+
     // Everything below is used on the queue only.
     private var active = false
     private var config: BleRadioConfig? = null
@@ -117,6 +123,7 @@ class IosBleRadio internal constructor(
     /** Relaunched by iOS for Bluetooth, and the runtime has not started the radio yet. */
     private var restoring = false
     private val heldReads = mutableListOf<Pair<CBPeripheralManager, CBATTRequest>>()
+    private val heldDiscoveries = HeldDiscoveries<Discovery>()
     private val reads = GattReads<CBPeripheral>()
     private var pumpScheduled = false
     private val decisionWaiters = mutableListOf<CancellableContinuation<Unit>>()
@@ -150,7 +157,8 @@ class IosBleRadio internal constructor(
 
     override fun state(): BleRadioState {
         if (simulator) return BleRadioState.Unsupported
-        central?.let { return radioStateOf(it.state) }
+        // The state the queue last saw: a manager's properties are read on its own queue only.
+        if (central != null) return radioStateOf(centralState)
         return when (access()) {
             // Allowed: the managers can be created without a prompt, and report their state in a moment.
             BleAccess.Granted -> {
@@ -188,11 +196,23 @@ class IosBleRadio internal constructor(
     }
 
     /**
+     * The runtime reports its sightings at [epochMillis]: in the background, the app is held awake
+     * until a little after then ([WakeHold.holdUntil]), or for the usual grace if that is later. iOS
+     * still ends the hold when the background time it allows runs out.
+     */
+    override fun keepAwakeUntil(epochMillis: Long) {
+        if (simulator || !started) return
+        wake.holdUntil(epochMillis)
+    }
+
+    /**
      * Recreates both managers now, with their restore identifiers, because iOS relaunched the app
      * for Bluetooth ([IosBle.restoreAfterLaunch], on the main thread inside `didFinishLaunching`).
      * Their `willRestoreState` arrives before anything else. If the common runtime has not started
      * the radio within [RESTORE_GRACE_MS] (its presence ended while the app was gone), whatever iOS
-     * restored is stopped.
+     * restored is stopped. The app is held awake ([WakeHold.hold]) from here, so the cold start (the
+     * database, the session's restoration) and the first upload run inside a background task rather
+     * than in the few seconds iOS gives a relaunch.
      */
     internal fun resumeAfterLaunch() {
         if (simulator || access() != BleAccess.Granted) return
@@ -207,6 +227,7 @@ class IosBleRadio internal constructor(
             }
             ensureManagers()
         }
+        wake.hold()
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -253,6 +274,7 @@ class IosBleRadio internal constructor(
             centralStateChanged()
             if (active) peripheralStateChanged()
         }
+        replayHeldDiscoveries()
     }
 
     /** Stops advertising, the service and the scan, and drops every connection; [active] is unchanged. */
@@ -286,6 +308,7 @@ class IosBleRadio internal constructor(
         source = null
         events = null
         answerHeldReads()
+        heldDiscoveries.clear()
         withdraw()
         // Powered off: the connections are gone with the radio, but the references must go too.
         restoredPeripherals.clear()
@@ -347,8 +370,9 @@ class IosBleRadio internal constructor(
 
     private fun centralStateChanged() {
         val c = central ?: return
-        checkDecision()
         val state = c.state
+        centralState = state
+        checkDecision()
         if (state == CBManagerStatePoweredOn && restoredPeripherals.isNotEmpty()) {
             // Connections iOS kept for the app while it was gone were reads in progress; none is needed now.
             for (p in restoredPeripherals) {
@@ -368,6 +392,7 @@ class IosBleRadio internal constructor(
         when {
             state == CBManagerStatePoweredOn -> {
                 startScan()
+                replayHeldDiscoveries()
                 pump()
             }
             reason != null -> stopSelf(reason)
@@ -523,9 +548,22 @@ class IosBleRadio internal constructor(
         )
     }
 
-    private fun discovered(peripheral: CBPeripheral, advertisementData: Map<Any?, *>, rssiValue: NSNumber) {
-        val cfg = config ?: return
-        if (!active) return
+    /** A discovery held while a restoration waits for the runtime, with the time it was heard at. */
+    private class Discovery(val peripheral: CBPeripheral, val advertisementData: Map<Any?, *>, val rssi: NSNumber, val atMillis: Long)
+
+    /**
+     * A phone heard by the scan. [heardAt] is when: now, or the time a held discovery came in. While
+     * a restoration waits for the runtime, the discovery is held ([HeldDiscoveries]) and taken up
+     * once the radio runs.
+     */
+    private fun discovered(peripheral: CBPeripheral, advertisementData: Map<Any?, *>, rssiValue: NSNumber, heardAt: Long = clock()) {
+        val cfg = config
+        if (cfg == null || !active) {
+            if (restoring && cfg == null) {
+                heldDiscoveries.add(peripheral.identifier.UUIDString, Discovery(peripheral, advertisementData, rssiValue, heardAt))
+            }
+            return
+        }
         val now = clock()
         if (now >= cfg.untilEpochMillis) {
             stopSelf(BleStopReason.System)
@@ -535,11 +573,20 @@ class IosBleRadio internal constructor(
         if (rssi == RSSI_UNAVAILABLE || rssi < cfg.nearRssi) return
         val serviceData = serviceDataOf(advertisementData, cfg.serviceUuid)
         if (serviceData != null) {
-            deliver(serviceData, rssi, now)
+            deliver(serviceData, rssi, heardAt)
             return
         }
         if (!connectableOf(advertisementData)) return
-        if (reads.offer(GattReads.Candidate(peripheral.identifier.UUIDString, peripheral, rssi, now))) pump()
+        if (reads.offer(GattReads.Candidate(peripheral.identifier.UUIDString, peripheral, rssi, heardAt))) pump()
+    }
+
+    /** Takes up the discoveries held during a restoration, once the radio runs. */
+    private fun replayHeldDiscoveries() {
+        if (!active || heldDiscoveries.size == 0) return
+        for (d in heldDiscoveries.drain()) {
+            if (!active) return
+            discovered(d.peripheral, d.advertisementData, d.rssi, d.atMillis)
+        }
     }
 
     /** Starts the next read when nothing is being read and the cap allows it. */
@@ -549,6 +596,9 @@ class IosBleRadio internal constructor(
         when (val next = reads.next(clock())) {
             is GattReads.Next.Start -> {
                 val candidate = next.candidate
+                // In the background the app must stay awake to finish the read, or at least to
+                // reach its timeout: a read left hanging by a suspension would hold up every other.
+                wake.hold()
                 candidate.peripheral.delegate = peripheralDelegate
                 c.connectPeripheral(candidate.peripheral, null)
                 // Core Bluetooth never gives up on a connection by itself.
@@ -640,9 +690,7 @@ class IosBleRadio internal constructor(
     /** Ticks at most every [SCAN_RESTART_MS], at each window change and at the deadline. */
     private fun scheduleTick(run: Int) {
         val cfg = config ?: return
-        val now = clock()
-        val nextWindow = BleProtocol.windowStartMillis(BleProtocol.windowAtMillis(now) + 1)
-        val delay = minOf(SCAN_RESTART_MS, cfg.untilEpochMillis - now, nextWindow - now + WINDOW_MARGIN_MS).coerceAtLeast(MIN_TICK_MS)
+        val delay = tickDelayMillis(clock(), cfg.untilEpochMillis, SCAN_RESTART_MS, WINDOW_MARGIN_MS, MIN_TICK_MS)
         after(delay) { if (run == generation) tick(run) }
     }
 
@@ -748,8 +796,8 @@ class IosBleRadio internal constructor(
         const val RESTORE_GRACE_MS = 30_000L
 
         private const val DECISION_POLL_MS = 500L
-        private const val WINDOW_MARGIN_MS = 500L
-        private const val MIN_TICK_MS = 250L
+        internal const val WINDOW_MARGIN_MS = 500L
+        internal const val MIN_TICK_MS = 250L
         private const val NANOS_PER_MILLI = 1_000_000L
 
         /** Core Bluetooth's RSSI when it could not measure one. */

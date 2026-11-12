@@ -25,6 +25,11 @@ object IosBle {
      * whose Bluetooth runtime then resumes the radio. They are the same instances the screens use
      * if the person opens the app later. Main thread only; does nothing when [bluetooth] is false
      * or after the first call.
+     *
+     * The people features start out believing the app is in the foreground. A relaunch for Bluetooth
+     * is in the background and has no scene, so they are told otherwise here (else they would poll
+     * as if the screens were open); when the person opens the app, the scene's lifecycle effect
+     * (CaddieApp's LifecycleResumeEffect) reports the foreground, after this.
      */
     @OptIn(ExperimentalNativeApi::class)
     fun restoreAfterLaunch(bluetooth: Boolean) {
@@ -33,6 +38,7 @@ object IosBle {
         // First, before the core or ONNX Runtime start any thread (see OnnxRuntimeTelemetry).
         OnnxRuntimeTelemetry.disableForProcess()
         IosBleRadio.shared.resumeAfterLaunch()
-        IosCore.people({ IosPeopleServices.create() }, allowLocalHttp = Platform.isDebugBinary)
+        val people = IosCore.people({ IosPeopleServices.create() }, allowLocalHttp = Platform.isDebugBinary)
+        people.setForeground(false)
     }
 }
