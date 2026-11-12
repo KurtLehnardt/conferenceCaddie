@@ -19,7 +19,7 @@
 //                      row, until the server restarts.
 //
 // Tier 3 serves every People API v1 route with server-side ranking and polling, the talk search
-// routes and both server imports. Only the official deployment holds the APNs key and may send
+// routes and both server imports, and PUT /api/presence takes until: 'keep' (presence_keep_until). Only the official deployment holds the APNs key and may send
 // through the app's Firebase project, so on every other tier 3 server push.apns and push.fcm are
 // false.
 
@@ -66,7 +66,7 @@ export function capabilitiesDocument({ bleMode, nearRssi, webpush, apns = false,
     api_version: 1,
     tier: 'paid',
     talks: { bundle_base: bundleBase, server_search: true },
-    people: { enabled: true, semantic: 'server', presence: true, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
+    people: { enabled: true, semantic: 'server', presence: true, presence_keep_until: true, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
     ble: {
       mode: bleMode,
       service_uuid: SERVICE_UUID,

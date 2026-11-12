@@ -126,6 +126,18 @@ class CapabilitiesTest {
     }
 
     @Test
+    fun keepUntilIsOnlyOnWhenTheBackendSaysTrueAndHasPresence() {
+        val tier3 = Fixtures.capabilities("tier3-paid.json")
+        assertTrue(Capabilities.effective(tier3).people.presenceKeepUntil)
+        assertFalse(Capabilities.effective(Fixtures.capabilities("tier2-free.json")).people.presenceKeepUntil)
+        assertFalse(Capabilities.Legacy.people.presenceKeepUntil, "the legacy server refuses until: keep")
+        assertFalse(Capabilities.effective(tier3.with("people", "presence", JsonPrimitive(false))).people.presenceKeepUntil, "it needs presence")
+        assertFalse(Capabilities.effective(tier3.with("people", "presence_keep_until", JsonPrimitive("yes"))).people.presenceKeepUntil)
+        val without = JsonObject(tier3 + ("people" to JsonObject(tier3.getValue("people").jsonObject - "presence_keep_until")))
+        assertFalse(Capabilities.effective(without).people.presenceKeepUntil, "missing is off")
+    }
+
+    @Test
     fun derivedV1UsesTenMinuteWindowsAndClampsTheRest() {
         val tier2 = Fixtures.capabilities("tier2-free.json")
         val e = Capabilities.effective(tier2.with("ble", "window_s", JsonPrimitive(60)).with("ble", "sightings_min_interval_s", JsonPrimitive(900)))

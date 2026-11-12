@@ -24,6 +24,11 @@ import kotlinx.serialization.json.int
 class PeopleContractTest {
     private val strict = Json
 
+    // The capabilities whose optional examples this client sends (a fixture example's "requires").
+    // until: "keep" (people.presence_keep_until) is not one yet: PresenceMode has no keep, so those
+    // requests cannot even be built. Add the flag here when the client sends it.
+    private val capabilitiesSent = emptySet<String>()
+
     private class Route(val method: String, val path: String, val auth: Boolean = true)
 
     private val routes = mapOf(
@@ -113,6 +118,12 @@ class PeopleContractTest {
                 val meetId = (request["path_params"] as? JsonObject)?.get("meet_id")?.let { (it as JsonPrimitive).content }
                 val header = ((request["headers"] as? JsonObject)?.get("X-Caddie-Device") as? JsonPrimitive)?.content
 
+                val requires = (example["requires"] as? JsonPrimitive)?.content
+                if (requires != null && requires !in capabilitiesSent) {
+                    assertEquals("presence.put", route, "$name: only presence.put has examples that need a capability")
+                    assertFailsWith<Exception>("$route ($name): a request this client cannot build yet") { decodeRequest(PresencePutRequest.serializer(), body) }
+                    continue
+                }
                 if (name == "an unknown key is refused") {
                     // A key the schema does not name cannot even be put into a request: the server's 400 cannot happen.
                     assertFailsWith<Exception> { decodeRequest(ProfilePutRequest.serializer(), body) }

@@ -51,6 +51,8 @@ data class Capabilities(
         val enabled: Boolean = false,
         val semantic: Semantic = Semantic.Off,
         val presence: Boolean = false,
+        /** `PUT /api/presence` takes `until: "keep"`, which keeps the stored `presence_until`. */
+        val presenceKeepUntil: Boolean = false,
         val gpsBands: Boolean = false,
         val meets: Boolean = false,
         val circles: Boolean = false,
@@ -102,6 +104,7 @@ data class Capabilities(
             put("enabled", people.enabled)
             put("semantic", people.semantic.code)
             put("presence", people.presence)
+            put("presence_keep_until", people.presenceKeepUntil)
             put("gps_bands", people.gpsBands)
             put("meets", people.meets)
             put("circles", people.circles)
@@ -242,6 +245,7 @@ data class Capabilities(
                     enabled = peopleOn,
                     semantic = if (peopleOn) oneOf(people["semantic"], Semantic.entries, Semantic::code) ?: Semantic.Off else Semantic.Off,
                     presence = presence,
+                    presenceKeepUntil = presence && people["presence_keep_until"].isTrue(),
                     gpsBands = presence && people["gps_bands"].isTrue(),
                     meets = presence && people["meets"].isTrue(),
                     circles = peopleOn && people["circles"].isTrue(),

@@ -38,6 +38,7 @@ The response is `application/json` and public. Backends should send `Cache-Contr
 | `people.enabled` | boolean | The People API v1 ([people-api.md](people-api.md)) is served. False hides the People tab. |
 | `people.semantic` | `server`, `client` or `off` | Where meaning-based people matching runs. `client` is reserved for tier 2, where the app computes profile vectors; the request field that carries them is not part of People API v1 and will be added as an optional field. A client that does not implement `client` treats it as `off` (keyword and topic legs only). |
 | `people.presence` | boolean | `PUT` and `DELETE /api/presence`, the "around now" view and the watch list. |
+| `people.presence_keep_until` | boolean, optional | `PUT /api/presence` takes `until: "keep"`, which keeps the stored `presence_until` instead of starting the hour or the day again ([people-api.md](people-api.md), Keeping the end of presence). A client sends `keep` only when this is true, with every Bluetooth write. Missing is false; tier 3 sends true, tier 2 does not send it yet. |
 | `people.gps_bands` | boolean | The optional position with presence, the proximity bands and the distance inside an active meet. |
 | `people.meets` | boolean | Ask to talk shop, Wave, the meet inbox and the meet screen. |
 | `people.circles` | boolean | Per-talk sharing, circle counts and circle members. |
@@ -54,7 +55,7 @@ The response is `application/json` and public. Backends should send `Cache-Contr
 | `imports.github` | `device` or `server` | `device`: the app calls `api.github.com` itself. `server`: `POST /api/import/github` is served. |
 | `imports.schedule` | `device` or `server` | `device`: the app parses the file itself. `server`: `POST /api/import/schedule` is served. |
 
-Schema rules beyond the table: `people` fields other than `enabled` are required when `enabled` is true; `ble.mode` must be `none` when `people.enabled` is false; `derived-v1` requires every `ble` field, `window_s: 600` and `sightings_min_interval_s` of at most 300; `talks.bundle_base` is an https URL without credentials, query or fragment; `server-rotate` requires `service_uuid`, `near_rssi` and `sightings_min_interval_s`.
+Schema rules beyond the table: `people` fields other than `enabled` and `presence_keep_until` are required when `enabled` is true; `ble.mode` must be `none` when `people.enabled` is false; `derived-v1` requires every `ble` field, `window_s: 600` and `sightings_min_interval_s` of at most 300; `talks.bundle_base` is an https URL without credentials, query or fragment; `server-rotate` requires `service_uuid`, `near_rssi` and `sightings_min_interval_s`.
 
 ## Reading the document (consumer rules)
 
@@ -63,7 +64,7 @@ A v1 client turns whatever it fetched into an effective feature set, `effectiveC
 1. **Unknown fields are ignored**, at every level. A newer backend can add fields without breaking older apps (`forward-compatible-v2.json`).
 2. **Unknown enum values fall back to the most conservative known value**: `people.semantic` to `off`, `people.live` to `poll`, `ble.mode` to `none`, `imports.*` to `device`, and an unknown `tier` to the label `unknown`.
 3. **A missing field is off**: booleans false, `bundle_base` null, `ble.mode` none, imports on the device. The one exception is `ble.colocation_required`, which is a protection and is therefore on unless the document says false. `near_rssi` is clamped to [-100, -30] (-75 when it is not an integer); other numbers out of range take their defaults (`window_s` 600, `sightings_min_interval_s` 60, capped at 300 in `derived-v1`).
-4. **Dependent features turn off with what they need.** No people features at all unless `people.enabled` and `people.reports` are both true. No presence, meets or GPS bands without `people.presence` (asks are now-only, so they need presence). No Bluetooth without presence.
+4. **Dependent features turn off with what they need.** No people features at all unless `people.enabled` and `people.reports` are both true. No presence, `presence_keep_until`, meets or GPS bands without `people.presence` (asks are now-only, so they need presence). No Bluetooth without presence.
 
 These rules apply only to a document that exists. A backend without a document is the legacy case below.
 
@@ -98,8 +99,8 @@ The app keeps the last good document per backend base. It fetches again at every
 | File | What it is |
 |---|---|
 | `tier1-demo.json` | Tier 1: bundles, no people features, imports on the device. |
-| `tier2-free.json` | Tier 2: people features with client vectors and a WebSocket, `derived-v1` with a 300-second sightings interval, FCM push from the official backend. |
-| `tier3-paid.json` | Tier 3 after Phase 4: server semantics, polling, `derived-v1` with a 10-second interval, APNs and FCM from the official backend. |
+| `tier2-free.json` | Tier 2: people features with client vectors and a WebSocket, `derived-v1` with a 300-second sightings interval, FCM push from the official backend, no `until: "keep"` yet. |
+| `tier3-paid.json` | Tier 3 after Phase 4: server semantics, polling, `until: "keep"`, `derived-v1` with a 10-second interval, APNs and FCM from the official backend. |
 | `tier3-transition.json` | Tier 3 between Phase 1 and Phase 4: the same with `server-rotate` Bluetooth and no native push. |
 | `legacy-effective.json` | The effective feature set of a backend with no document. |
 | `forward-compatible-v2.json` | A v2 document a v1 client can read: unknown fields and enum values. |
