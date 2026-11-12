@@ -16,9 +16,11 @@ import { UsageError } from './errors.mjs';
 const SHAPE = '{ "default": "<name>", "backends": { "<name>": { "tier": 2, "api": "<https url>" } or { "tier": 3, "es_url": "<url>", "api"?: "<https url>", "project"?: "<gcp project>", "service"?: "<cloud run service>" } } }';
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
-export function configDir(env) {
+// The config directory: CADDIE_ADMIN_HOME, else $XDG_CONFIG_HOME/conference-caddie, else
+// ~/.config/conference-caddie. `home` is for the tests; scripts/lib/admin-token-file.mjs uses it too.
+export function configDir(env, home = homedir()) {
   if (env.CADDIE_ADMIN_HOME) return env.CADDIE_ADMIN_HOME;
-  return join(env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'conference-caddie');
+  return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'conference-caddie');
 }
 
 export function configPath(env) {

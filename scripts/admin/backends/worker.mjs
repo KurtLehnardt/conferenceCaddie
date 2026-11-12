@@ -57,6 +57,7 @@ import dc from 'node:diagnostics_channel';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HEADER_NAME, signAdminRequest } from '../../lib/admin-sign.mjs';
+import { adminTokenPaths, shellPath, shellQuote } from '../../lib/admin-token-file.mjs';
 import { withoutControlKeys } from '../commands/conferences.mjs';
 import { AdminError, NotFoundError, UnsupportedError, UsageError } from '../errors.mjs';
 
@@ -977,8 +978,11 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       const health = await publicGet('/api/health');
       const caps = await publicGet('/api/capabilities');
       const c = caps.json ?? {};
-      const tokenFile = env.ADMIN_TOKEN_FILE || '~/.config/conference-caddie/admin-token';
-      const smoke = `BASE_URL="${api}" ADMIN_TOKEN_FILE="${tokenFile}" node scripts/smoke.mjs`;
+      // The api single-quoted, and the token file this CLI reads always named: the smoke reads a
+      // file nobody named only for an api in config.json, and a named file works in any POSIX shell
+      // whatever it exports. The file is an absolute path quoted for the shell, with a leading ~/
+      // left unquoted so it expands.
+      const smoke = `BASE_URL=${shellQuote(api)} SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(adminTokenPaths(env).path)} node scripts/smoke.mjs`;
       const logs = '(cd worker && npx wrangler tail --format json) | node /path/to/scratch/tail-filter.mjs   # the filter is in worker/README.md, "Logs and CPU"; never run wrangler tail unfiltered';
       return {
         items: [
