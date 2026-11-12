@@ -30,15 +30,41 @@
 // The key is the UTF-8 bytes of the secret after trimming surrounding whitespace, with no hex
 // decoding; it must be at least 32 characters, as the Worker requires. Nothing here prints or
 // logs a key, a header or a body.
+//
+// Version 2 (test/fixtures/admin-sign.v2.json) binds the request to the origin it is sent to, so a
+// signed request that reaches another host (a typo, a hostile mirror) cannot be replayed to the
+// production Worker within the clock window. The header has the same fields and grammar with "v2"
+// in front: X-Caddie-Admin: v2 <ts> <nonce> <bodySha256> <sig>. Its canonical string has its own
+// first line and one more field, so no v1 string can ever equal a v2 string:
+//   caddie-admin-v2
+//   <METHOD, uppercase>
+//   <pathname + search>
+//   <bodySha256, as in the header>
+//   <ts>
+//   <nonce>
+//   <origin>
+// The origin is not in the header. The client signs new URL(base).origin, which lowercases the
+// scheme and host, drops the scheme's default port and turns an internationalised host into
+// punycode; the verifier holds the list of origins it serves (the Worker's ADMIN_ORIGIN),
+// normalised the same way, and tries each. A signature made for any other origin fails as
+// "signature", with no reason of its own. Both sides accept only a bare http: or https: origin
+// (canonicalOrigin). The signer signs v1 unless asked for v2, and the verifier accepts only v1
+// unless told otherwise; the migration is in DECISIONS.md ("Admin signature v2").
 
 import { createHash, createHmac, randomBytes, timingSafeEqual as nodeTimingSafeEqual } from 'node:crypto';
 
 export const VERSION = 'v1';
+export const VERSION_V2 = 'v2';
+// The version signAdminRequest() signs when the caller names none. It stays 1 until the clients
+// move to v2 (step c of the migration).
+export const DEFAULT_SIGN_VERSION = 1;
 export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 export const QUERY_RE = /^[A-Za-z0-9_.:=&,-]*$/;
 export const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
 // ts is a decimal integer without a leading zero, so a raw-string verifier and Number() agree.
 export const HEADER_RE = /^v1 (0|[1-9]\d{0,11}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$/;
+// The v2 header: the v1 grammar field for field, with "v2" in front.
+export const HEADER_RE_V2 = /^v2 (0|[1-9]\d{0,11}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$/;
 // The path of an admin request: absolute, one leading "/", segments of letters, digits, "_", "."
 // and "-" with no empty segment (so no "//" anywhere), so nothing in it is ever percent-encoded
 // or rewritten, which keeps both sides byte-identical.
@@ -50,6 +76,9 @@ export const MIN_KEY_LENGTH = 32;
 // other hash before it computes anything.
 export const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE']);
 const METHOD_RE = /^[A-Z]{3,10}$/;
+// The schemes a v2 origin may have: anything else (file:, data:, a custom scheme) has the opaque
+// origin "null" or is not something the Worker serves.
+const ORIGIN_PROTOCOLS = new Set(['http:', 'https:']);
 
 // A request the signer refuses before anything is sent: the caller's mistake, exit code 2 in the CLI.
 export class UsageError extends Error {
@@ -75,6 +104,30 @@ export function bodyBytes(body) {
 
 export function canonicalString({ method, pathWithQuery, bodySha256, ts, nonce }) {
   return `caddie-admin-${VERSION}\n${String(method).toUpperCase()}\n${pathWithQuery}\n${bodySha256}\n${ts}\n${nonce}\n`;
+}
+
+// The v2 canonical string: its own first line (domain separation from v1), the six v1 fields in
+// the v1 order with the same "\n" after each, then the origin, also followed by "\n".
+export function canonicalStringV2({ method, pathWithQuery, bodySha256, ts, nonce, origin }) {
+  return `caddie-admin-v2\n${String(method).toUpperCase()}\n${pathWithQuery}\n${bodySha256}\n${ts}\n${nonce}\n${origin}\n`;
+}
+
+// The origin a v2 signature binds: new URL(value).origin, for a value that is a bare http: or
+// https: origin (path "/" or none, no query, no fragment, no user name or password). Returns null
+// for anything else, including every value whose origin would be the opaque "null". Examples:
+// "HTTPS://Caddie.Example:443/" gives "https://caddie.example"; "https://caddie.example:8443"
+// keeps its port; "https://caddie.example." keeps its trailing dot and is another origin.
+export function canonicalOrigin(value) {
+  if (typeof value !== 'string' && !(value instanceof URL)) return null;
+  let u;
+  try {
+    u = new URL(value);
+  } catch {
+    return null;
+  }
+  if (!ORIGIN_PROTOCOLS.has(u.protocol)) return null;
+  if (u.pathname !== '/' || u.search !== '' || u.hash !== '' || u.username !== '' || u.password !== '') return null;
+  return u.origin;
 }
 
 // The trimmed key bytes, or a UsageError when the key is missing or too short.
@@ -118,7 +171,13 @@ export function canonicalUrl(path, base) {
 // Signs one request. Returns the header value, the URL to send it to, and the pieces that went
 // into the signature (for tests and fixtures). `now` is milliseconds; `nonce` is for tests only,
 // because a nonce is single-use on the Worker and every retry must sign afresh.
-export function signAdminRequest({ method, path, base, body, key, now, nonce }) {
+//
+// `version` is 1 (the default, DEFAULT_SIGN_VERSION) or 2. A v1 result is exactly what it was
+// before v2 existed; a v2 result also carries `version: 2` and the `origin` it signed, which is
+// canonicalOrigin(base): a v2 signature needs a base that is an http: or https: origin without
+// a user name or password.
+export function signAdminRequest({ method, path, base, body, key, now, nonce, version = DEFAULT_SIGN_VERSION }) {
+  if (version !== 1 && version !== 2) throw new UsageError('The admin signature version must be the number 1 or 2.', 'version');
   const METHOD = String(method ?? '').toUpperCase();
   if (!METHOD_RE.test(METHOD)) throw new UsageError('The admin request needs an HTTP method.', 'method');
   const keyBuf = keyBytes(key);
@@ -130,16 +189,55 @@ export function signAdminRequest({ method, path, base, body, key, now, nonce }) 
   if (!Number.isInteger(ts) || ts < 0 || String(ts).length > 12) throw new UsageError('The signing time is out of range.', 'ts');
   const n = nonce ?? randomNonce();
   if (!NONCE_RE.test(n)) throw new UsageError('A nonce is 16 bytes as base64url without padding (22 characters).', 'nonce');
-  const canonical = canonicalString({ method: METHOD, pathWithQuery, bodySha256, ts, nonce: n });
+  if (version === 1) {
+    const canonical = canonicalString({ method: METHOD, pathWithQuery, bodySha256, ts, nonce: n });
+    const sig = hmacSha256Hex(keyBuf, canonical);
+    return { header: `${VERSION} ${ts} ${n} ${bodySha256} ${sig}`, url: url.href, pathWithQuery, method: METHOD, bodySha256, ts, nonce: n, canonical };
+  }
+  const origin = canonicalOrigin(base);
+  if (origin === null) throw new UsageError('A v2 admin signature needs a base that is an http: or https: origin without a user name or password.', 'url');
+  const canonical = canonicalStringV2({ method: METHOD, pathWithQuery, bodySha256, ts, nonce: n, origin });
   const sig = hmacSha256Hex(keyBuf, canonical);
-  return { header: `${VERSION} ${ts} ${n} ${bodySha256} ${sig}`, url: url.href, pathWithQuery, method: METHOD, bodySha256, ts, nonce: n, canonical };
+  return { header: `${VERSION_V2} ${ts} ${n} ${bodySha256} ${sig}`, url: url.href, pathWithQuery, method: METHOD, bodySha256, ts, nonce: n, canonical, version: 2, origin };
 }
 
-// Parses a header value; null when it does not match HEADER_RE exactly.
+// Parses a header value; null when it does not match HEADER_RE exactly. It reads v1 only, as it
+// always has; parseVersionedAdminHeader() reads both versions.
 export function parseAdminHeader(value) {
   const m = HEADER_RE.exec(typeof value === 'string' ? value : '');
   if (!m) return null;
   return { ts: Number(m[1]), nonce: m[2], bodySha256: m[3], sig: m[4] };
+}
+
+// Parses a header of either version: { version: 1 or 2, ts, nonce, bodySha256, sig }, or null
+// when the value matches neither HEADER_RE nor HEADER_RE_V2 exactly.
+export function parseVersionedAdminHeader(value) {
+  const text = typeof value === 'string' ? value : '';
+  for (const [version, re] of [[1, HEADER_RE], [2, HEADER_RE_V2]]) {
+    const m = re.exec(text);
+    if (m) return { version, ts: Number(m[1]), nonce: m[2], bodySha256: m[3], sig: m[4] };
+  }
+  return null;
+}
+
+// The verifier's options, checked before the header is read, so a misconfigured verifier fails on
+// every request rather than on the first v2 one. allowedVersions is a non-empty list of 1 and 2;
+// when it holds 2, expectedOrigins is a non-empty list of values canonicalOrigin() accepts, and
+// one bad entry refuses the whole list (fail closed). The origins are deduplicated after
+// normalisation, so the work per request does not grow with a repeated entry.
+function verifierVersions(allowedVersions) {
+  if (!Array.isArray(allowedVersions) || allowedVersions.length === 0 || !allowedVersions.every((v) => v === 1 || v === 2)) {
+    throw new UsageError('allowedVersions must be a non-empty list of the numbers 1 and 2.', 'version');
+  }
+  return new Set(allowedVersions);
+}
+
+function verifierOrigins(expectedOrigins) {
+  const origins = Array.isArray(expectedOrigins) ? expectedOrigins.map(canonicalOrigin) : [];
+  if (origins.length === 0 || origins.includes(null)) {
+    throw new UsageError('A verifier that accepts v2 needs expectedOrigins: a non-empty list of http: or https: origins with no path, query, fragment or credentials.', 'expected_origins');
+  }
+  return [...new Set(origins)];
 }
 
 // Verifies a header against the request's method and canonical path, in the Worker's order:
@@ -153,24 +251,44 @@ export function parseAdminHeader(value) {
 // Node (the default), crypto.subtle.timingSafeEqual on Workers. Every key is checked, and the
 // comparison of each runs even after one matched, so the time taken does not depend on which key
 // matched. Reasons: malformed, bodyless_body_hash, no_key, signature, skew.
-export function verifyAdminSignature({ headerValue, method, pathWithQuery, keys, now, skewSeconds = SKEW_SECONDS, timingSafeEqual = nodeTimingSafeEqual }) {
-  const parsed = parseAdminHeader(headerValue);
-  if (!parsed) return { ok: false, reason: 'malformed', bodySha256: null };
+//
+// Versions: `allowedVersions` (default [1]) lists the header versions accepted; a header of any
+// other version is "malformed", as a v2 header always was to a v1 verifier. Accepting 2 needs
+// `expectedOrigins`, the origins this verifier serves, or the call throws a UsageError
+// ("expected_origins"); a bad allowedVersions throws "version". A v2 header is checked against
+// every (key, origin) pair, each comparison running even after one matched, so a signature made
+// for an origin outside the list fails as "signature". A v1 success has the shape it always had;
+// a v2 success also carries `version: 2` and the `origin` that matched.
+export function verifyAdminSignature({ headerValue, method, pathWithQuery, keys, now, skewSeconds = SKEW_SECONDS, timingSafeEqual = nodeTimingSafeEqual, allowedVersions = [1], expectedOrigins }) {
+  const versions = verifierVersions(allowedVersions);
+  const origins = versions.has(2) ? verifierOrigins(expectedOrigins) : [];
+  const parsed = parseVersionedAdminHeader(headerValue);
+  if (!parsed || !versions.has(parsed.version)) return { ok: false, reason: 'malformed', bodySha256: null };
   const METHOD = String(method ?? '').toUpperCase();
   if (BODYLESS_METHODS.has(METHOD) && parsed.bodySha256 !== EMPTY_BODY_SHA256) return { ok: false, reason: 'bodyless_body_hash', bodySha256: null };
   const usable = (Array.isArray(keys) ? keys : [keys]).filter((k) => typeof k === 'string' && k.trim().length >= MIN_KEY_LENGTH);
   if (usable.length === 0) return { ok: false, reason: 'no_key', bodySha256: null };
-  const canonical = canonicalString({ method: METHOD, pathWithQuery, bodySha256: parsed.bodySha256, ts: parsed.ts, nonce: parsed.nonce });
+  const fields = { method: METHOD, pathWithQuery, bodySha256: parsed.bodySha256, ts: parsed.ts, nonce: parsed.nonce };
+  // One canonical string for v1; one per expected origin for v2.
+  const candidates = parsed.version === 1 ? [{ origin: null, canonical: canonicalString(fields) }] : origins.map((origin) => ({ origin, canonical: canonicalStringV2({ ...fields, origin }) }));
   const given = Buffer.from(parsed.sig, 'hex');
   let matched = false;
+  let matchedOrigin = null;
   for (const key of usable) {
-    const expected = createHmac('sha256', Buffer.from(key.trim(), 'utf8')).update(canonical, 'utf8').digest();
-    if (timingSafeEqual(given, expected)) matched = true;
+    const keyBuf = Buffer.from(key.trim(), 'utf8');
+    for (const { origin, canonical } of candidates) {
+      const expected = createHmac('sha256', keyBuf).update(canonical, 'utf8').digest();
+      if (timingSafeEqual(given, expected)) {
+        matched = true;
+        matchedOrigin = origin;
+      }
+    }
   }
   if (!matched) return { ok: false, reason: 'signature', bodySha256: null };
   const nowSeconds = Math.floor((now ?? Date.now()) / 1000);
   if (Math.abs(nowSeconds - parsed.ts) > skewSeconds) return { ok: false, reason: 'skew', bodySha256: null };
-  return { ok: true, reason: null, bodySha256: parsed.bodySha256, ts: parsed.ts, nonce: parsed.nonce };
+  const result = { ok: true, reason: null, bodySha256: parsed.bodySha256, ts: parsed.ts, nonce: parsed.nonce };
+  return parsed.version === 1 ? result : { ...result, version: 2, origin: matchedOrigin };
 }
 
 // After verifyAdminSignature() accepted the header: whether the body that was then read matches
