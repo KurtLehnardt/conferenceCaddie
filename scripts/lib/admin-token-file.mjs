@@ -1,5 +1,5 @@
-// Where the Worker's admin token file is on the operator's computer, for scripts/smoke.mjs and for
-// the smoke command that `caddie-admin stats health` prints.
+// Where the Worker's admin token file is on the operator's computer, for scripts/smoke.mjs, for the
+// smoke command that `caddie-admin stats health` prints, and for worker/scripts/setup-secrets.mjs.
 //
 // The caddie-admin CLI reads <config dir>/admin-token (scripts/admin/config.mjs configDir:
 // CADDIE_ADMIN_HOME, else $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie),
@@ -11,7 +11,7 @@
 import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
-import { configDir } from '../admin/config.mjs';
+import { configDir, loadConfig } from '../admin/config.mjs';
 
 // Where a path is, symlinks resolved, whether or not it exists yet: the real path of its nearest
 // existing ancestor with the missing segments joined back on. A symlinked ~/.config or
@@ -71,35 +71,53 @@ export function defaultAdminTokenFile(env, home = homedir()) {
   return adminTokenPaths({ ...env, ADMIN_TOKEN_FILE: '' }, home).path;
 }
 
-// The token file the smoke reads: ADMIN_TOKEN_FILE if set; otherwise <config dir>/admin-token;
-// otherwise, when that file does not exist, the old ~/.config/conference-caddie/admin-token.
-// Returns { file, note }: file is null when ADMIN_TOKEN_FILE is unset and neither file exists, and
-// note is one NOTE line for the operator (the old file was read, or a different old file is still
-// there) or null. The old path is only ever considered when adminTokenPaths found it to be another
-// file or location than path, so no note points at the file in use.
+// The origins of the tier 2 (Worker) backends in caddie-admin's config.json, which loadConfig has
+// checked are https (or http to this machine); none when the file is missing or not valid. The
+// smoke reads the token file by itself only for one of these (scripts/smoke.mjs).
+export function configuredWorkerOrigins(env = process.env) {
+  let config;
+  try {
+    config = loadConfig(env);
+  } catch {
+    return [];
+  }
+  return Object.values(config.backends).filter((b) => b.tier === 2).map((b) => new URL(b.api).origin);
+}
+
+// statSync that tells "no such file" (stat undefined: ENOENT, ENOTDIR) from any other failure.
+function look(path) {
+  try {
+    return { stat: statSync(path, { throwIfNoEntry: false }) };
+  } catch (error) {
+    return { error };
+  }
+}
+
+// The token file the smoke reads when ADMIN_TOKEN_FILE is unset: <config dir>/admin-token; when that
+// does not exist, the old ~/.config/conference-caddie/admin-token. A path whose stat fails for any
+// other reason (a directory that cannot be searched, a symlink loop) is returned as it is, so the
+// read fails and names it. Returns { file, note }: file is null when neither exists; note is one
+// NOTE line to print once the file was read, or null. It never suggests deleting a token file: the
+// old path is where worker/scripts/setup-secrets.mjs writes a rotated token, so after a rotation
+// it can hold the newer one. The old path is considered only when adminTokenPaths found it to be
+// another file or location than the config dir's, so a note never names the file in use twice.
 export function resolveAdminTokenFile(env, home = homedir()) {
   const { path, legacy, explicit } = adminTokenPaths(env, home);
   if (explicit) return { file: path, note: null };
-  let current;
-  try {
-    current = statSync(path, { throwIfNoEntry: false });
-  } catch {
-    // There, but not even stat-able (a directory on the way is not searchable): reading it reports that.
-    return { file: path, note: null };
+  const current = look(path);
+  if (current.error) return { file: path, note: null };
+  if (!legacy) return { file: current.stat ? path : null, note: null };
+  const old = look(legacy);
+  if (current.stat) {
+    if (!old.stat) return { file: path, note: null };
+    const a = current.stat.mtimeMs;
+    const b = old.stat.mtimeMs;
+    const newer = a === b ? 'Both have the same modification time.' : `By modification time the newer is ${a > b ? path : legacy}.`;
+    return { file: path, note: `NOTE admin token: read ${path}; the old path ${legacy} is a different file and is not read. Do not delete either until you know which one the Worker accepts: worker/scripts/setup-secrets.mjs writes ${legacy}. ${newer}` };
   }
-  if (!legacy) return { file: current ? path : null, note: null };
-  let old;
-  try {
-    old = statSync(legacy, { throwIfNoEntry: false });
-  } catch {
-    old = undefined;
-  }
-  if (!current) {
-    if (!old) return { file: null, note: null };
-    return { file: legacy, note: `NOTE admin token: ${path} does not exist, so the old path ${legacy} was read; move the file to ${path}, where caddie-admin reads it` };
-  }
-  if (old) return { file: path, note: `NOTE admin token: read ${path}; the old path ${legacy} is a different file and is not read; keep only one of the two` };
-  return { file: path, note: null };
+  if (old.error) return { file: legacy, note: null };
+  if (!old.stat) return { file: null, note: null };
+  return { file: legacy, note: `NOTE admin token: ${path} does not exist, so the old path ${legacy} was read. Move it to ${path} and leave a symlink at the old path (ln -s ${shellPath(path, home)} ${shellPath(legacy, home)}), so caddie-admin and worker/scripts/setup-secrets.mjs use one file.` };
 }
 
 // A path as a POSIX shell word that survives copy and paste: a path under the home directory as

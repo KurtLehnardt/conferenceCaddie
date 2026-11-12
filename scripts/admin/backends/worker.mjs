@@ -57,8 +57,7 @@ import dc from 'node:diagnostics_channel';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HEADER_NAME, signAdminRequest } from '../../lib/admin-sign.mjs';
-import { adminTokenPaths, legacyAdminTokenFile, sameFile, shellPath } from '../../lib/admin-token-file.mjs';
-import { isLoopbackHost } from '../../lib/loopback-host.mjs';
+import { adminTokenPaths, shellPath } from '../../lib/admin-token-file.mjs';
 import { withoutControlKeys } from '../commands/conferences.mjs';
 import { AdminError, NotFoundError, UnsupportedError, UsageError } from '../errors.mjs';
 
@@ -979,15 +978,10 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       const health = await publicGet('/api/health');
       const caps = await publicGet('/api/capabilities');
       const c = caps.json ?? {};
-      // With SMOKE_API=worker and no ADMIN_TOKEN_FILE, the smoke reads the token file this CLI
-      // reads (scripts/lib/admin-token-file.mjs), except against a loopback API. So ADMIN_TOKEN_FILE
-      // is printed only when the file is not ~/.config/conference-caddie/admin-token (the default
-      // with none of the variables set, so the line works in any shell; sameFile, so a symlinked
-      // config dir counts) or the api is loopback; then as an absolute path quoted for the shell,
-      // with a leading ~/ left unquoted so it expands.
-      const tokenFile = adminTokenPaths(env).path;
-      const local = isLoopbackHost(new URL(api).hostname);
-      const tokenArg = !local && sameFile(tokenFile, legacyAdminTokenFile()) ? '' : ` ADMIN_TOKEN_FILE=${shellPath(tokenFile)}`;
+      // The token file this CLI reads, always named: the smoke reads a file nobody named only for an
+      // api in config.json, and a named file works in any POSIX shell whatever it exports. It is an
+      // absolute path quoted for the shell, with a leading ~/ left unquoted so it expands.
+      const tokenArg = ` ADMIN_TOKEN_FILE=${shellPath(adminTokenPaths(env).path)}`;
       const smoke = `BASE_URL="${api}" SMOKE_API=worker${tokenArg} node scripts/smoke.mjs`;
       const logs = '(cd worker && npx wrangler tail --format json) | node /path/to/scratch/tail-filter.mjs   # the filter is in worker/README.md, "Logs and CPU"; never run wrangler tail unfiltered';
       return {

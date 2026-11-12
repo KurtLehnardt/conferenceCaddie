@@ -2289,8 +2289,8 @@ describe('STAT-1 to STAT-3 stats', () => {
     assert.equal(r.code, 0, r.stderr);
     assert.deepEqual(r.requests.map((x) => `${x.method} ${x.path}`), ['GET /api/health', 'GET /api/capabilities']);
     assert.match(r.stdout, /^health=200 ok=true\ncapabilities=200 tier=2 ble_mode=off push_apns=false push_fcm=false\n/);
-    // The stub is on loopback, where the smoke never reads the default token file by itself, so the
-    // file the CLI reads (CADDIE_ADMIN_HOME/admin-token here) is named, single-quoted, never a value.
+    // The file the CLI reads (CADDIE_ADMIN_HOME/admin-token here) is always named, single-quoted,
+    // never a value.
     assert.ok(r.stdout.includes(`smoke=BASE_URL="${stub.url}" SMOKE_API=worker ADMIN_TOKEN_FILE=${shellPath(join(home, 'admin-token'))} node scripts/smoke.mjs`), r.stdout);
     assert.ok(!r.stdout.includes('"~'), 'never a tilde inside double quotes');
     assert.ok(r.stdout.includes('logs=(cd worker && npx wrangler tail --format json) | node /path/to/scratch/tail-filter.mjs'), r.stdout);
@@ -2344,11 +2344,11 @@ describe('STAT-1 to STAT-3 stats', () => {
     };
     const configHome = (h) => join(h, '.config', 'conference-caddie');
     try {
-      await check('the default file: no ADMIN_TOKEN_FILE in the command', {
+      await check('the default file: named as ~/ outside single quotes', {
         env: () => ({}),
         configAt: configHome,
         tokenAt: (h) => join(configHome(h), 'admin-token'),
-        expect: () => `BASE_URL="${API}" SMOKE_API=worker node scripts/smoke.mjs`,
+        expect: () => `BASE_URL="${API}" SMOKE_API=worker ADMIN_TOKEN_FILE=~/'.config/conference-caddie/admin-token' node scripts/smoke.mjs`,
       });
       await check('ADMIN_TOKEN_FILE under HOME with a space, a quote and a $: ~/ outside the quotes', {
         env: (h) => ({ ADMIN_TOKEN_FILE: join(h, "my dir", "it's $HOME", 'admin-token') }),
