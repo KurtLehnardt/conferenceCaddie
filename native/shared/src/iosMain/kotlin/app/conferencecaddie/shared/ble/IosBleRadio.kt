@@ -5,6 +5,7 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
+import platform.CoreBluetooth.CBATTErrorReadNotPermitted
 import platform.CoreBluetooth.CBATTErrorRequestNotSupported
 import platform.CoreBluetooth.CBATTErrorUnlikelyError
 import platform.CoreBluetooth.CBATTRequest
@@ -53,7 +54,9 @@ import platform.darwin.dispatch_walltime
  *   holds the service UUID only: iOS cannot advertise service data, and in the background it moves
  *   the UUID to the overflow area, which only iPhones scanning for it can see. Nothing in the
  *   advertisement depends on the token, so [refresh] has nothing to re-advertise; the address is
- *   iOS's own, rotated on its own schedule.
+ *   iOS's own, rotated on its own schedule. Each central is served the token of one window only,
+ *   the window of its first read, for the rest of the radio's session ([CentralReadWindows]), so a
+ *   connection held open across a window change cannot link two tokens.
  * - **Scanning.** A central manager scans for the service UUID. An advertisement with service data
  *   for it (an Android phone's extended advertisement) is handed to the runtime as heard. Any
  *   other phone at or above [BleRadioConfig.nearRssi] is connected to and its characteristic read,
@@ -68,7 +71,7 @@ import platform.darwin.dispatch_walltime
  *   requests, and relaunches it after it ended the app. On such a launch [IosBle.restoreAfterLaunch]
  *   recreates the managers before `didFinishLaunching` returns, as Core Bluetooth requires, and holds
  *   the app awake for the cold start. Read requests that arrive before the common runtime has started
- *   the radio are held for [READ_HOLD_MS] rather than refused, and discoveries are kept
+ *   the radio are held for [READ_HOLD_MS] rather than refused ([RestoreGate]), and discoveries are kept
  *   ([HeldDiscoveries]) and taken up once it runs. An event delivered in the background, and a read
  *   started there, hold the app awake a little longer ([WakeHold]), so the read finishes and the
  *   runtime's sightings upload goes out; [keepAwakeUntil] holds it until the runtime's next report.
@@ -120,9 +123,11 @@ class IosBleRadio internal constructor(
     private var restoredServices: List<CBMutableService> = emptyList()
     private val restoredPeripherals = mutableListOf<CBPeripheral>()
 
-    /** Relaunched by iOS for Bluetooth, and the runtime has not started the radio yet. */
-    private var restoring = false
-    private val heldReads = mutableListOf<Pair<CBPeripheralManager, CBATTRequest>>()
+    /** Relaunched by iOS for Bluetooth, and the runtime has not started the radio yet: the reads held meanwhile. */
+    private val gate = RestoreGate<Pair<CBPeripheralManager, CBATTRequest>>({ millis, block -> after(millis, block) })
+
+    /** The window each central was first served in, so no central links two windows' tokens. */
+    private val centralWindows = CentralReadWindows()
     private val heldDiscoveries = HeldDiscoveries<Discovery>()
     private val reads = GattReads<CBPeripheral>()
     private var pumpScheduled = false
@@ -140,19 +145,25 @@ class IosBleRadio internal constructor(
     /**
      * Creates the managers, which shows the system prompt while the person has not decided, and
      * waits until iOS has an answer: the authorization is decided and the central manager knows its
-     * state. Cancellable; on the simulator it answers at once.
+     * state. Cancellable; on the simulator it answers at once. It gives up after
+     * [ACCESS_TIMEOUT_MS] ([awaitAccessDecision]): a prompt still unanswered then counts as refused,
+     * so the switch shows a problem rather than "Starting…" for as long as the prompt stays up.
      */
     override suspend fun requestAccess(): BleAccess {
         if (simulator) return access()
+        return awaitAccessDecision(ACCESS_TIMEOUT_MS, { awaitDecision() }, ::access)
+    }
+
+    private suspend fun awaitDecision() {
         suspendCancellableCoroutine { waiter ->
             dispatch_async(queue) {
                 ensureManagers()
                 decisionWaiters += waiter
                 checkDecision()
             }
+            // A timeout or a cancelled turn-on: the waiter goes, and the polling with the last one.
             waiter.invokeOnCancellation { dispatch_async(queue) { decisionWaiters.remove(waiter) } }
         }
-        return access()
     }
 
     override fun state(): BleRadioState {
@@ -218,13 +229,7 @@ class IosBleRadio internal constructor(
         if (simulator || access() != BleAccess.Granted) return
         // The queue never waits for the main thread, so waiting for it here cannot deadlock.
         dispatch_sync(queue) {
-            if (!active) {
-                restoring = true
-                val run = generation
-                after(RESTORE_GRACE_MS) {
-                    if (run == generation && restoring && !active) halt()
-                }
-            }
+            if (!active) gate.relaunched { if (!active) halt() }
             ensureManagers()
         }
         wake.hold()
@@ -257,7 +262,6 @@ class IosBleRadio internal constructor(
         this.events = events
         active = true
         started = true
-        restoring = false
         val run = ++generation
         pumpScheduled = false
         val now = clock()
@@ -266,7 +270,8 @@ class IosBleRadio internal constructor(
             return
         }
         ensureManagers()
-        answerHeldReads()
+        // The reads held since a relaunch are answered with the payload now.
+        serveHeldReads(gate.started())
         scheduleTick(run)
         if (!switching || moved) {
             reads.roll(now)
@@ -302,12 +307,12 @@ class IosBleRadio internal constructor(
     private fun halt() {
         active = false
         started = false
-        restoring = false
         generation++
         config = null
         source = null
         events = null
-        answerHeldReads()
+        serveHeldReads(gate.stopped())
+        centralWindows.clear()
         heldDiscoveries.clear()
         withdraw()
         // Powered off: the connections are gone with the radio, but the references must go too.
@@ -385,7 +390,7 @@ class IosBleRadio internal constructor(
             // Stopped while the manager could not take commands (after a relaunch, before it was
             // powered on): stop now whatever iOS restored. While a restoration waits for the
             // runtime, it keeps running.
-            if (state == CBManagerStatePoweredOn && !restoring && c.isScanning) c.stopScan()
+            if (state == CBManagerStatePoweredOn && !gate.restoring && c.isScanning) c.stopScan()
             return
         }
         val reason = stopReasonOf(state)
@@ -406,7 +411,7 @@ class IosBleRadio internal constructor(
         val state = pm.state
         if (!active) {
             // As in centralStateChanged: no advertising and no service once stopped.
-            if (state == CBManagerStatePoweredOn && !restoring) {
+            if (state == CBManagerStatePoweredOn && !gate.restoring) {
                 if (pm.isAdvertising) pm.stopAdvertising()
                 pm.removeAllServices()
                 restoredServices = emptyList()
@@ -489,16 +494,9 @@ class IosBleRadio internal constructor(
     private fun readRequested(pm: CBPeripheralManager, request: CBATTRequest) {
         val cfg = config
         if (!active || cfg == null) {
-            if (restoring) {
-                // Relaunched for this very read: the runtime starts the radio in a moment.
-                heldReads += pm to request
-                if (heldReads.size == 1) {
-                    val run = generation
-                    after(READ_HOLD_MS) { if (run == generation) answerHeldReads() }
-                }
-            } else {
-                answer(pm, request, answerRead(null, 0))
-            }
+            // Relaunched for this very read: the runtime starts the radio in a moment, so it is held
+            // (and refused if that takes longer than READ_HOLD_MS). Otherwise there is nothing to serve.
+            if (!gate.hold(pm to request) { held -> serveHeldReads(held) }) answer(pm, request, answerRead(null, 0))
             return
         }
         if (!request.characteristic.UUID.UUIDString.equals(cfg.characteristicUuid, ignoreCase = true)) {
@@ -509,6 +507,19 @@ class IosBleRadio internal constructor(
         if (now >= cfg.untilEpochMillis) {
             pm.respondToRequest(request, CBATTErrorUnlikelyError)
             stopSelf(BleStopReason.System)
+            return
+        }
+        if (now < 0) {
+            answer(pm, request, answerRead(null, 0))
+            return
+        }
+        // One window per central for the whole session (CentralReadWindows): a central that keeps
+        // its connection open, or comes back under the same identifier, after the window changed is
+        // refused, so it cannot read two windows' tokens and link them. The reviewer suggested
+        // forgetting the centrals at each window change; that would still serve a held connection
+        // once in w and once in w + 1, so the identifiers are kept until the radio stops instead.
+        if (!centralWindows.allow(request.central.identifier.UUIDString, BleProtocol.windowAtMillis(now))) {
+            pm.respondToRequest(request, CBATTErrorReadNotPermitted)
             return
         }
         val payload = try {
@@ -524,15 +535,11 @@ class IosBleRadio internal constructor(
         pm.respondToRequest(request, answer.result)
     }
 
-    /** Answers the reads held during a restoration: with the payload once running, refused otherwise. */
-    private fun answerHeldReads() {
-        if (heldReads.isEmpty()) return
-        val held = heldReads.toList()
-        heldReads.clear()
-        val wasRestoring = restoring
-        restoring = false
-        for ((pm, request) in held) readRequested(pm, request)
-        restoring = wasRestoring && !active
+    /** Answers reads held during a restoration: with the payload once running, refused otherwise. */
+    private fun serveHeldReads(held: List<Pair<CBPeripheralManager, CBATTRequest>>) {
+        for ((pm, request) in held) {
+            if (active && config != null) readRequested(pm, request) else answer(pm, request, answerRead(null, 0))
+        }
     }
 
     private fun startScan() {
@@ -559,7 +566,7 @@ class IosBleRadio internal constructor(
     private fun discovered(peripheral: CBPeripheral, advertisementData: Map<Any?, *>, rssiValue: NSNumber, heardAt: Long = clock()) {
         val cfg = config
         if (cfg == null || !active) {
-            if (restoring && cfg == null) {
+            if (gate.restoring && cfg == null) {
                 heldDiscoveries.add(peripheral.identifier.UUIDString, Discovery(peripheral, advertisementData, rssiValue, heardAt))
             }
             return
@@ -794,6 +801,9 @@ class IosBleRadio internal constructor(
 
         /** After a relaunch for Bluetooth, restored advertising and scanning stop unless the runtime starts the radio within this time. */
         const val RESTORE_GRACE_MS = 30_000L
+
+        /** The Bluetooth prompt is waited for this long at most; unanswered by then, it counts as refused. */
+        const val ACCESS_TIMEOUT_MS = 60_000L
 
         private const val DECISION_POLL_MS = 500L
         internal const val WINDOW_MARGIN_MS = 500L

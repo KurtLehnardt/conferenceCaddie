@@ -4,6 +4,7 @@ import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
+import kotlinx.coroutines.withTimeoutOrNull
 import platform.CoreBluetooth.CBATTErrorInvalidOffset
 import platform.CoreBluetooth.CBATTErrorSuccess
 import platform.CoreBluetooth.CBATTErrorUnlikelyError
@@ -306,4 +307,116 @@ internal fun tickDelayMillis(
 ): Long {
     val nextWindow = BleProtocol.windowStartMillis(BleProtocol.windowAtMillis(now) + 1)
     return minOf(scanRestartMillis, untilEpochMillis - now, nextWindow - now + windowMarginMillis).coerceAtLeast(minMillis)
+}
+
+/**
+ * The token window each central (by its Core Bluetooth identifier) was first served in, so that no
+ * central can read this phone's tokens of two windows and link them (docs/contracts/ble-tokens.md:
+ * the tokens of one phone must not be linkable across windows). Used on the radio's queue only.
+ *
+ * A central is served in the window of its first read and refused in every later window, for the
+ * rest of the radio's session; [clear] forgets them all when the radio stops. Forgetting them at
+ * each window change instead would not be enough: a central that holds its connection open across
+ * the change would be served once in window w, then once more in w + 1 after the reset, which is
+ * the very link to prevent. A phone that connects again under a new random address has a new
+ * identifier and is served again; one whose address outlives a window waits for its next address.
+ * At most [cap] centrals are remembered, the one seen least recently making room.
+ */
+internal class CentralReadWindows(private val cap: Int = MAX_CENTRALS_REMEMBERED) {
+    // In the order they were last seen, oldest first.
+    private val firstWindow = LinkedHashMap<String, Long>()
+
+    /** The number of centrals remembered. */
+    val size: Int get() = firstWindow.size
+
+    /**
+     * True when the central [id] may be served a read in window [w]: it was never served, or was
+     * first served in [w]. Either way it counts as seen now.
+     */
+    fun allow(id: String, w: Long): Boolean {
+        val first = firstWindow.remove(id)
+        if (first == null && firstWindow.size >= cap) firstWindow.remove(firstWindow.keys.first())
+        firstWindow[id] = first ?: w
+        return first == null || first == w
+    }
+
+    /** Forgets every central (the radio stopped). */
+    fun clear() = firstWindow.clear()
+}
+
+/** Centrals [CentralReadWindows] remembers per radio session, at most. */
+internal const val MAX_CENTRALS_REMEMBERED = 1024
+
+/**
+ * The iOS radio's gate after a relaunch for Bluetooth, apart from Core Bluetooth (used on the radio's
+ * queue only; [schedule] runs a block on that queue after a delay). From [relaunched] until the
+ * runtime starts the radio ([started]) or it stops ([stopped]), a read request that arrives is held
+ * for [readHoldMillis] rather than refused, since the runtime starts the radio in a moment; and if
+ * neither happens within [graceMillis], whatever iOS restored is halted.
+ */
+internal class RestoreGate<R>(
+    private val schedule: (delayMillis: Long, block: () -> Unit) -> Unit,
+    private val readHoldMillis: Long = IosBleRadio.READ_HOLD_MS,
+    private val graceMillis: Long = IosBleRadio.RESTORE_GRACE_MS,
+) {
+    /** True from a relaunch until the radio starts or stops. */
+    var restoring = false
+        private set
+
+    private val held = mutableListOf<R>()
+
+    // Moves on at every start and stop, so the timers of a relaunch that has ended do nothing.
+    private var generation = 0
+
+    /** The reads held now. */
+    val heldCount: Int get() = held.size
+
+    /** Relaunched for Bluetooth: reads are held from now on, and [onGraceEnded] runs if nothing starts or stops the radio within the grace. */
+    fun relaunched(onGraceEnded: () -> Unit) {
+        restoring = true
+        val mine = generation
+        schedule(graceMillis) { if (mine == generation && restoring) onGraceEnded() }
+    }
+
+    /**
+     * A read that arrived while the radio is not running: true when it is held, false when it is to
+     * be refused now (no relaunch is waiting). The first read held starts a wait of [readHoldMillis],
+     * after which [onHoldEnded] gets every read held by then, to refuse, unless the radio started or
+     * stopped first. The relaunch keeps waiting for the runtime after that.
+     */
+    fun hold(read: R, onHoldEnded: (List<R>) -> Unit): Boolean {
+        if (!restoring) return false
+        held += read
+        if (held.size == 1) {
+            val mine = generation
+            schedule(readHoldMillis) { if (mine == generation) onHoldEnded(drain()) }
+        }
+        return true
+    }
+
+    /** The runtime started the radio: the relaunch is over, and the reads held are returned, to answer with the payload. */
+    fun started(): List<R> = end()
+
+    /** The radio stopped: the relaunch is over, and the reads held are returned, to refuse. */
+    fun stopped(): List<R> = end()
+
+    private fun end(): List<R> {
+        generation++
+        restoring = false
+        return drain()
+    }
+
+    private fun drain(): List<R> = held.toList().also { held.clear() }
+}
+
+/**
+ * Waits for the system's answer to the Bluetooth prompt ([wait]) for at most [timeoutMillis], then
+ * returns the access [accessNow] reads. A wait that times out is cancelled, which lets go of whatever
+ * it held, and a prompt still unanswered counts as refused (Denied), so the screens show a problem
+ * instead of "Starting…" for as long as the prompt stays up.
+ */
+internal suspend fun awaitAccessDecision(timeoutMillis: Long, wait: suspend () -> Unit, accessNow: () -> BleAccess): BleAccess {
+    val decided = withTimeoutOrNull(timeoutMillis) { wait() } != null
+    val access = accessNow()
+    return if (!decided && access == BleAccess.NotAsked) BleAccess.Denied else access
 }

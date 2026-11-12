@@ -49,6 +49,45 @@ internal fun wakeHoldEnd(now: Long, currentEnd: Long, graceMillis: Long, request
 internal const val HOLD_UNTIL_MARGIN_MS = 5_000L
 
 /**
+ * What [UiBackgroundGrace] needs from UIKit and the main queue, so its pairing of begun and ended
+ * background tasks can be checked without a UIApplication ([UiKitBackgroundTasks] in the app).
+ */
+internal interface BackgroundTasks {
+    /** Runs [block] on the main queue, later. */
+    fun onMain(block: () -> Unit)
+
+    /** Runs [block] on the main queue after [millis]. */
+    fun onMainAfter(millis: Long, block: () -> Unit)
+
+    /** True while the app is in the background. Main queue only. */
+    fun inBackground(): Boolean
+
+    /** Begins a background task, whose [onExpired] runs on the main queue when iOS is about to suspend the app; null when iOS gives none. Main queue only. */
+    fun begin(onExpired: () -> Unit): ULong?
+
+    /** Ends the background task [task]. Main queue only. */
+    fun end(task: ULong)
+}
+
+/** [BackgroundTasks] on UIApplication and the main dispatch queue. */
+internal object UiKitBackgroundTasks : BackgroundTasks {
+    override fun onMain(block: () -> Unit) = dispatch_async(dispatch_get_main_queue(), block)
+
+    @OptIn(ExperimentalForeignApi::class)
+    override fun onMainAfter(millis: Long, block: () -> Unit) =
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, millis * 1_000_000L), dispatch_get_main_queue(), block)
+
+    override fun inBackground(): Boolean = UIApplication.sharedApplication.applicationState == UIApplicationState.UIApplicationStateBackground
+
+    override fun begin(onExpired: () -> Unit): ULong? =
+        UIApplication.sharedApplication.beginBackgroundTaskWithName(TASK_NAME, onExpired).takeIf { it != UIBackgroundTaskInvalid }
+
+    override fun end(task: ULong) = UIApplication.sharedApplication.endBackgroundTask(task)
+
+    private const val TASK_NAME = "Caddie Bluetooth sightings"
+}
+
+/**
  * [WakeHold] on `beginBackgroundTaskWithName`. Every UIApplication call runs on the main queue, as
  * UIKit requires; the task, its end and its timer live there too. One task at a time: begun by the
  * first hold in the background and ended once, by the timer at the hold's end, by [release], or by
@@ -58,9 +97,10 @@ internal const val HOLD_UNTIL_MARGIN_MS = 5_000L
 internal class UiBackgroundGrace(
     private val graceMillis: Long = GRACE_MS,
     private val clock: () -> Long = ::epochMillis,
+    private val tasks: BackgroundTasks = UiKitBackgroundTasks,
 ) : WakeHold {
     // Main queue only.
-    private var task = UIBackgroundTaskInvalid
+    private var task: ULong? = null
     private var generation = 0
 
     /** When the hold ends, in epoch milliseconds; 0 while nothing is held. Main queue only. */
@@ -75,20 +115,18 @@ internal class UiBackgroundGrace(
 
     private fun extend(requested: Long?) {
         used = true
-        dispatch_async(dispatch_get_main_queue()) {
-            val app = UIApplication.sharedApplication
-            if (app.applicationState != UIApplicationState.UIApplicationStateBackground) return@dispatch_async
-            if (task == UIBackgroundTaskInvalid) {
+        tasks.onMain {
+            if (!tasks.inBackground()) return@onMain
+            if (task == null) {
                 // The expiration handler runs on the main thread when iOS is about to suspend the app.
-                task = app.beginBackgroundTaskWithName(TASK_NAME) { end() }
+                task = tasks.begin { end() }
             }
             val now = clock()
             val next = wakeHoldEnd(now, endsAt, graceMillis, requested)
-            if (next == endsAt) return@dispatch_async
+            if (next == endsAt) return@onMain
             endsAt = next
             val mine = ++generation
-            @OptIn(ExperimentalForeignApi::class)
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (next - now) * 1_000_000L), dispatch_get_main_queue()) {
+            tasks.onMainAfter(next - now) {
                 if (mine == generation) end()
             }
         }
@@ -96,22 +134,20 @@ internal class UiBackgroundGrace(
 
     override fun release() {
         if (!used) return
-        dispatch_async(dispatch_get_main_queue()) { end() }
+        tasks.onMain { end() }
     }
 
     /** Main queue only. */
     private fun end() {
         generation++
         endsAt = 0L
-        if (task == UIBackgroundTaskInvalid) return
-        UIApplication.sharedApplication.endBackgroundTask(task)
-        task = UIBackgroundTaskInvalid
+        val t = task ?: return
+        task = null
+        tasks.end(t)
     }
 
     companion object {
         /** How long after the last event the app is held, at most (iOS may end it sooner). */
         const val GRACE_MS = 20_000L
-
-        private const val TASK_NAME = "Caddie Bluetooth sightings"
     }
 }

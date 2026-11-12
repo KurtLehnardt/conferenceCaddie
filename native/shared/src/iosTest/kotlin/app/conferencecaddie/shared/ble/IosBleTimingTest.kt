@@ -2,6 +2,7 @@ package app.conferencecaddie.shared.ble
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -94,11 +95,32 @@ class IosBleTimingTest {
         assertEquals(minOf(scan, windowLength + margin), delay(window))
     }
 
+    /** A [WakeHold] that writes down what it was asked. */
+    private class RecordingWakeHold : WakeHold {
+        val calls = mutableListOf<String>()
+
+        override fun hold() {
+            calls += "hold"
+        }
+
+        override fun holdUntil(epochMillis: Long) {
+            calls += "holdUntil"
+        }
+
+        override fun release() {
+            calls += "release"
+        }
+    }
+
     @Test
     fun keepingAwakeIsSafeWhereThereIsNoRadio() {
         // The simulator's radio is not supported: nothing is held and nothing touches UIApplication.
-        val radio = IosBleRadio()
+        val wake = RecordingWakeHold()
+        val radio = IosBleRadio(wake = wake)
         radio.keepAwakeUntil(epochMillis() + 60_000L)
         radio.stop()
+        assertFalse(radio.supported)
+        assertFalse(radio.running)
+        assertEquals(emptyList<String>(), wake.calls, "no hold was asked for, so none is held or released")
     }
 }
