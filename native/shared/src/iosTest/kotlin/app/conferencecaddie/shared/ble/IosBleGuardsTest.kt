@@ -215,6 +215,16 @@ class IosBleGuardsTest {
     // The prompt's time limit
 
     @Test
+    fun aChangedAuthorizationIsReportedOnce() {
+        val watch = AuthorizationWatch(CBManagerAuthorizationNotDetermined)
+        assertFalse(watch.changed(CBManagerAuthorizationNotDetermined), "still unanswered")
+        assertTrue(watch.changed(CBManagerAuthorizationAllowedAlways), "answered after the wait gave up")
+        assertFalse(watch.changed(CBManagerAuthorizationAllowedAlways), "once")
+        assertTrue(watch.changed(CBManagerAuthorizationDenied), "changed again in Settings")
+        assertEquals(600_000L, IosBleRadio.LATE_ANSWER_WATCH_MS)
+    }
+
+    @Test
     fun aPromptUnansweredForAMinuteCountsAsRefusedAndLetsGo() = runTest {
         assertEquals(60_000L, IosBleRadio.ACCESS_TIMEOUT_MS)
         var released = false

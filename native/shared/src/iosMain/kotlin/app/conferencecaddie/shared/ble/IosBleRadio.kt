@@ -136,6 +136,14 @@ class IosBleRadio internal constructor(
     private val decisionWaiters = mutableListOf<CancellableContinuation<Unit>>()
     private var decisionPolling = false
 
+    /** Told when the authorization changes outside [requestAccess]; set from any thread. */
+    @kotlin.concurrent.Volatile
+    private var accessListener: (() -> Unit)? = null
+
+    // The authorization last reported to [accessListener], and the watch for a late answer.
+    private val authorizations = AuthorizationWatch(CBManager.authorization)
+    private var lateAnswerUntil = 0L
+
     override val supported: Boolean get() = !simulator
 
     override val permissionKind: BlePermissionKind get() = BlePermissionKind.Bluetooth
@@ -153,7 +161,15 @@ class IosBleRadio internal constructor(
      */
     override suspend fun requestAccess(): BleAccess {
         if (simulator) return access()
-        return awaitAccessDecision(ACCESS_TIMEOUT_MS, { awaitDecision() }, ::access)
+        val access = awaitAccessDecision(ACCESS_TIMEOUT_MS, { awaitDecision() }, ::access)
+        // Denied only when the prompt went unanswered (iOS has no askable refusal): the answer,
+        // whenever it comes, is reported through watchAccess.
+        if (access == BleAccess.Denied) dispatch_async(queue) { watchLateAnswer() }
+        return access
+    }
+
+    override fun watchAccess(listener: (() -> Unit)?) {
+        accessListener = listener
     }
 
     private suspend fun awaitDecision() {
@@ -375,11 +391,42 @@ class IosBleRadio internal constructor(
         }
     }
 
+    /**
+     * After [requestAccess] gave up on the prompt, the authorization is looked at twice a second
+     * until the person answers, for at most [LATE_ANSWER_WATCH_MS] (a manager may not report a
+     * refusal at all), and the answer is reported through [accessListener].
+     */
+    private fun watchLateAnswer() {
+        val polling = lateAnswerUntil > clock()
+        lateAnswerUntil = clock() + LATE_ANSWER_WATCH_MS
+        if (!polling) pollLateAnswer()
+    }
+
+    private fun pollLateAnswer() {
+        authorizationMayHaveChanged()
+        if (CBManager.authorization != CBManagerAuthorizationNotDetermined || clock() >= lateAnswerUntil) {
+            lateAnswerUntil = 0L
+            return
+        }
+        after(DECISION_POLL_MS) { pollLateAnswer() }
+    }
+
+    private fun authorizationMayHaveChanged() {
+        if (!authorizations.changed(CBManager.authorization)) return
+        val listener = accessListener ?: return
+        try {
+            listener()
+        } catch (e: Exception) {
+            // As in notifyStopped.
+        }
+    }
+
     private fun centralStateChanged() {
         val c = central ?: return
         val state = c.state
         centralState = state
         checkDecision()
+        authorizationMayHaveChanged()
         if (state == CBManagerStatePoweredOn && restoredPeripherals.isNotEmpty()) {
             // Connections iOS kept for the app while it was gone were reads in progress; none is needed now.
             for (p in restoredPeripherals) {
@@ -815,6 +862,9 @@ class IosBleRadio internal constructor(
 
         /** The Bluetooth prompt is waited for this long at most; unanswered by then, it counts as refused. */
         const val ACCESS_TIMEOUT_MS = 60_000L
+
+        /** After that, a late answer to the prompt is looked for this long at most. */
+        const val LATE_ANSWER_WATCH_MS = 600_000L
 
         private const val DECISION_POLL_MS = 500L
         internal const val WINDOW_MARGIN_MS = 500L

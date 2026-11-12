@@ -187,6 +187,49 @@ class BleTurnOnTest {
     }
 
     @Test
+    fun aLateAnswerToThePromptReplacesTheRefusalUnderTheSwitch() = runTest {
+        // iOS: the prompt went unanswered for a minute, so the turn-on counted it as refused.
+        val b = BleRig(this)
+        b.ready()
+        b.radio.permissionKind = BlePermissionKind.Bluetooth
+        b.radio.accessNow = BleAccess.NotAsked
+        b.radio.afterRequest = BleAccess.Denied
+        assertEquals(BleProblem.PermissionDenied, (b.controller.turnOnBluetooth() as BleOutcome.Problem).problem)
+        assertEquals(BleProblem.PermissionDenied, b.view.problem)
+        assertNotNull(b.radio.accessListener, "the runtime listens for the answer")
+
+        // Allowed later: the refusal goes, and nothing starts by itself.
+        b.radio.answerLate(BleAccess.Granted)
+        runCurrent()
+        assertNull(b.view.problem)
+        assertNull(b.view.message)
+        assertFalse(b.view.on)
+        assertTrue(b.presencePuts().isEmpty())
+        assertEquals(BleOutcome.On, b.controller.turnOnBluetooth(), "the switch turns it on at once")
+
+        // Refused later: the refusal is one for good, with the way to Settings.
+        val c = BleRig(this)
+        c.ready()
+        c.radio.permissionKind = BlePermissionKind.Bluetooth
+        c.radio.accessNow = BleAccess.NotAsked
+        c.radio.afterRequest = BleAccess.Denied
+        c.controller.turnOnBluetooth()
+        c.radio.answerLate(BleAccess.Blocked)
+        runCurrent()
+        assertEquals(BleProblem.PermissionBlocked, c.view.problem)
+        assertEquals("Caddie needs the Bluetooth permission for this. You can allow it in Settings.", c.view.message)
+
+        // Any other problem is left as it is.
+        val d = BleRig(this)
+        d.ready()
+        d.radio.stateNow = BleRadioState.PoweredOff
+        d.controller.turnOnBluetooth()
+        d.radio.answerLate(BleAccess.Granted)
+        runCurrent()
+        assertEquals(BleProblem.BluetoothOff, d.view.problem)
+    }
+
+    @Test
     fun theRadiosStateDecidesBeforeAnyWrite() = runTest {
         val b = BleRig(this)
         b.ready()

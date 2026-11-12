@@ -204,6 +204,10 @@ internal class BleRuntime(
 
     private fun stopMark(slug: String): Pair<Int, Int> = stopsEverywhere to (stopsBySlug[slug] ?: 0)
 
+    init {
+        platform?.radio?.watchAccess { scope.launch { accessChanged() } }
+    }
+
     // ---------------------------------------------------------------------------------------------
     // State for the screens
 
@@ -497,6 +501,28 @@ internal class BleRuntime(
     }
 
     private fun untilOf(slug: String): Long? = host.presence(slug).until?.let { IsoTime.epochMillis(it) }
+
+    /**
+     * The platform's permission changed outside a turn-on ([BleRadio.watchAccess]): on iOS, the
+     * person answered the prompt after the turn-on had stopped waiting and counted it as refused.
+     * A refusal left under the switch follows the answer: allowed clears it (the switch can be
+     * turned on again at once), refused for good makes it a block. Nothing starts by itself.
+     */
+    private fun accessChanged() {
+        val access = platform?.radio?.access() ?: return
+        var changed = false
+        for ((slug, p) in problems.entries.toList()) {
+            val problem = p.first
+            if (problem != BleProblem.PermissionDenied && problem != BleProblem.PermissionBlocked) continue
+            when {
+                access == BleAccess.Granted -> problems.remove(slug)
+                access == BleAccess.Blocked && problem == BleProblem.PermissionDenied -> refuse(slug, BleProblem.PermissionBlocked)
+                else -> continue
+            }
+            changed = true
+        }
+        if (changed) host.changed()
+    }
 
     private fun startRun(slug: String, alias: String) {
         val radio = platform?.radio ?: return

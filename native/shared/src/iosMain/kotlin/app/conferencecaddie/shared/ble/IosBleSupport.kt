@@ -472,3 +472,18 @@ internal suspend fun awaitAccessDecision(timeoutMillis: Long, wait: suspend () -
     val access = accessNow()
     return if (!decided && access == BleAccess.NotAsked) BleAccess.Denied else access
 }
+
+/**
+ * Says when the app's Bluetooth authorization differs from the one seen last, so the radio reports
+ * a change once ([BleRadio.watchAccess]): an answer to the prompt that came after
+ * [awaitAccessDecision] stopped waiting, or a change in Settings that a manager's state update
+ * shows. Used on the radio's queue only.
+ */
+internal class AuthorizationWatch(private var seen: Long) {
+    /** True when [authorization] is not the one seen last; it is the one seen from now on. */
+    fun changed(authorization: Long): Boolean {
+        if (authorization == seen) return false
+        seen = authorization
+        return true
+    }
+}

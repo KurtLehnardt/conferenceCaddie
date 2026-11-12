@@ -227,6 +227,14 @@ interface BleRadio {
     fun keepAwakeUntil(epochMillis: Long) {}
 
     /**
+     * Calls [listener], from any thread, whenever the app's Bluetooth permission may have changed
+     * outside [requestAccess]: on iOS, the person answering the system prompt after [requestAccess]
+     * stopped waiting for it (it then counted as refused). The runtime reads [access] again, so the
+     * words under the switch follow the answer. Null stops the calls. Does nothing by default.
+     */
+    fun watchAccess(listener: (() -> Unit)?) {}
+
+    /**
      * Whether the person stopped the whole app (Android's force stop, or the Task Manager) since the
      * radio last ran, as far as the platform can tell. The runtime's restore then turns Bluetooth
      * proximity off and tells the server instead of resuming it. Reading it clears it. False by default.

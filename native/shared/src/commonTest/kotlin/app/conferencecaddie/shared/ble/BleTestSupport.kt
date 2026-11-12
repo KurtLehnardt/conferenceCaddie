@@ -105,6 +105,19 @@ class FakeBleRadio(
         return userStoppedApp.also { userStoppedApp = false }
     }
 
+    /** The listener the runtime gave [watchAccess], or null. */
+    var accessListener: (() -> Unit)? = null
+
+    override fun watchAccess(listener: (() -> Unit)?) {
+        accessListener = listener
+    }
+
+    /** The person answered the system prompt late, with [access], and the platform says so. */
+    fun answerLate(access: BleAccess) {
+        accessNow = access
+        accessListener?.invoke()
+    }
+
     /** The platform woke the app for the report it was asked to stay awake for. */
     fun reportDue() = events!!.onReportDue()
 
