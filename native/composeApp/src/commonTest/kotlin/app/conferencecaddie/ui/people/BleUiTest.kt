@@ -144,7 +144,7 @@ class BleUiTest {
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
             .assert(describedBy(BleStrings.HINT_OFF))
             .assertHeightIsAtLeast(44.dp)
-        assertEquals("Find people near me by Bluetooth. Only people who also turned this on can be found.", BleStrings.switchDescription(BleStrings.HINT_OFF))
+        assertEquals("Find people near me by Bluetooth (phone can stay in your pocket). Only people who also turned this on can be found.", BleStrings.switchDescription(BleStrings.HINT_OFF))
         onNodeWithTag("ble-hint").assertTextEquals(BleStrings.HINT_OFF)
         onNodeWithTag("ble-setup").assertDoesNotExist()
         onNodeWithTag("ble-open-settings").assertDoesNotExist()
