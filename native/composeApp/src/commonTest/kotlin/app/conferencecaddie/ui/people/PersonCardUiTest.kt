@@ -81,6 +81,26 @@ class PersonCardUiTest {
     }
 
     @Test
+    fun aDoubleTapOnWatchWatchesOnce() = runComposeUiTest {
+        u2Ready(rig)
+        val cy = rig.server.seedPerson(rig.slug, "Cy Seed", expertise = "Tuned eBPF probes.", speakTopics = listOf("ebpf"))
+        u2Show(rig)
+        u2WaitForTag("person-${cy.ref}")
+        // The first toggle is held where it has changed the list and not yet returned, so it cannot
+        // finish between the two taps of one frame.
+        val held = HeldAction(rig.controller) { rig.state.watch.isNotEmpty() }
+        doubleTap(onNode(u2InCard(cy.ref, PeopleStrings.WATCH)))
+        waitUntil(timeoutMillis = 20_000) { held.hasArrived }
+        held.release()
+        waitUntil(timeoutMillis = 20_000) { PeopleStrings.watchOn("Cy Seed") in rig.toasts }
+        // A second tap would have turned the watch straight back, with a second toast.
+        u2Await(rig) { rig.controller.retrySession() }
+        waitForIdle()
+        assertEquals(listOf(cy.ref), rig.state.watch.map { it.ref })
+        assertEquals(listOf(PeopleStrings.watchOn("Cy Seed")), rig.toasts.toList())
+    }
+
+    @Test
     fun watchingSomeoneWhoIsNotAroundTogglesWithTheWebsToasts() = runComposeUiTest {
         u2Ready(rig)
         val cy = rig.server.seedPerson(rig.slug, "Cy Seed", expertise = "Tuned eBPF probes.", speakTopics = listOf("ebpf"))

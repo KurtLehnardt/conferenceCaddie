@@ -83,6 +83,39 @@ export function tabHash(tab: Tab, params: TabParams = {}): string {
   return `#/${tab}${qs ? `?${qs}` : ''}`;
 }
 
+/** Where Back on the profile editor leads, and what it is called there. */
+export interface ProfileBack {
+  href: string;
+  /** True when the history entry behind this one is that screen, so Back can pop it. */
+  pops: boolean;
+  /** The screen Back leads to, so the tab bar can mark the same tab that Back names. */
+  tab: BackTab | 'settings';
+  label: (typeof BACK_TAB_LABEL)[BackTab] | 'Settings';
+}
+
+/** The tab screens Back on the profile editor can return to, and what Back says for each. */
+const BACK_TAB_LABEL = { people: 'People', 'for-you': 'For you', search: 'Search', interested: 'Interested' } as const;
+type BackTab = keyof typeof BACK_TAB_LABEL;
+const isBackTab = (tab: string | null): tab is BackTab => tab !== null && Object.prototype.hasOwnProperty.call(BACK_TAB_LABEL, tab);
+
+/**
+ * Back on the profile editor returns to the tab screen of the same conference it was opened from:
+ * People (the Profile button in its app bar or one of its prompts), For you (its "Pick topics"
+ * prompt), Search or Interested (the share controls and the "Open profile" notice), and says that
+ * screen's name. When the screen behind is #/here/{zone}, Back links to #/people without popping,
+ * because popping to #/here/{zone} would turn presence on again. Otherwise it goes to Settings: from
+ * the Settings row, from another conference, and after a reload or a deep link, when the screen
+ * behind is not known.
+ */
+export function profileBack(prev: Route | null, slug: string | null): ProfileBack {
+  const behind = prev && prev.slug === slug ? prev.tab : null;
+  if (prev && isBackTab(behind)) {
+    return { href: tabHash(behind, prev.params), pops: true, tab: behind, label: BACK_TAB_LABEL[behind] };
+  }
+  if (behind === 'here') return { href: '#/people', pops: false, tab: 'people', label: 'People' };
+  return { href: '#/settings', pops: behind === 'settings', tab: 'settings', label: 'Settings' };
+}
+
 /**
  * Changes the current tab's view or day in the URL without a history entry. The entry's state is
  * kept, because the history record in trail.ts numbers each entry there.

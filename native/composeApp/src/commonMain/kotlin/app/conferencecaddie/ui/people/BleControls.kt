@@ -9,7 +9,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -76,18 +75,25 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
     val ble = state.ble
     if (!ble.available) return
     val controller = host.controller
-    val scope = rememberCoroutineScope()
     val settings = variant == BleVariant.Settings
     val presenceOn = state.presence.on
     var panel by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val starting = busy || ble.starting
 
+    // On the app's scope (PeopleHost.scope), as the presence card's actions: the start waits for the
+    // system's permission prompt, and the card may be scrolled away or the tab left meanwhile. Its
+    // problem is in the state, so nothing is lost there. busy is set before the launch, so a second
+    // tap in the same frame does not start a second attempt (and, after a refusal, a second prompt).
     fun turnOn() {
-        scope.launch {
-            busy = true
-            val outcome = controller.turnOnBluetooth()
-            busy = false
+        if (busy) return
+        busy = true
+        host.scope.launch {
+            val outcome = try {
+                controller.turnOnBluetooth()
+            } finally {
+                busy = false
+            }
             // A problem keeps the panel open with the words under it, as the web's error does.
             if (outcome == BleOutcome.On) panel = false
         }

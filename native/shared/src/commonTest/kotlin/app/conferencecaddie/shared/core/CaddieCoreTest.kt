@@ -19,6 +19,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -26,10 +27,13 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -338,6 +342,32 @@ class CaddieCoreTest {
         core.refresh()
         core.awaitIdle()
         assertEquals(2, count(caps))
+    }
+
+    /**
+     * The settings of the screens have a queue of their own: the writes of one setting are stored
+     * in the order they were made, and a read or awaitIdle comes after every write made before it.
+     * The core's scope here never runs anything, so a write launched on that scope's dispatcher
+     * instead would never be stored, and the test would fail every time.
+     */
+    @Test
+    fun uiSettingsAreStoredInTheirOrderBeforeAReadOrAwaitIdle() = runTest {
+        val database = CaddieDatabase.open(dbPath).also { databases += it }
+        val stopped = StandardTestDispatcher(TestCoroutineScheduler())
+        val scope = CoroutineScope(SupervisorJob() + stopped)
+        try {
+            val core = CaddieCore(database, files, online(), scope, allowLocalHttp = false, clock = clock)
+            for (i in 1..20) core.setUiSetting("order", i.toString())
+            assertEquals("20", core.uiSetting("order"), "a read comes after the writes made before it")
+            // Read straight from the database, so only awaitIdle orders the read after the writes.
+            for (i in 21..40) core.setUiSetting("order", i.toString())
+            core.setUiSetting("order", null)
+            core.awaitIdle()
+            assertNull(database.setting("ui:order"), "awaitIdle comes after the writes made before it")
+        } finally {
+            // Not joined: a coroutine launched on the stopped dispatcher would never end.
+            scope.cancel()
+        }
     }
 
     @Test
