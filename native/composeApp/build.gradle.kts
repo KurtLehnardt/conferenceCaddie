@@ -97,6 +97,9 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.compose.uiTest)
+            // StoredChoiceUiTest keeps the core's database busy through CaddieDatabase.run, whose
+            // block takes the SQLite connection.
+            implementation(libs.androidx.sqlite.bundled)
         }
         // The iOS UI tests send the system Back through a navigation event dispatcher of their own.
         iosTest.dependencies {

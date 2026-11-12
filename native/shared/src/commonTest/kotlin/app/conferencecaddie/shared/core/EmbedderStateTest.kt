@@ -115,7 +115,10 @@ class EmbedderStateTest {
         core.useEmbedder(loads::load)
         core.until { it.semantic == SemanticState.Idle }
         core.search(SearchRequest())
+        // A load the call started would end only later: wait for it before checking there was none.
+        core.awaitEmbedderLoad()
         assertEquals(0, loads.attempts, "browsing needs no model")
+        assertEquals(SemanticState.Idle, core.state.value.semantic)
 
         // The first text search starts the load, which fails; the search itself is answered by keywords.
         val first = core.search(SearchRequest(query = "kubernetes"))
@@ -127,7 +130,9 @@ class EmbedderStateTest {
         // Within the pause no search tries again.
         time += (CaddieCore.RETRY_FIRST_MS - 1).milliseconds
         core.search(SearchRequest(query = "kubernetes"))
+        core.awaitEmbedderLoad()
         assertEquals(1, loads.attempts)
+        assertEquals(SemanticState.Unavailable, core.state.value.semantic)
 
         // After it, the next search does, and meaning-based matching joins.
         time += 2.milliseconds
@@ -139,6 +144,7 @@ class EmbedderStateTest {
         // Another backend keeps the loaded model.
         core.setBackend(BackendUrl.normalise("https://other.example") as BackendUrl.Valid)
         core.until { it.backend.base == "https://other.example" }
+        core.awaitEmbedderLoad()
         assertEquals(SemanticState.Ready, core.state.value.semantic)
         assertEquals(2, loads.attempts)
     }
@@ -151,7 +157,9 @@ class EmbedderStateTest {
         core.useEmbedder { error("a second offer is ignored") }
         core.until { it.semantic == SemanticState.Idle }
         core.forYou()
+        core.awaitEmbedderLoad()
         assertEquals(0, loads.attempts, "For you without learn text needs no model")
+        assertEquals(SemanticState.Idle, core.state.value.semantic)
         core.search(SearchRequest(query = "kubernetes"))
         core.until { it.semantic == SemanticState.Ready }
         assertTrue(core.search(SearchRequest(query = "kubernetes"))!!.semantic, "the embedding is now cached")
@@ -161,6 +169,7 @@ class EmbedderStateTest {
         assertEquals(1, loads.closed)
         // The same text, with another filter, is answered from the cached embedding.
         assertTrue(core.search(SearchRequest(query = "kubernetes", hideSponsor = true))!!.semantic)
+        core.awaitEmbedderLoad()
         assertEquals(1, loads.attempts, "a cached text does not load the model again")
         assertEquals(SemanticState.Idle, core.state.value.semantic)
         // A new text does.
