@@ -16,7 +16,8 @@ import app.conferencecaddie.shared.NotificationTapKey
  * The ongoing notification of [BleRadioService], which Android requires of a foreground service and
  * which says what the phone is doing: its own low-importance channel (no sound, no badge), a Stop
  * action, and a tap that opens the people screen showing who is around. The words are the Capacitor
- * app's (web/android/app/src/main/res/values/strings.xml).
+ * app's (web/android/app/src/main/res/values/strings.xml), except [OPEN_TO_LISTEN]. Dismissing it,
+ * which Android 14 and newer allow, tells the service, which posts it again.
  */
 internal object BleRadioNotification {
     const val CHANNEL_ID = "finding_people"
@@ -27,6 +28,12 @@ internal object BleRadioNotification {
     const val TITLE = "Conference Caddie is finding people near you"
     const val TEXT = "Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth."
     const val STOP = "Stop"
+
+    /**
+     * The text instead of [TEXT] on Android 10 and 11 after the system restarted the service with the
+     * app in the background, where the scan may hear nothing until the app is opened.
+     */
+    const val OPEN_TO_LISTEN = "Open Caddie to keep listening"
 
     /**
      * Where a tap on the notification leads: the people screen with who is around, the nudge's link,
@@ -48,8 +55,11 @@ internal object BleRadioNotification {
         )
     }
 
-    /** The notification, with [smallIcon] (the application's monochrome icon) in the status bar. */
-    fun build(context: Context, smallIcon: Int): Notification {
+    /**
+     * The notification, with [smallIcon] (the application's monochrome icon) in the status bar, and
+     * [OPEN_TO_LISTEN] as its text when [openToListen].
+     */
+    fun build(context: Context, smallIcon: Int, openToListen: Boolean = false): Notification {
         ensureChannel(context)
         val stop = PendingIntent.getService(
             context,
@@ -57,12 +67,22 @@ internal object BleRadioNotification {
             Intent(context, BleRadioService::class.java).setAction(BleRadioService.ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        // A broadcast to the running service only (its receiver is not exported), which posts the
+        // notification again.
+        val deleted = PendingIntent.getBroadcast(
+            context,
+            4,
+            Intent(BleRadioService.ACTION_NOTIFICATION_DELETED).setPackage(context.packageName),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val text = if (openToListen) OPEN_TO_LISTEN else TEXT
         val builder = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(smallIcon)
             .setColor(ACCENT)
             .setContentTitle(TITLE)
-            .setContentText(TEXT)
-            .setStyle(Notification.BigTextStyle().bigText(TEXT))
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setDeleteIntent(deleted)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)

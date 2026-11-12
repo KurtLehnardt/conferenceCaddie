@@ -24,6 +24,7 @@ import app.conferencecaddie.shared.ble.BleGattAnswer
 import app.conferencecaddie.shared.ble.BleHardware
 import app.conferencecaddie.shared.ble.BleHardwareStatus
 import app.conferencecaddie.shared.ble.BlePayloadSource
+import app.conferencecaddie.shared.ble.BleProcessExit
 import app.conferencecaddie.shared.ble.BlePermissionKind
 import app.conferencecaddie.shared.ble.BleProtocol
 import app.conferencecaddie.shared.ble.BleRadioConfig
@@ -32,6 +33,7 @@ import app.conferencecaddie.shared.ble.BleRadioService
 import app.conferencecaddie.shared.ble.BleRadioState
 import app.conferencecaddie.shared.ble.BleReadResult
 import app.conferencecaddie.shared.ble.BleStopReason
+import app.conferencecaddie.shared.ble.BleWakeups
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -72,6 +74,10 @@ class BleServiceLifecycleTest {
     private var savedHook: ((Context) -> Unit)? = null
     private lateinit var savedStartService: (Intent) -> Unit
     private lateinit var savedPermissionGranted: (String) -> Boolean
+    private lateinit var savedWakeups: BleWakeups
+    private var savedScanNeedsAppInFront = false
+    private lateinit var savedAppInFront: () -> Boolean
+    private lateinit var savedProcessExits: () -> List<BleProcessExit>
     private var scenario: ActivityScenario<MainActivity>? = null
 
     private val nearRssi = -75
@@ -85,6 +91,7 @@ class BleServiceLifecycleTest {
     private class Events : BleRadioEvents {
         val heard = CopyOnWriteArrayList<Pair<ByteArray, Int>>()
         val stopped = CopyOnWriteArrayList<BleStopReason>()
+        val reportsDue = AtomicInteger()
 
         override fun onHeard(payload: ByteArray, rssi: Int, atEpochMillis: Long) {
             heard += payload to rssi
@@ -92,6 +99,10 @@ class BleServiceLifecycleTest {
 
         override fun onStopped(reason: BleStopReason) {
             stopped += reason
+        }
+
+        override fun onReportDue() {
+            reportsDue.incrementAndGet()
         }
     }
 
@@ -122,10 +133,10 @@ class BleServiceLifecycleTest {
             .any { it.service.className == BleRadioService::class.java.name && it.foreground }
 
     /** The service's record in the activity manager, which names its foreground service types. */
-    private fun dumpsys(): String {
-        val pfd = instrumentation.uiAutomation.executeShellCommand(
-            "dumpsys activity services ${context.packageName}/${BleRadioService::class.java.name}",
-        )
+    private fun dumpsys(): String = shell("dumpsys activity services ${context.packageName}/${BleRadioService::class.java.name}")
+
+    private fun shell(command: String): String {
+        val pfd = instrumentation.uiAutomation.executeShellCommand(command)
         return ParcelFileDescriptor.AutoCloseInputStream(pfd).use { it.readBytes().decodeToString() }
     }
 
@@ -162,6 +173,10 @@ class BleServiceLifecycleTest {
         savedHook = AndroidBleRadio.onSystemRestart
         savedStartService = radio.startService
         savedPermissionGranted = radio.permissionGranted
+        savedWakeups = radio.wakeups
+        savedScanNeedsAppInFront = radio.scanNeedsAppInFront
+        savedAppInFront = radio.appInFront
+        savedProcessExits = radio.processExits
         radio.hardware = fake
     }
 
@@ -176,6 +191,10 @@ class BleServiceLifecycleTest {
         AndroidBleRadio.onSystemRestart = savedHook
         radio.startService = savedStartService
         radio.permissionGranted = savedPermissionGranted
+        radio.wakeups = savedWakeups
+        radio.scanNeedsAppInFront = savedScanNeedsAppInFront
+        radio.appInFront = savedAppInFront
+        radio.processExits = savedProcessExits
         scenario?.close()
         scenario = null
         // A tapped notification may have opened another MainActivity; none is left for the next test.
@@ -316,20 +335,380 @@ class BleServiceLifecycleTest {
         startRunning(source, Events())
         val reader = fake.reader!!
         // Called on a binder thread in the real stack; here on the test's thread, which is not main.
-        val whole = reader.read(0)
+        val whole = reader.read(PHONE, 0)
         assertEquals(BleGattAnswer.SUCCESS, whole.status)
         assertArrayEquals(payload(7), whole.value)
-        val tail = reader.read(5)
+        val tail = reader.read(PHONE, 5)
         assertEquals(BleGattAnswer.SUCCESS, tail.status)
         assertArrayEquals(payload(7).copyOfRange(5, 17), tail.value)
-        assertEquals(0, reader.read(17).value!!.size)
-        assertEquals(BleGattAnswer.INVALID_OFFSET, reader.read(18).status)
-        // The payload of the moment, not the one advertised at the start.
+        assertEquals(0, reader.read(PHONE, 17).value!!.size)
+        assertEquals(BleGattAnswer.INVALID_OFFSET, reader.read(PHONE, 18).status)
+        // The payload of the moment, not the one advertised at the start, for a connection that has
+        // read nothing yet.
         source.payload = payload(8)
-        assertArrayEquals(payload(8), reader.read(0).value)
+        assertArrayEquals(payload(8), reader.read(OTHER_PHONE, 0).value)
         source.payload = null
-        assertEquals(BleGattAnswer.FAILURE, reader.read(0).status)
+        assertEquals(BleGattAnswer.FAILURE, reader.read(THIRD_PHONE, 0).status)
     }
+
+    @Test
+    fun aConnectionIsServedOneTokenAndEndedWhenTheWindowChanges() {
+        // The radio's clock, moved by the test: 30 seconds into window 2990520.
+        var now = BleProtocol.windowStartMillis(2990520L) + 30_000L
+        radio.clock = { now }
+        val source = BlePayloadSource { BleProtocol.encodePayload(ByteArray(16) { (BleProtocol.windowAtMillis(now) % 100).toByte() }) }
+        showApp()
+        radio.start(config(untilEpochMillis = now + 3_600_000L), source, Events())
+        assertTrue(waitFor { fake.advertising != null })
+        val reader = fake.reader!!
+        val first = source.payloadNow()!!
+        // A phone connects and reads the token; a watch bonded to this phone is connected too, but it
+        // never asks for the token.
+        assertArrayEquals(first, reader.read(PHONE, 0).value)
+        assertArrayEquals("reading again in the same window is fine", first, reader.read(PHONE, 0).value)
+
+        // The window changes while the phone stays connected: it may not read the new token over the
+        // same link, which would tie the two together.
+        now = BleProtocol.windowStartMillis(2990521L) + 5L
+        val second = source.payloadNow()!!
+        val refused = reader.read(PHONE, 0)
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, refused.status)
+        assertNull(refused.value)
+        // A phone that connects now reads the new one.
+        assertArrayEquals(second, reader.read(OTHER_PHONE, 0).value)
+
+        // At the refresh for the new window its connection is ended; the other phone's (which read
+        // this window's token) and the watch's are not.
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(second) == true })
+        assertEquals(listOf(PHONE), fake.disconnectedClients.toList())
+        assertFalse(WATCH in fake.disconnectedClients)
+        // Still connected (the stack has not reported the end yet): still refused.
+        assertEquals(BleGattAnswer.READ_NOT_PERMITTED, reader.read(PHONE, 0).status)
+
+        // Once its connection has ended, the phone connects again through the new advertisement and
+        // reads the new token like any other phone.
+        reader.disconnected(PHONE)
+        assertArrayEquals(second, reader.read(PHONE, 0).value)
+        // A refresh within the window ends nothing more.
+        radio.refresh()
+        instrumentation.waitForIdleSync()
+        assertEquals(listOf(PHONE), fake.disconnectedClients.toList())
+    }
+
+    @Test
+    fun withoutTheConnectableSetThereIsNoGattServer() {
+        // Before Android 14 the legacy connectable set is not offered (a connected peer could read the
+        // phone's name), and so neither is the GATT server behind it.
+        fake.connectable = false
+        val events = Events()
+        startRunning(Source(payload(1)), events)
+        assertEquals(0, fake.gattOpens)
+        assertNull(fake.reader)
+        assertNotNull("the scan runs", fake.scanListener)
+        assertArrayEquals(payload(1), fake.advertising)
+        assertTrue(events.stopped.isEmpty())
+    }
+
+    @Test
+    fun theScanStartsAgainAfterAFailureAndAtEveryWindow() {
+        var now = BleProtocol.windowStartMillis(2990520L) + 30_000L
+        radio.clock = { now }
+        val source = Source(payload(1))
+        val events = Events()
+        showApp()
+        radio.start(config(untilEpochMillis = now + 3_600_000L), source, events)
+        assertTrue(waitFor { fake.advertising != null })
+        assertEquals(1, fake.scanStarts)
+
+        // The scan fails: advertising goes on, and the next refresh starts the scan again.
+        onMain { fake.scanListener!!.onScanFailed() }
+        source.payload = payload(2)
+        radio.refresh()
+        assertTrue(waitFor { fake.scanStarts == 2 })
+        // Running, in the same window: a refresh leaves it alone.
+        source.payload = payload(3)
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(payload(3)) == true })
+        instrumentation.waitForIdleSync()
+        assertEquals(2, fake.scanStarts)
+
+        // A new window starts it again even while it runs (Android downgrades a scan after 30 minutes).
+        now = BleProtocol.windowStartMillis(2990521L) + 5L
+        source.payload = payload(4)
+        radio.refresh()
+        assertTrue(waitFor { fake.scanStarts == 3 })
+        assertNotNull(fake.scanListener)
+
+        // A scan the stack refuses outright is tried again at the next refresh, too.
+        fake.scanStatus = BleHardwareStatus.Failed
+        now = BleProtocol.windowStartMillis(2990522L) + 5L
+        source.payload = payload(5)
+        radio.refresh()
+        assertTrue(waitFor { fake.scanStarts == 4 })
+        fake.scanStatus = BleHardwareStatus.Ok
+        source.payload = payload(6)
+        radio.refresh()
+        assertTrue(waitFor { fake.scanStarts == 5 && fake.scanListener != null })
+        assertTrue(events.stopped.isEmpty())
+        assertTrue(radio.running)
+    }
+
+    @Test
+    fun onAndroid10And11TheScanNeverStartsAgainFromTheBackground() {
+        // Android 10 and 11, played here: a scan started from the background hears nothing, because
+        // the location permission is "while in use".
+        radio.scanNeedsAppInFront = true
+        var inFront = true
+        radio.appInFront = { inFront }
+        var now = BleProtocol.windowStartMillis(2990520L) + 30_000L
+        radio.clock = { now }
+        val source = Source(payload(1))
+        showApp()
+        radio.start(config(untilEpochMillis = now + 3_600_000L), source, Events())
+        assertTrue(waitFor { fake.advertising != null })
+        assertEquals(1, fake.scanStarts)
+
+        // In the background, new windows and a failed scan start nothing.
+        inFront = false
+        now = BleProtocol.windowStartMillis(2990521L) + 5L
+        source.payload = payload(2)
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(payload(2)) == true })
+        onMain { fake.scanListener!!.onScanFailed() }
+        now = BleProtocol.windowStartMillis(2990522L) + 5L
+        source.payload = payload(3)
+        radio.refresh()
+        assertTrue(waitFor { fake.advertising?.contentEquals(payload(3)) == true })
+        instrumentation.waitForIdleSync()
+        assertEquals(1, fake.scanStarts)
+
+        // The app comes to the front: the failed scan starts again at once.
+        inFront = true
+        radio.resumeDeferred()
+        assertTrue(waitFor { fake.scanStarts == 2 })
+        // And in front, a new window restarts it as everywhere else.
+        now = BleProtocol.windowStartMillis(2990523L) + 5L
+        source.payload = payload(4)
+        radio.refresh()
+        assertTrue(waitFor { fake.scanStarts == 3 })
+    }
+
+    @Test
+    fun aStickyRestartInTheBackgroundOnAndroid10And11AsksToOpenTheApp() {
+        radio.scanNeedsAppInFront = true
+        var inFront = false
+        radio.appInFront = { inFront }
+        val events = Events()
+        AndroidBleRadio.onSystemRestart = { radio.start(config(), Source(payload(9)), events) }
+        // Android lets the test start a foreground service only with the app shown; the restart is
+        // still taken to be in the background, which is what appInFront says.
+        showApp()
+        context.startForegroundService(Intent(context, BleRadioService::class.java))
+        assertTrue(waitFor { fake.advertising != null })
+        assertTrue(waitFor { ongoingText() == "Open Caddie to keep listening" })
+        assertEquals(1, fake.scanStarts)
+
+        // The person opens the app: the scan starts again, now with location access, and the
+        // notification says what it always says.
+        inFront = true
+        radio.resumeDeferred()
+        assertTrue(waitFor { fake.scanStarts == 2 })
+        assertTrue(waitFor { ongoingText() == TEXT })
+        assertTrue(events.stopped.isEmpty())
+    }
+
+    @Test
+    fun aBriefEncounterWakesThePhoneForTheReport() {
+        val wakeups = FakeBleWakeups()
+        radio.wakeups = wakeups
+        var now = BleProtocol.windowStartMillis(2990520L) + 30_000L
+        radio.clock = { now }
+        val events = Events()
+        showApp()
+        radio.start(config(untilEpochMillis = now + 3_600_000L), Source(payload(1)), events)
+        assertTrue(waitFor { fake.advertising != null })
+        // The window's own alarm is set as before.
+        assertTrue(waitFor { wakeups.alarms.containsKey(TICK_ACTION) })
+
+        // A phone walks by: the runtime has a sighting and will report it in 45 seconds, by the
+        // radio's clock. The alarm is set for then on the clock that counts while the phone sleeps.
+        val before = SystemClock.elapsedRealtime()
+        radio.keepAwakeUntil(now + 45_000L)
+        assertTrue(waitFor { wakeups.alarms.containsKey(REPORT_ACTION) })
+        val at = wakeups.alarms.getValue(REPORT_ACTION)
+        assertTrue("at $at, asked at $before", at in before + 45_000L..SystemClock.elapsedRealtime() + 45_000L)
+        assertEquals(0, events.reportsDue.get())
+
+        // The alarm fires (sent here as the alarm manager would): the runtime hears that the report
+        // is due, and the phone is kept awake for a short while so the upload can finish.
+        context.sendBroadcast(Intent(REPORT_ACTION).setPackage(context.packageName))
+        assertTrue(waitFor { events.reportsDue.get() == 1 })
+        assertEquals(listOf(15_000L), wakeups.holds.toList())
+        assertTrue(wakeups.held)
+
+        // A report due in the past wakes at once.
+        val past = SystemClock.elapsedRealtime()
+        radio.keepAwakeUntil(now - 1_000L)
+        assertTrue(waitFor { (wakeups.alarms[REPORT_ACTION] ?: Long.MAX_VALUE) <= SystemClock.elapsedRealtime() })
+        assertTrue(wakeups.alarms.getValue(REPORT_ACTION) >= past)
+
+        // Stopping cancels both alarms and lets the phone sleep.
+        radio.stop()
+        assertTrue(waitFor { !serviceRunning() })
+        assertFalse(wakeups.held)
+        assertTrue(wakeups.releases >= 1)
+        assertTrue(wakeups.alarms.isEmpty())
+        // Nothing asks for a report once stopped.
+        radio.keepAwakeUntil(now + 45_000L)
+        instrumentation.waitForIdleSync()
+        assertTrue(wakeups.alarms.isEmpty())
+    }
+
+    @Test
+    fun theReportAlarmAndWakeLockAreRealOnes() {
+        // The real alarm manager and power manager, seen through dumpsys: the alarm is a wake-up alarm
+        // of the app's own broadcast, and the wake lock is held after it fires and let go at the stop.
+        val events = Events()
+        startRunning(Source(payload(1)), events)
+        radio.keepAwakeUntil(radio.clock() + 600_000L)
+        // "*walarm*" marks a wake-up alarm; the tag of a broadcast alarm is its action.
+        val tag = "tag=*walarm*:$REPORT_ACTION"
+        assertTrue(waitFor { tag in pendingAlarms() })
+        assertFalse("not held before the alarm fires", WAKE_LOCK_TAG in heldWakeLocks())
+        context.sendBroadcast(Intent(REPORT_ACTION).setPackage(context.packageName))
+        assertTrue(waitFor { events.reportsDue.get() == 1 })
+        assertTrue(waitFor { WAKE_LOCK_TAG in heldWakeLocks() })
+        radio.stop()
+        assertTrue(waitFor { !serviceRunning() })
+        assertTrue(waitFor { WAKE_LOCK_TAG !in heldWakeLocks() })
+        assertTrue(waitFor { tag !in pendingAlarms() })
+    }
+
+    /** The wake locks dumpsys power lists as held now (its section of them, which ends at the first blank line). */
+    private fun heldWakeLocks(): String =
+        shell("dumpsys power").substringAfter("Wake Locks:", "").substringBefore("\n\n")
+
+    /** The alarms dumpsys alarm lists as pending: everything before its statistics and its history of removed alarms. */
+    private fun pendingAlarms(): String {
+        val all = shell("dumpsys alarm")
+        val end = listOf("LazyAlarmStore stats", "Pending user blocked", "Removal history", "Top Alarms", "Alarm Stats")
+            .map { all.indexOf(it) }
+            .filter { it >= 0 }
+            .minOrNull() ?: all.length
+        return all.substring(0, end)
+    }
+
+    @Test
+    fun theLocationSwitchOnAndroid8To11() {
+        // Android 8 to 11, played by the fake: with the Location switch off a scan hears nothing.
+        fake.locationOff = true
+        assertEquals(BleRadioState.LocationOff, radio.state())
+        val refused = Events()
+        showApp()
+        radio.start(config(), Source(payload(1)), refused)
+        assertTrue(waitFor { refused.stopped.isNotEmpty() })
+        assertEquals(listOf(BleStopReason.LocationOff), refused.stopped.toList())
+        assertTrue(waitFor { !serviceRunning() })
+
+        // Switched off while running: the service stops with LocationOff. A change that leaves it on
+        // changes nothing.
+        fake.locationOff = false
+        assertEquals(BleRadioState.Ready, radio.state())
+        val events = Events()
+        startRunning(Source(payload(1)), events)
+        onMain { fake.onLocationChange!!() }
+        Thread.sleep(300)
+        assertTrue(events.stopped.isEmpty())
+        fake.locationOff = true
+        onMain { fake.onLocationChange!!() }
+        assertTrue(waitFor { events.stopped.isNotEmpty() })
+        assertEquals(listOf(BleStopReason.LocationOff), events.stopped.toList())
+        assertTrue(waitFor { !serviceRunning() })
+        assertTrue(fake.idle)
+    }
+
+    @Test
+    fun aForceStopCountsOnce() {
+        val prefs = context.getSharedPreferences("caddie_ble_radio", Context.MODE_PRIVATE)
+        val saved = prefs.all["exits_checked_at"] as Long?
+        var exits = listOf<BleProcessExit>()
+        radio.processExits = { exits }
+        try {
+            prefs.edit().remove("exits_checked_at").commit()
+            // Never looked before: the newest end there is counts.
+            exits = listOf(BleProcessExit(2_000L, userRequested = false), BleProcessExit(1_000L, userRequested = true))
+            assertFalse("the newest end was not the person's", radio.takeUserStoppedApp())
+            exits = listOf(BleProcessExit(3_000L, userRequested = true)) + exits
+            assertTrue(radio.takeUserStoppedApp())
+            assertFalse("reading it clears it", radio.takeUserStoppedApp())
+            // A force stop followed by another end (the system ended the reopened app) is not the newest.
+            exits = listOf(BleProcessExit(5_000L, userRequested = false), BleProcessExit(4_000L, userRequested = true)) + exits
+            assertFalse(radio.takeUserStoppedApp())
+            exits = listOf(BleProcessExit(6_000L, userRequested = true)) + exits
+            assertTrue(radio.takeUserStoppedApp())
+            assertFalse(radio.takeUserStoppedApp())
+            // The activity manager failing says nothing.
+            radio.processExits = { throw IllegalStateException("no answer (test)") }
+            assertFalse(radio.takeUserStoppedApp())
+
+            // The first run of the radio starts the count: a force stop from before it does not count.
+            prefs.edit().remove("exits_checked_at").commit()
+            val startedAt = System.currentTimeMillis()
+            startRunning(Source(payload(1)), Events())
+            radio.processExits = { listOf(BleProcessExit(startedAt - 60_000L, userRequested = true)) }
+            assertFalse(radio.takeUserStoppedApp())
+            radio.processExits = { listOf(BleProcessExit(System.currentTimeMillis() + 1_000L, userRequested = true)) }
+            assertTrue(radio.takeUserStoppedApp())
+        } finally {
+            val editor = prefs.edit().remove("exits_checked_at")
+            if (saved != null) editor.putLong("exits_checked_at", saved)
+            editor.commit()
+        }
+    }
+
+    @Test
+    fun otherAppleAdvertisementsAreNeverConnectedTo() {
+        val events = Events()
+        startRunning(Source(payload(1)), events)
+        onMain {
+            fake.scanListener!!.onAdvertisements(
+                listOf(
+                    // AirPods, a watch or an iPhone's routine advertisement: Apple data of another type.
+                    ad("AA:00:00:00:00:21", -40, appleData = byteArrayOf(0x10, 0x05, 0x01)),
+                    ad("AA:00:00:00:00:22", -45, appleData = byteArrayOf(0x07, 0x19)),
+                    ad("AA:00:00:00:00:23", -50, appleData = byteArrayOf()),
+                ),
+            )
+        }
+        instrumentation.waitForIdleSync()
+        Thread.sleep(300)
+        assertTrue(fake.interrogated.isEmpty())
+        // The overflow area still is.
+        onMain { fake.scanListener!!.onAdvertisements(listOf(ad("AA:00:00:00:00:24", -60, appleData = byteArrayOf(0x01, 0, 0)))) }
+        assertTrue(waitFor { fake.interrogated.toList() == listOf("AA:00:00:00:00:24") })
+    }
+
+    @Test
+    fun aDismissedNotificationComesBack() {
+        val events = Events()
+        startRunning(Source(payload(1)), events)
+        assertTrue(waitFor { ongoing() != null })
+        val first = ongoingPostTime()
+        val deleted = ongoing()!!.deleteIntent
+        assertNotNull("Android 14 and newer let the person swipe it away; the service hears of it", deleted)
+        Thread.sleep(50)
+        deleted.send()
+        assertTrue(waitFor { ongoingPostTime() > first })
+        assertEquals(TEXT, ongoingText())
+        assertTrue(serviceInForeground())
+        assertTrue(events.stopped.isEmpty())
+    }
+
+    private fun ongoingText(): String? = ongoing()?.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+
+    private fun ongoingPostTime(): Long =
+        notifications.activeNotifications.firstOrNull { it.id == ONGOING_ID && it.packageName == context.packageName }?.postTime ?: 0L
 
     @Test
     fun serviceDataIsReportedAndAnIPhoneIsReadOverGatt() {
@@ -794,5 +1173,21 @@ class BleServiceLifecycleTest {
 
         /** BleRadioService.ACTION_STOP, internal to the shared module. */
         const val STOP_ACTION = "app.conferencecaddie.ble.STOP"
+
+        /** BleRadioService.ACTION_TICK and ACTION_REPORT_DUE, internal to the shared module. */
+        const val TICK_ACTION = "app.conferencecaddie.ble.TICK"
+        const val REPORT_ACTION = "app.conferencecaddie.ble.REPORT_DUE"
+
+        /** AndroidBleWakeups' wake lock. */
+        const val WAKE_LOCK_TAG = "caddie:bluetooth-report"
+
+        /** BleRadioNotification.TEXT. */
+        const val TEXT = "Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth."
+
+        /** Addresses of devices connected to this phone's GATT server. */
+        const val PHONE = "5A:00:00:00:00:01"
+        const val OTHER_PHONE = "5A:00:00:00:00:02"
+        const val THIRD_PHONE = "5A:00:00:00:00:03"
+        const val WATCH = "C0:00:00:00:00:09"
     }
 }

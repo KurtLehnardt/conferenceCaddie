@@ -1,7 +1,5 @@
 package app.conferencecaddie.shared.ble
 
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -30,13 +28,30 @@ import java.util.UUID
  * calls [AndroidBleRadio.refresh] then; the service does it by itself as well, because the runtime's
  * timers may not run while the phone sleeps.
  *
+ * **One token per connection.** A phone that stayed connected to the GATT server across a window
+ * change could read two tokens over one link and tie them together, which rotation is there to
+ * prevent. Each connection is served only the payload it read first ([BleTokenReaders]); a read of
+ * another is refused, and whenever the payload changes the connections that read an earlier one are
+ * ended. Devices that never read the token (a watch bonded to this phone) are left alone.
+ *
  * **Clocks.** The window boundary and the session's end ([BleRadioConfig.untilEpochMillis]) are
  * kept on the elapsed-realtime clock, which keeps counting while the phone sleeps; a Handler alone
  * counts uptime and would let a sleeping phone advertise past its presence. A Handler acts on time
  * while the phone is awake, every scan callback checks both whenever it runs, and an inexact
- * allow-while-idle alarm wakes the phone for the next one. The alarm needs no exact-alarm permission
- * and may come some minutes late in Doze; the payload of a late window is still accepted by the
- * server, which resolves the windows before and after the current one.
+ * allow-while-idle alarm ([BleWakeups]) wakes the phone for the next one. The alarm needs no
+ * exact-alarm permission and may come some minutes late in Doze; the payload of a late window is
+ * still accepted by the server, which resolves the windows before and after the current one. The
+ * runtime's next report ([AndroidBleRadio.keepAwakeUntil]) gets an alarm of its own, which calls
+ * [BleRadioEvents.onReportDue] and holds a partial wake lock for [REPORT_AWAKE_MS], so the report can
+ * go out before the phone sleeps again.
+ *
+ * **Scanning.** The scan starts again at a refresh when it failed, and at every new window anyway,
+ * because Android turns a scan that has run for 30 minutes into an opportunistic one that only hears
+ * what other apps' scans hear. On Android 10 and 11 a scan gets results only while the app is in
+ * front (the location permission there is "while in use", and a `connectedDevice` service has no
+ * location access of its own), so there it is never started again from the background, and after a
+ * sticky restart in the background the notification says "Open Caddie to keep listening" until an
+ * activity starts ([appCameToFront]), which starts the scan again.
  *
  * **Stopping.** The service stops for good at the session's end ([BleStopReason.System]), when
  * Bluetooth is switched off, when the Stop action is tapped, when advertising fails or a permission
@@ -58,6 +73,9 @@ import java.util.UUID
  * session and calls [AndroidBleRadio.start] again. If nothing has started it after
  * [AndroidBleRadio.restartGraceMillis], it stops.
  *
+ * **The notification.** Android 14 and newer let the person swipe the ongoing notification away,
+ * which would hide the Stop action; while the service runs it is posted again.
+ *
  * Declared in the application's manifest with `foregroundServiceType="connectedDevice"`, not
  * exported. Nothing here logs an address, a payload or a token.
  */
@@ -66,6 +84,7 @@ class BleRadioService : Service() {
 
     private var radio: AndroidBleRadio? = null
     private var hardware: BleHardware? = null
+    private var wakeups: BleWakeups? = null
 
     /** The session being run, or null before the first and after a stop. Read from a GATT binder thread too. */
     @Volatile private var active: AndroidBleRadio.Session? = null
@@ -79,37 +98,52 @@ class BleRadioService : Service() {
     private var deadlineElapsed = Long.MAX_VALUE
     private var leaving = false
 
+    /** The scan runs: it started and has not failed since. */
+    private var scanning = false
+
+    /**
+     * Android 10 and 11: the system restarted the service while the app was not in front, so the scan
+     * may hear nothing until the app is opened, and the notification says so.
+     */
+    private var needsAppToListen = false
+
+    /** The connections that read the token, and which payload each was served; read from a GATT binder thread too. */
+    private val readers = BleTokenReaders()
+
     private val tick = Runnable { onTick() }
     private val pump = Runnable { interrogateNext() }
     private val graceStop = Runnable { if (active == null) stopQuietly() }
     private val advertiseRetry = Runnable { retryAdvertising() }
 
-    private val tickReceiver = object : BroadcastReceiver() {
+    /** The app's own broadcasts to the running service: its alarms and the notification's dismissal. */
+    private val receiver = object : BroadcastReceiver() {
         // The alarm manager holds a wake lock until this returns, so the steps it takes complete.
-        override fun onReceive(context: Context, intent: Intent) = onTick()
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                ACTION_TICK -> onTick()
+                ACTION_REPORT_DUE -> onReportDue()
+                ACTION_NOTIFICATION_DELETED -> onNotificationDeleted()
+            }
+        }
     }
 
-    private val alarms by lazy { getSystemService(AlarmManager::class.java) }
+    /**
+     * Answers reads of the token characteristic, from a binder thread, with the payload of the window
+     * now, once per connection ([BleTokenReaders]).
+     */
+    private val reader = object : BleCharacteristicReader {
+        override fun read(device: String, offset: Int): BleGattAnswer = readers.answer(device, offset, payloadNow(active))
 
-    /** A broadcast to [tickReceiver]; once the process is gone it reaches nothing. */
-    private val tickAlarm: PendingIntent by lazy {
-        PendingIntent.getBroadcast(
-            this,
-            3,
-            Intent(ACTION_TICK).setPackage(packageName),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        override fun disconnected(device: String) = readers.disconnected(device)
     }
-
-    /** Answers reads of the token characteristic, from a binder thread, with the payload of the window now. */
-    private val reader = BleCharacteristicReader { offset -> BleGattAnswer.of(payloadNow(active), offset) }
 
     private val scanListener = object : BleScanListener {
         override fun onAdvertisements(advertisements: List<BleAdvertisement>) = heard(advertisements)
 
         override fun onScanFailed() {
             // Advertising and the GATT server keep going without the scan: other phones can still
-            // find this one, as in the Capacitor app.
+            // find this one, as in the Capacitor app. The next refresh starts it again.
+            scanning = false
         }
     }
 
@@ -118,14 +152,12 @@ class BleRadioService : Service() {
     override fun onCreate() {
         super.onCreate()
         BleRadioNotification.ensureChannel(this)
-        val filter = IntentFilter(ACTION_TICK)
-        // Not exported from Android 13 on, where the flag exists. Before, another app could send the
-        // broadcast too, but it only makes the service look at its clocks.
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(tickReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(tickReceiver, filter)
+        val filter = IntentFilter().apply {
+            addAction(ACTION_TICK)
+            addAction(ACTION_REPORT_DUE)
+            addAction(ACTION_NOTIFICATION_DELETED)
         }
+        registerNotExported(receiver, filter)
         // Not attached to the radio yet: onStartCommand attaches once the service is in the
         // foreground, so nothing the radio posts in between can stop it before startForeground.
     }
@@ -193,9 +225,12 @@ class BleRadioService : Service() {
                 // The hook creates the process's people features, or finds them when they exist.
                 AndroidBleRadio.onSystemRestart?.invoke(applicationContext)
                 val r = AndroidBleRadio.existing()?.also { attachTo(it) }
+                // Android 10 and 11: restarted with the app in the background, the scan may hear
+                // nothing until the app is opened, and the notification asks for that.
+                needsAppToListen = r != null && r.scanNeedsAppInFront && !r.appInFront()
                 // The notification went up before the radio existed, with the application's icon:
-                // shown again with the radio's monochrome one.
-                if (r != null && r.notificationIcon != icon) enterForeground()
+                // shown again with the radio's monochrome one (and the words of the moment).
+                if (r != null && (r.notificationIcon != icon || needsAppToListen)) enterForeground()
                 val s = r?.session
                 if (s != null) {
                     apply(s)
@@ -216,9 +251,8 @@ class BleRadioService : Service() {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
-        alarms.cancel(tickAlarm)
         try {
-            unregisterReceiver(tickReceiver)
+            unregisterReceiver(receiver)
         } catch (e: IllegalArgumentException) {
             // Not registered.
         }
@@ -238,7 +272,7 @@ class BleRadioService : Service() {
     /** Starts the foreground state (or shows its notification again); returns why it was refused, or null. */
     private fun enterForeground(): BleStopReason? {
         val icon = (radio ?: AndroidBleRadio.existing())?.notificationIcon ?: applicationInfo.icon
-        val notification = BleRadioNotification.build(this, icon)
+        val notification = BleRadioNotification.build(this, icon, openToListen = needsAppToListen)
         return try {
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(BleRadioNotification.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
@@ -265,6 +299,7 @@ class BleRadioService : Service() {
         main.removeCallbacks(graceStop)
         val previous = active
         val hw = hardware ?: r.hardware
+        if (wakeups == null) wakeups = r.wakeups
         val now = r.clock()
         deadlineElapsed = SystemClock.elapsedRealtime() + (s.config.untilEpochMillis - now)
         active = s
@@ -272,6 +307,7 @@ class BleRadioService : Service() {
             s.config.untilEpochMillis <= now -> BleStopReason.System
             !hw.enabled() -> BleStopReason.BluetoothOff
             !hw.extendedAdvertisingSupported() -> BleStopReason.Unsupported
+            hw.locationOff() -> BleStopReason.LocationOff
             else -> null
         }
         if (reason != null) {
@@ -285,8 +321,14 @@ class BleRadioService : Service() {
         if (previous == null || hardware == null) {
             hardware = hw
             hw.watchAdapter { active?.let { finish(it, BleStopReason.BluetoothOff) } }
+            // Android 8 to 11: with the Location switch off a scan hears nothing.
+            hw.watchLocation { if (hardware?.locationOff() == true) active?.let { finish(it, BleStopReason.LocationOff) } }
         }
-        if (previous == null || !sameUuids) {
+        // Only where the legacy connectable set is offered: before Android 14 nothing could reach the
+        // server but this phone's own connections, through which the peer can read the phone's name.
+        if ((previous == null || !sameUuids) && hw.connectableAdvertising()) {
+            // A new server has no connections yet.
+            readers.clear()
             // Without the GATT server only phones that receive extended advertisements find this one;
             // that is still worth running, so only a missing permission or Bluetooth off end it.
             when (hw.openGattServer(serviceUuid, characteristicUuid, reader)) {
@@ -296,13 +338,7 @@ class BleRadioService : Service() {
             }
         }
         if (!advertise(s)) return
-        if (previous == null || !sameUuids) {
-            when (hw.startScan(serviceUuid, scanListener)) {
-                BleHardwareStatus.NoPermission -> return finish(s, BleStopReason.PermissionLost)
-                BleHardwareStatus.Off -> return finish(s, BleStopReason.BluetoothOff)
-                else -> Unit
-            }
-        }
+        if ((previous == null || !sameUuids) && !scan(s)) return
         if (previous == null || previous.config.nearRssi != s.config.nearRssi || !sameUuids) {
             hw.cancelInterrogation()
             interrogation = BleInterrogation(s.config.nearRssi)
@@ -319,12 +355,42 @@ class BleRadioService : Service() {
         // already carry the payload of now, restarting them again a moment later gains nothing and
         // races the stack's pending starts, so only a new payload (a new window or a new key)
         // restarts them.
+        val window = BleProtocol.windowAtMillis(r.clock())
         val payload = payloadNow(s)
-        if (payload != null && payload.contentEquals(advertisedPayload) && advertisedWindow == BleProtocol.windowAtMillis(r.clock())) {
+        if (payload != null && payload.contentEquals(advertisedPayload) && advertisedWindow == window) {
             arm()
             return
         }
-        if (advertise(s, mayRetry = true)) arm()
+        val newWindow = window != advertisedWindow
+        if (advertise(s, mayRetry = true) && rescan(s, newWindow)) arm()
+    }
+
+    /**
+     * The runtime's next report is due at [epochMillis]: an alarm wakes the phone then, so a report
+     * whose own timer cannot run while the phone sleeps still goes out ([onReportDue]).
+     */
+    internal fun reportDueAt(epochMillis: Long) {
+        val r = radio ?: return
+        if (leaving || active == null) return
+        val at = SystemClock.elapsedRealtime() + (epochMillis - r.clock()).coerceAtLeast(0L)
+        wakeups?.setAlarm(ACTION_REPORT_DUE, at)
+    }
+
+    /**
+     * An activity of the app started. On Android 10 and 11 a scan started from the background may
+     * hear nothing, so one started after a sticky restart, or one that failed meanwhile, starts again
+     * now, and the notification stops asking to open the app.
+     */
+    internal fun appCameToFront() {
+        val r = radio ?: return
+        if (leaving) return
+        val waited = needsAppToListen
+        if (waited) {
+            needsAppToListen = false
+            enterForeground()
+        }
+        val s = active ?: return
+        if (r.scanNeedsAppInFront && (waited || !scanning)) scan(s)
     }
 
     /** [AndroidBleRadio.stop]: ends everything without telling the runtime, which asked for it. */
@@ -348,6 +414,10 @@ class BleRadioService : Service() {
         main.removeCallbacks(advertiseRetry)
         advertisedWindow = BleProtocol.windowAtMillis(r.clock())
         val payload = payloadNow(s)
+        // A connection that read another payload (an earlier window, or the key before) must not stay
+        // connected into this one: its reads are refused already, and it is ended here.
+        val stale = readers.servedOtherThan(payload)
+        if (stale.isNotEmpty()) hw.disconnectGattClients(stale)
         if (payload == null) {
             // No key (it is being replaced, or it is gone): advertise nothing rather than a stale
             // payload, and keep listening. The runtime refreshes or stops the radio.
@@ -396,6 +466,44 @@ class BleRadioService : Service() {
         if (advertise(s, mayRetry = false)) arm()
     }
 
+    /** Starts (or restarts) the scan for [s]; returns false when the session has stopped because of it. */
+    private fun scan(s: AndroidBleRadio.Session): Boolean {
+        val hw = hardware ?: return false
+        return when (hw.startScan(UUID.fromString(s.config.serviceUuid), scanListener)) {
+            BleHardwareStatus.Ok -> {
+                scanning = true
+                true
+            }
+            BleHardwareStatus.NoPermission -> {
+                finish(s, BleStopReason.PermissionLost)
+                false
+            }
+            BleHardwareStatus.Off -> {
+                finish(s, BleStopReason.BluetoothOff)
+                false
+            }
+            // Advertising and the GATT server go on without it; the next refresh tries again.
+            BleHardwareStatus.Failed -> {
+                scanning = false
+                true
+            }
+        }
+    }
+
+    /**
+     * At a refresh: starts the scan again when it is not running, and at every [newWindow] anyway,
+     * because Android turns a scan that has run for 30 minutes into an opportunistic one. Never from
+     * the background where the scan needs the app in front (Android 10 and 11): a scan started there
+     * hears nothing, while one started with the app in front keeps hearing. Returns false when the
+     * session has stopped because of it.
+     */
+    private fun rescan(s: AndroidBleRadio.Session, newWindow: Boolean): Boolean {
+        val r = radio ?: return false
+        if (scanning && !newWindow) return true
+        if (r.scanNeedsAppInFront && !r.appInFront()) return true
+        return scan(s)
+    }
+
     /** The session's payload now, or null; a failing key store must not take the service down. */
     private fun payloadNow(s: AndroidBleRadio.Session?): ByteArray? {
         if (s == null) return null
@@ -425,6 +533,12 @@ class BleRadioService : Service() {
                 continue
             }
             val kind = BleInterrogation.kindOf(ad.advertisesService, null, ad.appleData, ad.connectable) ?: continue
+            // Other Apple advertisements come far more often from AirPods, watches and Macs than from
+            // a Caddie phone, and every connection this phone makes lets the peer read its name (the
+            // GAP Device Name is readable by the central's peer on every Android version): only the
+            // service UUID and the iOS overflow area are worth one. The scan filter already drops
+            // most of them.
+            if (kind == BleInterrogation.Kind.Apple) continue
             policy?.offer(ad.address, ad.rssi, kind, now)
         }
         interrogateNext()
@@ -477,6 +591,22 @@ class BleRadioService : Service() {
         if (BleProtocol.windowAtMillis(r.clock()) != advertisedWindow) refresh() else arm()
     }
 
+    /** The report alarm ([reportDueAt]): the phone is awake for a moment, long enough for the runtime's report. */
+    private fun onReportDue() {
+        val s = active ?: return
+        if (leaving || pastDeadline(s)) return
+        // The alarm manager's wake lock ends when the receiver returns; the report goes out over the
+        // network after that, so the phone is kept awake a little longer. The hold ends by itself.
+        wakeups?.holdAwake(REPORT_AWAKE_MS)
+        s.events.onReportDue()
+    }
+
+    /** The person swiped the ongoing notification away (Android 14 and newer allow it): posted again while the service runs. */
+    private fun onNotificationDeleted() {
+        if (leaving) return
+        enterForeground()
+    }
+
     /** Stops the session with [BleStopReason.System] and returns true when its end has passed. */
     private fun pastDeadline(s: AndroidBleRadio.Session): Boolean {
         if (SystemClock.elapsedRealtime() < deadlineElapsed) return false
@@ -496,7 +626,7 @@ class BleRadioService : Service() {
         val nextWindow = elapsed + (BleProtocol.windowStartMillis(BleProtocol.windowAtMillis(now) + 1) - now)
         val next = minOf(nextWindow, deadlineElapsed)
         main.postDelayed(tick, (next - elapsed).coerceAtLeast(0L))
-        alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, next, tickAlarm)
+        wakeups?.setAlarm(ACTION_TICK, next)
     }
 
     /** Stops for [reason] and tells the runtime, if [s] is still its session. */
@@ -514,18 +644,42 @@ class BleRadioService : Service() {
         main.removeCallbacks(pump)
         main.removeCallbacks(graceStop)
         main.removeCallbacks(advertiseRetry)
-        alarms.cancel(tickAlarm)
+        wakeups?.let { w ->
+            w.cancelAlarm(ACTION_TICK)
+            w.cancelAlarm(ACTION_REPORT_DUE)
+            w.releaseAwake()
+        }
+        wakeups = null
         hardware?.let { hw ->
             hw.cancelInterrogation()
             hw.stopScan()
             hw.stopAdvertising()
             hw.closeGattServer()
             hw.unwatchAdapter()
+            hw.unwatchLocation()
         }
         hardware = null
+        readers.clear()
+        scanning = false
         advertisedWindow = Long.MIN_VALUE
         advertisedPayload = null
         deadlineElapsed = Long.MAX_VALUE
+    }
+
+    /**
+     * Registers [receiver] for broadcasts from this app only, as ContextCompat.registerReceiver does
+     * with RECEIVER_NOT_EXPORTED: with the flag from Android 13 on, and before that behind the
+     * signature permission that AndroidX Core and the app's manifest declare for this purpose, which
+     * only an app signed with the app's key can hold. The alarms and the notification's dismissal are
+     * PendingIntents of the app, sent with its identity, so they get through; no other app can make
+     * the service act.
+     */
+    private fun registerNotExported(receiver: BroadcastReceiver, filter: IntentFilter) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter, "$packageName$NOT_EXPORTED_PERMISSION", null)
+        }
     }
 
     private fun leave() {
@@ -540,7 +694,22 @@ class BleRadioService : Service() {
         internal const val ACTION_STOP = "app.conferencecaddie.ble.STOP"
 
         /** The wake-up alarm's broadcast, received only by a running service. */
-        private const val ACTION_TICK = "app.conferencecaddie.ble.TICK"
+        internal const val ACTION_TICK = "app.conferencecaddie.ble.TICK"
+
+        /** The report alarm's broadcast ([AndroidBleRadio.keepAwakeUntil]), received only by a running service. */
+        internal const val ACTION_REPORT_DUE = "app.conferencecaddie.ble.REPORT_DUE"
+
+        /** The ongoing notification was swiped away. */
+        internal const val ACTION_NOTIFICATION_DELETED = "app.conferencecaddie.ble.NOTIFICATION_DELETED"
+
+        /** The suffix (after the application id) of the signature permission behind the receiver before Android 13. */
+        private const val NOT_EXPORTED_PERMISSION = ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+
+        /**
+         * How long the phone stays awake after the report alarm: enough for the runtime to send one
+         * report over a slow network, short enough that a phone in a pocket barely notices it.
+         */
+        internal const val REPORT_AWAKE_MS = 15_000L
 
         /** A connection that has not read the characteristic by then is given up. */
         private const val INTERROGATION_TIMEOUT_MS = 5_000L

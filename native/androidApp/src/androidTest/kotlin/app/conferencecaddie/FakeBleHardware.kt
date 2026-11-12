@@ -19,7 +19,10 @@ class FakeBleHardware : BleHardware {
     @Volatile var present = true
     @Volatile var enabled = true
     @Volatile var extended = true
+    @Volatile var connectable = true
+    @Volatile var locationOff = false
     @Volatile var advertiseStatus = BleHardwareStatus.Ok
+    @Volatile var scanStatus = BleHardwareStatus.Ok
 
     /** Every payload advertising was started with, in order. */
     val advertised = CopyOnWriteArrayList<ByteArray>()
@@ -36,10 +39,14 @@ class FakeBleHardware : BleHardware {
     @Volatile var gattUuids: Pair<UUID, UUID>? = null
     @Volatile var gattOpens = 0
 
+    /** Every device whose connection the service ended, in order. */
+    val disconnectedClients = CopyOnWriteArrayList<String>()
+
     @Volatile var scanListener: BleScanListener? = null
     @Volatile var scanStarts = 0
 
     @Volatile var onAdapterOff: (() -> Unit)? = null
+    @Volatile var onLocationChange: (() -> Unit)? = null
 
     /** Every address the service connected to, in order. */
     val interrogated = CopyOnWriteArrayList<String>()
@@ -50,6 +57,18 @@ class FakeBleHardware : BleHardware {
     override fun enabled() = enabled
 
     override fun extendedAdvertisingSupported() = extended
+
+    override fun connectableAdvertising() = connectable
+
+    override fun locationOff() = locationOff
+
+    override fun watchLocation(onChange: () -> Unit) {
+        onLocationChange = onChange
+    }
+
+    override fun unwatchLocation() {
+        onLocationChange = null
+    }
 
     override fun watchAdapter(onOff: () -> Unit) {
         onAdapterOff = onOff
@@ -81,14 +100,22 @@ class FakeBleHardware : BleHardware {
         return BleHardwareStatus.Ok
     }
 
+    override fun disconnectGattClients(devices: Collection<String>) {
+        disconnectedClients += devices
+    }
+
     override fun closeGattServer() {
         reader = null
         gattUuids = null
     }
 
     override fun startScan(serviceUuid: UUID, listener: BleScanListener): BleHardwareStatus {
-        scanListener = listener
         scanStarts++
+        if (scanStatus != BleHardwareStatus.Ok) {
+            scanListener = null
+            return scanStatus
+        }
+        scanListener = listener
         return BleHardwareStatus.Ok
     }
 
@@ -106,7 +133,9 @@ class FakeBleHardware : BleHardware {
     }
 
     /** Whether everything the service started is stopped again. */
-    val idle: Boolean get() = advertising == null && reader == null && scanListener == null && onAdapterOff == null && pendingRead == null
+    val idle: Boolean
+        get() = advertising == null && reader == null && scanListener == null && onAdapterOff == null && onLocationChange == null &&
+            pendingRead == null
 
     companion object {
         /** An advertisement as the scan would report it. */
