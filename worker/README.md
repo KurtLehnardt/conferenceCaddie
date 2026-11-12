@@ -307,12 +307,18 @@ answer 404, to a correctly signed request as to any other, before the conference
 run has every check, while against the deployed Worker the smoke prints SKIP, naming the variable,
 for the checks that need a fixture (`meter1`, the expired profile, the aged presence and `unav1`)
 instead of FAIL, once it sees that `GET /admin/stats` answers 200 with the same credentials. To
-run them against the deployed Worker, deploy once with the variable and once without:
-`cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1` (the app already built by an earlier
-`deploy.sh`), run the smoke, then `bash worker/scripts/deploy.sh` again, because every wrangler
-deploy replaces the Worker's variables with those of `wrangler.toml`. Never set it with
-`wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
-deleted it.
+run them against the deployed Worker, deploy once with the variable and once without: first run
+`bash worker/scripts/deploy.sh` once and stop if it refuses, because the direct `wrangler deploy`
+that follows skips its check of the Worker's secrets ([Signature v2](#signature-v2)) and the deploy
+that switches the routes off again would refuse for the same reason; then
+`cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1` (the app built by that `deploy.sh`),
+run the smoke, then `bash worker/scripts/deploy.sh` again, because every wrangler deploy replaces
+the Worker's variables with those of `wrangler.toml`. `docs/fork/TIER2_CLOUDFLARE.md` wraps the
+sequence in a `trap`. If that last `deploy.sh` refuses (a secret `ADMIN_SIG_MIN` or `ADMIN_ORIGIN`
+appeared in the meantime, or Cloudflare did not answer the check), the routes stay on: its message
+names the cause and the remedy; fix that, run it again, and check that `POST /admin/test/profile`
+answers 404. Never set it with `wrangler secret put`: a secret survives every deploy, so the
+fixtures would stay on until someone deleted it.
 
 The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
 redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like the Worker-side

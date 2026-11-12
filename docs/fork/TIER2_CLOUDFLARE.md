@@ -140,18 +140,19 @@ node scripts/smoke.mjs
 
 Four routes under `/admin/test/` (`POST` and `DELETE /admin/test/profile`, `POST /admin/test/age-presence` and `POST /admin/test/meter-restart`) exist only for the smoke test. They create expired profiles, age presence and restart the usage meter, which nobody should be able to do on a live conference. The Worker serves them only when its variable `ADMIN_TEST_ROUTES` is the string `"1"`. Otherwise they answer 404, even to a correctly signed request, before the conference is looked up. `worker/wrangler.toml` does not set the variable, and a local `wrangler dev` run sets it in `.dev.vars`, so a local run has every check, while against a deployed Worker the smoke prints SKIP for the checks that need a fixture (`meter1`, the expired profile, the aged presence and `unav1`).
 
-To run them against a deployed Worker, deploy once with the variable, run the smoke, and deploy again without it. Every `wrangler deploy` replaces the Worker's variables with those of `wrangler.toml`, so the second deploy switches the routes off again. Wrap the sequence in a `trap`, so that the routes are switched off again even if the smoke is interrupted or fails:
+To run them against a deployed Worker, deploy once with the variable, run the smoke, and deploy again without it. Every `wrangler deploy` replaces the Worker's variables with those of `wrangler.toml`, so the second deploy switches the routes off again. Start with one ordinary `bash worker/scripts/deploy.sh`, which builds the app and runs the check of the Worker's secrets that the direct `wrangler deploy --var` skips (`deploy.sh` refuses to deploy while `ADMIN_SIG_MIN` or `ADMIN_ORIGIN` is a secret of the Worker, or when it cannot read the list of secrets), and stop there if it refuses, so that the routes are never switched on when the deploy that switches them off would refuse. Then wrap the rest in a `trap`, so that the routes are switched off again even if the smoke is interrupted or fails:
 
 ```sh
 (
-  set -u
+  set -eu
+  bash worker/scripts/deploy.sh                  # the secrets check and the app build; nothing below runs if it refuses
   trap 'bash worker/scripts/deploy.sh' EXIT      # always redeploy without the variable, on success, failure or Ctrl-C
   (cd worker && npx wrangler deploy --var ADMIN_TEST_ROUTES:1)
   BASE_URL="$CADDIE_APP_URL" SMOKE_BUNDLE_BASE="$CADDIE_BUNDLE_BASE" ADMIN_TOKEN_FILE=~/.config/conference-caddie/admin-token node scripts/smoke.mjs
 )
 ```
 
-Never set `ADMIN_TEST_ROUTES` with `wrangler secret put`. A secret survives every deploy, so the fixtures would stay on until someone deleted it. Do not run this against a conference that is in use: while the routes are on, anyone who can sign admin requests (which means only you) can create expired profiles and restart the meter. If the trap's redeploy itself fails, run `bash worker/scripts/deploy.sh` again by hand and check that `POST /admin/test/profile` answers 404.
+Never set `ADMIN_TEST_ROUTES` with `wrangler secret put`. A secret survives every deploy, so the fixtures would stay on until someone deleted it. Do not run this against a conference that is in use: while the routes are on, anyone who can sign admin requests (which means only you) can create expired profiles and restart the meter. If the trap's redeploy itself fails, the routes stay on: it runs the same secrets check as every `deploy.sh`, so it can also refuse because a secret `ADMIN_SIG_MIN` or `ADMIN_ORIGIN` appeared in the meantime or because Cloudflare did not answer the check (a 5xx, or no answer). Its message names the cause and the remedy; fix that, run `bash worker/scripts/deploy.sh` again by hand, and check that `POST /admin/test/profile` answers 404.
 
 ## The admin key and how requests are signed
 
