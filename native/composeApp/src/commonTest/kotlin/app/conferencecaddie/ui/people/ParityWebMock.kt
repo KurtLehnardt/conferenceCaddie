@@ -1,5 +1,6 @@
 package app.conferencecaddie.ui.people
 
+import app.conferencecaddie.shared.bundle.Conference
 import app.conferencecaddie.shared.net.ApiHttp
 import app.conferencecaddie.shared.net.HttpResponse
 import app.conferencecaddie.ui.talks.TestBackend
@@ -11,6 +12,14 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.time.Instant
+import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atTime
+import kotlinx.datetime.plus
+import kotlinx.datetime.toInstant
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -87,6 +96,31 @@ internal object ParitySample {
     )
 
     fun talk(n: Int): SampleTalk = TALKS.first { it.n == n }
+
+    /**
+     * The instant the parity screenshots run at, from the summit's bundle as the app reads it: 09:00
+     * on its second day in its own zone, as TalkSmokeTest pins its checks. Talks 1 and 2 (the first
+     * day) have ended and every other talk is still to come, so For you, the ended-talk banners and
+     * the people features (which close after the last day) look the same whatever day the
+     * screenshots are taken. [ParityClockTest] holds the states to that.
+     */
+    fun pinnedNowMs(conference: Conference): Long {
+        val start = LocalDate.parse(conference.startDate ?: error("${conference.slug} has no start date"))
+        val zone = TimeZone.of(conference.timeZone ?: error("${conference.slug} has no time zone"))
+        return start.plus(1, DateTimeUnit.DAY).atTime(9, 0).toInstant(zone).toEpochMilliseconds()
+    }
+
+    /** The summit's bundle as [TestBackend] serves it, for the cameras, which have no rig. */
+    private val served: Conference by lazy {
+        TestBackend().also { it.publish(listOf(testConference())) }.bundleOf(testConference()).conference
+    }
+
+    /** The wall clock at [pinnedNowMs] in the summit's zone as `HHMM` ("0900"): what the Android shots' status bar shows. */
+    fun pinnedHhmm(): String {
+        val zone = TimeZone.of(served.timeZone ?: error("${served.slug} has no time zone"))
+        val wall = Instant.fromEpochMilliseconds(pinnedNowMs(served)).toLocalDateTime(zone)
+        return wall.hour.toString().padStart(2, '0') + wall.minute.toString().padStart(2, '0')
+    }
 
     private fun minutes(hhmm: String) = hhmm.substringBefore(':').toInt() * 60 + hhmm.substringAfter(':').toInt()
 
