@@ -140,7 +140,7 @@ class FakePeopleServerTest {
         val header = device ?: server.requests.last { it.header("X-Caddie-Device") != null }.header("X-Caddie-Device")!!
         val before = server.requests.size
         val r: HttpResponse = server.send(method, "https://caddie.test$path", mapOf("X-Caddie-Device" to header), body?.toString()?.encodeToByteArray(), 1000, 1_000_000)
-        while (server.requests.size > before) server.requests.removeAt(server.requests.size - 1)
+        server.forgetRequestsAfter(before)
         return r.status to (Json.parseToJsonElement(r.text()) as JsonObject)
     }
 

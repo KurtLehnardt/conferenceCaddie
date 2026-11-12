@@ -18,6 +18,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -129,34 +132,65 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     constructor(clock: () -> Long, vararg conferences: FakeConference) : this(clock, conferences.toList())
 
     private val conferences = conferences.associateBy { it.slug }
+
+    // The code under test sends from its own threads while the test reads the server from another,
+    // so the stored state below is only read and changed under this lock. Without it, a test that
+    // read the profiles while a delete removed one failed now and then (a NullPointerException
+    // inside me(), reported as a timeout). The lock is taken the same blocking way everywhere and
+    // never held across a suspension, so no waiter is a coroutine queued on a thread that is itself
+    // blocked waiting for it.
+    private val lock = Mutex()
+
+    private fun <T> locked(block: () -> T): T = runBlocking { lock.withLock { block() } }
+
+    /** Reads a stored field of a person under the lock, for [FakePerson]. */
+    internal fun <T> read(block: () -> T): T = locked(block)
+
     private val docs = ArrayList<Doc>()
     private val meets = ArrayList<Meet>()
     private val reports = ArrayList<Report>()
     private var counter = 0
 
-    /** Every request the code under test sent, oldest first (calls a [FakePerson] makes are not recorded). */
-    val requests = ArrayList<RecordedRequest>()
+    // Replaced as a whole under the lock, so a reader always holds a complete list.
+    @kotlin.concurrent.Volatile
+    private var log: List<RecordedRequest> = emptyList()
+
+    /**
+     * Every request the code under test sent, oldest first (calls a [FakePerson] makes are not
+     * recorded), as it is now: a copy that later requests do not change.
+     */
+    val requests: List<RecordedRequest> get() = log
+
+    /** Records [request] as sent, for a test's stand-in that answers it instead of the server. */
+    fun record(request: RecordedRequest) = locked { log = log + request }
+
+    /** Forgets the requests after the first [count], for calls a test sends as the device itself. */
+    fun forgetRequestsAfter(count: Int) = locked { log = log.take(count) }
 
     /** The mode every request meets; set it back to [FakeFailure.None] to recover. */
+    @kotlin.concurrent.Volatile
     var failure: FakeFailure = FakeFailure.None
 
     /** Sent as `X-Caddie-Pace` on every answer when set. */
+    @kotlin.concurrent.Volatile
     var pace: String? = null
 
     /** `ble.near_rssi`: weaker sightings resolve to nobody. */
     var nearRssi: Int = -75
 
     /** The native push platforms this server pushes to ("apns", "fcm"); empty answers 404 `push_unavailable`. */
+    @kotlin.concurrent.Volatile
     var pushPlatforms: Set<String> = emptySet()
 
     /** Lines containing one of these words (any case) are refused with 400 `filtered`. */
+    @kotlin.concurrent.Volatile
     var filterWords: Set<String> = setOf("badword")
 
     private var deleteFailures = 0
     private var deleteFailureStatus = 502
 
     /** The next [count] profile deletes answer [status] and delete nothing. */
-    fun failNextDeletes(count: Int, status: Int = 502) {
+    fun failNextDeletes(count: Int, status: Int = 502) = locked {
         deleteFailures = count
         deleteFailureStatus = status
     }
@@ -183,14 +217,13 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         }
     }
 
-    @kotlin.concurrent.Volatile
     private var holds: List<Hold> = emptyList()
 
     /**
      * Holds the next request with [method] to [path], and only that one, until [Hold.release]. For
      * tests of what happens when the screen that asked has gone by the time the answer comes.
      */
-    fun hold(method: String, path: String): Hold = Hold(method, path).also { holds = holds + it }
+    fun hold(method: String, path: String): Hold = Hold(method, path).also { locked { holds = holds + it } }
 
     /** The recorded requests with [method] to [path]. */
     fun requests(method: String, path: String): List<RecordedRequest> = requests.filter { it.method == method && it.path == path }
@@ -222,18 +255,22 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
         contactNote: String? = null,
     ): FakePerson {
         val conf = conferences.getValue(slug)
-        val d = newDoc(slug, seeded = true)
-        d.displayName = displayName
-        d.about = about
-        d.expertise = expertise
-        d.interests = interests
-        d.speak = speakTopics.filter { it in conf.topics }
-        d.learn = learnTopics.filter { it in conf.topics }
-        d.shared = sharedTalkIds
-        d.openToMeet = openToMeet
-        d.linkedin = linkedinUrl
-        d.contactNote = contactNote
-        docs += d
+        val d = locked {
+            newDoc(slug, seeded = true).also { d ->
+                d.displayName = displayName
+                d.about = about
+                d.expertise = expertise
+                d.interests = interests
+                d.speak = speakTopics.filter { it in conf.topics }
+                d.learn = learnTopics.filter { it in conf.topics }
+                d.shared = sharedTalkIds
+                d.openToMeet = openToMeet
+                d.linkedin = linkedinUrl
+                d.contactNote = contactNote
+                docs += d
+            }
+        }
+        // Outside the lock: going around is a call to the server, which takes it.
         val person = FakePerson(this, d)
         if (around != null) person.goAround(around, located = located)
         return person
@@ -247,16 +284,16 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     fun bleKeyId(person: FakePerson): String? = person.doc.bleKey?.let { keyIdOf(it) }
 
     /** The profile most recently created through the API at [slug] (the device under test), or null when there is none. */
-    fun me(slug: String): FakePerson? = docs.lastOrNull { it.slug == slug && !it.seeded }?.let { FakePerson(this, it) }
+    fun me(slug: String): FakePerson? = locked { docs.lastOrNull { it.slug == slug && !it.seeded } }?.let { FakePerson(this, it) }
 
     /** The person with [ref] at [slug], or null. */
-    fun person(slug: String, ref: String): FakePerson? = docs.firstOrNull { it.slug == slug && it.ref == ref }?.let { FakePerson(this, it) }
+    fun person(slug: String, ref: String): FakePerson? = locked { docs.firstOrNull { it.slug == slug && it.ref == ref } }?.let { FakePerson(this, it) }
 
     /** The stored state of a meet, or null when there is no such meet (after the time and presence transitions). */
-    fun meetState(meetId: String): String? = meets.firstOrNull { it.id == meetId }?.also { refresh(it) }?.state
+    fun meetState(meetId: String): String? = locked { meets.firstOrNull { it.id == meetId }?.also { refresh(it) }?.state }
 
     /** Every ref at [slug] that [person] has blocked, oldest first. */
-    fun blockedBy(person: FakePerson): List<String> = person.doc.blocks.map { it.first }
+    fun blockedBy(person: FakePerson): List<String> = locked { person.doc.blocks.map { it.first } }
 
     private fun newDoc(slug: String, seeded: Boolean, credential: Pair<String, String>? = null): Doc {
         counter++
@@ -268,13 +305,15 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     // ApiHttp
 
     override suspend fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?, timeoutMs: Long, maxBytes: Long): HttpResponse {
-        requests += RecordedRequest(method, url, headers, body?.decodeToString())
-        val request = RecordedRequest(method, url, headers, null)
-        holds.firstOrNull { it.method == method && it.path == request.path }?.let { held ->
-            holds = holds - held
-            held.wait()
+        val text = body?.decodeToString()
+        val request = RecordedRequest(method, url, headers, text)
+        val held = locked {
+            log = log + request
+            holds.firstOrNull { it.method == method && it.path == request.path }?.also { holds = holds - it }
         }
-        return answer(method, url, headers, body?.decodeToString())
+        // A held request waits without the lock, so the test can read the server meanwhile.
+        held?.wait()
+        return locked { answer(method, url, headers, text) }
     }
 
     private fun answer(method: String, url: String, headers: Map<String, String>, body: String?): HttpResponse {
@@ -296,7 +335,7 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     /** Runs a request as [doc] without recording it; used by [FakePerson]. */
     internal fun actAs(doc: Doc, method: String, path: String, body: JsonObject?): JsonObject {
         val h = mapOf("X-Caddie-Device" to "${doc.profileId}.${doc.secret}")
-        val r = answer(method, "https://fake.test$path", h, body?.toString())
+        val r = locked { answer(method, "https://fake.test$path", h, body?.toString()) }
         val parsed = Json.parseToJsonElement(r.text()) as JsonObject
         if (r.status !in 200..299) throw FakeCallFailed(r.status, parsed.str("error"))
         return parsed
@@ -951,7 +990,7 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
     }
 
     /** The native push registrations of [person], as "platform:token". */
-    fun pushRegistrations(person: FakePerson): Set<String> = person.doc.push.filter { !it.startsWith("web:") }.toSet()
+    fun pushRegistrations(person: FakePerson): Set<String> = locked { person.doc.push.filter { !it.startsWith("web:") }.toSet() }
 
     // ---------------------------------------------------------------------------------------------
     // Shaping people
@@ -1167,20 +1206,20 @@ class FakePeopleServer(private val clock: () -> Long, conferences: List<FakeConf
  */
 class FakePerson internal constructor(private val server: FakePeopleServer, internal val doc: FakePeopleServer.Doc) {
     val ref: String get() = doc.ref
-    val displayName: String get() = doc.displayName
+    val displayName: String get() = server.read { doc.displayName }
     val slug: String get() = doc.slug
 
     /** True while this person is visible conference-wide, as the server stores it. */
-    val openToMeet: Boolean get() = doc.openToMeet
+    val openToMeet: Boolean get() = server.read { doc.openToMeet }
 
     /** The talk ids this person shares for, as the server stores them. */
-    val sharedTalkIds: List<String> get() = doc.shared
+    val sharedTalkIds: List<String> get() = server.read { doc.shared }
 
     /** The zone this person's presence is on in, or null while presence is off, as the server stores it. */
-    val zone: String? get() = doc.zone
+    val zone: String? get() = server.read { doc.zone }
 
     /** True while the profile is hidden after reports. */
-    val hidden: Boolean get() = doc.hidden
+    val hidden: Boolean get() = server.read { doc.hidden }
 
     private fun call(method: String, path: String, build: JsonObjectBuilder.() -> Unit = {}): JsonObject =
         server.actAs(doc, method, path, buildJsonObject { put("event", doc.slug); build() })
@@ -1241,7 +1280,8 @@ class FakePerson internal constructor(private val server: FakePeopleServer, inte
 
     /** Moves the stored position, keeping the zone and the hour (presence must be on). */
     fun locate(lat: Double, lon: Double) {
-        goAround(doc.zone ?: error("Not around"), doc.spot ?: "", located = true, lat = lat, lon = lon)
+        val (zone, spot) = server.read { doc.zone to doc.spot }
+        goAround(zone ?: error("Not around"), spot ?: "", located = true, lat = lat, lon = lon)
     }
 
     fun leave() {
