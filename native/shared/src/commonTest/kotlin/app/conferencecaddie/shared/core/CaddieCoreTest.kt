@@ -359,6 +359,8 @@ class CaddieCoreTest {
             val core = CaddieCore(database, files, online(), scope, allowLocalHttp = false, clock = clock)
             for (i in 1..20) core.setUiSetting("order", i.toString())
             assertEquals("20", core.uiSetting("order"), "a read comes after the writes made before it")
+            // Read straight from the database, so only awaitIdle orders the read after the writes.
+            for (i in 21..40) core.setUiSetting("order", i.toString())
             core.setUiSetting("order", null)
             core.awaitIdle()
             assertNull(database.setting("ui:order"), "awaitIdle comes after the writes made before it")

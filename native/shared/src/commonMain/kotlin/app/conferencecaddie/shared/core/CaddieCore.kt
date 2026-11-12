@@ -640,9 +640,11 @@ class CaddieCore(
     }
 
     // The settings of the screens have a queue and a lock of their own, apart from the core's, so a
-    // write never waits for a call of the core's. Writes, reads and awaitIdle all go through them:
-    // the writes of one setting are stored in the order they were made, and a read or awaitIdle
-    // comes after every write made before it.
+    // write never waits for a whole call of the core's, only for a statement already running on the
+    // database. Writes, reads and awaitIdle all go through them: the writes of one setting are
+    // stored in the order they were made, and a read or awaitIdle comes after every write made
+    // before it. The marker that importLegacyInterested writes with its marks is a call of the
+    // core's instead, so a read sees it only after awaitIdle.
     private val uiSerial = Dispatchers.Default.limitedParallelism(1)
     private val uiMutex = Mutex()
 
