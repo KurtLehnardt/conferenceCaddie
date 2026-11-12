@@ -299,11 +299,10 @@ deploy replaces the Worker's variables with those of `wrangler.toml`. Never set 
 `wrangler secret put`: a secret survives every deploy, so the fixtures would stay on until someone
 deleted it.
 
-The smoke signs its admin calls by default (`SMOKE_ADMIN_AUTH=signed`, since #67;
-[Admin requests](#admin-requests)), and none of them follows a redirect: a 3xx is a FAIL.
-`SMOKE_ADMIN_AUTH=bearer` sends the token as `Authorization: Bearer` instead. It is only for a
-Worker, local or deployed, built from before signed admin requests; a current Worker answers a
-bearer with 404.
+The smoke signs its admin calls ([Admin requests](#admin-requests)), and none of them follows a
+redirect: a 3xx is a FAIL. Since #93 it signs with signature v2 by default, like the Worker-side
+clients; `CADDIE_ADMIN_SIG_VERSION=1` makes it sign v1, for a Worker from before v2. Its bearer
+mode is gone, and a current Worker answers a bearer with 404.
 
 The Cloud Run command line is unchanged: `BASE_URL=<Cloud Run URL> node scripts/smoke.mjs`.
 
@@ -388,7 +387,7 @@ A Worker from before signed admin requests reads only the bearer, and the client
 on send only the signature, so rolling the Worker back means rolling the clients back too: run
 `push-ingest.mjs`, `migrate-from-backup.mjs`, `topics-local.mjs` and `moderation.mjs` from the
 commit before the merge (and revert the merge on `main`, so the weekly ingest sends the bearer
-again), and run the smoke with `SMOKE_ADMIN_AUTH=bearer`. Otherwise every ingest and moderation call
+again), and run the smoke from that commit too, since the current smoke has no bearer mode. Otherwise every ingest and moderation call
 gets a 404 that looks like a wrong token. The `admin_nonces` table and its index stay in the objects
 and are harmless to the older code, which never reads them. After a rollback the conference objects
 stay at `schema_version` 3, so the next schema change must use version 4: a later change that bumps
@@ -418,8 +417,31 @@ clock check are the same for both versions, and v1 and v2 nonces share the table
 
 The move to v2 is in four steps (DECISIONS.md, "Admin signature v2"), each deployed on its own:
 a, the signer and the fixtures; b, this Worker accepts v1 and v2; c, the clients sign v2; d, the
-Worker refuses v1. Until step c every client still signs v1, so deploying step b changes nothing
-for them.
+Worker refuses v1. Deploying step b changed nothing for the clients, which then still signed v1.
+
+From step c on, the Worker-side clients sign v2 by default: `adminClient` in `ingest/lib.mjs`, and
+so `push-ingest.mjs` (the CI ingest included), `topics-local.mjs`, `migrate-from-backup.mjs` and
+the `/admin/embed-pending` calls they make. Each signs the origin of its `--api` base. That base
+is read with `canonicalOrigin` from `scripts/lib/admin-origin.mjs` before anything else, so it must
+be the Worker's origin and nothing more: a plain `https://` URL (`http://` for `localhost`,
+`127.0.0.1` and `[::1]` only) in printable ASCII, with no path, query, fragment, user name,
+password, backslash, `%` or `,`, and an internationalised host in its punycode (`xn--`) form. A
+base the URL parser would otherwise map to another host, such as one with a full-width dot or a
+percent-encoded character, is refused as a usage error before any request is signed.
+`CADDIE_ADMIN_SIG_VERSION` is the rollback: set it to `1` in the environment of a local run, or
+set the repository variable of the same name to `1` for the CI ingest (`.github/workflows/ingest.yml`
+passes it to the push step), and the clients sign v1 again. Unset or empty means v2, and any other
+value is a usage error when the client is created, before anything is sent; `push-ingest.mjs`
+and `migrate-from-backup.mjs` check it before anything else, also in a dry run, and the
+workflow's first step refuses it without printing it. The rollback works
+only while the Worker still accepts v1: step d will make the Worker refuse v1, and it removes the
+variable from the clients and the workflow in the same change. `scripts/moderation.mjs` (the
+deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
+`caddie-admin` command to use.
+
+Step c does not yet cover every client. The `caddie-admin` CLI (`scripts/admin/`) and
+`scripts/smoke.mjs` still sign v1 and move to v2 in their own step-c change. Step d must wait
+until both of them sign v2, because a Worker that refuses v1 would refuse them too.
 
 Two optional Worker variables decide what is accepted. Neither is set in `wrangler.toml` today.
 
