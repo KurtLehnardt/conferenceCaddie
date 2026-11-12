@@ -274,11 +274,11 @@ describe('reject cases: the signer refuses before anything is sent', () => {
   test('SEC-14: the query charset, through canonicalUrl', () => {
     assert.equal(canonicalUrl('/admin/moderation?event=x-1&since=2026-11-10T08:00:00Z', 'https://caddie.example').pathWithQuery, '/admin/moderation?event=x-1&since=2026-11-10T08:00:00Z');
     assert.equal(canonicalUrl('/admin/people/view?event=x&ref=0123456789abcdef&fields=text,contact', 'https://caddie.example').pathWithQuery, '/admin/people/view?event=x&ref=0123456789abcdef&fields=text,contact');
-    for (const q of ['q=a%20b', 'q=a b', 'q=a+b', 'q=a/b', 'q=a?b', 'q=%41', 'q=a;b', 'q=a@b', 'q=a~b', 'q="a"', "q='a'", 'q=Zoë']) {
+    for (const q of ['q=a%20b', 'q=a b', 'q=a+b', 'q=a/b', 'q=a?b', 'q=%41', 'q=a;b', 'q=a@b', 'q=a~b', 'q="a"', "q='a'", 'q=Zo\u00eb']) {
       assert.throws(() => canonicalUrl(`/admin/people/search?event=x&${q}`, 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'query_charset', q);
     }
     // The path charset: one leading slash, nothing that the URL parser would rewrite or encode.
-    for (const path of ['/admin/Zoë', '/admin/a b', '//admin/stats', '/admin//stats', '/admin/stats//', '/admin\\stats', 'admin/stats', '', 'https://caddie.example/admin/stats', '/admin/%2e%2e', '/admin/st;ats', '/admin/st@ts', '/admin/st:ats', '/admin/st~ats']) {
+    for (const path of ['/admin/Zo\u00eb', '/admin/a b', '//admin/stats', '/admin//stats', '/admin/stats//', '/admin\\stats', 'admin/stats', '', 'https://caddie.example/admin/stats', '/admin/%2e%2e', '/admin/st;ats', '/admin/st@ts', '/admin/st:ats', '/admin/st~ats']) {
       assert.throws(() => canonicalUrl(path, 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'path_charset', JSON.stringify(path));
     }
     assert.throws(() => canonicalUrl('/admin/x?a=1/b', 'https://caddie.example'), (e) => e instanceof UsageError && e.code === 'query_charset');

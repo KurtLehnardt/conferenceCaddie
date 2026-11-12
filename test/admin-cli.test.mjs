@@ -231,6 +231,24 @@ describe('SEC terminal output: format characters, separators, tags and the backs
     assert.match(r.stdout, /a\\u2028b\\ufeffc\\u200bd\\udb40\\udc41e\\u00adf\\\\u\{1B\}g A\\u200dB /);
     assert.equal(JSON.parse(r.stdout).result.items[0].name, hostile, 'the same text once parsed');
   });
+
+  test('default-ignorable code points are escaped; U+FE0F stays only after a pictograph or in a keycap', async () => {
+    // Hangul fillers U+3164, U+115F, U+FFA0; variation selectors U+FE00 and U+E0100; the
+    // combining grapheme joiner U+034F; U+FE0F after a letter. Kept: a red heart with U+FE0F, and
+    // the keycap "1", U+FE0F, U+20E3.
+    const ignorable = [0x3164, 0x115f, 0xffa0, 0xfe00, 0xe0100, 0x34f];
+    const heart = cp(0x2764, 0xfe0f);
+    const keycap = cp(0x31, 0xfe0f, 0x20e3);
+    const name = `${ignorable.map((p) => `x${cp(p)}`).join('')} A${cp(0xfe0f)}B ${heart} ${keycap}`;
+    const human = await invoke(['stats', 'usage'], { behavior: () => ({ items: [{ name }], summary: 'done' }) });
+    assert.equal(human.code, 0, human.stderr);
+    const line = human.stdout.split('\n')[0];
+    assert.equal(line, `name=x\\u{3164}x\\u{115F}x\\u{FFA0}x\\u{FE00}x\\u{E0100}x\\u{34F} A\\u{FE0F}B ${heart} ${keycap}`);
+    const asJson = await invoke(['stats', 'usage', '--json'], { behavior: () => ({ items: [{ name }], summary: 'done' }) });
+    for (const p of [...ignorable, 0xfe0f]) assert.ok(!asJson.stdout.includes(cp(p)), `U+${p.toString(16)} raw in --json`);
+    assert.match(asJson.stdout, /x\\u3164x\\u115fx\\uffa0x\\ufe00x\\udb40\\udd00x\\u034f A\\ufe0fB /);
+    assert.equal(JSON.parse(asJson.stdout).result.items[0].name, name);
+  });
 });
 
 describe('CLI-3 exit codes', () => {

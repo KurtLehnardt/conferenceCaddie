@@ -9,26 +9,34 @@
 //
 // What is escaped: every control (\p{Cc}: C0, DEL and C1) but tab, every format character
 // (\p{Cf}: the bidi controls, the zero-width space and joiners, the soft hyphen, the byte-order
-// mark, the tag characters U+E0000-U+E007F and the rest), the line and paragraph separators
-// (\p{Zl}, \p{Zp}) and, in human output, a lone surrogate and the backslash itself, so a name that
-// holds the text "\u{1B}" cannot pass for an escaped ESC.
-// - Human output shows each as \u{XX} (the code point in hex) and a backslash as \\. One exception,
-//   for readable names: the zero-width joiner U+200D is kept inside an emoji ZWJ sequence (a
-//   pictograph, optionally U+FE0F or a skin tone, the joiner, a pictograph), so a name that ends in
-//   the "woman technologist" emoji prints as the person wrote it. A joiner anywhere else, between
-//   letters for example, is escaped. The joiner moves no cursor and changes no direction; inside
-//   such a sequence it only selects the combined glyph.
+// mark, the tag characters U+E0000-U+E007F and the rest), every default-ignorable code point
+// (\p{Default_Ignorable_Code_Point}: the Hangul fillers U+115F, U+3164 and U+FFA0, the variation
+// selectors U+FE00-U+FE0F and U+E0100-U+E01EF, the combining grapheme joiner U+034F and the rest,
+// which render as nothing), the line and paragraph separators (\p{Zl}, \p{Zp}) and, in human
+// output, a lone surrogate and the backslash itself, so a name that holds the text "\u{1B}"
+// cannot pass for an escaped ESC.
+// - Human output shows each as \u{XX} (the code point in hex) and a backslash as \\. Two
+//   exceptions, for readable names with emoji. The zero-width joiner U+200D is kept inside an
+//   emoji ZWJ sequence (a pictograph, optionally U+FE0F or a skin tone, the joiner, a pictograph),
+//   so a name that ends in the "woman technologist" emoji prints as the person wrote it. The
+//   emoji presentation selector U+FE0F is kept right after a pictograph, or in a keycap (a digit,
+//   "#" or "*", U+FE0F, U+20E3). Anywhere else, between letters for example, both are escaped.
+//   Neither moves the cursor or changes direction; inside such a sequence they only select a glyph.
 // - JSON: JSON.stringify escapes C0, the backslash and lone surrogates already; every other match
 //   becomes \uXXXX escapes of its UTF-16 units (a surrogate pair for a code point above U+FFFF), so
-//   the JSON parses to the same document. The joiner is escaped there too; its escape parses back
-//   to the same text. An object inside a human line prints as its JSON, escaped the JSON way.
+//   the JSON parses to the same document. The joiner and U+FE0F are escaped there too; their
+//   escapes parse back to the same text. An object inside a human line prints as its JSON, escaped
+//   the JSON way.
 // Every pattern here is written with escapes, so this file holds no invisible character.
 
-const HUMAN_UNSAFE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\\]/gu;
-const JSON_UNSAFE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const HUMAN_UNSAFE_RE = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}\p{Cs}\\]/gu;
+const JSON_UNSAFE_RE = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/gu;
 const PICTOGRAPH_RE = /^\p{Extended_Pictographic}$/u;
 const EMOJI_TAIL_RE = /^[\u{FE0F}\u{1F3FB}-\u{1F3FF}]$/u;
+const KEYCAP_BASE_RE = /^[0-9#*]$/;
 const ZWJ = String.fromCharCode(0x200d);
+const VS16 = String.fromCharCode(0xfe0f);
+const KEYCAP = String.fromCharCode(0x20e3);
 
 // The code point that ends just before index i of text, or null.
 function codePointBefore(text, i) {
@@ -50,12 +58,20 @@ function emojiJoiner(text, i) {
   return before !== null && PICTOGRAPH_RE.test(before);
 }
 
+// The presentation selector at index i of text follows a pictograph or sits in a keycap.
+function emojiSelector(text, i) {
+  const before = codePointBefore(text, i);
+  if (before === null) return false;
+  return PICTOGRAPH_RE.test(before) || (KEYCAP_BASE_RE.test(before) && text[i + 1] === KEYCAP);
+}
+
 // Human text: each unsafe character shown as \u{XX}, a backslash as \\.
 export function escapeControls(text) {
   return String(text).replace(HUMAN_UNSAFE_RE, (c, i, all) => {
     if (c === '\t') return c;
     if (c === '\\') return '\\\\';
     if (c === ZWJ && emojiJoiner(all, i)) return c;
+    if (c === VS16 && emojiSelector(all, i)) return c;
     return `\\u{${c.codePointAt(0).toString(16).toUpperCase()}}`;
   });
 }

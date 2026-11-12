@@ -126,7 +126,7 @@
       "method": "POST",
       "path": "/admin/test/profile?event=testconf-2099",
       "base": "https://caddie.example",
-      "body": "{\"display_name\":\"Zoë Łukasz 日本語 🙂\"}",
+      "body": "{\"display_name\":\"Zo\u00eb \u0141ukasz \u65e5\u672c\u8a9e \ud83d\ude42\"}",
       "url": "https://caddie.example/admin/test/profile?event=testconf-2099",
       "path_with_query": "/admin/test/profile?event=testconf-2099",
       "ts": 1762848000,
@@ -1046,7 +1046,7 @@
         "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "body": null,
         "method": "GET",
-        "path": "/admin/people/search?event=testconf-2099&q=Zoë"
+        "path": "/admin/people/search?event=testconf-2099&q=Zo\u00eb"
       },
       "reject": "query_charset"
     },
@@ -1153,7 +1153,7 @@
         "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "body": null,
         "method": "GET",
-        "path": "/admin/Zoë"
+        "path": "/admin/Zo\u00eb"
       },
       "reject": "path_charset"
     },
