@@ -382,6 +382,33 @@ describe('push nudge with native push', () => {
     assert.deepEqual(records().map((r) => [r.day, r.created_at]).sort(), [['2099-12-30', '2099-12-30T23:59:59.999Z'], ['2099-12-31', '2099-12-31T08:00:00.000Z']]);
   });
 
+  test('a conference with no time zone keeps its days in UTC-12, as dayBounds and visible_until do', async () => {
+    const [tApns, vFcm] = [apnsToken(), fcmToken()];
+    const noZone = { ...CONF, timeZone: null };
+    const { t, v, me } = await pair({ apns: tApns }, { fcm: vFcm });
+    await nudgeAfterPresence(me, noZone, pinned());
+    assert.equal(fake.pushes.length, 2);
+    // Midnight in UTC-12 is 12:00 UTC: 1 ms before it the pair is still refused, at it nudged again.
+    await nudgeAfterPresence(later(Date.parse('2099-12-31T11:59:59.999Z'), t, v), noZone, pinned());
+    assert.equal(fake.pushes.length, 2, 'still 30 December in UTC-12');
+    await nudgeAfterPresence(later(Date.parse('2099-12-31T12:00:00.000Z'), t, v), noZone, pinned());
+    assert.equal(fake.pushes.length, 4, '31 December in UTC-12');
+    assert.deepEqual(records().map((r) => [r.day, r.created_at]).sort(), [['2099-12-30', '2099-12-30T23:59:59.999Z'], ['2099-12-31', '2099-12-31T12:00:00.000Z']]);
+  });
+
+  test('the hourly limit counts the nudges of the hour before the nudge\'s clock, its first millisecond included', async () => {
+    for (const [edge, pushed] of [[60 * 60_000 + 1, true], [60 * 60_000, false]]) {
+      const tApns = apnsToken();
+      const { t, me } = await pair({ apns: tApns }, { apns: apnsToken() });
+      // T was nudged one minute, two minutes and edge ms before the pinned clock.
+      for (const [i, ago] of [60_000, 120_000, edge].entries()) {
+        fake.put('caddie-people-nudges', `earlier-${i}`, { event_id: EVENT, day: 'x', profile_ids: [t.profileId, `someone${i}`], receivers: [t.profileId], created_at: iso(clock() - ago), expires_at: FUTURE });
+      }
+      await nudgeAfterPresence(me, CONF, pinned());
+      assert.equal(fake.pushes.map(addressOf).includes(`apns:${tApns}`), pushed, `a nudge ${edge} ms earlier ${pushed ? 'is not' : 'is'} in the hour`);
+    }
+  });
+
   test('under a pinned clock each APNs push expires 600 s after the time that clock gives when the push is sent', async () => {
     const [tApns, vApns] = [apnsToken(), apnsToken()];
     const { me } = await pair({ apns: tApns }, { apns: vApns });
@@ -407,6 +434,8 @@ describe('push nudge with native push', () => {
     assert.equal(records().length, 0);
   });
 
+  // Keep this test last: while Date.now is mocked, NATIVE_PUSH's FCM access token and the topics
+  // cache are stamped in 2099, so they look fresh to any later test in this file.
   test('with no clock and no channel given, the rule and NATIVE_PUSH read Date.now when they run', async (t) => {
     const [tApns, vFcm] = [apnsToken(), fcmToken()];
     const { me } = await pair({ apns: tApns }, { fcm: vFcm });
