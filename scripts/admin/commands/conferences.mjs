@@ -36,6 +36,16 @@ export function adminRoot(env = {}) {
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+// A key that PUT /admin/conferences reads as an instruction rather than a conference field:
+// "unretire" or "expect_status", or one that differs from either only in letter case or
+// surrounding whitespace, which the Worker refuses with 400 ("the key must be written exactly as
+// ..."; worker/src/directory.js #upsert). A conference document never carries one on purpose.
+export const isControlKey = (key) => ['unretire', 'expect_status'].includes(key.trim().toLowerCase());
+// The document without its control keys. The local files are read through it, so no rewrite of
+// data/<slug>/conference.json (hide, unhide, remove) keeps one and no backend call is given one;
+// the tier 2 adapter drops them again from what it sends and adds its own flag and precondition.
+export const withoutControlKeys = (doc) => Object.fromEntries(Object.entries(doc).filter(([key]) => !isControlKey(key)));
+
 export function readOperatorFile(root) {
   const path = join(root, OPERATOR_FILE);
   if (!existsSync(path)) return { hidden: {}, removed: {} };
@@ -65,7 +75,7 @@ function readConference(root, slug) {
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return isPlainObject(parsed) ? parsed : null;
+    return isPlainObject(parsed) ? withoutControlKeys(parsed) : null;
   } catch {
     throw new AdminError(`${relative(root, path)} is not valid JSON`);
   }

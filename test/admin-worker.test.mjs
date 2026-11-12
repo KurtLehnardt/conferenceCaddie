@@ -31,8 +31,10 @@
 //   pass (400 for a near-miss of "expect_status" or "unretire" and for an invalid value) and the
 //   check (409 status_mismatch for the whole batch, nothing written); the tests cover a matching
 //   unretire, a removal or an unretire landing between the read and the PUT, each documented
-//   repair flow, the retry effect, the near-miss keys of a local document, skipped_retired, and a
-//   listing that does not say what the row holds;
+//   repair flow, the retry's expectation after an answer that proves a commit (and a removal
+//   landing between the attempts), the earlier attempts named only when the row shows the status
+//   sent, a version mismatch, the near-miss keys of a local document (sent and written back),
+//   skipped_retired, and a listing that does not say what the row holds;
 // - STAT-1 to STAT-3: counts, usage and health, with the smoke and log commands naming variables.
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
@@ -106,8 +108,8 @@ function stubWorker() {
     // deleted; at step directory the object was wiped and the directory keeps the row.
     supersede: null,
     // An unretire fan-out that fails: { status: 503, cause: 'daily_limit', retryAfter } or
-    // { status: 502, cause: 'unretire_superseded' | 'conference_retired' }. The directory's upsert
-    // still commits, as in the Worker.
+    // { status: 502, cause: 'unretire_superseded' | 'conference_retired' }, with `times` for a
+    // failure of that many requests only. The directory's upsert still commits, as in the Worker.
     fanOutFailure: null,
     // How many PUT /admin/conferences answered 409 status_mismatch (and wrote nothing).
     mismatches: 0,
@@ -195,6 +197,7 @@ function stubWorker() {
       const unretiring = b.conferences.filter((d) => d.unretire === true).map((d) => d.slug);
       const f = state.fanOutFailure;
       if (f && unretiring.length) {
+        if (f.times !== undefined && --f.times <= 0) state.fanOutFailure = null;
         // The unretired objects keep their removal marker; the answer names the cause first.
         for (const s of unretiring) state.wipedObjects.add(s);
         const rest = { error: 'unretire_incomplete', unretire_failed: unretiring, upserted, searchable, synced: upserted - unretiring.length, skipped_retired: skipped };
@@ -1738,7 +1741,7 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     assert.equal(r.code, 1);
     assert.equal(admins(r.requests).length, 1, 'a 409 is not retried');
     assert.equal(sentDoc(r).expect_status, 'searchable');
-    assert.equal(r.stderr, `caddie-admin: unretire of testconf-2099 not applied: the directory holds another status than this command read (expected${TO}actual): testconf-2099 searchable${TO}(no row); nothing was written by this attempt; something changed the conference between this command's read and its PUT (another remove, unretire, hide or unhide, or an ingest run); check it with conferences list --all, then run conferences unretire --event testconf-2099 again if it is still wanted: it re-reads the status and expects that (PUT /admin/conferences: status 409 (status_mismatch))\n`);
+    assert.equal(r.stderr, `caddie-admin: unretire of testconf-2099 not applied: the directory holds another status than this command expected (expected${TO}actual): testconf-2099 searchable${TO}(no row); nothing was written by this attempt; something else changed the conference after this command read it (another remove, unretire, hide or unhide, or an ingest run); check it with conferences list --all, then run conferences unretire --event testconf-2099 again if it is still wanted: it re-reads the status and expects that (PUT /admin/conferences: status 409 (status_mismatch))\n`);
     assert.equal(r.audit.at(-1).result, 'failed');
     assert.equal(r.audit.at(-1).error, 'status_mismatch');
     // Nothing written: the tombstone, the missing row and the marker as the removal left them,
@@ -1778,7 +1781,7 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT), { fetch: racingFetch(other) });
     assert.equal(r.code, 1);
     assert.equal(admins(r.requests).length, 2);
-    assert.match(r.stderr, new RegExp(`testconf-2099 \\(no row\\)${TO}unavailable; nothing was written by this attempt; something changed the conference between`));
+    assert.match(r.stderr, new RegExp(`testconf-2099 \\(no row\\)${TO}unavailable; nothing was written by this attempt; something else changed the conference after this command read it`));
     assert.ok(!r.stderr.includes('earlier attempt'), 'a 429 never ran');
     assert.equal(row().status, 'unavailable', 'the other unretire stands');
     const again = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
@@ -1840,30 +1843,76 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     assert.equal(stub.state.mismatches, 0);
   });
 
-  test('the retry effect: a repeat of an attempt that was applied mismatches; the message shows that attempt and the re-run repairs it', async () => {
+  test('after a 502 unretire_incomplete the retry expects the status the directory committed, and repairs the object', async () => {
     seedConferenceFiles(EVENT);
     RECORDED();
     removedOnWorker();
-    // The first attempt stores the row and drops the tombstone, then its fan-out fails: 502
-    // unretire_incomplete, which the client retries with the same body, expecting no row.
-    stub.state.fanOutFailure = { status: 502, cause: 'unretire_superseded' };
+    // The first attempt stores the row and drops the tombstone, then its fan-out fails once.
+    stub.state.fanOutFailure = { status: 502, cause: 'unretire_superseded', times: 1 };
     const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
-    assert.equal(r.code, 1);
-    assert.equal(admins(r.requests).length, 2, 'the 502, then the 409, which is not retried');
-    assert.deepEqual(admins(r.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, null], 'the same body on the retry');
-    assert.equal(r.stderr, `caddie-admin: unretire of testconf-2099 not applied: the directory holds another status than this command read (expected${TO}actual): testconf-2099 (no row)${TO}searchable; nothing was written by this attempt; an earlier attempt of this command answered status 502 (unretire_incomplete; cause unretire_superseded) and may have been applied, so the actual status can be the one it set; run conferences unretire --event testconf-2099 again until it answers 200: each run re-reads the status and expects that (PUT /admin/conferences: status 409 (status_mismatch))\n`);
-    assert.equal(r.audit.at(-1).error, 'status_mismatch');
-    assert.ok(stub.state.wipedObjects.has(EVENT), 'the object still refuses the conference');
-    assert.deepEqual(Object.keys(operatorFile().removed), [EVENT], 'the local entry stays until the Worker took the unretire');
-    stub.state.fanOutFailure = null;
-    const again = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
-    assert.equal(again.code, 0, again.stderr);
-    assert.equal(sentDoc(again).expect_status, 'searchable');
-    assert.ok(!stub.state.wipedObjects.has(EVENT));
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(admins(r.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, 'searchable']);
+    assert.equal(new Set(admins(r.requests).map((x) => x.nonce)).size, 2, 'each attempt signed afresh over its own body');
+    assert.ok(!stub.state.wipedObjects.has(EVENT), 'the retry cleared the removal marker');
+    assert.ok(!stub.state.retired.has(EVENT));
     assert.deepEqual(operatorFile().removed, {});
+    assert.equal(stub.state.mismatches, 0);
+  });
 
-    // An answer lost after the request was written whole: the attempt may have run.
+  test('after a 2xx whose body was lost the retry expects the status the directory committed', async () => {
+    seedConferenceFiles(EVENT);
+    RECORDED();
     removedOnWorker();
+    let first = true;
+    const lostBody = async (url, init) => {
+      if (!first || !String(url).includes('/admin/')) return realFetch(url, init);
+      first = false;
+      const res = await realFetch(url, init);
+      assert.equal(res.status, 200);
+      await res.text();
+      const body = new ReadableStream({ start(c) { c.error(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })); } });
+      return new Response(body, { status: 200 });
+    };
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT), { fetch: lostBody });
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(admins(r.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, 'searchable']);
+    assert.ok(!stub.state.retired.has(EVENT));
+    assert.equal(stub.state.mismatches, 0);
+  });
+
+  test('a removal that finishes between a committed attempt and its retry is not undone: 409 searchable->(no row), "something else changed"', async () => {
+    seedConferenceFiles(EVENT);
+    RECORDED();
+    removedOnWorker();
+    stub.state.fanOutFailure = { status: 502, cause: 'unretire_superseded', times: 1 };
+    let puts = 0;
+    const racing = async (url, init) => {
+      const res = await realFetch(url, init);
+      if (new URL(url).pathname === '/admin/conferences' && ++puts === 1) {
+        // Operator B's removal (a later order number) wipes the object, then its step 3 deletes the row.
+        stub.state.retired.add(EVENT);
+        stub.state.conferences = stub.state.conferences.filter((c) => c.slug !== EVENT);
+        stub.state.wipedObjects.add(EVENT);
+      }
+      return res;
+    };
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT), { fetch: racing });
+    assert.equal(r.code, 1);
+    assert.deepEqual(admins(r.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, 'searchable']);
+    assert.equal(r.stderr, `caddie-admin: unretire of testconf-2099 not applied: the directory holds another status than this command expected (expected${TO}actual): testconf-2099 searchable${TO}(no row); nothing was written by this attempt; something else changed the conference after this command read it (another remove, unretire, hide or unhide, or an ingest run); check it with conferences list --all, then run conferences unretire --event testconf-2099 again if it is still wanted: it re-reads the status and expects that (PUT /admin/conferences: status 409 (status_mismatch))\n`);
+    assert.equal(r.audit.at(-1).error, 'status_mismatch');
+    // B's removal stands.
+    assert.ok(stub.state.retired.has(EVENT));
+    assert.equal(row(), null);
+    assert.ok(stub.state.wipedObjects.has(EVENT));
+    assert.deepEqual(Object.keys(operatorFile().removed), [EVENT]);
+  });
+
+  test('after failures that prove no commit the retry keeps its expectation; a 409 showing the sent status names every earlier attempt that may have run', async () => {
+    seedConferenceFiles(EVENT);
+    RECORDED();
+    removedOnWorker();
+    // The connection breaks after the request was written whole and applied: no answer.
     let failed = false;
     const lostAnswer = async (url, init) => {
       if (failed || !String(url).includes('/admin/')) return realFetch(url, init);
@@ -1873,11 +1922,26 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     };
     const lost = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT), { fetch: lostAnswer, trackSend: SENT });
     assert.equal(lost.code, 1);
-    assert.match(lost.stderr, new RegExp(`testconf-2099 \\(no row\\)${TO}searchable; nothing was written by this attempt; an earlier attempt of this command got no answer \\(ECONNRESET\\) and may have been applied, so the actual status can be the one it set; run conferences unretire --event testconf-2099 again until it answers 200`));
+    assert.deepEqual(admins(lost.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, null], 'a network error proves nothing');
+    assert.equal(lost.stderr, `caddie-admin: unretire of testconf-2099 not applied: the directory holds another status than this command expected (expected${TO}actual): testconf-2099 (no row)${TO}searchable; nothing was written by this attempt; an earlier attempt of this command got no answer (ECONNRESET) and may have been applied, so the actual status can be the one this command sent; run conferences unretire --event testconf-2099 again until it answers 200: each run re-reads the status and expects that (PUT /admin/conferences: status 409 (status_mismatch))\n`);
     assert.ok(!stub.state.retired.has(EVENT), 'that attempt did unretire it');
+    // The re-run reads the row it stored and expects it.
+    const again = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(sentDoc(again).expect_status, 'searchable');
+
+    // A 5xx without unretire_incomplete proves nothing either; every attempt that may have run is named.
+    removedOnWorker();
+    RECORDED();
+    stub.forced.push({ status: 502, body: { error: 'Service is temporarily unavailable' }, act: true }, { status: 503, body: { error: 'busy' } });
+    const both = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(both.code, 1);
+    assert.deepEqual(admins(both.requests).map((x) => JSON.parse(x.body).conferences[0].expect_status), [null, null, null]);
+    assert.ok(both.stderr.includes(`testconf-2099 (no row)${TO}searchable; nothing was written by this attempt; earlier attempts of this command may have been applied (answered status 502 (Service is temporarily unavailable); answered status 503 (busy)), so the actual status can be the one this command sent; run conferences unretire --event testconf-2099 again until it answers 200`), both.stderr);
+    assert.ok(!both.stderr.includes('may have done the work'));
   });
 
-  test('no near-miss of expect_status or unretire is ever sent, whatever the local document holds; a hide sends no precondition', async () => {
+  test('no near-miss of expect_status or unretire is ever sent or written back, whatever the local document holds; a hide sends no precondition', async () => {
     seedConferenceFiles(EVENT);
     RECORDED();
     removedOnWorker();
@@ -1891,10 +1955,26 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     assert.equal(doc.expect_status, null, "the CLI's own precondition, not the file's");
     assert.equal(doc.unretire, true, "the CLI's own flag, not the file's");
     assert.equal(doc.name, `Conference ${EVENT}`, 'the conference fields go as they are');
+    const controlKeys = [...Object.keys(nearMiss), 'expect_status', 'unretire'];
+    const salt = () => writeFileSync(path, JSON.stringify({ ...readJson(path), ...nearMiss, expect_status: 'draft', unretire: true }));
+    const clean = (what) => { for (const key of controlKeys) assert.ok(!Object.hasOwn(readJson(path), key), `${what} writes no ${JSON.stringify(key)} back`); };
+    salt();
     const hide = await invoke(confirmed(['conferences', 'hide', '--event', EVENT, '--reason', 'other'], EVENT));
     assert.equal(hide.code, 0, hide.stderr);
     const hidden = sentDoc(hide);
-    for (const key of [...Object.keys(nearMiss), 'expect_status', 'unretire']) assert.ok(!Object.hasOwn(hidden, key), `the hide sends no ${JSON.stringify(key)}`);
+    for (const key of controlKeys) assert.ok(!Object.hasOwn(hidden, key), `the hide sends no ${JSON.stringify(key)}`);
+    clean('hide');
+    assert.equal(readJson(path).status_reason, 'operator_hidden');
+    salt();
+    const unhide = await invoke(confirmed(['conferences', 'unhide', '--event', EVENT], EVENT));
+    assert.equal(unhide.code, 0, unhide.stderr);
+    for (const key of controlKeys) assert.ok(!Object.hasOwn(sentDoc(unhide), key), `the unhide sends no ${JSON.stringify(key)}`);
+    clean('unhide');
+    salt();
+    const remove = await invoke(confirmed(['conferences', 'remove', '--event', EVENT], EVENT));
+    assert.equal(remove.code, 0, remove.stderr);
+    clean('remove');
+    assert.equal(readJson(path).status_reason, 'operator_removed');
     // invoke checked that the stand-in saw no near-miss key and no invalid expect_status.
   });
 
@@ -1928,10 +2008,26 @@ describe('conferences unretire: the expect_status precondition (#79)', () => {
     assert.equal(r.code, 1);
     assert.ok(r.stderr.includes(`(expected${TO}actual): testconf-2099 (no row)${TO}"null", otherconf-2099 "NULL"${TO}(no row) (3 malformed entries not shown); nothing was written`), r.stderr);
     assert.ok(!r.stderr.includes('\u001b') && !r.stderr.includes('aGk'), 'nothing of a malformed entry is echoed');
+    // "null" as a status, a malformed status and a null entry are none a row holds: a version
+    // mismatch, with no advice to run it again.
+    assert.ok(r.stderr.includes('so the Worker and this CLI are not from the same version; do not run the unretire again until they are'), r.stderr);
+    assert.ok(!r.stderr.includes('run conferences unretire --event'));
     stub.forced.push({ status: 409, body: { error: 'status_mismatch', mismatched: Array.from({ length: 22 }, () => ({ slug: EVENT, expected: null, actual: 'searchable' })) } });
     const many = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
     assert.equal(many.stderr.split(`(no row)${TO}searchable`).length - 1, 20);
     assert.ok(many.stderr.includes(`(no row)${TO}searchable and 2 more; nothing was written`));
+  });
+
+  test('a 409 whose actual status is one a row never holds is a version mismatch: no re-run advised', async () => {
+    seedConferenceFiles(EVENT);
+    RECORDED();
+    removedOnWorker();
+    stub.forced.push({ status: 409, body: { error: 'status_mismatch', mismatched: [{ slug: EVENT, expected: null, actual: 'partial_index' }] } });
+    const r = await invoke(confirmed(['conferences', 'unretire', '--event', EVENT], EVENT));
+    assert.equal(r.code, 1);
+    assert.equal(r.stderr, `caddie-admin: unretire of testconf-2099 not applied: the directory holds another status than this command expected (expected${TO}actual): testconf-2099 (no row)${TO}partial_index; nothing was written by this attempt; the Worker answered a status that a directory row never holds in this CLI's version (searchable or unavailable, or no row), so the Worker and this CLI are not from the same version; do not run the unretire again until they are (PUT /admin/conferences: status 409 (status_mismatch))\n`);
+    assert.equal(r.audit.at(-1).error, 'status_mismatch');
+    assert.deepEqual(Object.keys(operatorFile().removed), [EVENT]);
   });
 
   test('a listing that does not say what the row holds refuses the unretire and sends nothing', async () => {
