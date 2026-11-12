@@ -546,6 +546,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
     ParityState("profile-filled", 2629, 2870, extras = extras(3000)) {
         start(tab = null)
         openProfile()
+        waitSuggested()
         pause(600)
         shoot()
     },
@@ -573,6 +574,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         tapTag("profile-delete")
         waitFor(hasTestTag("profile-delete-confirm"))
         profileTop()
+        waitSuggested()
         pause(400)
         shoot()
     },
@@ -589,11 +591,12 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         })
         openProfile()
         waitFor(hasTestTag("profile-hidden-banner"))
+        waitSuggested()
         pause(400)
         shoot()
     },
     ParityState("profile-delete-pending", 2913, 3198) {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val now = rig.clock.ms
         start(tab = null, record = { r ->
             JsonObject(r + ("delete_pending" to buildJsonObject {
                 put("attempts", 2)
@@ -605,11 +608,12 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         })
         openProfile()
         waitFor(hasTestTag("profile-pending-delete"))
+        waitSuggested()
         pause(400)
         shoot()
     },
     ParityState("profile-delete-stuck", 3043, 3421) {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val now = rig.clock.ms
         start(tab = null, record = { r ->
             JsonObject(r + ("delete_pending" to buildJsonObject {
                 put("attempts", 6)
@@ -621,6 +625,7 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         })
         openProfile()
         waitFor(hasTestTag("profile-stop-trying"))
+        waitSuggested()
         pause(400)
         shoot()
     },
@@ -778,10 +783,17 @@ private fun ParityRun.bleSwitch() {
     tap(isToggleable() and hasText(app.conferencecaddie.shared.people.PeopleText.BLE_LABEL))
 }
 
+/**
+ * Waits for Profile's "Suggested for you" topics (from Jordan's free text), which the topic picker
+ * shows only after its debounce (ProfileTopicPicker), so the shot has them as the web's has.
+ */
+@OptIn(ExperimentalTestApi::class)
+private fun ParityRun.waitSuggested() = waitFor(hasText(ProfileStrings.SUGGESTED_FOR_YOU, ignoreCase = true))
+
 /** I'm around in the Expo hall, back after twenty minutes: "Still in Expo hall?" (scenarios.mjs still-in). */
 @OptIn(ExperimentalTestApi::class)
 private fun ParityRun.stillIn() {
-    val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+    val now = rig.clock.ms
     start(
         prepare = {
             presence("Expo hall")
