@@ -15,7 +15,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -967,8 +967,10 @@ describe('setup-secrets.mjs: the plain run and --only-missing', () => {
 // The token file's default place follows the caddie-admin CLI's config directory
 // (worker/ingest/admin-token-file.mjs): ADMIN_TOKEN_FILE, else $CADDIE_ADMIN_HOME/admin-token, else
 // ${XDG_CONFIG_HOME:-~/.config}/conference-caddie/admin-token. The old default
-// ~/.config/conference-caddie/admin-token (under the scratch HOME here) is read when only it exists,
-// and never written or deleted.
+// ~/.config/conference-caddie/admin-token (under the scratch HOME here) is never written or deleted.
+// Neither the --only-missing GitHub sync nor the recipe for an unfinished rotation uses a token
+// file that is not trusted: the fallback to the old file, two files with different tokens, or an
+// old file that cannot be read.
 describe('setup-secrets.mjs: where the token file is (the caddie-admin config directory)', () => {
   const NEW1 = 'a1'.repeat(32);
   const inProgress = { ADMIN_TOKEN: OLD_TOKEN, ADMIN_TOKEN_NEXT: NEW1, REF_SALT: 'p'.repeat(40) };
@@ -978,6 +980,23 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     writeFileSync(oldFile(w), value, { mode: 0o600 });
   }
   const quoted = (path) => `'${path.replaceAll("'", "'\\''")}'`;
+  // A file at mode 000 can still be read by root, so the tests that need one are skipped only then.
+  const asRoot = process.getuid?.() === 0 && 'root can read a file at mode 000';
+  // The end of every refusal over a token file that is not trusted.
+  const SET_FILE = 'Set ADMIN_TOKEN_FILE to the file that holds this deployment\'s token and run this command again.';
+  const syncWhy = (doubt) => `ADMIN_TOKEN is set on the Worker and CADDIE_ADMIN_TOKEN is not, but ${doubt}. CADDIE_ADMIN_TOKEN is not set, and nothing was changed. ${SET_FILE}`;
+  const recipeWhy = (doubt) => `The safe recipe makes the value in the token file the only admin token, so it is offered only when there is no doubt which file holds this deployment's token, and ${doubt}. ${SET_FILE}`;
+  const fallbackDoubt = (file, old) => `there is no token file at ${file}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${old}, which may hold another deployment's token`;
+  const differsDoubt = (file, old) => `the token file ${file} and the file at its old place ${old} hold different tokens, so it is not clear which one is this deployment's`;
+  const unreadableDoubt = (file, old) => `the file at the old place ${old} of the token file ${file} exists and cannot be read, so it is not clear which one holds this deployment's token`;
+  // The new token file under $XDG_CONFIG_HOME, holding value.
+  function writeNew(w, value) {
+    const xdg = join(w.dir, 'xdg');
+    const file = join(xdg, 'conference-caddie', 'admin-token');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, value, { mode: 0o600 });
+    return { env: { ADMIN_TOKEN_FILE: undefined, XDG_CONFIG_HOME: xdg }, file };
+  }
   const read = (path) => (existsSync(path) ? readFileSync(path, 'utf8') : null);
 
   test('a first run writes $XDG_CONFIG_HOME/conference-caddie/admin-token, and nothing under ~/.config', (t) => {
@@ -1044,23 +1063,63 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     assertNoPartOf(value, r.text, 'the output');
   });
 
-  test('an unfinished rotation with only the old file: the recipe names the old file it read, after a note that names both paths and not the value', (t) => {
+  test('an unfinished rotation with only the old file gets no recipe: the refusal names both paths and not the value', (t) => {
     const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: null });
     writeOld(w, NEW1);
     const xdg = join(w.dir, 'xdg config');
     const file = join(xdg, 'conference-caddie', 'admin-token');
-    const r = w.run(['--rotate-admin-token'], { env: { ADMIN_TOKEN_FILE: undefined, XDG_CONFIG_HOME: xdg } });
+    const env = { ADMIN_TOKEN_FILE: undefined, XDG_CONFIG_HOME: xdg };
+    const r = w.run(['--rotate-admin-token'], { env });
     assert.equal(r.status, 1);
     assert.deepEqual(verbs(w.calls()), ['wrangler list'], 'nothing was put');
-    const notes = r.stderr.split('\n').filter((l) => l.startsWith('Note: the admin token file'));
-    assert.deepEqual(notes, [`Note: the admin token file is not at ${file}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, so the file at its old place ${oldFile(w)} was read instead; move that file to ${file}.`]);
+    assert.ok(r.stderr.includes(`Nothing was changed.\n${recipeWhy(fallbackDoubt(file, oldFile(w)))}\n`), r.stderr);
+    assert.doesNotMatch(r.text, /Note: the admin token file|gh secret set|secret put ADMIN_TOKEN/, 'no separate note and no recipe');
+    const dry = w.run(['--rotate-admin-token', '--dry-run'], { env });
+    assert.equal(dry.status, 0, dry.text);
+    assert.ok(dry.stdout.includes(`${recipeWhy(fallbackDoubt(file, oldFile(w)))}\nDry run: nothing is generated or changed. A real run stops here.\n`), dry.stdout);
+    assert.equal(existsSync(xdg), false);
+    assertNoPartOf(NEW1, `${r.text}\n${dry.text}`, 'the output');
+    // ADMIN_TOKEN_FILE set to the old file is the operator's choice: the recipe names that file.
+    const ok = w.run(['--rotate-admin-token'], { env: { ...env, ADMIN_TOKEN_FILE: oldFile(w) } });
+    assert.equal(ok.status, 1);
     const recipe = [
       '  gh secret set CADDIE_ADMIN_TOKEN --repo KurtLehnardt/conferenceCaddie < ~/.config/conference-caddie/admin-token',
       '  npx wrangler secret put ADMIN_TOKEN < ~/.config/conference-caddie/admin-token',
       '  npx wrangler secret delete ADMIN_TOKEN_NEXT',
     ].join('\n');
-    assert.ok(r.stderr.includes(`${recipe}\n`), r.stderr);
-    assert.equal(existsSync(xdg), false);
+    assert.ok(ok.stderr.includes(`${recipe}\n`), ok.stderr);
+    assertNoPartOf(NEW1, ok.text, 'the output');
+  });
+
+  test('an unfinished rotation with two files that hold different tokens gets no recipe', (t) => {
+    const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: null });
+    const NEW2 = 'b4'.repeat(32);
+    writeOld(w, NEW1);
+    const { env, file } = writeNew(w, `${NEW2}\n`);
+    const r = w.run(['--rotate-admin-token'], { env });
+    assert.equal(r.status, 1);
+    assert.deepEqual(verbs(w.calls()), ['wrangler list'], 'nothing was put');
+    assert.ok(r.stderr.includes(`Nothing was changed.\n${recipeWhy(differsDoubt(file, oldFile(w)))}\n`), r.stderr);
+    assert.doesNotMatch(r.text, /Note: the admin token file|gh secret set|secret put ADMIN_TOKEN/);
+    for (const value of [NEW1, NEW2]) assertNoPartOf(value, r.text, 'the output');
+    // With the same token in both, there is no doubt, and the recipe names the new file.
+    writeFileSync(oldFile(w), NEW2);
+    const ok = w.run(['--rotate-admin-token'], { env });
+    assert.equal(ok.status, 1);
+    assert.ok(ok.stderr.includes(`  npx wrangler secret put ADMIN_TOKEN < ${file}\n`), ok.stderr);
+    assert.doesNotMatch(ok.text, /Note: |old place/);
+  });
+
+  test('an unfinished rotation with an old file that cannot be read gets no recipe', { skip: asRoot }, (t) => {
+    const w = world(t, { worker: inProgress, github: { CADDIE_ADMIN_TOKEN: NEW1 }, tokenFile: null });
+    writeOld(w, NEW1);
+    chmodSync(oldFile(w), 0o000);
+    const { env, file } = writeNew(w, NEW1);
+    const r = w.run(['--rotate-admin-token'], { env });
+    assert.equal(r.status, 1);
+    assert.deepEqual(verbs(w.calls()), ['wrangler list'], 'nothing was put');
+    assert.ok(r.stderr.includes(`Nothing was changed.\n${recipeWhy(unreadableDoubt(file, oldFile(w)))}\n`), r.stderr);
+    assert.doesNotMatch(r.text, /Note: the admin token file|gh secret set|secret put ADMIN_TOKEN/);
     assertNoPartOf(NEW1, r.text, 'the output');
   });
 
@@ -1078,7 +1137,7 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     writeOld(w, NEW1);
     const home = join(w.dir, 'caddie home');
     const env = { ADMIN_TOKEN_FILE: undefined, CADDIE_ADMIN_HOME: home };
-    const why = `ADMIN_TOKEN is set on the Worker and CADDIE_ADMIN_TOKEN is not, but there is no token file at ${join(home, 'admin-token')}, its default place under CADDIE_ADMIN_HOME or XDG_CONFIG_HOME, only one at its old place ${oldFile(w)}, which may hold another deployment's token. CADDIE_ADMIN_TOKEN is not set from it, and nothing was changed. If that file holds this Worker's token, move it to ${join(home, 'admin-token')}, or set ADMIN_TOKEN_FILE to ${oldFile(w)}, and run this command again.`;
+    const why = syncWhy(fallbackDoubt(join(home, 'admin-token'), oldFile(w)));
     const dry = w.run(['--only-missing', '--dry-run'], { env });
     assert.equal(dry.status, 0, dry.text);
     assert.ok(dry.stdout.includes(`Note: ${why}\nDry run: nothing is generated or changed. A real run stops here.\n`), dry.stdout);
@@ -1108,7 +1167,7 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${NEW2}\n`, { mode: 0o600 });
     const env = { ADMIN_TOKEN_FILE: undefined, XDG_CONFIG_HOME: xdg };
-    const why = `ADMIN_TOKEN is set on the Worker and CADDIE_ADMIN_TOKEN is not, but the token file ${file} and the file at its old place ${oldFile(w)} hold different tokens, so it is not clear which one is this Worker's. CADDIE_ADMIN_TOKEN is not set, and nothing was changed. Set ADMIN_TOKEN_FILE to the file that holds this Worker's token and run this command again.`;
+    const why = syncWhy(differsDoubt(file, oldFile(w)));
     const dry = w.run(['--only-missing', '--dry-run'], { env });
     assert.equal(dry.status, 0, dry.text);
     assert.ok(dry.stdout.includes(`Note: ${why}\n`), dry.stdout);
@@ -1123,6 +1182,65 @@ describe('setup-secrets.mjs: where the token file is (the caddie-admin config di
     assert.equal(ok.status, 0, ok.text);
     assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, NEW2);
     assert.doesNotMatch(ok.text, /Note: |old place/);
+  });
+
+  test('--only-missing refuses to set a missing GitHub secret when the old file exists and cannot be read', { skip: asRoot }, (t) => {
+    const w = world(t, { workerSecrets: ALL_NAMES, githubSecrets: [], tokenFile: null });
+    writeOld(w, NEW1);
+    chmodSync(oldFile(w), 0o000);
+    const { env, file } = writeNew(w, NEW1);
+    const why = syncWhy(unreadableDoubt(file, oldFile(w)));
+    const dry = w.run(['--only-missing', '--dry-run'], { env });
+    assert.equal(dry.status, 0, dry.text);
+    assert.ok(dry.stdout.includes(`Note: ${why}\nDry run: nothing is generated or changed. A real run stops here.\n`), dry.stdout);
+    assert.doesNotMatch(dry.stdout, /Would set/);
+    const r = w.run(['--only-missing'], { env });
+    assert.equal(r.status, 1, r.text);
+    assert.equal(r.stderr, `${why}\n`);
+    assert.deepEqual(putsOf(w), [], 'nothing was put or set');
+    assert.deepEqual(w.githubState(), {});
+    assertNoPartOf(NEW1, `${dry.text}\n${r.text}`, 'the output');
+    // ADMIN_TOKEN_FILE set to the new file is the operator's choice: the secret is set from it.
+    const ok = w.run(['--only-missing'], { env: { ...env, ADMIN_TOKEN_FILE: file } });
+    assert.equal(ok.status, 0, ok.text);
+    assert.equal(w.githubState().CADDIE_ADMIN_TOKEN, NEW1);
+  });
+
+  test('a rotation splits a hard link between the old place and the token file, and says the old path keeps the previous token', (t) => {
+    const w = world(t, { tokenFile: null });
+    const caddie = join(w.dir, 'caddie home');
+    const file = join(caddie, 'admin-token');
+    mkdirSync(caddie);
+    writeFileSync(file, OLD_TOKEN, { mode: 0o600 });
+    mkdirSync(dirname(oldFile(w)), { recursive: true });
+    linkSync(file, oldFile(w));
+    const env = { ADMIN_TOKEN_FILE: undefined, CADDIE_ADMIN_HOME: caddie };
+    const dry = w.run(['--rotate-admin-token', '--dry-run'], { env });
+    assert.equal(dry.status, 0, dry.text);
+    assert.doesNotMatch(dry.text, /old token file|old place/, 'one file before the write');
+    const r = w.run(['--rotate-admin-token'], { env });
+    assert.equal(r.status, 0, r.text);
+    const value = w.got('put-ADMIN_TOKEN_NEXT');
+    assert.equal(read(file), value);
+    assert.equal(read(oldFile(w)), OLD_TOKEN, 'the old path keeps the previous token');
+    const lines = r.stdout.split('\n').filter((l) => l.includes(oldFile(w)));
+    assert.deepEqual(lines, [`The old token file ${oldFile(w)} still exists and was left as it is (not updated, not deleted); the token file is now ${file}, so delete the old one once nothing reads it. The two paths were hard links to one file, which this write split, so ${oldFile(w)} now holds the previous token, which the Worker refuses once the two finishing commands below have run.`]);
+    assertNoPartOf(value, `${dry.text}\n${r.text}`, 'the output');
+  });
+
+  test('a plain run splits a hard link the same way, and says the previous token is no longer the Worker\'s ADMIN_TOKEN', (t) => {
+    const w = world(t, { githubSecrets: [], tokenFile: null });
+    const caddie = join(w.dir, 'caddie home');
+    const file = join(caddie, 'admin-token');
+    mkdirSync(caddie);
+    writeFileSync(file, OLD_TOKEN, { mode: 0o600 });
+    mkdirSync(dirname(oldFile(w)), { recursive: true });
+    linkSync(file, oldFile(w));
+    const r = w.run([], { env: { ADMIN_TOKEN_FILE: undefined, CADDIE_ADMIN_HOME: caddie } });
+    assert.equal(r.status, 0, r.text);
+    assert.equal(read(file), w.got('put-ADMIN_TOKEN'));
+    assert.equal(read(oldFile(w)), OLD_TOKEN);
+    assert.ok(r.stdout.includes(`, so ${oldFile(w)} now holds the previous token, which is no longer the Worker's ADMIN_TOKEN.\n`), r.stdout);
   });
 
   // ~/.config (or ~/.config/conference-caddie) can be a link to the new place, so both paths are

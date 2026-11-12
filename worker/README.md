@@ -162,16 +162,21 @@ Run these from the repository root, in this order. Each step is safe to repeat.
    (`worker/ingest/admin-token-file.mjs`). If you set `CADDIE_ADMIN_HOME` or `XDG_CONFIG_HOME` and
    your token is still in `~/.config/conference-caddie/admin-token`, a script that reads the token
    file and finds none at the new place reads the old one and prints one line on stderr that names
-   both paths and says to move the file; when both files exist and hold different tokens, it reads
-   the new one and prints one line that names both paths and says which one is used (never the
-   values). The script writes only the new place, says so in one line when the old file still
-   exists, and never deletes it. Two paths that lead to one file through a symbolic link (say,
-   `~/.config` is a link to `$XDG_CONFIG_HOME`) are one file, so there is no old file then. There
-   is no such fallback when `ADMIN_TOKEN_FILE` is set. `--only-missing` skips names the Worker
-   already has. When it would set a missing `CADDIE_ADMIN_TOKEN` from the token file, it stops
-   with exit 1 and changes nothing if that file is the old one (it may hold another deployment's
-   token) or if the two files hold different tokens; move the file, or set `ADMIN_TOKEN_FILE` to
-   the right one, and run it again. An existing `REF_SALT`
+   both paths and says, if that file holds this deployment's token, to move it to the new place or
+   set `ADMIN_TOKEN_FILE` to it (with `CADDIE_ADMIN_HOME` keeping a second deployment apart, the old
+   place may hold the other deployment's token). When both files exist and hold different tokens,
+   or the old one exists and cannot be read, it reads the new one and prints one line that names
+   both paths (never the values). The script writes only the new place, says so in one line when
+   the old file still exists, and never deletes it. Two paths that lead to one file through a
+   symbolic link or a hard link (say, `~/.config` is a link to `$XDG_CONFIG_HOME`) are one file,
+   so there is no old file then. There is no such fallback when `ADMIN_TOKEN_FILE` is set.
+   `--only-missing` skips names the Worker already has. It sets a missing `CADDIE_ADMIN_TOKEN`
+   from the token file, and `--rotate-admin-token` prints its recipe for an unfinished rotation
+   from it, only when the file is trusted: `ADMIN_TOKEN_FILE` names it, no different file is at
+   the old place, or both hold the same token. In each of the other cases (the fallback to the old
+   file, two files with different tokens, an old file that cannot be read) the script stops with
+   exit 1, changes nothing, names both paths and says to set `ADMIN_TOKEN_FILE` to the file that
+   holds this deployment's token; do that and run it again. An existing `REF_SALT`
    is kept unless `--rotate-ref-salt` is given, because changing it changes every person's ref.
    The first `BLE_MASTER_KEYRING` (Bluetooth derived tokens v1, one random master) is created
    when the Worker has none and never replaced; rotate it by hand (docs/FREE_HOSTING.md).
