@@ -1,6 +1,8 @@
 package app.conferencecaddie.shared.ble
 
 import android.Manifest
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Context
 import android.content.Intent
@@ -38,9 +40,15 @@ import app.conferencecaddie.shared.AndroidPermissions
  * Permissions: on Android 12 and newer "Nearby devices" (BLUETOOTH_SCAN, BLUETOOTH_ADVERTISE and
  * BLUETOOTH_CONNECT, the scan declared as never used for location); on Android 8 to 11 the location
  * permission, which a scan needs there although no position is read (BLUETOOTH and BLUETOOTH_ADMIN
- * are granted at install). Android cannot tell "never asked" from "refused for good" without an
+ * are granted at install), and the Location switch on, without which a scan hears nothing
+ * ([BleRadioState.LocationOff]). Android cannot tell "never asked" from "refused for good" without an
  * activity, so, like AndroidLocationProvider, the radio remembers that it has asked and asks the
  * attached activity ([AndroidPermissions]) whether the prompt would still show.
+ *
+ * **Force stop.** Android 11 and newer record why the app's process ended. A force stop (the app's
+ * settings page, or the Task Manager of Android 13 and newer) ends the service without a word, so the
+ * runtime asks [takeUserStoppedApp] when it restores and turns Bluetooth proximity off as the person
+ * asked, instead of quietly starting it again.
  */
 class AndroidBleRadio private constructor(context: Context, notificationIcon: Int) : BleRadio {
     private val app = context.applicationContext
@@ -67,6 +75,49 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
     @Volatile var clock: () -> Long = System::currentTimeMillis
 
     /**
+     * The service's alarms and wake lock. The instrumented tests replace it with a fake while the
+     * radio is stopped; nothing else sets it.
+     */
+    @Volatile var wakeups: BleWakeups = AndroidBleWakeups(app)
+
+    /**
+     * Android 10 and 11 (API 29 and 30), where a scan gets results only while the app is in front: the
+     * location permission it needs is "while in use", and a `connectedDevice` service has no location
+     * access of its own. The service then never starts a scan again from the background. The
+     * instrumented tests set it; nothing else does.
+     */
+    @Volatile var scanNeedsAppInFront: Boolean = Build.VERSION.SDK_INT in Build.VERSION_CODES.Q..Build.VERSION_CODES.R
+
+    /**
+     * Whether an activity of the app is visible now, as Android ranks the process (a foreground
+     * service alone does not count). The instrumented tests replace it; nothing else sets it.
+     */
+    @Volatile var appInFront: () -> Boolean = {
+        val info = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(info)
+        info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+            info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+    }
+
+    /**
+     * The recent ends of the app's process, newest first, as Android 11 and newer record them; empty
+     * before. The instrumented tests replace it; nothing else sets it.
+     */
+    @Volatile var processExits: () -> List<BleProcessExit> = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            app.getSystemService(ActivityManager::class.java)
+                ?.getHistoricalProcessExitReasons(app.packageName, 0, MAX_EXITS)
+                ?.map { exit ->
+                    val userRequested = exit.reason == ApplicationExitInfo.REASON_USER_REQUESTED && exit.description != REMOVE_TASK
+                    BleProcessExit(exit.timestamp, userRequested)
+                }
+                .orEmpty()
+        } else {
+            emptyList()
+        }
+    }
+
+    /**
      * Starts [BleRadioService] for the foreground. The instrumented tests replace it to play
      * Android's refusal of a start from the background; nothing else sets it.
      */
@@ -82,6 +133,9 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
     internal class Session(val config: BleRadioConfig, val source: BlePayloadSource, val events: BleRadioEvents)
 
     private val lock = Any()
+
+    /** The radio's own state across processes: when [takeUserStoppedApp] last looked. */
+    private val radioPrefs by lazy { app.getSharedPreferences(RADIO_PREFS, Context.MODE_PRIVATE) }
 
     // Written under [lock] from any thread; the service reads them on the main thread.
     @Volatile internal var session: Session? = null
@@ -147,6 +201,7 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
             access() != BleAccess.Granted -> BleRadioState.Unauthorized
             !hw.enabled() -> BleRadioState.PoweredOff
             !hw.extendedAdvertisingSupported() -> BleRadioState.Unsupported
+            hw.locationOff() -> BleRadioState.LocationOff
             else -> BleRadioState.Ready
         }
     }
@@ -157,11 +212,44 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
             session = s
             started = true
         }
+        // The first run ever: a force stop from before it says nothing about Bluetooth.
+        if (!radioPrefs.contains(KEY_EXITS_CHECKED)) radioPrefs.edit().putLong(KEY_EXITS_CHECKED, System.currentTimeMillis()).apply()
         main.post { deliver(s) }
     }
 
     override fun refresh() {
         main.post { service?.refresh() }
+    }
+
+    /**
+     * Wakes the phone at [epochMillis] (an allow-while-idle alarm) to call the session's
+     * [BleRadioEvents.onReportDue], and keeps it awake for a moment so the report can go out: the
+     * runtime's own timer does not run while the phone sleeps. Nothing while no service runs.
+     */
+    override fun keepAwakeUntil(epochMillis: Long) {
+        main.post { service?.reportDueAt(epochMillis) }
+    }
+
+    /**
+     * True when the newest end of the app's process since the last call was the person's own (a force
+     * stop in the app's settings, or the Task Manager), as Android 11 and newer record it; false
+     * otherwise and before Android 11. Each call moves the point it looks from to the newest end it
+     * saw, so an end counts once, and the first run of the radio sets it to then, so a force stop from
+     * before Bluetooth was ever on does not count.
+     */
+    override fun takeUserStoppedApp(): Boolean {
+        val exits = try {
+            processExits()
+        } catch (e: RuntimeException) {
+            // The activity manager could not answer; nothing is known.
+            return false
+        }
+        synchronized(lock) {
+            val checked = radioPrefs.getLong(KEY_EXITS_CHECKED, Long.MIN_VALUE)
+            val newest = exits.filter { it.timestampMillis > checked }.maxByOrNull { it.timestampMillis } ?: return false
+            radioPrefs.edit().putLong(KEY_EXITS_CHECKED, newest.timestampMillis).apply()
+            return newest.userRequested
+        }
     }
 
     override fun stop() {
@@ -183,11 +271,13 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
 
     /**
      * Tries again to start the service for a session Android refused to start from the background,
-     * if there is one. The application calls it whenever one of its activities starts, which puts
-     * the app in the foreground. Any thread.
+     * if there is one, and tells a running service that the app is in front, which on Android 10 and
+     * 11 lets its scan hear again after a restart in the background. The application calls it
+     * whenever one of its activities starts, which puts the app in the foreground. Any thread.
      */
     fun resumeDeferred() {
         main.post {
+            service?.appCameToFront()
             val d = deferred ?: return@post
             deferred = null
             deliver(d)
@@ -281,6 +371,22 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
         /** AndroidLocationProvider's flag; before Android 12 the radio needs the same permission. */
         private const val KEY_LOCATION_ASKED = "location_asked"
 
+        private const val RADIO_PREFS = "caddie_ble_radio"
+
+        /** The time (epoch milliseconds) up to which [takeUserStoppedApp] has looked at the process's ends. */
+        private const val KEY_EXITS_CHECKED = "exits_checked_at"
+
+        /** Process ends read at once, newest first; more than enough between two restores. */
+        private const val MAX_EXITS = 16
+
+        /**
+         * The description Android gives a process it ends because the person swiped the app from
+         * Recents (REASON_USER_REQUESTED with SUBREASON_REMOVE_TASK, which is not public). That is no
+         * force stop: Android never ends a process with a running service for it, and the service
+         * keeps running by design.
+         */
+        private const val REMOVE_TASK = "remove task"
+
         private val PERMISSIONS: List<String> =
             if (Build.VERSION.SDK_INT >= 31) {
                 listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
@@ -313,3 +419,14 @@ class AndroidBleRadio private constructor(context: Context, notificationIcon: In
         @Volatile var onSystemRestart: ((Context) -> Unit)? = null
     }
 }
+
+/** One end of the app's process as Android 11 and newer record it (ApplicationExitInfo), reduced to what the radio asks. */
+class BleProcessExit(
+    /** When the process ended, in epoch milliseconds. */
+    val timestampMillis: Long,
+    /**
+     * The person stopped the app: a force stop in the app's settings, or the Task Manager
+     * (REASON_USER_REQUESTED), but not a swipe from Recents.
+     */
+    val userRequested: Boolean,
+)

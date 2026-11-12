@@ -22,6 +22,15 @@ interface BleHardware {
     /** The controller can send Bluetooth 5 extended advertisements; only known while [enabled]. */
     fun extendedAdvertisingSupported(): Boolean
 
+    /**
+     * Whether this phone offers the legacy connectable advertising set and the GATT server behind
+     * it. Only from Android 14 (API 34) on, where the set can be made non-discoverable, so the stack
+     * refuses the GAP Device Name (the name the person gave the phone) to a peer that connects
+     * without bonding. Before, any phone that connects can read that name, so the set and the server
+     * are not offered at all, and the phone is found only through its extended advertisement.
+     */
+    fun connectableAdvertising(): Boolean
+
     /** Calls [onOff] when the adapter starts switching off, until [unwatchAdapter]. */
     fun watchAdapter(onOff: () -> Unit)
 
@@ -29,11 +38,25 @@ interface BleHardware {
     fun unwatchAdapter()
 
     /**
+     * Android 8 to 11: the Location switch is off, so a scan hears nothing (the stack drops every
+     * result). Always false from Android 12 on, where a scan declared `neverForLocation` needs no
+     * location at all.
+     */
+    fun locationOff(): Boolean
+
+    /** Calls [onChange] whenever the Location switch changes, until [unwatchLocation]; nothing from Android 12 on. */
+    fun watchLocation(onChange: () -> Unit)
+
+    /** Stops calling the `onChange` of [watchLocation]. */
+    fun unwatchLocation()
+
+    /**
      * Starts both advertising sets with [payload] (docs/contracts/ble-tokens.md, Over the air): the
      * extended, non-connectable, non-scannable set with [serviceUuid] and the payload as its service
-     * data, and the legacy connectable set with [serviceUuid] only. A failure of the extended set
-     * after it was accepted arrives at [onFailed]; the legacy set is a fallback for phones that cannot
-     * receive extended advertisements, and its failure is not reported.
+     * data, and, where [connectableAdvertising] allows it, the legacy connectable set with
+     * [serviceUuid] only. A failure of the extended set after it was accepted arrives at [onFailed];
+     * the legacy set is a fallback for phones that cannot receive extended advertisements, and its
+     * failure is not reported.
      */
     fun startAdvertising(serviceUuid: UUID, payload: ByteArray, onFailed: () -> Unit): BleHardwareStatus
 
@@ -42,16 +65,24 @@ interface BleHardware {
 
     /**
      * Opens a GATT server with the primary service [serviceUuid] and its read-only characteristic
-     * [characteristicUuid], answering every read with [reader].
+     * [characteristicUuid], answering every read of it with [reader] and telling [reader] when a
+     * connected device goes away.
      */
     fun openGattServer(serviceUuid: UUID, characteristicUuid: UUID, reader: BleCharacteristicReader): BleHardwareStatus
+
+    /**
+     * Ends the connections of [devices] (addresses that [BleCharacteristicReader.read] named) to this
+     * phone. Devices that are not connected are skipped.
+     */
+    fun disconnectGattClients(devices: Collection<String>)
 
     /** Closes the GATT server, which ends the connections of phones reading it. */
     fun closeGattServer()
 
     /**
-     * Scans for advertisements with [serviceUuid] or with Apple manufacturer data, and hands them to
-     * [listener] (in batches where the controller batches).
+     * Scans for advertisements with [serviceUuid] or with Apple manufacturer data of the iOS overflow
+     * area (first byte 0x01), and hands them to [listener] (in batches where the controller batches).
+     * Starting again while a scan runs restarts it.
      */
     fun startScan(serviceUuid: UUID, listener: BleScanListener): BleHardwareStatus
 
@@ -84,10 +115,16 @@ enum class BleHardwareStatus {
     Failed,
 }
 
-/** Answers a read of the token characteristic. Called from a binder thread; must be thread-safe and fast. */
-fun interface BleCharacteristicReader {
-    /** The answer to a read at [offset] into the value. */
-    fun read(offset: Int): BleGattAnswer
+/** Answers reads of the token characteristic. Called from a binder thread; must be thread-safe and fast. */
+interface BleCharacteristicReader {
+    /**
+     * The answer to a read by [device] (its address on this connection, the key of
+     * [BleHardware.disconnectGattClients]) at [offset] into the value.
+     */
+    fun read(device: String, offset: Int): BleGattAnswer
+
+    /** [device]'s connection to this phone ended. */
+    fun disconnected(device: String)
 }
 
 /** A GATT read answer: the ATT status and, on success, the value from the requested offset on. */
@@ -100,6 +137,9 @@ class BleGattAnswer(
     companion object {
         /** BluetoothGatt.GATT_SUCCESS. */
         const val SUCCESS = 0
+
+        /** BluetoothGatt.GATT_READ_NOT_PERMITTED: this connection may not read the value now. */
+        const val READ_NOT_PERMITTED = 0x2
 
         /** BluetoothGatt.GATT_INVALID_OFFSET. */
         const val INVALID_OFFSET = 0x7

@@ -23,16 +23,21 @@ class CaddieApplication : Application() {
         // a second set of platform services and the nudge scheduler starts as it would with the app.
         // Their runtime restores the Bluetooth session and starts the radio again. Opening the
         // database is deferred to its own thread, so this is quick on the main thread. The service
-        // also calls this for a Stop tapped in a process that has no people features yet.
-        AndroidBleRadio.onSystemRestart = { context ->
-            val controller = CaddiePeople.controller(context)
-            // A restart has no activity, so the app is in the background whatever the controller
-            // starts out believing; without this its poll would keep running in the background, as
-            // BackgroundNudgeJobService explains. An activity reports the foreground itself when it
-            // starts, and reading again after the write keeps its word the last one.
-            if (!hasStartedActivity) {
-                controller.setForeground(false)
-                if (hasStartedActivity) controller.setForeground(true)
+        // also calls this for a Stop tapped in a process that has no people features yet. A build
+        // without native Bluetooth (a release build, until the exit test on real phones has passed)
+        // sets no hook: it has no radio, so a restarted service, which it can never have started,
+        // only stops after its grace.
+        if (BuildConfig.CADDIE_BLE_ENABLED) {
+            AndroidBleRadio.onSystemRestart = { context ->
+                val controller = CaddiePeople.controller(context)
+                // A restart has no activity, so the app is in the background whatever the controller
+                // starts out believing; without this its poll would keep running in the background, as
+                // BackgroundNudgeJobService explains. An activity reports the foreground itself when it
+                // starts, and reading again after the write keeps its word the last one.
+                if (!hasStartedActivity) {
+                    controller.setForeground(false)
+                    if (hasStartedActivity) controller.setForeground(true)
+                }
             }
         }
         // The background nudge job starts a cold process with no activity and needs to know that.
@@ -40,7 +45,8 @@ class CaddieApplication : Application() {
             override fun onActivityStarted(activity: Activity) {
                 startedActivities++
                 // The app is in the foreground now: a Bluetooth session that Android refused to
-                // start from the background (a cold start by the nudge job) can start.
+                // start from the background (a cold start by the nudge job) can start, and on
+                // Android 10 and 11 a service restarted in the background can listen again.
                 AndroidBleRadio.existing()?.resumeDeferred()
             }
 

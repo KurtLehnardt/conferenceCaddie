@@ -27,11 +27,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.provider.Settings
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * [BleHardware] on the Android Bluetooth stack, the approach of the Capacitor app's BleService
@@ -41,12 +44,16 @@ import java.util.UUID
  * - **Advertising.** The extended set is non-connectable and non-scannable with no name and no TX
  *   power, sent once a second at medium power on the 1M PHY (which every Bluetooth 5 phone receives),
  *   carrying the service UUID and the 17-byte payload as service data: 53 bytes, which only an
- *   extended advertisement holds. The legacy set is connectable (and therefore scannable, which a
- *   legacy connectable set must be) with the flags and the service UUID only, 21 of its 31 bytes,
- *   for phones that cannot receive extended advertisements; they connect and read the
- *   characteristic.
- * - **Scanning.** Two filters (the service UUID, and Apple's manufacturer data), every match
- *   reported, legacy and extended advertisements on every PHY the controller supports, in
+ *   extended advertisement holds. From Android 14 on, a legacy set is connectable (and therefore
+ *   scannable, which a legacy connectable set must be) with the service UUID only, for phones that
+ *   cannot receive extended advertisements; they connect and read the characteristic. It is
+ *   non-discoverable, so the stack refuses the GAP Device Name to a peer that connected through it
+ *   without bonding (and leaves the flags out of it). Before Android 14 the stack lets any connected
+ *   peer read that name, which is the name the person gave the phone, so there is no legacy set and
+ *   no GATT server ([connectableAdvertising]).
+ * - **Scanning.** Two filters (the service UUID, and Apple manufacturer data whose first byte is
+ *   0x01, the iOS overflow area), every match reported, legacy and extended advertisements on every
+ *   PHY the controller supports, in
  *   SCAN_MODE_BALANCED. Where the controller batches results in hardware, they are delivered every
  *   five seconds, so the application processor sleeps in between. The mode stays the same when the
  *   screen turns off: discovery with the phone in a pocket is the point, restarting a scan to change
@@ -69,12 +76,16 @@ class AndroidBleHardware(context: Context) : BleHardware {
     private val adapter: BluetoothAdapter? get() = manager?.adapter
 
     private var adapterReceiver: BroadcastReceiver? = null
+    private var locationReceiver: BroadcastReceiver? = null
 
     private var advertiser: BluetoothLeAdvertiser? = null
     private var extendedCallback: AdvertisingSetCallback? = null
     private var legacyCallback: AdvertisingSetCallback? = null
 
     private var gattServer: BluetoothGattServer? = null
+
+    /** The devices connected to this phone that have asked for the token, by address; written on the GATT binder thread. */
+    private val tokenReaders = ConcurrentHashMap<String, BluetoothDevice>()
 
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
@@ -92,6 +103,8 @@ class AndroidBleHardware(context: Context) : BleHardware {
     override fun enabled(): Boolean = adapter?.isEnabled == true
 
     override fun extendedAdvertisingSupported(): Boolean = adapter?.isLeExtendedAdvertisingSupported == true
+
+    override fun connectableAdvertising(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
 
     // --- The adapter -----------------------------------------------------------------------------
 
@@ -125,6 +138,40 @@ class AndroidBleHardware(context: Context) : BleHardware {
         }
     }
 
+    // --- The Location switch (Android 8 to 11) ----------------------------------------------------
+
+    override fun locationOff(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            app.getSystemService(LocationManager::class.java)?.isLocationEnabled == false
+        } else {
+            @Suppress("DEPRECATION") // LOCATION_MODE is the only way on Android 8.
+            Settings.Secure.getInt(app.contentResolver, Settings.Secure.LOCATION_MODE, Settings.Secure.LOCATION_MODE_OFF) ==
+                Settings.Secure.LOCATION_MODE_OFF
+        }
+    }
+
+    override fun watchLocation(onChange: () -> Unit) {
+        unwatchLocation()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) = onChange()
+        }
+        // A system broadcast; the receiver only ever reads the switch's real state when it arrives.
+        app.registerReceiver(receiver, IntentFilter(LocationManager.MODE_CHANGED_ACTION), null, main)
+        locationReceiver = receiver
+    }
+
+    override fun unwatchLocation() {
+        val receiver = locationReceiver ?: return
+        locationReceiver = null
+        try {
+            app.unregisterReceiver(receiver)
+        } catch (e: IllegalArgumentException) {
+            // Not registered.
+        }
+    }
+
     // --- Advertising -----------------------------------------------------------------------------
 
     override fun startAdvertising(serviceUuid: UUID, payload: ByteArray, onFailed: () -> Unit): BleHardwareStatus {
@@ -149,13 +196,21 @@ class AndroidBleHardware(context: Context) : BleHardware {
             .addServiceUuid(uuid)
             .addServiceData(uuid, payload)
             .build()
-        val legacyParameters = AdvertisingSetParameters.Builder()
-            .setLegacyMode(true)
-            .setConnectable(true)
-            .setScannable(true)
-            .setInterval(AdvertisingSetParameters.INTERVAL_HIGH)
-            .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
-            .build()
+        // Only from Android 14 on (connectableAdvertising), and non-discoverable: the stack then
+        // answers a read of the GAP Device Name by a peer that connected through this set without
+        // bonding with an error instead of the phone's name.
+        val legacyParameters = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            AdvertisingSetParameters.Builder()
+                .setLegacyMode(true)
+                .setConnectable(true)
+                .setScannable(true)
+                .setDiscoverable(false)
+                .setInterval(AdvertisingSetParameters.INTERVAL_HIGH)
+                .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
+                .build()
+        } else {
+            null
+        }
         val legacyData = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
@@ -185,11 +240,13 @@ class AndroidBleHardware(context: Context) : BleHardware {
             adv.startAdvertisingSet(extendedParameters, extendedData, null, null, null, extended)
             advertiser = adv
             extendedCallback = extended
-            try {
-                adv.startAdvertisingSet(legacyParameters, legacyData, emptyResponse, null, null, legacy)
-                legacyCallback = legacy
-            } catch (e: IllegalArgumentException) {
-                // The legacy set is a fallback; the extended set carries the payload on its own.
+            if (legacyParameters != null) {
+                try {
+                    adv.startAdvertisingSet(legacyParameters, legacyData, emptyResponse, null, null, legacy)
+                    legacyCallback = legacy
+                } catch (e: IllegalArgumentException) {
+                    // The legacy set is a fallback; the extended set carries the payload on its own.
+                }
             }
             BleHardwareStatus.Ok
         } catch (e: SecurityException) {
@@ -247,6 +304,14 @@ class AndroidBleHardware(context: Context) : BleHardware {
         val btManager = manager ?: return BleHardwareStatus.Failed
         var server: BluetoothGattServer? = null
         val callback = object : BluetoothGattServerCallback() {
+            // Called for every LE connection of the phone (a bonded watch's too), not only for those
+            // that read the token; only the readers are known to the reader and ever disconnected.
+            override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+                if (newState != BluetoothProfile.STATE_DISCONNECTED) return
+                tokenReaders.remove(device.address)
+                reader.disconnected(device.address)
+            }
+
             override fun onCharacteristicReadRequest(
                 device: BluetoothDevice,
                 requestId: Int,
@@ -254,7 +319,8 @@ class AndroidBleHardware(context: Context) : BleHardware {
                 characteristic: BluetoothGattCharacteristic,
             ) {
                 val answer = if (characteristic.uuid == characteristicUuid) {
-                    reader.read(offset)
+                    tokenReaders[device.address] = device
+                    reader.read(device.address, offset)
                 } else {
                     BleGattAnswer(BluetoothGatt.GATT_READ_NOT_PERMITTED, null)
                 }
@@ -292,7 +358,22 @@ class AndroidBleHardware(context: Context) : BleHardware {
         }
     }
 
+    override fun disconnectGattClients(devices: Collection<String>) {
+        val server = gattServer ?: return
+        for (address in devices) {
+            val device = tokenReaders[address] ?: continue
+            try {
+                server.cancelConnection(device)
+            } catch (e: SecurityException) {
+                // Without the permission nothing more can be done; the reader refuses its reads.
+            } catch (e: IllegalStateException) {
+                // Bluetooth is switching off, which ends the connection anyway.
+            }
+        }
+    }
+
     override fun closeGattServer() {
+        tokenReaders.clear()
         val server = gattServer ?: return
         gattServer = null
         try {
@@ -307,7 +388,8 @@ class AndroidBleHardware(context: Context) : BleHardware {
     // --- Scanning ---------------------------------------------------------------------------------
 
     override fun startScan(serviceUuid: UUID, listener: BleScanListener): BleHardwareStatus {
-        stopScan()
+        // A restart keeps the devices of recent results, which a pending interrogation still needs.
+        stopScanning(forget = false)
         if (!granted(scanPermission())) return BleHardwareStatus.NoPermission
         val bt = adapter ?: return BleHardwareStatus.Failed
         if (!bt.isEnabled) return BleHardwareStatus.Off
@@ -322,8 +404,16 @@ class AndroidBleHardware(context: Context) : BleHardware {
             .build()
         val filters = listOf(
             ScanFilter.Builder().setServiceUuid(uuid).build(),
-            // Empty data matches any manufacturer data of the company.
-            ScanFilter.Builder().setManufacturerData(BleInterrogation.APPLE_COMPANY_ID, ByteArray(0)).build(),
+            // Only Apple data whose first byte is the overflow type: an iPhone advertising an app's
+            // service in the background. Its other advertisements (AirPods, watches, Macs, and the
+            // iPhone's own routine ones) would wake the scan for nothing.
+            ScanFilter.Builder()
+                .setManufacturerData(
+                    BleInterrogation.APPLE_COMPANY_ID,
+                    byteArrayOf(BleInterrogation.APPLE_OVERFLOW_TYPE),
+                    byteArrayOf(-1),
+                )
+                .build(),
         )
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -357,12 +447,14 @@ class AndroidBleHardware(context: Context) : BleHardware {
         }
     }
 
-    override fun stopScan() {
+    override fun stopScan() = stopScanning(forget = true)
+
+    private fun stopScanning(forget: Boolean) {
         val sc = scanner
         val callback = scanCallback
         scanner = null
         scanCallback = null
-        recent.clear()
+        if (forget) recent.clear()
         if (sc == null || callback == null) return
         try {
             sc.stopScan(callback)

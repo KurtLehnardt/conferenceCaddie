@@ -1,9 +1,13 @@
 package app.conferencecaddie
 
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.conferencecaddie.shared.ble.AndroidBleKeyStore
 import app.conferencecaddie.shared.ble.BleProtocol
+import java.security.InvalidKeyException
 import java.security.KeyStore
+import java.security.ProviderException
+import java.security.UnrecoverableKeyException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -13,6 +17,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -162,6 +167,53 @@ class AndroidBleKeyStoreTest {
         assertNotNull(key)
         assertNull("the Keystore never hands out the key bytes", key.encoded)
         assertArrayEquals(hex(tokensA.getValue("0")), AndroidBleKeyStore().hmac(aliasA, BleProtocol.tokenMessage(0)))
+    }
+
+    @Test
+    fun aPassingKeystoreFailureIsTriedOnceMoreBeforeTheKeyCountsAsLost() = runBlocking {
+        val store = AndroidBleKeyStore()
+        store.put(aliasA, keyA)
+        val real = store.attempt
+        val message = BleProtocol.tokenMessage(0)
+        var calls = 0
+
+        // The Keystore refuses the key once (its daemon busy or restarting): the second try answers.
+        store.attempt = { alias, m ->
+            calls++
+            if (calls == 1) throw UnrecoverableKeyException("busy (test)") else real(alias, m)
+        }
+        assertEquals(tokensA.getValue("0"), store.hmac(aliasA, message)?.hex())
+        assertEquals(2, calls)
+        calls = 0
+        store.attempt = { alias, m ->
+            calls++
+            if (calls == 1) throw InvalidKeyException("busy (test)") else real(alias, m)
+        }
+        assertEquals(tokensA.getValue("0"), store.hmac(aliasA, message)?.hex())
+        assertEquals(2, calls)
+
+        // Refused twice: the key reads as lost (the runtime then re-keys), after exactly two tries.
+        calls = 0
+        store.attempt = { _, _ ->
+            calls++
+            throw KeyPermanentlyInvalidatedException()
+        }
+        assertNull(store.hmac(aliasA, message))
+        assertEquals(2, calls)
+
+        // No key stored is no error: looked up once.
+        calls = 0
+        store.attempt = { alias, m ->
+            calls++
+            real(alias, m)
+        }
+        assertNull(store.hmac(aliasB, message))
+        assertEquals(1, calls)
+
+        // Any other Keystore error is still thrown, never taken for a lost key.
+        store.attempt = { _, _ -> throw ProviderException("keystore (test)") }
+        assertThrows(ProviderException::class.java) { store.hmac(aliasA, message) }
+        Unit
     }
 
     private fun ByteArray.hex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }

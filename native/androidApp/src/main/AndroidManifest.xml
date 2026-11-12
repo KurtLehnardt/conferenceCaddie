@@ -41,6 +41,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!-- When the Bluetooth runtime's next report is due, an alarm wakes the phone and a partial wake
+         lock of at most 15 seconds keeps it awake while the report goes out. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Before Android 13, the Bluetooth service's receiver of the app's own alarms and notification
+         dismissals is registered behind this signature permission, so no other app can send to it
+         (what ContextCompat.registerReceiver does with RECEIVER_NOT_EXPORTED; AndroidX Core declares
+         the same permission, and the two declarations merge). -->
+    <permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+
     <!-- The app works without Bluetooth LE; Bluetooth proximity is then hidden. -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 

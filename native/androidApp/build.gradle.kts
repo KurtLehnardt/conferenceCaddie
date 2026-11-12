@@ -109,8 +109,20 @@ android {
         }
     }
 
+    // CADDIE_BLE_ENABLED is the release gate of native Bluetooth proximity (DECISIONS.md, phase 4):
+    // on in debug builds, off in release builds until the exit test on real phones has passed. Off,
+    // the app creates no Bluetooth platform at all (AndroidPeopleServices.create), so the feature is
+    // hidden even where the backend offers it, and nothing restarts the radio.
+    buildFeatures {
+        buildConfig = true
+    }
+
     buildTypes {
+        getByName("debug") {
+            buildConfigField("boolean", "CADDIE_BLE_ENABLED", "true")
+        }
         getByName("release") {
+            buildConfigField("boolean", "CADDIE_BLE_ENABLED", "false")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
