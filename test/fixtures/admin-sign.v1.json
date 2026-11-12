@@ -126,7 +126,7 @@
       "method": "POST",
       "path": "/admin/test/profile?event=testconf-2099",
       "base": "https://caddie.example",
-      "body": "{\"display_name\":\"Zoë Łukasz 日本語 🙂\"}",
+      "body": "{\"display_name\":\"Zo\u00eb \u0141ukasz \u65e5\u672c\u8a9e \ud83d\ude42\"}",
       "url": "https://caddie.example/admin/test/profile?event=testconf-2099",
       "path_with_query": "/admin/test/profile?event=testconf-2099",
       "ts": 1762848000,
@@ -351,21 +351,21 @@
     {
       "id": "post-unretire-flag",
       "kind": "sign",
-      "title": "PUT /admin/conferences with \"unretire\": true in the body (conferences unretire on tier 2): a body flag",
+      "title": "PUT /admin/conferences with \"unretire\": true on the document (conferences unretire on tier 2): a body flag, never a query key",
       "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "key_name": "key1",
       "method": "PUT",
       "path": "/admin/conferences",
       "base": "https://caddie.example",
-      "body": "{\"conferences\":[{\"slug\":\"testconf-2099\"}],\"unretire\":true}",
+      "body": "{\"conferences\":[{\"slug\":\"testconf-2099\",\"unretire\":true}]}",
       "url": "https://caddie.example/admin/conferences",
       "path_with_query": "/admin/conferences",
       "ts": 1762848000,
       "nonce": "I8j9K0l1M2n3O4p5Q6r7St",
-      "body_sha256": "b3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69",
-      "canonical": "caddie-admin-v1\nPUT\n/admin/conferences\nb3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69\n1762848000\nI8j9K0l1M2n3O4p5Q6r7St\n",
-      "sig": "33134beb5e032064755781b22d7b1e90759f7dc56ce5f9563abb4a6ae6504a11",
-      "header": "v1 1762848000 I8j9K0l1M2n3O4p5Q6r7St b3f5d3acdbf91e460c40c98e01e5255b160c936e14efffbbd4d3d989dfebaf69 33134beb5e032064755781b22d7b1e90759f7dc56ce5f9563abb4a6ae6504a11"
+      "body_sha256": "2f89debe297938df4ab01d278ce426d225d606256ee7a8ffd80237eee099706e",
+      "canonical": "caddie-admin-v1\nPUT\n/admin/conferences\n2f89debe297938df4ab01d278ce426d225d606256ee7a8ffd80237eee099706e\n1762848000\nI8j9K0l1M2n3O4p5Q6r7St\n",
+      "sig": "1658a1ed7c3ca411aab349d2651424795961ba9e18c6d46145634b747db5327f",
+      "header": "v1 1762848000 I8j9K0l1M2n3O4p5Q6r7St 2f89debe297938df4ab01d278ce426d225d606256ee7a8ffd80237eee099706e 1658a1ed7c3ca411aab349d2651424795961ba9e18c6d46145634b747db5327f"
     },
     {
       "id": "get-trailing-question",
@@ -1046,7 +1046,7 @@
         "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "body": null,
         "method": "GET",
-        "path": "/admin/people/search?event=testconf-2099&q=Zoë"
+        "path": "/admin/people/search?event=testconf-2099&q=Zo\u00eb"
       },
       "reject": "query_charset"
     },
@@ -1153,7 +1153,7 @@
         "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "body": null,
         "method": "GET",
-        "path": "/admin/Zoë"
+        "path": "/admin/Zo\u00eb"
       },
       "reject": "path_charset"
     },

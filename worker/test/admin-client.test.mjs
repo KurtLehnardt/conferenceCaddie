@@ -140,6 +140,29 @@ describe('adminClient (worker/ingest/lib.mjs)', () => {
     assert.ok(seen.every((r) => r.body.equals(seen[0].body)));
   });
 
+  test('an unretire_incomplete answer names its cause and the slugs not unretired; with cause daily_limit first it stops at once, otherwise it is retried', async () => {
+    const body = (status, cause) => ({ status, headers: { 'Retry-After': '1' }, body: { cause, error: 'unretire_incomplete', unretire_failed: [SLUG, 'Bad Slug\nFAKE', 7, SLUG], upserted: 3, searchable: 2, synced: 1, skipped_retired: [] } });
+    const limited = await recorder([body(503, 'daily_limit')]);
+    await assert.rejects(adminClient(limited.base, KEY, { retries: 3, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+      assert.equal(e.status, 503);
+      assert.match(e.message, /status 503 \(unretire_incomplete, cause daily_limit\)/);
+      assert.ok(e.message.includes(`not unretired, the object did not take the document: ${SLUG};`), e.message);
+      assert.ok(e.message.includes('the rest of the batch was applied (upserted 3)'), e.message);
+      assert.ok(!e.message.includes('FAKE') && !e.message.includes('Bad Slug'), e.message);
+      assert.match(e.message, /daily limit is reached/);
+      return true;
+    });
+    assert.equal(limited.seen.length, 1, 'a daily limit is not retried');
+    const superseded = await recorder([body(502, 'unretire_superseded'), { body: { upserted: 3, searchable: 2, synced: 2, skipped_retired: [] } }]);
+    assert.deepEqual(await adminClient(superseded.base, KEY, { retries: 1, env: {} })('PUT', '/admin/conferences', { conferences: [] }), { upserted: 3, searchable: 2, synced: 2, skipped_retired: [] });
+    assert.equal(superseded.seen.length, 2, 'a 502 is retried');
+    const gaveUp = await recorder([body(502, 'unretire_superseded')]);
+    await assert.rejects(adminClient(gaveUp.base, KEY, { retries: 0, env: {} })('PUT', '/admin/conferences', { conferences: [] }), (e) => {
+      assert.ok(e.message.includes(`status 502 (unretire_incomplete, cause unretire_superseded): not unretired, the object did not take the document: ${SLUG}; the rest of the batch was applied (upserted 3)`), e.message);
+      return true;
+    });
+  });
+
   test('a 401 is not retried and names its code', async () => {
     const { seen, base } = await recorder([{ status: 401, body: { error: 'admin_skew' } }]);
     const admin = adminClient(base, KEY, { retries: 3, env: {} });
