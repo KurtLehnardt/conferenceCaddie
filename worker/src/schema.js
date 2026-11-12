@@ -228,8 +228,14 @@ export function migrate(sql) {
 }
 
 // The DirectoryDO schema: the conference list, a small key-value table for the cron's
-// cross-conference usage totals, and the nonces of the admin requests it serves (as in a
-// ConferenceDO, version 3). Every statement is idempotent and runs at each start.
+// cross-conference usage totals, the nonces of the admin requests it serves (as in a
+// ConferenceDO, version 3), and the tombstones of removed conferences. Every statement is
+// idempotent and runs at each start, so a new table needs no version and no migration tag.
+//
+// retired: one row per conference the operator removed (DELETE /admin/conference), written when
+// its object is wiped and its conferences row deleted, at_ms being the time of the last removal.
+// PUT /admin/conferences skips a retired slug unless its document carries "unretire": true, which
+// deletes the row, so the weekly ingest cannot bring a removed conference back.
 const DIRECTORY_V1 = `
 CREATE TABLE IF NOT EXISTS conferences (
   slug TEXT PRIMARY KEY,
@@ -240,6 +246,7 @@ CREATE TABLE IF NOT EXISTS conferences (
   updated_at_ms INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS retired (slug TEXT PRIMARY KEY, at_ms INTEGER NOT NULL);
 ${ADMIN_NONCES}
 `;
 

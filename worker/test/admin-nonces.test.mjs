@@ -62,7 +62,7 @@ async function call(env, req) {
 async function withConferences(ctx, slugs = [SLUG]) {
   const r = await call(ctx.env, signed('PUT', '/admin/conferences', { body: JSON.stringify({ conferences: slugs.map(conf) }) }).build());
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { upserted: slugs.length, searchable: slugs.length, synced: slugs.length });
+  assert.deepEqual(r.json, { upserted: slugs.length, searchable: slugs.length, synced: slugs.length, skipped_retired: [] });
 }
 
 const nonces = (state) => state.db.prepare('SELECT nonce, ts_ms FROM admin_nonces ORDER BY ts_ms, nonce').all().map((r) => ({ ...r }));
@@ -106,7 +106,7 @@ describe('the admin nonce table', { skip }, () => {
     const upserts = () => ctx.directorySql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
     const fanOut = () => ctx.CONFERENCE.calls.filter((c) => new URL(c.req.url).pathname === '/internal/conference').length;
     const first = await call(ctx.env, req.build());
-    assert.deepEqual([first.status, first.json], [200, { upserted: 1, searchable: 1, synced: 1 }]);
+    assert.deepEqual([first.status, first.json], [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
     assert.deepEqual([upserts(), fanOut()], [1, 1]);
     const replay = await call(ctx.env, req.build());
     assert.deepEqual([replay.status, replay.json], [401, { error: 'admin_replay' }]);

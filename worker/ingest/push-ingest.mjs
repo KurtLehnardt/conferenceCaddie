@@ -41,9 +41,14 @@
 // Output is counts only. Exit code: 0 when every event was pushed, 2 when one failed, 1 on a
 // usage error.
 //
+// Removed conferences: the Worker keeps a tombstone for every conference the operator removed
+// (DELETE /admin/conference) and answers PUT /admin/conferences with the slugs it skipped for that
+// reason (skipped_retired). Each is logged by name, its talks are not pushed, and the run does not
+// count it as failed; `caddie-admin conferences unretire` brings it back.
 // --report <file> writes what reached the Worker as JSON, also when the run fails part way:
 //   { "upserted": [slugs whose conference document was stored],
 //     "kept": [slugs whose document was held back because the schedule fetch failed],
+//     "skipped_retired": [slugs the Worker skipped because they were removed],
 //     "pushed": [searchable slugs whose talks, topics and facets were all stored],
 //     "failed": [searchable slugs whose push failed], "not_attempted": [searchable slugs not tried] }
 // ingest.yml stages the talk files of exactly these conferences for the talk bundles
@@ -124,6 +129,17 @@ export function workerTalks(slug, talks, takedowns) {
   return { talks: out, dropped: talks.length - out.length, redacted, entries };
 }
 
+/**
+ * The conference document as PUT /admin/conferences gets it: without the `unretire` key, so a run
+ * of the ingest (in CI or by hand) can never bring back a conference the operator removed, whatever
+ * a committed conference.json holds; and with its counts recomputed when takedowns dropped talks.
+ * `prepared` is the conference's workerTalks() result, or undefined.
+ */
+export function conferenceForWorker(conf, prepared) {
+  const { unretire, ...doc } = conf;
+  return prepared?.dropped ? { ...doc, counts: countsAfterTakedowns(doc.counts ?? {}, prepared.talks) } : doc;
+}
+
 /** The counts block of a conference document, recomputed over the talks that remain after takedowns. */
 export function countsAfterTakedowns(counts, talks) {
   const next = { ...counts, sessions: talks.length, with_slides: 0, sponsor: 0 };
@@ -170,6 +186,39 @@ export async function pushEvent(conf, prepared, { admin, dryRun, generation, reb
   return `${head}; upserted ${total.upserted}, unchanged ${total.unchanged}, embedded ${total.embedded}, pending ${pendingAfter ?? '?'}; finalized ${fin.talks ?? '?'} talks, deleted ${fin.deleted ?? 0}, unshared ${fin.unshared ?? 0}; topics stored ${tp.topics ?? '?'}, facets stored ${fc.facets ?? '?'}.`;
 }
 
+/**
+ * PUT /admin/conferences with the conference documents to store, each passed through
+ * conferenceForWorker here, on the one path that sends them, so no caller can send an `unretire`
+ * key: `prepared` maps a slug to its workerTalks() result for the takedown recount. Logs the upsert
+ * count, then each slug the Worker skipped because the operator removed it (skipped_retired), by
+ * name, so the operator sees why a conference did not come back. Only well-formed slugs are logged
+ * or returned. Returns the skipped slugs.
+ */
+export async function upsertConferences(admin, confs, { prepared = new Map(), log = console.log } = {}) {
+  const r = await admin('PUT', '/admin/conferences', { conferences: confs.map((c) => conferenceForWorker(c, prepared.get(c.slug))) });
+  log(`Conferences upserted: ${r.upserted ?? '?'}.`);
+  const skipped = Array.isArray(r.skipped_retired) ? [...new Set(r.skipped_retired.filter((s) => typeof s === 'string' && isSlug(s)))] : [];
+  for (const slug of skipped) {
+    log(`${slug}: skipped, the Worker holds it as removed (DELETE /admin/conference); its talks are not pushed. To bring it back, run caddie-admin conferences unretire --event ${slug}.`);
+  }
+  return skipped;
+}
+
+/**
+ * What follows the conference upsert, as data: `sent` the conference documents the upsert sent,
+ * `searchable` those of them with talks to push, `skipped` the slugs the Worker answered as
+ * skipped_retired. Returns { upserted, skipped_retired, push }: the slugs whose document was
+ * stored, the skipped ones, and the conferences whose talks to push, never a skipped one.
+ */
+export function planPush({ sent, searchable, skipped }) {
+  const retired = new Set(skipped);
+  return {
+    upserted: sent.map((c) => c.slug).filter((s) => !retired.has(s)),
+    skipped_retired: [...retired],
+    push: searchable.filter((c) => !retired.has(c.slug)),
+  };
+}
+
 // The slugs the Worker lists as searchable (GET /api/conferences), or an empty set when it cannot
 // say, in which case nothing is kept back.
 async function liveSearchable(api) {
@@ -184,7 +233,7 @@ async function liveSearchable(api) {
 }
 
 // What reached the Worker in this run, for --report.
-const report = { upserted: [], kept: [], pushed: [], failed: [], not_attempted: [] };
+const report = { upserted: [], kept: [], skipped_retired: [], pushed: [], failed: [], not_attempted: [] };
 
 async function main() {
   const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty'], values: ['api', 'report', 'events-from'], multi: ['event'] });
@@ -229,7 +278,7 @@ async function main() {
   // Validated before anything is sent, as the bundle build validates it.
   const takedowns = loadTakedowns(join(DATA, 'takedowns.json'), { dataDir: DATA });
 
-  const searchable = confs.filter((c) => c.status === 'searchable' && existsSync(join(DATA, c.slug, 'talks.ndjson')));
+  let searchable = confs.filter((c) => c.status === 'searchable' && existsSync(join(DATA, c.slug, 'talks.ndjson')));
   console.log(`Conferences: ${confs.length} selected, ${searchable.length} searchable with a talk file${dryRun ? ' (dry run)' : ''}.`);
   // The talks each conference will get, with the takedowns applied. A conference whose takedown
   // entries do not apply is not pushed (its talks stay as the Worker has them) and counts as failed.
@@ -241,10 +290,6 @@ async function main() {
       prepared.set(c.slug, { error: e });
     }
   }
-  const forWorker = (c) => {
-    const p = prepared.get(c.slug);
-    return p?.dropped ? { ...c, counts: countsAfterTakedowns(c.counts ?? {}, p.talks) } : c;
-  };
   if (!dryRun) {
     // A schedule that could not be fetched this time (status_reason fetch_failed, which
     // scripts/ingest.mjs records on a transient error) must not take down a conference the Worker
@@ -252,10 +297,12 @@ async function main() {
     const live = await liveSearchable(api);
     const kept = confs.filter((c) => c.status !== 'searchable' && c.status_reason === 'fetch_failed' && live.has(c.slug));
     for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
-    const r = await admin('PUT', '/admin/conferences', { conferences: confs.filter((c) => !kept.includes(c)).map(forWorker) });
-    console.log(`Conferences upserted: ${r.upserted ?? '?'}.`);
+    const sent = confs.filter((c) => !kept.includes(c));
+    const plan = planPush({ sent, searchable, skipped: await upsertConferences(admin, sent, { prepared }) });
     report.kept = kept.map((c) => c.slug);
-    report.upserted = confs.filter((c) => !kept.includes(c)).map((c) => c.slug);
+    report.skipped_retired = plan.skipped_retired;
+    report.upserted = plan.upserted;
+    searchable = plan.push;
   }
 
   let pushed = 0;
