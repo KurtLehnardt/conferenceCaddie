@@ -308,11 +308,16 @@ keystore password. A local signed build reads them inside one shell, without pri
 
 **In CI, Gradle never sees the key.** The build job runs `assembleRelease` with
 `-Pcaddie.unsignedRelease=true` on every run, pull requests included, so R8 and resource shrinking
-are checked before `main`. On `main` it keeps the unsigned arm64-v8a APK for one day, named
-`conference-caddie-native-<commit>-release.apk`, and a separate job signs it. That job checks out no code and runs no Gradle or npm; it refuses an APK whose name is not the
-release APK of the commit being built, decodes the keystore into the runner's
-temp directory with `umask 077`, runs `zipalign` and `apksigner` from the runner's Android SDK,
-deletes the keystore, and fails unless the APK's certificate matches the repository variable
+are checked before `main`, and then, in a Gradle run of its own, `bundleRelease` for the Android
+App Bundle that Google Play takes (every ABI; see `docs/fork/APPS.md`, "Google Play"). On `main`
+it keeps the unsigned arm64-v8a APK and the unsigned bundle for one day, named
+`conference-caddie-native-<commit>-release.apk` and `.aab`, and a separate job signs them: the APK
+with `apksigner`, the bundle with the JDK's `jarsigner`, both with the same key, which is the
+upload key for Play. That job checks out no code and runs no Gradle or npm; it refuses an APK or
+bundle whose name is not that of the commit being built, decodes the keystore into the runner's
+temp directory with `umask 077`, runs `zipalign` and `apksigner` from the runner's Android SDK and
+`jarsigner` from its JDK (passwords through the environment), deletes the keystore, and fails
+unless the certificate of the APK and of the bundle matches the repository variable
 `ANDROID_RELEASE_CERT_SHA256` (the public fingerprint
 `15:02:52:89:3C:0B:24:01:9C:1C:24:68:CD:BB:3A:CA:A7:FC:79:33:68:35:34:54:38:FD:09:47:E0:D5:7C:7B`).
 
@@ -944,8 +949,9 @@ dependencies.
   the arm64-v8a one to the sign job.
 - **Talk checks against the on-device search** (Ubuntu): builds the bundles from the committed data
   with `scripts/build-bundles.mjs` and runs `:shared:smokeTalks`; the table goes to the job summary.
-- **Sign the release APK** (Ubuntu, environment `release`, `main` only): described under Signing.
-  It is skipped with a notice when the signing secrets are missing.
+- **Sign the release APK and bundle** (Ubuntu, environment `release`, `main` only): described
+  under Signing. It is skipped with a notice when the signing secrets are missing. The build job
+  checks the bundle's ABIs and the 16 KB alignment of its 64-bit native libraries first.
 - **UI tests on an Android emulator** (Ubuntu): the Compose UI tests, the measurement of the shipped
   model (its numbers go to the job summary), the app's instrumented tests and
   `scripts/release-smoke.sh` on the R8 release build, on an API 34 emulator started by

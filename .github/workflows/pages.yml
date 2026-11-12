@@ -10,7 +10,9 @@ name: Deploy the talk bundles to GitHub Pages
 #   builder's bundles/build-info.json and bundles/sources.json, and the tier 1 capabilities.json,
 #   built by scripts/build-bundles.mjs;
 # - a small landing page (index.html, and the same page as 404.html, from scripts/pages-landing.mjs)
-#   with no script and no storage access, which links to the app.
+#   with no script and no storage access, which links to the app;
+# - the apps' privacy policy (privacy.html, from scripts/lib/privacy-page.mjs through the same
+#   script), with the same restrictions, which the Google Play and App Store listings link to.
 #
 # The web app is served by the Cloudflare Worker on its own origin (worker/scripts/deploy.sh). The
 # github.io origin is shared with the account's other Pages sites, which could read the app's device
@@ -298,13 +300,16 @@ jobs:
         run: node scripts/carry-forward-bundles.mjs --out dist-pages --base-url "$BUNDLE_BASE"
 
       # The landing page reads CADDIE_APP_URL from the environment; an empty value gives the
-      # "not live yet" page, and a value that is not a plain https address fails the build.
-      - name: Write the landing page
-        run: node scripts/pages-landing.mjs --out dist-pages --site-url "$SITE_URL"
+      # "not live yet" page, and a value that is not a plain https address fails the build. The
+      # privacy page names this repository's issues as its contact.
+      - name: Write the landing page and the privacy policy
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: node scripts/pages-landing.mjs --out dist-pages --site-url "$SITE_URL" --repo-url "https://github.com/$REPOSITORY"
 
-      # Only the bundle builder's outputs and the landing page may be published: no app code. The
-      # github.io origin is shared with other Pages sites of the same account, so a script published
-      # here could read their storage. The check therefore looks below the top level too, rejects
+      # Only the bundle builder's outputs, the landing page and the privacy page may be published: no
+      # app code. The github.io origin is shared with other Pages sites of the same account, so a
+      # script published here could read their storage. The check therefore looks below the top level too, rejects
       # every symlink and every other entry that is not a plain file or directory (the artifact is
       # packed with tar --dereference, which would copy what a link points at), and allows under
       # bundles/ only the files the bundle builder writes. This is an early failure: the verify job
@@ -315,7 +320,7 @@ jobs:
           links=$(find dist-pages -type l -print)
           if [ -n "$links" ]; then echo "::error::Symlinks in dist-pages: $links"; exit 1; fi
           unexpected=$(find dist-pages -mindepth 1 -maxdepth 1 \
-            ! -name bundles ! -name conferences.json ! -name capabilities.json ! -name index.html ! -name 404.html -print)
+            ! -name bundles ! -name conferences.json ! -name capabilities.json ! -name index.html ! -name 404.html ! -name privacy.html -print)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected files in dist-pages: $unexpected"; exit 1; fi
           unexpected=$(find dist-pages -mindepth 1 -maxdepth 1 ! -name bundles ! -type f -print)
           if [ -n "$unexpected" ]; then echo "::error::Top-level entries that are not plain files: $unexpected"; exit 1; fi
@@ -329,9 +334,9 @@ jobs:
           if [ -n "$unexpected" ]; then echo "::error::Unexpected directories in dist-pages/bundles: $unexpected"; exit 1; fi
           # grep exits 0 on a match, 1 on none and 2 on an error such as a missing file, so only 1 passes.
           rc=0
-          grep -qiE '<script|[[:space:]]on[a-z]+[[:space:]]*=' dist-pages/index.html dist-pages/404.html || rc=$?
-          if [ "$rc" -ne 1 ]; then echo "::error::The landing page must hold no script or event handler (grep status $rc)."; exit 1; fi
-          for f in dist-pages/index.html dist-pages/404.html; do
+          grep -qiE '<script|[[:space:]]on[a-z]+[[:space:]]*=' dist-pages/index.html dist-pages/404.html dist-pages/privacy.html || rc=$?
+          if [ "$rc" -ne 1 ]; then echo "::error::The landing and privacy pages must hold no script or event handler (grep status $rc)."; exit 1; fi
+          for f in dist-pages/index.html dist-pages/404.html dist-pages/privacy.html; do
             grep -qF "default-src 'none'" "$f" || { echo "::error::$f has no default-src 'none' policy."; exit 1; }
           done
 
@@ -362,7 +367,7 @@ jobs:
           if grep -qvE '^[-d]$' types.txt; then echo "::error::The artifact holds an entry that is not a plain file or directory (a link or a device)."; tar -tvf artifact/artifact.tar | grep -vE '^[-d]'; exit 1; fi
           entries=$(tar -tf artifact/artifact.tar | sed 's|^\./||; s|/$|/|' | grep -vxE '\.?/?|\.' || true)
           unexpected=$(printf '%s\n' "$entries" | grep -vE '/$' \
-            | grep -vE '^(index\.html|404\.html|conferences\.json|capabilities\.json|bundles/conferences\.json|bundles/build-info\.json|bundles/sources\.json|bundles/[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
+            | grep -vE '^(index\.html|404\.html|privacy\.html|conferences\.json|capabilities\.json|bundles/conferences\.json|bundles/build-info\.json|bundles/sources\.json|bundles/[^/]+/[0-9a-f]{16}/(bundle\.json|vectors\.i8))$' || true)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected files in the artifact: $unexpected"; exit 1; fi
           unexpected=$(printf '%s\n' "$entries" | grep -E '/$' | grep -vE '^bundles/([^/]+/([0-9a-f]{16}/)?)?$' || true)
           if [ -n "$unexpected" ]; then echo "::error::Unexpected directories in the artifact: $unexpected"; exit 1; fi
@@ -371,10 +376,11 @@ jobs:
           [ -d site/bundles ] || { echo "::error::The artifact has no bundles directory."; exit 1; }
           [ -f site/bundles/conferences.json ] || { echo "::error::The artifact has no bundles/conferences.json."; exit 1; }
           [ -f site/capabilities.json ] || { echo "::error::The artifact has no capabilities.json."; exit 1; }
+          [ -f site/privacy.html ] || { echo "::error::The artifact has no privacy.html."; exit 1; }
           rc=0
-          grep -qiE '<script|[[:space:]]on[a-z]+[[:space:]]*=' site/index.html site/404.html || rc=$?
-          if [ "$rc" -ne 1 ]; then echo "::error::The landing page must hold no script or event handler (grep status $rc)."; exit 1; fi
-          for f in site/index.html site/404.html; do
+          grep -qiE '<script|[[:space:]]on[a-z]+[[:space:]]*=' site/index.html site/404.html site/privacy.html || rc=$?
+          if [ "$rc" -ne 1 ]; then echo "::error::The landing and privacy pages must hold no script or event handler (grep status $rc)."; exit 1; fi
+          for f in site/index.html site/404.html site/privacy.html; do
             grep -qF "default-src 'none'" "$f" || { echo "::error::$f has no default-src 'none' policy."; exit 1; }
           done
 

@@ -48,6 +48,13 @@ val bleInRelease = when (val value = providers.gradleProperty("caddie.bleEnabled
 
 fun bleEnabledFor(buildType: String?): Boolean = buildType == "debug" || (buildType == "release" && bleInRelease)
 
+// An Android App Bundle (bundleRelease, for Google Play) carries every ABI, and Play serves each
+// device only its own. AGP refuses to build a bundle while the APK ABI splits below are on
+// (https://issuetracker.google.com/402800800), so they are off in a build that asks for a bundle
+// task. Build the APKs and the bundle in separate Gradle runs: in one run together the APKs would
+// not be split.
+val buildsBundle = gradle.startParameter.taskNames.any { it.substringAfterLast(':').startsWith("bundle") }
+
 // CI sets CADDIE_VERSION_CODE to 1000 + the workflow run number, which keeps every native build
 // above the Capacitor app's versionCode. Local builds use 1.
 val caddieVersionCode = providers.environmentVariable("CADDIE_VERSION_CODE").orNull?.let { value ->
@@ -89,10 +96,10 @@ android {
     // Releases, for nearly every phone in use; a phone with only a 32-bit system (some low-end
     // Android Go models) cannot install it. x86_64 is built for emulators (CI's release smoke test)
     // and Chromebooks. 32-bit ARM and x86 are left out, and so is a universal APK (DECISIONS.md,
-    // phase 2b).
+    // phase 2b). The bundle for Google Play has no splits and every ABI (buildsBundle above).
     splits {
         abi {
-            isEnable = true
+            isEnable = !buildsBundle
             reset()
             include("arm64-v8a", "x86_64")
             isUniversalApk = false
@@ -170,7 +177,7 @@ kotlin {
  * src/main/AndroidManifest.xml removes: the telemetry initializer (a content provider that starts
  * with the app and uploads to Microsoft) and the ACCESS_NETWORK_STATE permission. A new ONNX Runtime
  * version could rename the provider or add another component, so any provider, receiver, service or
- * activity of ONNX Runtime fails too. Runs with every assemble.
+ * activity of ONNX Runtime fails too. Runs with every assemble and bundle.
  */
 abstract class CheckOnnxRuntimeManifest : DefaultTask() {
     @get:InputFile
@@ -210,7 +217,7 @@ abstract class CheckOnnxRuntimeManifest : DefaultTask() {
  * the gate off (a release build without -Pcaddie.bleEnabled=true) it must declare no Bluetooth
  * permission, no FOREGROUND_SERVICE_CONNECTED_DEVICE, no Bluetooth hardware and no BleRadioService,
  * whatever a library adds; with it on it must declare the service and the permissions the radio
- * needs. Runs with every assemble.
+ * needs. Runs with every assemble and bundle.
  */
 abstract class CheckBluetoothManifest : DefaultTask() {
     @get:InputFile
@@ -289,6 +296,8 @@ androidComponents {
             bleEnabled.set(ble)
             report.set(layout.buildDirectory.file("reports/bluetooth-manifest/${variant.name}.txt"))
         }
-        tasks.matching { it.name == "assemble$name" || it.name == "check" }.configureEach { dependsOn(onnxCheck, bluetoothCheck) }
+        tasks.matching { it.name == "assemble$name" || it.name == "bundle$name" || it.name == "check" }.configureEach {
+            dependsOn(onnxCheck, bluetoothCheck)
+        }
     }
 }

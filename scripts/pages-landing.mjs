@@ -8,19 +8,25 @@
 // code: no script at all (its Content-Security-Policy forbids scripts), no storage access, and no
 // form. It links to the app, or says the app is not live yet when no app URL is given. The 404
 // page is the same, so an old link or QR code under the Pages address still leads to the app.
+// It also writes privacy.html, the apps' privacy policy (scripts/lib/privacy-page.mjs), which the
+// store listings link to, with the same restrictions.
 //
 // Usage: node scripts/pages-landing.mjs --out dist-pages [--app-url https://conference-caddie.<subdomain>.workers.dev]
 //                                       [--site-url <the Pages site's https address>]
+//                                       [--repo-url https://github.com/<owner>/<repository>]
 //   --app-url (or the environment variable CADDIE_APP_URL) must be an https URL with no user name,
 //   password, query or fragment; only its origin and path are used. An empty value means "not live".
 //   --site-url is the Pages site's own address (default: the environment variable CADDIE_SITE_URL,
 //   else the official one). The links to its files are absolute, so they also work from the 404 page,
 //   which GitHub serves at any missing path. Both variables are read when they are needed, not when
 //   the module is imported, as build-bundles.mjs reads its environment.
+//   --repo-url is the repository on GitHub whose issues the privacy page names as the contact
+//   (default: the official repository).
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { OFFICIAL_REPO_URL, normaliseRepoUrl, privacyPage } from './lib/privacy-page.mjs';
 
 const KUBECON = 'kubecon-cloudnativecon-north-america-2026';
 const OFFICIAL_SITE_URL = 'https://kurtlehnardt.github.io/conferenceCaddie/';
@@ -79,6 +85,7 @@ export function landingPage(appUrl, siteUrl = defaultSiteUrl()) {
       <p>Find the people to talk to and the talks you would like at Linux Foundation conferences.</p>
     ${body}
       <p class="small">This site publishes only the public talk data: <a href="${files}conferences.json">conferences.json</a>, <a href="${files}capabilities.json">capabilities.json</a> and the talk bundles under <code>bundles/</code>. Source: <a href="https://github.com/KurtLehnardt/conferenceCaddie">KurtLehnardt/conferenceCaddie</a>.</p>
+      <p class="small"><a href="${files}privacy.html">Privacy policy</a></p>
     </main>
   </body>
 </html>
@@ -86,12 +93,13 @@ export function landingPage(appUrl, siteUrl = defaultSiteUrl()) {
 }
 
 export function parseArgs(argv) {
-  const out = { out: null, appUrl: process.env.CADDIE_APP_URL ?? '', siteUrl: defaultSiteUrl() };
+  const out = { out: null, appUrl: process.env.CADDIE_APP_URL ?? '', siteUrl: defaultSiteUrl(), repoUrl: OFFICIAL_REPO_URL };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') out.out = argv[++i];
     else if (a === '--app-url') out.appUrl = argv[++i] ?? '';
     else if (a === '--site-url') out.siteUrl = argv[++i] ?? '';
+    else if (a === '--repo-url') out.repoUrl = argv[++i] ?? '';
     else throw new Error(`Unknown argument: ${a}`);
   }
   if (!out.out) throw new Error('--out <dir> is required.');
@@ -105,8 +113,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     const dir = resolve(args.out);
     mkdirSync(dir, { recursive: true });
     const html = landingPage(appUrl, args.siteUrl);
+    const site = normaliseAppUrl(args.siteUrl);
+    if (!site) throw new Error('The site URL must not be empty.');
+    const privacy = privacyPage(`${site}/`, normaliseRepoUrl(args.repoUrl));
     writeFileSync(join(dir, 'index.html'), html);
     writeFileSync(join(dir, '404.html'), html);
+    writeFileSync(join(dir, 'privacy.html'), privacy);
     console.log(appUrl ? `Wrote the landing page linking to ${appUrl}/.` : 'Wrote the landing page: the app is not live yet.');
   } catch (err) {
     console.error(err.message);
